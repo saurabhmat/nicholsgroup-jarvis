@@ -24,6 +24,7 @@ You are building an internal executive portal for Robert Nichols (sponsor). Tech
 13. Out of scope: Nichols Law Microsoft 365 tenant, Plaid, payments/transfers/trust disbursements/QuickBooks posting/deletions.
 
 ## Definition of done (every task)
+- Review depth: dev tooling/scripts → one security review, fix BLOCKER only (log HIGH and below in docs/plan-review.md). App code (RLS/data access, auth/MFA, connectors/tokens, approvals) → full security + code review, fix all BLOCKER and HIGH before done.
 - `pnpm typecheck && pnpm lint && pnpm test` pass; `pnpm test:db` passes if SQL changed.
 - New behaviour has tests; RLS changes include a cross-lane denial test.
 - `security-reviewer` subagent reviewed the diff; findings fixed or listed in the PR.
