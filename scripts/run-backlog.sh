@@ -5,7 +5,8 @@ set -euo pipefail
 MAX=${1:-5}
 for i in $(seq 1 "$MAX"); do
   git switch main && git pull --ff-only
-  ID=$(node scripts/next-task.mjs || true)
+  # next-task exits 0 with empty output when nothing is ready, and 1 on a backlog error.
+  ID=$(node scripts/next-task.mjs) || { echo "next-task failed (backlog error above); stopping."; exit 1; }
   [ -z "$ID" ] && { echo "No approved tasks ready."; exit 0; }
   echo "=== Building $ID ==="
   git switch -c "agent/$ID"

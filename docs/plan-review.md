@@ -56,3 +56,16 @@ Ways to cut further, roughly by size:
 3. **D-8** — Sophie's mapping IDs, plus **D-2 / D-3 / D-9** metric definitions, before finance tie-out.
 4. **H-019** — env variable names (blocks T-005).
 5. **H-016** — Resend account + DNS; **D-15** — design sign-off (blocks T-024).
+
+## 6. Follow-ups from reviews (not blocking)
+
+Under the review policy (dev tooling: one security review, fix BLOCKERs only), these are logged rather than fixed.
+
+- **T-000 `scripts/next-task.mjs`:** the third security round was stopped before it finished. Edge cases not yet probed:
+  - Unicode lookalikes in `T-`/`H-`/`D-` ids or in `approved`
+  - NBSP or tab variants in field lines and `- [x]`
+  - a BOM at the start of the file
+  - `####  T-001` headings
+  - setext headings inside Needs human
+
+  The allowlist grammar should reject most of these, since anything that isn't an exact ASCII field line blocks the task. This hasn't been verified.

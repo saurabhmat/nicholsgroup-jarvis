@@ -58,7 +58,7 @@ Rules for running tracks in parallel:
 
 ## Ready for approval
 These tasks have all their dependencies done and all their `needs` checked. A human sets `status: approved`.
-- **T-000** — approved Oct 23, 2026 by Saurabh (build requested in chat).
+- T-000 — done on `agent/T-000` (true on merge).
 - **T-001** Convert to pnpm + Turborepo monorepo — ready once **H-018** (Node 22, pnpm, Supabase CLI installed locally) is checked.
 
 ---
@@ -112,7 +112,7 @@ These tasks have all their dependencies done and all their `needs` checked. A hu
 
 ## Phase A0 — Workflow tooling
 ### T-000 Make next-task.mjs honour `needs:`
-- status: approved
+- status: done
 - depends: -
 - needs: H-015
 - acceptance: `scripts/next-task.mjs` skips any approved task whose `- needs:` line lists an `H-\d+` or `D-\d+` item that is not checked (`- [x]`) under "Needs human"; unknown IDs count as unmet; existing `depends:` behaviour unchanged; `node scripts/next-task.mjs --explain` prints each approved task with the reason it is blocked (unmet deps / unmet needs); `node --test scripts/next-task.test.mjs` covers: no needs, met needs, unmet H, unmet D, unknown ID, multiple needs, task with deps and needs; runs on Node 22 with no dependencies (precedes the monorepo).
