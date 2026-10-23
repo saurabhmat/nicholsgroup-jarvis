@@ -1,0 +1,59 @@
+# Runs Claude Code on one approved backlog task and opens a PR for human review.
+# Trigger: Actions tab → "Agent build" → task_id, or label an issue "agent:build" titled "T-012 ...".
+# NOTE: check the anthropics/claude-code-action README for current input names before first run.
+name: Agent build
+on:
+  workflow_dispatch:
+    inputs:
+      task_id: { description: "Backlog task ID (e.g. T-003)", required: true }
+  issues:
+    types: [labeled]
+
+concurrency: { group: agent-build, cancel-in-progress: false }   # one agent at a time
+
+permissions:
+  contents: write
+  pull-requests: write
+  issues: write
+  id-token: write
+
+jobs:
+  build:
+    if: github.event_name == 'workflow_dispatch' || github.event.label.name == 'agent:build'
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    environment: agents            # holds only dev/staging-safe secrets
+    steps:
+      - name: Resolve task id
+        id: task
+        run: |
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            echo "id=${{ github.event.inputs.task_id }}" >> "$GITHUB_OUTPUT"
+          else
+            echo "id=$(echo '${{ github.event.issue.title }}' | grep -oE '^T-[0-9]+')" >> "$GITHUB_OUTPUT"
+          fi
+
+      - uses: actions/checkout@v4
+        with: { fetch-depth: 0 }
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with: { node-version: 22, cache: pnpm }
+      - uses: supabase/setup-cli@v1
+      - run: pnpm install --frozen-lockfile || pnpm install
+      - run: git checkout -b "agent/${{ steps.task.outputs.id }}"
+
+      - name: Claude Code builds the task
+        uses: anthropics/claude-code-action@v1
+        with:
+          anthropic_api_key: ${{ secrets.ANTHROPIC_API_KEY_DEV }}
+          prompt: |
+            Follow .claude/commands/build-task.md for task ${{ steps.task.outputs.id }}.
+          claude_args: "--max-turns 150"
+
+      - name: Push branch and open PR
+        env: { GH_TOKEN: "${{ github.token }}" }
+        run: |
+          ID="${{ steps.task.outputs.id }}"
+          git push -u origin "agent/$ID"
+          BODY=".agent/pr/$ID.md"; [ -f "$BODY" ] || echo "Agent did not write a PR body." > "$BODY"
+          gh pr create --base main --head "agent/$ID" --title "$ID (agent)" --body-file "$BODY" --label agent-pr
