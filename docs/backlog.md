@@ -58,8 +58,8 @@ Rules for running tracks in parallel:
 
 ## Ready for approval
 These tasks have all their dependencies done and all their `needs` checked. A human sets `status: approved`.
-- T-000 — done on `agent/T-000` (true on merge).
-- **T-001** Convert to pnpm + Turborepo monorepo — approved Oct 23, 2026 by Saurabh; H-018 done.
+- T-000 — done (merged).
+- T-001 — done on `agent/T-001` (true on merge). Next ready after merge: **T-002** (package skeletons). T-006 also follows T-001 but needs H-020.
 
 ---
 
@@ -75,7 +75,7 @@ These tasks have all their dependencies done and all their `needs` checked. A hu
 - [ ] H-007 GoHighLevel Private Integration token (read-only scopes) + location ID (PL-18)
 - [ ] H-008 Mail/calendar/docs API permissions for pub-k.org: Google OAuth client (Internal app type) with Gmail/Calendar/Drive scopes, **or** Entra app with admin consent for Mail/Calendars/Files/Sites read (PL-19)
 - [ ] H-009 monday.com API token (IT workspace); Notion internal integration shared to the target pages/databases (PL-20)
-- [ ] H-010 Vercel project linked to the repo; staging domain; DNS for the production domain (PL-10)
+- [ ] H-010 Vercel project linked to the repo, with **Root Directory = `apps/web`** and **"Include files outside the root directory"** turned on (Vercel detects pnpm and Turborepo); staging domain; DNS for the production domain (PL-10)
 - [ ] H-011 Sentry project DSN (free tier) for staging
 - [ ] H-012 GitHub repo in the Nichols-owned org, with branch protection on `main` and Actions enabled
 - [ ] H-013 Google Cloud project for Pub/Sub (Gmail watch), only if D-1 = Google
@@ -122,7 +122,7 @@ These tasks have all their dependencies done and all their `needs` checked. A hu
 Serial spine (main worktree). T-005 and T-006 can run in parallel once T-001/T-002 are merged.
 
 ### T-001 Convert to pnpm + Turborepo monorepo
-- status: approved
+- status: done
 - depends: -
 - needs: H-018
 - acceptance: `pnpm-workspace.yaml`, `turbo.json`; the existing Next.js 16 app (kept per D-7) moves to `apps/web` and still runs with `pnpm dev`; `package-lock.json` removed; `engines.node` set to `>=22 <25` (local dev runs Node 24, CI runs 22; no `.nvmrc` pin); `packageManager: pnpm@12.15.0` in the root `package.json` (the pack's `ci.yml` uses `pnpm/action-setup` without a version); root scripts `typecheck`, `lint`, `test`, `test:db`, `test:injection` exist (the last two may be no-op placeholders that exit 0 with a message).
