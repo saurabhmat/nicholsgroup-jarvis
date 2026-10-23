@@ -20,8 +20,8 @@ Last reviewed **Oct 23, 2026** against `CLAUDE.md`, `docs/pilot-scope.md`, `docs
 ## 2. Pack vs. backlog (handled in the backlog, listed for awareness)
 
 - **Protected files:** `.claude/hooks/guard-files.sh` blocks agent edits to `.github/workflows/*` and `.env*`, and `settings.json` denies reading `.env.*` (including `.env.example`). T-004, T-025 and T-171 now deliver workflow changes as diffs in the PR body for you to apply. T-005 needs the env variable names from you (H-019).
-- **Stop hook before the monorepo:** `.claude/hooks/check-on-stop.sh` runs `pnpm typecheck/lint/test` whenever `package.json` exists. Until T-001 is merged and pnpm is installed (H-018), it fails on every stop. It lets the second stop through (`stop_hook_active`), so work isn't blocked, but agents will report a failing check each time.
-- **Toolchain:** this machine has Node v24.19.0, no pnpm and no Supabase CLI. CI and the pack assume Node 22 (H-018).
+- **Stop hook before the monorepo:** resolved Oct 23. `.claude/hooks/check-on-stop.sh` now skips when pnpm is missing or `package.json` has no `typecheck` script, so it starts checking once T-001 lands.
+- **Toolchain:** local Node 24.19.0 (kept on purpose), CI Node 22 (`ci.yml`, `agent-build.yml`). T-001 sets `engines` to `>=22 <25` so both work. Code must not use Node 24-only APIs, because CI would catch them only after the push. Docker isn't usable by your user yet (H-020).
 - **`ci.yml`** uses `pnpm/action-setup@v4` without a version, so T-001 must set `packageManager` in `package.json`.
 - **`migrate-prod.yml`** runs the Supabase CLI from `supabase/core`. T-006 must use a folder layout that matches what the CLI expects there. There is no staging migration workflow yet (T-171 proposes one).
 - **`agent-build.yml`** allows one agent at a time in CI. The parallel worktrees in the backlog are for local runs only.
@@ -51,7 +51,7 @@ Ways to cut further, roughly by size:
 
 ## 5. Most urgent from you
 
-1. **H-018** — install Node 22, pnpm and the Supabase CLI (blocks T-001 and the Stop hook).
+1. **H-020** — Docker permission for your user (blocks T-006 and `pnpm test:db`).
 2. **D-1** — the pub-k.org mail provider.
 3. **D-8** — Sophie's mapping IDs, plus **D-2 / D-3 / D-9** metric definitions, before finance tie-out.
 4. **H-019** — env variable names (blocks T-005).

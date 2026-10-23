@@ -59,7 +59,7 @@ Rules for running tracks in parallel:
 ## Ready for approval
 These tasks have all their dependencies done and all their `needs` checked. A human sets `status: approved`.
 - T-000 — done on `agent/T-000` (true on merge).
-- **T-001** Convert to pnpm + Turborepo monorepo — ready once **H-018** (Node 22, pnpm, Supabase CLI installed locally) is checked.
+- **T-001** Convert to pnpm + Turborepo monorepo — approved Oct 23, 2026 by Saurabh; H-018 done.
 
 ---
 
@@ -83,7 +83,8 @@ These tasks have all their dependencies done and all their `needs` checked. A hu
 - [x] H-015 Planning pack v2 copied into the repo (Oct 23, 2026)
 - [ ] H-016 Resend account; sending domain verified (SPF/DKIM DNS records) for sign-in emails; SMTP credentials for staging and prod in 1Password and the Supabase Auth settings
 - [ ] H-017 Intuit **production** approval received and the live PKG QuickBooks file connected in staging (needed for tie-out, T-172)
-- [ ] H-018 Local toolchain: Node **22** (machine has v24.19.0), pnpm via `corepack enable pnpm` (not installed), Supabase CLI (not installed), Docker running. Needed for T-001 onward and for `.claude/hooks/check-on-stop.sh`.
+- [x] H-018 Local toolchain (Oct 23, 2026): Node 24.19.0 kept locally (CI stays on 22), pnpm 12.15.0 via corepack, Supabase CLI 2.122.0 (npm global)
+- [ ] H-020 Docker access for your user: `docker info` fails with "permission denied" on `/var/run/docker.sock`. Run `sudo usermod -aG docker $USER`, log out and back in (or `newgrp docker`), and check that `docker info` works. Needed by `supabase start` and `pnpm test:db` from T-006 on.
 - [ ] H-019 Let agents see the env variable **names**: either narrow the `Read(./.env.*)` deny rule in `.claude/settings.json` so it doesn't cover `.env.example`, or paste the name list into `.agent/notes/T-005.md`. Needed for T-005.
 
 ### Decisions (details and options in `docs/plan-review.md`)
@@ -115,16 +116,16 @@ These tasks have all their dependencies done and all their `needs` checked. A hu
 - status: done
 - depends: -
 - needs: H-015
-- acceptance: `scripts/next-task.mjs` skips any approved task whose `- needs:` line lists an `H-\d+` or `D-\d+` item that is not checked (`- [x]`) under "Needs human"; unknown IDs count as unmet; existing `depends:` behaviour unchanged; `node scripts/next-task.mjs --explain` prints each approved task with the reason it is blocked (unmet deps / unmet needs); `node --test scripts/next-task.test.mjs` covers: no needs, met needs, unmet H, unmet D, unknown ID, multiple needs, task with deps and needs; runs on Node 22 with no dependencies (precedes the monorepo).
+- acceptance: `scripts/next-task.mjs` skips any approved task whose `- needs:` line lists an `H-\d+` or `D-\d+` item that is not checked (`- [x]`) under "Needs human"; unknown IDs count as unmet; existing `depends:` behaviour unchanged; `node scripts/next-task.mjs --explain` prints each approved task with the reason it is blocked (unmet deps / unmet needs); `node --test scripts/next-task.test.mjs` covers: no needs, met needs, unmet H, unmet D, unknown ID, multiple needs, task with deps and needs; runs on Node 22+ with no dependencies (precedes the monorepo).
 
 ## Phase A1 — Repo and tooling (PL-27)
 Serial spine (main worktree). T-005 and T-006 can run in parallel once T-001/T-002 are merged.
 
 ### T-001 Convert to pnpm + Turborepo monorepo
-- status: proposed
+- status: approved
 - depends: -
 - needs: H-018
-- acceptance: `pnpm-workspace.yaml`, `turbo.json`; the existing Next.js 16 app (kept per D-7) moves to `apps/web` and still runs with `pnpm dev`; `package-lock.json` removed; Node 22 pinned (`.nvmrc`, `engines`); `packageManager: pnpm@<version>` in the root `package.json` (the pack's `ci.yml` uses `pnpm/action-setup` without a version); root scripts `typecheck`, `lint`, `test`, `test:db`, `test:injection` exist (the last two may be no-op placeholders that exit 0 with a message).
+- acceptance: `pnpm-workspace.yaml`, `turbo.json`; the existing Next.js 16 app (kept per D-7) moves to `apps/web` and still runs with `pnpm dev`; `package-lock.json` removed; `engines.node` set to `>=22 <25` (local dev runs Node 24, CI runs 22; no `.nvmrc` pin); `packageManager: pnpm@12.15.0` in the root `package.json` (the pack's `ci.yml` uses `pnpm/action-setup` without a version); root scripts `typecheck`, `lint`, `test`, `test:db`, `test:injection` exist (the last two may be no-op placeholders that exit 0 with a message).
 
 ### T-002 Package skeletons per architecture §10
 - status: proposed
@@ -150,6 +151,7 @@ Serial spine (main worktree). T-005 and T-006 can run in parallel once T-001/T-0
 ### T-006 Local Supabase + pgTAP harness
 - status: proposed
 - depends: T-001
+- needs: H-020
 - acceptance: `supabase/core` project starts locally, laid out so the pack's `migrate-prod.yml` (which runs the CLI from `supabase/core`) finds `config.toml` and the migrations; check the CLI's expected folder layout first; `pnpm test:db` runs pgTAP in `supabase/core/tests`; `supabase/nl/` exists as a documented placeholder (deferred data plane); README section for local DB.
 
 ### T-007 Synthetic seed framework
