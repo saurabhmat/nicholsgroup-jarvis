@@ -39,3 +39,10 @@ yarn-error.log*
 # typescript
 *.tsbuildinfo
 next-env.d.ts
+
+# Planning pack
+!.env.example
+.agent/logs/*
+!.agent/logs/.gitkeep
+.turbo/
+supabase/.temp/
