@@ -1,0 +1,817 @@
+# Backlog — Pub K Group pilot
+
+Status flow: `proposed` → **`approved` (human)** → built by agent → PR sets `done` → **merge (human)**.
+Only humans change `proposed` → `approved`. Agents pick the next `approved` task whose dependencies are `done` and whose `needs` are checked.
+Board references (PL-xx) point to the Personal Chatbot board in monday.com.
+
+**Releases (D-10)**
+- **Release A — live by Nov 25:** platform core, QuickBooks, Stripe, GoHighLevel, mail/calendar connectors, finance, assistant, inbox, calendar, briefing, Approval Center (email + monday.com). PKG approvals switch on Nov 25 only after the pilot security test T-170 passes (D-11).
+- **Release B — Dec 7 – 31:** commitments, memory, opt-in indexing, Notion writes, calendar write actions, notification polish, projects view, onboarding playbook. Action modules for lanes other than PKG go live Dec 29.
+
+**Task fields**
+- `depends:` other tasks (T-xxx). Enforced by `scripts/next-task.mjs`.
+- `needs:` human items (H-xxx) or decisions (D-x). Met when the item is checked (`- [x]`) under "Needs human". **Enforced by the script once T-000 is done**; until then, approve a task only when its `needs` are checked.
+- `acceptance:` what must be true. Every task also has to meet the Definition of Done in `CLAUDE.md` (typecheck, lint, test, test:db, security review, PR body).
+- Provider dependencies: tasks that need mail/calendar/docs depend on the **Google** tasks (T-063, T-064) by default. If D-1 = Microsoft 365, replace them with T-066, T-067 before approving.
+- IDs are stable and roughly follow build order; the dependency graph is authoritative where they differ (e.g. T-132 → T-140).
+- Sizing: each task is ≤1 day for one developer with Claude Code. Release A is 119 tasks, Release B 17 (see "Schedule risk" in `docs/plan-review.md`).
+
+Standing rules that apply to every task, so they are not repeated in each acceptance:
+- Every function, query, job, AI tool, cache entry and memory item takes `laneId`. DB clients come only from the lane router.
+- Every new table has `lane_id`, RLS (AAL2 + `core.allowed_lanes`) and pgTAP tests, including a cross-lane denial test.
+- Synthetic data, MSW mocks and vendor sandboxes only. No real credentials or records.
+- Next.js 16 conventions (`proxy.ts` rather than `middleware.ts`, among others): read `node_modules/next/dist/docs/` before writing Next code.
+
+---
+
+## Ready for approval
+Tasks whose dependencies and `needs` are all met. A human sets `status: approved`.
+- **T-001** Convert to pnpm + Turborepo monorepo — no dependencies, D-7 decided.
+- T-000 is next in line but needs H-015: `scripts/next-task.mjs` is not in the repo yet.
+
+---
+
+## Needs human
+
+### Credentials and accounts
+- [ ] H-001 Supabase **staging** project created; URL + anon/service keys in `.env.local` and 1Password (PL-11)
+- [ ] H-002 Anthropic dev API key with a spend limit (PL-13)
+- [ ] H-003 Inngest account: event key + signing key for staging (PL-12)
+- [ ] H-004 Confirm the pub-k.org mail/calendar/docs provider (D-1). Sign-in no longer needs an OAuth app (D-6). (PL-15)
+- [x] H-005 Intuit developer app + sandbox company; production assessment submitted Oct 23, 2026 (PL-16)
+- [ ] H-006 Stripe restricted read-only key (test mode first, then live for staging) + webhook signing secret (PL-17)
+- [ ] H-007 GoHighLevel Private Integration token (read-only scopes) + location ID (PL-18)
+- [ ] H-008 Mail/calendar/docs API permissions for pub-k.org: Google OAuth client (Internal app type) with Gmail/Calendar/Drive scopes, **or** Entra app with admin consent for Mail/Calendars/Files/Sites read (PL-19)
+- [ ] H-009 monday.com API token (IT workspace); Notion internal integration shared to the target pages/databases (PL-20)
+- [ ] H-010 Vercel project linked to the repo; staging domain; DNS for the production domain (PL-10)
+- [ ] H-011 Sentry project DSN (free tier) for staging
+- [ ] H-012 GitHub repo in the Nichols-owned org, with branch protection on `main` and Actions enabled
+- [ ] H-013 Google Cloud project for Pub/Sub (Gmail watch), only if D-1 = Google
+- [ ] H-014 VAPID key pair for web push, generated and stored in 1Password (agent can generate a **dev** pair only)
+- [ ] H-015 Copy the rest of the planning pack into **this** repo (`/home/saurabh/dev/pubk-projects/nicholsgroup-jarvis`): `.claude/` (agents + commands), `.github/`, `.agent/`, `scripts/`, `.env.example`, `CLAUDE.md`, `docs/pilot-scope.md`, `docs/architecture.md`, `docs/architecture-v0.3-sponsor.pdf`. As of Oct 23 none of them are in the working tree.
+- [ ] H-016 Custom SMTP sender for auth emails (magic link / OTP) in staging and prod, e.g. a transactional mail service on a pub-k.org subdomain with SPF/DKIM; credentials in 1Password
+- [ ] H-017 Intuit **production** approval received and the live PKG QuickBooks file connected in staging (needed for tie-out, T-172)
+
+### Decisions (details and options in `docs/plan-review.md`)
+- [ ] D-1 pub-k.org provider: Google Workspace or Microsoft 365 (pilot-scope open decision 1). Both are built behind one interface meanwhile.
+- [ ] D-2 Pilot KPI list (default: cash book balance, AR >30 days, AP due 14 days, P&L MTD/YTD, MRR, churn, paid subscribers, controls)
+- [ ] D-3 GoHighLevel "paid subscriber" definition (tag, pipeline stage or product)
+- [ ] D-4 Confirm the remaining pilot roles: Robert = owner, Saurabh = admin_technical (defaults). Decided: Sophie = finance_operator (generates and signs off reports).
+- [ ] D-5 Production domain (default `portal.pub-k.org`)
+- [x] D-6 Sign-in is separate from mail: Supabase email magic link + Supabase TOTP MFA (AAL2) for all users
+- [x] D-7 Keep Next.js 16 (`proxy.ts`); pnpm workspaces + Turborepo
+- [ ] D-8 Sophie confirms the lane_config entity mapping: the QBO class IDs and Stripe product IDs for Ask Pub K and Pub K Institute that PKG figures must exclude. Decided: PKG excludes APK and PKI.
+- [ ] D-9 MRR and churn definitions (interval normalisation, discounts, trials, logo vs revenue churn)
+- [x] D-10 Release A by Nov 25 / Release B Dec 7–31 (see "Releases" above)
+- [x] D-11 PKG approvals go live Nov 25 after the pilot security test (T-170); Dec 29 applies to other lanes only
+- [ ] D-12 Source of "meeting notes" for meeting prep and Commitments (Google Meet/Gemini notes, Notion, other)
+- [ ] D-13 Embedding provider for opt-in indexing (Release B; Anthropic has no embeddings API; e.g. Voyage AI, OpenAI, or Supabase built-in `gte-small`)
+- [ ] D-14 Weekly cash report distribution: email via the Approval Center (recipients?) or in-portal only. Decided: Sophie signs off.
+- [ ] D-15 Design sign-off for navigation/prototype (PL-26), which blocks T-024
+- [ ] D-16 Is federated search (T-140, T-141) in Release A? It isn't in either D-10 list; placed in A because meeting prep and the assistant use it.
+- [ ] D-17 Should GoHighLevel subscriber counts also exclude APK/PKI (by GHL product or tag)? D-8 covers QBO and Stripe only.
+- [ ] D-18 Cash book balance when bank accounts are shared with APK/PKI: QBO classes don't split balance-sheet balances reliably. Options: report the shared account in full with a note, use separate bank accounts per entity, or split by class-tagged transactions.
+
+---
+
+# Release A — PKG pilot, live by Nov 25
+
+## Phase A0 — Workflow tooling
+### T-000 Make next-task.mjs honour `needs:`
+- status: proposed
+- depends: -
+- needs: H-015
+- acceptance: `scripts/next-task.mjs` skips any approved task whose `- needs:` line lists an `H-\d+` or `D-\d+` item that is not checked (`- [x]`) under "Needs human"; unknown IDs count as unmet; existing `depends:` behaviour unchanged; `node scripts/next-task.mjs --explain` prints each approved task with the reason it is blocked (unmet deps / unmet needs); `node --test scripts/next-task.test.mjs` covers: no needs, met needs, unmet H, unmet D, unknown ID, multiple needs, task with deps and needs; runs on Node 22 with no dependencies (precedes the monorepo).
+
+## Phase A1 — Repo and tooling (PL-27)
+### T-001 Convert to pnpm + Turborepo monorepo
+- status: proposed
+- depends: -
+- acceptance: `pnpm-workspace.yaml`, `turbo.json`; the existing Next.js 16 app (kept per D-7) moves to `apps/web` and still runs with `pnpm dev`; `package-lock.json` removed; Node 22 pinned (`.nvmrc`, `engines`); root scripts `typecheck`, `lint`, `test`, `test:db`, `test:injection` exist (the last two may be no-op placeholders that exit 0 with a message).
+
+### T-002 Package skeletons per architecture §10
+- status: proposed
+- depends: T-001
+- acceptance: `packages/core`, `packages/connectors`, `packages/ai`, `packages/ui`, `packages/modules/{finance,comms,calendar,commitments,documents,briefing,approvals,notifications,memory,admin,projects}`, each with `domain/ tools/ jobs/ ui/` as relevant, `package.json`, `tsconfig` project refs and one passing Vitest test; `apps/web` imports one package successfully.
+
+### T-003 Strict TS, shared lint config and architectural boundary rules
+- status: proposed
+- depends: T-002
+- acceptance: strict TS everywhere; shared ESLint flat config; boundary rules fail lint when (a) vendor SDKs or outbound `fetch` to external hosts are used outside `packages/connectors`, (b) `executeWrite` is imported outside `packages/modules/approvals`, (c) the Supabase service client is created outside the lane router, (d) `NEXT_PUBLIC_*` env names match secret patterns. Each rule has a failing fixture test.
+
+### T-004 CI workflow
+- status: proposed
+- depends: T-003
+- acceptance: `.github/workflows/ci.yml` runs install, typecheck, lint, test, `supabase start` + test:db, test:injection on PRs; gitleaks secret scan; no deploy or `db push` steps; caches pnpm/turbo.
+
+### T-005 Environment config
+- status: proposed
+- depends: T-002
+- acceptance: `.env.example` (names only, no values); a Zod-validated server env module in `packages/core/env` that throws on missing vars and is importable only server-side (`server-only`); `.gitignore` covers `.env*`, `.agent/logs`, Supabase temp files.
+
+### T-006 Local Supabase + pgTAP harness
+- status: proposed
+- depends: T-001
+- acceptance: `supabase/core` project starts locally; `pnpm test:db` runs pgTAP in `supabase/core/tests`; `supabase/nl/` exists as a documented placeholder (deferred data plane); README section for local DB.
+
+### T-007 Synthetic seed framework
+- status: proposed
+- depends: T-006
+- acceptance: deterministic seed (fixed RNG) for lanes PKG, APK, PKI, NC, NL, P with only PKG enabled; synthetic users (owner, admin_technical, finance_operator, viewer, outsider); `pnpm db:reset` reseeds; no real names, emails or companies' records beyond lane names.
+
+## Phase A2 — Platform core (PL-28, PL-34)
+### T-010 Lanes and lane policies
+- status: proposed
+- depends: T-007
+- acceptance: `core.lanes` (code, name, data_plane, enabled) and `core.lane_policies` (fields from architecture §5.3) with RLS; pgTAP: only PKG enabled; non-members cannot read other lanes' policies; AAL1 sessions are denied.
+
+### T-011 Lane config (per-lane source settings, no secrets)
+- status: proposed
+- depends: T-010
+- acceptance: `core.lane_config` versioned rows (jsonb validated by a shared Zod schema in `packages/core/lane-config`) for QBO realm + entity mapping (file or file+class), Stripe account, GHL location + paid-subscriber rule, mailboxes, priority senders, KPI list, briefing time, approval rules, enabled modules, and an **entity mapping** (QBO class IDs and Stripe product IDs included/excluded per lane, so PKG excludes Ask Pub K and Pub K Institute); a DB check plus a unit test reject secret-looking keys/values; RLS + pgTAP; seed config for PKG (synthetic IDs).
+
+### T-012 Users, memberships, roles, allowed_lanes()
+- status: proposed
+- depends: T-010
+- acceptance: `core.users`, `core.memberships` (lane, role ∈ owner/finance_operator/viewer/admin_technical, named views for viewer); `core.allowed_lanes(uid, view)` security-definer function; pgTAP proves cross-lane denial, the AAL2 requirement, viewer limited to named views; finance_operator can generate and sign off finance reports, admin_technical has no content views by default.
+
+### T-013 RLS conventions and catalog test
+- status: proposed
+- depends: T-012
+- acceptance: migration template + pgTAP helper for the standard lane policy; a catalog test that fails if any table in lane-scoped schemas lacks `lane_id`, RLS enabled, or a policy; documented in `supabase/core/README.md`.
+
+### T-014 Append-only audit log (SQL)
+- status: proposed
+- depends: T-012
+- acceptance: `audit.events` (lane_id, actor, action, target, metadata, at timestamptz); insert-only grants + trigger blocking update/delete/truncate; `audit.log()` function; pgTAP proves update/delete fail for every role including service.
+
+### T-015 Audit API (TypeScript)
+- status: proposed
+- depends: T-014, T-005
+- acceptance: `audit.log({laneId, actor, action, target, metadata})` in `packages/core`; metadata redactor strips token/secret/body-like fields (unit tests); failures to audit fail the calling action.
+
+### T-016 Lane router
+- status: proposed
+- depends: T-012, T-005
+- acceptance: `getLaneClient(laneId, session)` returns a client for the lane's data plane (registry: `core` only, `nl` slot defined); throws without membership or for disabled lanes; service client only for jobs via `getLaneJobClient(laneId)`; unit tests incl. disabled-lane and non-member cases.
+
+### T-017 Session → allowed lanes helpers
+- status: proposed
+- depends: T-016
+- acceptance: `requireSession()`, `requireLane(laneId)`, `requireRole(laneId, role)` for route handlers/server actions; unit tests; used by a sample protected route.
+
+### T-018 Sign-in (local test IdP)
+- status: proposed
+- depends: T-017
+- acceptance: Supabase Auth email sign-in (D-6): magic link **and** 6-digit email OTP code entry (the code path is needed for the installed iOS PWA, where a link opens in Safari, not the PWA); local Inbucket/Mailpit for tests; sign-in/out pages; session refresh in `proxy.ts` (Next 16); unauthenticated requests redirect; Playwright test.
+
+### T-019 Enforced MFA (AAL2)
+- status: proposed
+- depends: T-018
+- acceptance: Supabase TOTP enrolment + challenge for all users (D-6); recovery procedure documented (admin-assisted factor reset, audited); every data route and RLS rejects AAL1; Playwright: AAL1 user cannot load data; short session lifetime configured.
+
+### T-020 Step-up helper
+- status: proposed
+- depends: T-019
+- acceptance: `requireStepUp(maxAgeSeconds)` forces a fresh TOTP challenge; unit + Playwright tests; used later by approvals.
+
+### T-021 Production auth email delivery
+- status: proposed
+- depends: T-019
+- needs: H-016
+- acceptance: custom SMTP configured via config for staging/prod (Supabase default mail is rate-limited); redirect URL allowlist per environment; email templates show the OTP code; sign-ups disabled (invite-only users from `core.users`).
+
+### T-022 UI foundation (Tailwind + shadcn/ui + packages/ui)
+- status: proposed
+- depends: T-002
+- acceptance: shadcn/ui set up in `packages/ui`; KPI card, source chip (`as_of`, live/cached/stale), lane chip, empty/error states and a `BookBalance` label component; Storybook-free unit/render tests.
+
+### T-023 App shell and lane switcher (provisional nav)
+- status: proposed
+- depends: T-017, T-022
+- acceptance: authenticated layout, lane switcher limited to allowed lanes, module placeholder routes; current lane in URL; Playwright test that a non-member lane is not listed and its URL returns 404/403.
+
+### T-024 Navigation per approved prototype
+- status: proposed
+- depends: T-023
+- needs: D-15 (PL-26)
+- acceptance: navigation and page structure match the signed-off prototype.
+
+### T-025 PWA install (Mac + iPhone)
+- status: proposed
+- depends: T-023
+- acceptance: web manifest, icons, Serwist service worker (verify Next 16 compatibility first; fall back to a hand-written SW if needed); no lane data cached by the SW; Lighthouse installability check in CI; manual install checklist for Mac Safari/Chrome and iOS.
+
+### T-026 Settings page (user + lane config read view)
+- status: proposed
+- depends: T-023, T-011
+- acceptance: owner can view lane config and policies (read-only in pilot; editing is T-047); others see only their own preferences.
+
+## Phase A3 — Connector platform and jobs (PL-29)
+### T-030 Connector contract
+- status: proposed
+- depends: T-002
+- acceptance: `Connector` interface per architecture §6 M2 with Zod types (`Provider`, `Connection`, `ReadOp`, `SourceResult` with `as_of` + freshness, `RawRecord`); reusable contract test kit that any connector must pass.
+
+### T-031 Connections and sync runs tables
+- status: proposed
+- depends: T-013
+- acceptance: `core.connections` (lane, provider, external account id, status, token expiry, last_sync, last_error) and `core.sync_runs`; RLS: admin_technical reads health columns only; pgTAP incl. cross-lane denial.
+
+### T-032 Vault token functions
+- status: proposed
+- depends: T-031
+- acceptance: security-definer `store/read/rotate/revoke` keyed by connection_id; execute revoked from `anon` and `authenticated`; pgTAP proves authenticated users cannot call them or read `vault.*`.
+
+### T-033 Token access + redaction in connectors
+- status: proposed
+- depends: T-032, T-030
+- acceptance: `getToken(conn)` only exported inside `packages/connectors` (lint-enforced); a shared redacting logger; tests prove tokens never appear in logs, API responses, RSC payloads or prompt builders (canary-token test).
+
+### T-034 Connector HTTP client + MSW harness
+- status: proposed
+- depends: T-033
+- acceptance: shared client with timeouts, retry/backoff on 429/5xx with `Retry-After`, per-provider rate limit, redacted logging; MSW handlers directory per provider; tests.
+
+### T-035 OAuth flow framework
+- status: proposed
+- depends: T-034, T-017, T-015
+- acceptance: generic start/callback route handlers with `state` + PKCE bound to lane + user; tokens go straight to Vault; connection row created; audited; tested end-to-end against a mock OAuth server.
+
+### T-036 Webhook receiver framework
+- status: proposed
+- depends: T-034, T-031
+- acceptance: route per provider with raw-body signature verification interface, timestamp tolerance, dedupe table `core.webhook_events` (lane_id, provider, event id) + RLS + pgTAP; unsigned/replayed requests rejected (tests); payloads enqueued as Inngest events, not processed inline.
+
+### T-037 Inngest setup
+- status: proposed
+- depends: T-005
+- acceptance: Inngest client, `/api/inngest` route, typed event schemas where `laneId` is required (type test proves events without it fail to compile); runs against the local dev server.
+
+### T-038 conn.sync skeleton
+- status: proposed
+- depends: T-037, T-031, T-030
+- acceptance: `conn.sync` with concurrency key = connection id, retries, cursor persistence, `sync_runs` start/finish/error logging; tested with a mock provider, including one connection failing without blocking another.
+
+### T-039 Raw source records
+- status: proposed
+- depends: T-013
+- acceptance: `raw.source_records` (lane_id, provider, object_type, external_id, payload jsonb, payload_hash, synced_at) + RLS + pgTAP; upsert helper; a guard rejects records from comms/docs providers that contain body fields unless lane policy `store_content_bodies` is true (test).
+
+### T-040 conn.token_health and subscriptions_renew skeleton
+- status: proposed
+- depends: T-038
+- acceptance: daily job flags tokens expiring within 7 days and failing health checks; renewal job interface for push subscriptions; both update `core.connections` and emit a notification event (T-181 consumes it).
+
+### T-041 Sentry with scrubbing
+- status: proposed
+- depends: T-005
+- needs: H-011
+- acceptance: Sentry for server and client; `beforeSend` scrubs tokens, emails, bodies, amounts; test with a canary.
+
+### T-042 Retention purge job
+- status: proposed
+- depends: T-038
+- acceptance: `retention.purge` reads `retention_days` from lane policy per table class (comms 90, calendar 180, conversations 180) and deletes expired rows; tests with time-shifted fixtures. Tables register themselves as they are added.
+
+## Phase A4 — Admin and observability (PL-34)
+### T-045 Connection health page
+- status: proposed
+- depends: T-038, T-023
+- acceptance: status, last sync, token expiry, last error per connection; admin_technical sees no content or figures (Playwright check).
+
+### T-046 Sync runs, job failures and audit viewer
+- status: proposed
+- depends: T-045, T-014
+- acceptance: paginated sync run history and failures; audit viewer filtered by lane and actor, owner + admin only; no payload bodies shown.
+
+### T-047 Lane policy and config editor (owner only)
+- status: proposed
+- depends: T-026, T-015
+- acceptance: owner edits lane_config/policies with Zod validation and step-up MFA; every change versioned and audited; others are denied (RLS + UI test).
+
+## Phase A5 — Connectors (PL-30 – PL-33)
+Both mail providers are built behind one interface. Once D-1 is confirmed, the unconfirmed provider's tasks (T-063 – T-065 or T-066 – T-068) can move to Release B.
+
+### T-050 QuickBooks OAuth (sandbox) + health
+- status: proposed
+- depends: T-035
+- needs: H-005
+- acceptance: Intuit OAuth with rotating refresh tokens persisted atomically on every refresh (test that a concurrent refresh doesn't lose the token); realm from lane_config; health check; contract tests pass.
+
+### T-051 QuickBooks entity sync (CDC)
+- status: proposed
+- depends: T-050, T-038, T-039
+- acceptance: initial load + CDC for Account, Customer, Vendor, Invoice, Payment, Bill, BillPayment, Purchase, Deposit, JournalEntry, Class into `raw.source_records`; MSW fixtures from synthetic data; no bank account numbers stored (field allowlist test).
+
+### T-052 QuickBooks Reports API
+- status: proposed
+- depends: T-050, T-039
+- acceptance: P&L, Balance Sheet, Cash Flow, AR Aging Summary/Detail, AP Aging Summary/Detail fetched with date range, accounting method and optional class from lane_config; stored in `fin.report_cache` (T-055) with params and `as_of`.
+
+### T-053 QuickBooks webhooks
+- status: proposed
+- depends: T-051, T-036
+- acceptance: Intuit signature verified; events trigger targeted CDC for the realm's lane; spoofed payloads rejected (test).
+
+### T-054 Stripe connector
+- status: proposed
+- depends: T-034, T-038, T-039
+- needs: H-006
+- acceptance: restricted key read from Vault; health; sync customers, products, prices, subscriptions, invoices, charges, refunds, payouts, balance transactions into raw; pagination + rate limits; contract tests.
+
+### T-055 Finance normalized schema (part 1: ledger and reports)
+- status: proposed
+- depends: T-013
+- acceptance: `fin.accounts`, `fin.transactions`, `fin.invoices`, `fin.payments`, `fin.bills`, `fin.report_cache` with `numeric(18,2)`, `timestamptz`, source refs, entity/class columns; RLS + pgTAP; only finance roles and owner can read.
+
+### T-056 QuickBooks normalizer → fin.*
+- status: proposed
+- depends: T-051, T-055
+- acceptance: idempotent transform from raw to fin.* (re-run produces no diff); tests on synthetic fixtures incl. voided/deleted records; every row tagged with its entity from the lane_config mapping (APK/PKI classes excluded from PKG).
+
+### T-057 Finance normalized schema (part 2: subscriptions)
+- status: proposed
+- depends: T-055
+- acceptance: `fin.stripe_subscriptions`, `fin.stripe_invoices`, `fin.stripe_charges`, `fin.stripe_payouts` (revenue source) and `fin.subscriber_status` (GHL, **no revenue/amount columns**: enforced by a pgTAP column check); RLS + pgTAP.
+
+### T-058 Stripe webhooks + normalizer
+- status: proposed
+- depends: T-054, T-036, T-057
+- acceptance: Stripe signature verified; events upsert raw + normalized rows; out-of-order events handled by `created`/version; rows tagged with entity by Stripe product mapping; spoof test.
+
+### T-059 GoHighLevel connector
+- status: proposed
+- depends: T-034, T-038, T-039
+- needs: H-007
+- acceptance: Private Integration token from Vault; location from lane_config; contacts, tags, pipelines/opportunities, products, orders/subscriptions read-only; rate limits; contract tests.
+
+### T-060 Paid-subscriber rule engine
+- status: proposed
+- depends: T-059, T-057, T-011
+- needs: D-3
+- acceptance: rule from lane_config (tag / pipeline stage / product, combinable) evaluated into `fin.subscriber_status` with event history (new, cancelled, trial→paid, failed payment); unit tests per rule type; no amounts copied from GHL.
+
+### T-061 Comms and calendar index tables
+- status: proposed
+- depends: T-013
+- acceptance: `comms.message_index` (metadata only, per architecture §6 M5, priority fields, optional approved summary) and `cal.event_index`; pgTAP column check proves no body column exists; RLS + pgTAP; registered with retention purge.
+
+### T-062 Mail/calendar/docs provider interfaces + mocks
+- status: proposed
+- depends: T-030
+- acceptance: `MailProvider`, `CalendarProvider`, `DocumentProvider` (metadata sync, live body fetch, live search, watch/renew, prepareWrite/executeWrite stubs); mock implementation; contract tests both real providers must pass.
+
+### T-063 Google: OAuth + Gmail metadata sync + live body
+- status: proposed
+- depends: T-062, T-061, T-035
+- needs: H-008 (Google), D-1
+- acceptance: Gmail history-API delta into `comms.message_index` (metadata only); `readBody` fetches live and never persists (test spies on DB writes); mailboxes from lane_config.
+
+### T-064 Google: Calendar sync + Drive live search
+- status: proposed
+- depends: T-063
+- acceptance: Calendar sync tokens into `cal.event_index`; Drive `files.list` search returning links/metadata only; contract tests.
+
+### T-065 Google: Gmail watch + renewal
+- status: proposed
+- depends: T-063, T-040, T-036
+- needs: H-013
+- acceptance: Pub/Sub push verified (OIDC token), weekly renewal job, polling fallback when watch fails.
+
+### T-066 Microsoft: Entra OAuth + mail delta + live body
+- status: proposed
+- depends: T-062, T-061, T-035
+- needs: H-008 (Microsoft), D-1
+- acceptance: same acceptance as T-063 on Graph (`/messages/delta` with `$select` metadata only); per-tenant throttling handling.
+
+### T-067 Microsoft: calendar delta + OneDrive/SharePoint search
+- status: proposed
+- depends: T-066
+- acceptance: calendarView delta into `cal.event_index`; Graph Search for drive items; contract tests.
+
+### T-068 Microsoft: change notifications + renewal
+- status: proposed
+- depends: T-066, T-040, T-036
+- acceptance: subscription create/renew before expiry, `clientState` + validation token handling, lifecycle notifications; spoof test.
+
+### T-069 Work tasks index
+- status: proposed
+- depends: T-013
+- acceptance: `work.tasks` (lane, provider, external id, board/database, title, status, owner, due, company, exec_priority, url) + RLS + pgTAP.
+
+### T-070 monday.com connector (read + prepareWrite)
+- status: proposed
+- depends: T-034, T-038, T-069
+- needs: H-009
+- acceptance: boards/items/columns from the IT workspace into `work.tasks`, Company and Exec Priority columns mapped via lane_config; `prepareWrite` returns a proposed payload and never executes (test).
+
+### T-071 Notion connector (read + prepareWrite)
+- status: proposed
+- depends: T-034, T-038, T-069
+- needs: H-009
+- acceptance: search, pages, databases shared with the integration; task-like databases into `work.tasks`; page content fetched live; `prepareWrite` only.
+
+## Phase A6 — Module specs (planner)
+### T-075 Specs batch 1: finance, approvals, assistant
+- status: proposed
+- depends: T-001
+- needs: D-2, D-9
+- acceptance: `docs/specs/{finance,approvals,assistant}.md` with data model, SQL views, tools, UI, tests, open questions and sub-tasks; refines T-080 – T-130 if needed.
+
+### T-076 Specs batch 2: comms, calendar, search, briefing
+- status: proposed
+- depends: T-075
+- needs: D-1, D-12
+- acceptance: `docs/specs/{comms,calendar,search,briefing}.md` as above.
+
+### T-077 Specs batch 3: notifications, admin
+- status: proposed
+- depends: T-075
+- acceptance: `docs/specs/{notifications,admin}.md` as above.
+
+## Phase A7 — Finance (PL-35 – PL-37)
+### T-080 Business calendar SQL
+- status: proposed
+- depends: T-013
+- acceptance: `fin.business_week(ts)` (Sat–Fri, America/New_York), MTD/YTD/period helpers; pgTAP covers DST transitions, year boundaries and Friday 23:59 vs Saturday 00:00 ET.
+
+### T-081 Finance query layer
+- status: proposed
+- depends: T-056, T-017
+- acceptance: lane-scoped server functions in `packages/modules/finance/domain` returning figures + source refs + `as_of`; the only path used by UI and AI tools; unit tests.
+
+### T-082 Cash book balance view
+- status: proposed
+- depends: T-081, T-052
+- acceptance: SQL view of bank-type account balances as **book balance** (column and API field names say `book_balance`); matches the synthetic Balance Sheet fixture to the cent; handles bank accounts shared with APK/PKI per D-18.
+- needs: D-8, D-18
+
+### T-083 AR aging view
+- status: proposed
+- depends: T-081
+- needs: D-8
+- acceptance: buckets current/1–30/31–60/61–90/90+ and an AR >30 total; ties to the QBO AR Aging report cache on fixtures.
+
+### T-084 AP aging + AP due in 14 days
+- status: proposed
+- depends: T-081, T-080
+- needs: D-8
+- acceptance: AP aging buckets and bills due within 14 days (ET); ties to the AP Aging report cache on fixtures.
+
+### T-085 P&L MTD/YTD
+- status: proposed
+- depends: T-081, T-080, T-052
+- needs: D-8
+- acceptance: P&L MTD and YTD from the report cache with class filter from the lane_config entity mapping; tests incl. a class-mapped entity (for APK/PKI later).
+
+### T-086 MRR and churn
+- status: proposed
+- depends: T-058, T-080
+- needs: D-9, D-8
+- acceptance: SQL views for MRR (interval-normalised), new/expansion/contraction/churned MRR, logo and revenue churn per D-9; Stripe only; fixtures with annual plans, discounts, trials, refunds.
+
+### T-087 Paid subscribers
+- status: proposed
+- depends: T-060, T-080
+- acceptance: counts by product, new/cancelled/trial→paid/failed payments per week; no revenue figures in the view (pgTAP check).
+
+### T-088 Controls panel SQL
+- status: proposed
+- depends: T-082, T-087, T-031
+- acceptance: stale reconciliations >30 days, disconnected/stale feeds, uncategorized transactions, period lock status, Stripe-vs-GHL subscriber count mismatch (flag only, no merging); tests per control.
+
+### T-089 Immutable snapshots + sign-off
+- status: proposed
+- depends: T-082, T-083, T-084, T-085, T-086, T-087
+- acceptance: `fin.snapshots` (weekly/monthly, payload of figures + source refs, hash); after sign-off, update/delete fail for all roles (pgTAP); sign-off by finance_operator (Sophie) or owner, requires step-up and is audited.
+
+### T-090 fin.sync and fin.qbo_reports schedules
+- status: proposed
+- depends: T-056, T-052, T-058, T-060
+- acceptance: scheduled Inngest functions per enabled lane from lane_config; idempotent; sync_runs logged.
+
+### T-091 fin.weekly_cash job + report
+- status: proposed
+- depends: T-089, T-090
+- acceptance: Friday run builds the Sat–Fri weekly cash report snapshot; export (PDF/CSV) stored in private per-lane Storage; distribution only via an email proposal (T-110+).
+- needs: D-14
+
+### T-092 fin.monthly_close snapshot job
+- status: proposed
+- depends: T-089, T-090
+- acceptance: month-end snapshot after the books close (trigger configurable); test.
+
+### T-093 fin.controls_daily job
+- status: proposed
+- depends: T-088, T-090
+- acceptance: daily evaluation; red flags emit notification events.
+
+### T-094 Tie-out view
+- status: proposed
+- depends: T-089
+- acceptance: side-by-side portal figure vs QBO report figure vs manually entered reference figure (from Sophie's report), with differences and a pass/fail per KPI per week; manual entries audited.
+
+### T-095 Finance dashboard UI
+- status: proposed
+- depends: T-081, T-088, T-024
+- needs: D-2
+- acceptance: KPI cards from the lane_config KPI list with source chips and freshness; "book balance" label visible; Playwright test.
+
+### T-096 Finance detail pages
+- status: proposed
+- depends: T-095
+- acceptance: AR/AP aging tables (TanStack Table), P&L, MRR/churn and subscriber charts (Recharts), controls panel; all values from the query layer.
+
+### T-097 Weekly report and tie-out pages
+- status: proposed
+- depends: T-091, T-094, T-096
+- acceptance: view/sign-off weekly snapshot (step-up), view tie-out history; finance_operator and owner only.
+
+## Phase A8 — Assistant (PL-38)
+### T-100 LLMProvider interface + Anthropic implementation
+- status: proposed
+- depends: T-005
+- needs: H-002
+- acceptance: provider interface (analysis + fast model, configured not hard-coded); Anthropic implementation via `packages/ai` only; mock provider for tests; request logging excludes prompt content.
+
+### T-101 Tool registry + policy gate
+- status: proposed
+- depends: T-100, T-017, T-015
+- acceptance: modules register read-only tools with Zod args, category and laneId; the gate checks membership, role, lane policy `llm_allowed_categories` on every call and audits it; tests for denied lane, denied category and forged laneId in arguments.
+
+### T-102 Untrusted content wrapping + injection suite
+- status: proposed
+- depends: T-101
+- acceptance: retrieved content wrapped as data with provenance; system prompt states it has no authority; `pnpm test:injection` runs a fixture corpus (email/doc/web injections) against the mock and, opt-in, the real model; asserts no tool escalation, no cross-lane calls, no proposals created from injected text.
+
+### T-103 Conversations storage
+- status: proposed
+- depends: T-013
+- acceptance: `ai.conversations`, `ai.messages` (lane-scoped) + RLS + pgTAP; owner can delete; registered with retention (180 days).
+
+### T-104 Finance tools
+- status: proposed
+- depends: T-101, T-081
+- acceptance: `get_cash_position`, `get_ar_aging`, `get_pnl`, `get_mrr`, `get_subscribers`, `get_controls_status` return figures + source + `as_of` from the query layer.
+
+### T-105 Chat route with citations
+- status: proposed
+- depends: T-104, T-103, T-102
+- acceptance: streaming tool loop; answers carry source chips; a numeric-grounding check flags any figure in the answer that does not appear in tool results (test); multi-lane questions use per-lane sub-calls + composer that sees only allowed summaries.
+
+### T-106 Assistant UI
+- status: proposed
+- depends: T-105, T-024
+- acceptance: chat page with lane chip, source chips, conversation list and delete; Playwright test.
+
+## Phase A9 — Approval Center: email + monday.com (PL-42)
+### T-110 Proposed actions schema + state machine
+- status: proposed
+- depends: T-013, T-014
+- acceptance: `act.proposed_actions` (lane, type, target, payload jsonb, payload_sha256, status, proposer, approver, timestamps); allowed transitions enforced in SQL (proposed→approved/rejected/expired/invalidated; approved→executing→verified/failed); index row in the control plane; pgTAP for every illegal transition and cross-lane denial.
+
+### T-111 Proposal service
+- status: proposed
+- depends: T-110, T-030
+- acceptance: create proposals from `prepareWrite` with canonical JSON + SHA-256; editing creates a new proposal and invalidates the old; action types allowlisted by lane policy `write_actions_allowed`; excluded classes (payments, transfers, trust disbursements, QBO posting, deletions, permission changes) rejected at service and DB level (tests).
+
+### T-112 Approve/reject API
+- status: proposed
+- depends: T-111, T-020
+- acceptance: approve records the hash the approver saw and requires step-up; reject/defer; owner only (per lane approval rules in lane_config); all audited; tampered-hash test.
+
+### T-113 action.execute
+- status: proposed
+- depends: T-112, T-037
+- acceptance: Inngest function with idempotency key = action id; re-validates hash, access and target state; calls `executeWrite` (the only caller); read-back verification; verified/failed states; executes exactly once under retries/duplicate events (test).
+
+### T-114 action.expire
+- status: proposed
+- depends: T-110, T-037
+- acceptance: expires stale proposals per lane_config; test.
+
+### T-115 Approval Center UI
+- status: proposed
+- depends: T-112, T-024
+- acceptance: list + detail showing exact content, sender account, recipients/target, consequences, Claude's rationale; approve/edit/reject/defer; works on iPhone width; Playwright incl. step-up.
+
+### T-116 Executor: email send
+- status: proposed
+- depends: T-113, T-063
+- acceptance: `executeWrite` for send/draft on the confirmed provider; read-back via sent item id; MSW tests.
+
+### T-118 Executor: monday.com
+- status: proposed
+- depends: T-113, T-070
+- acceptance: create/update item and status; read-back; no deletes (test). Notion writes are T-180 (Release B).
+
+### T-119 Approvals go-live gate
+- status: proposed
+- depends: T-113
+- acceptance: per-lane `approvals_live` flag in lane_config (default false); `action.execute` refuses to run and proposals show "not live" while false; flipping it requires owner + step-up and is audited; pgTAP + unit tests. Humans flip it for PKG only after T-170 passes (D-11).
+
+## Phase A10 — Communications (PL-39)
+### T-120 comms.ingest_delta
+- status: proposed
+- depends: T-063, T-042
+- acceptance: push/poll-driven delta updates to `comms.message_index`; per-connection concurrency; tests.
+
+### T-121 comms.classify
+- status: proposed
+- depends: T-120, T-102
+- acceptance: fast model scores priority, needs_reply, category, commitment-candidate flag; priority senders from lane_config boost; only scores/labels stored; injection fixtures included.
+
+### T-122 Priority inbox UI
+- status: proposed
+- depends: T-121, T-024
+- acceptance: list filtered by lane/priority; thread view fetches bodies live (no persistence, `no-store`); Playwright.
+
+### T-123 Comms tools
+- status: proposed
+- depends: T-121, T-101
+- acceptance: `search_email`, `read_email`, `list_priority_threads` registered with category `email`; bodies wrapped as untrusted.
+
+### T-124 Reply drafts → proposals
+- status: proposed
+- depends: T-122, T-111
+- acceptance: "Draft reply" uses `prepare_email` to create a proposal; nothing sent without approval (test).
+
+## Phase A11 — Calendar and meetings (PL-40)
+### T-130 cal.ingest_delta
+- status: proposed
+- depends: T-064
+- acceptance: delta updates to `cal.event_index`; retention 180 days.
+
+### T-131 Unified calendar UI
+- status: proposed
+- depends: T-130, T-024
+- acceptance: day/week views across lanes the user may see; Playwright.
+
+### T-132 Meeting prep pack
+- status: proposed
+- depends: T-130, T-123, T-140
+- needs: D-12
+- acceptance: `cal.meeting_prep` at T-60 and on demand; attendee context, related docs, agenda suggestions (open commitments added in T-183); cited; per-lane; stored only as an approved/derived summary per lane policy.
+
+### T-133 Calendar tools
+- status: proposed
+- depends: T-130, T-101
+- acceptance: `get_calendar`, `get_meeting_context` registered with category `calendar`. Scheduling proposals are T-181 (Release B).
+
+## Phase A12 — Federated search (PL-41)
+Not listed in either bucket in D-10; placed here pending D-16.
+
+### T-140 Federated search service
+- status: proposed
+- depends: T-064, T-071
+- needs: D-16
+- acceptance: parallel fan-out to drive search + Notion within allowed lanes; merge, de-dupe, rank; per-source timeouts (partial results labelled); only the query log stored (`docs.query_log` + RLS + pgTAP).
+
+### T-141 Search UI + tools
+- status: proposed
+- depends: T-140, T-101, T-024
+- acceptance: search page with source links; `search_documents`, `read_document` (live fetch, untrusted wrapping).
+
+## Phase A13 — Briefing and basic notifications (PL-44)
+### T-160 Push subscriptions + web push sender
+- status: proposed
+- depends: T-025, T-013
+- needs: H-014
+- acceptance: `notify.push_subscriptions` + RLS + pgTAP; VAPID sender; iOS installed-PWA subscribe flow; test.
+
+### T-161 Notification events + in-app alerts
+- status: proposed
+- depends: T-160, T-037
+- acceptance: events (approval needed, briefing ready, finance red flag, connection failing, commitment due); payload builder allows only template text + lane code (test rejects names, amounts, subjects); in-app via Supabase Realtime.
+
+### T-162 briefing.daily
+- status: proposed
+- depends: T-104, T-123, T-133, T-112
+- acceptance: per-lane fan-out (calendar today, priority mail, finance alerts, pending approvals; commitments added in T-183) within each lane's policy, then a composer; facts separated from recommendations; `brief.briefings` + RLS + pgTAP + retention; schedule from lane_config (default 06:30 America/New_York).
+
+### T-163 Home page
+- status: proposed
+- depends: T-162, T-095, T-115
+- acceptance: briefing, attention queue, today's meetings, approvals waiting, lane tiles; Playwright.
+
+## Phase A14 — Pilot hardening and go-live (PL-45 – PL-50)
+### T-170 Security test suite
+- status: proposed
+- depends: T-119, T-105, T-124, T-118
+- acceptance: catalog-driven cross-lane RLS tests over every table; auth/AAL and step-up; token canaries; webhook spoofing per provider; injection suite; approval tampering (hash change, replay, double execute) for email + monday.com actions; report in `docs/security/pilot-test.md`; no open blocker/high. **Must pass before PKG approvals go live on Nov 25 (D-11).**
+
+### T-171 Staging environment runbook
+- status: proposed
+- depends: T-004
+- needs: H-001, H-010
+- acceptance: documented, human-run steps for staging migrations and deploys (agents never run them); env var checklist; seed policy (no real data in preview).
+
+### T-172 Tie-out procedure
+- status: proposed
+- depends: T-097
+- needs: H-017, D-8
+- acceptance: `docs/runbooks/tie-out.md`: weekly steps for Sophie/Saurabh, tolerance (to the cent unless agreed), sign-off record; supports success criterion 1.
+
+### T-173 Production deploy runbook + restore drill
+- status: proposed
+- depends: T-170
+- acceptance: `docs/runbooks/production.md`, PITR enabled, restore drill performed by a human and recorded.
+
+---
+
+# Release B — Dec 7 – 31
+
+## Phase B1 — Rollout and specs
+### T-174 Lane onboarding playbook + dry run
+- status: proposed
+- depends: T-090, T-047
+- acceptance: `docs/runbooks/onboard-lane.md`; dry run enabling APK on staging with synthetic config only, with zero code changes (PR diff check); timed against the 3-day target.
+
+### T-185 Specs batch 4: commitments, memory, projects
+- status: proposed
+- depends: T-075
+- needs: D-12
+- acceptance: `docs/specs/{commitments,memory,projects}.md` with data model, tools, UI, tests and sub-tasks.
+
+## Phase B2 — Remaining actions
+### T-117 Executor: calendar changes
+- status: proposed
+- depends: T-113, T-064
+- acceptance: create/move/decline/propose time; read-back verification; tests.
+
+### T-181 Scheduling proposals
+- status: proposed
+- depends: T-133, T-111, T-117
+- acceptance: `prepare_event` creates proposals only (create/move/decline/propose time); executed by T-117 after approval.
+
+### T-180 Executor: Notion
+- status: proposed
+- depends: T-113, T-071
+- acceptance: create/update page via approvals; read-back verification; no deletes (test).
+
+## Phase B3 — Opt-in indexing
+### T-142 Opt-in folder indexing (schema + embeddings interface)
+- status: proposed
+- depends: T-140
+- needs: D-13
+- acceptance: `docs.sources` (opted-in folders) and `docs.chunks` (pgvector, ACL snapshot) + RLS + pgTAP; `EmbeddingProvider` interface; indexing blocked unless lane policy `indexing_enabled`.
+
+### T-143 Indexing job + read-time permission recheck + opt-out purge
+- status: proposed
+- depends: T-142
+- acceptance: `index.rebuild` per folder; results re-check source permissions at read time; opt-out deletes chunks (test).
+
+## Phase B4 — Projects, commitments, memory (PL-43, PL-44)
+### T-150 Projects rollup
+- status: proposed
+- depends: T-070, T-024, T-101
+- acceptance: view of monday.com items by Company/project with Exec Priority, overdue and owner; `get_tasks` tool.
+
+### T-151 Commitments schema
+- status: proposed
+- depends: T-013
+- acceptance: `commit.candidates`, `commit.commitments` (owner, counterparty, due, status, source refs) + RLS + pgTAP.
+
+### T-152 commit.extract
+- status: proposed
+- depends: T-151, T-121
+- needs: D-12
+- acceptance: fast model extracts promises from sent mail (and meeting notes per D-12) with citations; bodies used transiently, not stored; injection fixtures.
+
+### T-153 commit.reconcile
+- status: proposed
+- depends: T-152, T-069, T-111
+- acceptance: matches candidates to `work.tasks`; proposes create/link/dismiss; create goes through approvals; nothing created silently (test).
+
+### T-154 Commitments UI + tool
+- status: proposed
+- depends: T-153, T-024
+- acceptance: list due/overdue; accept/dismiss; `get_commitments` tool; feeds briefing.
+
+### T-155 Memory items + explicit-only write path
+- status: proposed
+- depends: T-013, T-101
+- acceptance: `mem.items` (lane, fact, source, created_at, expires_at) + RLS + pgTAP; written only from explicit user statements or user-confirmed suggestions (tests that retrieved content can't create memory); never read across lanes.
+
+### T-156 Memory settings UI + assistant integration
+- status: proposed
+- depends: T-155, T-106
+- acceptance: view/delete per lane in Settings; assistant reads only current-lane memory; audited deletes.
+
+### T-183 Commitments in briefing and meeting prep
+- status: proposed
+- depends: T-154, T-162, T-132
+- acceptance: briefing adds "due this week / overdue" commitments; prep pack adds open commitments involving the attendees; cited.
+
+## Phase B5 — Notification polish
+### T-182 Notification polish
+- status: proposed
+- depends: T-161
+- acceptance: per-user preferences per event type, quiet hours (America/New_York), deep links into the app after auth, badge counts; payload rules from T-161 unchanged.
+
+## Phase B6 — Release B security test
+### T-184 Security test for Release B and other lanes
+- status: proposed
+- depends: T-170, T-156, T-143, T-153
+- acceptance: re-run T-170 suite plus commitments, memory and indexing tests; per-lane approval enablement for lanes other than PKG; Dec 17–23 window; actions for other lanes go live Dec 29 only if no blocker/high.
