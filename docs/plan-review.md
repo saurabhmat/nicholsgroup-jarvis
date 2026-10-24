@@ -19,7 +19,7 @@ Last reviewed **Oct 23, 2026** against `CLAUDE.md`, `docs/pilot-scope.md`, `docs
 
 ## 2. Pack vs. backlog (handled in the backlog, listed for awareness)
 
-- **Protected files:** `.claude/hooks/guard-files.sh` blocks agent edits to `.github/workflows/*` and `.env*`, and `settings.json` denies reading `.env.*` (including `.env.example`). T-004, T-025 and T-171 now deliver workflow changes as diffs in the PR body for you to apply. T-005 needs the env variable names from you (H-019).
+- **Protected files:** `.claude/hooks/guard-files.sh` blocks agent edits to `.github/workflows/*` and `.env*`, and `settings.json` denies reading real env files (`.env.example` is readable since Oct 24). T-004, T-025 and T-171 now deliver workflow changes as diffs in the PR body for you to apply; `.env.example` changes are proposed the same way.
 - **Stop hook before the monorepo:** resolved Oct 23. `.claude/hooks/check-on-stop.sh` now skips when pnpm is missing or `package.json` has no `typecheck` script, so it starts checking once T-001 lands.
 - **Toolchain:** local Node 24.19.0 (kept on purpose), CI Node 22 (`ci.yml`, `agent-build.yml`). T-001 sets `engines` to `>=22 <25` so both work. Code must not use Node 24-only APIs, because CI would catch them only after the push. Docker isn't usable by your user yet (H-020).
 - **`ci.yml`** uses `pnpm/action-setup@v4` without a version, so T-001 must set `packageManager` in `package.json`.
@@ -29,7 +29,7 @@ Last reviewed **Oct 23, 2026** against `CLAUDE.md`, `docs/pilot-scope.md`, `docs
 
 ## 3. Gaps
 
-- **Metric definitions (D-9, D-3).** MRR/churn rules and the GoHighLevel paid-subscriber rule aren't written down. Both drive success criterion 1.
+- **Paid-subscriber rule (D-3).** The GoHighLevel paid-subscriber rule isn't written down. It drives success criterion 1. (D-9 decided Oct 24, see §7.)
 - **Entity mapping values (D-8).** The approach is decided (classes → customer mapping fallback, Stripe products, GHL tags/products, bank-account owners), but the actual IDs come from Sophie and are needed before tie-out.
 - **AR/AP aging by class.** It isn't confirmed that the QuickBooks Reports API filters aging reports by class. T-052 should check this. If it can't, aging is computed from class-tagged invoices/bills in `fin.*` (T-083/T-084) and tied out to a class-filtered report Sophie runs in QBO.
 - **Tie-out reference data.** The format of Sophie's manual weekly cash report isn't specified. T-094 assumes the reference figures are entered by hand.
@@ -53,9 +53,8 @@ Ways to cut further, roughly by size:
 
 1. **H-020** — Docker permission for your user (blocks T-006 and `pnpm test:db`).
 2. **D-1** — the pub-k.org mail provider.
-3. **D-8** — Sophie's mapping IDs, plus **D-2 / D-3 / D-9** metric definitions, before finance tie-out.
-4. **H-019** — env variable names (blocks T-005).
-5. **H-016** — Resend account + DNS; **D-15** — design sign-off (blocks T-024).
+3. **D-8** — Sophie's mapping IDs, plus **D-3** (paid subscriber) and the customer-churn source question in §7, before finance tie-out.
+4. **H-016** — Resend account + DNS; **D-15** — design sign-off (blocks T-024).
 
 ## 6. Follow-ups from reviews (not blocking)
 
@@ -111,8 +110,49 @@ Under the review policy (dev tooling: one security review, fix BLOCKERs only), t
 
 **Where this lands in the backlog**
 - **T-003:** boundary rule (d) also covers the client-bundle guard for the secret key (import of the service client or secret env name from a `"use client"` module, or the value in built client chunks).
-- **T-005:** server and client Zod schemas, and the optional publishable/secret rename proposal in the PR body. Still needs H-019 for the variable names.
+- **T-005:** server and client Zod schemas (acceptance updated). H-019 done; see the env review below.
 - **T-006:** type generation from the local DB into a shared package. Fix the `.gitignore` gap from §6 M3. The CLI link Saurabh made isn't inside this repo (there is no `supabase/` folder yet). After T-006 creates `supabase/core`, Saurabh re-links from there (`supabase link --workdir supabase/core`, or run it inside that folder), because `migrate-prod.yml` runs the CLI from `supabase/core`.
 - **T-018 – T-021 (auth):** `@supabase/ssr` clients and session refresh in `proxy.ts`.
 - **T-171:** staging runbook now has its inputs (H-001, H-010 done).
 - Production-domain DNS is split out as **H-021** (waits on D-5).
+
+### Oct 24, 2026 — `.env.example` review (closes H-019)
+
+Saurabh applied these changes to `.env.example` on Oct 24 and renamed the Vercel Preview variables to match. `.env.local` is filled after T-006 (local Supabase). T-005 owns the secret-pattern list; T-003 imports it.
+
+| Change | Why |
+|---|---|
+| `NEXT_PUBLIC_SUPABASE_ANON_KEY` → `NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY`; `SUPABASE_SERVICE_ROLE_KEY` → `SUPABASE_SECRET_KEY` (and `SUPABASE_NL_SECRET_KEY`) | Matches Supabase's current key model (`sb_publishable_` / `sb_secret_`), which can be rotated independently of the JWT secret. Recommended now, before any code reads the old names. |
+| Remove `AUTH_PROVIDER`, `AZURE_CLIENT_ID`, `AZURE_CLIENT_SECRET` | They describe Microsoft/Google sign-in, which D-6 replaced. Leaving them invites code to use them. |
+| Keep `GOOGLE_OAUTH_*` under the mail connector; `AZURE_TENANT_ID` → `GRAPH_TENANT_ID` | The connector (H-008) still needs them; one `GRAPH_*` family for Microsoft. |
+| Remove `SUPABASE_DB_PASSWORD` | The app never uses it. The CLI/migrate workflow reads `SUPABASE_*_DB_PASSWORD` from GitHub secrets. It shouldn't be in Vercel. |
+| `VAPID_PUBLIC_KEY` → `NEXT_PUBLIC_VAPID_PUBLIC_KEY`; add `VAPID_SUBJECT` | The browser needs the public key to subscribe (T-160); `web-push` requires a subject. |
+| `SENTRY_DSN` → `NEXT_PUBLIC_SENTRY_DSN` | T-041 reports from client and server; a DSN isn't a secret. |
+
+Client schema after the diff: `NEXT_PUBLIC_APP_URL`, `NEXT_PUBLIC_SUPABASE_URL`, `NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY`, `NEXT_PUBLIC_VAPID_PUBLIC_KEY`, `NEXT_PUBLIC_SENTRY_DSN`. Everything else is server-only.
+
+No Resend variable in the app: Supabase Auth sends sign-in mail through Resend SMTP configured in the Supabase dashboard (T-021), and local tests use Mailpit.
+
+### Oct 24, 2026 — Pilot KPIs and metric definitions (closes D-2, D-9)
+
+**D-2 — pilot KPI list (PKG)**
+- Cash, labelled "book balance" (per account under the owning entity, D-18)
+- AR total and AR >30 days
+- AP due in ≤14 days
+- P&L MTD and YTD
+- MRR
+- Monthly churn
+- Paid subscribers (GoHighLevel), with new and cancelled this week
+- Controls: unreconciled items >30 days, disconnected feeds, uncategorized transactions
+
+**D-9 — MRR and churn (Stripe; months in America/New_York)**
+- **MRR** = sum of active Stripe subscriptions, normalised to monthly (annual ÷ 12, quarterly ÷ 3), after recurring coupons. Excludes trials, 100%-discounted subscriptions and one-off charges. PKG products only, via `lane_config`.
+- **Churned MRR** = MRR of subscriptions cancelled or ended in the month.
+- **Revenue churn %** = churned MRR ÷ MRR at the start of the month.
+- **Customer churn %** = subscribers cancelled in the month ÷ subscribers active at the start of the month.
+- **Net new MRR** = new + expansion − contraction − churned.
+
+**Questions for the T-075 finance spec (don't block it; the spec lists them as open questions):**
+1. **Customer churn source.** Rule 8 makes GoHighLevel the source of subscriber status, and Stripe the source of revenue. Assumed: customer churn % counts GoHighLevel paid subscribers (so it waits on D-3), and revenue churn % uses Stripe. Confirm.
+2. **Month boundaries.** "MRR at start of month" = the snapshot at 00:00 America/New_York on the 1st. A subscription that starts and cancels in the same month counts as new and churned.
+3. **Expansion/contraction** = MRR change on a subscription that stays active (price, quantity or coupon change), measured month-start vs month-end.
