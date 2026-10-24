@@ -1,0 +1,16 @@
+{
+  "name": "@nichols/core",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "exports": {
+    ".": "./src/index.ts",
+    "./lanes": "./src/lanes/index.ts",
+    "./db": "./src/db/index.ts"
+  },
+  "scripts": {
+    "typecheck": "tsc -b",
+    "lint": "eslint .",
+    "test": "vitest run"
+  }
+}

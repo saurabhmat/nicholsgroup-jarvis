@@ -16,6 +16,11 @@
     "test:injection": "node -e \"console.log('test:injection: placeholder, real suite arrives in T-102')\""
   },
   "devDependencies": {
-    "turbo": "^2"
+    "@types/node": "20.19.43",
+    "eslint": "9.39.5",
+    "turbo": "^2",
+    "typescript": "5.9.3",
+    "typescript-eslint": "8.72.0",
+    "vitest": "5.0.5"
   }
 }

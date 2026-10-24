@@ -1,0 +1,21 @@
+{
+  "name": "@nichols/projects",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "exports": {
+    ".": "./src/index.ts",
+    "./domain": "./src/domain/index.ts",
+    "./tools": "./src/tools/index.ts",
+    "./jobs": "./src/jobs/index.ts",
+    "./ui": "./src/ui/index.ts"
+  },
+  "scripts": {
+    "typecheck": "tsc -b",
+    "lint": "eslint .",
+    "test": "vitest run"
+  },
+  "dependencies": {
+    "@nichols/core": "workspace:*"
+  }
+}

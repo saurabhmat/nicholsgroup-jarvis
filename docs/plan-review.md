@@ -82,6 +82,20 @@ Under the review policy (dev tooling: one security review, fix BLOCKERs only), t
   - **L6:** `pnpm-lock.yaml` and `pnpm-workspace.yaml` are mode 0600 locally. Git records 0644, so this only matters if a local tool complains.
   - **M2** (release-age exemption for next@16.4.3): resolved in T-001 by pinning Next 16.4.2 and removing the exemption.
 
+- **T-002 package skeletons** (security + code review Oct 24, 2026; no BLOCKER or HIGH). The subpath-export and `packages/ui` tsconfig findings and the typecheck cache outputs were fixed in T-002; the rest:
+  - **T-003:** boundary rules must also apply inside `apps/web` (the root eslint config ignores `apps/**`); put them in a shared config both import, with a fixture test that fails lint inside `apps/web`.
+  - **T-003:** `scripts/**` is ignored by lint; lint it or record why not.
+  - **T-003:** ban `process.env` outside `packages/core/env`.
+  - **T-003:** ban importing `@nichols/core/env/server` (and later the lane router and service client) from `"use client"` files.
+  - **T-003:** replace the T-002 stub `eslint.config.mjs`.
+  - **T-005:** publish the secret-pattern list as a plain JSON/JS file behind its own subpath export. An `.mjs` ESLint config cannot import `.ts` on Node 22 (CI), so otherwise the T-003 rule works locally and breaks in CI.
+  - **T-016:** make `LaneId` a branded type minted only by the lane router / membership code (it is a plain `string` now).
+  - **T-006:** generate types with `--local` only, write to a temp file then move it, add the generated file to ESLint ignores, and export via `@nichols/core/db`.
+  - **Later / any task:** `transpilePackages` in `apps/web/next.config.ts` must list every `@nichols/*` package web imports (derive it from `apps/web/package.json` deps or add a test).
+  - **Later / any task:** align `apps/web` devDeps (`typescript`, `eslint`, `@types/node`) and root `turbo` to exact pins.
+  - **Later / any task:** remove `data-core={PACKAGE_ID}` from `apps/web/app/layout.tsx` once a real import of core exists.
+  - **Later / any task:** `@types/node` is 20 while `engines` is `>=22`.
+
 ## 7. Decisions log
 
 ### Oct 24, 2026 — Infrastructure (human-owned; closes H-001, H-010)
