@@ -61,6 +61,7 @@ These tasks have all their dependencies done and all their `needs` checked. A hu
 - T-000 — done (merged).
 - T-001 — done (merged).
 - T-002, T-006, T-075 — approved Oct 24, 2026.
+- T-005, T-003 — approved Oct 24, 2026 (build T-005 first).
 - Next after T-002 merges: **T-005**, then **T-003** (imports T-005's secret-pattern list).
 
 ---
@@ -142,7 +143,7 @@ Serial spine (main worktree). T-005 and T-006 can run in parallel once T-001/T-0
 - acceptance: `packages/core`, `packages/connectors`, `packages/ai`, `packages/ui`, `packages/modules/{finance,comms,calendar,commitments,documents,briefing,approvals,notifications,memory,admin,projects}`, each with `domain/ tools/ jobs/ ui/` as relevant, `package.json`, `tsconfig` project refs and one passing Vitest test; `apps/web` imports one package successfully.
 
 ### T-003 Strict TS, shared lint config and architectural boundary rules
-- status: proposed
+- status: approved
 - depends: T-002, T-005
 - acceptance: strict TS everywhere; shared ESLint flat config; boundary rules fail lint when (a) vendor SDKs or outbound `fetch` to external hosts are used outside `packages/connectors`, (b) `executeWrite` is imported outside `packages/modules/approvals`, (c) the Supabase service client is created outside the lane router, (d) `NEXT_PUBLIC_*` env names match secret patterns (imported from T-005's list in `packages/core/env`, not redefined), or the secret client / `SUPABASE_SECRET_KEY` is imported from a `"use client"` module. Each rule has a failing fixture test.
 
@@ -152,7 +153,7 @@ Serial spine (main worktree). T-005 and T-006 can run in parallel once T-001/T-0
 - acceptance: the existing `.github/workflows/ci.yml` (from the pack; agents cannot edit workflows) passes on a PR: install, typecheck, lint, test, test:db, test:injection. Proposed additions (gitleaks secret scan, turbo cache, Lighthouse for T-025) go in the PR body as a ready-to-apply diff for a human.
 
 ### T-005 Environment config
-- status: proposed
+- status: approved
 - depends: T-002
 - needs: H-019
 - acceptance: Zod env modules in `packages/core/env`: a **server** schema (`server-only`) and a **client** schema that contains only `NEXT_PUBLIC_*` names; variable names match `.env.example` (agents can read it but not edit it); owns and exports the **secret-pattern list** (T-003's lint rule imports it); a test fails if a client-schema name lacks `NEXT_PUBLIC_` or a `NEXT_PUBLIC_` name matches a secret pattern; core vars (app, Supabase, Inngest, Anthropic) fail the build when missing; connector credentials are optional at startup and validated when the connector is used (it fails closed), so Preview builds work before every H-item is done; `.gitignore` already covers `.env*`, `.agent/logs` and Supabase temp files (pack); verify only.
