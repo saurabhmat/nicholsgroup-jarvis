@@ -51,3 +51,6 @@ supabase/**/snippets/
 
 # tsc -b output for packages
 dist/
+
+# staged files from scripts (e.g. db:types)
+*.tmp

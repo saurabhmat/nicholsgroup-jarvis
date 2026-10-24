@@ -3,6 +3,6 @@ import { defineConfig, globalIgnores } from "eslint/config";
 import tseslint from "typescript-eslint";
 
 export default defineConfig([
-  globalIgnores(["**/dist/**", "**/.next/**", "**/node_modules/**", "apps/**", "scripts/**", "**/src/db/types.ts"]),
+  globalIgnores(["**/dist/**", "**/.next/**", "**/node_modules/**", "apps/**", "scripts/**", "packages/core/src/db/types.ts"]),
   ...tseslint.configs.recommended,
 ]);

@@ -37,7 +37,7 @@ Check out our [Next.js deployment documentation](https://nextjs.org/docs/app/bui
 
 ## Local database (Supabase + pgTAP)
 
-Needs Docker and the Supabase CLI (2.122+). Everything below is local only; never link or push from here.
+Needs Docker and Supabase CLI **2.122.0** (the version CI pins; other versions generate slightly different types and fail `pnpm db:types:check`). Everything below is local only; never link or push from here.
 
 Layout (the CLI looks for `<workdir>/supabase/config.toml`, and `migrate-prod.yml` runs from `supabase/core`, so the
 nesting is deliberate):
@@ -58,8 +58,9 @@ Commands (from the repo root):
 - Analytics and vector services are disabled in `config.toml` (they fail health checks locally and are not needed).
 
 - `pnpm db:types` regenerates `packages/core/src/db/types.ts` (exported as `Database` from `@nichols/core/db`) from the
-  local stack. Run it **after every migration** and commit the result. It writes via a temp file, so a failure leaves
-  the old file intact. `pnpm db:types:check` fails if the committed file is out of date.
+  local stack. Run `pnpm db:reset && pnpm db:types` **after every migration** and commit the result. It writes via a
+  staged file, so a failure leaves the old file intact. `pnpm db:types:check` compares the committed file with the
+  running local DB, so run it right after a reset (CI runs it after `pnpm test:db`, which resets).
 
 Notes:
 

@@ -1,11 +1,11 @@
 #!/usr/bin/env node
 // Generates DB types from the LOCAL core stack into packages/core/src/db/types.ts.
-// Writes to a temp file and moves it into place only on success (no truncated file on failure).
+// Writes to a staged file and moves it into place only on success (no truncated file on failure).
+// Output differs between CLI versions: use Supabase CLI 2.122.0 (same as CI) so --check doesn't flap.
 // Usage: node scripts/gen-db-types.mjs [--check]   (--check fails if the committed file is out of date)
 // Never uses --linked or --project-id.
 import { spawnSync } from "node:child_process";
-import { mkdtempSync, readFileSync, renameSync, rmSync, writeFileSync, copyFileSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import path from "node:path";
 
@@ -36,20 +36,26 @@ if (gen.status !== 0) {
 if (!gen.stdout.includes("export type Database")) fail("output does not look like generated types");
 
 const content = HEADER + gen.stdout;
-const dir = mkdtempSync(path.join(tmpdir(), "db-types-"));
-const tmp = path.join(dir, "types.ts");
-try {
-  writeFileSync(tmp, content);
-  if (check) {
-    if (readFileSync(target, "utf8") !== content) fail("packages/core/src/db/types.ts is out of date. Run `pnpm db:types`.");
-    console.log("db:types:check ok");
-  } else {
-    // tmp may be on another filesystem, so copy next to the target, then rename atomically.
-    const staged = `${target}.tmp`;
-    copyFileSync(tmp, staged);
-    renameSync(staged, target);
-    console.log(`db:types wrote ${path.relative(root, target)}`);
+
+if (check) {
+  // Compares against the live local DB, so run it right after a reset (CI: after `pnpm test:db`).
+  let committed;
+  try {
+    committed = readFileSync(target, "utf8").replace(/\r\n/g, "\n");
+  } catch {
+    fail("packages/core/src/db/types.ts is missing. Run `pnpm db:types`.");
   }
-} finally {
-  rmSync(dir, { recursive: true, force: true });
+  if (committed !== content) fail("packages/core/src/db/types.ts is out of date. Run `pnpm db:reset && pnpm db:types`.");
+  console.log("db:types:check ok");
+} else {
+  // Stage next to the target (same filesystem), then rename atomically; never leave the staged file behind.
+  const staged = `${target}.${process.pid}.tmp`;
+  try {
+    writeFileSync(staged, content);
+    renameSync(staged, target);
+  } catch (err) {
+    rmSync(staged, { force: true });
+    fail(`could not write ${path.relative(root, target)}: ${err.message}`);
+  }
+  console.log(`db:types wrote ${path.relative(root, target)}`);
 }

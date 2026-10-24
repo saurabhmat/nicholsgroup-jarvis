@@ -1,0 +1,2 @@
+# Generated DB types: LF everywhere so `pnpm db:types:check` is byte-stable on every OS.
+packages/core/src/db/types.ts text eol=lf linguist-generated
