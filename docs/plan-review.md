@@ -153,6 +153,19 @@ Client schema after the diff: `NEXT_PUBLIC_APP_URL`, `NEXT_PUBLIC_SUPABASE_URL`,
 
 No Resend variable in the app: Supabase Auth sends sign-in mail through Resend SMTP configured in the Supabase dashboard (T-021), and local tests use Mailpit.
 
+### Oct 24, 2026 — Env strictness (T-005)
+
+Decided by Saurabh (supersedes "core vars (app, Supabase, Inngest, Anthropic) fail the build" in T-005):
+
+- **Required in every environment:** `NEXT_PUBLIC_APP_URL`, `NEXT_PUBLIC_SUPABASE_URL`, `NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY`, `SUPABASE_SECRET_KEY`, plus `APP_ENV` and `ENABLED_LANES` (app config, not credentials).
+- **Required only in production:** `ANTHROPIC_*` and `INNGEST_*`. Production means `APP_ENV=production` or `VERCEL_ENV=production`, and it fails closed. A partially set group is an error in production.
+- **Local, staging and Preview:** both groups are optional. If missing or partial, the server logs one startup warning (variable names only, never values) and `getAnthropicEnv()` / `getInngestEnv()` return `{ configured: false, missing }`, so AI and job features report "not configured" instead of crashing.
+- **Build gate:** validation runs on deployment builds (`VERCEL=1`), when `APP_ENV` is `staging` or `production` (so self-hosted builds are covered too), or with `NICHOLS_VALIDATE_ENV=1`; CI typecheck, lint and test need no env. A missing core variable on a deployment stops the build, and the same check at server start (`instrumentation.ts`) stops the server at boot.
+- **Vercel setting:** "Automatically expose System Environment Variables" must stay ON (`VERCEL`, `VERCEL_ENV`, `NEXT_PUBLIC_VERCEL_*`). `APP_ENV` must agree with `VERCEL_ENV` (production needs `production`, preview needs `staging`, `local` is rejected on Vercel), and URLs must be https outside local. Consequences: `vercel dev` / `vercel build` locally need `APP_ENV=staging` (they set `VERCEL=1`), and a local `next dev` with `APP_ENV=staging` (e.g. against the staging Supabase project) needs https URLs.
+- **Also decided in review:** the Supabase secret key is read only through `getSupabaseSecretKey()` (not in the general env object); `NEXT_PUBLIC_*` values are allow-pattern checked and every `NEXT_PUBLIC_*` variable present at build is scanned against the secret-pattern list.
+
+Where this lands: backlog T-005, T-003 rule (c)/(d) imports `@nichols/core/env/secret-patterns`, T-041/T-171 (set Preview vars; Anthropic/Inngest needed only for production).
+
 ### Oct 24, 2026 — Pilot KPIs and metric definitions (closes D-2, D-9)
 
 **D-2 — pilot KPI list (PKG)**

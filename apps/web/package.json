@@ -7,7 +7,8 @@
     "build": "next build",
     "start": "next start",
     "typecheck": "next typegen && tsc --noEmit",
-    "lint": "eslint"
+    "lint": "eslint",
+    "check:env-build": "node scripts/check-env-build.mjs"
   },
   "dependencies": {
     "@nichols/core": "workspace:*",

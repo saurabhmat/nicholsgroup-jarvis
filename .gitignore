@@ -54,3 +54,6 @@ dist/
 
 # staged files from scripts (e.g. db:types)
 *.tmp
+
+# env-build smoke test scratch file
+*.check-env-backup
