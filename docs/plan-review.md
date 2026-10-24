@@ -196,24 +196,41 @@ Design is being done in a separate prototype (Claude Design canvas) for Robert's
 - The app shell and every screen task wait on **D-20**: T-023 – T-026, T-045 – T-047, T-095 – T-097, T-106, T-115, T-122, T-131, T-163 (Release A) and T-141, T-150, T-154, T-156 (Release B). D-15 (which only blocked T-024) is folded into D-20.
 - Platform work carries on: T-003, T-005, T-006, T-007 (synthetic seed, *not* a screen task), the data model (T-010 – T-017), auth (T-018 – T-021) and T-022 (UI components on the provisional tokens below). The sign-in and MFA pages from T-018/T-019 are functional and get restyled after sign-off.
 
-**Provisional design tokens** (final after D-20; implement as CSS variables / Tailwind theme so only values change):
+**Provisional design tokens** — v2, Oct 24, 2026: the prototype was restyled to match pub-k.org (final after D-20; implement as CSS variables / Tailwind theme so only values change):
 
 | Token | Value |
 |---|---|
-| Font | Inter, `system-ui` fallback; tabular numbers (`font-variant-numeric: tabular-nums`) for all figures |
-| Ground (page background) | `#F6F7F9` |
+| Heading font | Source Serif 4 (`Georgia, serif` fallback); italic for accent words |
+| Body font | Inter (`system-ui` fallback); tabular numbers (`font-variant-numeric: tabular-nums`) for all figures |
+| Ground (page background) | `#F7F4EC` (cream) |
 | Surface (cards, panels) | `#FFFFFF` |
+| Border | `#E7E1D3` |
+| Divider | `#F1ECE0` |
 | Text | `#111827` |
 | Muted text | `#4B5563` |
-| Border | `#E5E7EB` |
-| Accent (navy) | `#1E3A8A`; hover `#172554`; tint `#EEF2FF` |
-| Alert (orange) | `#C2410C`; alert text `#9A3412` on `#FFEDD5` |
+| Primary (navy) | `#0E2A47`; hover `#081A2E`; tint `#E4ECF5` |
+| Accent italic text | `#1F4A7A` |
+| Accent gold | `#D4AF5A`, decoration only; gold **text** on cream uses `#8A6A1F` for contrast |
+| Alert | `#B45309`; alert text `#92400E` on `#FCEFD9` |
 | Success | `#166534` on `#DCFCE7` |
 | Radius | 8px controls, 12px cards |
+
+**Side menu (desktop):**
+
+| Token | Value |
+|---|---|
+| Background | `#0E2A47` (navy) |
+| Item text | `#D5DEEA` |
+| Section labels | `#A9B8CC` |
+| Active item | `#1F4A7A` with a 3px gold left edge `#D4AF5A` |
+| Company switcher | `#143559`, border `#2C4F78` |
+
+Contrast (WCAG 2.x) checked for every text pair above: all ≥ 4.5:1. Tightest: gold text `#8A6A1F` on cream 4.59:1, alert `#B45309` on cream 4.57:1. Raw gold `#D4AF5A` on cream is 1.9:1, so it never carries text on light backgrounds (on navy it is 7.0:1, fine for the iPhone header accent word).
 
 **Provisional layout:**
 - Desktop: left side menu with the company (lane) switcher at the top; content max-width 1200px.
 - iPhone: bottom tabs **Home · Approvals · Inbox · Ask · More**.
+- iPhone header: navy band (`#0E2A47`) with a white title and a gold accent word.
 - Book balances are always labelled "book balance" (rule 7).
 
 Not yet decided: dark mode and chart palette (Recharts). Raise both at the sign-off.
