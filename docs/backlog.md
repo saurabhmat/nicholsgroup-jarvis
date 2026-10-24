@@ -59,7 +59,9 @@ Rules for running tracks in parallel:
 ## Ready for approval
 These tasks have all their dependencies done and all their `needs` checked. A human sets `status: approved`.
 - T-000 — done (merged).
-- T-001 — done on `agent/T-001` (true on merge). Next ready after merge: **T-002** (package skeletons). T-006 also follows T-001 but needs H-020.
+- T-001 — done (merged).
+- T-002, T-006, T-075 — approved Oct 24, 2026.
+- Next after T-002 merges: **T-005**, then **T-003** (imports T-005's secret-pattern list).
 
 ---
 
@@ -85,19 +87,19 @@ These tasks have all their dependencies done and all their `needs` checked. A hu
 - [ ] H-016 Resend account; sending domain verified (SPF/DKIM DNS records) for sign-in emails; SMTP credentials for staging and prod in 1Password and the Supabase Auth settings
 - [ ] H-017 Intuit **production** approval received and the live PKG QuickBooks file connected in staging (needed for tie-out, T-172)
 - [x] H-018 Local toolchain (Oct 23, 2026): Node 24.19.0 kept locally (CI stays on 22), pnpm 12.15.0 via corepack, Supabase CLI 2.122.0 (npm global)
-- [ ] H-020 Docker access for your user: `docker info` fails with "permission denied" on `/var/run/docker.sock`. Run `sudo usermod -aG docker $USER`, log out and back in (or `newgrp docker`), and check that `docker info` works. Needed by `supabase start` and `pnpm test:db` from T-006 on.
-- [ ] H-019 Let agents see the env variable **names**: either narrow the `Read(./.env.*)` deny rule in `.claude/settings.json` so it doesn't cover `.env.example`, or paste the name list into `.agent/notes/T-005.md`. Needed for T-005.
+- [x] H-020 Docker access for your user (Oct 24, 2026): user is in the `docker` group; `docker info` works in a fresh login. A process started before the group change (e.g. an old VS Code server / Claude Code session) still gets "permission denied" until it is restarted.
+- [x] H-019 Agents can read `.env.example` (deny rule narrowed Oct 24, 2026; real env files still blocked). Publishable/secret rename and cleanup applied Oct 24 and mirrored in Vercel Preview (see `docs/plan-review.md` §7).
 
 ### Decisions (details and options in `docs/plan-review.md`)
 - [ ] D-1 pub-k.org provider: Google Workspace or Microsoft 365 (pilot-scope open decision 1). Both are built behind one interface meanwhile.
-- [ ] D-2 Pilot KPI list (default: cash book balance, AR >30 days, AP due 14 days, P&L MTD/YTD, MRR, churn, paid subscribers, controls)
+- [x] D-2 Pilot KPI list (Oct 24, 2026): cash (book balance), AR total + AR >30 days, AP due ≤14 days, P&L MTD/YTD, MRR, monthly churn, paid subscribers (GoHighLevel, new/cancelled this week), controls (unreconciled >30 days, disconnected feeds, uncategorized transactions). Details in `docs/plan-review.md` §7
 - [ ] D-3 GoHighLevel "paid subscriber" definition (tag, pipeline stage or product)
 - [x] D-4 Roles: Robert owner, Saurabh admin_technical, Sophie finance_operator (pilot-scope decision 4)
 - [ ] D-5 Production domain (default `portal.pub-k.org`)
 - [x] D-6 Sign-in: Supabase 6-digit email code (primary; required inside the installed iPhone app) or magic link, plus Supabase TOTP MFA (AAL2) for all users; Resend for delivery
 - [x] D-7 Keep Next.js 16 (`proxy.ts`); pnpm workspaces + Turborepo
 - [ ] D-8 Sophie supplies the lane_config entity mapping values: the QBO class IDs (and customer IDs where classes are missing), Stripe product IDs, GoHighLevel tags/products and bank-account owners for Ask Pub K and Pub K Institute. Decided: PKG excludes APK and PKI.
-- [ ] D-9 MRR and churn definitions (interval normalisation, discounts, trials, logo vs revenue churn)
+- [x] D-9 MRR and churn definitions (Oct 24, 2026); full definitions in `docs/plan-review.md` §7
 - [x] D-10 Release A by Nov 25 / Release B Dec 7–31 (see "Releases" above)
 - [x] D-11 PKG approvals go live Nov 25 after the pilot security test (T-170); Dec 29 applies to other lanes only
 - [ ] D-12 Source of "meeting notes" for meeting prep and Commitments (Google Meet/Gemini notes, Notion, other) — Release B
@@ -129,14 +131,14 @@ Serial spine (main worktree). T-005 and T-006 can run in parallel once T-001/T-0
 - acceptance: `pnpm-workspace.yaml`, `turbo.json`; the existing Next.js 16 app (kept per D-7) moves to `apps/web` and still runs with `pnpm dev`; `package-lock.json` removed; `engines.node` set to `>=22 <25` (local dev runs Node 24, CI runs 22; no `.nvmrc` pin); `packageManager: pnpm@12.15.0` in the root `package.json` (the pack's `ci.yml` uses `pnpm/action-setup` without a version); root scripts `typecheck`, `lint`, `test`, `test:db`, `test:injection` exist (the last two may be no-op placeholders that exit 0 with a message).
 
 ### T-002 Package skeletons per architecture §10
-- status: proposed
+- status: approved
 - depends: T-001
 - acceptance: `packages/core`, `packages/connectors`, `packages/ai`, `packages/ui`, `packages/modules/{finance,comms,calendar,commitments,documents,briefing,approvals,notifications,memory,admin,projects}`, each with `domain/ tools/ jobs/ ui/` as relevant, `package.json`, `tsconfig` project refs and one passing Vitest test; `apps/web` imports one package successfully.
 
 ### T-003 Strict TS, shared lint config and architectural boundary rules
 - status: proposed
-- depends: T-002
-- acceptance: strict TS everywhere; shared ESLint flat config; boundary rules fail lint when (a) vendor SDKs or outbound `fetch` to external hosts are used outside `packages/connectors`, (b) `executeWrite` is imported outside `packages/modules/approvals`, (c) the Supabase service client is created outside the lane router, (d) `NEXT_PUBLIC_*` env names match secret patterns. Each rule has a failing fixture test.
+- depends: T-002, T-005
+- acceptance: strict TS everywhere; shared ESLint flat config; boundary rules fail lint when (a) vendor SDKs or outbound `fetch` to external hosts are used outside `packages/connectors`, (b) `executeWrite` is imported outside `packages/modules/approvals`, (c) the Supabase service client is created outside the lane router, (d) `NEXT_PUBLIC_*` env names match secret patterns (imported from T-005's list in `packages/core/env`, not redefined), or the secret client / `SUPABASE_SECRET_KEY` is imported from a `"use client"` module. Each rule has a failing fixture test.
 
 ### T-004 CI green on the pack's workflow
 - status: proposed
@@ -147,10 +149,10 @@ Serial spine (main worktree). T-005 and T-006 can run in parallel once T-001/T-0
 - status: proposed
 - depends: T-002
 - needs: H-019
-- acceptance: a Zod-validated server env module in `packages/core/env` that throws on missing vars and is importable only server-side (`server-only`); its variable names match the pack's `.env.example` (agents can neither read nor edit `.env*`; see H-019); `.gitignore` already covers `.env*`, `.agent/logs` and Supabase temp files (pack); verify only.
+- acceptance: Zod env modules in `packages/core/env`: a **server** schema (`server-only`) and a **client** schema that contains only `NEXT_PUBLIC_*` names; variable names match `.env.example` (agents can read it but not edit it); owns and exports the **secret-pattern list** (T-003's lint rule imports it); a test fails if a client-schema name lacks `NEXT_PUBLIC_` or a `NEXT_PUBLIC_` name matches a secret pattern; core vars (app, Supabase, Inngest, Anthropic) fail the build when missing; connector credentials are optional at startup and validated when the connector is used (it fails closed), so Preview builds work before every H-item is done; `.gitignore` already covers `.env*`, `.agent/logs` and Supabase temp files (pack); verify only.
 
 ### T-006 Local Supabase + pgTAP harness
-- status: proposed
+- status: approved
 - depends: T-001
 - needs: H-020
 - acceptance: `supabase/core` project starts locally, laid out so the pack's `migrate-prod.yml` (which runs the CLI from `supabase/core`) finds `config.toml` and the migrations; check the CLI's expected folder layout first; `pnpm test:db` runs pgTAP in `supabase/core/tests`; `supabase/nl/` exists as a documented placeholder (deferred data plane); README section for local DB.
@@ -459,7 +461,7 @@ Both mail providers are built behind one interface. Once D-1 is confirmed, the u
 Docs only. Can run in its own worktree at any time after T-001.
 
 ### T-075 Specs batch 1: finance, approvals, assistant
-- status: proposed
+- status: approved
 - depends: T-001
 - needs: D-2, D-9
 - acceptance: `docs/specs/{finance,approvals,assistant}.md` with data model, SQL views, tools, UI, tests, open questions and sub-tasks; refines T-080 – T-130 if needed.
