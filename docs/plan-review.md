@@ -184,6 +184,8 @@ No Resend variable in the app: Supabase Auth sends sign-in mail through Resend S
 
 **D-19 (b) — assistant conversations.** Rule 6 does not cover the assistant's own conversation text. Conversations are stored per lane, kept 180 days, and can be deleted by the user. Email and document content appears in them only as short cited snippets with links to the source, never full bodies.
 
+**Snippet limit (decided Oct 24, 2026).** Each quote of email/document content in a stored assistant message is capped at 300 characters by default, configurable per lane (`lane_config.assistant.max_snippet_chars`), with a citation link to the source.
+
 **Q-F9 — weekly snapshot timing.** Default accepted for now: Saturday 06:00 America/New_York for the Sat–Fri week just ended. Saurabh is confirming with Sophie.
 
 Where this lands: `docs/specs/approvals.md` §4, §6, §8, §13, §14; `docs/specs/assistant.md` §4, §8, §9; backlog T-010, T-103, T-110, T-111, T-116, D-14.
