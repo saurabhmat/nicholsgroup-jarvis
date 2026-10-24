@@ -70,3 +70,4 @@ Build the complete Executive Portal for **one lane, Pub K Group (PKG)**, as a re
 3. GoHighLevel definition of "paid subscriber" (tag / pipeline stage / product).
 4. Pilot users and roles: Robert owner, Saurabh admin, **Sophie finance operator** (generates and signs off reports). — DECIDED
 5. Production domain (default: `portal.pub-k.org`).
+6. Design sign-off (D-20, PL-26): Robert signs off the Claude Design prototype Nov 5–6. **Do not build the app shell or screens until then**; provisional tokens and layout are in `docs/plan-review.md` §7.

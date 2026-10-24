@@ -31,7 +31,7 @@ The **spine** runs serially in the main worktree: T-000 → T-001 – T-007 → 
 | Track | Tasks | Can start after | Notes |
 |---|---|---|---|
 | Specs | T-075 – T-077 | T-001 | Docs only, no conflicts |
-| W1 Auth + app shell | T-018 – T-026, then T-045 – T-047 | T-017 (T-022 after T-002) | T-024 waits on D-15 |
+| W1 Auth + app shell | T-018 – T-026, then T-045 – T-047 | T-017 (T-022 after T-002) | T-023 – T-026 and T-045 – T-047 wait on D-20 (design sign-off, Nov 5–6); T-018 – T-022 can run now |
 | W2 Connector platform | T-030 – T-042 | T-013 (T-030 after T-002) | |
 | W3 Finance/index schemas | T-055, T-057, T-061, T-080 | T-013 | SQL only |
 | W4 Assistant core | T-100 – T-103 | T-017 | needs H-002 for T-100 |
@@ -105,7 +105,8 @@ These tasks have all their dependencies done and all their `needs` checked. A hu
 - [ ] D-12 Source of "meeting notes" for meeting prep and Commitments (Google Meet/Gemini notes, Notion, other) — Release B
 - [ ] D-13 Embedding provider for opt-in indexing (Anthropic has no embeddings API; e.g. Voyage AI, OpenAI, or Supabase built-in `gte-small`) — Release B
 - [ ] D-14 Weekly cash report distribution: email via the Approval Center (recipients?) or in-portal only. Decided: Sophie signs off. Consequences: email is allowed under D-19 (body deleted after sending) and, if the report is sent as a file, either a link (private Storage signed link) or attachment support, which Release A approvals do not have.
-- [ ] D-15 Design sign-off for navigation/prototype (PL-26), which blocks T-024
+- [ ] D-15 Superseded by D-20 (Oct 24, 2026); no task needs it
+- [ ] D-20 Design sign-off (PL-26): Robert signs off the Claude Design canvas prototype, due Nov 5–6. **To close:** export or link the signed-off screens in `docs/design/` (or note the canvas URL and version here), confirm or change the provisional tokens and layout in `docs/plan-review.md` §7 "Provisional design tokens", then check this box. Blocks the app shell and every screen task (T-023 – T-026, T-045 – T-047, T-095 – T-097, T-106, T-115, T-122, T-131, T-163; Release B T-141, T-150, T-154, T-156). T-022 (UI components) is not blocked and uses the provisional tokens.
 - [x] D-16 Federated search is in Release B
 - [x] D-17 GoHighLevel subscriber counts exclude APK and PKI via lane_config tag/product mapping
 - [x] D-19 Rule 6 scope for PKG (Oct 24, 2026): (a) outbound email drafts are stored only while pending approval; the body is deleted on any terminal state, and the record keeps hash, recipients, subject and timestamps; (b) rule 6 does not cover the assistant's own conversation text: stored per lane, 180-day retention, user-deletable, with email/document content only as short cited snippets with links. Details in `docs/plan-review.md` §7
@@ -230,27 +231,30 @@ T-010 – T-017 are the serial spine. After T-017: auth/shell (T-018 – T-026) 
 ### T-022 UI foundation (Tailwind + shadcn/ui + packages/ui)
 - status: proposed
 - depends: T-002
-- acceptance: shadcn/ui set up in `packages/ui`; KPI card, source chip (`as_of`, live/cached/stale), lane chip, empty/error states and a `BookBalance` label component; Storybook-free unit/render tests.
+- acceptance: shadcn/ui set up in `packages/ui`; theme from the **provisional design tokens** in `docs/plan-review.md` §7 (CSS variables / Tailwind theme only, so the D-20 sign-off changes values, not components; tabular numbers for figures); KPI card, source chip (`as_of`, live/cached/stale), lane chip, empty/error states and a `BookBalance` label component; Storybook-free unit/render tests.
 
 ### T-023 App shell and lane switcher (provisional nav)
 - status: proposed
 - depends: T-017, T-022
+- needs: D-20 (design sign-off)
 - acceptance: authenticated layout, lane switcher limited to allowed lanes, module placeholder routes; current lane in URL; Playwright test that a non-member lane is not listed and its URL returns 404/403.
 
 ### T-024 Navigation per approved prototype
 - status: proposed
 - depends: T-023
-- needs: D-15 (PL-26)
+- needs: D-20 (design sign-off)
 - acceptance: navigation and page structure match the signed-off prototype.
 
 ### T-025 PWA install (Mac + iPhone)
 - status: proposed
 - depends: T-023
+- needs: D-20 (design sign-off)
 - acceptance: web manifest, icons, Serwist service worker (verify Next 16 compatibility first; fall back to a hand-written SW if needed); no lane data cached by the SW; Lighthouse installability check runnable locally (`pnpm lighthouse`), with the CI step proposed for a human to add; manual install checklist for Mac Safari/Chrome and iOS.
 
 ### T-026 Settings page (user + lane config read view)
 - status: proposed
 - depends: T-023, T-011
+- needs: D-20 (design sign-off)
 - acceptance: owner can view lane config and policies (read-only in pilot; editing is T-047); others see only their own preferences.
 
 ## Phase A3 — Connector platform and jobs (PL-29)
@@ -328,16 +332,19 @@ Joins W1 + W2 (needs T-023 and T-038).
 ### T-045 Connection health page
 - status: proposed
 - depends: T-038, T-023
+- needs: D-20 (design sign-off)
 - acceptance: status, last sync, token expiry, last error per connection; admin_technical sees no content or figures (Playwright check).
 
 ### T-046 Sync runs, job failures and audit viewer
 - status: proposed
 - depends: T-045, T-014
+- needs: D-20 (design sign-off)
 - acceptance: paginated sync run history and failures; audit viewer filtered by lane and actor, owner + admin only; no payload bodies shown.
 
 ### T-047 Lane policy and config editor (owner only)
 - status: proposed
 - depends: T-026, T-015
+- needs: D-20 (design sign-off)
 - acceptance: owner edits lane_config/policies with Zod validation and step-up MFA; every change versioned and audited; others are denied (RLS + UI test).
 
 ## Phase A5 — Connectors (PL-30 – PL-33)
@@ -574,17 +581,19 @@ T-080 joins W3 early. T-081 – T-097 form **track W12** once W6 – W8 are merg
 ### T-095 Finance dashboard UI
 - status: proposed
 - depends: T-081, T-088, T-024
-- needs: D-2
+- needs: D-2, D-20 (design sign-off)
 - acceptance: Spec: `docs/specs/finance.md` §10. KPI cards from the lane_config KPI list (ids in spec §4.1) with source chips, freshness and as-of; "Book balance" label visible; customer churn card shows "Pending definition (D-3)" while status is `pending_definition`; MTD figures labelled; Playwright test incl. AAL1 redirect and viewer denial.
 
 ### T-096 Finance detail pages
 - status: proposed
 - depends: T-095
+- needs: D-20 (design sign-off)
 - acceptance: AR/AP aging tables (TanStack Table), P&L, MRR/churn and subscriber charts (Recharts), controls panel; all values from the query layer.
 
 ### T-097 Weekly report and tie-out pages
 - status: proposed
 - depends: T-091, T-094, T-096
+- needs: D-20 (design sign-off)
 - acceptance: Spec: `docs/specs/finance.md` §10. `/finance/reports` and `/finance/tie-out`: view and sign off the weekly snapshot (step-up, shows the hash signed), view tie-out history, enter reference figures and reconciliation dates; finance_operator and owner only.
 
 ## Phase A8 — Assistant (PL-38)
@@ -624,6 +633,7 @@ T-100 – T-103 are **track W4**, parallel with the connectors (after T-017). T-
 ### T-106 Assistant UI
 - status: proposed
 - depends: T-105, T-024
+- needs: D-20 (design sign-off)
 - acceptance: Spec: `docs/specs/assistant.md` §4. Chat page with lane chip, streaming text, tool-progress line, source chips with freshness, grounding warning chip, conversation list and delete, iPhone layout, disabled state when no categories are allowed; Playwright test.
 
 ### T-194 Assistant golden-question eval set
@@ -674,6 +684,7 @@ T-110, T-111 and T-114 are **track W5**, parallel with the connectors. T-112 nee
 ### T-115 Approval Center UI
 - status: proposed
 - depends: T-112, T-024
+- needs: D-20 (design sign-off)
 - acceptance: Spec: `docs/specs/approvals.md` §10. `/approvals` (Pending, Deferred, History) and `/approvals/[id]` showing the exact content as executed, sending account, recipients with new-recipient/external/bcc flags, target, server-built consequences, the assistant's rationale labelled unverified, short hash and status timeline; approve (step-up modal showing the hash), edit (new proposal + diff), reject, defer; "Not live" banner; works on iPhone width; push deep link; Playwright incl. step-up.
 
 ### T-116 Executor: email send
@@ -708,6 +719,7 @@ T-110, T-111 and T-114 are **track W5**, parallel with the connectors. T-112 nee
 ### T-122 Priority inbox UI
 - status: proposed
 - depends: T-121, T-024
+- needs: D-20 (design sign-off)
 - acceptance: list filtered by lane/priority; thread view fetches bodies live (no persistence, `no-store`); Playwright.
 
 ### T-123 Comms tools
@@ -729,6 +741,7 @@ T-110, T-111 and T-114 are **track W5**, parallel with the connectors. T-112 nee
 ### T-131 Unified calendar UI
 - status: proposed
 - depends: T-130, T-024
+- needs: D-20 (design sign-off)
 - acceptance: day/week views across lanes the user may see; Playwright.
 
 ### T-133 Calendar tools
@@ -758,6 +771,7 @@ T-160/T-161 can run in parallel after T-025. T-162/T-163 wait for W12, W13 and t
 ### T-163 Home page
 - status: proposed
 - depends: T-162, T-095, T-115
+- needs: D-20 (design sign-off)
 - acceptance: briefing, attention queue, today's meetings, approvals waiting, lane tiles; Playwright.
 
 ## Phase A13 — Pilot hardening and go-live (PL-45 – PL-50)
@@ -844,6 +858,7 @@ Search connectors for the unconfirmed mail provider (T-186 or T-187) can be drop
 ### T-141 Search UI + tools
 - status: proposed
 - depends: T-140, T-101, T-024
+- needs: D-20 (design sign-off)
 - acceptance: search page with source links; `search_documents`, `read_document` (live fetch, untrusted wrapping).
 
 ### T-132 Meeting prep pack
@@ -868,6 +883,7 @@ Search connectors for the unconfirmed mail provider (T-186 or T-187) can be drop
 ### T-150 Projects rollup
 - status: proposed
 - depends: T-070, T-024, T-101
+- needs: D-20 (design sign-off)
 - acceptance: view of monday.com items by Company/project with Exec Priority, overdue and owner; `get_tasks` tool.
 
 ### T-151 Commitments schema
@@ -889,6 +905,7 @@ Search connectors for the unconfirmed mail provider (T-186 or T-187) can be drop
 ### T-154 Commitments UI + tool
 - status: proposed
 - depends: T-153, T-024
+- needs: D-20 (design sign-off)
 - acceptance: list due/overdue; accept/dismiss; `get_commitments` tool; feeds briefing.
 
 ### T-155 Memory items + explicit-only write path
@@ -899,6 +916,7 @@ Search connectors for the unconfirmed mail provider (T-186 or T-187) can be drop
 ### T-156 Memory settings UI + assistant integration
 - status: proposed
 - depends: T-155, T-106
+- needs: D-20 (design sign-off)
 - acceptance: view/delete per lane in Settings; assistant reads only current-lane memory; audited deletes.
 
 ### T-183 Commitments in briefing and meeting prep
