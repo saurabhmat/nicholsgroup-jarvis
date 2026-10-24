@@ -51,7 +51,7 @@ The **spine** runs serially in the main worktree: T-000 → T-001 – T-007 → 
 Rules for running tracks in parallel:
 - **No more than 3–4 tracks at once.** Every PR still needs your review.
 - **Migrations:** at most two SQL-heavy tracks at a time. Before merging, rebase and renumber migration timestamps so they apply in merge order, then re-run `pnpm test:db`.
-- **Local Supabase:** each worktree needs its own `project_id` and ports in `supabase/core/config.toml`, or `pnpm test:db` has to run one worktree at a time. Two stacks on the default ports collide.
+- **Local Supabase:** each worktree needs its own `project_id` and ports in `supabase/core/supabase/config.toml`, or `pnpm test:db` has to run one worktree at a time. Two stacks on the default ports collide.
 - **Shared files:** `pnpm-lock.yaml` and the `status:` lines in this file will conflict. Regenerate the lockfile and keep both status changes when rebasing.
 
 ---
@@ -79,6 +79,10 @@ These tasks have all their dependencies done and all their `needs` checked. A hu
 - [ ] H-009 monday.com API token (IT workspace); Notion internal integration shared to the target pages/databases (PL-20)
 - [x] H-010 Vercel project linked to the repo (Oct 24, 2026), with **Root Directory = `apps/web`** and **"Include files outside the root directory"** turned on; production branch `main`; a Preview deployment per PR (→ staging Supabase); Vercel Authentication on for Preview and Production; env vars set by Saurabh in the dashboard. Production-domain DNS moved to H-021 (PL-10)
 - [ ] H-021 DNS for the production domain once D-5 is decided (split out of H-010)
+- [ ] H-022 Guardrails **before** re-linking the Supabase CLI from `supabase/core` (T-006 review, Oct 24, 2026). Do one or both:
+  - (preferred) Link from a **separate clone** that agents never use (for example `~/ops/jarvis-link`), so no agent-visible worktree ever contains `supabase/**/.temp/project-ref`. Run migrations to staging from that clone only.
+  - Harden `.claude/`: add these to the `guard-bash.sh` patterns and the settings deny list: `--linked`, `--project-id`, `--db-url`, `config push`, `db pull`, `db dump`, `migration repair`, `migration up`, `migration fetch`, `inspect `, `branches `, `projects `, `functions deploy`, and the staging ref `lxjhaxdkqtmkhloqaffb`. Narrow the allow list to `supabase db reset --local`, `supabase test db --local` and `supabase gen types typescript --local` (plus `supabase start`, `supabase stop`, `supabase migration new`).
+  - Agents cannot do either (they may not edit `.claude/*`).
 - [ ] H-011 Sentry project DSN (free tier) for staging
 - [ ] H-012 GitHub repo in the Nichols-owned org, with branch protection on `main` and Actions enabled
 - [ ] H-013 Google Cloud project for Pub/Sub (Gmail watch), only if D-1 = Google
@@ -154,10 +158,10 @@ Serial spine (main worktree). T-005 and T-006 can run in parallel once T-001/T-0
 - acceptance: Zod env modules in `packages/core/env`: a **server** schema (`server-only`) and a **client** schema that contains only `NEXT_PUBLIC_*` names; variable names match `.env.example` (agents can read it but not edit it); owns and exports the **secret-pattern list** (T-003's lint rule imports it); a test fails if a client-schema name lacks `NEXT_PUBLIC_` or a `NEXT_PUBLIC_` name matches a secret pattern; core vars (app, Supabase, Inngest, Anthropic) fail the build when missing; connector credentials are optional at startup and validated when the connector is used (it fails closed), so Preview builds work before every H-item is done; `.gitignore` already covers `.env*`, `.agent/logs` and Supabase temp files (pack); verify only.
 
 ### T-006 Local Supabase + pgTAP harness
-- status: approved
+- status: done
 - depends: T-001
 - needs: H-020
-- acceptance: `supabase/core` project starts locally, laid out so the pack's `migrate-prod.yml` (which runs the CLI from `supabase/core`) finds `config.toml` and the migrations; check the CLI's expected folder layout first; `pnpm test:db` runs pgTAP in `supabase/core/tests`; `supabase/nl/` exists as a documented placeholder (deferred data plane); README section for local DB.
+- acceptance: `supabase/core` project starts locally, laid out so the pack's `migrate-prod.yml` (which runs the CLI from `supabase/core`) finds `config.toml` and the migrations; check the CLI's expected folder layout first; `pnpm test:db` runs pgTAP in `supabase/core/supabase/tests`; `supabase/nl/` exists as a documented placeholder (deferred data plane); README section for local DB.
 
 ### T-007 Synthetic seed framework
 - status: proposed

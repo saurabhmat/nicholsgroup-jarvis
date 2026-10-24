@@ -96,6 +96,12 @@ Under the review policy (dev tooling: one security review, fix BLOCKERs only), t
   - **Later / any task:** remove `data-core={PACKAGE_ID}` from `apps/web/app/layout.tsx` once a real import of core exists.
   - **Later / any task:** `@types/node` is 20 while `engines` is `>=22`.
 
+- **T-006 local Supabase** (security + code review Oct 24, 2026; no BLOCKER, HIGHs fixed or turned into human items):
+  - pgTAP runs as the superuser, so an RLS "allowed" test would pass even with broken policies. Before T-010/T-013, add helpers (`set local role authenticated` plus `request.jwt.claims`) so tests exercise RLS as a real user. **Assigned to T-013.**
+  - Docker publishes the local stack ports (Postgres, Studio, Mailpit) on all interfaces, reachable from the LAN. Human, host config: set `"ip": "127.0.0.1"` in Docker's `daemon.json` or use a firewall.
+  - Remaining `env()` placeholders in `config.toml` (OAuth, SMTP, etc.) are CLI defaults and are left as is.
+  - Re-link guardrails are tracked as H-022 in `docs/backlog.md`; the CI start step is a proposed `ci.yml` diff in `.agent/pr/T-006.md`.
+
 ## 7. Decisions log
 
 ### Oct 24, 2026 — Infrastructure (human-owned; closes H-001, H-010)
@@ -177,6 +183,8 @@ No Resend variable in the app: Supabase Auth sends sign-in mail through Resend S
 **D-19 (a) — outbound email drafts.** PKG may store a drafted outgoing email **only while it is pending approval** (`proposed`, `approved` or `executing`). The body is deleted as soon as the action reaches any terminal state (`verified`/sent, `failed`, `rejected`, `expired`, `invalidated`, or superseded). After that the approval record keeps only the payload hash, recipients, subject and timestamps (plus type, target ids, status and audit), never the body. `lane_policies.store_outbound_drafts` = true for PKG (default false for other lanes); there is no retention window for bodies.
 
 **D-19 (b) — assistant conversations.** Rule 6 does not cover the assistant's own conversation text. Conversations are stored per lane, kept 180 days, and can be deleted by the user. Email and document content appears in them only as short cited snippets with links to the source, never full bodies.
+
+**Snippet limit (decided Oct 24, 2026).** Each quote of email/document content in a stored assistant message is capped at 300 characters by default, configurable per lane (`lane_config.assistant.max_snippet_chars`), with a citation link to the source.
 
 **Q-F9 — weekly snapshot timing.** Default accepted for now: Saturday 06:00 America/New_York for the Sat–Fri week just ended. Saurabh is confirming with Sophie.
 

@@ -45,7 +45,12 @@ next-env.d.ts
 .agent/logs/*
 !.agent/logs/.gitkeep
 .turbo/
-supabase/.temp/
+supabase/**/.temp/
+supabase/**/.branches/
+supabase/**/snippets/
 
 # tsc -b output for packages
 dist/
+
+# staged files from scripts (e.g. db:types)
+*.tmp
