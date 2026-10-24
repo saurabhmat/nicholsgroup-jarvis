@@ -35,17 +35,17 @@ The **spine** runs serially in the main worktree: T-000 → T-001 – T-007 → 
 | W2 Connector platform | T-030 – T-042 | T-013 (T-030 after T-002) | |
 | W3 Finance/index schemas | T-055, T-057, T-061, T-080 | T-013 | SQL only |
 | W4 Assistant core | T-100 – T-103 | T-017 | needs H-002 for T-100 |
-| W5 Approvals core | T-110, T-111, T-114, then T-112 | T-013 + T-030; T-112 after T-020 | |
+| W5 Approvals core | T-110, T-111, T-114, T-193, then T-112 | T-013 + T-030; T-112 after T-020 | |
 | W6 QuickBooks | T-050 – T-053, T-056 | W2, T-055 | |
 | W7 Stripe | T-054, T-058 | W2, T-057 | needs H-006 |
 | W8 GoHighLevel | T-059, T-060 | W2, T-057 | needs H-007, D-3, D-8 |
 | W9 Google mail/calendar | T-063 – T-065 | W2, T-061 | drop if D-1 = Microsoft |
 | W10 Microsoft mail/calendar | T-066 – T-068 | W2, T-061 | drop if D-1 = Google |
 | W11 monday.com | T-069, T-070 | W2 | needs H-009 |
-| W12 Finance views + UI | T-081 – T-097 | W6, W7, W8 | one worktree only (shared `fin.*` migrations) |
+| W12 Finance views + UI | T-081 – T-097, T-190, T-191 | W6, W7, W8 | one worktree only (shared `fin.*` migrations). D-3 blocks T-087 (via T-060) and through it T-089, T-095, T-097. |
 | W13 Inbox + calendar | T-120 – T-124, T-130, T-131, T-133 | W9 or W10, W4, T-111 | |
-| W14 Approval execution | T-113, T-115, T-116, T-118, T-119 | W5, W9 or W10, W11 | |
-| W15 Assistant finance | T-104 – T-106 | W4, T-081 | |
+| W14 Approval execution | T-113, T-115, T-116, T-118, T-119, T-192 | W5, W9 or W10, W11 | |
+| W15 Assistant finance | T-104 – T-106, T-194 | W4, T-081 | |
 | Converge | T-160 – T-163, then T-170 – T-173 | all of the above | serial |
 
 Rules for running tracks in parallel:
@@ -104,10 +104,11 @@ These tasks have all their dependencies done and all their `needs` checked. A hu
 - [x] D-11 PKG approvals go live Nov 25 after the pilot security test (T-170); Dec 29 applies to other lanes only
 - [ ] D-12 Source of "meeting notes" for meeting prep and Commitments (Google Meet/Gemini notes, Notion, other) — Release B
 - [ ] D-13 Embedding provider for opt-in indexing (Anthropic has no embeddings API; e.g. Voyage AI, OpenAI, or Supabase built-in `gte-small`) — Release B
-- [ ] D-14 Weekly cash report distribution: email via the Approval Center (recipients?) or in-portal only. Decided: Sophie signs off.
+- [ ] D-14 Weekly cash report distribution: email via the Approval Center (recipients?) or in-portal only. Decided: Sophie signs off. Consequences: email needs D-19 and, if the report is sent as a file, either a link (private Storage signed link) or attachment support, which Release A approvals do not have.
 - [ ] D-15 Design sign-off for navigation/prototype (PL-26), which blocks T-024
 - [x] D-16 Federated search is in Release B
 - [x] D-17 GoHighLevel subscriber counts exclude APK and PKI via lane_config tag/product mapping
+- [ ] D-19 Rule 6 scope for PKG: may composed outbound email drafts be stored (`store_outbound_drafts`, default false; retention days), and does rule 6 also cover the assistant's own conversation text (`ai.messages`; until decided, assistant text from turns that used mail/document tools is stored redacted)? Blocks T-110, T-111, T-116 (email proposals); see `docs/specs/approvals.md` §8 and `docs/specs/assistant.md` §4
 - [x] D-18 Cash book balance shown per account under the legally owning entity, no allocation; shared accounts flagged in controls. P&L/aging split by QBO class, else customer mapping. Stripe payouts at account level; revenue split by product from charges/invoices.
 
 ---
@@ -168,7 +169,7 @@ T-010 – T-017 are the serial spine. After T-017: auth/shell (T-018 – T-026) 
 ### T-010 Lanes and lane policies
 - status: proposed
 - depends: T-007
-- acceptance: `core.lanes` (code, name, data_plane, enabled) and `core.lane_policies` (fields from architecture §5.3) with RLS; pgTAP: only PKG enabled; non-members cannot read other lanes' policies; AAL1 sessions are denied.
+- acceptance: `core.lanes` (code, name, data_plane, enabled) and `core.lane_policies` (fields from architecture §5.3, plus `store_outbound_drafts` default false, D-19) with RLS; pgTAP: only PKG enabled; non-members cannot read other lanes' policies; AAL1 sessions are denied.
 
 ### T-011 Lane config (per-lane source settings, no secrets)
 - status: proposed
@@ -394,7 +395,7 @@ Both mail providers are built behind one interface. Once D-1 is confirmed, the u
 ### T-190 Stripe subscription versions (MRR history)
 - status: proposed
 - depends: T-058
-- acceptance: Spec: `docs/specs/finance.md` §5. `fin.stripe_subscription_versions` (grain subscription × entity, `valid_from`/`valid_to`, `is_active`, `mrr` after recurring coupons, interval-normalised) with a no-overlap exclusion constraint; idempotent builder from `raw.source_records` Stripe events ordered by `created`/event version (out-of-order safe); initial backfill from current state, `start_date` and invoice line history (documents the 30-day limit of Stripe's events list); `fin.mrr_at`/`fin.subscription_state_at` read it; fixtures for upgrades, quantity changes, coupon start/expiry, trial conversion, cancellation, resume and multi-entity items; RLS + pgTAP incl. cross-lane denial.
+- acceptance: Spec: `docs/specs/finance.md` §5. `fin.stripe_subscription_versions` (grain subscription × entity, `is_active`/`is_live`/`is_ended`, `mrr` rounded per row and 0 when inactive, `valid_from`/`valid_to`, `is_active`, `mrr` after recurring coupons, interval-normalised) with a no-overlap exclusion constraint including `lane_id`; idempotent builder from `raw.source_records` Stripe events ordered by `created`/event version (out-of-order safe); initial backfill from current state, `start_date` and invoice line history (documents the 30-day limit of Stripe's events list); `fin.mrr_at`/`fin.subscription_state_at` read it; fixtures for upgrades, quantity changes, coupon start/expiry, trial conversion, cancellation, resume and multi-entity items; RLS + pgTAP incl. cross-lane denial.
 
 ### T-059 GoHighLevel connector
 - status: proposed
@@ -468,7 +469,6 @@ Docs only. Can run in its own worktree at any time after T-001.
 ### T-075 Specs batch 1: finance, approvals, assistant
 - status: done
 - depends: T-001
-- needs: D-2, D-9
 - acceptance: `docs/specs/{finance,approvals,assistant}.md` with data model, SQL views, tools, UI, tests, open questions and sub-tasks; refines T-080 – T-130 if needed.
 
 ### T-076 Specs batch 2: comms, calendar, search, briefing
@@ -488,7 +488,7 @@ T-080 joins W3 early. T-081 – T-097 form **track W12** once W6 – W8 are merg
 ### T-080 Business calendar SQL
 - status: proposed
 - depends: T-013
-- acceptance: Spec: `docs/specs/finance.md` §5. `fin.business_week(ts)` (Sat–Fri, America/New_York, exclusive end), `fin.month_start`, `fin.next_month_start`, `fin.ytd_start`, `fin.et_date`, MTD/YTD/period helpers; start of month = 00:00 America/New_York on the 1st; pgTAP covers DST transitions (Mar 8 and Nov 1, 2026: Nov is a 721-hour month and 00:00 Nov 1 is still EDT), year boundaries and Friday 23:59:59 vs Saturday 00:00 ET.
+- acceptance: Spec: `docs/specs/finance.md` §5. `fin.business_week(ts)` (Sat–Fri, America/New_York, exclusive end), `fin.month_start(d date)`, `fin.next_month_start(d date)` (conversions in ET, independent of session timezone; pgTAP also runs with `timezone = 'UTC'`), `fin.ytd_start`, `fin.et_date`, MTD/YTD/period helpers; start of month = 00:00 America/New_York on the 1st; pgTAP covers DST transitions (Mar 8 and Nov 1, 2026: Nov is a 721-hour month and 00:00 Nov 1 is still EDT), year boundaries and Friday 23:59:59 vs Saturday 00:00 ET.
 
 ### T-081 Finance query layer
 - status: proposed
@@ -523,7 +523,7 @@ T-080 joins W3 early. T-081 – T-097 form **track W12** once W6 – W8 are merg
 - status: proposed
 - depends: T-190, T-080
 - needs: D-9, D-8
-- acceptance: Spec: `docs/specs/finance.md` §4.2, §6. Revenue side only, Stripe only. SQL `fin.subscription_state_at`, `fin.mrr_at`, `fin.mrr_movements`, `fin.v_mrr_monthly` implementing D-9 plus the Oct 24 decisions exactly: MRR (interval-normalised, after recurring coupons, no trials / 100%-discounted / one-offs, PKG products via lane_config), start of month = 00:00 America/New_York on the 1st, new / expansion / contraction (month-start vs month-end change of an active subscription's MRR) / churned MRR, revenue churn % = churned MRR ÷ start-of-month MRR, same-month start+cancel counts as new and churned; property test `end_mrr = start_mrr + net_new_mrr`; month-to-date rows flagged `is_final = false`; `fin.v_stripe_revenue_month` by product (net of refunds); payouts account-level only, never split (D-18); fixtures with annual/quarterly plans, percent and amount coupons, once-coupons, trials, 100% discount, refunds, upgrades, same-month cancel, Nov 2026 DST month. Customer churn % is not here (T-087, GoHighLevel).
+- acceptance: Spec: `docs/specs/finance.md` §4.2, §6. Revenue side only, Stripe only. SQL `fin.subscription_state_at`, `fin.mrr_at`, `fin.mrr_movements`, `fin.v_mrr_monthly` implementing D-9 plus the Oct 24 decisions exactly: MRR (interval-normalised, after recurring coupons, no trials / 100%-discounted / one-offs, PKG products via lane_config), start of month = 00:00 America/New_York on the 1st, new / expansion / contraction (month-start vs month-end change of an active subscription's MRR) / churned MRR (cancelled/ended subscriptions only; unpaid/paused shown as contraction, spec Q-F2), revenue churn % = churned MRR ÷ start-of-month MRR, same-month start+cancel counts as new and churned; property test `end_mrr = start_mrr + net_new_mrr`; month-to-date rows flagged `is_final = false`; `fin.v_stripe_revenue_month` by product (net of refunds); payouts account-level only, never split (D-18); version rows rounded per row, `mrr = 0` when inactive; fixtures with annual/quarterly plans, percent and amount coupons, once-coupons, trials, 100% discount, refunds, upgrades, same-month cancel, Nov 2026 DST month. Customer churn % is not here (T-087, GoHighLevel).
 
 ### T-087 Paid subscribers
 - status: proposed
@@ -553,7 +553,7 @@ T-080 joins W3 early. T-081 – T-097 form **track W12** once W6 – W8 are merg
 ### T-091 fin.weekly_cash job + report
 - status: proposed
 - depends: T-089, T-090
-- acceptance: Spec: `docs/specs/finance.md` §9. Friday run (time from `lane_config.finance.weekly_cash_time`, default 18:00 America/New_York) builds the Sat–Fri weekly cash report snapshot (cash by account as book balance at week start/end, Stripe payouts at account level, AR/AP totals, AR >30, AP due 14d, subscribers new/cancelled, controls summary); refuses to write if sources are stale and emits a notification event; export (PDF/CSV, derived figures only) stored in private per-lane Storage; notifies Sophie to sign off; distribution only via an email proposal (T-110+).
+- acceptance: Spec: `docs/specs/finance.md` §9. Saturday run (time from `lane_config.finance.weekly_cash_time`, default 06:00 America/New_York) builds the snapshot for the Sat–Fri week that just ended, storing `period_start`/`period_end` instants in the payload (test with events between Friday 18:00 and Saturday 00:00 ET, and one at Saturday 00:30 that is excluded; confirm timing with Sophie, spec Q-F9) (cash by account as book balance at week start/end, Stripe payouts at account level, AR/AP totals, AR >30, AP due 14d, subscribers new/cancelled, controls summary); refuses to write if sources are stale and emits a notification event; export (PDF/CSV, derived figures only) stored in private per-lane Storage; notifies Sophie to sign off; distribution only via an email proposal (T-110+).
 - needs: D-14
 
 ### T-092 fin.monthly_close snapshot job
@@ -609,7 +609,7 @@ T-100 – T-103 are **track W4**, parallel with the connectors (after T-017). T-
 ### T-103 Conversations storage
 - status: proposed
 - depends: T-013
-- acceptance: Spec: `docs/specs/assistant.md` §4. `ai.conversations`, `ai.messages` (with `citations`, `grounding`) and `ai.tool_calls` (validated args, status, denial reason, result only for `resultStore = full`), all lane-scoped, RLS = AAL2 + lane membership + `user_id = auth.uid()` (own conversations only; admin_technical none) + pgTAP incl. cross-lane and cross-user denial; user can hard-delete (cascade); registered with retention (180 days); no email/doc bodies or tokens stored.
+- acceptance: Spec: `docs/specs/assistant.md` §4. `ai.conversations`, `ai.messages` (with `citations`, `grounding`) and `ai.tool_calls` (validated args, status, denial reason, result only for `resultStore = full`), all lane-scoped, RLS = AAL2 + lane membership + `user_id = auth.uid()` (own conversations only; admin_technical none) + pgTAP incl. cross-lane and cross-user denial; user can hard-delete (cascade); registered with retention (180 days); no email/doc bodies or tokens stored; assistant text from turns that used `refs_only` tools is stored in redacted form (placeholder text, citations kept) until D-19 allows otherwise.
 
 ### T-104 Finance tools
 - status: proposed
@@ -637,12 +637,14 @@ T-110, T-111 and T-114 are **track W5**, parallel with the connectors. T-112 nee
 ### T-110 Proposed actions schema + state machine
 - status: proposed
 - depends: T-013, T-014
-- acceptance: Spec: `docs/specs/approvals.md` §4. `act.proposed_actions` (full column set in the spec incl. `payload_sha256` over canonical JSON of lane+type+connection+target+payload, `expected_before`, `consequences`, `approved_hash`, `deferred_until`, `expires_at`), insert-only `act.status_history` and `act.executions` (unique single claim), allowed transitions enforced in SQL (proposed→approved/rejected/expired/invalidated; approved→executing/expired/invalidated; executing→verified/failed); payload/hash/target immutable after `proposed`; `act.is_allowed_type()` with excluded classes rejected at DB level; `authenticated` has no direct DML, only security-definer functions (`propose`, `approve` with in-SQL step-up check of the JWT `amr` or an equivalent single-use token, `reject`, `supersede`) and service-only `claim_execution`/`mark_*`; index row `core.action_index`; pgTAP for every illegal transition, tampering, AAL1/stale step-up, viewer/finance_operator/admin_technical denial and cross-lane denial.
+- needs: D-19
+- acceptance: Spec: `docs/specs/approvals.md` §4. `act.proposed_actions` (full column set in the spec incl. `payload_sha256` over canonical JSON of lane+type+connection+target+payload, `expected_before`, `consequences`, `approved_hash`, `deferred_until`, `expires_at`), insert-only `act.status_history` and `act.execution_claims` (primary key action_id: exactly one claim, no attempt column), allowed transitions enforced in SQL (proposed→approved/rejected/expired/invalidated; approved→executing/expired/invalidated; executing→verified/failed); payload/hash/target immutable after `proposed`; `act.is_allowed_type()` with excluded classes rejected at DB level; `authenticated` has no direct DML; `act.propose` is service-role only (the app computes the JCS hash) and users call security-definer functions (`approve` with in-SQL step-up check of the JWT `amr` or an equivalent single-use token, `reject`, `defer`, `supersede`; every security-definer function sets an explicit `search_path`) and service-only `claim_execution`/`mark_*`/`invalidate_approved`/`purge_content` (purge clears payload, consequences, rationale, source_refs and expected_before); `email.*` refused unless `lane_policies.store_outbound_drafts`; index row `core.action_index`; pgTAP for every illegal transition, tampering, AAL1/stale step-up, viewer/finance_operator/admin_technical denial and cross-lane denial.
 
 ### T-111 Proposal service
 - status: proposed
 - depends: T-110, T-030
-- acceptance: Spec: `docs/specs/approvals.md` §5. `proposeAction` from `prepareWrite` with canonical JSON (RFC 8785) + SHA-256, rationale and source refs; editing creates a new proposal (`supersedes_id`) and invalidates the old; types allowlisted by lane policy `write_actions_allowed`; excluded classes rejected at service and DB level (tests); per-lane and per-turn pending limits; consequences rendered server-side; `userInitiated` required for assistant-created proposals; audit + `approval.needed` event.
+- needs: D-19
+- acceptance: Spec: `docs/specs/approvals.md` §5. `proposeAction` from `prepareWrite` with canonical JSON (RFC 8785) + SHA-256, rationale and source refs; editing creates a new proposal (`supersedes_id`) and invalidates the old; types allowlisted by lane policy `write_actions_allowed`; excluded classes rejected at service and DB level (tests); per-lane and per-turn pending limits; consequences rendered server-side; `userInitiated` (true only for the direct Draft-reply click or an explicit prepare intent, set by the route) required for assistant-created proposals, with `derived_from_retrieved` set and shown when recipients/targets come from retrieved content (test); only composed text is stored for email, never quoted thread text (canary test); `email.*` refused unless `store_outbound_drafts`; audit + `approval.needed` event.
 
 ### T-193 ApprovedAction brand and mint boundary
 - status: proposed
@@ -657,17 +659,17 @@ T-110, T-111 and T-114 are **track W5**, parallel with the connectors. T-112 nee
 ### T-113 action.execute
 - status: proposed
 - depends: T-112, T-037, T-193
-- acceptance: Spec: `docs/specs/approvals.md` §6. Inngest `action.execute` (idempotency key = action id, concurrency per action and connection): claim → revalidate (hash, `approvals_live`, type still allowed, approver still holds role, connection belongs to lane and healthy, `expected_before` drift, mailbox in lane_config) → `executeWrite` (the only caller, via the `ApprovedAction` brand from T-193) → read-back verify → verified/failed; crash after provider accept never re-sends (`outcome_unknown` for a human); executes exactly once under retries, duplicate events and concurrent workers (test with a counting mock connector).
+- acceptance: Spec: `docs/specs/approvals.md` §6. Inngest `action.execute` (retries = 0, recovery only via T-192; idempotency key = action id, concurrency per action and connection): claim → revalidate (hash, `approvals_live`, type still allowed, approver still holds role, connection belongs to lane and healthy, `expected_before` drift, mailbox in lane_config) → `executeWrite` (the only caller, via the `ApprovedAction` brand from T-193) → read-back verify → verified/failed; crash after provider accept never re-sends (`outcome_unknown` for a human); executes exactly once under retries, duplicate events and concurrent workers (test with a counting mock connector).
 
 ### T-114 action.expire
 - status: proposed
 - depends: T-110, T-037
-- acceptance: Spec: `docs/specs/approvals.md` §6. `action.expire` cron (every 5 min) expires `proposed`/`approved` actions past `expires_at` (defaults from lane_config: email 72 h, monday 168 h); deferred items resurface; audited; test.
+- acceptance: Spec: `docs/specs/approvals.md` §6. `action.expire` cron (every 5 min) expires `proposed`/`approved` actions past `expires_at` (defaults from lane_config: email 72 h, monday 168 h); deferred items resurface; also invalidates approved actions whose approver lost the approver role (`act.invalidate_approved`); audited; test.
 
 ### T-192 action.reconcile_stuck
 - status: proposed
 - depends: T-113
-- acceptance: Spec: `docs/specs/approvals.md` §6. Cron that finds actions in `executing` longer than N minutes (lane_config), runs the provider marker lookup/read-back, and moves them to `verified` or `failed` (`outcome_unknown` when undecidable, never re-sending); audited; test with a mock connector that crashes after accepting a send.
+- acceptance: Spec: `docs/specs/approvals.md` §6. Cron that finds actions in `executing` longer than N minutes (lane_config), runs the provider marker lookup/read-back, and moves them to `verified` or `failed` (verify-only: never creates a second claim, never re-executes; monday create uses the marker lookup) (`outcome_unknown` when undecidable, never re-sending); audited; test with a mock connector that crashes after accepting a send.
 
 ### T-115 Approval Center UI
 - status: proposed
@@ -677,12 +679,13 @@ T-110, T-111 and T-114 are **track W5**, parallel with the connectors. T-112 nee
 ### T-116 Executor: email send
 - status: proposed
 - depends: T-113, T-063
+- needs: D-19
 - acceptance: Spec: `docs/specs/approvals.md` §8. `executeWrite` for `email.send` and `email.save_draft` on the confirmed provider (plain text, no attachments, no deletes); `X-Portal-Action-Id` idempotency marker and lookup before any retry; read-back via sent item id; MSW tests incl. crash-after-send.
 
 ### T-118 Executor: monday.com
 - status: proposed
 - depends: T-113, T-070
-- acceptance: Spec: `docs/specs/approvals.md` §8. `monday.item.create|update|set_status`; column writes limited to the lane_config allowlist; `expected_before` drift check; read-back; no deletes (test). Notion writes are T-180 (Release B).
+- acceptance: Spec: `docs/specs/approvals.md` §8. `monday.item.create|update|set_status`; column writes limited to the lane_config allowlist; `expected_before` drift check; `monday.item.create` writes the action id to a `portal_action_id` marker column and looks it up first so recovery never duplicates an item (needs the board column, spec Q-A7); read-back; no deletes (test). Notion writes are T-180 (Release B).
 
 ### T-119 Approvals go-live gate
 - status: proposed

@@ -27,7 +27,7 @@ Out of scope:
 - Money `numeric(18,2)`; time `timestamptz`; months and weeks computed in America/New_York; business week Sat–Fri.
 - Cash is always labelled "book balance" (column `book_balance`, API field `bookBalance`, UI label "Book balance"). Never "bank balance".
 - Stripe is the source of revenue and MRR. GoHighLevel is the source of subscriber status and has no money columns. The two are never added together; a mismatch is a control flag, not a merge.
-- Only the finance normalisers and snapshot jobs write `fin.*` (service role, jobs only). AI output and the browser never write `fin.*`.
+- Only the finance normalisers and snapshot jobs (service role, jobs only) and the named security-definer user functions (`fin.sign_off_snapshot`, the reconciliation entry function, tie-out reference entry) write `fin.*`. Every security-definer function sets `search_path = pg_catalog, fin, core` (explicit, no `public`) and is tested for it. AI output and the browser never write `fin.*`.
 - Metric views are `security_invoker = true` and filter `lane_id`; functions take `p_lane_id` and are `security invoker` unless they are the sign-off functions (below).
 
 ## 4. Metric definitions (authoritative)
@@ -53,11 +53,11 @@ The KPI list per lane lives in `lane_config.kpis` (T-011). D-2's "Monthly churn"
 Month = calendar month in America/New_York. **Start of month = 00:00 America/New_York on the 1st** (decided Oct 24, 2026). The month-end instant is the start of the next month, so one month's end MRR equals the next month's start MRR. November 2026 is a 721-hour month (DST ends Nov 1 at 02:00), and 00:00 on Nov 1 is still EDT; both are test cases.
 
 - **MRR** = sum of active Stripe subscriptions, normalised to monthly (annual ÷ 12, quarterly ÷ 3), after recurring coupons. Excludes trials, 100%-discounted subscriptions and one-off charges. PKG products only, via `lane_config`.
-  - Normalisation, per subscription item: `unit_amount × quantity` converted by price interval: month ÷ `interval_count`; year ÷ 12 ÷ `interval_count`; week × 52 ÷ 12 ÷ `interval_count`; day × 365 ÷ 12 ÷ `interval_count`. Half-cent results round at the end of the sum (banker's rounding is not used; `round(x, 2)`).
+  - Normalisation, per subscription item: `unit_amount × quantity` converted by price interval: month ÷ `interval_count`; year ÷ 12 ÷ `interval_count`; week × 52 ÷ 12 ÷ `interval_count`; day × 365 ÷ 12 ÷ `interval_count`. Each version row's `mrr` is rounded once to `numeric(18,2)` with `round(x, 2)` (half away from zero) when the version is written; sums add the rounded row values and are never re-rounded.
   - Recurring coupons: a `percent_off` or `amount_off` coupon with duration `forever`, or `repeating` and not yet expired at the instant, reduces MRR. `amount_off` is normalised like a price and capped so MRR is not negative. `once` coupons are ignored. The discount is applied to the subscription's PKG items pro rata.
-  - Excluded: status `trialing`, items on non-PKG products (by entity mapping), metered/usage prices (flagged in controls), non-USD subscriptions (flagged), tax, shipping, one-off invoice items.
-  - A subscription is **active** when its status is `active` or `past_due`; `canceled`, `unpaid`, `paused`, `incomplete`, `incomplete_expired` and `trialing` are not active. A subscription whose MRR is 0 because of a 100% discount is active but contributes 0 (and is not "churned").
-- **Churned MRR** = MRR of subscriptions cancelled or ended in the month (effective end, not a scheduled `cancel_at_period_end`).
+  - Excluded: status `trialing`, items on non-PKG products (by entity mapping), metered/usage prices (flagged in controls), non-USD subscriptions (flagged), tax, shipping, one-off invoice items. Flagged under `unsupported_billing` instead of guessed: customer-level discounts, multiple `discounts[]` entries on one subscription (applied in Stripe's order only when all are recurring percent/amount coupons, otherwise flagged), and tiered/volume prices or `unit_amount_decimal` prices that cannot be reduced to a unit amount.
+  - Status flags per version: **active** = `active` or `past_due` (contributes MRR); **live** = active, `unpaid` or `paused` (still a customer, may contribute 0); **ended** = `canceled` or `incomplete_expired`. `trialing` and `incomplete` are not live. `mrr` is stored as 0 whenever `is_active = false`. A subscription whose MRR is 0 because of a 100% discount is active but contributes 0 and is not "churned".
+- **Churned MRR** = MRR of subscriptions cancelled or ended in the month (narrow D-9 reading: the subscription is `canceled`/ended; effective end, not a scheduled `cancel_at_period_end`). A subscription that becomes `unpaid` or `paused` is not churned: its MRR drops to 0 and shows as contraction, and resuming shows as expansion (open question Q-F2).
 - **Revenue churn %** = churned MRR ÷ MRR at the start of the month. Null when start MRR is 0.
 - **Net new MRR** = new + expansion − contraction − churned. Invariant tested on every fixture and as a property test: `end_mrr = start_mrr + net_new_mrr`.
 
@@ -65,10 +65,10 @@ Month movement classification, per subscription and entity, comparing the snapsh
 
 | Situation | Movement |
 |---|---|
-| Active at `ts0` and at `ts1` (including 0 → >0 or >0 → 0 through coupons) | Expansion if MRR rose, contraction if it fell, by `mrr(ts1) − mrr(ts0)`. Price, quantity or coupon changes only count through this month-start vs month-end comparison (decided Oct 24, 2026). |
-| Active with MRR >0 at `ts0`, not active at `ts1` | Churned = `mrr(ts0)`. |
-| Not active at `ts0`, active at `ts1` with MRR >0 (new subscription, trial converted, resumed) | New = `mrr(ts1)`. |
-| Not active at `ts0` and not active at `ts1`, but active with MRR >0 at some point inside the month | **Counts as both new and churned** (decided Oct 24, 2026), each equal to the MRR at first activation. |
+| Live at `ts0` and not ended at `ts1` (including 0 → >0 or >0 → 0 through coupons, `unpaid`, `paused`, resume) | Expansion if MRR rose, contraction if it fell, by `mrr(ts1) − mrr(ts0)`. Price, quantity or coupon changes only count through this month-start vs month-end comparison (decided Oct 24, 2026). |
+| Live at `ts0` and ended by `ts1` (cancelled or ended in the month) | Churned = `mrr(ts0)` (0 if it was already contributing 0). |
+| Not live at `ts0` (no subscription, trial, incomplete) and live at `ts1` with MRR >0 (new subscription, trial converted) | New = `mrr(ts1)`. |
+| Not live at `ts0` and not live at `ts1` (ended, or still trialing), but active with MRR >0 at some point inside the month | **Counts as both new and churned** (decided Oct 24, 2026), each equal to the MRR at first activation. |
 | Anything else | No movement. |
 
 Intra-month changes that never appear at a month boundary are ignored by design, which is what makes the invariant hold. A customer who cancels one subscription and starts another in the same month shows as churned plus new. The current month is "month to date": end instant = now, flagged `is_final = false` until the month closes and its snapshot is signed.
@@ -76,7 +76,7 @@ Intra-month changes that never appear at a month boundary are ignored by design,
 ### 4.3 Subscribers and customer churn (GoHighLevel)
 
 - **Paid subscriber** = a GoHighLevel contact meeting the lane's rule in `lane_config` (tag / pipeline stage / product, combinable), evaluated by T-060. The rule itself is open decision **D-3**. APK/PKI tags and products are excluded (D-17).
-- **Customer churn %** = subscribers cancelled in the month ÷ subscribers active at the start of the month. Subscribers come from **GoHighLevel**, not Stripe (decided Oct 24, 2026, so this KPI **waits on D-3**). Same-month start + cancel counts as new **and** cancelled, as in 4.2. Start instant as in 4.2.
+- **Customer churn %** = subscribers cancelled in the month ÷ subscribers active at the start of the month. Subscribers come from **GoHighLevel**, not Stripe (decided Oct 24, 2026, so this KPI **waits on D-3**). Same-month start + cancel counts as new **and** cancelled, as in 4.2. The percentage is not clamped and can exceed 100%; the UI shows the raw value with a tooltip explaining why. Start instant as in 4.2.
 - Weekly counts (`new`, `cancelled`, `trial_to_paid`, `failed_payment`) use the business week `fin.business_week` (Sat 00:00 – Fri 23:59:59 ET).
 - GoHighLevel never contributes an amount. The Stripe-vs-GoHighLevel difference in active customer count is shown only in the controls panel.
 
@@ -127,7 +127,7 @@ Entity: every row that can belong to an entity has `entity_code text` set by the
 | `fin.stripe_subscriptions` | Current state: `source_id`, `customer_id`, `status`, `currency`, `livemode`, `start_date`, `canceled_at`, `ended_at`, `cancel_at_period_end`, `trial_end`, `entity_code` (null = mixed, see items), `created`, `event_version`. |
 | `fin.stripe_subscription_items` | `subscription_id`, `item_id`, `price_id`, `product_id`, `entity_code`, `interval`, `interval_count`, `unit_amount numeric(18,2)`, `quantity`, `usage_type`, `currency`. |
 | `fin.stripe_discounts` | `subscription_id`, `coupon_id`, `percent_off numeric`, `amount_off numeric(18,2)`, `duration` (`forever|repeating|once`), `duration_in_months`, `starts_at`, `ends_at`. |
-| `fin.stripe_subscription_versions` (T-190) | **History used for point-in-time MRR.** Grain: subscription × entity. `subscription_id`, `entity_code`, `valid_from timestamptz`, `valid_to timestamptz null`, `status`, `is_active bool`, `mrr numeric(18,2)` (after recurring coupons, normalised), `product_ids text[]`, `cause` (event id). A version is closed and a new one opened on each change of status, items, quantity, price, coupon or coupon expiry. Exclusion constraint: no overlapping ranges per subscription and entity. Rebuilt idempotently from `raw.source_records` events; backfilled from the subscription's current state plus Stripe events (`events` list only reaches back 30 days, so the initial backfill derives start state from `created`, `start_date` and invoice line history; documented in T-190). |
+| `fin.stripe_subscription_versions` (T-190) | **History used for point-in-time MRR.** Grain: subscription × entity. `subscription_id`, `entity_code`, `valid_from timestamptz`, `valid_to timestamptz null`, `status`, `is_active`, `is_live`, `is_ended` (bools), `mrr numeric(18,2)` (after recurring coupons, normalised, rounded per row, 0 when not active), `product_ids text[]`, `cause` (event id). A version is closed and a new one opened on each change of status, items, quantity, price, coupon or coupon expiry. Exclusion constraint on `(lane_id, subscription_id, entity_code, tstzrange(valid_from, valid_to))`: no overlapping ranges. Rebuilt idempotently from `raw.source_records` events; backfilled from the subscription's current state plus Stripe events (`events` list only reaches back 30 days, so the initial backfill derives start state from `created`, `start_date` and invoice line history; documented in T-190). |
 | `fin.stripe_invoices`, `fin.stripe_charges`, `fin.stripe_refunds`, `fin.stripe_payouts` | Revenue and payout facts, `numeric(18,2)`, `created timestamptz`, `product_id` per invoice line, `entity_code`. Payouts have no entity (account level). |
 | `fin.subscriber_status` (T-060) | Current state per GHL contact: `contact_id`, `product_key`, `entity_code`, `is_paid`, `since`, `trial`, `last_event_at`. **No revenue or amount columns** (pgTAP column check). |
 | `fin.subscriber_events` (T-060) | Append-only history: `contact_id`, `product_key`, `entity_code`, `event` (`new|cancelled|trial_to_paid|failed_payment`), `occurred_at timestamptz`, `rule_version`. Point-in-time membership and customer churn are reconstructed from this table. |
@@ -142,11 +142,11 @@ Test vs live: Stripe rows carry `livemode`; views filter to the value in `lane_c
 | `fin.snapshot_signoffs` | `snapshot_id`, `lane_id`, `signed_by`, `signed_at`, `role`, `payload_sha256_seen`, `note`. Insert-only, unique per snapshot. Created only by `fin.sign_off_snapshot(p_lane_id, p_snapshot_id, p_hash_seen)`: security definer, requires AAL2 with a recent TOTP (step-up), role finance_operator or owner on the lane, and `p_hash_seen` = stored hash. Audited. |
 | `fin.tieout_reference` | Manual reference figures from Sophie's report: `period_start`, `kpi`, `entity_code`, `value numeric(18,2)`, `entered_by`, `entered_at`, `source_note`. Insert-only (corrections are new rows); audited. |
 
-Snapshot figures are never edited. A correction after sign-off is a new version with `restates_snapshot_id`, which needs its own sign-off. The weekly report of week W is generated Friday and signed by Sophie or Robert; unsigned snapshots are marked "Draft" everywhere.
+Snapshot figures are never edited. A correction after sign-off is a new version with `restates_snapshot_id`, which needs its own sign-off. The weekly report of week W is generated **Saturday 06:00 America/New_York for the week just ended** (so late Friday activity is included) and signed by Sophie or Robert; unsigned snapshots are marked "Draft" everywhere.
 
 ### Business calendar functions (T-080)
 
-`fin.business_week(ts timestamptz) returns (week_start timestamptz, week_end timestamptz)`, week_end exclusive (next Saturday 00:00 ET); `fin.month_start(ts)`, `fin.next_month_start(ts)`, `fin.ytd_start(ts)`, `fin.et_date(ts)`; all `immutable` where possible, with the zone fixed to `America/New_York`.
+`fin.business_week(ts timestamptz) returns (week_start timestamptz, week_end timestamptz)`, week_end exclusive (next Saturday 00:00 ET); `fin.month_start(d date) = (date_trunc('month', d)::timestamp) at time zone 'America/New_York'`, `fin.next_month_start(d date)` (same with `+ interval '1 month'` applied to the local timestamp before the zone conversion), `fin.ytd_start(d date)`, `fin.et_date(ts timestamptz) = (ts at time zone 'America/New_York')::date`. All `p_month` and `p_ts` conversions happen in America/New_York and never depend on the session `timezone`; pgTAP runs every case with `set timezone = 'UTC'` and with `'Asia/Tokyo'` and must get identical results. `p_month` is any date in the month.
 
 ## 6. SQL views and functions
 
@@ -170,10 +170,10 @@ mid as ( -- active with mrr>0 at any version inside the month
     and v.valid_from < b.ts1 and (v.valid_to is null or v.valid_to > b.ts0)
   group by 1)
 select ... case
-  when coalesce(s0.is_active,false) and coalesce(s1.is_active,false) then delta -> expansion/contraction
-  when coalesce(s0.is_active,false) and s0.mrr>0 and not coalesce(s1.is_active,false) then churned = s0.mrr
-  when not coalesce(s0.is_active,false) and coalesce(s1.is_active,false) and s1.mrr>0 then new = s1.mrr
-  when not coalesce(s0.is_active,false) and not coalesce(s1.is_active,false) and mid.first_mrr is not null
+  when coalesce(s0.is_live,false) and not coalesce(s1.is_ended,false) then delta -> expansion/contraction
+  when coalesce(s0.is_live,false) and coalesce(s1.is_ended,false) then churned = s0.mrr
+  when not coalesce(s0.is_live,false) and coalesce(s1.is_live,false) and s1.mrr>0 then new = s1.mrr
+  when not coalesce(s0.is_live,false) and not coalesce(s1.is_live,false) and mid.first_mrr is not null
        then new = churned = mid.first_mrr
 end
 ```
@@ -220,7 +220,7 @@ Normalisers read `raw.source_records` only, never call providers.
 |---|---|---|
 | `fin.sync` | schedule per enabled lane from `lane_config`, plus webhook events | run connector syncs, normalise, rebuild `fin.stripe_subscription_versions` incrementally; idempotent; `core.sync_runs` rows. |
 | `fin.qbo_reports` | schedule (default 2×/day) + before weekly cash | fetch reports into `fin.report_cache`. |
-| `fin.weekly_cash` | cron Friday, time from `lane_config.finance.weekly_cash_time` (default 18:00 ET, `TZ=America/New_York`) | ensure fresh reports, build the Sat–Fri snapshot (cash by account as book balance at week end and start, Stripe payouts in the week at account level, AR/AP totals, AR >30, AP due 14d, subscribers new/cancelled for the week, controls summary), store PDF/CSV in private per-lane Storage (derived figures only), notify Sophie "report ready to sign off". Distribution only via an email proposal (D-14 open). |
+| `fin.weekly_cash` | cron Saturday, time from `lane_config.finance.weekly_cash_time` (default 06:00 ET, `TZ=America/New_York`), for the business week that ended at 00:00 that Saturday; the payload stores `period_start` and `period_end` as instants (week_end exclusive) and each figure's `as_of` | ensure fresh reports, build the Sat–Fri snapshot (cash by account as book balance at week end and start, Stripe payouts in the week at account level, AR/AP totals, AR >30, AP due 14d, subscribers new/cancelled for the week, controls summary), store PDF/CSV in private per-lane Storage (derived figures only), notify Sophie "report ready to sign off". Distribution only via an email proposal (D-14 open). |
 | `fin.monthly_close` | `lane_config.finance.monthly_close_trigger` (`day_of_month:N` or `manual`) | final-month snapshot incl. MRR movements and subscriber movements, `is_final = true`. |
 | `fin.controls_daily` | daily | evaluate controls; emit red-flag events. |
 
@@ -246,14 +246,15 @@ Failures are logged in `core.sync_runs`, alert admin_technical, and never produc
 
 ## 12. Acceptance tests (Given / When / Then)
 
-1. Given a lane with an annual $1,200 price, a quarterly $300 price and a monthly $100 price all active at month start, when `fin.mrr_at` runs, then MRR = 100 + 100 + 100.
+1. Given a lane with an annual $1,200 price, a quarterly $300 price and a monthly $100 price all active at month start, when `fin.mrr_at` runs, then MRR = 100.00 + 100.00 + 100.00. Given a $100.00 price with a 33.33% forever coupon, then the version row stores 66.67 and sums use that rounded value.
 2. Given a 25% `forever` coupon and a `once` coupon on different subscriptions, then MRR reflects only the forever coupon.
 3. Given a trialing subscription and a 100%-discounted active subscription, then neither adds MRR and the 100% one does not count as churned when it cancels.
 4. Given a subscription active at Nov 1 00:00 EDT with MRR 100 that upgrades to 150 on Nov 12, when movements for November run, then expansion = 50, and the invariant holds.
 5. Given a subscription that starts Nov 5 at 100 and cancels Nov 20, then new = 100 and churned = 100 for November; revenue churn % numerator includes it, denominator does not.
 6. Given start MRR 1,000 and churned 50, then revenue churn % = 5.00; with start MRR 0 it is null.
-7. Given GHL events with contact A subscribed Oct 20 and cancelled Nov 3, contact B subscribed and cancelled inside November, and contact C subscribed Nov 10, when November movements run, then start_count = 1, new_count = 2 (B, C), cancelled_count = 2 (A, B), end_count = 1 and customer churn % = 200.00 (cancelled ÷ start, not clamped; same-month start + cancel counts as both). Given no `paid_subscriber_rule` in `lane_config`, then status = `pending_definition` and the dashboard card shows the pending label.
-8. Given Friday 23:59:59 ET and Saturday 00:00:00 ET, then they fall in different business weeks, across a DST change week as well.
+7. Given GHL events with contact A subscribed Oct 20 and cancelled Nov 3, contact B subscribed and cancelled inside November, and contact C subscribed Nov 10, when November movements run, then start_count = 1, new_count = 2 (B, C), cancelled_count = 2 (A, B), end_count = 1 and customer churn % = 200.00 (cancelled ÷ start, not clamped, so customer churn can exceed 100%; same-month start + cancel counts as both). Given no `paid_subscriber_rule` in `lane_config`, then status = `pending_definition` and the dashboard card shows the pending label.
+8a. Given a payout, a bill payment and a GHL cancellation dated Friday 20:00–23:59 ET, when the Saturday 06:00 `fin.weekly_cash` runs, then all are in that week's snapshot and `period_end` is Saturday 00:00 ET; a Saturday 00:30 ET event is not.
+8. Given Friday 23:59:59 ET and Saturday 00:00:00 ET, then they fall in different business weeks, across a DST change week as well, and with session `timezone = 'UTC'`. Given `p_month = 2026-11-17` with session timezone UTC, then `fin.month_start` is 2026-11-01 04:00:00+00 and `fin.next_month_start` is 2026-12-01 05:00:00+00.
 9. Given a bank account mapped to the Pub K Institute entity, then it appears under that entity in full and in none of the PKG totals; a shared account raises the `shared_bank_account` control.
 10. Given an APK-class invoice, then it appears in no PKG AR figure and in `unmapped_entity` only if its class is unmapped.
 11. Given a signed snapshot, when any role (including service) updates or deletes it, then the statement fails; a restatement creates version 2 with `restates_snapshot_id`.
@@ -275,12 +276,13 @@ Still-open decisions (designed around, not decided here):
 
 New questions for Robert/Saurabh/Sophie (defaults stated; none block building):
 - Q-F1 P&L and aging accounting method (accrual vs cash). Default accrual, as `lane_config.finance.accounting_method`.
-- Q-F2 Does `past_due` count as active for MRR and customer counts (default yes) and should `paused` count as churn (default yes, resume = new)?
+- Q-F2 Does `past_due` count as active for MRR and customer counts (default yes)? `unpaid` and `paused` are treated as not churned (default: MRR drops to 0 as contraction, resume = expansion, per the narrow D-9 "cancelled or ended" reading); the broad alternative (leaving the active set = churn, resume = new) also keeps the invariant. Also decide how trial endings without conversion are reported (default: not a movement).
 - Q-F3 AP due ≤14 days: include overdue bills (default yes, shown as a sub-line)?
 - Q-F4 GoHighLevel subscribers counted per distinct contact (default) or per contact × product? Interacts with D-3.
 - Q-F5 Reconciliation status source: the QBO API may not expose it, so the default is Sophie entering the last-reconciled date per bank account (T-191). Confirm T-051/T-052 findings.
 - Q-F6 Format of Sophie's weekly cash report, to define the tie-out reference fields and the weekly payload layout (known gap in plan-review §3).
 - Q-F7 Historic data: GoHighLevel and Stripe history before the first sync (backfill depth) for the start-of-month snapshot of the first tie-out months.
+- Q-F9 Confirm snapshot timing with Sophie (default Saturday 06:00 ET for the week just ended; does her manual report cut off at Friday close or a bank cut-off?).
 - Q-F8 Non-USD or metered Stripe prices: confirmed none in PKG?
 
 ## 14. Sub-tasks and backlog changes

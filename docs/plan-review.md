@@ -153,7 +153,7 @@ No Resend variable in the app: Supabase Auth sends sign-in mail through Resend S
 - **Net new MRR** = new + expansion − contraction − churned.
 
 **Decided Oct 24, 2026** (confirmed by Saurabh; implemented in `docs/specs/finance.md`):
-1. **Customer churn %** counts GoHighLevel paid subscribers, so it waits on D-3. **Revenue churn %** uses Stripe.
+1. **Customer churn %** counts GoHighLevel paid subscribers, so it waits on D-3. **Revenue churn %** uses Stripe. Customer churn is cancelled ÷ start-of-month subscribers, unclamped, so it can exceed 100% (same-month start+cancel counts in the numerator only).
 2. **Start of month** = 00:00 America/New_York on the 1st.
 3. A subscription that **starts and cancels in the same month** counts as both new and churned.
 4. **Expansion/contraction** = the change in an active subscription's MRR (price, quantity or coupon change), measured month-start vs month-end.
