@@ -40,7 +40,7 @@ Last reviewed **Oct 23, 2026** against `CLAUDE.md`, `docs/pilot-scope.md`, `docs
 
 ## 4. Schedule risk
 
-Release A is **115 tasks of up to a day each**, against about **22 working days** (Oct 26 – Nov 25). The pilot security test (T-170) gates approvals, so Release A needs to be feature-complete around **Nov 18–20**. Running tracks in parallel (backlog → "Parallel worktrees") raises throughput, but review stays the bottleneck: every PR needs your merge.
+Release A is **120 tasks of up to a day each**, against about **22 working days** (Oct 26 – Nov 25). The pilot security test (T-170) gates approvals, so Release A needs to be feature-complete around **Nov 18–20**. Running tracks in parallel (backlog → "Parallel worktrees") raises throughput, but review stays the bottleneck: every PR needs your merge.
 
 Ways to cut further, roughly by size:
 1. **Decide D-1** and drop the other mail provider: removes 3 tasks from Release A (and 1 search task from Release B).
@@ -53,7 +53,7 @@ Ways to cut further, roughly by size:
 
 1. **H-020** — Docker permission for your user (blocks T-006 and `pnpm test:db`).
 2. **D-1** — the pub-k.org mail provider.
-3. **D-8** — Sophie's mapping IDs, plus **D-3** (paid subscriber) and the customer-churn source question in §7, before finance tie-out.
+3. **D-8** — Sophie's mapping IDs, plus **D-3** (paid subscriber, which also gates customer churn %), before finance tie-out.
 4. **H-016** — Resend account + DNS; **D-15** — design sign-off (blocks T-024).
 
 ## 6. Follow-ups from reviews (not blocking)
@@ -152,7 +152,8 @@ No Resend variable in the app: Supabase Auth sends sign-in mail through Resend S
 - **Customer churn %** = subscribers cancelled in the month ÷ subscribers active at the start of the month.
 - **Net new MRR** = new + expansion − contraction − churned.
 
-**Questions for the T-075 finance spec (don't block it; the spec lists them as open questions):**
-1. **Customer churn source.** Rule 8 makes GoHighLevel the source of subscriber status, and Stripe the source of revenue. Assumed: customer churn % counts GoHighLevel paid subscribers (so it waits on D-3), and revenue churn % uses Stripe. Confirm.
-2. **Month boundaries.** "MRR at start of month" = the snapshot at 00:00 America/New_York on the 1st. A subscription that starts and cancels in the same month counts as new and churned.
-3. **Expansion/contraction** = MRR change on a subscription that stays active (price, quantity or coupon change), measured month-start vs month-end.
+**Decided Oct 24, 2026** (confirmed by Saurabh; implemented in `docs/specs/finance.md`):
+1. **Customer churn %** counts GoHighLevel paid subscribers, so it waits on D-3. **Revenue churn %** uses Stripe.
+2. **Start of month** = 00:00 America/New_York on the 1st.
+3. A subscription that **starts and cancels in the same month** counts as both new and churned.
+4. **Expansion/contraction** = the change in an active subscription's MRR (price, quantity or coupon change), measured month-start vs month-end.
