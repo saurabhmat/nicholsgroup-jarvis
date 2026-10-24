@@ -1,4 +1,6 @@
 packages:
   - apps/*
+  - packages/*
+  - packages/modules/*
 allowBuilds:
   unrs-resolver: false

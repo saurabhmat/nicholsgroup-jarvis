@@ -46,3 +46,6 @@ next-env.d.ts
 !.agent/logs/.gitkeep
 .turbo/
 supabase/.temp/
+
+# tsc -b output for packages
+dist/
