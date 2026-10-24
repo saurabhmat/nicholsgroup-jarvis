@@ -57,6 +57,18 @@ Commands (from the repo root):
   there are no tests, or any test fails.
 - Analytics and vector services are disabled in `config.toml` (they fail health checks locally and are not needed).
 
+Notes:
+
+- `pnpm test:db` runs `supabase db reset --local` first so tests always see this branch's migrations. Pass
+  `--no-reset` (`pnpm test:db --no-reset`) to skip it. It never starts the stack for you.
+- `supabase start` publishes ports on all interfaces, so Postgres, Studio and Mailpit are reachable from your LAN.
+  Set `"ip": "127.0.0.1"` in Docker's `daemon.json` or use a firewall.
+- Analytics is disabled, so there is no local `supabase logs`.
+- Local sign-ups are off; tests create users through the admin API.
+
 Two worktrees at once: change `project_id` (it names the containers) and every port in
 `supabase/core/supabase/config.toml` (`[api]` 54321, `[db]` 54322 and `shadow_port` 54320, `[studio]` 54323,
 `[local_smtp]` 54324) in one of them, and do not commit that change.
+
+To keep a per-worktree port change out of `git status`, run
+`git update-index --skip-worktree supabase/core/supabase/config.toml` (undo with `--no-skip-worktree`).

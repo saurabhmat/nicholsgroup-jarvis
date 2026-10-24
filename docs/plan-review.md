@@ -96,6 +96,12 @@ Under the review policy (dev tooling: one security review, fix BLOCKERs only), t
   - **Later / any task:** remove `data-core={PACKAGE_ID}` from `apps/web/app/layout.tsx` once a real import of core exists.
   - **Later / any task:** `@types/node` is 20 while `engines` is `>=22`.
 
+- **T-006 local Supabase** (security + code review Oct 24, 2026; no BLOCKER, HIGHs fixed or turned into human items):
+  - pgTAP runs as the superuser, so an RLS "allowed" test would pass even with broken policies. Before T-010/T-013, add helpers (`set local role authenticated` plus `request.jwt.claims`) so tests exercise RLS as a real user. **Assigned to T-013.**
+  - Docker publishes the local stack ports (Postgres, Studio, Mailpit) on all interfaces, reachable from the LAN. Human, host config: set `"ip": "127.0.0.1"` in Docker's `daemon.json` or use a firewall.
+  - Remaining `env()` placeholders in `config.toml` (OAuth, SMTP, etc.) are CLI defaults and are left as is.
+  - Re-link guardrails are tracked as H-022 in `docs/backlog.md`; the CI start step is a proposed `ci.yml` diff in `.agent/pr/T-006.md`.
+
 ## 7. Decisions log
 
 ### Oct 24, 2026 — Infrastructure (human-owned; closes H-001, H-010)
