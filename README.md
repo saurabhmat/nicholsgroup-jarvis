@@ -57,6 +57,10 @@ Commands (from the repo root):
   there are no tests, or any test fails.
 - Analytics and vector services are disabled in `config.toml` (they fail health checks locally and are not needed).
 
+- `pnpm db:types` regenerates `packages/core/src/db/types.ts` (exported as `Database` from `@nichols/core/db`) from the
+  local stack. Run it **after every migration** and commit the result. It writes via a temp file, so a failure leaves
+  the old file intact. `pnpm db:types:check` fails if the committed file is out of date.
+
 Notes:
 
 - `pnpm test:db` runs `supabase db reset --local` first so tests always see this branch's migrations. Pass
