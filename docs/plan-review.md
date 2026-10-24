@@ -171,3 +171,13 @@ No Resend variable in the app: Supabase Auth sends sign-in mail through Resend S
 2. **Start of month** = 00:00 America/New_York on the 1st.
 3. A subscription that **starts and cancels in the same month** counts as both new and churned.
 4. **Expansion/contraction** = the change in an active subscription's MRR (price, quantity or coupon change), measured month-start vs month-end.
+
+### Oct 24, 2026 — Rule 6 scope for PKG (closes D-19) and weekly snapshot timing (Q-F9)
+
+**D-19 (a) — outbound email drafts.** PKG may store a drafted outgoing email **only while it is pending approval** (`proposed`, `approved` or `executing`). The body is deleted as soon as the action reaches any terminal state (`verified`/sent, `failed`, `rejected`, `expired`, `invalidated`, or superseded). After that the approval record keeps only the payload hash, recipients, subject and timestamps (plus type, target ids, status and audit), never the body. `lane_policies.store_outbound_drafts` = true for PKG (default false for other lanes); there is no retention window for bodies.
+
+**D-19 (b) — assistant conversations.** Rule 6 does not cover the assistant's own conversation text. Conversations are stored per lane, kept 180 days, and can be deleted by the user. Email and document content appears in them only as short cited snippets with links to the source, never full bodies.
+
+**Q-F9 — weekly snapshot timing.** Default accepted for now: Saturday 06:00 America/New_York for the Sat–Fri week just ended. Saurabh is confirming with Sophie.
+
+Where this lands: `docs/specs/approvals.md` §4, §6, §8, §13, §14; `docs/specs/assistant.md` §4, §8, §9; backlog T-010, T-103, T-110, T-111, T-116, D-14.

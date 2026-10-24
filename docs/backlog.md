@@ -104,11 +104,11 @@ These tasks have all their dependencies done and all their `needs` checked. A hu
 - [x] D-11 PKG approvals go live Nov 25 after the pilot security test (T-170); Dec 29 applies to other lanes only
 - [ ] D-12 Source of "meeting notes" for meeting prep and Commitments (Google Meet/Gemini notes, Notion, other) — Release B
 - [ ] D-13 Embedding provider for opt-in indexing (Anthropic has no embeddings API; e.g. Voyage AI, OpenAI, or Supabase built-in `gte-small`) — Release B
-- [ ] D-14 Weekly cash report distribution: email via the Approval Center (recipients?) or in-portal only. Decided: Sophie signs off. Consequences: email needs D-19 and, if the report is sent as a file, either a link (private Storage signed link) or attachment support, which Release A approvals do not have.
+- [ ] D-14 Weekly cash report distribution: email via the Approval Center (recipients?) or in-portal only. Decided: Sophie signs off. Consequences: email is allowed under D-19 (body deleted after sending) and, if the report is sent as a file, either a link (private Storage signed link) or attachment support, which Release A approvals do not have.
 - [ ] D-15 Design sign-off for navigation/prototype (PL-26), which blocks T-024
 - [x] D-16 Federated search is in Release B
 - [x] D-17 GoHighLevel subscriber counts exclude APK and PKI via lane_config tag/product mapping
-- [ ] D-19 Rule 6 scope for PKG: may composed outbound email drafts be stored (`store_outbound_drafts`, default false; retention days), and does rule 6 also cover the assistant's own conversation text (`ai.messages`; until decided, assistant text from turns that used mail/document tools is stored redacted)? Blocks T-110, T-111, T-116 (email proposals); see `docs/specs/approvals.md` §8 and `docs/specs/assistant.md` §4
+- [x] D-19 Rule 6 scope for PKG (Oct 24, 2026): (a) outbound email drafts are stored only while pending approval; the body is deleted on any terminal state, and the record keeps hash, recipients, subject and timestamps; (b) rule 6 does not cover the assistant's own conversation text: stored per lane, 180-day retention, user-deletable, with email/document content only as short cited snippets with links. Details in `docs/plan-review.md` §7
 - [x] D-18 Cash book balance shown per account under the legally owning entity, no allocation; shared accounts flagged in controls. P&L/aging split by QBO class, else customer mapping. Stripe payouts at account level; revenue split by product from charges/invoices.
 
 ---
@@ -169,7 +169,7 @@ T-010 – T-017 are the serial spine. After T-017: auth/shell (T-018 – T-026) 
 ### T-010 Lanes and lane policies
 - status: proposed
 - depends: T-007
-- acceptance: `core.lanes` (code, name, data_plane, enabled) and `core.lane_policies` (fields from architecture §5.3, plus `store_outbound_drafts` default false, D-19) with RLS; pgTAP: only PKG enabled; non-members cannot read other lanes' policies; AAL1 sessions are denied.
+- acceptance: `core.lanes` (code, name, data_plane, enabled) and `core.lane_policies` (fields from architecture §5.3, plus `store_outbound_drafts` default false, true for PKG per D-19) with RLS; pgTAP: only PKG enabled; non-members cannot read other lanes' policies; AAL1 sessions are denied.
 
 ### T-011 Lane config (per-lane source settings, no secrets)
 - status: proposed
@@ -609,7 +609,7 @@ T-100 – T-103 are **track W4**, parallel with the connectors (after T-017). T-
 ### T-103 Conversations storage
 - status: proposed
 - depends: T-013
-- acceptance: Spec: `docs/specs/assistant.md` §4. `ai.conversations`, `ai.messages` (with `citations`, `grounding`) and `ai.tool_calls` (validated args, status, denial reason, result only for `resultStore = full`), all lane-scoped, RLS = AAL2 + lane membership + `user_id = auth.uid()` (own conversations only; admin_technical none) + pgTAP incl. cross-lane and cross-user denial; user can hard-delete (cascade); registered with retention (180 days); no email/doc bodies or tokens stored; assistant text from turns that used `refs_only` tools is stored in redacted form (placeholder text, citations kept) until D-19 allows otherwise.
+- acceptance: Spec: `docs/specs/assistant.md` §4. `ai.conversations`, `ai.messages` (with `citations`, `grounding`) and `ai.tool_calls` (validated args, status, denial reason, result only for `resultStore = full`), all lane-scoped, RLS = AAL2 + lane membership + `user_id = auth.uid()` (own conversations only; admin_technical none) + pgTAP incl. cross-lane and cross-user denial; user can hard-delete (cascade); registered with retention (180 days); no email/doc bodies or tokens stored; per D-19 assistant text is stored in full, but email/document content may appear only as short cited snippets with links (server-side cap on quoted length, test with a canary body), never full bodies.
 
 ### T-104 Finance tools
 - status: proposed
@@ -638,13 +638,13 @@ T-110, T-111 and T-114 are **track W5**, parallel with the connectors. T-112 nee
 - status: proposed
 - depends: T-013, T-014
 - needs: D-19
-- acceptance: Spec: `docs/specs/approvals.md` §4. `act.proposed_actions` (full column set in the spec incl. `payload_sha256` over canonical JSON of lane+type+connection+target+payload, `expected_before`, `consequences`, `approved_hash`, `deferred_until`, `expires_at`), insert-only `act.status_history` and `act.execution_claims` (primary key action_id: exactly one claim, no attempt column), allowed transitions enforced in SQL (proposed→approved/rejected/expired/invalidated; approved→executing/expired/invalidated; executing→verified/failed); payload/hash/target immutable after `proposed`; `act.is_allowed_type()` with excluded classes rejected at DB level; `authenticated` has no direct DML; `act.propose` is service-role only (the app computes the JCS hash) and users call security-definer functions (`approve` with in-SQL step-up check of the JWT `amr` or an equivalent single-use token, `reject`, `defer`, `supersede`; every security-definer function sets an explicit `search_path`) and service-only `claim_execution`/`mark_*`/`invalidate_approved`/`purge_content` (purge clears payload, consequences, rationale, source_refs and expected_before); `email.*` refused unless `lane_policies.store_outbound_drafts`; index row `core.action_index`; pgTAP for every illegal transition, tampering, AAL1/stale step-up, viewer/finance_operator/admin_technical denial and cross-lane denial.
+- acceptance: Spec: `docs/specs/approvals.md` §4. `act.proposed_actions` (full column set in the spec incl. `payload_sha256` over canonical JSON of lane+type+connection+target+payload, `expected_before`, `consequences`, `approved_hash`, `deferred_until`, `expires_at`), insert-only `act.status_history` and `act.execution_claims` (primary key action_id: exactly one claim, no attempt column), allowed transitions enforced in SQL (proposed→approved/rejected/expired/invalidated; approved→executing/expired/invalidated; executing→verified/failed); payload/hash/target immutable after `proposed`; `act.is_allowed_type()` with excluded classes rejected at DB level; `authenticated` has no direct DML; `act.propose` is service-role only (the app computes the JCS hash) and users call security-definer functions (`approve` with in-SQL step-up check of the JWT `amr` or an equivalent single-use token, `reject`, `defer`, `supersede`; every security-definer function sets an explicit `search_path`) and service-only `claim_execution`/`mark_*`/`invalidate_approved`/`purge_content` (purge clears payload body, consequences, rationale, source_refs and expected_before, keeping hash, recipients, subject and timestamps; per D-19 it runs in the same transaction as every transition into a terminal state, and pgTAP proves no terminal action keeps a body); `email.*` refused unless `lane_policies.store_outbound_drafts`; index row `core.action_index`; pgTAP for every illegal transition, tampering, AAL1/stale step-up, viewer/finance_operator/admin_technical denial and cross-lane denial.
 
 ### T-111 Proposal service
 - status: proposed
 - depends: T-110, T-030
 - needs: D-19
-- acceptance: Spec: `docs/specs/approvals.md` §5. `proposeAction` from `prepareWrite` with canonical JSON (RFC 8785) + SHA-256, rationale and source refs; editing creates a new proposal (`supersedes_id`) and invalidates the old; types allowlisted by lane policy `write_actions_allowed`; excluded classes rejected at service and DB level (tests); per-lane and per-turn pending limits; consequences rendered server-side; `userInitiated` (true only for the direct Draft-reply click or an explicit prepare intent, set by the route) required for assistant-created proposals, with `derived_from_retrieved` set and shown when recipients/targets come from retrieved content (test); only composed text is stored for email, never quoted thread text (canary test); `email.*` refused unless `store_outbound_drafts`; audit + `approval.needed` event.
+- acceptance: Spec: `docs/specs/approvals.md` §5. `proposeAction` from `prepareWrite` with canonical JSON (RFC 8785) + SHA-256, rationale and source refs; editing creates a new proposal (`supersedes_id`) and invalidates the old; types allowlisted by lane policy `write_actions_allowed`; excluded classes rejected at service and DB level (tests); per-lane and per-turn pending limits; consequences rendered server-side; `userInitiated` (true only for the direct Draft-reply click or an explicit prepare intent, set by the route) required for assistant-created proposals, with `derived_from_retrieved` set and shown when recipients/targets come from retrieved content (test); only composed text is stored for email, never quoted thread text (canary test), and only until the action is terminal (D-19); `email.*` refused unless `store_outbound_drafts`; audit + `approval.needed` event.
 
 ### T-193 ApprovedAction brand and mint boundary
 - status: proposed
@@ -680,7 +680,7 @@ T-110, T-111 and T-114 are **track W5**, parallel with the connectors. T-112 nee
 - status: proposed
 - depends: T-113, T-063
 - needs: D-19
-- acceptance: Spec: `docs/specs/approvals.md` §8. `executeWrite` for `email.send` and `email.save_draft` on the confirmed provider (plain text, no attachments, no deletes); `X-Portal-Action-Id` idempotency marker and lookup before any retry; read-back via sent item id; MSW tests incl. crash-after-send.
+- acceptance: Spec: `docs/specs/approvals.md` §8. `executeWrite` for `email.send` and `email.save_draft` on the confirmed provider (plain text, no attachments, no deletes); `X-Portal-Action-Id` idempotency marker and lookup before any retry; read-back via sent item id; the body is deleted when the action becomes `verified` or `failed` (D-19); MSW tests incl. crash-after-send.
 
 ### T-118 Executor: monday.com
 - status: proposed
