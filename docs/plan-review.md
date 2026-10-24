@@ -54,7 +54,7 @@ Ways to cut further, roughly by size:
 1. **H-020** — Docker permission for your user (blocks T-006 and `pnpm test:db`).
 2. **D-1** — the pub-k.org mail provider.
 3. **D-8** — Sophie's mapping IDs, plus **D-3** (paid subscriber, which also gates customer churn %), before finance tie-out.
-4. **H-016** — Resend account + DNS; **D-15** — design sign-off (blocks T-024).
+4. **H-016** — Resend account + DNS; **D-20** — design sign-off, due Nov 5–6 (blocks the app shell and all screen tasks).
 
 ## 6. Follow-ups from reviews (not blocking)
 
@@ -181,3 +181,33 @@ No Resend variable in the app: Supabase Auth sends sign-in mail through Resend S
 **Q-F9 — weekly snapshot timing.** Default accepted for now: Saturday 06:00 America/New_York for the Sat–Fri week just ended. Saurabh is confirming with Sophie.
 
 Where this lands: `docs/specs/approvals.md` §4, §6, §8, §13, §14; `docs/specs/assistant.md` §4, §8, §9; backlog T-010, T-103, T-110, T-111, T-116, D-14.
+
+### Oct 24, 2026 — Design gating (opens D-20, supersedes D-15) and provisional design tokens
+
+Design is being done in a separate prototype (Claude Design canvas) for Robert's sign-off on **Nov 5–6** (PL-26). Until then:
+- The app shell and every screen task wait on **D-20**: T-023 – T-026, T-045 – T-047, T-095 – T-097, T-106, T-115, T-122, T-131, T-163 (Release A) and T-141, T-150, T-154, T-156 (Release B). D-15 (which only blocked T-024) is folded into D-20.
+- Platform work carries on: T-003, T-005, T-006, T-007 (synthetic seed, *not* a screen task), the data model (T-010 – T-017), auth (T-018 – T-021) and T-022 (UI components on the provisional tokens below). The sign-in and MFA pages from T-018/T-019 are functional and get restyled after sign-off.
+
+**Provisional design tokens** (final after D-20; implement as CSS variables / Tailwind theme so only values change):
+
+| Token | Value |
+|---|---|
+| Font | Inter, `system-ui` fallback; tabular numbers (`font-variant-numeric: tabular-nums`) for all figures |
+| Ground (page background) | `#F6F7F9` |
+| Surface (cards, panels) | `#FFFFFF` |
+| Text | `#111827` |
+| Muted text | `#4B5563` |
+| Border | `#E5E7EB` |
+| Accent (navy) | `#1E3A8A`; hover `#172554`; tint `#EEF2FF` |
+| Alert (orange) | `#C2410C`; alert text `#9A3412` on `#FFEDD5` |
+| Success | `#166534` on `#DCFCE7` |
+| Radius | 8px controls, 12px cards |
+
+**Provisional layout:**
+- Desktop: left side menu with the company (lane) switcher at the top; content max-width 1200px.
+- iPhone: bottom tabs **Home · Approvals · Inbox · Ask · More**.
+- Book balances are always labelled "book balance" (rule 7).
+
+Not yet decided: dark mode and chart palette (Recharts). Raise both at the sign-off.
+
+Where this lands: backlog D-15, D-20, T-022 and the screen tasks listed above; parallel-worktrees table (W1).
