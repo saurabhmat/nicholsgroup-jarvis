@@ -282,7 +282,7 @@ New questions for Robert/Saurabh/Sophie (defaults stated; none block building):
 - Q-F5 Reconciliation status source: the QBO API may not expose it, so the default is Sophie entering the last-reconciled date per bank account (T-191). Confirm T-051/T-052 findings.
 - Q-F6 Format of Sophie's weekly cash report, to define the tie-out reference fields and the weekly payload layout (known gap in plan-review §3).
 - Q-F7 Historic data: GoHighLevel and Stripe history before the first sync (backfill depth) for the start-of-month snapshot of the first tie-out months.
-- Q-F9 Confirm snapshot timing with Sophie (default Saturday 06:00 ET for the week just ended; does her manual report cut off at Friday close or a bank cut-off?).
+- Q-F9 Default accepted Oct 24, 2026 (Saturday 06:00 ET for the week just ended); Saurabh is confirming with Sophie whether her manual report cuts off at Friday close or a bank cut-off.
 - Q-F8 Non-USD or metered Stripe prices: confirmed none in PKG?
 
 ## 14. Sub-tasks and backlog changes
