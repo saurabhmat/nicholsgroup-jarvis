@@ -66,7 +66,7 @@ These tasks have all their dependencies done and all their `needs` checked. A hu
 ## Needs human
 
 ### Credentials and accounts
-- [ ] H-001 Supabase **staging** project created; URL + anon/service keys in `.env.local` and 1Password (PL-11)
+- [x] H-001 Supabase **staging** project created (Oct 24, 2026): ref `lxjhaxdkqtmkhloqaffb`, East US, public sign-ups off, CLI linked by Saurabh. Agents never apply migrations to it. Details in `docs/plan-review.md` §7 (PL-11)
 - [ ] H-002 Anthropic dev API key with a spend limit (PL-13)
 - [ ] H-003 Inngest account: event key + signing key for staging (PL-12)
 - [ ] H-004 Confirm the pub-k.org mail/calendar/docs provider (D-1). Sign-in needs no OAuth app (D-6). (PL-15)
@@ -75,7 +75,8 @@ These tasks have all their dependencies done and all their `needs` checked. A hu
 - [ ] H-007 GoHighLevel Private Integration token (read-only scopes) + location ID (PL-18)
 - [ ] H-008 Mail/calendar/docs API permissions for pub-k.org: Google OAuth client (Internal app type) with Gmail/Calendar/Drive scopes, **or** Entra app with admin consent for Mail/Calendars/Files/Sites read (PL-19)
 - [ ] H-009 monday.com API token (IT workspace); Notion internal integration shared to the target pages/databases (PL-20)
-- [ ] H-010 Vercel project linked to the repo, with **Root Directory = `apps/web`** and **"Include files outside the root directory"** turned on (Vercel detects pnpm and Turborepo); staging domain; DNS for the production domain (PL-10)
+- [x] H-010 Vercel project linked to the repo (Oct 24, 2026), with **Root Directory = `apps/web`** and **"Include files outside the root directory"** turned on; production branch `main`; a Preview deployment per PR (→ staging Supabase); Vercel Authentication on for Preview and Production; env vars set by Saurabh in the dashboard. Production-domain DNS moved to H-021 (PL-10)
+- [ ] H-021 DNS for the production domain once D-5 is decided (split out of H-010)
 - [ ] H-011 Sentry project DSN (free tier) for staging
 - [ ] H-012 GitHub repo in the Nichols-owned org, with branch protection on `main` and Actions enabled
 - [ ] H-013 Google Cloud project for Pub/Sub (Gmail watch), only if D-1 = Google
