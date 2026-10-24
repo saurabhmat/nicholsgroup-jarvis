@@ -1,0 +1,1 @@
+-- Local development seed. Synthetic data only (CLAUDE.md rule 10). Intentionally empty until T-010 adds tables.

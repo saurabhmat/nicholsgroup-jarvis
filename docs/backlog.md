@@ -153,7 +153,7 @@ Serial spine (main worktree). T-005 and T-006 can run in parallel once T-001/T-0
 - acceptance: Zod env modules in `packages/core/env`: a **server** schema (`server-only`) and a **client** schema that contains only `NEXT_PUBLIC_*` names; variable names match `.env.example` (agents can read it but not edit it); owns and exports the **secret-pattern list** (T-003's lint rule imports it); a test fails if a client-schema name lacks `NEXT_PUBLIC_` or a `NEXT_PUBLIC_` name matches a secret pattern; core vars (app, Supabase, Inngest, Anthropic) fail the build when missing; connector credentials are optional at startup and validated when the connector is used (it fails closed), so Preview builds work before every H-item is done; `.gitignore` already covers `.env*`, `.agent/logs` and Supabase temp files (pack); verify only.
 
 ### T-006 Local Supabase + pgTAP harness
-- status: approved
+- status: done
 - depends: T-001
 - needs: H-020
 - acceptance: `supabase/core` project starts locally, laid out so the pack's `migrate-prod.yml` (which runs the CLI from `supabase/core`) finds `config.toml` and the migrations; check the CLI's expected folder layout first; `pnpm test:db` runs pgTAP in `supabase/core/tests`; `supabase/nl/` exists as a documented placeholder (deferred data plane); README section for local DB.

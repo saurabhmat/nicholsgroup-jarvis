@@ -12,7 +12,10 @@
     "typecheck": "turbo run typecheck",
     "lint": "turbo run lint",
     "test": "turbo run test && node --test scripts/next-task.test.mjs",
-    "test:db": "node -e \"console.log('test:db: placeholder, real pgTAP suite arrives in T-006')\"",
+    "test:db": "node scripts/test-db.mjs",
+    "db:start": "supabase start --workdir supabase/core",
+    "db:stop": "supabase stop --workdir supabase/core",
+    "db:reset": "supabase db reset --local --workdir supabase/core",
     "test:injection": "node -e \"console.log('test:injection: placeholder, real suite arrives in T-102')\""
   },
   "devDependencies": {

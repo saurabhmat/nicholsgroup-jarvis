@@ -34,3 +34,29 @@ You can check out [the Next.js GitHub repository](https://github.com/vercel/next
 The easiest way to deploy your Next.js app is to use the [Vercel Platform](https://vercel.com/new?utm_medium=default-template&filter=next.js&utm_source=create-next-app&utm_campaign=create-next-app-readme) from the creators of Next.js.
 
 Check out our [Next.js deployment documentation](https://nextjs.org/docs/app/building-your-application/deploying) for more details.
+
+## Local database (Supabase + pgTAP)
+
+Needs Docker and the Supabase CLI (2.122+). Everything below is local only; never link or push from here.
+
+Layout (the CLI looks for `<workdir>/supabase/config.toml`, and `migrate-prod.yml` runs from `supabase/core`, so the
+nesting is deliberate):
+
+```
+supabase/core/supabase/config.toml   # project_id nichols-jarvis-core
+supabase/core/supabase/migrations/   # SQL migrations (supabase migration new ... --workdir supabase/core)
+supabase/core/supabase/tests/        # pgTAP tests (*.sql)
+supabase/core/supabase/seed.sql      # synthetic seed only
+supabase/nl/                         # placeholder, deferred Nichols Law data plane
+```
+
+Commands (from the repo root):
+
+- `pnpm db:start` / `pnpm db:stop` start and stop the local stack. `pnpm db:reset` rebuilds it from migrations and seed.
+- `pnpm test:db` runs every pgTAP file in `supabase/core/supabase/tests`. It exits non-zero if the stack is not running,
+  there are no tests, or any test fails.
+- Analytics and vector services are disabled in `config.toml` (they fail health checks locally and are not needed).
+
+Two worktrees at once: change `project_id` (it names the containers) and every port in
+`supabase/core/supabase/config.toml` (`[api]` 54321, `[db]` 54322 and `shadow_port` 54320, `[studio]` 54323,
+`[local_smtp]` 54324) in one of them, and do not commit that change.
