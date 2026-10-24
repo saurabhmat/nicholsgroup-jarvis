@@ -82,3 +82,37 @@ Under the review policy (dev tooling: one security review, fix BLOCKERs only), t
   - **L5 `.gitignore`:** `.claude/settings.local.json` isn't ignored, and it can hold per-user permissions and env values. Add it.
   - **L6:** `pnpm-lock.yaml` and `pnpm-workspace.yaml` are mode 0600 locally. Git records 0644, so this only matters if a local tool complains.
   - **M2** (release-age exemption for next@16.4.3): resolved in T-001 by pinning Next 16.4.2 and removing the exemption.
+
+## 7. Decisions log
+
+### Oct 24, 2026 — Infrastructure (human-owned; closes H-001, H-010)
+
+**Supabase**
+- Staging project: ref `lxjhaxdkqtmkhloqaffb` (`https://lxjhaxdkqtmkhloqaffb.supabase.co`), East US. Public sign-ups disabled (invite-only). CLI linked by Saurabh. Production project (`jarvis-prod`) is created at go-live.
+- Environments:
+  - Local dev and **all tests**: local Supabase via `supabase start` (Docker), never the cloud project. Seeds are synthetic only.
+  - Vercel Preview deployments → staging project.
+  - Production → `jarvis-prod` (later).
+- Schema changes only as SQL migrations in `supabase/**/migrations`, created with `supabase migration new`, applied locally with `supabase db reset`, tested with pgTAP. **Agents never apply migrations to any cloud project.** Saurabh applies them to staging/prod, manually or through the approval-gated migrate workflow.
+- Types are generated from the local DB (`supabase gen types typescript --local`) into a shared package, and the generated file is committed.
+- Next.js 16 integration uses `@supabase/ssr`:
+  - The browser client uses only the URL and the publishable/anon key.
+  - Server components, route handlers and server actions use the cookie-based server client.
+  - Session refresh runs in `proxy.ts`, not `middleware.ts`.
+- The secret/service_role key is server-only: used only where RLS must be bypassed (jobs, connector token vault), never imported into client components, never in a `NEXT_PUBLIC_` variable, never logged. A lint/test guard must fail if it appears in a client bundle.
+- Auth (later tasks): email 6-digit code / magic link + TOTP MFA (AAL2), invite-only, SMTP via Resend (H-016). Saurabh adds the redirect URLs for `localhost:3000` and the Vercel URLs.
+
+**Vercel**
+- Project connected to the GitHub repo. Root Directory `apps/web` with "include files outside root" on. Production branch `main`. Every PR gets a Preview deployment. Vercel Authentication (deployment protection) is on for Preview and Production.
+- Env vars are set by Saurabh in the Vercel dashboard (Preview = staging values, Production = prod values). **Agents never run the `vercel` CLI and never deploy.**
+- Code reads config only from env vars, validated at startup by Zod with **separate server and client schemas**, so a missing or misplaced variable fails the build with a clear message.
+- `.env.example` is the canonical list of variable names. Supabase now calls the keys "publishable" and "secret". A task that wants `NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY` / `SUPABASE_SECRET_KEY` instead of the current ANON/SERVICE_ROLE names proposes the exact `.env.example` diff in its PR body. Saurabh applies it and mirrors it in Vercel.
+- Server routes that use Node-only libraries (connectors, the Inngest endpoint later) run on the Node.js runtime, not Edge.
+
+**Where this lands in the backlog**
+- **T-003:** boundary rule (d) also covers the client-bundle guard for the secret key (import of the service client or secret env name from a `"use client"` module, or the value in built client chunks).
+- **T-005:** server and client Zod schemas, and the optional publishable/secret rename proposal in the PR body. Still needs H-019 for the variable names.
+- **T-006:** type generation from the local DB into a shared package. Fix the `.gitignore` gap from §6 M3. The CLI link Saurabh made isn't inside this repo (there is no `supabase/` folder yet). After T-006 creates `supabase/core`, Saurabh re-links from there (`supabase link --workdir supabase/core`, or run it inside that folder), because `migrate-prod.yml` runs the CLI from `supabase/core`.
+- **T-018 – T-021 (auth):** `@supabase/ssr` clients and session refresh in `proxy.ts`.
+- **T-171:** staging runbook now has its inputs (H-001, H-010 done).
+- Production-domain DNS is split out as **H-021** (waits on D-5).
