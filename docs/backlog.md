@@ -301,7 +301,7 @@ T-010 – T-017 are the serial spine. After T-017: auth/shell (T-018 – T-026) 
 **Track W2**, parallel with W1. T-030 can start after T-002 and T-037 after T-005; the rest follow T-013.
 
 ### T-030 Connector contract
-- status: approved
+- status: done
 - depends: T-002
 - acceptance: `Connector` interface per architecture §6 M2 with Zod types (`Provider`, `Connection`, `ReadOp`, `SourceResult` with `as_of` + freshness, `RawRecord`); reusable contract test kit that any connector must pass.
 
