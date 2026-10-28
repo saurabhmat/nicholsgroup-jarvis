@@ -16,6 +16,7 @@ Last reviewed **Oct 23, 2026** against `CLAUDE.md`, `docs/pilot-scope.md`, `docs
 3. **Email digest.** Architecture M11 lists an email digest; pilot scope and the backlog don't. Assumed out unless asked for.
 4. **Downeaster (DE)** appears only in architecture §5.1 ("confirm whether in scope"). It isn't seeded.
 5. **Basic notifications in Release A.** The pilot-scope Release A list doesn't name notifications; Release B has "notification polish". The backlog keeps basic web push (T-160/T-161) in A, because approvals on iPhone rely on a push. Say so if you want it moved.
+6. **H-021 id.** The QuickBooks note asked for a "new H-021" for the staging URL, but H-021 is already production-domain DNS. The staging URL is **H-023**; connecting the live file is **H-024**.
 
 ## 2. Pack vs. backlog (handled in the backlog, listed for awareness)
 
@@ -40,14 +41,21 @@ Last reviewed **Oct 23, 2026** against `CLAUDE.md`, `docs/pilot-scope.md`, `docs
 
 ## 4. Schedule risk
 
-Release A is **120 tasks of up to a day each**, against about **22 working days** (Oct 26 – Nov 25). The pilot security test (T-170) gates approvals, so Release A needs to be feature-complete around **Nov 18–20**. Running tracks in parallel (backlog → "Parallel worktrees") raises throughput, but review stays the bottleneck: every PR needs your merge.
+Release A is **123 tasks of up to a day each**, against about **22 working days** (Oct 26 – Nov 25). The pilot security test (T-170) gates approvals, so Release A needs to be feature-complete around **Nov 18–20**. Running tracks in parallel (backlog → "Parallel worktrees") raises throughput, but review stays the bottleneck: every PR needs your merge.
 
 Ways to cut further, roughly by size:
 1. **Decide D-1** and drop the other mail provider: removes 3 tasks from Release A (and 1 search task from Release B).
-2. **Merge small tasks during the build.** Many platform tasks (e.g. T-014/T-015, T-016/T-017, T-030/T-034) are well under a day each with Claude Code. Re-forecast after T-001 – T-020.
+2. **Merge small tasks during the build.** Applied Oct 28 (see below). Re-forecast after T-001 – T-020.
 3. **Allow a later PKG approvals go-live** (e.g. Nov 30, the start of Robert's test week) if T-170 slips. Success criterion 2 still holds without skipping the test.
 
-**Tie-out window:** two consecutive weeks before Nov 25 means the live QuickBooks file must be in staging by about Nov 7–10 (H-017, which waits on Intuit approval). If Intuit is late, success criterion 1 slips past the pilot window.
+**Tie-out window (updated Oct 28, 2026):** Intuit production keys are issued (H-017), so Intuit is no longer the constraint; the code is. The tie-out runs Nov 16–25. Before the recovery plan, connecting the live file waited on a 12-task chain (earliest Fri Nov 13 with no slack) and the full tie-out chain ran 19 tasks through Stripe, GoHighLevel and D-3.
+
+**Recovery plan, all three options applied (decided Oct 28, 2026):**
+- **Pairs.** On the critical chain: T-031 + T-032 and T-033 + T-034 (one worktree, one PR each). Off the chain, to cut review load: T-014 + T-015 and T-016 + T-017. The chain to H-024 is now 10 build days plus a sandbox QB-1 – QB-20 run.
+- **QuickBooks-first tie-out.** T-094 depends on T-082 – T-085 instead of T-089 and ties out cash, AR, AR >30, AP due ≤14 days and P&L from the live views and the report cache. It includes a functional entry page (pre-D-20). Stripe and GoHighLevel KPIs join with snapshots (T-089, T-097). T-090 is QuickBooks-first too, because QB-12 (4-hourly CDC poll, nightly reports) must pass before H-024. T-172 now depends on T-094.
+- **Week 1 by hand.** Week ending Fri Nov 13: QBO report cache figures from the staging connection against Sophie's report, recorded in the T-172 runbook. Week ending Fri Nov 20: through T-094 on Mon Nov 23.
+
+Day-by-day plan with 3 tracks: `docs/backlog.md` → "QuickBooks-first schedule". Target: connect Fri Nov 13, week-1 tie-out Nov 16, week-2 Nov 23. Human items on the path: H-011 by Nov 2, H-023 by Nov 12, D-8 by Nov 13. One lost day on the critical track moves the connection to Mon Nov 16; week 1 then still works, because QuickBooks reports can be pulled for a past period.
 
 ## 5. Most urgent from you
 
@@ -236,3 +244,51 @@ Contrast (WCAG 2.x) checked for every text pair above: all ≥ 4.5:1. Tightest: 
 Not yet decided: dark mode and chart palette (Recharts). Raise both at the sign-off.
 
 Where this lands: backlog D-15, D-20, T-022 and the screen tasks listed above; parallel-worktrees table (W1).
+
+### Oct 28, 2026 — QuickBooks Online (closes H-005, H-017; opens H-023, H-024)
+
+**Status**
+- **H-005 done.** One Intuit app, "Jarvis" (QuickBooks Online and Payments; scope `com.intuit.quickbooks.accounting` only). One app serves every company. Each company file connects separately through OAuth with its own realmId and tokens per lane.
+- Sandbox keys in `.env.local`: `INTUIT_CLIENT_ID`, `INTUIT_CLIENT_SECRET`, `INTUIT_ENVIRONMENT=sandbox`, `INTUIT_REDIRECT_URI=http://localhost:3000/api/connect/qbo/callback`. A sandbox company exists.
+- **H-017 done.** App assessment submitted; production keys issued. They are kept in 1Password only, never in `.env.local`.
+- **New H-023:** the Vercel Staging environment at `staging.portal.pub-k.org` (see the staging entry below) and the Intuit production redirect URI `https://staging.portal.pub-k.org/api/connect/qbo/callback`; later `https://portal.pub-k.org/api/connect/qbo/callback` (with H-021).
+- `INTUIT_WEBHOOK_VERIFIER_TOKEN` is added when the webhook endpoint exists (H-024).
+
+**Environments**
+- Local/dev and all tests: sandbox keys and the sandbox company only; recorded fixtures (synthetic values) in tests.
+- Staging (fixed URL): **production** Intuit keys, used to connect the real Pub K Group file for the tie-out, Nov 16–25. Data stays in the staging Supabase project, reachable only from the Vercel Staging environment (staging entry below).
+- Production: production keys at go-live.
+- Companies: PKG now (Saurabh is QBO admin); Nichols Law later (Saurabh is admin). For Ask Pub K, Pub K Institute and Nichols Capital, either Sophie grants Saurabh access or connects them herself, or they are classes inside the PKG file (D-8, waiting on Sophie).
+
+**Scope of use**
+- Read-only: never create, update or delete QuickBooks data. Accounting API only (no Payments, no Payroll).
+- Entities: Account, Invoice, Bill, Payment, BillPayment, Purchase, Deposit, JournalEntry, Customer, Vendor, Class, CompanyInfo, Preferences.
+- Reports: ProfitAndLoss, BalanceSheet, CashFlow, AgedReceivables, AgedPayables. The aging **detail** reports are dropped from T-052; drill-down comes from `fin.invoices` / `fin.bills`.
+- Sync: webhook-triggered CDC fetch of changed entities, a backup CDC poll every 4 hours per company, and a nightly full report pull (replaces the 2×/day report default). Book balances are always labelled "book balance".
+- PKG figures exclude Ask Pub K and Pub K Institute through the `lane_config` class/customer mapping (D-8).
+
+**Connector acceptance criteria.** QB-1 – QB-20 from the Intuit assessment are listed in `docs/backlog.md` Phase A5. All must pass on the sandbox company before any real company is connected. The QuickBooks tasks are app code: full security + code review, fix all BLOCKER and HIGH.
+
+Where this lands:
+- backlog H-005, H-017, H-023, H-024, D-8; T-050 – T-053, T-056, T-081, T-090, T-095, T-161 and T-172 (now needs H-024);
+- new **T-195** (disconnect, reconnect, error mapping), **T-196** (sync/API error log + export; needs Sentry, H-011, through T-041) and **T-197** (Settings → Connections, functional before D-20 like the sign-in pages);
+- T-052 now also depends on T-055 (it writes `fin.report_cache`); T-050 on T-011 (the realm lives in `lane_config`);
+- `docs/specs/finance.md` §8.1 and §9.
+
+### Oct 28, 2026 — Staging environment and real data (resolves the real-data conflict; defines H-023)
+
+- **Vercel custom environment "Staging"**, bound to branch `staging`, domain `staging.portal.pub-k.org`. This is H-023.
+- **Real-data secrets live only there:**
+  - the staging `SUPABASE_SECRET_KEY` (and the staging Supabase URL and publishable key)
+  - the production Intuit keys
+  - the production redirect URI `https://staging.portal.pub-k.org/api/connect/qbo/callback`
+- **Vercel Preview (PR deployments) gets no real-data secrets.** Sandbox Intuit keys only, no staging secret key. A Preview that needs a database uses synthetic data (H-025, optional); until then Previews run without a database.
+- **Guard (T-005).** The app refuses `INTUIT_ENVIRONMENT=production` unless `APP_ENV` is `staging` or `production`. It checks at build, at boot and when the connector is used. `APP_ENV` gains a `preview` value for PR deployments. On Vercel, `APP_ENV=staging` is accepted only when `VERCEL_TARGET_ENV=staging` (the custom environment).
+- **Supersedes:**
+  - H-010's "Preview → staging Supabase"
+  - T-171's "no real data in preview", which now applies by construction
+  - the Oct 24 env review note that Vercel Preview = staging values
+  - architecture §11's "staging uses the QBO sandbox", for QuickBooks only
+- **`.env.example` (human-owned).** The `APP_ENV` comment becomes `local | preview | staging | production`. T-005 proposes the exact diff in its PR body.
+
+Where this lands: backlog H-010, H-023, H-025, T-005, T-171; `docs/specs/finance.md` §8.1.
