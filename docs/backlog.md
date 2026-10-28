@@ -201,7 +201,7 @@ Serial spine (main worktree). T-005 and T-006 can run in parallel once T-001/T-0
 - acceptance: `supabase/core` project starts locally, laid out so the pack's `migrate-prod.yml` (which runs the CLI from `supabase/core`) finds `config.toml` and the migrations; check the CLI's expected folder layout first; `pnpm test:db` runs pgTAP in `supabase/core/supabase/tests`; `supabase/nl/` exists as a documented placeholder (deferred data plane); README section for local DB.
 
 ### T-007 Synthetic seed framework
-- status: approved
+- status: done
 - depends: T-006
 - acceptance: deterministic seed (fixed RNG) for lanes PKG, APK, PKI, NC, NL, P with only PKG enabled; synthetic users (owner, admin_technical, finance_operator, viewer, outsider); `pnpm db:reset` reseeds; no real names, emails or companies' records beyond lane names.
 

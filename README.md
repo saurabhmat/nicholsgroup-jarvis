@@ -71,6 +71,46 @@ Notes:
 - Analytics is disabled, so there is no local `supabase logs`.
 - Local sign-ups are off; tests create users through the admin API.
 
+### Seed data (synthetic only)
+
+`supabase/core/supabase/seed.sql` is **generated** by `supabase/core/seed/` and committed; `supabase db reset --local`
+applies it through `[db.seed]` in `config.toml`. Do not edit it by hand.
+
+- `pnpm db:seed` regenerates it, `pnpm db:seed:check` fails if it is out of date (`pnpm test` and `pnpm test:db` check
+  this too). `pnpm db:reset` regenerates and then resets the **local** DB.
+- Deterministic: a fixed seed (`SEED` in `data.mjs`) drives a SHA-256 counter RNG (`rng.mjs`); timestamps use
+  `SEED_EPOCH`, never `now()`. The same seed always gives a byte-identical file. Each section and each persona has
+  its own RNG stream, so adding a section never changes another section's ids.
+- `data.mjs` defines the lanes (PKG, APK, PKI, NC, NL, P; only PKG enabled) and five personas (owner,
+  admin_technical, finance_operator, viewer, outsider) with "Synthetic ..." labels, `@example.test` emails and their
+  intended lane memberships. `buildSeedData(seed)` adds a deterministic `id` to each persona.
+- Seeded today: the personas as Supabase Auth users (section `auth-personas`). They have **no password** and an
+  undeliverable reserved domain; local tests get sessions through the admin API or JWT claims in pgTAP.
+- The generator runs a guard (`guard.mjs`) and refuses to write if the output has an email outside `example.test`,
+  a non-reserved domain or a capitalized word that is not a lane name or persona label inside a string literal, or a
+  known real name. SQL calling `now()`, `random()`, `gen_random_uuid()` and similar is rejected.
+
+**Adding a seed section (T-010, T-011, T-012, ...).** Create `supabase/core/seed/sections/<id>.mjs` exporting
+`{ id, description, build(ctx) }`, where `build` returns an array of SQL statements (each ending in `;`). Use
+`ctx.data` (lanes, personas with ids, epoch), `ctx.rng` (this section's stream: `uuid()`, `int()`, `pick()`,
+`derive(label)`) and the `lit` / `json` / `values` helpers from `sql.mjs`; never interpolate raw strings. Register
+it in `sections/index.mjs` after the sections it references, run `pnpm db:seed`, and commit `seed.sql`. Example for
+T-010:
+
+```js
+import { values } from "../sql.mjs";
+export default {
+  id: "lanes",
+  description: "lane registry (only PKG enabled)",
+  build: (ctx) =>
+    ctx.data.lanes.map((l) =>
+      `insert into core.lanes (code, name, data_plane, enabled) values (${values(l.code, l.name, l.dataPlane, l.enabled)});`),
+};
+```
+
+New synthetic words (for example a fake vendor name) must be added to `ALLOWED_NAME_WORDS` in `data.mjs` in the same
+reviewed change. A section's tables must already exist in a migration, because seeds run after migrations.
+
 Two worktrees at once: change `project_id` (it names the containers) and every port in
 `supabase/core/supabase/config.toml` (`[api]` 54321, `[db]` 54322 and `shadow_port` 54320, `[studio]` 54323,
 `[local_smtp]` 54324) in one of them, and do not commit that change.
