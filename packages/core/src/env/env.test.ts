@@ -363,6 +363,69 @@ describe("real-data environments (Staging environment, Oct 28, 2026)", () => {
     expect(bad({ ...CORE, INTUIT_ENVIRONMENT: "prod" }).invalid).toEqual(["INTUIT_ENVIRONMENT"]);
   });
 
+  it("local builds and boots refuse production Intuit keys too (gate otherwise off)", () => {
+    for (const env of [{ APP_ENV: "local", INTUIT_ENVIRONMENT: "production" }, { INTUIT_ENVIRONMENT: "production" }]) {
+      const err = catchError(() => assertBuildEnv(env)) as EnvValidationError;
+      expect(err.invalid).toEqual(["INTUIT_ENVIRONMENT"]);
+    }
+    expect(() => assertBuildEnv({ APP_ENV: "local", INTUIT_ENVIRONMENT: "sandbox" })).not.toThrow();
+    expect(() => assertBuildEnv({ ...STAGING_CORE, INTUIT_ENVIRONMENT: "production" })).not.toThrow();
+  });
+
+  it("on Vercel, staging needs VERCEL_TARGET_ENV=staging and vercel dev is local only", () => {
+    const VERCEL_DEV = { VERCEL: "1", VERCEL_ENV: "development" };
+    expect(() => parseServerEnv({ ...CORE, ...VERCEL_DEV })).not.toThrow();
+    expect(bad({ ...STAGING_CORE, ...VERCEL_DEV }).invalid).toEqual(["APP_ENV"]);
+    expect(bad({ ...STAGING_CORE, ...VERCEL_DEV, INTUIT_ENVIRONMENT: "production" }).invalid).toEqual([
+      "APP_ENV",
+      "INTUIT_ENVIRONMENT",
+    ]);
+    expect(bad({ ...STAGING_CORE, VERCEL: "1", VERCEL_TARGET_ENV: "preview" }).invalid).toEqual(["APP_ENV"]);
+    expect(bad({ ...CORE, VERCEL: "1", VERCEL_ENV: "preview", VERCEL_TARGET_ENV: "preview" }).invalid).toEqual(["APP_ENV"]);
+  });
+
+  it("VERCEL_ENV=production wins: production rules apply whatever APP_ENV says", async () => {
+    const { isRealDataEnv } = await import("./schema");
+    expect(isRealDataEnv({ APP_ENV: "staging", VERCEL: "1", VERCEL_ENV: "production" })).toBe(true);
+    expect(bad({ ...STAGING_CORE, VERCEL: "1", VERCEL_ENV: "production" }).missing).toEqual(PROD_ONLY);
+  });
+
+  it("on Vercel, VERCEL_ENV must be present (fail closed)", () => {
+    expect(bad({ ...STAGING_CORE, VERCEL: "1" }).missing).toEqual(["VERCEL_ENV"]);
+  });
+
+  it("a PR Preview may not hold the Nichols Law data plane", () => {
+    expect(bad({ ...PREVIEW_CORE, ...VERCEL_PREVIEW, SUPABASE_NL_URL: "https://nl.example.test" }).invalid).toEqual([
+      "SUPABASE_NL_URL",
+    ]);
+    expect(bad({ ...PREVIEW_CORE, ...VERCEL_PREVIEW, SUPABASE_NL_SECRET_KEY: "sb_secret_FAKE-nl" }).invalid).toEqual([
+      "SUPABASE_NL_SECRET_KEY",
+    ]);
+  });
+
+  it("isRealDataEnv: APP_ENV=staging on a Vercel PR Preview target is not a real-data environment", async () => {
+    const { isRealDataEnv } = await import("./schema");
+    expect(isRealDataEnv({ APP_ENV: "staging", VERCEL: "1", VERCEL_ENV: "preview", VERCEL_TARGET_ENV: "preview" })).toBe(false);
+    expect(isRealDataEnv({ APP_ENV: "staging", VERCEL: "1", VERCEL_ENV: "preview" })).toBe(false);
+    expect(isRealDataEnv({ APP_ENV: "staging", VERCEL: "1", VERCEL_ENV: "development" })).toBe(false);
+    expect(isRealDataEnv({ APP_ENV: "staging", VERCEL: "1", VERCEL_ENV: "preview", VERCEL_TARGET_ENV: "staging" })).toBe(true);
+    expect(isRealDataEnv({ APP_ENV: "staging" })).toBe(true); // local machine against staging, by design
+    expect(isRealDataEnv({ APP_ENV: "preview", VERCEL_ENV: "production" })).toBe(true); // production fails closed
+    vi.stubEnv("APP_ENV", "staging");
+    vi.stubEnv("VERCEL", "1");
+    vi.stubEnv("VERCEL_ENV", "preview");
+    vi.stubEnv("VERCEL_TARGET_ENV", "preview");
+    expect(() =>
+      requireConnectorEnv("intuit", {
+        INTUIT_CLIENT_ID: "fake-id",
+        INTUIT_CLIENT_SECRET: "fake-secret",
+        INTUIT_REDIRECT_URI: "https://app.example.test/cb",
+        INTUIT_WEBHOOK_VERIFIER_TOKEN: "fake-verifier",
+        INTUIT_ENVIRONMENT: "production",
+      }),
+    ).toThrow(EnvValidationError);
+  });
+
   it("refuses INTUIT_ENVIRONMENT=production when the connector is used outside staging/production", () => {
     const INTUIT_PROD = {
       INTUIT_CLIENT_ID: "fake-id",

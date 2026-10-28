@@ -68,7 +68,10 @@ export function isProduction(env: EnvRecord): boolean {
  * and Production (decided Oct 28, 2026). PR Previews (APP_ENV=preview) and local dev are not.
  */
 export function isRealDataEnv(env: EnvRecord): boolean {
-  return isProduction(env) || env.APP_ENV === "staging";
+  if (isProduction(env)) return true;
+  // On Vercel, staging is only the custom environment "staging"; a PR Preview or `vercel dev` never is, whatever
+  // APP_ENV claims. Off Vercel, APP_ENV=staging is a developer machine pointed at staging (allowed by design).
+  return env.APP_ENV === "staging" && (!isVercel(env.VERCEL) || env.VERCEL_TARGET_ENV === "staging");
 }
 
 // ---------------------------------------------------------------- server schema
@@ -121,6 +124,7 @@ type CrossFieldInput = {
   NEXT_PUBLIC_SUPABASE_URL?: unknown;
   NEXT_PUBLIC_SENTRY_DSN?: unknown;
   SUPABASE_NL_URL?: unknown;
+  SUPABASE_NL_SECRET_KEY?: unknown;
 };
 const HTTPS_OUTSIDE_LOCAL = ["NEXT_PUBLIC_APP_URL", "NEXT_PUBLIC_SUPABASE_URL", "SUPABASE_NL_URL", "NEXT_PUBLIC_SENTRY_DSN"] as const;
 
@@ -130,17 +134,27 @@ function crossFieldRules(v: CrossFieldInput, ctx: z.RefinementCtx): void {
   // APP_ENV must agree with the platform. (A missing APP_ENV is already reported as missing.)
   // On Vercel, the custom environment "staging" reports VERCEL_ENV=preview with VERCEL_TARGET_ENV=staging; a PR
   // Preview reports VERCEL_TARGET_ENV=preview. Only the former may call itself staging.
+  if (isVercel(v.VERCEL) && v.VERCEL_ENV === undefined) issue("VERCEL_ENV"); // Vercel always sets it: fail closed
   if (v.APP_ENV !== undefined) {
-    if (isVercel(v.VERCEL) && v.APP_ENV === "local") issue("APP_ENV");
+    // `vercel dev` (VERCEL_ENV=development) is local; any other Vercel deployment is not.
+    if (isVercel(v.VERCEL) && (v.APP_ENV === "local") !== (v.VERCEL_ENV === "development")) issue("APP_ENV");
+    else if (isVercel(v.VERCEL) && v.APP_ENV === "staging" && v.VERCEL_TARGET_ENV !== "staging") issue("APP_ENV");
     else if (v.VERCEL_ENV === "production" && v.APP_ENV !== "production") issue("APP_ENV");
     else if (v.VERCEL_ENV === "preview" && v.APP_ENV !== (v.VERCEL_TARGET_ENV === "staging" ? "staging" : "preview"))
       issue("APP_ENV");
     else if (v.APP_ENV === "preview" && v.VERCEL_ENV !== "preview") issue("APP_ENV");
   }
   // Supabase on a PR Preview: all or none (a synthetic-data project, H-025). Required by the shape everywhere else.
-  if (v.APP_ENV === "preview") requireAllOrNone(v, SUPABASE_NAMES, ctx);
+  if (v.APP_ENV === "preview") {
+    requireAllOrNone(v, SUPABASE_NAMES, ctx);
+    // The Nichols Law data plane is real data: never on a PR Preview.
+    for (const name of ["SUPABASE_NL_URL", "SUPABASE_NL_SECRET_KEY"] as const) if (v[name] !== undefined) issue(name);
+  }
   // Production Intuit keys only where real data may live (Staging, Production).
-  if (v.INTUIT_ENVIRONMENT === "production" && !isRealDataEnv({ APP_ENV: v.APP_ENV, VERCEL_ENV: v.VERCEL_ENV }))
+  if (
+    v.INTUIT_ENVIRONMENT === "production" &&
+    !isRealDataEnv({ APP_ENV: v.APP_ENV, VERCEL: v.VERCEL, VERCEL_ENV: v.VERCEL_ENV, VERCEL_TARGET_ENV: v.VERCEL_TARGET_ENV })
+  )
     issue("INTUIT_ENVIRONMENT");
   // Outside local (or in production) every configured URL must be https.
   const strict = isProduction({ APP_ENV: v.APP_ENV, VERCEL_ENV: v.VERCEL_ENV }) || (v.APP_ENV !== undefined && v.APP_ENV !== "local");
@@ -173,6 +187,8 @@ export const serverEnvPreviewSchema = z
   .object({ ...baseShape, ...clientEnvShape, SUPABASE_SECRET_KEY: supabaseSecretKey.optional() })
   .superRefine(crossFieldRules);
 
+// Deliberately the loosest type (from the preview schema): one getServerEnv serves every environment, so Supabase
+// values may be absent; code that needs a database goes through getSupabaseSecretKey / requireSupabasePublicEnv.
 export type ServerEnvWithSecrets = z.infer<typeof serverEnvPreviewSchema>;
 /** The general server env object: no secret keys (use getSupabaseSecretKey / getAnthropicEnv). */
 export type ServerEnv = Omit<ServerEnvWithSecrets, "SUPABASE_SECRET_KEY" | "SUPABASE_NL_SECRET_KEY">;

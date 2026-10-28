@@ -5,6 +5,7 @@
 // env. A build counts as "real" per shouldValidateBuildEnv below. There is deliberately no skip flag.
 import {
   EnvValidationError,
+  isRealDataEnv,
   parseServerEnv,
   type EnvRecord,
 } from "./schema";
@@ -49,6 +50,9 @@ export function assertNoSecretPublicVars(env: EnvRecord): void {
  * variables are missing (plus Anthropic and Inngest in production). A no-op on CI and local builds.
  */
 export function assertBuildEnv(env: EnvRecord): void {
+  // Production Intuit keys outside staging/production are refused even where the rest is not validated (local).
+  if (env.INTUIT_ENVIRONMENT?.trim() === "production" && !isRealDataEnv(env))
+    throw new EnvValidationError("Intuit (production keys only in staging or production)", [], ["INTUIT_ENVIRONMENT"]);
   if (!shouldValidateBuildEnv(env)) return;
   assertNoSecretPublicVars(env);
   parseServerEnv(env);
