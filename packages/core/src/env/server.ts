@@ -4,6 +4,7 @@ import "server-only";
 import { withRedaction } from "./redact";
 import {
   CLIENT_ENV_NAMES,
+  EnvValidationError,
   isProduction,
   parseConnectorEnv,
   parseServerEnv,
@@ -17,9 +18,9 @@ import {
 } from "./schema";
 
 export type { ConnectorEnv, ConnectorName, GroupResult, ServerEnv } from "./schema";
-export { EnvValidationError } from "./schema";
+export { EnvValidationError, requireSupabasePublicEnv } from "./schema";
 
-type Loaded = { env: ServerEnv; supabaseSecretKey: string };
+type Loaded = { env: ServerEnv; supabaseSecretKey: string | undefined };
 let cached: Loaded | undefined;
 
 function load(): Loaded {
@@ -43,9 +44,14 @@ export function getServerEnv(): ServerEnv {
   return load().env;
 }
 
-/** The Supabase secret key. Narrow accessor: only the lane router and the token vault may call it (T-003 lint). */
+/**
+ * The Supabase secret key. Narrow accessor: only the lane router and the token vault may call it (T-003 lint).
+ * Throws on a PR Preview without a database (APP_ENV=preview); every other environment requires the key.
+ */
 export function getSupabaseSecretKey(): string {
-  return load().supabaseSecretKey;
+  const key = load().supabaseSecretKey;
+  if (key === undefined) throw new EnvValidationError("Supabase (no database in this deployment)", ["SUPABASE_SECRET_KEY"], []);
+  return key;
 }
 
 /**

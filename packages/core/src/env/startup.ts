@@ -13,5 +13,6 @@ export function warnUnconfiguredFeatures(env: EnvRecord, log: (message: string) 
   if (!ai.configured) parts.push(`AI features not configured: ${ai.missing.join(", ")} missing or invalid`);
   const jobs = resolveInngestEnv(env);
   if (!jobs.configured) parts.push(`Background jobs not configured: ${jobs.missing.join(", ")} missing or invalid`);
+  if (env.APP_ENV === "preview" && !env.SUPABASE_SECRET_KEY?.trim()) parts.push("No database in this preview deployment");
   if (parts.length > 0) log(`[env] ${parts.join(". ")}.`);
 }

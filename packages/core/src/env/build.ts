@@ -18,7 +18,7 @@ export function parseGateFlag(name: string, value: string | undefined): boolean 
 }
 
 /**
- * True on Vercel (VERCEL=1), when forced (NICHOLS_VALIDATE_ENV), or when APP_ENV says staging/production, so a
+ * True on Vercel (VERCEL=1), when forced (NICHOLS_VALIDATE_ENV), or when APP_ENV says preview/staging/production, so a
  * self-hosted deployment, or one with Vercel's "Automatically expose System Environment Variables" turned off,
  * is still validated at build and boot.
  */
@@ -26,6 +26,7 @@ export function shouldValidateBuildEnv(env: EnvRecord): boolean {
   return (
     parseGateFlag("VERCEL", env.VERCEL) ||
     parseGateFlag("NICHOLS_VALIDATE_ENV", env.NICHOLS_VALIDATE_ENV) ||
+    env.APP_ENV === "preview" ||
     env.APP_ENV === "staging" ||
     env.APP_ENV === "production"
   );

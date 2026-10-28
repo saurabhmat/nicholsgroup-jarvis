@@ -9,9 +9,11 @@ export {
   clientEnvSchema,
   connectorSchemaFactories,
   isProduction,
+  isRealDataEnv,
   parseClientEnv,
   parseConnectorEnv,
   parseServerEnv,
+  requireSupabasePublicEnv,
   runtimeFlags,
   serverEnvSchema,
 } from "./schema";

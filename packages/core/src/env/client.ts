@@ -4,6 +4,7 @@
 import { parseClientEnv, type ClientEnv } from "./schema";
 
 export type { ClientEnv } from "./schema";
+export { requireSupabasePublicEnv } from "./schema";
 
 export function readClientEnvFromProcess(): Record<string, string | undefined> {
   return {

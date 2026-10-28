@@ -51,8 +51,17 @@ const JOBS = {
 const HTTPS = { NEXT_PUBLIC_APP_URL: "https://app.example.test", NEXT_PUBLIC_SUPABASE_URL: "https://abc.supabase.test" } as const;
 const PROD_CORE = { ...CORE, ...HTTPS, APP_ENV: "production" } as const;
 const STAGING_CORE = { ...CORE, ...HTTPS, APP_ENV: "staging" } as const;
-const LOCAL_FLAGS = { production: false, local: true } as const;
-const PROD_FLAGS = { production: true, local: false } as const;
+// A PR Preview (APP_ENV=preview) may have no database; Vercel's custom environment "staging" is a preview target.
+const PREVIEW_CORE = { NEXT_PUBLIC_APP_URL: HTTPS.NEXT_PUBLIC_APP_URL, APP_ENV: "preview", ENABLED_LANES: "PKG" } as const;
+const SUPABASE_HTTPS = {
+  NEXT_PUBLIC_SUPABASE_URL: HTTPS.NEXT_PUBLIC_SUPABASE_URL,
+  NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY: CORE.NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY,
+  SUPABASE_SECRET_KEY: CORE.SUPABASE_SECRET_KEY,
+} as const;
+const VERCEL_PREVIEW = { VERCEL: "1", VERCEL_ENV: "preview", VERCEL_TARGET_ENV: "preview" } as const;
+const VERCEL_STAGING = { VERCEL: "1", VERCEL_ENV: "preview", VERCEL_TARGET_ENV: "staging" } as const;
+const LOCAL_FLAGS = { production: false, local: true, realData: false } as const;
+const PROD_FLAGS = { production: true, local: false, realData: true } as const;
 
 const CORE_REQUIRED = [
   "NEXT_PUBLIC_APP_URL",
@@ -133,7 +142,7 @@ describe("server env", () => {
     expect(bad({ VERCEL: "true" }, CORE).invalid).toEqual(["APP_ENV"]);
     expect(bad({ VERCEL_ENV: "production", ...AI, ...JOBS }).invalid).toEqual(["APP_ENV"]); // staging on a production deployment
     expect(bad({ VERCEL_ENV: "preview", ...AI, ...JOBS }, PROD_CORE as Record<string, string>).invalid).toEqual(["APP_ENV"]);
-    expect(() => parseServerEnv({ ...STAGING_CORE, VERCEL: "1", VERCEL_ENV: "preview" })).not.toThrow();
+    expect(() => parseServerEnv({ ...STAGING_CORE, ...VERCEL_STAGING })).not.toThrow();
     expect(() => parseServerEnv({ ...PROD_CORE, ...AI, ...JOBS, VERCEL: "1", VERCEL_ENV: "production" })).not.toThrow();
     expect(() => parseServerEnv({ ...CORE, VERCEL_ENV: "development" })).not.toThrow();
   });
@@ -185,7 +194,8 @@ describe("production strictness (Anthropic, Inngest)", () => {
     const appEnvProd = catchError(() => assertBuildEnv({ ...PROD_CORE, VERCEL: "1" })) as EnvValidationError;
     expect(appEnvProd.missing).toEqual(PROD_ONLY);
 
-    expect(() => assertBuildEnv({ ...STAGING_CORE, VERCEL: "1", VERCEL_ENV: "preview" })).not.toThrow();
+    expect(() => assertBuildEnv({ ...PREVIEW_CORE, ...VERCEL_PREVIEW })).not.toThrow();
+    expect(() => assertBuildEnv({ ...STAGING_CORE, ...VERCEL_STAGING })).not.toThrow();
     expect(() => assertBuildEnv({ ...STAGING_CORE })).not.toThrow();
     expect(() => assertBuildEnv({ ...CORE })).not.toThrow();
     expect(() => assertBuildEnv({})).not.toThrow();
@@ -304,6 +314,108 @@ describe("server accessors and redaction", () => {
   });
 });
 
+describe("real-data environments (Staging environment, Oct 28, 2026)", () => {
+  const bad = (env: Record<string, string>) => catchError(() => parseServerEnv(env)) as EnvValidationError;
+
+  it("only Vercel's custom environment staging may set APP_ENV=staging; a PR Preview must say preview", () => {
+    expect(() => parseServerEnv({ ...STAGING_CORE, ...VERCEL_STAGING })).not.toThrow();
+    expect(() => parseServerEnv({ ...PREVIEW_CORE, ...VERCEL_PREVIEW })).not.toThrow();
+    expect(bad({ ...STAGING_CORE, ...VERCEL_PREVIEW }).invalid).toEqual(["APP_ENV"]); // PR Preview claiming staging
+    expect(bad({ ...STAGING_CORE, VERCEL: "1", VERCEL_ENV: "preview" }).invalid).toEqual(["APP_ENV"]); // no target
+    expect(bad({ ...PREVIEW_CORE, ...SUPABASE_HTTPS, ...VERCEL_STAGING }).invalid).toEqual(["APP_ENV"]);
+  });
+
+  it("APP_ENV=preview exists only on a Vercel Preview", () => {
+    expect(bad({ ...PREVIEW_CORE, ...SUPABASE_HTTPS }).invalid).toEqual(["APP_ENV"]);
+    expect(bad({ ...PREVIEW_CORE, ...SUPABASE_HTTPS, VERCEL: "1", VERCEL_ENV: "production", ...AI, ...JOBS }).invalid).toEqual([
+      "APP_ENV",
+    ]);
+  });
+
+  it("a PR Preview needs no Supabase, but all three variables or none", () => {
+    expect(parseServerEnv({ ...PREVIEW_CORE, ...VERCEL_PREVIEW }).SUPABASE_SECRET_KEY).toBeUndefined();
+    expect(bad({ ...PREVIEW_CORE, ...VERCEL_PREVIEW, SUPABASE_SECRET_KEY: "sb_secret_FAKE" }).missing).toEqual([
+      "NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY",
+      "NEXT_PUBLIC_SUPABASE_URL",
+    ]);
+    const publicOnly: Record<string, string> = { ...SUPABASE_HTTPS };
+    delete publicOnly.SUPABASE_SECRET_KEY;
+    expect(bad({ ...PREVIEW_CORE, ...VERCEL_PREVIEW, ...publicOnly }).missing).toEqual(["SUPABASE_SECRET_KEY"]);
+  });
+
+  it.each(["local", "staging", "production"])("APP_ENV=%s still requires all Supabase variables", (appEnv) => {
+    const base = appEnv === "local" ? CORE : { ...CORE, ...HTTPS, ...AI, ...JOBS };
+    const env: Record<string, string> = { ...base, APP_ENV: appEnv };
+    delete env.SUPABASE_SECRET_KEY;
+    delete env.NEXT_PUBLIC_SUPABASE_URL;
+    expect(bad(env).missing).toEqual(["NEXT_PUBLIC_SUPABASE_URL", "SUPABASE_SECRET_KEY"]);
+  });
+
+  it("refuses INTUIT_ENVIRONMENT=production unless APP_ENV is staging or production (build and boot)", () => {
+    const PROD_INTUIT = { INTUIT_ENVIRONMENT: "production" };
+    expect(bad({ ...CORE, ...PROD_INTUIT }).invalid).toEqual(["INTUIT_ENVIRONMENT"]);
+    expect(bad({ ...PREVIEW_CORE, ...VERCEL_PREVIEW, ...PROD_INTUIT }).invalid).toEqual(["INTUIT_ENVIRONMENT"]);
+    const built = catchError(() => assertBuildEnv({ ...PREVIEW_CORE, ...VERCEL_PREVIEW, ...PROD_INTUIT })) as EnvValidationError;
+    expect(built.invalid).toEqual(["INTUIT_ENVIRONMENT"]);
+    expect(() => parseServerEnv({ ...STAGING_CORE, ...VERCEL_STAGING, ...PROD_INTUIT })).not.toThrow();
+    expect(() => parseServerEnv({ ...PROD_CORE, ...AI, ...JOBS, ...PROD_INTUIT })).not.toThrow();
+    expect(() => parseServerEnv({ ...CORE, INTUIT_ENVIRONMENT: "sandbox" })).not.toThrow();
+    expect(bad({ ...CORE, INTUIT_ENVIRONMENT: "prod" }).invalid).toEqual(["INTUIT_ENVIRONMENT"]);
+  });
+
+  it("refuses INTUIT_ENVIRONMENT=production when the connector is used outside staging/production", () => {
+    const INTUIT_PROD = {
+      INTUIT_CLIENT_ID: "fake-id",
+      INTUIT_CLIENT_SECRET: "fake-secret",
+      INTUIT_REDIRECT_URI: "https://app.example.test/cb",
+      INTUIT_WEBHOOK_VERIFIER_TOKEN: "fake-verifier",
+      INTUIT_ENVIRONMENT: "production",
+    };
+    for (const flags of [LOCAL_FLAGS, { production: false, local: false, realData: false }]) {
+      const err = catchError(() => parseConnectorEnv("intuit", INTUIT_PROD, flags)) as EnvValidationError;
+      expect(err.invalid).toEqual(["INTUIT_ENVIRONMENT"]);
+    }
+    expect(parseConnectorEnv("intuit", INTUIT_PROD, { production: false, local: false, realData: true }).INTUIT_ENVIRONMENT).toBe(
+      "production",
+    );
+    // requireConnectorEnv derives the flags from the real process env, not from the caller's record.
+    vi.stubEnv("APP_ENV", "preview");
+    expect(() => requireConnectorEnv("intuit", { ...INTUIT_PROD, APP_ENV: "staging" })).toThrow(EnvValidationError);
+    vi.stubEnv("APP_ENV", "staging");
+    expect(requireConnectorEnv("intuit", INTUIT_PROD).INTUIT_ENVIRONMENT).toBe("production");
+  });
+
+  it("getSupabaseSecretKey fails closed on a Preview without a database; getServerEnv still works", async () => {
+    for (const [k, v] of Object.entries({ ...PREVIEW_CORE, ...VERCEL_PREVIEW })) vi.stubEnv(k, v);
+    for (const k of Object.keys(SUPABASE_HTTPS)) vi.stubEnv(k, "");
+    const mod = await import("./server");
+    expect(mod.getServerEnv().APP_ENV).toBe("preview");
+    const err = catchError(() => mod.getSupabaseSecretKey()) as Error;
+    expect(err.message).toMatch(VALIDATION_FAILED);
+    expect(err.message).toContain("SUPABASE_SECRET_KEY");
+  });
+
+  it("client: the Supabase pair is all or none, and requireSupabasePublicEnv fails closed by name", async () => {
+    const { requireSupabasePublicEnv } = await import("./client");
+    const none = parseClientEnv({ NEXT_PUBLIC_APP_URL: HTTPS.NEXT_PUBLIC_APP_URL });
+    const err = catchError(() => requireSupabasePublicEnv(none)) as EnvValidationError;
+    expect(err.missing).toEqual(["NEXT_PUBLIC_SUPABASE_URL", "NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY"]);
+    expect(requireSupabasePublicEnv(parseClientEnv(CORE)).NEXT_PUBLIC_SUPABASE_URL).toBe(CORE.NEXT_PUBLIC_SUPABASE_URL);
+    const half = catchError(() =>
+      parseClientEnv({ NEXT_PUBLIC_APP_URL: HTTPS.NEXT_PUBLIC_APP_URL, NEXT_PUBLIC_SUPABASE_URL: HTTPS.NEXT_PUBLIC_SUPABASE_URL }),
+    ) as EnvValidationError;
+    expect(half.missing).toEqual(["NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY"]);
+  });
+
+  it("startup warns (names only) when a Preview has no database", async () => {
+    const { warnUnconfiguredFeatures } = await import("./startup");
+    const log = vi.fn();
+    warnUnconfiguredFeatures({ ...PREVIEW_CORE, ...VERCEL_PREVIEW, ...AI, ...JOBS }, log);
+    expect(log).toHaveBeenCalledOnce();
+    expect(log.mock.calls[0]?.[0]).toContain("No database");
+  });
+});
+
 describe("connector env", () => {
   it("covers every connector family and requires nothing at startup", () => {
     expect([...CONNECTOR_NAMES].sort()).toEqual(
@@ -352,7 +464,7 @@ describe("connector env", () => {
 
   it("intuit: redirect URI must be https unless local; output holds only intuit variables (N6)", () => {
     const err = catchError(() =>
-      parseConnectorEnv("intuit", INTUIT, { production: false, local: false }),
+      parseConnectorEnv("intuit", INTUIT, { production: false, local: false, realData: false }),
     ) as EnvValidationError;
     expect(err.invalid).toEqual(["INTUIT_REDIRECT_URI"]);
     const ok = parseConnectorEnv("intuit", { ...INTUIT, APP_ENV: "local", VERCEL_ENV: "preview" }, LOCAL_FLAGS);
@@ -686,7 +798,8 @@ describe("build-time validation", () => {
   });
 
   it("passes a preview build with a full core env and nothing else", () => {
-    expect(() => assertBuildEnv({ VERCEL: "1", VERCEL_ENV: "preview", ...STAGING_CORE })).not.toThrow();
+    expect(() => assertBuildEnv({ ...VERCEL_PREVIEW, ...PREVIEW_CORE })).not.toThrow();
+    expect(() => assertBuildEnv({ ...VERCEL_PREVIEW, ...PREVIEW_CORE, ...SUPABASE_HTTPS })).not.toThrow();
   });
 
   it("can be forced explicitly", () => {
@@ -749,7 +862,7 @@ describe("Vercel system variables (N1)", () => {
 
   it("a full Vercel Preview build with framework system vars passes", () => {
     expect(() =>
-      assertBuildEnv({ ...STAGING_CORE, VERCEL: "1", VERCEL_ENV: "preview", ...VERCEL_SYSTEM }),
+      assertBuildEnv({ ...PREVIEW_CORE, ...VERCEL_PREVIEW, ...VERCEL_SYSTEM }),
     ).not.toThrow();
   });
 
@@ -760,9 +873,8 @@ describe("Vercel system variables (N1)", () => {
   it("an unexpected NEXT_PUBLIC_VERCEL_* name is still flagged by name", () => {
     const err = catchError(() =>
       assertBuildEnv({
-        ...STAGING_CORE,
-        VERCEL: "1",
-        VERCEL_ENV: "preview",
+        ...PREVIEW_CORE,
+        ...VERCEL_PREVIEW,
         ...VERCEL_SYSTEM,
         NEXT_PUBLIC_VERCEL_AUTOMATION_BYPASS_SECRET: "fake-value",
       }),

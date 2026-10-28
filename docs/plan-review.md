@@ -169,7 +169,17 @@ Decided by Saurabh (supersedes "core vars (app, Supabase, Inngest, Anthropic) fa
 - **Required only in production:** `ANTHROPIC_*` and `INNGEST_*`. Production means `APP_ENV=production` or `VERCEL_ENV=production`, and it fails closed. A partially set group is an error in production.
 - **Local, staging and Preview:** both groups are optional. If missing or partial, the server logs one startup warning (variable names only, never values) and `getAnthropicEnv()` / `getInngestEnv()` return `{ configured: false, missing }`, so AI and job features report "not configured" instead of crashing.
 - **Build gate:** validation runs on deployment builds (`VERCEL=1`), when `APP_ENV` is `staging` or `production` (so self-hosted builds are covered too), or with `NICHOLS_VALIDATE_ENV=1`; CI typecheck, lint and test need no env. A missing core variable on a deployment stops the build, and the same check at server start (`instrumentation.ts`) stops the server at boot.
-- **Vercel setting:** "Automatically expose System Environment Variables" must stay ON (`VERCEL`, `VERCEL_ENV`, `NEXT_PUBLIC_VERCEL_*`). `APP_ENV` must agree with `VERCEL_ENV` (production needs `production`, preview needs `staging`, `local` is rejected on Vercel), and URLs must be https outside local. Consequences: `vercel dev` / `vercel build` locally need `APP_ENV=staging` (they set `VERCEL=1`), and a local `next dev` with `APP_ENV=staging` (e.g. against the staging Supabase project) needs https URLs.
+- **Vercel setting:** "Automatically expose System Environment Variables" must stay ON (`VERCEL`, `VERCEL_ENV`, `VERCEL_TARGET_ENV`, `NEXT_PUBLIC_VERCEL_*`). `APP_ENV` must agree with the platform, and URLs must be https outside local. Updated Oct 28, 2026 for the Staging environment decision (§7 "Staging environment and real data"):
+
+  | Vercel deployment | `VERCEL_ENV` / `VERCEL_TARGET_ENV` | `APP_ENV` |
+  |---|---|---|
+  | Production | `production` / `production` | `production` |
+  | Custom environment Staging (branch `staging`) | `preview` / `staging` | `staging` |
+  | PR Preview | `preview` / `preview` | `preview` |
+
+  `local` is rejected on Vercel, and `preview` is rejected anywhere but a Vercel Preview. Consequences: `vercel dev` / `vercel build` locally set `VERCEL=1`, so they need a matching `APP_ENV`. A local `next dev` with `APP_ENV=staging` (e.g. against the staging Supabase project) needs https URLs.
+- **PR Preview (`APP_ENV=preview`):** the Supabase variables are optional, all three or none (a synthetic-data project, H-025). Without them, `getSupabaseSecretKey()` and `requireSupabasePublicEnv()` throw, naming the variables, and the server logs "No database in this preview deployment".
+- **Intuit guard:** `INTUIT_ENVIRONMENT=production` is refused unless `APP_ENV` is `staging` or `production` (or `VERCEL_ENV=production`). It is checked by the server schema at build and boot, and again by `requireConnectorEnv("intuit")` from the real process env.
 - **Also decided in review:** the Supabase secret key is read only through `getSupabaseSecretKey()` (not in the general env object); `NEXT_PUBLIC_*` values are allow-pattern checked and every `NEXT_PUBLIC_*` variable present at build is scanned against the secret-pattern list.
 
 Where this lands: backlog T-005, T-003 rule (c)/(d) imports `@nichols/core/env/secret-patterns`, T-041/T-171 (set Preview vars; Anthropic/Inngest needed only for production).

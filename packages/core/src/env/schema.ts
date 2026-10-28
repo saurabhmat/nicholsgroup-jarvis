@@ -21,20 +21,38 @@ const publicValue = <S extends z.ZodType<string, string>>(schema: S) =>
     .refine((v) => !isSecretLikeValue(v), { message: "value looks like a secret and cannot be public" })
     .pipe(schema); // checks run on the raw value first: z.url() would normalise whitespace away
 
+const supabaseUrl = publicValue(httpUrl());
 const supabasePublishableKey = publicValue(z.string().regex(/^sb_publishable_[A-Za-z0-9_-]+$/));
+const supabaseSecretKey = z.string().min(1); // sb_secret_...: jobs + token vault only (see getSupabaseSecretKey)
 const vapidPublicKey = publicValue(z.string().regex(/^[A-Za-z0-9_-]{86,88}$/)); // uncompressed P-256 point, base64url
 const sentryDsn = publicValue(httpUrl());
 
 // ---------------------------------------------------------------- client (browser-visible) schema
 
+// The Supabase pair is optional in the schema because a PR Preview (APP_ENV=preview) may have no database. The
+// server schema and the build gate require it everywhere else; the browser cannot see APP_ENV, so it only checks
+// that the pair is complete. Use requireSupabasePublicEnv() where a database is needed.
 export const clientEnvShape = {
   NEXT_PUBLIC_APP_URL: publicValue(httpUrl()),
-  NEXT_PUBLIC_SUPABASE_URL: publicValue(httpUrl()),
-  NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY: supabasePublishableKey,
+  NEXT_PUBLIC_SUPABASE_URL: supabaseUrl.optional(),
+  NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY: supabasePublishableKey.optional(),
   NEXT_PUBLIC_VAPID_PUBLIC_KEY: vapidPublicKey.optional(),
   NEXT_PUBLIC_SENTRY_DSN: sentryDsn.optional(),
 };
-export const clientEnvSchema = z.object(clientEnvShape);
+
+const SUPABASE_PUBLIC_NAMES = ["NEXT_PUBLIC_SUPABASE_URL", "NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY"] as const;
+const SUPABASE_NAMES = [...SUPABASE_PUBLIC_NAMES, "SUPABASE_SECRET_KEY"] as const;
+
+/** Reports every name in `names` that is absent, when some but not all of them are present. */
+function requireAllOrNone(v: Record<string, unknown>, names: readonly string[], ctx: z.RefinementCtx): void {
+  const present = names.filter((n) => v[n] !== undefined);
+  if (present.length === 0 || present.length === names.length) return;
+  for (const n of names) if (v[n] === undefined) ctx.addIssue({ code: "custom", message: "required", path: [n] });
+}
+
+export const clientEnvSchema = z
+  .object(clientEnvShape)
+  .superRefine((v, ctx) => requireAllOrNone(v, SUPABASE_PUBLIC_NAMES, ctx));
 export type ClientEnv = z.infer<typeof clientEnvSchema>;
 export const CLIENT_ENV_NAMES = Object.keys(clientEnvShape) as (keyof typeof clientEnvShape)[];
 
@@ -43,6 +61,14 @@ export const CLIENT_ENV_NAMES = Object.keys(clientEnvShape) as (keyof typeof cli
 /** Production (fail-closed) when APP_ENV=production or Vercel says VERCEL_ENV=production. */
 export function isProduction(env: EnvRecord): boolean {
   return env.APP_ENV === "production" || env.VERCEL_ENV === "production";
+}
+
+/**
+ * Environments allowed to hold real company data and production vendor keys: the Vercel Staging environment
+ * and Production (decided Oct 28, 2026). PR Previews (APP_ENV=preview) and local dev are not.
+ */
+export function isRealDataEnv(env: EnvRecord): boolean {
+  return isProduction(env) || env.APP_ENV === "staging";
 }
 
 // ---------------------------------------------------------------- server schema
@@ -59,11 +85,11 @@ const laneIdList = z
   ])
   .pipe(z.array(z.string().regex(/^[A-Z][A-Z0-9_]*$/, "lane ids are upper-case")).min(1));
 
-/** Required in EVERY environment. */
+/** Required in every environment; on a PR Preview (APP_ENV=preview) the Supabase variables are all or none. */
 export const serverCoreShape = {
-  APP_ENV: z.enum(["local", "staging", "production"]),
+  APP_ENV: z.enum(["local", "preview", "staging", "production"]),
   ENABLED_LANES: laneIdList,
-  SUPABASE_SECRET_KEY: z.string().min(1), // sb_secret_...: jobs + token vault only (see getSupabaseSecretKey)
+  SUPABASE_SECRET_KEY: supabaseSecretKey,
   SUPABASE_NL_URL: httpUrl().optional(), // reserved for the later Nichols Law rollout
   SUPABASE_NL_SECRET_KEY: z.string().min(1).optional(),
 };
@@ -87,6 +113,10 @@ type CrossFieldInput = {
   APP_ENV?: string;
   VERCEL?: string;
   VERCEL_ENV?: string;
+  VERCEL_TARGET_ENV?: string;
+  INTUIT_ENVIRONMENT?: string;
+  NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY?: unknown;
+  SUPABASE_SECRET_KEY?: unknown;
   NEXT_PUBLIC_APP_URL?: unknown;
   NEXT_PUBLIC_SUPABASE_URL?: unknown;
   NEXT_PUBLIC_SENTRY_DSN?: unknown;
@@ -98,11 +128,20 @@ const HTTPS_OUTSIDE_LOCAL = ["NEXT_PUBLIC_APP_URL", "NEXT_PUBLIC_SUPABASE_URL", 
 function crossFieldRules(v: CrossFieldInput, ctx: z.RefinementCtx): void {
   const issue = (name: string) => ctx.addIssue({ code: "custom", message: "invalid combination", path: [name] });
   // APP_ENV must agree with the platform. (A missing APP_ENV is already reported as missing.)
+  // On Vercel, the custom environment "staging" reports VERCEL_ENV=preview with VERCEL_TARGET_ENV=staging; a PR
+  // Preview reports VERCEL_TARGET_ENV=preview. Only the former may call itself staging.
   if (v.APP_ENV !== undefined) {
     if (isVercel(v.VERCEL) && v.APP_ENV === "local") issue("APP_ENV");
     else if (v.VERCEL_ENV === "production" && v.APP_ENV !== "production") issue("APP_ENV");
-    else if (v.VERCEL_ENV === "preview" && v.APP_ENV !== "staging") issue("APP_ENV");
+    else if (v.VERCEL_ENV === "preview" && v.APP_ENV !== (v.VERCEL_TARGET_ENV === "staging" ? "staging" : "preview"))
+      issue("APP_ENV");
+    else if (v.APP_ENV === "preview" && v.VERCEL_ENV !== "preview") issue("APP_ENV");
   }
+  // Supabase on a PR Preview: all or none (a synthetic-data project, H-025). Required by the shape everywhere else.
+  if (v.APP_ENV === "preview") requireAllOrNone(v, SUPABASE_NAMES, ctx);
+  // Production Intuit keys only where real data may live (Staging, Production).
+  if (v.INTUIT_ENVIRONMENT === "production" && !isRealDataEnv({ APP_ENV: v.APP_ENV, VERCEL_ENV: v.VERCEL_ENV }))
+    issue("INTUIT_ENVIRONMENT");
   // Outside local (or in production) every configured URL must be https.
   const strict = isProduction({ APP_ENV: v.APP_ENV, VERCEL_ENV: v.VERCEL_ENV }) || (v.APP_ENV !== undefined && v.APP_ENV !== "local");
   if (!strict) return;
@@ -112,15 +151,29 @@ function crossFieldRules(v: CrossFieldInput, ctx: z.RefinementCtx): void {
   }
 }
 
-// VERCEL / VERCEL_ENV are platform variables, read only by the cross-field rules.
-const platformShape = { VERCEL: z.string().optional(), VERCEL_ENV: z.string().optional() };
-const baseShape = { ...clientEnvShape, ...serverCoreShape, ...platformShape };
+// Platform variables and INTUIT_ENVIRONMENT, read only by the cross-field rules (INTUIT_ENVIRONMENT is checked at
+// build and boot as well as when the connector is used).
+const platformShape = {
+  VERCEL: z.string().optional(),
+  VERCEL_ENV: z.string().optional(),
+  VERCEL_TARGET_ENV: z.string().optional(),
+  INTUIT_ENVIRONMENT: z.enum(["sandbox", "production"]).optional(),
+};
+const supabaseRequiredShape = {
+  NEXT_PUBLIC_SUPABASE_URL: supabaseUrl,
+  NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY: supabasePublishableKey,
+};
+const baseShape = { ...clientEnvShape, ...serverCoreShape, ...platformShape, ...supabaseRequiredShape };
 export const serverEnvSchema = z.object(baseShape).superRefine(crossFieldRules);
 export const serverEnvProductionSchema = z
   .object({ ...baseShape, ...anthropicShape, ...inngestShape })
   .superRefine(crossFieldRules);
+/** PR Preview (APP_ENV=preview): the database is optional. Chosen only when APP_ENV says so (parseServerEnv). */
+export const serverEnvPreviewSchema = z
+  .object({ ...baseShape, ...clientEnvShape, SUPABASE_SECRET_KEY: supabaseSecretKey.optional() })
+  .superRefine(crossFieldRules);
 
-export type ServerEnvWithSecrets = z.infer<typeof serverEnvSchema>;
+export type ServerEnvWithSecrets = z.infer<typeof serverEnvPreviewSchema>;
 /** The general server env object: no secret keys (use getSupabaseSecretKey / getAnthropicEnv). */
 export type ServerEnv = Omit<ServerEnvWithSecrets, "SUPABASE_SECRET_KEY" | "SUPABASE_NL_SECRET_KEY">;
 export const SERVER_ONLY_ENV_NAMES = [
@@ -172,10 +225,11 @@ export const connectorEnvShapes = {
 } as const;
 
 /** Runtime facts that connector rules need, derived from the REAL process env by server code. */
-export type RuntimeFlags = { production: boolean; local: boolean };
+export type RuntimeFlags = { production: boolean; local: boolean; realData: boolean };
 export const runtimeFlags = (env: EnvRecord): RuntimeFlags => ({
   production: isProduction(env),
   local: env.APP_ENV === "local",
+  realData: isRealDataEnv(env),
 });
 
 /** One schema factory per connector. The returned values contain only the connector's own variables. */
@@ -190,6 +244,8 @@ export const connectorSchemaFactories = {
           ctx.addIssue({ code: "custom", message: "https required", path: ["INTUIT_REDIRECT_URI"] });
         if (flags.production && v.INTUIT_ENVIRONMENT === undefined)
           ctx.addIssue({ code: "custom", message: "must be explicit in production", path: ["INTUIT_ENVIRONMENT"] });
+        if (!flags.realData && v.INTUIT_ENVIRONMENT === "production")
+          ctx.addIssue({ code: "custom", message: "only in staging or production", path: ["INTUIT_ENVIRONMENT"] });
       })
       .transform((v) => ({ ...v, INTUIT_ENVIRONMENT: v.INTUIT_ENVIRONMENT ?? ("sandbox" as const) })),
   stripe: () => z.object(connectorEnvShapes.stripe),
@@ -248,10 +304,25 @@ export function parseEnv<S extends z.ZodType>(scope: string, schema: S, env: Env
   throw new EnvValidationError(scope, [...missing].sort(), [...invalid].sort());
 }
 
-/** Core variables; in production also Anthropic and Inngest. */
+/** Core variables; in production also Anthropic and Inngest; on a PR Preview the database is optional. */
 export const parseServerEnv = (env: EnvRecord): ServerEnvWithSecrets =>
-  parseEnv("server environment", isProduction(env) ? serverEnvProductionSchema : serverEnvSchema, env);
+  parseEnv(
+    "server environment",
+    isProduction(env) ? serverEnvProductionSchema : env.APP_ENV === "preview" ? serverEnvPreviewSchema : serverEnvSchema,
+    env,
+  );
 export const parseClientEnv = (env: EnvRecord): ClientEnv => parseEnv("client environment", clientEnvSchema, env);
+
+/** The Supabase URL and publishable key, or EnvValidationError (names only) where there is no database. */
+export function requireSupabasePublicEnv(env: Pick<ClientEnv, (typeof SUPABASE_PUBLIC_NAMES)[number]>): {
+  NEXT_PUBLIC_SUPABASE_URL: string;
+  NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY: string;
+} {
+  const { NEXT_PUBLIC_SUPABASE_URL: url, NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY: key } = env;
+  if (url === undefined || key === undefined)
+    throw new EnvValidationError("Supabase (no database in this deployment)", SUPABASE_PUBLIC_NAMES.filter((n) => env[n] === undefined), []);
+  return { NEXT_PUBLIC_SUPABASE_URL: url, NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY: key };
+}
 
 /**
  * Fail-closed accessor for a connector's credentials. Call it where the connector is used (inside
