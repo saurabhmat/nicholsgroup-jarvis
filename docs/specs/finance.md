@@ -209,17 +209,51 @@ Every function calls `requireLane` / `requireRole`, takes its client from `getLa
 ## 8. Connector calls
 
 Only through `packages/connectors/*`, read-only (`read`/`sync`; no `prepareWrite` for finance):
-- QuickBooks: CDC for Account, Customer, Vendor, Invoice, Payment, Bill, BillPayment, Purchase, Deposit, JournalEntry, Class; Reports API (P&L, Balance Sheet, Cash Flow, AR/AP aging summary and detail) with date range, accounting method, class from `lane_config` (T-051, T-052).
+- QuickBooks: see 8.1.
 - Stripe: customers, products, prices, subscriptions, invoices, charges, refunds, payouts, balance transactions, plus webhooks (T-054, T-058).
 - GoHighLevel: contacts, tags, pipelines/opportunities, products, orders/subscriptions (T-059).
 Normalisers read `raw.source_records` only, never call providers.
+
+### 8.1 QuickBooks Online (decided Oct 28, 2026; `docs/plan-review.md` §7)
+
+**App and connections.** One Intuit app ("Jarvis", scope `com.intuit.quickbooks.accounting` only) serves every company. Each company file is a separate `core.connections` row in its lane, with its own realmId and Vault-held tokens. It is connected through the in-app OAuth flow only (no OAuth Playground or offline tokens). The realm for a lane lives in `lane_config`; a callback for a different realm is rejected.
+
+| Environment | Intuit keys | Company |
+|---|---|---|
+| Local/dev and all tests | sandbox (`INTUIT_ENVIRONMENT=sandbox`) | sandbox company; tests use recorded fixtures with synthetic values |
+| Staging (Vercel custom environment `Staging`, branch `staging`, `staging.portal.pub-k.org`; H-023) | production keys, only in this environment (`APP_ENV=staging`) | live Pub K Group file for the Nov 16–25 tie-out (H-024); data stays in the staging Supabase project |
+| Preview (PR deployments, `APP_ENV=preview`) | sandbox only | sandbox company or none; no staging Supabase values |
+| Production | production | at go-live |
+
+Companies: PKG now; Nichols Law later; Ask Pub K, Pub K Institute and Nichols Capital are either separate files (Sophie grants access or connects them) or classes in the PKG file (D-8).
+
+**Read-only scope.** Accounting API only; no Payments, no Payroll; no create, update, delete or batch calls (the client exposes none). Entities: Account, Invoice, Bill, Payment, BillPayment, Purchase, Deposit, JournalEntry, Customer, Vendor, Class, CompanyInfo, Preferences. Reports: ProfitAndLoss, BalanceSheet, CashFlow, AgedReceivables, AgedPayables (aging drill-down comes from `fin.invoices` / `fin.bills`, not the detail reports).
+
+**Sync.**
+- Webhook (`intuit-signature` verified, idempotent) → targeted CDC fetch of the changed entities (T-053).
+- Backup CDC poll every 4 hours per connection, from a stored last-changed timestamp. A cursor older than Intuit's 30-day CDC window triggers a full reload (T-051, T-090).
+- Nightly full report pull, plus one before `fin.weekly_cash` (T-052, T-090).
+- No sync for a connection in `reconnect_required`.
+
+**Edition features.** Preferences are read on connect and on every sync. Class tracking, location tracking and multicurrency are stored on the connection. With class tracking off or unavailable, reports are fetched unsplit and the query layer returns unsplit figures with a warning note (never an error). The entity split by customer mapping still applies where configured. Nothing depends on multicurrency or sales tax.
+
+**Failures.**
+- Transient errors (5xx, network, 429 with `Retry-After`) retry with capped exponential backoff.
+- `invalid_grant` and revoked or expired refresh tokens set `reconnect_required`, stop syncing and notify the admin. They are never retried.
+- 400 Fault/Error, 403 and 404 fail with a message.
+- Every response's `intuit_tid` is logged. API errors go to `core.connector_api_errors` and Sentry without tokens or personal data, and are exportable (CSV/JSON) for Intuit support (T-196).
+- Settings → Connections and every QuickBooks error banner carry "Contact support" (`mailto:it@pub-k.org`) (T-197).
+
+**Access.** QuickBooks-derived data needs AAL2, and is visible only to members of that company's lane (RLS). It is fetched over HTTPS only, never over Realtime or WebSockets. Cross-company figures appear only in the owner's consolidated summary, which is not in the pilot. `INTUIT_*` variables are server-only.
+
+The full checklist is QB-1 – QB-20 in `docs/backlog.md` Phase A5. All of it must pass on the sandbox company before any real file is connected.
 
 ## 9. Jobs (Inngest; each takes `laneId`, per-connection concurrency key)
 
 | Job | Trigger | Behaviour |
 |---|---|---|
-| `fin.sync` | schedule per enabled lane from `lane_config`, plus webhook events | run connector syncs, normalise, rebuild `fin.stripe_subscription_versions` incrementally; idempotent; `core.sync_runs` rows. |
-| `fin.qbo_reports` | schedule (default 2×/day) + before weekly cash | fetch reports into `fin.report_cache`. |
+| `fin.sync` | schedule per enabled lane from `lane_config`, plus webhook events; QuickBooks backup CDC poll every 4 hours per connection | run connector syncs, normalise, rebuild `fin.stripe_subscription_versions` incrementally; idempotent; `core.sync_runs` rows; skips connections in `reconnect_required`. |
+| `fin.qbo_reports` | nightly full report pull per QuickBooks connection + before weekly cash | fetch reports into `fin.report_cache`. |
 | `fin.weekly_cash` | cron Saturday, time from `lane_config.finance.weekly_cash_time` (default 06:00 ET, `TZ=America/New_York`), for the business week that ended at 00:00 that Saturday; the payload stores `period_start` and `period_end` as instants (week_end exclusive) and each figure's `as_of` | ensure fresh reports, build the Sat–Fri snapshot (cash by account as book balance at week end and start, Stripe payouts in the week at account level, AR/AP totals, AR >30, AP due 14d, subscribers new/cancelled for the week, controls summary), store PDF/CSV in private per-lane Storage (derived figures only), notify Sophie "report ready to sign off". Distribution only via an email proposal (D-14 open). |
 | `fin.monthly_close` | `lane_config.finance.monthly_close_trigger` (`day_of_month:N` or `manual`) | final-month snapshot incl. MRR movements and subscriber movements, `is_final = true`. |
 | `fin.controls_daily` | daily | evaluate controls; emit red-flag events. |
@@ -269,7 +303,7 @@ Failures are logged in `core.sync_runs`, alert admin_technical, and never produc
 
 Still-open decisions (designed around, not decided here):
 - **D-3** GoHighLevel "paid subscriber" definition. Blocks customer churn %, paid-subscriber counts, and T-060. The rule is a `lane_config` value; the subscriber views return `pending_definition` until it exists.
-- **D-8** Sophie's mapping values (QBO class and customer IDs, Stripe product IDs, GHL tags/products, bank-account owners). Needed before tie-out and before any entity-split figure is trusted; fixtures use synthetic ids.
+- **D-8** Sophie's mapping values (QBO class and customer IDs, Stripe product IDs, GHL tags/products, bank-account owners), and whether Ask Pub K, Pub K Institute and Nichols Capital are classes in the PKG file or separate files (8.1). Needed before tie-out and before any entity-split figure is trusted; fixtures use synthetic ids.
 - **D-14** Weekly cash report distribution (email via approvals vs in-portal only). Until decided the report is in-portal with PDF/CSV export; the email proposal step is optional.
 - **D-15** Design sign-off for navigation. Pages above use the provisional shell.
 - D-1, D-12, D-13 do not affect finance.

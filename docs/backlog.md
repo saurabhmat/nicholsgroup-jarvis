@@ -14,7 +14,7 @@ Board references (PL-xx) point to the Personal Chatbot board in monday.com.
 - `acceptance:` what must be true. Every task also has to meet the Definition of Done in `CLAUDE.md` (typecheck, lint, test, test:db, security review, PR body).
 - Provider dependencies: tasks that need mail/calendar depend on the **Google** tasks (T-063, T-064) by default. If D-1 = Microsoft 365, replace them with T-066, T-067 before approving.
 - IDs are stable and roughly follow build order; the dependency graph is authoritative where they differ.
-- Sizing: each task is ≤1 day for one developer with Claude Code. Release A is 120 tasks (T-075 added T-190 – T-194), Release B 23 (see "Schedule risk" in `docs/plan-review.md`).
+- Sizing: each task is ≤1 day for one developer with Claude Code. Release A is 123 tasks (T-075 added T-190 – T-194; the QuickBooks decisions of Oct 28 added T-195 – T-197), Release B 23 (see "Schedule risk" in `docs/plan-review.md`).
 
 Standing rules that apply to every task, so they are not repeated in each acceptance:
 - Every function, query, job, AI tool, cache entry and memory item takes `laneId`. DB clients come only from the lane router.
@@ -36,7 +36,7 @@ The **spine** runs serially in the main worktree: T-000 → T-001 – T-007 → 
 | W3 Finance/index schemas | T-055, T-057, T-061, T-080 | T-013 | SQL only |
 | W4 Assistant core | T-100 – T-103 | T-017 | needs H-002 for T-100 |
 | W5 Approvals core | T-110, T-111, T-114, T-193, then T-112 | T-013 + T-030; T-112 after T-020 | |
-| W6 QuickBooks | T-050 – T-053, T-056 | W2, T-055 | |
+| W6 QuickBooks | T-050 – T-053, T-195 – T-197, T-056 | W2, T-055 | all of QB-1 – QB-20 pass on the sandbox before H-024 |
 | W7 Stripe | T-054, T-058 | W2, T-057 | needs H-006 |
 | W8 GoHighLevel | T-059, T-060 | W2, T-057 | needs H-007, D-3, D-8 |
 | W9 Google mail/calendar | T-063 – T-065 | W2, T-061 | drop if D-1 = Microsoft |
@@ -48,8 +48,33 @@ The **spine** runs serially in the main worktree: T-000 → T-001 – T-007 → 
 | W15 Assistant finance | T-104 – T-106, T-194 | W4, T-081 | |
 | Converge | T-160 – T-163, then T-170 – T-173 | all of the above | serial |
 
+### QuickBooks-first schedule (Oct 28, 2026)
+Goal: the live PKG file connected in staging on **Fri Nov 13** (H-024), tie-out week 1 by hand on Mon Nov 16, week 2 through T-094 on Mon Nov 23. **At most 3 tracks at once.** Track A is the critical chain in the main worktree; B and C are parallel worktrees for off-chain tasks. `+` = a pair built in one worktree and one PR (both tasks set to done). At most two SQL-heavy tasks (marked SQL) on the same day.
+
+| Day | A — critical chain (main) | B — worktree | C — worktree |
+|---|---|---|---|
+| Oct 28–29 | T-005 (finish), T-007 | T-030 | T-022 |
+| Oct 30 | T-010 (SQL) | T-037 | T-003 |
+| Nov 2 | T-012 (SQL) | T-011 (SQL) | T-041 (needs H-011) |
+| Nov 3 | T-013 (SQL) | T-014 + T-015 (SQL) | T-016 + T-017 |
+| Nov 4 | T-031 + T-032 (SQL) | T-039 (SQL) | T-018 |
+| Nov 5 | T-033 + T-034 | T-038 | T-019 |
+| Nov 6 | T-035 | T-040 | T-055 (SQL) |
+| Nov 9 | T-050 | T-036 (SQL) | T-004 |
+| Nov 10 | T-195 | T-051 | T-052 |
+| Nov 11 | T-197 | T-053 | T-196 (SQL) |
+| Nov 12 | QB-1 – QB-20 sandbox run + fixes | T-090 | T-056 (SQL) |
+| Nov 13 | **H-024 connect live PKG file** | T-080 (SQL) | T-081 |
+| Nov 16 | week-1 tie-out by hand (T-172) | T-082 (SQL) | T-083 (SQL) |
+| Nov 17 | T-084 (SQL) | T-085 (SQL) | — |
+| Nov 18 | T-094 (SQL) | T-172 | — |
+| Nov 23 | week-2 tie-out through T-094 | | |
+
+Off-chain tasks (any free B/C slot, as long as their own dependencies are merged): T-003, T-004, T-011, T-014 + T-015, T-016 + T-017, T-018, T-019, T-022, T-030, T-036, T-037, T-038, T-039, T-040, T-041, T-051, T-052, T-053, T-055, T-090, T-196. Human items on the path: H-011 (Sentry, by Nov 2, blocks T-041 → T-196), H-023 (Staging environment, by Nov 12), D-8 (Sophie's mapping, by Nov 13). Everything else in Release A fills free slots after Nov 13. Re-forecast weekly; one lost day on track A moves the connection to Mon Nov 16.
+
 Rules for running tracks in parallel:
-- **No more than 3–4 tracks at once.** Every PR still needs your review.
+- **Location:** the main checkout is `~/dev/pubk-projects/jarvis/main`. Create each worktree beside it as `~/dev/pubk-projects/jarvis/<task-id>` (`git worktree add ../<task-id> -b agent/<task-id>`), never inside `main/`. Remove it with `git worktree remove` once its PR is merged.
+- **No more than 3 tracks at once** (Oct 28, 2026). Every PR still needs your review.
 - **Migrations:** at most two SQL-heavy tracks at a time. Before merging, rebase and renumber migration timestamps so they apply in merge order, then re-run `pnpm test:db`.
 - **Local Supabase:** each worktree needs its own `project_id` and ports in `supabase/core/supabase/config.toml`, or `pnpm test:db` has to run one worktree at a time. Two stacks on the default ports collide.
 - **Shared files:** `pnpm-lock.yaml` and the `status:` lines in this file will conflict. Regenerate the lockfile and keep both status changes when rebasing.
@@ -60,9 +85,9 @@ Rules for running tracks in parallel:
 These tasks have all their dependencies done and all their `needs` checked. A human sets `status: approved`.
 - T-000 — done (merged).
 - T-001 — done (merged).
-- T-002, T-006, T-075 — approved Oct 24, 2026.
-- T-005, T-003 — approved Oct 24, 2026 (build T-005 first).
-- Next after T-002 merges: **T-005**, then **T-003** (imports T-005's secret-pattern list).
+- T-002, T-006, T-075 — done (merged).
+- T-005, T-007, T-030, T-022 — approved Oct 28, 2026. Build order: T-005 first, then T-007 in the main worktree, with T-030 and T-022 in parallel worktrees.
+- T-003 (imports T-005's secret-pattern list) — approved Oct 24, 2026; in progress in its own worktree.
 
 ---
 
@@ -73,13 +98,23 @@ These tasks have all their dependencies done and all their `needs` checked. A hu
 - [ ] H-002 Anthropic dev API key with a spend limit (PL-13)
 - [ ] H-003 Inngest account: event key + signing key for staging (PL-12)
 - [ ] H-004 Confirm the pub-k.org mail/calendar/docs provider (D-1). Sign-in needs no OAuth app (D-6). (PL-15)
-- [x] H-005 Intuit developer app + sandbox company; production assessment submitted Oct 23, 2026 (PL-16)
+- [x] H-005 Intuit developer app + sandbox company (PL-16). Done Oct 28, 2026: one Intuit app "Jarvis" (QuickBooks Online and Payments, scope `com.intuit.quickbooks.accounting` only) serves every company; each company file connects separately through the in-app OAuth flow (own realmId + tokens per lane). Sandbox keys and `INTUIT_ENVIRONMENT=sandbox`, `INTUIT_REDIRECT_URI=http://localhost:3000/api/connect/qbo/callback` are in `.env.local`; a sandbox company exists. Details in `docs/plan-review.md` §7 (Oct 28)
 - [ ] H-006 Stripe restricted read-only key (test mode first, then live for staging) + webhook signing secret (PL-17)
 - [ ] H-007 GoHighLevel Private Integration token (read-only scopes) + location ID (PL-18)
 - [ ] H-008 Mail/calendar/docs API permissions for pub-k.org: Google OAuth client (Internal app type) with Gmail/Calendar/Drive scopes, **or** Entra app with admin consent for Mail/Calendars/Files/Sites read (PL-19)
 - [ ] H-009 monday.com API token (IT workspace); Notion internal integration shared to the target pages/databases (PL-20)
-- [x] H-010 Vercel project linked to the repo (Oct 24, 2026), with **Root Directory = `apps/web`** and **"Include files outside the root directory"** turned on; production branch `main`; a Preview deployment per PR (→ staging Supabase); Vercel Authentication on for Preview and Production; env vars set by Saurabh in the dashboard. Production-domain DNS moved to H-021 (PL-10)
+- [x] H-010 Vercel project linked to the repo (Oct 24, 2026), with **Root Directory = `apps/web`** and **"Include files outside the root directory"** turned on; production branch `main`; a Preview deployment per PR (no real-data secrets since Oct 28, 2026; see H-023); Vercel Authentication on for Preview and Production; env vars set by Saurabh in the dashboard. Production-domain DNS moved to H-021 (PL-10)
 - [ ] H-021 DNS for the production domain once D-5 is decided (split out of H-010)
+- [ ] H-023 Vercel **Staging** environment (decided Oct 28, 2026; `docs/plan-review.md` §7). Do all of these, then check this box:
+  - Vercel → Settings → Environments: create a custom environment **Staging**, bound to branch `staging`, with domain `staging.portal.pub-k.org` (DNS CNAME to Vercel). Vercel Authentication on.
+  - Staging variables (the only place real-data secrets live): `APP_ENV=staging`, the staging `NEXT_PUBLIC_SUPABASE_URL`, `NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY` and `SUPABASE_SECRET_KEY`, the **production** Intuit keys from 1Password, `INTUIT_ENVIRONMENT=production`, `INTUIT_REDIRECT_URI=https://staging.portal.pub-k.org/api/connect/qbo/callback`.
+  - Preview (PR deployments): remove `SUPABASE_SECRET_KEY` and every staging Supabase value; keep only sandbox Intuit keys (`INTUIT_ENVIRONMENT=sandbox`) and `APP_ENV=local`. A Preview that needs a database uses synthetic data only (H-025).
+  - Intuit app → Production → Redirect URIs: add `https://staging.portal.pub-k.org/api/connect/qbo/callback`. Add `https://portal.pub-k.org/api/connect/qbo/callback` later, with H-021.
+- [ ] H-025 (optional) A database for Preview deployments with synthetic data only: a separate Supabase project seeded by T-007, or Supabase branching. Until then Previews run without a database (static pages and sign-in screens only).
+- [ ] H-024 Connect the live Pub K Group QuickBooks file in staging (needed for tie-out, T-172). Only after T-050 – T-053 and T-195 – T-197 are merged and QB-1 – QB-20 pass on the sandbox company, and H-023 is done:
+  - Intuit app → Production → Webhooks: endpoint `https://staging.portal.pub-k.org/api/webhooks/qbo` for the entities in QB scope; copy the verifier token into the Vercel Staging environment as `INTUIT_WEBHOOK_VERIFIER_TOKEN`.
+  - Set the PKG realm ID (QBO → Settings → Additional info → Company ID) in the staging `lane_config`, then Saurabh (QBO admin) connects from Settings → Connections at the staging URL.
+  - Confirm the first sync, the Preferences check (class tracking on) and a report pull on Settings → Connections. Data stays in the staging Supabase project.
 - [ ] H-022 Guardrails **before** re-linking the Supabase CLI from `supabase/core` (T-006 review, Oct 24, 2026). Do one or both:
   - (preferred) Link from a **separate clone** that agents never use (for example `~/ops/jarvis-link`), so no agent-visible worktree ever contains `supabase/**/.temp/project-ref`. Run migrations to staging from that clone only.
   - Harden `.claude/`: add these to the `guard-bash.sh` patterns and the settings deny list: `--linked`, `--project-id`, `--db-url`, `config push`, `db pull`, `db dump`, `migration repair`, `migration up`, `migration fetch`, `inspect `, `branches `, `projects `, `functions deploy`, and the staging ref `lxjhaxdkqtmkhloqaffb`. Narrow the allow list to `supabase db reset --local`, `supabase test db --local` and `supabase gen types typescript --local` (plus `supabase start`, `supabase stop`, `supabase migration new`).
@@ -90,7 +125,7 @@ These tasks have all their dependencies done and all their `needs` checked. A hu
 - [ ] H-014 VAPID key pair for web push, generated and stored in 1Password (agent can generate a **dev** pair only)
 - [x] H-015 Planning pack v2 copied into the repo (Oct 23, 2026)
 - [ ] H-016 Resend account; sending domain verified (SPF/DKIM DNS records) for sign-in emails; SMTP credentials for staging and prod in 1Password and the Supabase Auth settings
-- [ ] H-017 Intuit **production** approval received and the live PKG QuickBooks file connected in staging (needed for tie-out, T-172)
+- [x] H-017 Intuit **production** approval (Oct 28, 2026): app assessment submitted, production keys issued and kept in 1Password only (never in `.env.local`). Connecting the live PKG file moved to H-024
 - [x] H-018 Local toolchain (Oct 23, 2026): Node 24.19.0 kept locally (CI stays on 22), pnpm 12.15.0 via corepack, Supabase CLI 2.122.0 (npm global)
 - [x] H-020 Docker access for your user (Oct 24, 2026): user is in the `docker` group; `docker info` works in a fresh login. A process started before the group change (e.g. an old VS Code server / Claude Code session) still gets "permission denied" until it is restarted.
 - [x] H-019 Agents can read `.env.example` (deny rule narrowed Oct 24, 2026; real env files still blocked). Publishable/secret rename and cleanup applied Oct 24 and mirrored in Vercel Preview (see `docs/plan-review.md` §7).
@@ -103,7 +138,7 @@ These tasks have all their dependencies done and all their `needs` checked. A hu
 - [ ] D-5 Production domain (default `portal.pub-k.org`)
 - [x] D-6 Sign-in: Supabase 6-digit email code (primary; required inside the installed iPhone app) or magic link, plus Supabase TOTP MFA (AAL2) for all users; Resend for delivery
 - [x] D-7 Keep Next.js 16 (`proxy.ts`); pnpm workspaces + Turborepo
-- [ ] D-8 Sophie supplies the lane_config entity mapping values: the QBO class IDs (and customer IDs where classes are missing), Stripe product IDs, GoHighLevel tags/products and bank-account owners for Ask Pub K and Pub K Institute. Decided: PKG excludes APK and PKI.
+- [ ] D-8 Sophie supplies the lane_config entity mapping values: the QBO class IDs (and customer IDs where classes are missing), Stripe product IDs, GoHighLevel tags/products and bank-account owners for Ask Pub K and Pub K Institute. Decided: PKG excludes APK and PKI. Also open (Oct 28, 2026): whether Ask Pub K, Pub K Institute and Nichols Capital are classes inside the PKG QuickBooks file or separate files; if separate, Sophie grants Saurabh access or connects them herself.
 - [x] D-9 MRR and churn definitions (Oct 24, 2026); full definitions in `docs/plan-review.md` §7
 - [x] D-10 Release A by Nov 25 / Release B Dec 7–31 (see "Releases" above)
 - [x] D-11 PKG approvals go live Nov 25 after the pilot security test (T-170); Dec 29 applies to other lanes only
@@ -156,7 +191,7 @@ Serial spine (main worktree). T-005 and T-006 can run in parallel once T-001/T-0
 - status: done
 - depends: T-002
 - needs: H-019
-- acceptance: Zod env modules in `packages/core/env`: a **server** schema (`server-only`) and a **client** schema that contains only `NEXT_PUBLIC_*` names; variable names match `.env.example` (agents can read it but not edit it); owns and exports the **secret-pattern list** (T-003's lint rule imports it); a test fails if a client-schema name lacks `NEXT_PUBLIC_` or a `NEXT_PUBLIC_` name matches a secret pattern; core vars (app, Supabase) fail the build when missing in every environment; Anthropic and Inngest only in production, elsewhere optional with a startup warning and "not configured" accessors (human decision Oct 24, 2026, `docs/plan-review.md` §7 "Env strictness (T-005)"); connector credentials are optional at startup and validated when the connector is used (it fails closed), so Preview builds work before every H-item is done; `.gitignore` already covers `.env*`, `.agent/logs` and Supabase temp files (pack); verify only.
+- acceptance: Zod env modules in `packages/core/env`: a **server** schema (`server-only`) and a **client** schema that contains only `NEXT_PUBLIC_*` names; variable names match `.env.example` (agents can read it but not edit it); owns and exports the **secret-pattern list** (T-003's lint rule imports it); a test fails if a client-schema name lacks `NEXT_PUBLIC_` or a `NEXT_PUBLIC_` name matches a secret pattern; core vars (app, Supabase) fail the build when missing in every environment except `APP_ENV=preview`; Anthropic and Inngest only in production, elsewhere optional with a startup warning and "not configured" accessors (human decision Oct 24, 2026, `docs/plan-review.md` §7 "Env strictness (T-005)"); connector credentials are optional at startup and validated when the connector is used (it fails closed), so Preview builds work before every H-item is done; `APP_ENV` gains `preview` for PR deployments (Vercel Preview without real-data secrets: Supabase optional there, all three variables or none) and `staging` is accepted on Vercel only for the custom environment `staging` (`VERCEL_TARGET_ENV`); the app refuses `INTUIT_ENVIRONMENT=production` unless `APP_ENV` is `staging` or `production`, at build, at boot and when the connector is used (tests); `.gitignore` already covers `.env*`, `.agent/logs` and Supabase temp files (pack); verify only.
 
 ### T-006 Local Supabase + pgTAP harness
 - status: done
@@ -165,7 +200,7 @@ Serial spine (main worktree). T-005 and T-006 can run in parallel once T-001/T-0
 - acceptance: `supabase/core` project starts locally, laid out so the pack's `migrate-prod.yml` (which runs the CLI from `supabase/core`) finds `config.toml` and the migrations; check the CLI's expected folder layout first; `pnpm test:db` runs pgTAP in `supabase/core/supabase/tests`; `supabase/nl/` exists as a documented placeholder (deferred data plane); README section for local DB.
 
 ### T-007 Synthetic seed framework
-- status: proposed
+- status: approved
 - depends: T-006
 - acceptance: deterministic seed (fixed RNG) for lanes PKG, APK, PKI, NC, NL, P with only PKG enabled; synthetic users (owner, admin_technical, finance_operator, viewer, outsider); `pnpm db:reset` reseeds; no real names, emails or companies' records beyond lane names.
 
@@ -234,7 +269,7 @@ T-010 – T-017 are the serial spine. After T-017: auth/shell (T-018 – T-026) 
 - acceptance: Resend SMTP configured for Supabase Auth in staging/prod (Supabase default mail is rate-limited), key from env only; redirect URL allowlist per environment; email templates show the OTP code; sign-ups disabled (invite-only users from `core.users`).
 
 ### T-022 UI foundation (Tailwind + shadcn/ui + packages/ui)
-- status: proposed
+- status: approved
 - depends: T-002
 - acceptance: shadcn/ui set up in `packages/ui`; theme from the **provisional design tokens** in `docs/plan-review.md` §7 (CSS variables / Tailwind theme only, so the D-20 sign-off changes values, not components; tabular numbers for figures); KPI card, source chip (`as_of`, live/cached/stale), lane chip, empty/error states and a `BookBalance` label component; Storybook-free unit/render tests.
 
@@ -266,7 +301,7 @@ T-010 – T-017 are the serial spine. After T-017: auth/shell (T-018 – T-026) 
 **Track W2**, parallel with W1. T-030 can start after T-002 and T-037 after T-005; the rest follow T-013.
 
 ### T-030 Connector contract
-- status: proposed
+- status: approved
 - depends: T-002
 - acceptance: `Connector` interface per architecture §6 M2 with Zod types (`Provider`, `Connection`, `ReadOp`, `SourceResult` with `as_of` + freshness, `RawRecord`); reusable contract test kit that any connector must pass.
 
@@ -357,26 +392,67 @@ After W2, one worktree per provider can run in parallel: **W6** QuickBooks (T-05
 
 Both mail providers are built behind one interface. Once D-1 is confirmed, the unconfirmed provider's tasks (T-063 – T-065 or T-066 – T-068) can move to Release B.
 
+### QuickBooks connector acceptance (QB-1 – QB-20)
+Decided Oct 28, 2026 (`docs/plan-review.md` §7, spec `docs/specs/finance.md` §8.1). These come from the Intuit app assessment. **All of them must pass on the sandbox company before any real company file is connected (H-024).** Each QuickBooks task below names the items it owns. QuickBooks tasks are app code (connectors/tokens): full security + code review, fix all BLOCKER and HIGH.
+
+Scope: read-only, Accounting API only (no Payments, no Payroll); never create, update or delete QuickBooks data. Entities: Account, Invoice, Bill, Payment, BillPayment, Purchase, Deposit, JournalEntry, Customer, Vendor, Class, CompanyInfo, Preferences. Reports: ProfitAndLoss, BalanceSheet, CashFlow, AgedReceivables, AgedPayables.
+
+1. Connect, disconnect and reconnect work end to end against the sandbox company (tests, plus a manual checklist in the PR body).
+2. The access token is refreshed proactively before expiry (about 1 h) and on a 401; every refresh stores the new rotating refresh token in the Vault and discards the old one.
+3. Transient errors (5xx, network, 429 honouring `Retry-After`) are retried with capped exponential backoff; `invalid_grant` is never retried.
+4. On `invalid_grant` or a revoked or expired refresh token: connection status `reconnect_required`, syncing stops, the admin is notified, and Settings → Connections shows "Reconnect QuickBooks".
+5. OAuth endpoints come from Intuit's OpenID discovery document (cached), not hard-coded.
+6. Handled and tested: expired access token, expired refresh token, `invalid_grant`, CSRF (per-request `state` stored server-side, verified on callback, mismatch rejected).
+7. No OAuth Playground or offline tokens: tokens only come from the in-app connect flow.
+8. Disconnect calls Intuit's revoke endpoint and deletes the stored tokens.
+9. `intuit_tid` is logged from every API response; tokens are never logged.
+10. Company Preferences are read on connect and on each sync to detect edition-dependent features (class tracking, location tracking, multicurrency). If class tracking is off or unavailable, figures are shown unsplit with a warning instead of failing; re-checked when the edition changes.
+11. Webhooks: endpoint with `intuit-signature` verification (verifier token), idempotent processing, then a CDC fetch for the changed entities.
+12. CDC for incremental sync with a stored last-changed timestamp per company; full report pull nightly; backup CDC poll every 4 hours.
+13. No dependency on multicurrency or sales-tax features.
+14. Intuit API errors handled and tested with recorded sandbox fixtures: 400 validation/syntax (Fault/Error codes), 401/403, 404, 429 (`Retry-After`), 5xx and timeouts; each mapped to retry, `reconnect_required`, or failed-with-message.
+15. Error logging: per-company sync runs and API errors (timestamp, endpoint, HTTP status, Intuit error code/message, `intuit_tid`), with no tokens or personal data; sent to Sentry; admin export (CSV/JSON) for Intuit support.
+16. In-app support: a "Contact support" link (`mailto:it@pub-k.org`) in Settings → Connections and on every QuickBooks error banner.
+17. `INTUIT_*` secrets live only in server-side env vars (never `NEXT_PUBLIC_`, never logged, never in client bundles); the secret guard has a test for `INTUIT_*`.
+18. MFA (TOTP, AAL2) before any QuickBooks data is visible.
+19. No WebSockets or Supabase Realtime for QuickBooks-derived data; finance views fetch over HTTPS only.
+20. QuickBooks data is visible only to members of that company's lane (RLS); cross-company only in the owner's consolidated summary (not in the pilot).
+
 ### T-050 QuickBooks OAuth (sandbox) + health
 - status: proposed
-- depends: T-035
+- depends: T-035, T-011
 - needs: H-005
-- acceptance: Intuit OAuth with rotating refresh tokens persisted atomically on every refresh (test that a concurrent refresh doesn't lose the token); realm from lane_config; health check; contract tests pass.
+- acceptance: Owns QB-2, QB-5, QB-6 (CSRF, expired access token), QB-7, QB-9, QB-17, QB-18. Intuit OAuth on the T-035 framework with scope `com.intuit.quickbooks.accounting` only; authorization, token and revocation endpoints read from Intuit's OpenID discovery document for `INTUIT_ENVIRONMENT` and cached; `state` stored server-side per request and bound to lane + user, mismatch or replay rejected (test); connect allowed only for owner or admin_technical of the lane at AAL2, audited; callback `realmId` must equal the lane_config QBO realm when one is set (mismatch rejected, test); tokens enter the Vault only from the callback (no import path for Playground or offline tokens); proactive refresh before expiry and refresh on 401, rotating refresh token stored atomically on every refresh with the old one discarded (test that a concurrent refresh doesn't lose the token); `intuit_tid` captured from every response into the redacted log; a test that every `INTUIT_*` name is server-only, `INTUIT_CLIENT_SECRET` and `INTUIT_WEBHOOK_VERIFIER_TOKEN` match T-005's secret patterns, and a canary value never reaches the client bundle; health check reads CompanyInfo; contract tests pass.
 
 ### T-051 QuickBooks entity sync (CDC)
 - status: proposed
 - depends: T-050, T-038, T-039
-- acceptance: initial load + CDC for Account, Customer, Vendor, Invoice, Payment, Bill, BillPayment, Purchase, Deposit, JournalEntry, Class into `raw.source_records`; MSW fixtures from synthetic data; no bank account numbers stored (field allowlist test).
+- acceptance: Owns QB-10 (detection), QB-12 (CDC cursor), QB-13. Initial load + CDC for Account, Customer, Vendor, Invoice, Payment, Bill, BillPayment, Purchase, Deposit, JournalEntry, Class, plus CompanyInfo and Preferences into `raw.source_records`; last-changed timestamp stored per connection and advanced only after a successful run; a cursor older than Intuit's CDC look-back (30 days) triggers a full reload instead of a gap (test); Preferences read on connect and on every sync, and class tracking, location tracking and multicurrency flags stored on the connection, with a change recorded and audited; nothing depends on multicurrency or sales-tax fields (test with both off); the QuickBooks client exposes read and query calls only (a test fails on any create, update, delete or batch call); MSW fixtures from synthetic data; no bank account numbers stored (field allowlist test).
 
 ### T-052 QuickBooks Reports API
 - status: proposed
-- depends: T-050, T-039
-- acceptance: P&L, Balance Sheet, Cash Flow, AR Aging Summary/Detail, AP Aging Summary/Detail fetched with date range, accounting method and optional class from lane_config; stored in `fin.report_cache` (T-055) with params and `as_of`.
+- depends: T-050, T-039, T-055
+- acceptance: Owns QB-10 (reports). ProfitAndLoss, BalanceSheet, CashFlow, AgedReceivables and AgedPayables fetched with date range, accounting method and class from lane_config; the class filter is used only when the connection's class-tracking flag is on, otherwise the report is fetched unsplit and marked so; stored in `fin.report_cache` (T-055) with params and `as_of`; records whether AgedReceivables/AgedPayables honour a class filter (plan-review §3) and whether reconciliation state is exposed (spec Q-F5).
 
 ### T-053 QuickBooks webhooks
 - status: proposed
 - depends: T-051, T-036
-- acceptance: Intuit signature verified; events trigger targeted CDC for the realm's lane; spoofed payloads rejected (test).
+- acceptance: Owns QB-11. `intuit-signature` verified with `INTUIT_WEBHOOK_VERIFIER_TOKEN` (fails closed when unset) over the raw body; realm resolved to its lane through `core.connections`, unknown realms dropped and logged; processing is idempotent (dedupe key from realm, entity, id, operation and last-updated time in `core.webhook_events`), then a targeted CDC fetch for the changed entities; no sync for a connection in `reconnect_required`; spoofed, replayed and duplicate payloads tested.
+
+### T-195 QuickBooks disconnect, reconnect and error mapping
+- status: proposed
+- depends: T-050, T-038, T-040
+- acceptance: Owns QB-1 (server side), QB-3, QB-4, QB-6 (expired refresh token, `invalid_grant`), QB-8, QB-14. Disconnect calls Intuit's revoke endpoint, deletes the Vault tokens and marks the connection disconnected, audited; reconnect reuses the connect flow and the existing connection row for the same realm; `invalid_grant`, revoked or expired refresh token set `reconnect_required`, stop `conn.sync` for that connection and emit the admin notification event; an error map from recorded sandbox fixtures (synthetic values) covers 400 Fault/Error codes, 401, 403, 404, 429 with `Retry-After`, 5xx and timeouts, each to retry (capped exponential backoff), `reconnect_required` or failed-with-message; `invalid_grant` is never retried (test).
+
+### T-196 QuickBooks sync and API error log + export
+- status: proposed
+- depends: T-050, T-031, T-041
+- acceptance: Owns QB-9 (storage), QB-15. Per-connection sync runs (`core.sync_runs`) and a lane-scoped `core.connector_api_errors` (lane_id, connection_id, at, endpoint, http_status, provider_error_code, provider_message, provider_tid) with RLS + pgTAP incl. cross-lane denial; redaction test proves no tokens, emails or names are stored; errors also sent to Sentry with the same scrubbing; owner and admin_technical can export a date range as CSV or JSON for Intuit support, audited.
+
+### T-197 Settings → Connections (functional)
+- status: proposed
+- depends: T-195, T-019, T-022
+- acceptance: Owns QB-1 (UI and manual checklist), QB-4 (UI), QB-16. Functional page (restyled after D-20, like the sign-in pages) at Settings → Connections listing the lane's connections with status, last sync and the class-tracking flag; Connect, Disconnect (confirm) and Reconnect QuickBooks for owner and admin_technical at AAL2; a `reconnect_required` banner with "Reconnect QuickBooks"; a "Contact support" link (`mailto:it@pub-k.org`) on the page and in the shared QuickBooks error banner component; no figures shown; data fetched over HTTPS only; Playwright test plus the QB-1 manual checklist against the sandbox company in the PR body.
 
 ### T-054 Stripe connector
 - status: proposed
@@ -392,7 +468,7 @@ Both mail providers are built behind one interface. Once D-1 is confirmed, the u
 ### T-056 QuickBooks normalizer → fin.*
 - status: proposed
 - depends: T-051, T-055
-- acceptance: idempotent transform from raw to fin.* (re-run produces no diff); tests on synthetic fixtures incl. voided/deleted records; every row tagged with its entity from the lane_config mapping (APK/PKI classes excluded from PKG).
+- acceptance: idempotent transform from raw to fin.* (re-run produces no diff); tests on synthetic fixtures incl. voided/deleted records; every row tagged with its entity from the lane_config mapping (APK/PKI classes excluded from PKG); when the connection's class-tracking flag is off, rows fall back to the customer mapping or `unmapped` and the run records the fallback (QB-10).
 
 ### T-057 Finance normalized schema (part 2: subscriptions)
 - status: proposed
@@ -402,7 +478,7 @@ Both mail providers are built behind one interface. Once D-1 is confirmed, the u
 ### T-058 Stripe webhooks + normalizer
 - status: proposed
 - depends: T-054, T-036, T-057
-- acceptance: Stripe signature verified; events upsert raw + normalized rows; out-of-order events handled by `created`/version; rows tagged with entity by Stripe product mapping; spoof test.
+- acceptance: Stripe signature verified; events upsert raw + normalized rows; registers its `fin.sync` schedule on the T-090 pattern; out-of-order events handled by `created`/version; rows tagged with entity by Stripe product mapping; spoof test.
 
 ### T-190 Stripe subscription versions (MRR history)
 - status: proposed
@@ -419,7 +495,7 @@ Both mail providers are built behind one interface. Once D-1 is confirmed, the u
 - status: proposed
 - depends: T-059, T-057, T-011
 - needs: D-3, D-8
-- acceptance: Spec: `docs/specs/finance.md` §4.3, §5. Rule from lane_config (tag / pipeline stage / product, combinable) evaluated into `fin.subscriber_status` and append-only `fin.subscriber_events` (new, cancelled, trial→paid, failed payment; carries `rule_version`) so point-in-time membership and customer churn can be rebuilt; unit tests per rule type; APK/PKI tags/products excluded via the lane_config mapping (D-17); no amounts copied from GHL; documents the backfill depth available from GHL (spec Q-F7).
+- acceptance: Spec: `docs/specs/finance.md` §4.3, §5. Rule from lane_config (tag / pipeline stage / product, combinable) evaluated into `fin.subscriber_status` and append-only `fin.subscriber_events` (new, cancelled, trial→paid, failed payment; carries `rule_version`) so point-in-time membership and customer churn can be rebuilt; unit tests per rule type; APK/PKI tags/products excluded via the lane_config mapping (D-17); no amounts copied from GHL; documents the backfill depth available from GHL (spec Q-F7); registers its `fin.sync` schedule on the T-090 pattern.
 
 ### T-061 Comms and calendar index tables
 - status: proposed
@@ -505,7 +581,7 @@ T-080 joins W3 early. T-081 – T-097 form **track W12** once W6 – W8 are merg
 ### T-081 Finance query layer
 - status: proposed
 - depends: T-056, T-017
-- acceptance: Spec: `docs/specs/finance.md` §7. Lane-scoped server functions in `packages/modules/finance/domain` returning `FinanceResult<T>` (figures with display strings, `sources`, `asOf`, `freshness`, `status` incl. `pending_definition`, `notes`); the only path used by UI and AI tools; requireLane/requireRole + Zod on every function; any `use cache` includes laneId and role; unit tests.
+- acceptance: Spec: `docs/specs/finance.md` §7. Lane-scoped server functions in `packages/modules/finance/domain` returning `FinanceResult<T>` (figures with display strings, `sources`, `asOf`, `freshness`, `status` incl. `pending_definition`, `notes`); the only path used by UI and AI tools; requireLane/requireRole + Zod on every function, AAL2 required (QB-18); any `use cache` includes laneId and role; when the QuickBooks connection has class tracking off, figures are returned unsplit with a warning note instead of failing (QB-10); unit tests.
 
 ### T-082 Cash book balance view
 - status: proposed
@@ -559,8 +635,8 @@ T-080 joins W3 early. T-081 – T-097 form **track W12** once W6 – W8 are merg
 
 ### T-090 fin.sync and fin.qbo_reports schedules
 - status: proposed
-- depends: T-056, T-052, T-058, T-060
-- acceptance: scheduled Inngest functions per enabled lane from lane_config; idempotent; sync_runs logged.
+- depends: T-051, T-052
+- acceptance: scheduled Inngest functions per enabled lane from lane_config; idempotent; sync_runs logged; QuickBooks first (needed for QB-12 before H-024), Stripe and GoHighLevel schedules are added by T-058 and T-060 on the same pattern; QuickBooks per connection: backup CDC poll every 4 hours and a nightly full report pull (plus the pull before `fin.weekly_cash`), skipped for connections in `reconnect_required` (QB-12).
 
 ### T-091 fin.weekly_cash job + report
 - status: proposed
@@ -578,16 +654,16 @@ T-080 joins W3 early. T-081 – T-097 form **track W12** once W6 – W8 are merg
 - depends: T-088, T-090
 - acceptance: daily evaluation; red flags emit notification events.
 
-### T-094 Tie-out view
+### T-094 Tie-out view (QuickBooks first)
 - status: proposed
-- depends: T-089
-- acceptance: Spec: `docs/specs/finance.md` §5 Part 3, §6. `fin.tieout_reference` (insert-only manual entries, audited) and `fin.v_tieout(p_lane_id, p_week)`: portal figure vs QBO report figure vs manually entered reference figure (from Sophie's report), differences and pass/fail per KPI per week with tolerance from `lane_config.tieout.tolerance` (default 0.00, i.e. to the cent).
+- depends: T-082, T-083, T-084, T-085, T-014, T-019, T-022
+- acceptance: Spec: `docs/specs/finance.md` §5 Part 3, §6. `fin.tieout_reference` (insert-only manual entries, audited) and `fin.v_tieout(p_lane_id, p_week)`: portal figure vs QBO report figure vs manually entered reference figure (from Sophie's report), differences and pass/fail per KPI per week with tolerance from `lane_config.tieout.tolerance` (default 0.00, i.e. to the cent). QuickBooks first (decided Oct 28, 2026): cash book balance, AR total, AR >30, AP due ≤14 days and P&L MTD/YTD are tied out from the live views (T-082 – T-085) and the report cache, not from snapshots; Stripe and GoHighLevel KPIs join once T-089 snapshots exist (T-097). A functional page at `/finance/tie-out` (restyled after D-20, like T-197) shows the comparison and lets finance_operator and owner enter reference figures at AAL2.
 
 ### T-095 Finance dashboard UI
 - status: proposed
 - depends: T-081, T-088, T-024
 - needs: D-2, D-20 (design sign-off)
-- acceptance: Spec: `docs/specs/finance.md` §10. KPI cards from the lane_config KPI list (ids in spec §4.1) with source chips, freshness and as-of; "Book balance" label visible; customer churn card shows "Pending definition (D-3)" while status is `pending_definition`; MTD figures labelled; Playwright test incl. AAL1 redirect and viewer denial.
+- acceptance: Spec: `docs/specs/finance.md` §10. KPI cards from the lane_config KPI list (ids in spec §4.1) with source chips, freshness and as-of; "Book balance" label visible; data fetched over HTTPS only, no Realtime (QB-19); the shared QuickBooks error banner (T-197, with "Contact support") and the class-tracking-off warning shown when they apply; customer churn card shows "Pending definition (D-3)" while status is `pending_definition`; MTD figures labelled; Playwright test incl. AAL1 redirect and viewer denial.
 
 ### T-096 Finance detail pages
 - status: proposed
@@ -766,7 +842,7 @@ T-160/T-161 can run in parallel after T-025. T-162/T-163 wait for W12, W13 and t
 ### T-161 Notification events + in-app alerts
 - status: proposed
 - depends: T-160, T-037
-- acceptance: events (approval needed, briefing ready, finance red flag, connection failing, commitment due); payload builder allows only template text + lane code (test rejects names, amounts, subjects); in-app via Supabase Realtime.
+- acceptance: events (approval needed, briefing ready, finance red flag, connection failing, commitment due); payload builder allows only template text + lane code (test rejects names, amounts, subjects); in-app via Supabase Realtime, which never carries QuickBooks-derived data (QB-19).
 
 ### T-162 briefing.daily
 - status: proposed
@@ -791,13 +867,13 @@ Serial. T-171 can start any time after T-004. T-170 is the gate for PKG approval
 - status: proposed
 - depends: T-004
 - needs: H-001, H-010
-- acceptance: documented, human-run steps for staging migrations and deploys (agents never run them); a proposed `migrate-staging.yml` mirroring `migrate-prod.yml`, delivered in the PR body for a human to add; env var checklist; seed policy (no real data in preview).
+- acceptance: documented, human-run steps for staging migrations and deploys (agents never run them); a proposed `migrate-staging.yml` mirroring `migrate-prod.yml`, delivered in the PR body for a human to add; env var checklist per Vercel environment (decided Oct 28, 2026): the custom environment **Staging** (branch `staging`, `staging.portal.pub-k.org`, `APP_ENV=staging`) is the only place real-data secrets live (staging Supabase secret key, production Intuit keys, production redirect URI); **Preview** (PR deployments, `APP_ENV=preview`) gets sandbox Intuit keys only and no staging Supabase values; **Production** at go-live; seed policy: real PKG data only in the staging Supabase project and only through the Staging environment, Previews use synthetic data (H-025) or no database; how code reaches `staging` (fast-forward from `main` by a human).
 
 ### T-172 Tie-out procedure
 - status: proposed
-- depends: T-097
-- needs: H-017, D-8
-- acceptance: `docs/runbooks/tie-out.md`: weekly steps for Sophie/Saurabh, tolerance (to the cent unless agreed), sign-off record; supports success criterion 1.
+- depends: T-094
+- needs: H-024, D-8
+- acceptance: `docs/runbooks/tie-out.md`: weekly steps for Sophie/Saurabh, tolerance (to the cent unless agreed), sign-off record; supports success criterion 1. Week 1 (business week ending Fri Nov 13) is done by hand: the QBO report cache figures from the staging connection against Sophie's weekly cash report, recorded in the runbook's sign-off table; from week 2 (ending Fri Nov 20) the T-094 view; Stripe/GoHighLevel KPIs join when T-097 lands.
 
 ### T-173 Production deploy runbook + restore drill
 - status: proposed
