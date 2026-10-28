@@ -1,0 +1,5 @@
+/* Entry stylesheet for apps: Tailwind + the Nichols theme + this package's sources. */
+@import "tailwindcss";
+@import "./theme.css";
+
+@source "../";

@@ -1,0 +1,141 @@
+/*
+ * Nichols portal theme: provisional design tokens v2 (docs/plan-review.md §7, Oct 24, 2026).
+ * Final values come with the D-20 design sign-off. Change values here only; components use
+ * the semantic names below (shadcn/ui convention), never raw colours.
+ *
+ * Contrast rules: raw gold (--gold) is decoration only and never carries text on light
+ * grounds; gold text uses --gold-foreground. Dark mode is not decided yet (raise at D-20).
+ *
+ * Import after `@import "tailwindcss";`.
+ */
+
+:root {
+  /* Fonts: the app sets --font-source-serif-4 and --font-inter via next/font (self-hosted). */
+  --heading-font: var(--font-source-serif-4, "Source Serif 4"), Georgia, serif;
+  --body-font: var(--font-inter, "Inter"), system-ui, sans-serif;
+
+  /* Ground, surfaces, lines, text */
+  --background: #F7F4EC;
+  --foreground: #111827;
+  --card: #FFFFFF;
+  --card-foreground: #111827;
+  --popover: #FFFFFF;
+  --popover-foreground: #111827;
+  --border: #E7E1D3;
+  --input: #E7E1D3;
+  --divider: #F1ECE0;
+  --muted: #F1ECE0;
+  --muted-foreground: #4B5563;
+
+  /* Primary (navy) */
+  --primary: #0E2A47;
+  --primary-foreground: #FFFFFF;
+  --primary-hover: #081A2E;
+  --primary-tint: #E4ECF5;
+  --secondary: #E4ECF5;
+  --secondary-foreground: #0E2A47;
+  --accent: #E4ECF5;
+  --accent-foreground: #0E2A47;
+  --accent-italic: #1F4A7A;
+  --ring: #1F4A7A;
+
+  /* Gold: decoration only; text uses --gold-foreground */
+  --gold: #D4AF5A;
+  --gold-foreground: #8A6A1F;
+
+  /* Status */
+  --alert: #B45309;
+  --alert-foreground: #92400E;
+  --alert-surface: #FCEFD9;
+  --success: #166534;
+  --success-surface: #DCFCE7;
+  /* No separate error colour in the provisional tokens; errors use the alert palette. */
+  --destructive: #B45309;
+  --destructive-foreground: #FFFFFF;
+
+  /* Side menu (desktop) */
+  --sidebar: #0E2A47;
+  --sidebar-foreground: #D5DEEA;
+  --sidebar-section: #A9B8CC;
+  --sidebar-active: #1F4A7A;
+  --sidebar-active-edge: #D4AF5A;
+  --sidebar-switcher: #143559;
+  --sidebar-switcher-border: #2C4F78;
+
+  /* Radii and layout */
+  --control-radius: 8px;
+  --card-radius: 12px;
+  --content-max-width: 1200px;
+}
+
+@theme inline {
+  --font-sans: var(--body-font);
+  --font-heading: var(--heading-font);
+
+  --color-background: var(--background);
+  --color-foreground: var(--foreground);
+  --color-card: var(--card);
+  --color-card-foreground: var(--card-foreground);
+  --color-popover: var(--popover);
+  --color-popover-foreground: var(--popover-foreground);
+  --color-border: var(--border);
+  --color-input: var(--input);
+  --color-divider: var(--divider);
+  --color-muted: var(--muted);
+  --color-muted-foreground: var(--muted-foreground);
+  --color-primary: var(--primary);
+  --color-primary-foreground: var(--primary-foreground);
+  --color-primary-hover: var(--primary-hover);
+  --color-primary-tint: var(--primary-tint);
+  --color-secondary: var(--secondary);
+  --color-secondary-foreground: var(--secondary-foreground);
+  --color-accent: var(--accent);
+  --color-accent-foreground: var(--accent-foreground);
+  --color-accent-italic: var(--accent-italic);
+  --color-ring: var(--ring);
+  --color-gold: var(--gold);
+  --color-gold-foreground: var(--gold-foreground);
+  --color-alert: var(--alert);
+  --color-alert-foreground: var(--alert-foreground);
+  --color-alert-surface: var(--alert-surface);
+  --color-success: var(--success);
+  --color-success-surface: var(--success-surface);
+  --color-destructive: var(--destructive);
+  --color-destructive-foreground: var(--destructive-foreground);
+  --color-sidebar: var(--sidebar);
+  --color-sidebar-foreground: var(--sidebar-foreground);
+  --color-sidebar-section: var(--sidebar-section);
+  --color-sidebar-active: var(--sidebar-active);
+  --color-sidebar-active-edge: var(--sidebar-active-edge);
+  --color-sidebar-switcher: var(--sidebar-switcher);
+  --color-sidebar-switcher-border: var(--sidebar-switcher-border);
+
+  --radius-control: var(--control-radius);
+  --radius-card: var(--card-radius);
+  /* shadcn/ui components added later via the CLI use rounded-md (controls) and rounded-xl (cards). */
+  --radius-sm: calc(var(--control-radius) - 2px);
+  --radius-md: var(--control-radius);
+  --radius-lg: var(--card-radius);
+  --radius-xl: var(--card-radius);
+
+  --container-content: var(--content-max-width);
+}
+
+@layer base {
+  * {
+    border-color: var(--border);
+  }
+
+  body {
+    background-color: var(--background);
+    color: var(--foreground);
+    font-family: var(--body-font);
+  }
+
+  h1,
+  h2,
+  h3,
+  h4 {
+    font-family: var(--heading-font);
+  }
+}

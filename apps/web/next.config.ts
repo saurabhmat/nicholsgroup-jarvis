@@ -3,7 +3,7 @@ import type { NextConfig } from "next";
 const nextConfig: NextConfig = {
   /* config options here */
   // Workspace packages are consumed as TypeScript source.
-  transpilePackages: ["@nichols/core"],
+  transpilePackages: ["@nichols/core", "@nichols/ui"],
   experimental: {
     agentFeedback: true,
   },
