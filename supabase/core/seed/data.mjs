@@ -85,15 +85,20 @@ export const ALLOWED_NAME_WORDS = deepFreeze(
 );
 
 /**
- * Everything a seed section may read: lanes, personas with their deterministic ids, and the fixed epoch.
- * Persona ids come from per-persona RNG streams, so adding a persona never changes the others' ids.
+ * Everything a seed section may read: lanes and personas with their deterministic ids, and the fixed epoch.
+ *
+ * Cross-section references: an id that more than one section needs (a lane's id, a persona's user id) lives HERE,
+ * derived from a per-entity RNG label (`lane:<code>`, `persona:<key>`), never from a section's own `ctx.rng`.
+ * Otherwise reference rows by natural key in SQL (e.g. `(select id from core.lanes where code = 'PKG')`).
+ * Per-entity labels mean adding an entity never changes the others' ids. T-010 decides whether `core.lanes` uses
+ * `lanes[].id` or the code as its key.
  * @param {string | number} seed
  */
 export function buildSeedData(seed) {
   return deepFreeze({
     seed,
     epoch: SEED_EPOCH,
-    lanes: LANES.map((l) => ({ ...l })),
+    lanes: LANES.map((l) => ({ ...l, id: createRng(seed, `lane:${l.code}`).uuid() })),
     personas: PERSONAS.map((p) => ({
       ...p,
       memberships: p.memberships.map((m) => ({ ...m })),

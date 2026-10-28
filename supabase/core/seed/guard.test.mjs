@@ -1,6 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { assertSyntheticOnly, findSyntheticViolations } from "./guard.mjs";
+import { GENERATOR_HEADER, assertSyntheticOnly, findSyntheticViolations } from "./guard.mjs";
+import { values } from "./sql.mjs";
 import { generateSeedSql } from "./generate.mjs";
 
 const lit = (s) => `select '${s}';\n`;
@@ -61,4 +62,49 @@ test("assertSyntheticOnly throws with every violation listed", () => {
     assert.match(err.message, /gmail/);
     return true;
   });
+});
+
+// Bypasses from the T-007 review.
+
+test("a literal containing a newline and -- does not hide the next literal", () => {
+  const sql = `insert into t values (${values("a\n-- '", "Jane Doe")});\n`;
+  assert.ok(findSyntheticViolations(sql).some((v) => v.includes("Jane")));
+});
+
+test("dollar-quoted, E'' and U&'' strings are rejected and still name-checked", () => {
+  const v = findSyntheticViolations("select $$Jane Doe$$;\n");
+  assert.ok(v.some((x) => x.includes("dollar")));
+  assert.ok(v.some((x) => x.includes("Jane")));
+  assert.ok(findSyntheticViolations("select E'x';\n").some((x) => x.includes("estring")));
+  assert.ok(findSyntheticViolations("select U&'\\0041';\n").some((x) => x.includes("ustring")));
+});
+
+test("names are checked in comments, block comments and quoted identifiers", () => {
+  for (const sql of ["-- for Jane\n", "/* Jane */ select 1;\n", 'select 1 as "Jane";\n', "-- x\rselect 'Jane';\n"]) {
+    assert.ok(findSyntheticViolations(sql).some((v) => v.includes("Jane")), sql);
+  }
+});
+
+test("Unicode capitals and Unicode email domains are caught", () => {
+  assert.ok(findSyntheticViolations(lit("Émile")).some((v) => v.includes("Émile")));
+  assert.ok(findSyntheticViolations(lit("ärzte Ölberg")).some((v) => v.includes("Ölberg")));
+  assert.ok(findSyntheticViolations(lit("a@exämple.test")).some((v) => v.includes("email")));
+  assert.ok(findSyntheticViolations(lit("a@bücher.de")).some((v) => v.includes("email")));
+});
+
+test("SSN-like numbers and long digit runs in literals are rejected; UUIDs are fine", () => {
+  assert.ok(findSyntheticViolations(lit("123-45-6789")).some((v) => v.includes("SSN")));
+  assert.ok(findSyntheticViolations(lit("acct 123456789")).some((v) => v.includes("digits")));
+  assert.deepEqual(findSyntheticViolations(lit("00000000-0000-0000-0000-000000000000")), []);
+  assert.deepEqual(findSyntheticViolations(lit("12345678")), []);
+});
+
+test("unparseable SQL is a violation", () => {
+  assert.ok(findSyntheticViolations("select 'open;\n").some((v) => v.includes("unparseable")));
+});
+
+test("only the exact generator header is exempt; the same fence elsewhere is flagged", () => {
+  assert.deepEqual(findSyntheticViolations(GENERATOR_HEADER), []);
+  assert.ok(findSyntheticViolations(`select 1;\n${GENERATOR_HEADER}`).some((v) => v.includes("dollar")));
+  assert.ok(findSyntheticViolations(GENERATOR_HEADER.replace("example.test')", "example.test') or true")).length > 0);
 });

@@ -76,26 +76,44 @@ Notes:
 `supabase/core/supabase/seed.sql` is **generated** by `supabase/core/seed/` and committed; `supabase db reset --local`
 applies it through `[db.seed]` in `config.toml`. Do not edit it by hand.
 
+**Local only.** Never apply this seed with `--include-seed`, `--linked` or `--db-url`. As a backstop, its first
+statements set `standard_conforming_strings = on` and abort (`synthetic seed refuses: non-synthetic users present`)
+when the target database has any auth user whose email is not on `example.test`.
+
 - `pnpm db:seed` regenerates it, `pnpm db:seed:check` fails if it is out of date (`pnpm test` and `pnpm test:db` check
   this too). `pnpm db:reset` regenerates and then resets the **local** DB.
 - Deterministic: a fixed seed (`SEED` in `data.mjs`) drives a SHA-256 counter RNG (`rng.mjs`); timestamps use
-  `SEED_EPOCH`, never `now()`. The same seed always gives a byte-identical file. Each section and each persona has
-  its own RNG stream, so adding a section never changes another section's ids.
+  `SEED_EPOCH`, never `now()`. The same seed always gives a byte-identical file. Each section and each entity has its
+  own RNG stream (label paths are JSON-encoded, so they cannot collide), so adding one never changes another's ids.
 - `data.mjs` defines the lanes (PKG, APK, PKI, NC, NL, P; only PKG enabled) and five personas (owner,
   admin_technical, finance_operator, viewer, outsider) with "Synthetic ..." labels, `@example.test` emails and their
-  intended lane memberships. `buildSeedData(seed)` adds a deterministic `id` to each persona.
+  intended lane memberships. `buildSeedData(seed)` adds a deterministic `id` to each lane (`lane:<code>`) and persona
+  (`persona:<key>`).
 - Seeded today: the personas as Supabase Auth users (section `auth-personas`). They have **no password** and an
   undeliverable reserved domain; local tests get sessions through the admin API or JWT claims in pgTAP.
-- The generator runs a guard (`guard.mjs`) and refuses to write if the output has an email outside `example.test`,
-  a non-reserved domain or a capitalized word that is not a lane name or persona label inside a string literal, or a
-  known real name. SQL calling `now()`, `random()`, `gen_random_uuid()` and similar is rejected.
+- The generator lexes every statement and refuses dollar quoting, `E''` and `U&''` strings (every literal comes from
+  `lit()`), non-deterministic SQL (`now()`, `random()`, `gen_random_uuid()`, `gen_random_bytes()`, `'now'::...`,
+  `'today'`, `current_timestamp`, ...) and descriptions with control characters. It then runs the guard
+  (`guard.mjs`), which rejects: emails outside `example.test`; non-reserved domains in literals; capitalized words in
+  literals, comments or quoted identifiers that are not lane names or persona labels; SSN-like numbers or 9+ digit
+  runs in literals; known real names. **The guard is a heuristic**: it does not catch lower-case names or names built
+  with `chr()` or `||`, so new sections still need review.
 
 **Adding a seed section (T-010, T-011, T-012, ...).** Create `supabase/core/seed/sections/<id>.mjs` exporting
 `{ id, description, build(ctx) }`, where `build` returns an array of SQL statements (each ending in `;`). Use
-`ctx.data` (lanes, personas with ids, epoch), `ctx.rng` (this section's stream: `uuid()`, `int()`, `pick()`,
+`ctx.data` (lanes and personas with ids, epoch), `ctx.rng` (this section's stream: `uuid()`, `int()`, `pick()`,
 `derive(label)`) and the `lit` / `json` / `values` helpers from `sql.mjs`; never interpolate raw strings. Register
-it in `sections/index.mjs` after the sections it references, run `pnpm db:seed`, and commit `seed.sql`. Example for
-T-010:
+it in `sections/index.mjs` after the sections it references, run `pnpm db:seed`, and commit `seed.sql`. Rules:
+
+- **Set every column that defaults to `now()` or a random value** (`created_at`, `updated_at`, `id`, ...) explicitly
+  from `ctx.data.epoch` / `ctx.rng`. Column defaults are invisible to the generator: leaving one out keeps `seed.sql`
+  byte-identical but makes the database differ between resets.
+- **Cross-section references:** an id that another section needs lives in `data.mjs` under a per-entity label (like
+  `lane:<code>` and `persona:<key>`), never in a section's own `ctx.rng`. Otherwise reference rows by natural key in
+  SQL, e.g. `(select id from core.lanes where code = 'PKG')`.
+- A section's tables must already exist in a migration, because seeds run after migrations.
+
+Example for T-010:
 
 ```js
 import { values } from "../sql.mjs";
@@ -109,7 +127,7 @@ export default {
 ```
 
 New synthetic words (for example a fake vendor name) must be added to `ALLOWED_NAME_WORDS` in `data.mjs` in the same
-reviewed change. A section's tables must already exist in a migration, because seeds run after migrations.
+reviewed change.
 
 Two worktrees at once: change `project_id` (it names the containers) and every port in
 `supabase/core/supabase/config.toml` (`[api]` 54321, `[db]` 54322 and `shadow_port` 54320, `[studio]` 54323,

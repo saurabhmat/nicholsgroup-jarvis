@@ -25,6 +25,13 @@ test("label separator cannot be forged by concatenation", () => {
   assert.notDeepEqual(take(createRng("ab", "c"), 5), take(createRng("a", "bc"), 5));
 });
 
+test("derive() label paths cannot collide through separators", () => {
+  const root = () => createRng("d", "root");
+  assert.notDeepEqual(take(root().derive("b/c"), 5), take(root().derive("b").derive("c"), 5));
+  assert.notDeepEqual(take(createRng("d", "root/b"), 5), take(root().derive("b"), 5));
+  assert.deepEqual(take(root().derive("b").derive("c"), 5), take(root().derive("b").derive("c"), 5));
+});
+
 test("next() is in [0, 1) and int() stays in range and hits both ends", () => {
   const rng = createRng("range", "x");
   const seen = new Set();
@@ -77,5 +84,5 @@ test("seed and label must be non-empty strings or integers", () => {
   assert.doesNotThrow(() => createRng(42, "x"));
 });
 
-// sha256('["pin","root",0]') starts with 01778d37 (cross-checked with `sha256sum`).
-const PINNED_FIRST_UINT32 = 0x01778d37;
+// sha256('["pin",["root"],0]') starts with 7ffb10e9 (cross-checked with `sha256sum`).
+const PINNED_FIRST_UINT32 = 0x7ffb10e9;

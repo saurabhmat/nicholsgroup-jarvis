@@ -15,15 +15,19 @@ const asKey = (value, what) => {
  * @param {string} label
  */
 export function createRng(seed, label) {
-  const seedKey = asKey(seed, "seed");
-  const labelKey = asKey(label, "label");
+  return streamFor(asKey(seed, "seed"), [asKey(label, "label")]);
+}
+
+/** A stream is keyed by the seed and the full label path (JSON-encoded, so no separator can be forged). */
+function streamFor(seedKey, labelPath) {
   let block = 0;
   let buf = Buffer.alloc(0);
   let pos = 0;
 
   const refill = () => {
-    // JSON encoding keeps (seed, label) pairs unambiguous: ("ab","c") never collides with ("a","bc").
-    buf = createHash("sha256").update(JSON.stringify([seedKey, labelKey, block])).digest();
+    // JSON encoding keeps keys unambiguous: ("ab","c") never collides with ("a","bc"), and derive("b/c") never
+    // collides with derive("b").derive("c").
+    buf = createHash("sha256").update(JSON.stringify([seedKey, labelPath, block])).digest();
     block += 1;
     pos = 0;
   };
@@ -65,7 +69,7 @@ export function createRng(seed, label) {
   };
 
   /** Independent child stream; does not depend on how much of this stream was consumed. */
-  const derive = (sub) => createRng(seedKey, `${labelKey}/${asKey(sub, "label")}`);
+  const derive = (sub) => streamFor(seedKey, [...labelPath, asKey(sub, "label")]);
 
   return Object.freeze({ nextUint32, next, int, pick, uuid, derive });
 }
