@@ -9,10 +9,11 @@ describe("LaneChip", () => {
     expect(chip).not.toBeNull();
   });
 
-  it("exposes the lane name to assistive tech and as a tooltip", () => {
-    render(<LaneChip code="PKG" name="Pub K Group" />);
-    const chip = screen.getByTitle("Pub K Group");
-    expect(chip.textContent).toContain("PKG");
-    expect(chip.textContent).toContain("Pub K Group");
+  it("exposes the lane name once to assistive tech", () => {
+    const { container } = render(<LaneChip code="PKG" name="Pub K Group" />);
+    const chip = container.querySelector("[data-slot=lane-chip]");
+    expect(chip?.textContent).toContain("PKG");
+    expect(chip?.textContent).toContain("Pub K Group");
+    expect(chip?.hasAttribute("title")).toBe(false);
   });
 });

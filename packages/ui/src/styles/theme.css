@@ -44,6 +44,7 @@
   --gold-foreground: #8A6A1F;
 
   /* Status */
+  /* --alert on --alert-surface is only 4.42:1: never use it as text there (use --alert-foreground). */
   --alert: #B45309;
   --alert-foreground: #92400E;
   --alert-surface: #FCEFD9;

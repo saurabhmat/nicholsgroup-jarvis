@@ -61,6 +61,24 @@ describe("KpiCard", () => {
     expect(screen.getByText("No data yet")).toBeTruthy();
   });
 
+  it("treats an empty value as no data", () => {
+    render(<KpiCard label="AR total" value="" />);
+    expect(screen.getByText("No data yet")).toBeTruthy();
+    expect(document.querySelector("[data-slot=kpi-value]")).toBeNull();
+  });
+
+  it("keeps the Book balance label while a cash card is pending definition", () => {
+    render(<KpiCard label="Cash" value="$1.00" bookBalance status="pending_definition" />);
+    expect(screen.getByText("Book balance")).toBeTruthy();
+    expect(screen.getByText("Pending definition")).toBeTruthy();
+    expect(screen.queryByText("$1.00")).toBeNull();
+  });
+
+  it("supports a different heading level", () => {
+    render(<KpiCard label="MRR" value="$1.00" headingLevel="h2" />);
+    expect(screen.getByRole("heading", { level: 2, name: "MRR" })).toBeTruthy();
+  });
+
   it("renders values as text, not HTML", () => {
     const { container } = render(<KpiCard label="<b>x</b>" value="<img src=x onerror=alert(1)>" />);
     expect(container.querySelector("img")).toBeNull();

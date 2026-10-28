@@ -11,6 +11,8 @@ export type ErrorBannerProps = {
   supportLabel?: string;
   /** e.g. a "Reconnect" button or form. */
   action?: ReactNode;
+  /** "alert" (default) interrupts screen readers; use "status" for errors that are not urgent. */
+  role?: "alert" | "status";
   className?: string;
 };
 
@@ -22,12 +24,13 @@ export function ErrorBanner({
   supportSubject,
   supportLabel = "Contact support",
   action,
+  role = "alert",
   className,
 }: ErrorBannerProps) {
   const supportHref = supportEmail ? mailtoHref(supportEmail, supportSubject) : undefined;
 
   return (
-    <Alert data-slot="error-banner" variant="alert" className={cn("sm:flex sm:items-start sm:justify-between sm:gap-4", className)}>
+    <Alert data-slot="error-banner" role={role} variant="alert" className={cn("sm:flex sm:items-start sm:justify-between sm:gap-4", className)}>
       <div className="grid gap-1">
         <AlertTitle>{title}</AlertTitle>
         {description ? <AlertDescription>{description}</AlertDescription> : null}

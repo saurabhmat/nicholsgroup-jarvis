@@ -24,6 +24,13 @@ describe("isSafeEmail", () => {
     "it@pub-k.org\r\nBcc: x@evil.test",
     "javascript:alert(1)@x.org",
     "a b@pub-k.org",
+    // Percent-encoded payloads: mail clients decode these.
+    "attacker%40evil.test%2Cit@pub-k.org",
+    "it%0A@pub-k.org",
+    "it%0D%0ABcc%3Ax@pub-k.org",
+    "it%2Cx@pub-k.org",
+    "it%3Fcc%3Dx@pub-k.org",
+    "it%40x@pub-k.org",
   ])("rejects %j", (value) => {
     expect(isSafeEmail(value)).toBe(false);
   });
@@ -38,6 +45,21 @@ describe("mailtoHref", () => {
     expect(mailtoHref("it@pub-k.org", "Sync failed & retry")).toBe(
       "mailto:it@pub-k.org?subject=Sync%20failed%20%26%20retry",
     );
+  });
+
+  it("strips control characters from the subject", () => {
+    expect(mailtoHref("it@pub-k.org", "a\r\nBcc: x@evil.test\u0000\u007f")).toBe(
+      "mailto:it@pub-k.org?subject=aBcc%3A%20x%40evil.test",
+    );
+  });
+
+  it("caps the subject at 200 characters", () => {
+    const href = mailtoHref("it@pub-k.org", "x".repeat(500));
+    expect(href).toBe(`mailto:it@pub-k.org?subject=${"x".repeat(200)}`);
+  });
+
+  it("omits an empty subject", () => {
+    expect(mailtoHref("it@pub-k.org", "\r\n")).toBe("mailto:it@pub-k.org");
   });
 
   it("returns undefined for an unsafe address", () => {

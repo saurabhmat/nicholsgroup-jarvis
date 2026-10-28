@@ -20,9 +20,14 @@ export function CardHeader({ className, ...props }: ComponentProps<"div">) {
   return <div data-slot="card-header" className={cn("flex flex-col gap-1", className)} {...props} />;
 }
 
-export function CardTitle({ className, ...props }: ComponentProps<"h3">) {
+export type CardTitleProps = ComponentProps<"h3"> & {
+  /** Heading level for the page outline; defaults to h3. */
+  as?: "h2" | "h3" | "h4";
+};
+
+export function CardTitle({ as: Heading = "h3", className, ...props }: CardTitleProps) {
   return (
-    <h3 data-slot="card-title" className={cn("text-base font-semibold leading-tight", className)} {...props} />
+    <Heading data-slot="card-title" className={cn("text-base font-semibold leading-tight", className)} {...props} />
   );
 }
 

@@ -26,6 +26,12 @@ describe("ErrorState", () => {
     expect(region.textContent).toContain("Could not load figures");
   });
 
+  it("can be a polite status region", () => {
+    render(<ErrorState title="Figures are delayed" role="status" />);
+    expect(screen.getByRole("status").textContent).toContain("Figures are delayed");
+    expect(screen.queryByRole("alert")).toBeNull();
+  });
+
   it("renders an action slot", () => {
     render(<ErrorState title="Failed" action={<button type="button">Try again</button>} />);
     expect(screen.getByRole("button", { name: "Try again" })).toBeTruthy();

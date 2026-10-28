@@ -20,6 +20,13 @@ function rootTokens(css: string): Map<string, string> {
 
 const tokens = rootTokens(themeCss);
 
+function sources(): (readonly [string, string])[] {
+  const componentsDir = join(here, "..", "components");
+  return readdirSync(componentsDir)
+    .filter((f) => f.endsWith(".tsx") && !f.endsWith(".test.tsx"))
+    .map((f) => [f, readFileSync(join(componentsDir, f), "utf8")] as const);
+}
+
 function hex(name: string): string {
   const value = tokens.get(name);
   if (!value || !/^#[0-9a-f]{6}$/i.test(value)) throw new Error(`${name} is not a 6-digit hex colour: ${value}`);
@@ -92,6 +99,8 @@ describe("provisional design tokens (docs/plan-review.md §7, v2)", () => {
     ["--sidebar-section", "--sidebar"],
     ["--sidebar-foreground", "--sidebar-active"],
     ["--gold", "--sidebar"],
+    ["--muted-foreground", "--muted"],
+    ["--destructive-foreground", "--destructive"],
   ])("text %s on %s meets WCAG AA (4.5:1)", (fg, bg) => {
     expect(contrast(hex(fg), hex(bg))).toBeGreaterThanOrEqual(4.5);
   });
@@ -100,35 +109,38 @@ describe("provisional design tokens (docs/plan-review.md §7, v2)", () => {
     expect(contrast(hex("--gold"), hex("--background"))).toBeLessThan(4.5);
   });
 
+  it("alert on alert-surface fails, so alert text there must use --alert-foreground", () => {
+    expect(contrast(hex("--alert"), hex("--alert-surface"))).toBeLessThan(4.5);
+  });
+
+  it.each(sources())("%s never puts text-alert on bg-alert-surface", (_file, source) => {
+    expect(source).not.toMatch(/bg-alert-surface[^"]*\btext-alert(?!-foreground)\b|\btext-alert(?!-foreground)\b[^"]*bg-alert-surface/);
+  });
+
   it("does not define dark-mode values yet (undecided until D-20)", () => {
     expect(themeCss).not.toMatch(/prefers-color-scheme|\.dark\b/);
   });
 });
 
 describe("components use tokens only", () => {
-  const componentsDir = join(here, "..", "components");
-  const sources = readdirSync(componentsDir)
-    .filter((f) => f.endsWith(".tsx") && !f.endsWith(".test.tsx"))
-    .map((f) => [f, readFileSync(join(componentsDir, f), "utf8")] as const);
-
   it("finds component sources", () => {
-    expect(sources.length).toBeGreaterThan(0);
+    expect(sources().length).toBeGreaterThan(0);
   });
 
-  it.each(sources)("%s has no hard-coded colours", (_file, source) => {
+  it.each(sources())("%s has no hard-coded colours", (_file, source) => {
     expect(source).not.toMatch(/#[0-9a-f]{3,8}\b/i);
     expect(source).not.toMatch(/\b(?:rgb|hsl|oklch)a?\(/i);
   });
 
-  it.each(sources)("%s never uses raw gold for text", (_file, source) => {
+  it.each(sources())("%s never uses raw gold for text", (_file, source) => {
     expect(source).not.toMatch(/\btext-gold(?!-foreground)\b/);
   });
 
-  it.each(sources)("%s does not inject HTML", (_file, source) => {
+  it.each(sources())("%s does not inject HTML", (_file, source) => {
     expect(source).not.toContain("dangerouslySetInnerHTML");
   });
 
-  it.each(sources)("%s never says bank balance", (_file, source) => {
+  it.each(sources())("%s never says bank balance", (_file, source) => {
     expect(source.toLowerCase()).not.toContain("bank balance");
   });
 });

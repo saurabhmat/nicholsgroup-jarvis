@@ -14,14 +14,19 @@ const DEFAULT_STATUS_TEXT: Record<Exclude<KpiStatus, "ok">, string> = {
 
 export type KpiCardProps = {
   label: string;
-  /** Pre-formatted display figure (formatted server-side). Shown only when status is "ok". */
+  /** Heading level of the label; defaults to h3. */
+  headingLevel?: "h2" | "h3" | "h4";
+  /** Pre-formatted display figure (formatted server-side). Shown only when status is "ok"; missing or "" means no data. */
   value?: string;
   /** Short qualifier under the label, e.g. "month to date". */
   qualifier?: string;
   /** Cash card: shows the mandatory "Book balance" label. */
   bookBalance?: boolean;
   status?: KpiStatus;
-  /** Replaces the default text for "pending_definition" / "no_data", e.g. "Pending definition (D-3)". */
+  /**
+   * Replaces the default text for "pending_definition" / "no_data". The finance dashboard (T-095)
+   * passes "Pending definition (D-3)" for the customer churn card while its status is pending_definition.
+   */
   statusText?: string;
   sources?: SourceChipProps[];
   /** Extra content under the source chips (e.g. a link to the detail view). */
@@ -31,6 +36,7 @@ export type KpiCardProps = {
 
 export function KpiCard({
   label,
+  headingLevel,
   value,
   qualifier,
   bookBalance = false,
@@ -40,12 +46,12 @@ export function KpiCard({
   footer,
   className,
 }: KpiCardProps) {
-  const effectiveStatus: KpiStatus = status === "ok" && value === undefined ? "no_data" : status;
+  const effectiveStatus: KpiStatus = status === "ok" && (value === undefined || value === "") ? "no_data" : status;
 
   return (
     <Card data-slot="kpi-card" data-status={effectiveStatus} className={cn("min-w-0", className)}>
       <CardHeader>
-        <CardTitle className="font-sans text-sm font-medium text-muted-foreground">{label}</CardTitle>
+        <CardTitle as={headingLevel} className="font-sans text-sm font-medium text-muted-foreground">{label}</CardTitle>
         {bookBalance || qualifier ? (
           <div className="flex flex-wrap items-center gap-2">
             {bookBalance ? <BookBalanceLabel /> : null}

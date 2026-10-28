@@ -6,15 +6,17 @@ export type ErrorStateProps = {
   description?: string;
   /** e.g. a "Try again" button or link. */
   action?: ReactNode;
+  /** "alert" (default) interrupts screen readers; use "status" for errors that are not urgent. */
+  role?: "alert" | "status";
   className?: string;
 };
 
 /** Shown in place of a region whose content failed to load. Messages come from the caller; never pass raw error details. */
-export function ErrorState({ title, description, action, className }: ErrorStateProps) {
+export function ErrorState({ title, description, action, role = "alert", className }: ErrorStateProps) {
   return (
     <div
       data-slot="error-state"
-      role="alert"
+      role={role}
       className={cn(
         "flex flex-col items-center gap-2 rounded-card border border-alert bg-alert-surface px-6 py-10 text-center text-alert-foreground",
         className,

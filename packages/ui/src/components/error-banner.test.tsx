@@ -29,6 +29,17 @@ describe("ErrorBanner", () => {
     expect(screen.queryByRole("link")).toBeNull();
   });
 
+  it("can be a polite status region", () => {
+    render(<ErrorBanner title="Sync delayed" role="status" />);
+    expect(screen.getByRole("status").textContent).toContain("Sync delayed");
+    expect(screen.queryByRole("alert")).toBeNull();
+  });
+
+  it("does not render a link for a percent-encoded address", () => {
+    render(<ErrorBanner title="x" supportEmail="attacker%40evil.test%2Cit@pub-k.org" />);
+    expect(screen.queryByRole("link")).toBeNull();
+  });
+
   it("renders an action slot", () => {
     render(<ErrorBanner title="x" action={<button type="submit">Reconnect</button>} />);
     expect(screen.getByRole("button", { name: "Reconnect" })).toBeTruthy();
