@@ -1,6 +1,5 @@
-import type { LaneId } from "@nichols/core";
 import { ConnectorError } from "./errors";
-import type { Connection, ConnectionStatus, Freshness } from "./schemas";
+import type { ConnectionStatus, Freshness } from "./schemas";
 
 const USABLE: ReadonlySet<ConnectionStatus> = new Set(["active", "degraded"]);
 
@@ -10,26 +9,15 @@ export function isSyncAllowed(status: ConnectionStatus): boolean {
 }
 
 /**
- * Every connector method calls this first: the connection must belong to the caller's lane and be usable.
- * Throws a `ConnectorError` (`invalid_input`, `lane_mismatch`, `reconnect_required` or `connection_unavailable`).
+ * Call with the status from the **authoritative** row (never the caller's object). Throws `reconnect_required`
+ * (never retried) or `connection_unavailable`.
  */
-export function assertConnectionUsable(laneId: LaneId, conn: Pick<Connection, "lane_id" | "status">): void {
-  assertConnectionInLane(laneId, conn);
-  if (conn.status === "reconnect_required") {
+export function assertStatusUsable(status: ConnectionStatus): void {
+  if (status === "reconnect_required") {
     throw new ConnectorError({ kind: "reconnect_required", message: "Connection needs to be reconnected" });
   }
-  if (!USABLE.has(conn.status)) {
-    throw new ConnectorError({ kind: "connection_unavailable", message: `Connection is ${conn.status}` });
-  }
-}
-
-/** Lane check only (for `health` and `disconnect`, which must also work on unusable connections). */
-export function assertConnectionInLane(laneId: LaneId, conn: Pick<Connection, "lane_id">): void {
-  if (typeof laneId !== "string" || laneId.length === 0) {
-    throw new ConnectorError({ kind: "invalid_input", message: "laneId is required" });
-  }
-  if (conn.lane_id !== laneId) {
-    throw new ConnectorError({ kind: "lane_mismatch", message: "Connection does not belong to this lane" });
+  if (!USABLE.has(status)) {
+    throw new ConnectorError({ kind: "connection_unavailable", message: `Connection is ${status}` });
   }
 }
 

@@ -29,9 +29,11 @@ export type ConnectorErrorInit = Pick<ConnectorErrorInfo, "kind" | "message"> &
 
 /**
  * The only error type a connector may throw across the contract.
- * Deliberately has no `cause`: provider responses and transport errors can contain tokens or personal data, so only the
- * safe `info` fields travel. `toJSON` returns `info` only (no stack), so it is safe to log and to store (T-196).
- * Connectors must not put tokens, secrets or personal data in `message`; the contract kit checks this with canaries.
+ * - No `cause`, and the instance is non-extensible (so one cannot be attached later): provider responses and transport
+ *   errors can contain tokens or personal data, so only the safe `info` fields travel.
+ * - `toJSON` returns `info` only (no stack), so it is safe to log and to store (T-196).
+ * - Effectively final: subclasses cannot add fields (the contract kit also requires the exact prototype).
+ * Connectors must not put tokens, secrets or personal data in `message` (T-033 redacts; the kit checks with canaries).
  */
 export class ConnectorError extends Error {
   override readonly name = "ConnectorError";
@@ -50,6 +52,7 @@ export class ConnectorError extends Error {
       retry_after_seconds: init.retry_after_seconds ?? null,
       endpoint: init.endpoint ?? null,
     });
+    Object.preventExtensions(this);
   }
 
   toJSON(): ConnectorErrorInfo {
@@ -59,4 +62,13 @@ export class ConnectorError extends Error {
 
 export function isConnectorError(value: unknown): value is ConnectorError {
   return value instanceof ConnectorError;
+}
+
+/**
+ * Converts anything a connector caught into a `ConnectorError`. Foreign errors become `provider_error` with a generic
+ * message: their message, stack and cause are dropped because they may contain tokens or personal data.
+ */
+export function toConnectorError(value: unknown): ConnectorError {
+  if (value instanceof ConnectorError) return value;
+  return new ConnectorError({ kind: "provider_error", message: "Unexpected connector failure" });
 }

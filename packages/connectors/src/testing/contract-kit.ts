@@ -1,44 +1,48 @@
 // Reusable contract test kit: every connector registers itself with `describeConnectorContract` in its own test file.
 //
-//   describeConnectorContract({ name: "quickbooks", setup: () => ({ connector, laneId, otherLaneId, ... }) });
+//   describeConnectorContract({ name: "quickbooks", setup: () => ({ connector, loader, laneId, otherLaneId, ... }) });
 //
 // The checks are also exported (`contractChecks`) so the kit's own tests can prove it catches broken connectors.
+import { inspect } from "node:util";
 import { describe, expect, it } from "vitest";
 import type { LaneId } from "@nichols/core";
-import type { Connector } from "../contract/connector";
+import { CONNECTOR_KEYS, type Connector } from "../contract/connector";
 import { ConnectorError } from "../contract/errors";
+import { isLaneBound, type ConnectionLoader, type LaneBoundConnection } from "../contract/lane-bound";
 import {
-  ConnectionSchema,
   ConnectorErrorInfoSchema,
   HealthStatusSchema,
-  ProposedPayloadSchema,
-  ProviderSchema,
   OpNameSchema,
-  RawRecordSchema,
-  SourceResultSchema,
-  SubscriptionSchema,
   SyncSummarySchema,
   type ConnectInput,
-  type Connection,
   type ConnectorErrorKind,
   type ReadOp,
   type WriteIntent,
 } from "../contract/schemas";
+import { testSchemas, TestProviderSchema, type TestProvider } from "./test-provider";
+
+type AnyConnection = LaneBoundConnection<TestProvider>;
 
 export interface ContractHarness {
-  connector: Connector;
+  connector: Connector<TestProvider>;
+  /** Loader over the same store the connector uses (the real one comes with T-031/T-016/T-033). */
+  loader: ConnectionLoader<TestProvider>;
   /** Synthetic lane the connection is made in. */
   laneId: LaneId;
   /** A different synthetic lane, used for cross-lane denial checks. */
   otherLaneId: LaneId;
-  /** Synthetic OAuth result the provider mock (MSW / sandbox fixture) accepts. */
+  /** Synthetic connect input the provider mock (MSW / sandbox fixture) accepts. */
   connectInput: ConnectInput;
   /** At least one valid read op; each is executed against a fresh connection. */
   readOps: ReadOp[];
   /** Required when the connector has `prepareWrite`. */
   writeIntents?: WriteIntent[];
-  /** Required when the connector has `prepareWrite`: number of write calls the provider mock has received. */
-  externalWriteCount?: () => number;
+  /** Number of write calls the provider mock has received (revocations included). Must not move except on disconnect. */
+  externalWriteCount: () => number;
+  /** Mark the stored connection row `reconnect_required` (what T-195 does after `invalid_grant`). */
+  markReconnectRequired: (conn: AnyConnection) => void | Promise<void>;
+  /** Optional: make the provider mock answer `invalid_grant` on the next token refresh/use. */
+  simulateInvalidGrant?: (conn: AnyConnection) => void | Promise<void>;
   /** Canary values the connector can see (synthetic tokens, client secret). None may appear in any output or error. */
   secrets: string[];
   teardown?: () => void | Promise<void>;
@@ -50,21 +54,56 @@ export interface ConnectorContractFixture {
   setup: () => ContractHarness | Promise<ContractHarness>;
 }
 
+/** Per-run bookkeeping: revocations the check itself caused through `disconnect`. */
+export interface CheckState {
+  revokes: number;
+}
+
 export interface ContractCheck {
   name: string;
   /** When false the check does not apply (e.g. no `sync`) and is reported as skipped. */
-  applies?: (connector: Connector) => boolean;
-  run: (h: ContractHarness) => Promise<void>;
+  applies?: (h: ContractHarness) => boolean;
+  run: (h: ContractHarness, state: CheckState) => Promise<void>;
 }
 
 const CLOCK_SKEW_MS = 5_000;
 const UNSUPPORTED_OP: ReadOp = { op: "contract_kit.unsupported_op", params: {} };
+const ERROR_OWN_KEYS = new Set<PropertyKey>(["name", "info", "message", "stack"]);
+const DATA_KEYS = new Set<PropertyKey>(["provider", "capabilities", "readOps", "featureKeys"]);
+const ALLOWED_KEYS = new Set<PropertyKey>(CONNECTOR_KEYS);
+
+/** A canary plus the encodings it could leak in. */
+function canaryForms(secret: string): string[] {
+  const forms = [
+    secret,
+    Buffer.from(secret).toString("base64"),
+    Buffer.from(secret).toString("base64url"),
+    encodeURIComponent(secret),
+  ];
+  return [...new Set(forms.filter((f) => f.length > 0))];
+}
+
+function renderForScan(value: unknown): string {
+  const parts: string[] = [inspect(value, { depth: Infinity, showHidden: true, maxArrayLength: Infinity, maxStringLength: Infinity })];
+  try {
+    parts.push(JSON.stringify(value) ?? "");
+  } catch {
+    // circular structures are covered by inspect
+  }
+  let current: unknown = value;
+  for (let i = 0; i < 10 && current instanceof Error; i += 1) {
+    parts.push(current.message, current.stack ?? "");
+    current = (current as { cause?: unknown }).cause;
+    if (current !== undefined) parts.push(inspect(current, { depth: Infinity, showHidden: true }));
+  }
+  return parts.join("\n");
+}
 
 function assertNoSecrets(h: ContractHarness, value: unknown, where: string): void {
-  const text = value instanceof Error ? `${value.message}\n${JSON.stringify(value)}` : JSON.stringify(value) ?? "";
+  const text = renderForScan(value);
   for (const secret of h.secrets) {
-    if (secret.length > 0 && text.includes(secret)) {
-      throw new Error(`${where} contains a secret canary`);
+    for (const form of canaryForms(secret)) {
+      if (text.includes(form)) throw new Error(`${where} contains a secret canary`);
     }
   }
 }
@@ -83,15 +122,27 @@ async function expectConnectorError(
   }
   if (thrown === undefined) throw new Error(`${where}: expected a ConnectorError (${kinds.join("|")}), got success`);
   if (!(thrown instanceof ConnectorError)) throw new Error(`${where}: expected a ConnectorError, got ${String(thrown)}`);
+  if (Object.getPrototypeOf(thrown) !== ConnectorError.prototype) throw new Error(`${where}: error prototype must be exactly ConnectorError.prototype`);
+  expect((thrown as { cause?: unknown }).cause, `${where}: error must have no cause`).toBeUndefined();
+  expect(Object.isExtensible(thrown), `${where}: error must be non-extensible`).toBe(false);
+  for (const key of Reflect.ownKeys(thrown)) {
+    if (!ERROR_OWN_KEYS.has(key)) throw new Error(`${where}: error has unexpected own property ${String(key)}`);
+  }
   expect(ConnectorErrorInfoSchema.safeParse(thrown.info).success, `${where}: invalid error info`).toBe(true);
   expect(kinds, `${where}: unexpected error kind ${thrown.info.kind}`).toContain(thrown.info.kind);
   assertNoSecrets(h, thrown, `${where} error`);
   return thrown;
 }
 
-async function connect(h: ContractHarness): Promise<Connection> {
+async function connect(h: ContractHarness): Promise<AnyConnection> {
   const conn = await h.connector.connect(h.laneId, h.connectInput);
-  return ConnectionSchema.parse(conn);
+  testSchemas.ConnectionSchema.parse(conn);
+  return conn;
+}
+
+async function disconnect(h: ContractHarness, state: CheckState, laneId: LaneId, conn: AnyConnection): Promise<AnyConnection> {
+  state.revokes += 1;
+  return h.connector.disconnect(laneId, conn);
 }
 
 function expectFeaturesDeclared(h: ContractHarness, features: Record<string, boolean> | undefined, where: string): void {
@@ -100,31 +151,48 @@ function expectFeaturesDeclared(h: ContractHarness, features: Record<string, boo
   }
 }
 
-async function drain<T, R>(gen: AsyncGenerator<T, R, void>): Promise<{ items: T[]; result: R }> {
-  const items: T[] = [];
-  let next = await gen.next();
-  while (!next.done) {
-    items.push(next.value);
-    next = await gen.next();
-  }
-  return { items, result: next.value };
-}
-
-/** Lane and status denial shared by every connection-taking method. */
-async function expectGuarded(h: ContractHarness, call: (laneId: LaneId, conn: Connection) => Promise<unknown>, where: string) {
+/** Forged copies (another lane, or an exact unminted copy) and a minted connection used from another lane. */
+async function expectLaneEnforced(h: ContractHarness, call: (laneId: LaneId, conn: AnyConnection) => Promise<unknown>, where: string) {
   const conn = await connect(h);
   await expectConnectorError(h, () => call(h.otherLaneId, conn), ["lane_mismatch"], `${where} from another lane`);
-  await expectConnectorError(h, () => call(h.laneId, { ...conn, lane_id: h.otherLaneId }), ["lane_mismatch"], `${where} with a foreign connection`);
-  const rr = await expectConnectorError(h, () => call(h.laneId, { ...conn, status: "reconnect_required" }), ["reconnect_required"], `${where} on reconnect_required`);
+  const forgedOther = { ...conn, lane_id: h.otherLaneId } as AnyConnection;
+  await expectConnectorError(h, () => call(h.otherLaneId, forgedOther), ["lane_mismatch", "not_found"], `${where} with a forged other-lane connection`);
+  const forgedSame = { ...conn } as AnyConnection;
+  await expectConnectorError(h, () => call(h.laneId, forgedSame), ["lane_mismatch", "not_found"], `${where} with an unminted copy`);
+}
+
+/** Lane enforcement plus authoritative status: stale `active` objects must not get through. */
+async function expectGuarded(
+  h: ContractHarness,
+  state: CheckState,
+  call: (laneId: LaneId, conn: AnyConnection) => Promise<unknown>,
+  where: string,
+) {
+  await expectLaneEnforced(h, call, where);
+
+  const stale = await connect(h);
+  await h.markReconnectRequired(stale);
+  const rr = await expectConnectorError(h, () => call(h.laneId, stale), ["reconnect_required"], `${where} on a connection marked reconnect_required`);
   expect(rr.info.disposition, `${where}: reconnect_required must never be retried`).toBe("reconnect_required");
-  await expectConnectorError(h, () => call(h.laneId, { ...conn, status: "disconnected" }), ["connection_unavailable"], `${where} on disconnected`);
+
+  const gone = await connect(h);
+  await disconnect(h, state, h.laneId, gone);
+  await expectConnectorError(h, () => call(h.laneId, gone), ["connection_unavailable"], `${where} on a disconnected connection`);
 }
 
 export const contractChecks: readonly ContractCheck[] = [
   {
-    name: "exposes no executeWrite on the connector surface",
+    name: "exposes only contract methods (no executeWrite)",
     run: async (h) => {
       expect("executeWrite" in h.connector, "executeWrite belongs on a ConnectorWriter (approvals only)").toBe(false);
+      for (let obj: object | null = h.connector; obj !== null && obj !== Object.prototype; obj = Object.getPrototypeOf(obj)) {
+        for (const key of Reflect.ownKeys(obj)) {
+          if (key === "constructor" || ALLOWED_KEYS.has(key)) continue;
+          const value = (obj as Record<PropertyKey, unknown>)[key];
+          if (typeof value === "function") throw new Error(`connector exposes a non-contract function ${String(key)}`);
+        }
+      }
+      for (const key of DATA_KEYS) expect(typeof (h.connector as unknown as Record<PropertyKey, unknown>)[key]).not.toBe("function");
     },
   },
   {
@@ -134,26 +202,29 @@ export const contractChecks: readonly ContractCheck[] = [
       expect(c.capabilities.sync, "capabilities.sync").toBe(typeof c.sync === "function");
       expect(c.capabilities.subscribe, "capabilities.subscribe").toBe(typeof c.subscribe === "function");
       expect(c.capabilities.prepareWrite, "capabilities.prepareWrite").toBe(typeof c.prepareWrite === "function");
-      expect(c.capabilities.disconnect, "capabilities.disconnect").toBe(typeof c.disconnect === "function");
+      expect(typeof c.disconnect, "disconnect is required").toBe("function");
     },
   },
   {
     name: "declares a known provider and well-formed readOps and featureKeys",
     run: async (h) => {
       const c = h.connector;
-      expect(ProviderSchema.safeParse(c.provider).success, "provider").toBe(true);
+      expect(TestProviderSchema.safeParse(c.provider).success, "provider").toBe(true);
       expect(c.readOps.length, "at least one read op").toBeGreaterThan(0);
       for (const op of c.readOps) expect(OpNameSchema.safeParse(op).success, `read op ${op}`).toBe(true);
       for (const key of c.featureKeys) expect(key).toMatch(/^[a-z][a-z0-9_]{0,63}$/);
       expect(h.readOps.length, "harness must supply at least one read op").toBeGreaterThan(0);
       expect(h.secrets.length, "harness must supply secret canaries").toBeGreaterThan(0);
+      expect(typeof h.externalWriteCount, "harness must supply externalWriteCount").toBe("function");
       expect(h.otherLaneId).not.toBe(h.laneId);
     },
   },
   {
-    name: "connect returns an active Connection in the caller's lane",
+    name: "connect returns an active lane-bound Connection in the caller's lane",
     run: async (h) => {
       const conn = await connect(h);
+      expect(isLaneBound(conn), "connect must return a minted LaneBoundConnection").toBe(true);
+      expect(Object.isFrozen(conn), "connection must be frozen").toBe(true);
       expect(conn.lane_id).toBe(h.laneId);
       expect(conn.provider).toBe(h.connector.provider);
       expect(conn.status).toBe("active");
@@ -168,6 +239,34 @@ export const contractChecks: readonly ContractCheck[] = [
     },
   },
   {
+    name: "connect refuses a cross-lane reconnect",
+    run: async (h) => {
+      const conn = await connect(h);
+      await expectConnectorError(
+        h,
+        () => h.connector.connect(h.otherLaneId, { ...h.connectInput, reconnect_connection_id: conn.id }),
+        ["not_found", "lane_mismatch", "invalid_input", "forbidden"],
+        "cross-lane reconnect",
+      );
+      // The original connection is untouched and still works in its own lane.
+      const reloaded = await h.loader.loadConnection(h.laneId, conn.id);
+      expect(reloaded.lane_id).toBe(h.laneId);
+      await h.connector.read(h.laneId, reloaded, h.readOps[0]!);
+    },
+  },
+  {
+    name: "loader returns lane-bound connections and hides other lanes'",
+    run: async (h) => {
+      const conn = await connect(h);
+      const loaded = await h.loader.loadConnection(h.laneId, conn.id);
+      expect(isLaneBound(loaded)).toBe(true);
+      expect(Object.isFrozen(loaded)).toBe(true);
+      expect(loaded.id).toBe(conn.id);
+      await expectConnectorError(h, () => h.loader.loadConnection(h.otherLaneId, conn.id), ["not_found"], "loader from another lane");
+      await expectConnectorError(h, () => h.loader.loadConnection(h.laneId, "00000000-0000-4000-8000-00000000dead"), ["not_found"], "loader unknown id");
+    },
+  },
+  {
     name: "health returns a valid HealthStatus",
     run: async (h) => {
       const conn = await connect(h);
@@ -179,10 +278,26 @@ export const contractChecks: readonly ContractCheck[] = [
     },
   },
   {
-    name: "health rejects a connection from another lane",
+    name: "health reports unusable connections without throwing",
+    run: async (h, state) => {
+      const stale = await connect(h);
+      await h.markReconnectRequired(stale);
+      const rr = HealthStatusSchema.parse(await h.connector.health(h.laneId, stale));
+      expect(rr.ok, "health on reconnect_required").toBe(false);
+      expect(rr.status).toBe("reconnect_required");
+      expect(rr.error).not.toBeNull();
+
+      const gone = await connect(h);
+      await disconnect(h, state, h.laneId, gone);
+      const after = HealthStatusSchema.parse(await h.connector.health(h.laneId, gone));
+      expect(after.ok, "health after disconnect").toBe(false);
+      assertNoSecrets(h, [rr, after], "health");
+    },
+  },
+  {
+    name: "health rejects other lanes and forged connections",
     run: async (h) => {
-      const conn = await connect(h);
-      await expectConnectorError(h, () => h.connector.health(h.otherLaneId, conn), ["lane_mismatch"], "health");
+      await expectLaneEnforced(h, (laneId, conn) => h.connector.health(laneId, conn), "health");
     },
   },
   {
@@ -190,7 +305,7 @@ export const contractChecks: readonly ContractCheck[] = [
     run: async (h) => {
       const conn = await connect(h);
       for (const op of h.readOps) {
-        const result = SourceResultSchema.parse(await h.connector.read(h.laneId, conn, op));
+        const result = testSchemas.SourceResultSchema.parse(await h.connector.read(h.laneId, conn, op));
         expect(result.lane_id).toBe(h.laneId);
         expect(result.connection_id).toBe(conn.id);
         expect(result.provider).toBe(h.connector.provider);
@@ -201,22 +316,22 @@ export const contractChecks: readonly ContractCheck[] = [
     },
   },
   {
-    name: "read rejects a connection from another lane",
-    run: async (h) => {
-      const conn = await connect(h);
-      const op = h.readOps[0]!;
-      await expectConnectorError(h, () => h.connector.read(h.otherLaneId, conn, op), ["lane_mismatch"], "read");
-      await expectConnectorError(h, () => h.connector.read(h.laneId, { ...conn, lane_id: h.otherLaneId }, op), ["lane_mismatch"], "read foreign connection");
+    name: "read rejects other lanes, forged and unusable connections",
+    run: async (h, state) => {
+      await expectGuarded(h, state, (laneId, conn) => h.connector.read(laneId, conn, h.readOps[0]!), "read");
     },
   },
   {
-    name: "read refuses a reconnect_required connection without retry",
+    name: "read raises reconnect_required on invalid_grant",
+    applies: (h) => typeof h.simulateInvalidGrant === "function",
     run: async (h) => {
       const conn = await connect(h);
-      const op = h.readOps[0]!;
-      const err = await expectConnectorError(h, () => h.connector.read(h.laneId, { ...conn, status: "reconnect_required" }, op), ["reconnect_required"], "read");
+      await h.simulateInvalidGrant!(conn);
+      const err = await expectConnectorError(h, () => h.connector.read(h.laneId, conn, h.readOps[0]!), ["reconnect_required"], "read after invalid_grant");
       expect(err.info.disposition).toBe("reconnect_required");
-      await expectConnectorError(h, () => h.connector.read(h.laneId, { ...conn, status: "disconnected" }, op), ["connection_unavailable"], "read disconnected");
+      const health = HealthStatusSchema.parse(await h.connector.health(h.laneId, conn));
+      expect(health.ok).toBe(false);
+      expect(health.status).toBe("reconnect_required");
     },
   },
   {
@@ -228,88 +343,122 @@ export const contractChecks: readonly ContractCheck[] = [
     },
   },
   {
-    name: "sync yields valid RawRecords and returns a cursor",
-    applies: (c) => typeof c.sync === "function",
+    name: "sync hands valid RawRecords to the sink and returns a cursor",
+    applies: (h) => typeof h.connector.sync === "function",
     run: async (h) => {
       const conn = await connect(h);
-      const full = await drain(h.connector.sync!(h.laneId, conn, null));
-      const summary = SyncSummarySchema.parse(full.result);
-      expect(summary.mode, "a sync without a cursor is a full load").toBe("full");
-      expect(summary.records, "summary counts yielded records").toBe(full.items.length);
+      const collect = async (cursor: Parameters<NonNullable<Connector["sync"]>>[2]) => {
+        const items: unknown[] = [];
+        const summary = SyncSummarySchema.parse(
+          await h.connector.sync!(h.laneId, conn, cursor, async (batch) => {
+            items.push(...batch);
+          }),
+        );
+        return { items, summary };
+      };
+      const full = await collect(null);
+      expect(full.summary.mode, "a sync without a cursor is a full load").toBe("full");
+      expect(full.summary.records, "summary counts delivered records").toBe(full.items.length);
       for (const item of full.items) {
-        const record = RawRecordSchema.parse(item);
+        const record = testSchemas.RawRecordSchema.parse(item);
         expect(record.lane_id).toBe(h.laneId);
         expect(record.connection_id).toBe(conn.id);
         expect(record.provider).toBe(h.connector.provider);
       }
       assertNoSecrets(h, full, "sync");
-      const again = await drain(h.connector.sync!(h.laneId, conn, summary.cursor));
-      SyncSummarySchema.parse(again.result);
-      for (const item of again.items) RawRecordSchema.parse(item);
+      const again = await collect(full.summary.cursor);
+      expect(again.summary.records).toBe(again.items.length);
+      for (const item of again.items) testSchemas.RawRecordSchema.parse(item);
+
+      // A failing sink aborts the run: the connector must reject rather than return a cursor.
+      let failed = false;
+      try {
+        await h.connector.sync!(h.laneId, conn, null, async () => {
+          throw new Error("sink failure");
+        });
+      } catch {
+        failed = true;
+      }
+      if (full.items.length > 0) expect(failed, "sync must propagate a sink failure").toBe(true);
     },
   },
   {
-    name: "sync rejects another lane and unusable connections",
-    applies: (c) => typeof c.sync === "function",
-    run: async (h) => {
-      await expectGuarded(h, (laneId, conn) => h.connector.sync!(laneId, conn, null).next(), "sync");
+    name: "sync rejects other lanes, forged and unusable connections",
+    applies: (h) => typeof h.connector.sync === "function",
+    run: async (h, state) => {
+      await expectGuarded(h, state, (laneId, conn) => h.connector.sync!(laneId, conn, null, async () => {}), "sync");
     },
   },
   {
-    name: "subscribe returns a valid Subscription",
-    applies: (c) => typeof c.subscribe === "function",
-    run: async (h) => {
+    name: "subscribe returns a valid Subscription and is guarded",
+    applies: (h) => typeof h.connector.subscribe === "function",
+    run: async (h, state) => {
       const conn = await connect(h);
-      const sub = SubscriptionSchema.parse(await h.connector.subscribe!(h.laneId, conn));
+      const sub = testSchemas.SubscriptionSchema.parse(await h.connector.subscribe!(h.laneId, conn));
       expect(sub.lane_id).toBe(h.laneId);
       expect(sub.connection_id).toBe(conn.id);
       expect(sub.provider).toBe(h.connector.provider);
       assertNoSecrets(h, sub, "subscribe");
-      await expectGuarded(h, (laneId, c) => h.connector.subscribe!(laneId, c), "subscribe");
+      await expectGuarded(h, state, (laneId, c) => h.connector.subscribe!(laneId, c), "subscribe");
     },
   },
   {
     name: "prepareWrite returns a ProposedPayload and never executes",
-    applies: (c) => typeof c.prepareWrite === "function",
+    applies: (h) => typeof h.connector.prepareWrite === "function",
     run: async (h) => {
       expect(h.writeIntents?.length ?? 0, "harness must supply writeIntents").toBeGreaterThan(0);
-      expect(typeof h.externalWriteCount, "harness must supply externalWriteCount").toBe("function");
       const conn = await connect(h);
-      const before = h.externalWriteCount!();
+      const before = h.externalWriteCount();
       for (const intent of h.writeIntents!) {
-        const proposed = ProposedPayloadSchema.parse(await h.connector.prepareWrite!(h.laneId, conn, intent));
+        const proposed = testSchemas.ProposedPayloadSchema.parse(await h.connector.prepareWrite!(h.laneId, conn, intent));
         expect(proposed.lane_id).toBe(h.laneId);
         expect(proposed.connection_id).toBe(conn.id);
         expect(proposed.provider).toBe(h.connector.provider);
         expect(proposed.action_type).toBe(intent.action_type);
         assertNoSecrets(h, proposed, "prepareWrite");
       }
-      expect(h.externalWriteCount!(), "prepareWrite must not write to the provider").toBe(before);
+      expect(h.externalWriteCount(), "prepareWrite must not write to the provider").toBe(before);
     },
   },
   {
-    name: "prepareWrite rejects another lane and unusable connections",
-    applies: (c) => typeof c.prepareWrite === "function",
-    run: async (h) => {
+    name: "prepareWrite rejects other lanes, forged and unusable connections",
+    applies: (h) => typeof h.connector.prepareWrite === "function",
+    run: async (h, state) => {
       const intent = h.writeIntents?.[0];
       expect(intent, "harness must supply writeIntents").toBeDefined();
-      await expectGuarded(h, (laneId, conn) => h.connector.prepareWrite!(laneId, conn, intent!), "prepareWrite");
+      await expectGuarded(h, state, (laneId, conn) => h.connector.prepareWrite!(laneId, conn, intent!), "prepareWrite");
     },
   },
   {
-    name: "disconnect returns the connection as disconnected",
-    applies: (c) => typeof c.disconnect === "function",
-    run: async (h) => {
+    name: "disconnect revokes and returns the connection as disconnected",
+    run: async (h, state) => {
+      await expectLaneEnforced(h, (laneId, conn) => h.connector.disconnect(laneId, conn), "disconnect");
       const conn = await connect(h);
-      await expectConnectorError(h, () => h.connector.disconnect!(h.otherLaneId, conn), ["lane_mismatch"], "disconnect");
-      const out = ConnectionSchema.parse(await h.connector.disconnect!(h.laneId, conn));
+      const before = h.externalWriteCount();
+      const out = await disconnect(h, state, h.laneId, conn);
+      testSchemas.ConnectionSchema.parse(out);
+      expect(isLaneBound(out), "disconnect returns a minted LaneBoundConnection").toBe(true);
       expect(out.id).toBe(conn.id);
       expect(out.lane_id).toBe(h.laneId);
       expect(out.status).toBe("disconnected");
+      expect(h.externalWriteCount(), "disconnect revokes at the provider").toBeGreaterThan(before);
       assertNoSecrets(h, out, "disconnect");
     },
   },
 ];
+
+/** Runs one check with the external-write invariant: only the check's own disconnects may write (revoke). */
+export async function runContractCheck(check: ContractCheck, h: ContractHarness): Promise<"skipped" | "passed"> {
+  if (check.applies && !check.applies(h)) return "skipped";
+  const state: CheckState = { revokes: 0 };
+  const before = h.externalWriteCount();
+  await check.run(h, state);
+  const writes = h.externalWriteCount() - before;
+  if (writes > state.revokes) {
+    throw new Error(`${check.name}: ${writes} external write(s) but only ${state.revokes} disconnect revocation(s)`);
+  }
+  return "passed";
+}
 
 /** Registers the full contract suite for one connector. Call it at the top level of the connector's test file. */
 export function describeConnectorContract(fixture: ConnectorContractFixture): void {
@@ -318,11 +467,7 @@ export function describeConnectorContract(fixture: ConnectorContractFixture): vo
       it(check.name, async (ctx) => {
         const h = await fixture.setup();
         try {
-          if (check.applies && !check.applies(h.connector)) {
-            ctx.skip();
-            return;
-          }
-          await check.run(h);
+          if ((await runContractCheck(check, h)) === "skipped") ctx.skip();
         } finally {
           await h.teardown?.();
         }

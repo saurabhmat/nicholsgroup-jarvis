@@ -43,6 +43,11 @@ describe("ProviderSchema", () => {
     expect(ProviderSchema.parse("quickbooks")).toBe("quickbooks");
     expect(ProviderSchema.safeParse("acme-ledger").success).toBe(false);
   });
+
+  it("does not accept the test-only mock provider", () => {
+    expect(ProviderSchema.safeParse("mock").success).toBe(false);
+    expect(ConnectionSchema.safeParse({ ...connection, provider: "mock" }).success).toBe(false);
+  });
 });
 
 describe("ConnectionStatusSchema", () => {
@@ -88,10 +93,33 @@ describe("ConnectInputSchema", () => {
     expect(ConnectInputSchema.safeParse({ ...input, kind: "playground_token" }).success).toBe(false);
   });
 
-  it("rejects a non-https redirect uri except localhost", () => {
+  it("rejects a non-https redirect uri except loopback", () => {
     const base = { kind: "oauth_code", code: "c" };
     expect(ConnectInputSchema.safeParse({ ...base, redirect_uri: "http://evil.test/cb" }).success).toBe(false);
     expect(ConnectInputSchema.safeParse({ ...base, redirect_uri: "http://localhost:3000/cb" }).success).toBe(true);
+    expect(ConnectInputSchema.safeParse({ ...base, redirect_uri: "http://127.0.0.1:3000/cb" }).success).toBe(true);
+    expect(ConnectInputSchema.safeParse({ ...base, redirect_uri: "http://[::1]:3000/cb" }).success).toBe(true);
+    expect(ConnectInputSchema.safeParse({ ...base, redirect_uri: "http://localhost.evil.test/cb" }).success).toBe(false);
+  });
+
+  it("rejects redirect uris with userinfo or a fragment", () => {
+    const base = { kind: "oauth_code", code: "c" };
+    expect(ConnectInputSchema.safeParse({ ...base, redirect_uri: "https://user:pw@example.test/cb" }).success).toBe(false);
+    expect(ConnectInputSchema.safeParse({ ...base, redirect_uri: "https://example.test/cb#frag" }).success).toBe(false);
+    expect(ConnectInputSchema.safeParse({ ...base, redirect_uri: "https://example.test/cb#" }).success).toBe(false);
+  });
+
+  it("returns a validation failure (not a TypeError) for a non-URL redirect uri", () => {
+    const result = ConnectInputSchema.safeParse({ kind: "oauth_code", code: "c", redirect_uri: "not a url" });
+    expect(result.success).toBe(false);
+  });
+
+  it("parses a vault secret reference and never a raw secret", () => {
+    const ref = { kind: "vault_secret", secret_ref: "00000000-0000-4000-8000-000000000009", external_account_id: "acct_synthetic" };
+    expect(ConnectInputSchema.parse(ref).kind).toBe("vault_secret");
+    expect(ConnectInputSchema.safeParse({ ...ref, secret_ref: "rk_test_synthetic" }).success).toBe(false);
+    expect(ConnectInputSchema.safeParse({ ...ref, api_key: "rk_test_synthetic" }).success).toBe(false);
+    expect(ConnectInputSchema.safeParse({ kind: "vault_secret", secret_ref: ref.secret_ref }).success).toBe(false);
   });
 });
 
@@ -163,8 +191,8 @@ describe("RawRecordSchema", () => {
 
 describe("SyncSummarySchema", () => {
   it("parses incremental and full summaries", () => {
-    expect(SyncSummarySchema.parse({ cursor: { value: T0 }, mode: "full", records: 3 }).mode).toBe("full");
-    expect(SyncSummarySchema.safeParse({ cursor: { value: "" }, mode: "incremental", records: 0 }).success).toBe(false);
+    expect(SyncSummarySchema.parse({ cursor: { value: T0 }, mode: "full", records: 3, provider_tid: null }).mode).toBe("full");
+    expect(SyncSummarySchema.safeParse({ cursor: { value: "" }, mode: "incremental", records: 0, provider_tid: null }).success).toBe(false);
   });
 });
 
@@ -196,6 +224,22 @@ describe("ConnectorErrorInfoSchema", () => {
       endpoint: "/v3/company/{realm}/query",
     });
     expect(info.provider_tid).toBe("synthetic-tid");
+  });
+
+  it("rejects endpoints carrying a query string or fragment", () => {
+    const base = {
+      kind: "provider_error",
+      disposition: "fail",
+      message: "x",
+      http_status: 400,
+      provider_error_code: null,
+      provider_tid: null,
+      retry_after_seconds: null,
+    };
+    expect(ConnectorErrorInfoSchema.safeParse({ ...base, endpoint: "/v3/company/{realm}/query" }).success).toBe(true);
+    expect(ConnectorErrorInfoSchema.safeParse({ ...base, endpoint: "/v3/company/1/query?query=select" }).success).toBe(false);
+    expect(ConnectorErrorInfoSchema.safeParse({ ...base, endpoint: "/cb#x" }).success).toBe(false);
+    expect(ConnectorErrorInfoSchema.safeParse({ ...base, endpoint: "https://host/x" }).success).toBe(false);
   });
 });
 

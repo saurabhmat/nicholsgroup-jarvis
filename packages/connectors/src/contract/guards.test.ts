@@ -1,50 +1,30 @@
 import { describe, expect, it } from "vitest";
-import { assertConnectionUsable, freshnessOf, isSyncAllowed } from "./guards";
+import { assertStatusUsable, freshnessOf, isSyncAllowed } from "./guards";
 import { ConnectorError } from "./errors";
-import type { Connection } from "./schemas";
+import type { ConnectionStatus } from "./schemas";
 
-const conn: Connection = {
-  id: "00000000-0000-4000-8000-000000000001",
-  lane_id: "lane-synthetic-a",
-  provider: "mock",
-  external_account_id: "synthetic-account",
-  status: "active",
-  features: {},
-  features_checked_at: null,
-  token_expires_at: null,
-  last_sync_at: null,
-  last_error: null,
-};
-
-function kindOf(fn: () => void): string | undefined {
+function kindOf(status: ConnectionStatus): string | undefined {
   try {
-    fn();
+    assertStatusUsable(status);
   } catch (e) {
-    return e instanceof ConnectorError ? e.info.kind : "other";
+    return e instanceof ConnectorError ? `${e.info.kind}/${e.info.disposition}` : "other";
   }
   return undefined;
 }
 
-describe("assertConnectionUsable", () => {
-  it("passes for an active connection in the same lane", () => {
-    expect(kindOf(() => assertConnectionUsable("lane-synthetic-a", conn))).toBeUndefined();
-  });
-
-  it("rejects a connection from another lane", () => {
-    expect(kindOf(() => assertConnectionUsable("lane-synthetic-b", conn))).toBe("lane_mismatch");
-  });
-
-  it("rejects an empty laneId", () => {
-    expect(kindOf(() => assertConnectionUsable("", conn))).toBe("invalid_input");
+describe("assertStatusUsable", () => {
+  it("passes active and degraded", () => {
+    expect(kindOf("active")).toBeUndefined();
+    expect(kindOf("degraded")).toBeUndefined();
   });
 
   it("refuses reconnect_required with a never-retry error", () => {
-    expect(kindOf(() => assertConnectionUsable("lane-synthetic-a", { ...conn, status: "reconnect_required" }))).toBe("reconnect_required");
+    expect(kindOf("reconnect_required")).toBe("reconnect_required/reconnect_required");
   });
 
   it("refuses disconnected and pending connections", () => {
-    expect(kindOf(() => assertConnectionUsable("lane-synthetic-a", { ...conn, status: "disconnected" }))).toBe("connection_unavailable");
-    expect(kindOf(() => assertConnectionUsable("lane-synthetic-a", { ...conn, status: "pending" }))).toBe("connection_unavailable");
+    expect(kindOf("disconnected")).toBe("connection_unavailable/fail");
+    expect(kindOf("pending")).toBe("connection_unavailable/fail");
   });
 });
 

@@ -2,7 +2,8 @@
 // lint-forbid importing it anywhere except `packages/modules/approvals` (rule 5, approvals spec §5).
 // Not re-exported from the package root.
 import type { LaneId } from "@nichols/core";
-import type { Connection, ExecResult, JsonObject, Provider } from "./schemas";
+import type { LaneBoundConnection } from "./lane-bound";
+import type { ExecResult, JsonObject, Provider } from "./schemas";
 
 /**
  * Minimum shape of an approved action as stored in `act.proposed_actions`. T-193 replaces the type argument with the
@@ -20,11 +21,15 @@ export interface ApprovedActionShape {
 }
 
 /**
- * Executes one approved action. Implementations must re-check the lane and connection, and recompute
- * `sha256(payload) === action.payload_sha256` before calling the provider (T-193).
+ * Executes one approved action. Before calling the provider, every implementation must:
+ * - `assertLaneBound(laneId, conn)` and re-read the authoritative connection row (lane, status) like any read;
+ * - assert `action.lane_id === laneId` and `action.connection_id === conn.id`;
+ * - recompute `payload_sha256` and compare: SHA-256 over the RFC 8785 (JCS) canonical JSON of
+ *   `{lane_id, action_type, connection_id, target, payload, payload_schema_version}`, exactly as defined in
+ *   `docs/specs/approvals.md` §4 (T-193).
  */
-export interface ConnectorWriter<TAction extends ApprovedActionShape = ApprovedActionShape> {
-  readonly provider: Provider;
+export interface ConnectorWriter<TAction extends ApprovedActionShape = ApprovedActionShape, P extends string = Provider> {
+  readonly provider: P;
   readonly actionTypes: readonly string[];
-  executeWrite(laneId: LaneId, conn: Connection, action: TAction): Promise<ExecResult>;
+  executeWrite(laneId: LaneId, conn: LaneBoundConnection<P>, action: TAction): Promise<ExecResult>;
 }

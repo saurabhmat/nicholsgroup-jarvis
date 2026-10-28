@@ -10,18 +10,8 @@ export const InstantSchema = z.iso.datetime({ offset: true });
 /** Lane ids come from the database / lane_config; the contract only requires a non-empty, bounded id. */
 export const LaneIdSchema = z.string().min(1).max(64);
 
-export const PROVIDERS = [
-  "quickbooks",
-  "stripe",
-  "gohighlevel",
-  "google",
-  "microsoft",
-  "monday",
-  "notion",
-  "timesolv",
-  // Test-only provider used by the contract kit's mock connector and job tests (T-038, T-113). Never connected for real.
-  "mock",
-] as const;
+/** Real providers only. The test-only `mock` provider lives in `@nichols/connectors/testing` (never in data). */
+export const PROVIDERS = ["quickbooks", "stripe", "gohighlevel", "google", "microsoft", "monday", "notion", "timesolv"] as const;
 export const ProviderSchema = z.enum(PROVIDERS);
 export type Provider = z.infer<typeof ProviderSchema>;
 
@@ -37,10 +27,12 @@ export const CONNECTION_STATUSES = ["pending", "active", "degraded", "reconnect_
 export const ConnectionStatusSchema = z.enum(CONNECTION_STATUSES);
 export type ConnectionStatus = z.infer<typeof ConnectionStatusSchema>;
 
-/** Lower snake_case identifier, e.g. `class_tracking`, `invoice`. */
-const SnakeKeySchema = z.string().regex(/^[a-z][a-z0-9_]{0,63}$/);
+/** Lower snake_case identifier, e.g. `class_tracking`. */
+export const SnakeKeySchema = z.string().regex(/^[a-z][a-z0-9_]{0,63}$/);
 /** Dotted lower snake_case name, e.g. `report.profit_and_loss`, `monday.item.update`. */
 export const OpNameSchema = z.string().regex(/^[a-z][a-z0-9_]{0,63}(\.[a-z][a-z0-9_]{0,63}){0,4}$/);
+/** Provider object type as stored in `raw.source_records.object_type`, e.g. `Invoice`. */
+export const ObjectTypeSchema = z.string().regex(/^[A-Za-z][A-Za-z0-9_.]{0,63}$/);
 
 /**
  * Edition/plan-dependent features detected on the provider account (e.g. QuickBooks Preferences: `class_tracking`,
@@ -72,7 +64,8 @@ export type ErrorDisposition = z.infer<typeof ErrorDispositionSchema>;
 export const ERROR_MESSAGE_MAX = 500;
 
 /**
- * Safe, storable error description (T-196 `core.connector_api_errors`). Must never carry tokens, secrets or personal data.
+ * Safe, storable error description (T-196 `core.connector_api_errors`). Must never carry tokens, secrets or personal
+ * data. Redacting provider messages before they get here is the connector's job (shared redactor in T-033).
  * `provider_tid` is the provider's transaction/request id (Intuit `intuit_tid`, Stripe `Request-Id`, ...).
  */
 export const ConnectorErrorInfoSchema = z.strictObject({
@@ -83,39 +76,40 @@ export const ConnectorErrorInfoSchema = z.strictObject({
   provider_error_code: z.string().max(128).nullable(),
   provider_tid: z.string().max(256).nullable(),
   retry_after_seconds: z.number().int().nonnegative().nullable(),
-  /** Endpoint template without ids or query values, e.g. `/v3/company/{realm}/reports/ProfitAndLoss`. */
-  endpoint: z.string().max(256).nullable(),
+  /** Endpoint template without ids, query strings or fragments, e.g. `/v3/company/{realm}/reports/ProfitAndLoss`. */
+  endpoint: z.string().max(256).regex(/^\/[^?#\s]*$/, "endpoint is a path template without query or fragment").nullable(),
 });
 export type ConnectorErrorInfo = z.infer<typeof ConnectorErrorInfoSchema>;
 
+const LOOPBACK_HOSTS = new Set(["localhost", "127.0.0.1", "[::1]"]);
+
 /**
- * A lane's connection to one provider account. Mirrors the non-secret columns of `core.connections` (T-031).
- * Strict: tokens and secrets live only in the Vault and can never ride along on this object.
+ * OAuth redirect URI: https, or http on loopback only; no userinfo, no fragment. This is shape validation only —
+ * connectors must send the server-configured redirect URI and the provider must match it exactly (T-035).
  */
-export const ConnectionSchema = z.strictObject({
-  id: z.uuid(),
-  lane_id: LaneIdSchema,
-  provider: ProviderSchema,
-  /** Provider account id (QuickBooks realmId, Stripe account, mailbox, workspace). Comes from the provider, not code. */
-  external_account_id: z.string().min(1).max(256),
-  status: ConnectionStatusSchema,
-  features: ConnectionFeaturesSchema.default({}),
-  features_checked_at: InstantSchema.nullable(),
-  token_expires_at: InstantSchema.nullable(),
-  last_sync_at: InstantSchema.nullable(),
-  last_error: ConnectorErrorInfoSchema.nullable(),
-});
-export type Connection = z.infer<typeof ConnectionSchema>;
+export const RedirectUriSchema = z
+  .string()
+  .max(2048)
+  .refine((value) => {
+    if (!URL.canParse(value) || value.includes("#")) return false;
+    const url = new URL(value);
+    if (url.username !== "" || url.password !== "") return false;
+    if (url.protocol === "https:") return true;
+    return url.protocol === "http:" && LOOPBACK_HOSTS.has(url.hostname);
+  }, "redirect_uri must be https (http only for loopback), without userinfo or fragment");
 
-const RedirectUriSchema = z.url().refine((value) => {
-  const url = new URL(value);
-  if (url.protocol === "https:") return true;
-  return url.protocol === "http:" && (url.hostname === "localhost" || url.hostname === "127.0.0.1");
-}, "redirect_uri must be https (http only for localhost)");
+const ReconnectFields = {
+  /** Account id from the provider (QuickBooks callback `realmId`); checked against lane_config by T-050. */
+  external_account_id: z.string().min(1).max(256),
+  /** Reuse an existing connection row on reconnect (T-195). Must be in the same lane, provider and account. */
+  reconnect_connection_id: z.uuid().optional(),
+};
 
 /**
- * Input to `connect`. Only the in-app OAuth callback produces one (QB-7: no Playground or offline tokens).
- * A discriminated union so key-based providers (e.g. a Vault-held restricted key) can add a variant later.
+ * Input to `connect`.
+ * - `oauth_code`: only the in-app OAuth callback produces one (QB-7: no Playground or offline tokens).
+ * - `vault_secret`: a reference to a secret an admin already stored in the Vault (Stripe restricted key, GoHighLevel,
+ *   monday, Notion tokens). Never the secret itself.
  */
 export const ConnectInputSchema = z.discriminatedUnion("kind", [
   z.strictObject({
@@ -124,15 +118,18 @@ export const ConnectInputSchema = z.discriminatedUnion("kind", [
     redirect_uri: RedirectUriSchema,
     /** PKCE verifier (T-035). */
     code_verifier: z.string().min(43).max(128).optional(),
-    /** Account id returned on the callback (QuickBooks `realmId`); checked against lane_config by T-050. */
-    external_account_id: z.string().min(1).max(256).optional(),
-    /** Reuse an existing connection row on reconnect (T-195). */
-    reconnect_connection_id: z.uuid().optional(),
+    external_account_id: ReconnectFields.external_account_id.optional(),
+    reconnect_connection_id: ReconnectFields.reconnect_connection_id,
+  }),
+  z.strictObject({
+    kind: z.literal("vault_secret"),
+    secret_ref: z.uuid(),
+    ...ReconnectFields,
   }),
 ]);
 export type ConnectInput = z.infer<typeof ConnectInputSchema>;
 
-const JsonObjectSchema = z.record(z.string(), z.json());
+export const JsonObjectSchema = z.record(z.string(), z.json());
 export type JsonObject = z.infer<typeof JsonObjectSchema>;
 
 /** A live retrieval request. `op` must be one of the connector's `readOps`. */
@@ -153,48 +150,126 @@ export const SourceRefSchema = z.strictObject({
 });
 export type SourceRef = z.infer<typeof SourceRefSchema>;
 
-/** Envelope for every live read: provenance, `as_of` and freshness (architecture §2 principle 6). */
-export function sourceResultSchema<T extends z.ZodType>(data: T) {
-  return z.strictObject({
+/**
+ * Builds every schema that names a provider, for a given provider enum. The contract uses real providers
+ * (`ProviderSchema`); the test kit builds the same schemas with the test-only provider added.
+ */
+export function buildProviderSchemas<P extends z.ZodType<string>>(provider: P) {
+  /**
+   * A lane's connection to one provider account. Mirrors the non-secret columns of `core.connections` (T-031).
+   * Strict: tokens and secrets live only in the Vault and can never ride along on this object.
+   */
+  const ConnectionSchema = z.strictObject({
+    id: z.uuid(),
     lane_id: LaneIdSchema,
-    provider: ProviderSchema,
-    connection_id: z.uuid(),
-    op: OpNameSchema,
-    data,
-    /** The instant the data reflects at the source. */
-    as_of: InstantSchema,
-    /** When the connector obtained it (from the provider or a cache). */
-    fetched_at: InstantSchema,
-    freshness: FreshnessSchema,
-    provider_tid: z.string().max(256).nullable(),
-    source_refs: z.array(SourceRefSchema).default([]),
-    notes: z.array(z.string().max(500)).default([]),
+    provider,
+    /** Provider account id (QuickBooks realmId, Stripe account, mailbox, workspace). Comes from the provider, not code. */
+    external_account_id: z.string().min(1).max(256),
+    status: ConnectionStatusSchema,
+    features: ConnectionFeaturesSchema.default({}),
+    features_checked_at: InstantSchema.nullable(),
+    token_expires_at: InstantSchema.nullable(),
+    last_sync_at: InstantSchema.nullable(),
+    last_error: ConnectorErrorInfoSchema.nullable(),
   });
-}
-export const SourceResultSchema = sourceResultSchema(z.unknown());
-export type SourceResult<T = unknown> = Omit<z.infer<typeof SourceResultSchema>, "data"> & { data: T };
 
-/** One provider object as synced into `raw.source_records` (T-039). T-039 computes `payload_hash`. */
-export const RawRecordSchema = z.strictObject({
-  lane_id: LaneIdSchema,
-  provider: ProviderSchema,
-  connection_id: z.uuid(),
-  object_type: z.string().regex(/^[A-Za-z][A-Za-z0-9_.]{0,63}$/),
-  external_id: z.string().min(1).max(256),
-  payload: JsonObjectSchema,
-  /** Provider's last-updated time for the object, when it has one. */
-  source_updated_at: InstantSchema.nullable(),
-  /** CDC/delta deletion marker. */
-  deleted: z.boolean(),
-  synced_at: InstantSchema,
-});
-export type RawRecord = z.infer<typeof RawRecordSchema>;
+  /** Envelope for every live read: provenance, `as_of` and freshness (architecture §2 principle 6). */
+  function sourceResultSchema<T extends z.ZodType>(data: T) {
+    return z.strictObject({
+      lane_id: LaneIdSchema,
+      provider,
+      connection_id: z.uuid(),
+      op: OpNameSchema,
+      data,
+      /** The instant the data reflects at the source. */
+      as_of: InstantSchema,
+      /** When the connector obtained it (from the provider or a cache). */
+      fetched_at: InstantSchema,
+      freshness: FreshnessSchema,
+      provider_tid: z.string().max(256).nullable(),
+      source_refs: z.array(SourceRefSchema).default([]),
+      notes: z.array(z.string().max(500)).default([]),
+    });
+  }
+
+  /** One provider object as synced into `raw.source_records` (T-039). T-039 computes `payload_hash`. */
+  const RawRecordSchema = z.strictObject({
+    lane_id: LaneIdSchema,
+    provider,
+    connection_id: z.uuid(),
+    object_type: ObjectTypeSchema,
+    external_id: z.string().min(1).max(256),
+    payload: JsonObjectSchema,
+    /** Provider's last-updated time for the object, when it has one. */
+    source_updated_at: InstantSchema.nullable(),
+    /** CDC/delta deletion marker. */
+    deleted: z.boolean(),
+    synced_at: InstantSchema,
+  });
+
+  const SubscriptionSchema = z.strictObject({
+    id: z.string().min(1).max(256),
+    lane_id: LaneIdSchema,
+    provider,
+    connection_id: z.uuid(),
+    kind: z.enum(["webhook", "push"]),
+    /** Null when the provider subscription does not expire (e.g. Intuit webhooks). */
+    expires_at: InstantSchema.nullable(),
+    created_at: InstantSchema,
+  });
+
+  /**
+   * Output of `prepareWrite`: the exact payload a human will approve (approvals spec §4).
+   * Hashing, consequences and approval are the approvals module's job, so they cannot appear here.
+   */
+  const ProposedPayloadSchema = z.strictObject({
+    lane_id: LaneIdSchema,
+    provider,
+    connection_id: z.uuid(),
+    action_type: OpNameSchema,
+    target: JsonObjectSchema,
+    payload: JsonObjectSchema,
+    payload_schema_version: z.number().int().positive(),
+    /** Target state when proposed, so the executor can detect drift. Null for creates. */
+    expected_before: JsonObjectSchema.nullable(),
+  });
+
+  return {
+    ConnectionSchema,
+    sourceResultSchema,
+    SourceResultSchema: sourceResultSchema(z.unknown()),
+    RawRecordSchema,
+    SubscriptionSchema,
+    ProposedPayloadSchema,
+  };
+}
+
+const realProviderSchemas = buildProviderSchemas(ProviderSchema);
+export const ConnectionSchema = realProviderSchemas.ConnectionSchema;
+export const sourceResultSchema = realProviderSchemas.sourceResultSchema;
+export const SourceResultSchema = realProviderSchemas.SourceResultSchema;
+export const RawRecordSchema = realProviderSchemas.RawRecordSchema;
+export const SubscriptionSchema = realProviderSchemas.SubscriptionSchema;
+export const ProposedPayloadSchema = realProviderSchemas.ProposedPayloadSchema;
+
+type WithProvider<T, P extends string> = Omit<T, "provider"> & { provider: P };
+export type Connection<P extends string = Provider> = WithProvider<z.infer<typeof ConnectionSchema>, P>;
+export type SourceResult<T = unknown, P extends string = Provider> = Omit<WithProvider<z.infer<typeof SourceResultSchema>, P>, "data"> & { data: T };
+export type RawRecord<P extends string = Provider> = WithProvider<z.infer<typeof RawRecordSchema>, P>;
+export type Subscription<P extends string = Provider> = WithProvider<z.infer<typeof SubscriptionSchema>, P>;
+export type ProposedPayload<P extends string = Provider> = WithProvider<z.infer<typeof ProposedPayloadSchema>, P>;
 
 /** Opaque, connector-defined sync position (CDC timestamp, history id, delta link token). */
 export const SyncCursorSchema = z.strictObject({
   value: z.string().min(1).max(4096),
 });
 export type SyncCursor = z.infer<typeof SyncCursorSchema>;
+
+export const SyncOptionsSchema = z.strictObject({
+  /** Limit the run to these object types (e.g. a targeted CDC fetch after a webhook, T-053). */
+  objectTypes: z.array(ObjectTypeSchema).max(64).optional(),
+});
+export type SyncOptions = z.infer<typeof SyncOptionsSchema>;
 
 /**
  * Returned when a sync run completes. The caller persists `cursor` only after the whole run succeeded (T-038, T-051).
@@ -204,9 +279,9 @@ export const SyncSummarySchema = z.strictObject({
   cursor: SyncCursorSchema,
   mode: z.enum(["full", "incremental"]),
   records: z.number().int().nonnegative(),
-  provider_tid: z.string().max(256).nullable().default(null),
+  provider_tid: z.string().max(256).nullable(),
 });
-export type SyncSummary = z.input<typeof SyncSummarySchema>;
+export type SyncSummary = z.infer<typeof SyncSummarySchema>;
 
 export const HealthStatusSchema = z.strictObject({
   ok: z.boolean(),
@@ -220,18 +295,6 @@ export const HealthStatusSchema = z.strictObject({
 });
 export type HealthStatus = z.infer<typeof HealthStatusSchema>;
 
-export const SubscriptionSchema = z.strictObject({
-  id: z.string().min(1).max(256),
-  lane_id: LaneIdSchema,
-  provider: ProviderSchema,
-  connection_id: z.uuid(),
-  kind: z.enum(["webhook", "push"]),
-  /** Null when the provider subscription does not expire (e.g. Intuit webhooks). */
-  expires_at: InstantSchema.nullable(),
-  created_at: InstantSchema,
-});
-export type Subscription = z.infer<typeof SubscriptionSchema>;
-
 /** What a caller wants written; the connector turns it into an exact payload for approval. */
 export const WriteIntentSchema = z.strictObject({
   action_type: OpNameSchema,
@@ -239,23 +302,6 @@ export const WriteIntentSchema = z.strictObject({
   changes: JsonObjectSchema,
 });
 export type WriteIntent = z.infer<typeof WriteIntentSchema>;
-
-/**
- * Output of `prepareWrite`: the exact payload a human will approve (approvals spec §4).
- * Hashing, consequences and approval are the approvals module's job, so they cannot appear here.
- */
-export const ProposedPayloadSchema = z.strictObject({
-  lane_id: LaneIdSchema,
-  provider: ProviderSchema,
-  connection_id: z.uuid(),
-  action_type: OpNameSchema,
-  target: JsonObjectSchema,
-  payload: JsonObjectSchema,
-  payload_schema_version: z.number().int().positive(),
-  /** Target state when proposed, so the executor can detect drift. Null for creates. */
-  expected_before: JsonObjectSchema.nullable(),
-});
-export type ProposedPayload = z.infer<typeof ProposedPayloadSchema>;
 
 /** Result of an approved write (approvals module only; see `writer.ts`). No content bodies. */
 export const ExecResultSchema = z.strictObject({

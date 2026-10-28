@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { ConnectorError, dispositionFor, isConnectorError } from "./errors";
+import { ConnectorError, dispositionFor, isConnectorError, toConnectorError } from "./errors";
 import { ConnectorErrorInfoSchema } from "./schemas";
 
 describe("dispositionFor", () => {
@@ -48,5 +48,38 @@ describe("ConnectorError", () => {
     expect(isConnectorError(new ConnectorError({ kind: "not_found", message: "Not found" }))).toBe(true);
     expect(isConnectorError(new Error("x"))).toBe(false);
     expect(isConnectorError({ name: "ConnectorError" })).toBe(false);
+  });
+
+  it("is non-extensible, so no cause can be attached later", () => {
+    const err = new ConnectorError({ kind: "provider_error", message: "x" });
+    expect(Object.isExtensible(err)).toBe(false);
+    expect(() => {
+      (err as unknown as { cause: unknown }).cause = new Error("token=synthetic");
+    }).toThrow(TypeError);
+    expect((err as unknown as { cause?: unknown }).cause).toBeUndefined();
+    expect(Object.isFrozen(err.info)).toBe(true);
+  });
+
+  it("has only name, info, message and stack as own keys", () => {
+    const err = new ConnectorError({ kind: "provider_error", message: "x" });
+    for (const key of Reflect.ownKeys(err)) expect(["name", "info", "message", "stack"]).toContain(key);
+    expect(Object.getPrototypeOf(err)).toBe(ConnectorError.prototype);
+  });
+});
+
+describe("toConnectorError", () => {
+  it("passes ConnectorError through", () => {
+    const err = new ConnectorError({ kind: "not_found", message: "Not found" });
+    expect(toConnectorError(err)).toBe(err);
+  });
+
+  it("converts foreign errors to provider_error without their message or cause", () => {
+    const foreign = new Error("Bearer canary-synthetic", { cause: new Error("refresh_token=canary-synthetic") });
+    const err = toConnectorError(foreign);
+    expect(err.info.kind).toBe("provider_error");
+    expect(err.message).not.toContain("canary");
+    expect((err as unknown as { cause?: unknown }).cause).toBeUndefined();
+    expect(JSON.stringify(err)).not.toContain("canary");
+    expect(toConnectorError("string thrown").info.kind).toBe("provider_error");
   });
 });

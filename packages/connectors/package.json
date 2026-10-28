@@ -6,7 +6,8 @@
   "exports": {
     ".": "./src/index.ts",
     "./testing": "./src/testing/index.ts",
-    "./writer": "./src/contract/writer.ts"
+    "./writer": "./src/contract/writer.ts",
+    "./internal": "./src/contract/internal.ts"
   },
   "scripts": {
     "typecheck": "tsc -b",
@@ -15,6 +16,17 @@
   },
   "dependencies": {
     "@nichols/core": "workspace:*",
-    "zod": "^4.6.7"
+    "zod": "4.6.7"
+  },
+  "devDependencies": {
+    "vitest": "5.0.5"
+  },
+  "peerDependencies": {
+    "vitest": "5.0.5"
+  },
+  "peerDependenciesMeta": {
+    "vitest": {
+      "optional": true
+    }
   }
 }
