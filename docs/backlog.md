@@ -114,6 +114,9 @@ These tasks have all their dependencies done and all their `needs` checked. A hu
   - GitHub: protect branch `main` (changes only by PR with review, no direct or force pushes; see H-012). Anything merged to `main` runs with the real-data secrets.
   - Supabase: turn on backups or point-in-time restore for `lxjhaxdkqtmkhloqaffb` before production migrations are applied.
   - Intuit app → Production → Redirect URIs: add the production callback above. Replace it with `https://portal.pub-k.org/api/connect/qbo/callback` with H-021.
+- [ ] H-026 Supabase production API and auth settings (T-016/T-017, Oct 31, 2026; `docs/plan-review.md` §7 "Core and audit schemas over the API"):
+  - Project Settings → API → Exposed schemas: `public`, `graphql_public`, `core`, `audit` (nothing else).
+  - Authentication → JWT: access token expiry 900 seconds; switch to asymmetric JWT signing keys.
 - [ ] H-025 (optional) A database for Preview deployments with synthetic data only: a separate Supabase project seeded by T-007, or Supabase branching. Until then Previews run without a database (static pages and sign-in screens only).
 - [ ] H-024 Connect the live Pub K Group QuickBooks file in production (needed for tie-out, T-172; no staging since Oct 31, 2026). Only after T-050 – T-053 and T-195 – T-197 are merged and QB-1 – QB-20 pass on the sandbox company, and H-023 is done:
   - Intuit app → Production → Webhooks: endpoint `https://<production domain>/api/webhooks/qbo` for the entities in QB scope; copy the verifier token into the Vercel Production environment as `INTUIT_WEBHOOK_VERIFIER_TOKEN`.
@@ -243,12 +246,12 @@ T-010 – T-017 are the serial spine. After T-017: auth/shell (T-018 – T-026) 
 - acceptance: `audit.log({laneId, actor, action, target, metadata})` in `packages/core`; metadata redactor strips token/secret/body-like fields (unit tests); failures to audit fail the calling action.
 
 ### T-016 Lane router
-- status: proposed
+- status: done
 - depends: T-012, T-005
 - acceptance: `getLaneClient(laneId, session)` returns a client for the lane's data plane (registry: `core` only, `nl` slot defined); throws without membership or for disabled lanes; service client only for jobs via `getLaneJobClient(laneId)`; unit tests incl. disabled-lane and non-member cases. The lane router entry module must `import "server-only"`, with a test that reads the source and fails without it (T-003 lint review M2). It lives at `packages/core/src/lane-router`, the only path allowed to create Supabase clients or touch the secret key besides the token vault (`packages/connectors/src/vault`) and `packages/core/src/env`.
 
 ### T-017 Session → allowed lanes helpers
-- status: proposed
+- status: done
 - depends: T-016
 - acceptance: `requireSession()`, `requireLane(laneId)`, `requireRole(laneId, role)` for route handlers/server actions; unit tests; used by a sample protected route.
 

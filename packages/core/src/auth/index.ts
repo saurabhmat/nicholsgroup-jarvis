@@ -7,7 +7,8 @@ import "server-only";
 //   sign-in and MFA pages.
 // - requireLane(laneId): the session plus the lane client from the lane router (membership, enabled lane, AAL2).
 // - requireRole(laneId, roles): requireLane plus core.has_lane_role() for actions a view does not imply.
-// Failures throw AuthError (401 without a session, 403 otherwise); authErrorResponse() turns one into a Response.
+// Failures throw AuthError (401 without a valid session, 403 otherwise); authErrorResponse() turns one into a Response.
+// An auth outage or a configuration error is NOT reported as "no session": it propagates (the route answers 503).
 import { createServerClient } from "@supabase/ssr";
 import type { Database } from "../db/index";
 import { getServerEnv, requireSupabasePublicEnv } from "../env/server";
@@ -56,7 +57,9 @@ export function cookieSessionReader(cookies: CookieStore): SessionReader {
     const { data: sessionData } = await supabase.auth.getSession();
     const token = sessionData.session?.access_token;
     if (!token) return null;
+    // Verify THIS token and take identity and AAL from its verified claims only, never from the cookie's user object.
     const { data, error } = await supabase.auth.getClaims(token);
+    if (error?.name === "AuthRetryableFetchError") throw new Error("auth service unavailable");
     const claims = data?.claims;
     if (error || !claims || typeof claims.sub !== "string" || claims.sub === "") return null;
     return { userId: claims.sub, accessToken: token, aal: claims.aal === "aal2" ? "aal2" : "aal1" };
@@ -74,12 +77,8 @@ export function createGuards(
   router: Pick<LaneRouter, "getLaneClient"> = { getLaneClient },
 ): Guards {
   const requireSession: Guards["requireSession"] = async (opts) => {
-    let session: VerifiedSession | null;
-    try {
-      session = await readSession();
-    } catch {
-      session = null; // an unreadable or unverifiable session is no session
-    }
+    // The reader returns null for a missing or invalid session; anything it throws is an outage or misconfiguration.
+    const session = await readSession();
     if (!session) throw new AuthError("no_session");
     if (session.aal !== "aal2" && !opts?.allowAal1) throw new AuthError("mfa_required");
     return session;

@@ -1,6 +1,8 @@
 import "server-only";
-// Lane router (T-016, architecture §5.2). The ONLY place that creates Supabase clients or reads the secret key
-// (T-003 lint). Application code asks for a lane's client and never chooses a database itself.
+// Lane router (T-016, architecture §5.2). The only place that creates Supabase DATA clients or reads the secret key
+// (T-003 lint); packages/core/src/auth creates an auth-only client for the session and must never query data with
+// it. Application code asks for a lane's client and never chooses a database itself.
+// getLaneJobClient and createLaneRouter are restricted names (lint): request code gets user clients only.
 //
 // - getLaneClient(laneId, session): a client acting as the signed-in user (publishable key + the user's access
 //   token), so RLS applies to every query. Before returning it, the router asks the database, with that same token,
@@ -19,7 +21,11 @@ import type { LaneId } from "../lanes/index";
 
 export type LaneClient = SupabaseClient<Database>;
 
-/** What the router needs from a session: the user's id and access token (T-017 builds it from the cookie session). */
+/**
+ * What the router needs from a session: the user's access token and its user id. Both must come from the VERIFIED
+ * token (T-017's cookie reader uses the getClaims result); the database checks the token itself either way, and
+ * core.may_resolve() refuses a userId that is not the token's subject.
+ */
 export type LaneSession = { userId: string; accessToken: string };
 
 export type DataPlane = "core" | "nl";
@@ -52,7 +58,7 @@ const NO_SESSION_STORAGE = { auth: { persistSession: false, autoRefreshToken: fa
 
 let serviceSingleton: LaneClient | undefined;
 
-export const defaultClientFactory: ClientFactory = {
+const defaultClientFactory: ClientFactory = {
   userClient(accessToken) {
     const { NEXT_PUBLIC_SUPABASE_URL: url, NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY: key } = requireSupabasePublicEnv(getServerEnv());
     return createClient<Database>(url, key, {
@@ -120,7 +126,10 @@ export function createLaneRouter(factory: ClientFactory = defaultClientFactory):
     getAudit() {
       return createAudit(async (row) => {
         // Generated function args are all non-null; audit.log() takes a null actor id for service/system actors.
-        const args = row as unknown as Database["audit"]["Functions"]["log"]["Args"];
+        // The annotation fails to compile if audit.log()'s parameter names drift from AuditRow.
+        type LogArgs = Database["audit"]["Functions"]["log"]["Args"];
+        const checked: Record<keyof LogArgs, unknown> = row;
+        const args = checked as LogArgs;
         const { error } = await factory.serviceClient().schema("audit").rpc("log", args);
         if (error) throw new Error("audit.log failed");
       });

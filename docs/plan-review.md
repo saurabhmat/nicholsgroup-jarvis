@@ -338,3 +338,11 @@ Where this lands: backlog H-010, H-023 (now Production), H-024, T-005, T-171, Qu
 ### Oct 31, 2026 — Finance operator uses the assistant
 
 Decided by Saurabh: the finance operator (Sophie) has the `assistant` view in her lanes (resolves assistant spec Q-S3; architecture §5.4 listed the finance module only). The assistant's tool policy gate still limits what she can query: each tool's required view (e.g. `finance`) must be one her role holds, so she cannot reach approvals or other content through the assistant. Lands in `core.role_views` (T-012).
+
+### Oct 31, 2026 — Core and audit schemas over the API; session lifetime (T-016/T-017 security review)
+
+- **`core` and `audit` are exposed to PostgREST** so server code reaches them through supabase-js (lane router). A signed-in AAL2 user (or script in their browser tab) can therefore query these schemas directly; RLS is the boundary, which the pgTAP suites and the catalog test enforce (no anon access, no user DML, reviewed definer and callable functions). Module data that must only flow through the policy gate (for example assistant tool results) goes in schemas that stay unexposed or behind server routes. An NL-plane schema is never exposed this way (architecture §5.2). `scripts/supabase-config.test.mjs` pins the exposed list.
+- **Access tokens live 15 minutes** (`jwt_expiry = 900`), so a revoked session or removed MFA factor stops working within 15 minutes; membership and role changes apply immediately through RLS. Approval and step-up paths (T-119, T-193) verify with `auth.getUser()` (server-checked) rather than local claim verification. Production should use asymmetric JWT signing keys (claims verified locally, no auth round trip per request).
+- **Job client restricted:** `getLaneJobClient` (bypasses RLS) is a restricted name: Inngest client and route, approvals executor and token vault only; module jobs are added to `JOB_RUNNERS` deliberately when written.
+
+Where this lands: backlog H-026; `.agent/pr/T-016.md`, `.agent/pr/T-017.md`.

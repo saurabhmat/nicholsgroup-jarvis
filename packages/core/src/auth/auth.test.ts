@@ -24,9 +24,9 @@ describe("requireSession", () => {
     expect(await createGuards(async () => SESSION).requireSession()).toBe(SESSION);
   });
 
-  it("401 without a session, or when reading it fails", async () => {
+  it("401 without a valid session; reader failures (outage, config) propagate instead of posing as no session", async () => {
     expect(await reason(createGuards(async () => null).requireSession())).toBe("401 no_session");
-    expect(await reason(createGuards(async () => Promise.reject(new Error("bad jwt"))).requireSession())).toBe("401 no_session");
+    expect(await reason(createGuards(async () => Promise.reject(new Error("auth service unavailable"))).requireSession())).toBe("Error: auth service unavailable");
   });
 
   it("403 mfa_required at AAL1 unless the page allows it", async () => {

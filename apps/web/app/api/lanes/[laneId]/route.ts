@@ -14,6 +14,8 @@ export async function GET(_request: Request, ctx: RouteContext<"/api/lanes/[lane
   } catch (e) {
     const res = authErrorResponse(e);
     if (res) return res;
+    // An outage or misconfiguration: log the error class only (never the error text, which could carry token data).
+    console.error("[api/lanes] unavailable:", e instanceof Error ? e.name : typeof e);
     return Response.json({ error: "unavailable" }, { status: 503, headers: { "cache-control": "no-store" } });
   }
 }

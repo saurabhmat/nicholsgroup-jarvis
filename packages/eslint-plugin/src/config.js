@@ -47,6 +47,11 @@ export const TOKEN_VAULT = ["packages/connectors/src/vault"];
 export const AUTH_SESSION = ["packages/core/src/auth", "apps/web/proxy.ts"];
 export const INNGEST_CLIENT = ["packages/core/src/inngest", "apps/web/app/api/inngest"];
 export const SCRIPTS = ["scripts", "apps/web/scripts"];
+/**
+ * Code that may use the RLS-bypassing job client (T-016 review H1): the Inngest client and route, the approvals
+ * executor and the token vault. Module jobs join this list deliberately (reviewed) when they are written.
+ */
+export const JOB_RUNNERS = [...INNGEST_CLIENT, ...APPROVALS, ...TOKEN_VAULT];
 /** Files that may read process.env (besides test files and vitest configs). */
 export const PROCESS_ENV_ALLOWED = [
   ...CORE_ENV,
@@ -120,6 +125,9 @@ export const RESTRICTED_NAMES = {
   executeWrite: { allow: APPROVALS, allowReexport: CONNECTORS, hint: "only the approvals package executes writes" },
   mintApprovedAction: { allow: APPROVALS, hint: "only the approvals package mints approved actions" },
   getSupabaseSecretKey: { allow: [...LANE_ROUTER, ...TOKEN_VAULT, ...CORE_ENV], hint: "lane router and token vault only" },
+  getLaneJobClient: { allow: [...LANE_ROUTER, ...JOB_RUNNERS], hint: "the service client bypasses RLS: jobs, approvals executor and token vault only; request code uses getLaneClient / requireLane" },
+  createLaneRouter: { allow: LANE_ROUTER, hint: "use getLaneClient / requireLane; client factories are internal to the lane router" },
+  defaultClientFactory: { allow: LANE_ROUTER, hint: "internal to the lane router" },
   parseServerEnv: { allow: CORE_ENV, hint: "returns unredacted secrets; use the accessors in @nichols/core/env/server" },
   parseConnectorEnv: { allow: CORE_ENV, hint: "use requireConnectorEnv (redacted, fails closed)" },
   runtimeFlags: { allow: CORE_ENV, hint: "internal to packages/core/src/env" },
