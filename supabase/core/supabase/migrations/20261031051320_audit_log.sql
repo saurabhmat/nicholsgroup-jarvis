@@ -17,7 +17,8 @@ create table audit.events (
   -- Dotted event name, e.g. 'lane_config.version_created', 'approval.approved'.
   action text not null check (action ~ '^[a-z][a-z0-9_]*(\.[a-z][a-z0-9_]*)+$' and length(action) <= 100),
   -- What the action was about, as an id or reference (never content), e.g. 'lane_config:PKG:3'.
-  target text check (length(target) <= 300),
+  -- A reference shape only; the secret check catches key-like references (e.g. 'sk_live_...').
+  target text check (target ~ '^[A-Za-z0-9_.:/@-]+$' and length(target) <= 300 and not core.jsonb_has_secret(pg_catalog.jsonb_build_object('target', target))),
   -- Small structured context. Redacted by the caller (T-015); the database refuses credential-like keys and values.
   metadata jsonb not null default '{}'
     check (pg_catalog.jsonb_typeof(metadata) = 'object')

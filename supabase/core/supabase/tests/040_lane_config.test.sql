@@ -1,6 +1,6 @@
 -- Lane config (T-011): versioned insert-only rows, the database secret check, the current-version view and RLS.
 begin;
-select plan(45);
+select plan(52);
 \ir helpers/lane_rls.psql
 
 -- ---------------------------------------------------------------- schema
@@ -28,6 +28,13 @@ select is(core.jsonb_has_secret(jsonb_build_object('x', U&'\00A0\FEFFsk_live_abc
 select is(core.jsonb_has_secret('{"API-Key": "x"}'), true, 'hyphenated api key name detected');
 select is(core.jsonb_has_secret('{"assistant": {"max_tokens": 5, "messages_per_hour": 30}}'), false, 'max_tokens is not a credential name');
 select is(core.jsonb_has_secret('{"ghl_tags": ["Paid Member", "VIP 2026"]}'), false, 'free-text tags pass');
+select is(core.jsonb_has_secret('{"accessToken": "x"}'), true, 'camelCase credential key detected');
+select is(core.jsonb_has_secret('{"oauth_tokens": ["x"]}'), true, 'plural credential key detected');
+select is(core.jsonb_has_secret('{"employee": {"ssn": "x", "salary": 1}}'), true, 'forbidden personal data keys detected');
+select is(core.jsonb_has_secret('{"h": "Bearer abc.def"}'), true, 'Bearer credential value detected');
+select is(core.jsonb_has_secret('{"u": "https://example.test/cb?code=abc&state=1"}'), true, 'URL with a token in the query detected');
+select is(core.jsonb_has_secret('{"t": "ya29.a0Af"}'), true, 'Google access token detected');
+select is(core.jsonb_has_secret('{"stripe": {"account_id": "acct_1"}, "qbo_account_id": "a", "input_tokens": 5}'), false, 'config and counter keys pass');
 select throws_ok(
   format($$insert into core.lane_config (lane_id, version, config) values ('APK', 2, %L)$$,
          (select jsonb_build_object('blob', repeat('a', 70000)))),

@@ -33,6 +33,8 @@ create policy <table>_select on <schema>.<table>
 revoke all on <schema>.<table> from public, anon, authenticated;
 grant select on <schema>.<table> to authenticated;
 grant select, insert, update, delete on <schema>.<table> to service_role;
+-- `public`'s default privileges grant anon/authenticated access to new sequences (e.g. identity columns).
+revoke all on all sequences in schema <schema> from public, anon, authenticated;
 
 -- pgTAP (supabase/core/supabase/tests/NNN_<table>.test.sql):
 --   begin; select plan(N); \ir helpers/lane_rls.psql

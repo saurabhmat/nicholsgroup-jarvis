@@ -1,6 +1,6 @@
 -- Audit log (T-014): write path, append-only for every role, constraints and RLS.
 begin;
-select plan(27);
+select plan(34);
 \ir helpers/lane_rls.psql
 
 select has_table('audit', 'events', 'audit.events exists');
@@ -47,6 +47,31 @@ select throws_ok($$select audit.log('PKG', 'service', pg_temp.uid('owner@example
 select throws_ok($$select audit.log('PKG', 'system', null, 'x.y', null, '{"access_token": "abc"}')$$, '23514', null, 'credential-named metadata rejected');
 select throws_ok($$select audit.log('PKG', 'system', null, 'x.y', null, '{"note": "sk_live_abc"}')$$, '23514', null, 'secret-looking metadata rejected');
 select throws_ok($$select audit.log('XX', 'system', null, 'x.y')$$, '23503', null, 'unknown lane rejected');
+select throws_ok($$select audit.log('PKG', 'system', null, 'x.y', 'sk_live_target_secret')$$, '23514', null, 'secret-looking target rejected');
+select throws_ok($$select audit.log('PKG', 'system', null, 'x.y', 'free text with spaces')$$, '23514', null, 'free-text target rejected');
+select throws_ok($$select audit.log('PKG', 'system', null, 'x.y', null, '{"accessToken": "abc"}')$$, '23514', null, 'camelCase credential metadata rejected');
+
+-- The append-only guarantees stay in place (T-014 review L1).
+select set_eq(
+  $$select tgname::text from pg_trigger where tgrelid = 'audit.events'::regclass and tgenabled = 'O' and not tgisinternal$$,
+  array['events_no_update_delete', 'events_no_truncate'],
+  'both immutability triggers exist and are enabled'
+);
+select is(pg_get_userbyid((select relowner from pg_class where oid = 'audit.events'::regclass)), 'postgres', 'audit.events is owned by postgres');
+select is(
+  (select count(*)::int from pg_roles r
+    where r.rolname <> 'postgres' and not r.rolsuper and r.rolname !~ '^pg_'
+      and has_table_privilege(r.oid, 'audit.events', 'insert, update, delete, truncate, trigger, references')),
+  0,
+  'no role other than the owner holds a write, trigger or references privilege'
+);
+select is(
+  (select count(*)::int from pg_roles r
+    where r.rolname in ('anon', 'authenticated', 'service_role', 'authenticator')
+      and pg_has_role(r.oid, 'pg_write_all_data', 'member')),
+  0,
+  'no API role is a member of pg_write_all_data'
+);
 
 -- ---------------------------------------------------------------- RLS ('audit' view: owner)
 select pg_temp.claims('owner@example.test', 'aal2');

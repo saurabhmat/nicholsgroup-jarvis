@@ -5,6 +5,7 @@
 
 -- True when any key in `p_config` (at any depth) is credential-named, or any string value looks like a secret:
 -- vendor key prefixes (mirrors packages/core/src/env/secret-patterns.js), PEM private keys, JWTs, URLs with a password.
+-- Also: Bearer/Basic credentials, Google (ya29.) and GitLab (glpat-) tokens, and URLs carrying a token in the query.
 -- Values are stripped of all leading/trailing whitespace first (incl. tab, newline, NBSP, zero-width, BOM), like JS
 -- trim(). Known false positive, accepted: a free-text value starting with a vendor prefix (e.g. a tag `re_engaged`).
 create function core.jsonb_has_secret(p_config jsonb) returns boolean
@@ -25,13 +26,21 @@ as $$
   )
   select exists (
     select 1 from walk
-    where key ~* ('(^|[-_])(secrets?|token|access_token|refresh_token|passwords?|passwd|pwd|api[-_]?keys?|apikey|private[-_]?keys?|'
-                  || 'credentials?|bearer|signing[-_]?key|cookies?|session[-_]?id|auth|authorization|pat)($|[-_])')
+    -- Key names: camelCase split to snake_case first (accessToken -> access_token), plurals accepted; token counters
+    -- (max_tokens, input_tokens, output_tokens) are allowed by name.
+    where (pg_catalog.lower(pg_catalog.regexp_replace(key, '([a-z0-9])([A-Z])', '\1_\2', 'g')) ~ (
+             '(^|[-_])(secrets?|tokens?|passwords?|passwd|pwd|api[-_]?keys?|apikeys?|access[-_]?keys?|private[-_]?keys?|'
+             || 'credentials?|bearer|signing[-_]?keys?|cookies?|session[-_]?ids?|auth|authorization|pat|jwts?|'
+             || 'ssn|iban|cvv|salary|salaries|compensation)($|[-_])')
+           and pg_catalog.lower(pg_catalog.regexp_replace(key, '([a-z0-9])([A-Z])', '\1_\2', 'g'))
+               not in ('max_tokens', 'input_tokens', 'output_tokens'))
        or (pg_catalog.jsonb_typeof(value) = 'string' and pg_catalog.regexp_replace(value #>> '{}',
-             '^[[:space:]\u00a0\u1680\u2000-\u200b\u2028\u2029\u202f\u205f\u3000\ufeff]+|[[:space:]\u00a0\u1680\u2000-\u200b\u2028\u2029\u202f\u205f\u3000\ufeff]+$', '', 'g') ~ (
-            '^(sb_secret_|sk_|rk_|whsec_|sk-ant-|ghp_|gho_|ghs_|github_pat_|xox[abprs]-|signkey-|GOCSPX-|re_[A-Za-z0-9]|sntry[a-z]_|ntn_|secret_|pit-|AKIA[0-9A-Z]{16}|eyJ[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.)'
+             '^[[:space:]   -​    　﻿]+|[[:space:]   -​    　﻿]+$', '', 'g') ~ (
+            '^(sb_secret_|sk_|rk_|whsec_|sk-ant-|ghp_|gho_|ghs_|github_pat_|glpat-|xox[abprs]-|signkey-|GOCSPX-|ya29\.|re_[A-Za-z0-9]|sntry[a-z]_|ntn_|secret_|pit-|AKIA[0-9A-Z]{16}|eyJ[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.)'
+            || '|^([Bb]earer|[Bb]asic)[[:space:]]'
             || '|-----BEGIN [A-Z ]*PRIVATE KEY-----'
-            || '|^[a-z][a-z0-9+.-]*://[^/@[:space:]]*:[^/@[:space:]]+@'))
+            || '|^[a-z][a-z0-9+.-]*://[^/@[:space:]]*:[^/@[:space:]]+@'
+            || '|[?&#](access_token|token|code|key|sig|signature)='))
   );
 $$;
 revoke all on function core.jsonb_has_secret(jsonb) from public, anon, authenticated;

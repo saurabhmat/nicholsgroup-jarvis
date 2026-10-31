@@ -3,7 +3,7 @@
 // keys rejected), and every string value is scanned with the env secret-pattern list; the database repeats the check.
 // Defaults are the values in docs/specs (finance §4.5 and §9, approvals §4 and §6, assistant §5).
 import { z } from "zod";
-import { isSecretLikeValue } from "../env/secret-patterns";
+import { looksLikeSecretValue } from "../secrets/index";
 
 const laneCode = z.string().regex(/^[A-Z]{1,8}$/);
 const id = z.string().min(1).max(100).regex(/^[A-Za-z0-9_.:-]+$/);
@@ -14,8 +14,6 @@ const ids = z.array(id).max(500).default([]);
 const tags = z.array(z.string().min(1).max(100).regex(/^[^\u0000-\u001f\u007f]+$/)).max(500).default([]);
 /** Nesting beyond this is never a valid config; the scan refuses it instead of recursing. */
 const MAX_DEPTH = 16;
-/** Any JWT; config never holds one. isSecretLikeValue only flags service-role JWTs. */
-const JWT = /^eyJ[\w-]+\.[\w-]+\./;
 
 export const KPI_IDS = [
   "cash_book_balance",
@@ -139,7 +137,7 @@ export type LaneConfigInput = z.input<typeof laneConfigSchema>;
  * than MAX_DEPTH is reported at the path where the limit was hit (never a valid config; avoids deep recursion).
  */
 export function findSecretLikeValues(value: unknown, path = "$", depth = 0): string[] {
-  if (typeof value === "string") return isSecretLikeValue(value) || JWT.test(value.trim()) ? [path] : [];
+  if (typeof value === "string") return looksLikeSecretValue(value) ? [path] : [];
   if (value === null || typeof value !== "object") return [];
   if (depth >= MAX_DEPTH) return [path];
   if (Array.isArray(value)) return value.flatMap((v, i) => findSecretLikeValues(v, `${path}[${String(i)}]`, depth + 1));

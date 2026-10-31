@@ -20,10 +20,13 @@ Local only for agents: `pnpm db:start`, `pnpm db:reset` (regenerates the seed, t
 - **New table.** Start from [`templates/lane_table.sql`](templates/lane_table.sql). Add pgTAP tests in the same change,
   including a cross-lane denial test; `pg_temp.has_standard_lane_policy(table, view)` from
   `supabase/tests/helpers/lane_rls.psql` checks the policy.
-- **Catalog test.** `supabase/tests/050_catalog.test.sql` fails when any table, view or function in an app schema
-  breaks these rules. App schemas are all schemas except the Supabase/Postgres platform ones, so a new schema is
-  covered automatically. Exceptions (`no_lane_id_ok`, `custom_policy_ok`, `user_dml_ok`) are reviewed lists with a
-  reason per entry.
+- **Catalog test.** `supabase/tests/050_catalog.test.sql` fails when any table, view, sequence or function in an app
+  schema breaks these rules. App schemas are all schemas except the Supabase/Postgres platform ones, so a new schema
+  is covered automatically. Lane tables must have exactly one permissive policy, equal to the canonical expression
+  (compared as a whole, never by fragment). It also checks column-level grants, write policies, materialized views,
+  sequences, security-definer functions and what `authenticated` may execute. Exceptions (`no_lane_id_ok`,
+  `custom_policy_ok`, `user_dml_ok`, `unprotected_read_ok`, `security_definer_ok`, `authenticated_exec_ok`) are
+  reviewed lists with a reason per entry; a new security-definer function or callable function must be added there.
 
 ## Tests
 
