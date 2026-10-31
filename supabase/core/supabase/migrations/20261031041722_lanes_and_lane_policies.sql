@@ -25,12 +25,12 @@ revoke all on function core.set_updated_at() from public, anon, authenticated;
 -- that reads core.memberships. T-012 requirements (T-010 security review): security definer with `search_path = ''`,
 -- schema-qualified references, stable; return no lanes unless p_uid = auth.uid() (or the caller is service_role) and
 -- the session is aal2, so no caller can list another user's lanes; decide whether disabled lanes are excluded.
-create function core.allowed_lanes(p_uid uuid, p_view text) returns uuid[]
+create function core.allowed_lanes(p_uid uuid, p_view text) returns text[]
 language sql
 stable
 set search_path = ''
 as $$
-  select '{}'::uuid[];
+  select '{}'::text[];
 $$;
 revoke all on function core.allowed_lanes(uuid, text) from public, anon;
 grant execute on function core.allowed_lanes(uuid, text) to authenticated, service_role;
@@ -38,8 +38,7 @@ grant execute on function core.allowed_lanes(uuid, text) to authenticated, servi
 -- ---------------------------------------------------------------- core.lanes
 
 create table core.lanes (
-  id uuid primary key default gen_random_uuid(),
-  code text not null unique check (code ~ '^[A-Z]{1,8}$'),
+  code text primary key check (code ~ '^[A-Z]{1,8}$'),
   name text not null check (name = btrim(name) and length(name) between 1 and 100),
   data_plane text not null check (data_plane in ('core', 'nl')),
   -- Nichols Law data always lives in its isolated project (architecture §5.2).
@@ -48,7 +47,7 @@ create table core.lanes (
   created_at timestamptz not null default now(),
   updated_at timestamptz not null default now()
 );
-comment on table core.lanes is 'Lane registry (architecture §5.1). id is the lane_id every lane-scoped table references.';
+comment on table core.lanes is 'Lane registry (architecture §5.1). code is the lane_id (text) every lane-scoped table references.';
 
 create trigger lanes_set_updated_at before update on core.lanes
   for each row execute function core.set_updated_at();
@@ -59,7 +58,7 @@ create policy lanes_select on core.lanes
   for select to authenticated
   using (
     (select auth.jwt() ->> 'aal') = 'aal2'
-    and id = any ((select core.allowed_lanes((select auth.uid()), 'lanes'))::uuid[]) -- evaluated once per statement
+    and code = any ((select core.allowed_lanes((select auth.uid()), 'lanes'))::text[]) -- evaluated once per statement
   );
 
 revoke all on core.lanes from public, anon, authenticated;
@@ -69,7 +68,7 @@ grant select, insert, update, delete on core.lanes to service_role;
 -- ---------------------------------------------------------------- core.lane_policies
 
 create table core.lane_policies (
-  lane_id uuid primary key references core.lanes (id) on delete restrict,
+  lane_id text primary key references core.lanes (code) on update restrict on delete restrict,
   -- Data categories Claude may see for this lane. Empty = none.
   llm_allowed_categories text[] not null default '{}'
     check (llm_allowed_categories <@ array['email', 'calendar', 'docs', 'finance', 'finance_summary', 'tasks']::text[]),
@@ -99,7 +98,7 @@ create policy lane_policies_select on core.lane_policies
   for select to authenticated
   using (
     (select auth.jwt() ->> 'aal') = 'aal2'
-    and lane_id = any ((select core.allowed_lanes((select auth.uid()), 'lane_policies'))::uuid[]) -- evaluated once per statement
+    and lane_id = any ((select core.allowed_lanes((select auth.uid()), 'lane_policies'))::text[]) -- evaluated once per statement
   );
 
 revoke all on core.lane_policies from public, anon, authenticated;

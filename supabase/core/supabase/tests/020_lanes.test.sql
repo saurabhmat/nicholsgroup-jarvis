@@ -22,12 +22,12 @@ select set_eq($$select code from core.lanes$$, array['PKG', 'APK', 'PKI', 'NC', 
 select set_eq($$select code from core.lanes where enabled$$, array['PKG'], 'only PKG is enabled');
 select is((select data_plane from core.lanes where code = 'NL'), 'nl', 'NL is on the nl data plane');
 select is(
-  (select count(*)::int from core.lanes l where not exists (select 1 from core.lane_policies p where p.lane_id = l.id)),
+  (select count(*)::int from core.lanes l where not exists (select 1 from core.lane_policies p where p.lane_id = l.code)),
   0,
   'every lane has a policy'
 );
 select set_eq(
-  $$select l.code from core.lane_policies p join core.lanes l on l.id = p.lane_id where p.store_outbound_drafts$$,
+  $$select l.code from core.lane_policies p join core.lanes l on l.code = p.lane_id where p.store_outbound_drafts$$,
   array['PKG'],
   'only PKG stores outbound drafts (D-19)'
 );
@@ -37,12 +37,12 @@ select col_default_is('core', 'lane_policies', 'store_outbound_drafts', 'false',
 -- Old timestamps so the updated_at check below can see a change (now() is fixed for the whole transaction).
 insert into core.lanes (code, name, data_plane, created_at, updated_at)
   values ('TST', 'Synthetic Test Lane', 'core', '2026-01-01 00:00:00+00', '2026-01-01 00:00:00+00');
-insert into core.lane_policies (lane_id) select id from core.lanes where code = 'TST';
+insert into core.lane_policies (lane_id) values ('TST');
 select is((select enabled from core.lanes where code = 'TST'), false, 'a new lane is disabled by default');
 select row_eq(
   $$select llm_allowed_categories, store_content_bodies, store_outbound_drafts, indexing_enabled, retention_days,
            cross_lane_summary_allowed, write_actions_allowed
-      from core.lane_policies p join core.lanes l on l.id = p.lane_id where l.code = 'TST'$$,
+      from core.lane_policies p join core.lanes l on l.code = p.lane_id where l.code = 'TST'$$,
   row('{}'::text[], false, false, false, 30, 'none'::text, '{}'::text[]),
   'a new policy has the most restrictive defaults'
 );
@@ -50,11 +50,11 @@ select throws_ok($$insert into core.lanes (code, name, data_plane) values ('BAD'
 select throws_ok($$insert into core.lanes (code, name, data_plane) values ('bad', 'Bad', 'core')$$, '23514', null, 'lowercase lane code rejected');
 select throws_ok($$update core.lanes set data_plane = 'core' where code = 'NL'$$, '23514', null, 'NL cannot move to the core data plane');
 select throws_ok(
-  $$update core.lane_policies set llm_allowed_categories = array['everything'] where lane_id = (select id from core.lanes where code = 'TST')$$,
+  $$update core.lane_policies set llm_allowed_categories = array['everything'] where lane_id = 'TST'$$,
   '23514', null, 'unknown LLM category rejected'
 );
 select throws_ok(
-  $$update core.lane_policies set write_actions_allowed = array['qbo_posting'] where lane_id = (select id from core.lanes where code = 'TST')$$,
+  $$update core.lane_policies set write_actions_allowed = array['qbo_posting'] where lane_id = 'TST'$$,
   '23514', null, 'excluded write action class rejected'
 );
 select throws_ok(
@@ -87,16 +87,16 @@ reset role;
 do $stub$
 begin
   execute format(
-    'create or replace function core.allowed_lanes(p_uid uuid, p_view text) returns uuid[] language sql stable set search_path = '''' as $f$ select case when p_uid = %L::uuid and p_view in (%L, %L) then array[%L::uuid] else array[]::uuid[] end $f$',
+    'create or replace function core.allowed_lanes(p_uid uuid, p_view text) returns text[] language sql stable set search_path = '''' as $f$ select case when p_uid = %L::uuid and p_view in (%L, %L) then array[%L] else array[]::text[] end $f$',
     (select id from auth.users where email = 'owner@example.test'), 'lanes', 'lane_policies',
-    (select id from core.lanes where code = 'PKG'));
+    'PKG');
 end
 $stub$;
 
 set local role authenticated;
 select set_eq($$select code from core.lanes$$, array['PKG'], 'a PKG member at AAL2 reads only the PKG lane');
 select is(
-  (select count(*)::int from core.lane_policies where lane_id <> (select id from core.lanes where code = 'PKG')),
+  (select count(*)::int from core.lane_policies where lane_id <> 'PKG'),
   0,
   'a PKG member cannot read other lanes'' policies'
 );

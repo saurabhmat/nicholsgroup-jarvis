@@ -116,11 +116,10 @@ test("output starts with the fence header: conforming strings on and abort on no
   assert.equal(firstStatement, "set standard_conforming_strings = on;");
 });
 
-test("lanes get deterministic per-lane ids independent of order", () => {
-  const ids = buildSeedData(SEED).lanes.map((l) => l.id);
-  assert.equal(new Set(ids).size, LANES.length);
-  assert.deepEqual(buildSeedData(SEED).lanes.map((l) => l.id), ids);
-  assert.notDeepEqual(buildSeedData("another-seed").lanes.map((l) => l.id), ids);
+test("lanes are keyed by their unique code (core.lanes primary key)", () => {
+  const codes = buildSeedData(SEED).lanes.map((l) => l.code);
+  assert.equal(new Set(codes).size, LANES.length);
+  for (const code of codes) assert.match(code, /^[A-Z]{1,8}$/);
 });
 
 const one = (stmt, extra = {}) => [{ id: "s", description: "d", build: () => [stmt], ...extra }];

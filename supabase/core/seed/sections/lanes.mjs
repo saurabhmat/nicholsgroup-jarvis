@@ -1,6 +1,6 @@
-// Lane registry and lane policies (T-010). Lane ids come from ctx.data (per-lane RNG labels), so later sections
-// reference them by id or by code. Policies follow architecture §5.3: PKG is the pilot lane (D-19: outbound drafts
-// stored), NL is limited to finance summaries, and every other lane keeps the restrictive column defaults.
+// Lane registry and lane policies (T-010). The lane code is the key; later sections reference lanes by code.
+// Policies follow architecture §5.3: PKG is the pilot lane (D-19: outbound drafts stored), NL is limited to finance
+// summaries, and every other lane keeps the restrictive column defaults.
 import { lit, values } from "../sql.mjs";
 
 /** @param {readonly string[]} items */
@@ -27,8 +27,8 @@ export default {
     const out = [];
     for (const l of lanes) {
       out.push(
-        "insert into core.lanes (id, code, name, data_plane, enabled, created_at, updated_at) values (" +
-          `${values(l.id, l.code, l.name, l.dataPlane, l.enabled, epoch, epoch)}) on conflict (id) do nothing;`,
+        "insert into core.lanes (code, name, data_plane, enabled, created_at, updated_at) values (" +
+          `${values(l.code, l.name, l.dataPlane, l.enabled, epoch, epoch)}) on conflict (code) do nothing;`,
       );
     }
     for (const l of lanes) {
@@ -36,14 +36,14 @@ export default {
       if (!p) {
         out.push(
           "insert into core.lane_policies (lane_id, created_at, updated_at) values (" +
-            `${values(l.id, epoch, epoch)}) on conflict (lane_id) do nothing;`,
+            `${values(l.code, epoch, epoch)}) on conflict (lane_id) do nothing;`,
         );
         continue;
       }
       out.push(
         "insert into core.lane_policies (lane_id, llm_allowed_categories, store_content_bodies, store_outbound_drafts, " +
           "indexing_enabled, retention_days, cross_lane_summary_allowed, write_actions_allowed, created_at, updated_at) values (" +
-          `${lit(l.id)}, ${textArray(p.llm)}, ${values(false, p.storeOutboundDrafts, false, p.retentionDays, p.crossLane)}, ` +
+          `${lit(l.code)}, ${textArray(p.llm)}, ${values(false, p.storeOutboundDrafts, false, p.retentionDays, p.crossLane)}, ` +
           `${textArray(p.writes)}, ${values(epoch, epoch)}) on conflict (lane_id) do nothing;`,
       );
     }
