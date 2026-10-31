@@ -22,3 +22,10 @@ test("access tokens are short-lived (architecture §9: short sessions)", () => {
   const expiry = Number(valueIn("auth", "jwt_expiry"));
   assert.ok(expiry > 0 && expiry <= 900, `jwt_expiry is ${String(expiry)}`);
 });
+
+test("email sign-in is on, but nobody can sign up (invite-only)", () => {
+  assert.equal(valueIn("auth", "enable_signup"), "false");
+  assert.equal(valueIn("auth.email", "enable_signup"), "true"); // the CLI's email provider switch
+  assert.equal(valueIn("auth", "enable_anonymous_sign_ins"), "false");
+  assert.equal(valueIn("auth.email", "otp_length"), "6");
+});

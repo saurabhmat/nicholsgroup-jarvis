@@ -7,9 +7,12 @@ import "server-only";
 //   sign-in and MFA pages.
 // - requireLane(laneId): the session plus the lane client from the lane router (membership, enabled lane, AAL2).
 // - requireRole(laneId, roles): requireLane plus core.has_lane_role() for actions a view does not imply.
+// - authActions(cookies): sign-in by 6-digit email code (primary, D-6) or email link; sign-out (T-018).
+// - refreshSession(cookies): for proxy.ts; refreshes the session cookie and reports whether it is signed in.
 // Failures throw AuthError (401 without a valid session, 403 otherwise); authErrorResponse() turns one into a Response.
 // An auth outage or a configuration error is NOT reported as "no session": it propagates (the route answers 503).
 import { createServerClient } from "@supabase/ssr";
+import { z } from "zod";
 import type { Database } from "../db/index";
 import { getServerEnv, requireSupabasePublicEnv } from "../env/server";
 import type { LaneId } from "../lanes/index";
@@ -20,10 +23,13 @@ export type VerifiedSession = LaneSession & { aal: Aal };
 export type SessionReader = () => Promise<VerifiedSession | null>;
 export type Role = "owner" | "finance_operator" | "viewer" | "admin_technical";
 
-/** The parts of Next's cookie store the reader uses (`await cookies()` in a route handler or server action). */
+/**
+ * Request cookies, and (where the framework allows writing) a way to set the refreshed session cookies.
+ * apps/web adapts Next's `cookies()` store and the proxy's request/response to this shape.
+ */
 export type CookieStore = {
   getAll(): { name: string; value: string }[];
-  set?(name: string, value: string, options?: Record<string, unknown>): void;
+  setAll?(cookies: { name: string; value: string; options?: Record<string, unknown> }[]): void;
 };
 
 export class AuthError extends Error {
@@ -37,23 +43,28 @@ export class AuthError extends Error {
   }
 }
 
+/** The auth-only client over the request cookies. Used for `auth.*` calls only, never `.from()` / `.rpc()`. */
+function authClient(cookies: CookieStore) {
+  const { NEXT_PUBLIC_SUPABASE_URL: url, NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY: key } = requireSupabasePublicEnv(getServerEnv());
+  return createServerClient<Database>(url, key, {
+    cookies: {
+      getAll: () => cookies.getAll(),
+      setAll: (list) => {
+        // Refreshed tokens are written back where the framework allows it (proxy, route handlers, server actions); in
+        // a server component setting cookies throws, and proxy.ts refreshes the session instead.
+        try {
+          cookies.setAll?.(list);
+        } catch {
+          /* read-only cookie store */
+        }
+      },
+    },
+  });
+}
+
 export function cookieSessionReader(cookies: CookieStore): SessionReader {
   return async () => {
-    const { NEXT_PUBLIC_SUPABASE_URL: url, NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY: key } = requireSupabasePublicEnv(getServerEnv());
-    const supabase = createServerClient<Database>(url, key, {
-      cookies: {
-        getAll: () => cookies.getAll(),
-        setAll: (list) => {
-          // Refreshed tokens are written back where Next allows it (route handlers, server actions); in a server
-          // component setting cookies throws, and proxy.ts (T-018) refreshes the session instead.
-          try {
-            for (const c of list) cookies.set?.(c.name, c.value, c.options);
-          } catch {
-            /* read-only cookie store */
-          }
-        },
-      },
-    });
+    const supabase = authClient(cookies);
     const { data: sessionData } = await supabase.auth.getSession();
     const token = sessionData.session?.access_token;
     if (!token) return null;
@@ -106,6 +117,80 @@ export function createGuards(
   };
 
   return { requireSession, requireLane, requireRole };
+}
+
+// ---------------------------------------------------------------- sign-in and sign-out (T-018)
+
+const emailSchema = z.email().max(254);
+const codeSchema = z.string().regex(/^\d{6}$/);
+const tokenHashSchema = z.string().min(8).max(512).regex(/^[A-Za-z0-9_-]+$/);
+
+export type AuthActions = {
+  /**
+   * Emails a 6-digit code (and a link) to an EXISTING user; never creates users (invite-only). Resolves the same way
+   * whether or not the address belongs to a user, so the form cannot be used to discover accounts. Throws
+   * AuthError("forbidden") only for a malformed address.
+   */
+  sendSignInCode(email: string): Promise<void>;
+  /** Verifies the 6-digit code; on success the session cookie is set. False for a wrong or expired code. */
+  verifySignInCode(email: string, code: string): Promise<boolean>;
+  /** Verifies an email link's token hash (secondary flow; opens in the browser). */
+  verifyEmailLink(tokenHash: string): Promise<boolean>;
+  /** Ends this device's session (other devices keep theirs). */
+  signOut(): Promise<void>;
+};
+
+export function authActions(cookies: CookieStore): AuthActions {
+  return {
+    async sendSignInCode(email) {
+      const parsed = emailSchema.safeParse(email.trim().toLowerCase());
+      if (!parsed.success) throw new AuthError("forbidden");
+      const appUrl = getServerEnv().NEXT_PUBLIC_APP_URL;
+      const { error } = await authClient(cookies).auth.signInWithOtp({
+        email: parsed.data,
+        options: { shouldCreateUser: false, emailRedirectTo: `${appUrl}/auth/confirm` },
+      });
+      // Unknown address and rate limits look like success; an outage is an error (the page shows "try again").
+      if (error?.name === "AuthRetryableFetchError") throw new Error("auth service unavailable");
+    },
+    async verifySignInCode(email, code) {
+      const e = emailSchema.safeParse(email.trim().toLowerCase());
+      const c = codeSchema.safeParse(code.trim());
+      if (!e.success || !c.success) return false;
+      const { data, error } = await authClient(cookies).auth.verifyOtp({ email: e.data, token: c.data, type: "email" });
+      if (error?.name === "AuthRetryableFetchError") throw new Error("auth service unavailable");
+      return !error && !!data.session;
+    },
+    async verifyEmailLink(tokenHash) {
+      const t = tokenHashSchema.safeParse(tokenHash);
+      if (!t.success) return false;
+      const { data, error } = await authClient(cookies).auth.verifyOtp({ token_hash: t.data, type: "email" });
+      if (error?.name === "AuthRetryableFetchError") throw new Error("auth service unavailable");
+      return !error && !!data.session;
+    },
+    async signOut() {
+      await authClient(cookies).auth.signOut({ scope: "local" });
+    },
+  };
+}
+
+/**
+ * For proxy.ts: refreshes the session cookie when needed (writes go through cookies.setAll) and reports whether
+ * the request carries a valid session and at which AAL. Never throws for a missing or invalid session.
+ */
+export async function refreshSession(cookies: CookieStore): Promise<{ signedIn: boolean; aal: Aal | null }> {
+  const { data, error } = await authClient(cookies).auth.getClaims();
+  const claims = data?.claims;
+  if (error || !claims || typeof claims.sub !== "string" || claims.sub === "") return { signedIn: false, aal: null };
+  return { signedIn: true, aal: claims.aal === "aal2" ? "aal2" : "aal1" };
+}
+
+/**
+ * A safe post-sign-in destination: a same-origin path only (no scheme, no `//host`, no backslashes); "/" otherwise.
+ */
+export function safeNextPath(next: unknown): string {
+  if (typeof next !== "string" || !next.startsWith("/") || next.startsWith("//") || /[\\\s]/.test(next)) return "/";
+  return next.length > 512 ? "/" : next;
 }
 
 /** A JSON error Response for an AuthError (no detail beyond the reason); null for any other error. */

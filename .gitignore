@@ -57,3 +57,8 @@ dist/
 
 # env-build smoke test scratch file
 *.check-env-backup
+
+# Playwright (T-018)
+test-results/
+playwright-report/
+blob-report/

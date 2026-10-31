@@ -3,8 +3,6 @@
 import { authErrorResponse } from "@nichols/core/auth";
 import { guards } from "@/lib/guards";
 
-export const dynamic = "force-dynamic";
-
 export async function GET(_request: Request, ctx: RouteContext<"/api/lanes/[laneId]">) {
   const { laneId } = await ctx.params;
   try {

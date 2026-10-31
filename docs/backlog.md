@@ -256,7 +256,8 @@ T-010 – T-017 are the serial spine. After T-017: auth/shell (T-018 – T-026) 
 - acceptance: `requireSession()`, `requireLane(laneId)`, `requireRole(laneId, role)` for route handlers/server actions; unit tests; used by a sample protected route.
 
 ### T-018 Sign-in (local test IdP)
-- status: proposed
+- status: approved
+- note (Oct 31, 2026): built on `agent/pilot-build`; browser Playwright tests pending Chromium system libraries on the dev machine (`.agent/pr/T-018.md`). Set to done after they pass.
 - depends: T-017
 - acceptance: Supabase Auth email sign-in (D-6): 6-digit email code as the **primary** flow (works inside the installed iPhone app) plus magic link as a secondary option (a link opens in Safari, not the installed app); local Inbucket/Mailpit for tests; sign-in/out pages; session refresh in `proxy.ts` (Next 16); unauthenticated requests redirect; Playwright test.
 

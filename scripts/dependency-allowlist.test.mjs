@@ -17,6 +17,7 @@ const ALLOWED = {
     "@nichols/core",
     "@nichols/eslint-plugin",
     "@nichols/ui", // T-022
+    "@playwright/test", // T-018 end-to-end tests
     "@tailwindcss/turbopack",
     "@types/node",
     "@types/react",

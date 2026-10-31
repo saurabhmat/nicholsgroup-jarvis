@@ -6,6 +6,8 @@ export { Alert, AlertDescription, AlertTitle, alertVariants, type AlertProps } f
 export { Badge, badgeVariants, type BadgeProps } from "./components/badge";
 export { Button, buttonVariants, type ButtonProps } from "./components/button";
 export { Card, CardContent, CardDescription, CardFooter, CardHeader, CardTitle } from "./components/card";
+export { Input, type InputProps } from "./components/input";
+export { Label, type LabelProps } from "./components/label";
 
 export { BOOK_BALANCE_LABEL, BookBalance, BookBalanceLabel, type BookBalanceProps } from "./components/book-balance";
 export { EmptyState, type EmptyStateProps } from "./components/empty-state";

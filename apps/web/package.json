@@ -8,7 +8,8 @@
     "start": "next start",
     "typecheck": "next typegen && tsc --noEmit",
     "lint": "eslint",
-    "check:env-build": "node scripts/check-env-build.mjs"
+    "check:env-build": "node scripts/check-env-build.mjs",
+    "test:e2e": "playwright test"
   },
   "dependencies": {
     "@nichols/core": "workspace:*",
@@ -19,6 +20,7 @@
   },
   "devDependencies": {
     "@nichols/eslint-plugin": "workspace:*",
+    "@playwright/test": "1.64.1",
     "@tailwindcss/turbopack": "^4",
     "@types/node": "^20",
     "@types/react": "^19",
