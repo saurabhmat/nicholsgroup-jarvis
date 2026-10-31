@@ -166,7 +166,7 @@ No Resend variable in the app: Supabase Auth sends sign-in mail through Resend S
 Decided by Saurabh (supersedes "core vars (app, Supabase, Inngest, Anthropic) fail the build" in T-005):
 
 - **Required in every environment:** `NEXT_PUBLIC_APP_URL`, `NEXT_PUBLIC_SUPABASE_URL`, `NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY`, `SUPABASE_SECRET_KEY`, plus `APP_ENV` and `ENABLED_LANES` (app config, not credentials).
-- **Required only in production:** `ANTHROPIC_*` and `INNGEST_*`. Production means `APP_ENV=production` or `VERCEL_ENV=production`, and it fails closed. A partially set group is an error in production.
+- **Optional in production too (changed Oct 31, 2026, "Production only, no staging" below):** `ANTHROPIC_*` and `INNGEST_*`. An absent group means the feature is off ("not configured", one startup warning). A partially set group is still an error in production (`APP_ENV=production` or `VERCEL_ENV=production`) and fails the build and boot.
 - **Local, staging and Preview:** both groups are optional. If missing or partial, the server logs one startup warning (variable names only, never values) and `getAnthropicEnv()` / `getInngestEnv()` return `{ configured: false, missing }`, so AI and job features report "not configured" instead of crashing.
 - **Build gate:** validation runs on deployment builds (`VERCEL=1`, which must come with `VERCEL_ENV`), when `APP_ENV` is `preview`, `staging` or `production` (so self-hosted builds are covered too), or with `NICHOLS_VALIDATE_ENV=1`; CI typecheck, lint and test need no env. A missing core variable on a deployment stops the build, and the same check at server start (`instrumentation.ts`) stops the server at boot.
 - **Vercel setting:** "Automatically expose System Environment Variables" must stay ON (`VERCEL`, `VERCEL_ENV`, `VERCEL_TARGET_ENV`, `NEXT_PUBLIC_VERCEL_*`). `APP_ENV` must agree with the platform, and URLs must be https outside local. Updated Oct 28, 2026 for the Staging environment decision (§7 "Staging environment and real data"):
@@ -315,3 +315,17 @@ Where this lands:
 - **`.env.example` (human-owned).** The `APP_ENV` comment becomes `local | preview | staging | production`. T-005 proposes the exact diff in its PR body.
 
 Where this lands: backlog H-010, H-023, H-025, T-005, T-171; `docs/specs/finance.md` §8.1.
+
+### Oct 31, 2026 — Production only, no staging (supersedes the Staging environment above)
+
+Decided by Saurabh. The pilot has three users (Robert, Saurabh, Sophie), so there is no separate staging site.
+- **Vercel Production (branch `main`) is the only real-data environment.** It holds the Supabase project, the production Intuit keys and `INTUIT_ENVIRONMENT=production`. There is no custom environment "Staging" and no `staging` branch.
+- **The existing Supabase project `lxjhaxdkqtmkhloqaffb` becomes the production database.** No second project for now. (Its old label "staging" stays in older entries.)
+- **PR Previews stay free of real data**, as decided Oct 28: `APP_ENV=preview`, sandbox Intuit keys, no Supabase values unless a synthetic-data project exists (H-025).
+- **Anthropic and Inngest are optional in production** (env strictness above), so production can deploy before H-002 and H-003.
+- **Guardrails that replace staging:** branch protection on `main` (H-012, now urgent: every merge reaches the live books); migrations tested locally with `pnpm test:db` and, when possible, on a throwaway project before they are applied to production; Supabase backups or point-in-time restore on; QB-1 – QB-20 pass on the sandbox company before the live file is connected (H-024).
+- **Intuit redirect URI:** the stable production address, `https://<production domain>/api/connect/qbo/callback`. Until H-021 (DNS) that is the project's fixed `*.vercel.app` production domain, never a per-deployment URL.
+- **Code:** T-005 keeps accepting `APP_ENV=staging` (unused, harmless). Nothing else changes.
+- **Development mode:** for now the in-progress tasks (T-003, T-005, T-007, T-022, T-030) are worked on together and split into per-feature PRs later.
+
+Where this lands: backlog H-010, H-023 (now Production), H-024, T-005, T-171, QuickBooks-first schedule.

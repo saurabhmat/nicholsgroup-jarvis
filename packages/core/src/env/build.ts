@@ -47,7 +47,8 @@ export function assertNoSecretPublicVars(env: EnvRecord): void {
 
 /**
  * Throws EnvValidationError (names only) on a real build/start when public variables look secret or core
- * variables are missing (plus Anthropic and Inngest in production). A no-op on CI and local builds.
+ * variables are missing (in production also when Anthropic or Inngest is only partly set). A no-op on CI and local
+ * builds.
  */
 export function assertBuildEnv(env: EnvRecord): void {
   // Production Intuit keys outside staging/production are refused even where the rest is not validated (local).

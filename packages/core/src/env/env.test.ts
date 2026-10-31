@@ -73,7 +73,6 @@ const CORE_REQUIRED = [
 ] as const;
 // Modules re-imported after vi.resetModules() have their own error class, so match on the message.
 const VALIDATION_FAILED = /^Environment validation failed/;
-const PROD_ONLY = [...Object.keys(AI), ...Object.keys(JOBS)].sort();
 
 afterEach(() => {
   vi.unstubAllEnvs();
@@ -162,14 +161,9 @@ describe("server env", () => {
 });
 
 describe("production strictness (Anthropic, Inngest)", () => {
-  it("requires them when APP_ENV=production, naming them", () => {
-    const err = catchError(() => parseServerEnv(PROD_CORE)) as EnvValidationError;
-    expect(err.missing).toEqual(PROD_ONLY);
-  });
-
-  it("requires them when VERCEL_ENV=production", () => {
-    const err = catchError(() => parseServerEnv({ ...CORE, VERCEL_ENV: "production" })) as EnvValidationError;
-    expect(err.missing).toEqual(PROD_ONLY);
+  it("are optional in production when entirely absent (APP_ENV or VERCEL_ENV)", () => {
+    expect(() => parseServerEnv(PROD_CORE)).not.toThrow();
+    expect(() => parseServerEnv({ ...PROD_CORE, VERCEL_ENV: "production" })).not.toThrow();
   });
 
   it("a partial group is an error in production", () => {
@@ -177,22 +171,23 @@ describe("production strictness (Anthropic, Inngest)", () => {
       parseServerEnv({ ...PROD_CORE, ...JOBS, ANTHROPIC_API_KEY: AI.ANTHROPIC_API_KEY }),
     ) as EnvValidationError;
     expect(err.missing).toEqual(["ANTHROPIC_MODEL_ANALYSIS", "ANTHROPIC_MODEL_FAST"]);
+    const jobs = catchError(() =>
+      parseServerEnv({ ...PROD_CORE, INNGEST_EVENT_KEY: JOBS.INNGEST_EVENT_KEY }),
+    ) as EnvValidationError;
+    expect(jobs.missing).toEqual(["INNGEST_SIGNING_KEY"]);
   });
 
   it("passes in production with everything set", () => {
     expect(() => parseServerEnv({ ...PROD_CORE, ...AI, ...JOBS })).not.toThrow();
   });
 
-  it("assertBuildEnv: production builds fail without them, preview and local builds pass", () => {
-    const vercelProd = catchError(() =>
-      assertBuildEnv({ ...PROD_CORE, VERCEL: "1", VERCEL_ENV: "production" }),
+  it("assertBuildEnv: production builds pass without them, fail on a partial group", () => {
+    expect(() => assertBuildEnv({ ...PROD_CORE, VERCEL: "1", VERCEL_ENV: "production" })).not.toThrow();
+    const partial = catchError(() =>
+      assertBuildEnv({ ...PROD_CORE, VERCEL: "1", VERCEL_ENV: "production", INNGEST_SIGNING_KEY: JOBS.INNGEST_SIGNING_KEY }),
     ) as EnvValidationError;
-    expect(vercelProd.missing).toEqual(PROD_ONLY);
-    expect(vercelProd.message).toContain("ANTHROPIC_API_KEY");
-    expect(vercelProd.message).toContain("INNGEST_SIGNING_KEY");
-
-    const appEnvProd = catchError(() => assertBuildEnv({ ...PROD_CORE, VERCEL: "1" })) as EnvValidationError;
-    expect(appEnvProd.missing).toEqual(PROD_ONLY);
+    expect(partial.missing).toEqual(["INNGEST_EVENT_KEY"]);
+    expect(partial.message).toContain("INNGEST_EVENT_KEY");
 
     expect(() => assertBuildEnv({ ...PREVIEW_CORE, ...VERCEL_PREVIEW })).not.toThrow();
     expect(() => assertBuildEnv({ ...STAGING_CORE, ...VERCEL_STAGING })).not.toThrow();
@@ -219,26 +214,33 @@ describe("production strictness (Anthropic, Inngest)", () => {
     expect(r).toEqual({ configured: false, missing: ["ANTHROPIC_MODEL_ANALYSIS", "ANTHROPIC_MODEL_FAST"] });
   });
 
-  it("accessors return values when configured, and throw in production when not", async () => {
+  it("accessors return values when configured; in production absent is not-configured, partial throws", async () => {
     const { getAnthropicEnv, getInngestEnv } = await import("./server");
     const ai = getAnthropicEnv({ ...CORE, ...AI });
     expect(ai.configured && ai.ANTHROPIC_MODEL_FAST).toBe("fake-fast-model");
     expect(getInngestEnv({ ...CORE, ...JOBS }).configured).toBe(true);
     vi.stubEnv("APP_ENV", "production");
-    expect(() => getAnthropicEnv({ ...PROD_CORE })).toThrow(VALIDATION_FAILED);
+    expect(getAnthropicEnv({ ...PROD_CORE })).toEqual({
+      configured: false,
+      missing: ["ANTHROPIC_API_KEY", "ANTHROPIC_MODEL_ANALYSIS", "ANTHROPIC_MODEL_FAST"],
+    });
+    expect(getAnthropicEnv({ ...PROD_CORE, ANTHROPIC_API_KEY: "  " }).configured).toBe(false); // blank = unset
+    expect(() => getAnthropicEnv({ ...PROD_CORE, ANTHROPIC_API_KEY: AI.ANTHROPIC_API_KEY })).toThrow(VALIDATION_FAILED);
     vi.stubEnv("APP_ENV", "");
     vi.stubEnv("VERCEL_ENV", "production");
-    expect(() => getInngestEnv({ ...CORE })).toThrow(VALIDATION_FAILED);
+    expect(getInngestEnv({ ...CORE }).configured).toBe(false);
+    expect(() => getInngestEnv({ ...CORE, INNGEST_EVENT_KEY: JOBS.INNGEST_EVENT_KEY })).toThrow(VALIDATION_FAILED);
   });
 
   it("production is decided from the real process env, not from the caller's env subset (N6)", async () => {
     const { getAnthropicEnv, getInngestEnv } = await import("./server");
+    const partialAi = { ANTHROPIC_API_KEY: AI.ANTHROPIC_API_KEY };
     // Process env is not production: a caller-supplied APP_ENV=production must not flip the mode.
-    expect(getAnthropicEnv({ ...PROD_CORE }).configured).toBe(false);
+    expect(getAnthropicEnv({ ...PROD_CORE, ...partialAi }).configured).toBe(false);
     expect(getInngestEnv({ ...PROD_CORE }).configured).toBe(false);
     // Process env IS production: a caller-supplied "local" cannot relax it.
     vi.stubEnv("APP_ENV", "production");
-    expect(() => getAnthropicEnv({ ...CORE })).toThrow(VALIDATION_FAILED);
+    expect(() => getAnthropicEnv({ ...CORE, ...partialAi })).toThrow(VALIDATION_FAILED);
   });
 
   it("emits one startup warning, names only, and not twice", async () => {
@@ -254,15 +256,17 @@ describe("production strictness (Anthropic, Inngest)", () => {
     for (const value of Object.values(env)) expect(message).not.toContain(value);
   });
 
-  it("stays silent when fully configured or in production", async () => {
+  it("stays silent when fully configured, and warns in production when a group is absent", async () => {
     const log = vi.fn();
     const { warnUnconfiguredFeatures: warn } = await import("./startup");
     warn({ ...CORE, ...AI, ...JOBS }, log);
     expect(log).not.toHaveBeenCalled();
     vi.resetModules();
     const { warnUnconfiguredFeatures: warn2 } = await import("./startup");
-    warn2({ ...PROD_CORE }, log);
-    expect(log).not.toHaveBeenCalled();
+    warn2({ ...PROD_CORE, ...JOBS }, log);
+    expect(log).toHaveBeenCalledTimes(1);
+    expect(String(log.mock.calls[0]?.[0])).toContain("AI features not configured");
+    expect(String(log.mock.calls[0]?.[0])).not.toContain("Background jobs");
   });
 });
 
@@ -387,7 +391,10 @@ describe("real-data environments (Staging environment, Oct 28, 2026)", () => {
   it("VERCEL_ENV=production wins: production rules apply whatever APP_ENV says", async () => {
     const { isRealDataEnv } = await import("./schema");
     expect(isRealDataEnv({ APP_ENV: "staging", VERCEL: "1", VERCEL_ENV: "production" })).toBe(true);
-    expect(bad({ ...STAGING_CORE, VERCEL: "1", VERCEL_ENV: "production" }).missing).toEqual(PROD_ONLY);
+    // The production all-or-none rule for Anthropic applies, and APP_ENV must say production.
+    const err = bad({ ...STAGING_CORE, VERCEL: "1", VERCEL_ENV: "production", ANTHROPIC_API_KEY: AI.ANTHROPIC_API_KEY });
+    expect(err.missing).toEqual(["ANTHROPIC_MODEL_ANALYSIS", "ANTHROPIC_MODEL_FAST"]);
+    expect(err.invalid).toEqual(["APP_ENV"]);
   });
 
   it("on Vercel, VERCEL_ENV must be present (fail closed)", () => {

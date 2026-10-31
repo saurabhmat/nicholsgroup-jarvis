@@ -97,7 +97,10 @@ export const serverCoreShape = {
   SUPABASE_NL_SECRET_KEY: z.string().min(1).optional(),
 };
 
-/** Required only in production; optional (feature reports "not configured") elsewhere. */
+/**
+ * Optional everywhere (the feature reports "not configured" when the group is absent). In production a partially set
+ * group is an error, so a half-entered key fails the build instead of silently switching the feature off.
+ */
 export const anthropicShape = {
   ANTHROPIC_API_KEY: z.string().min(1),
   ANTHROPIC_MODEL_ANALYSIS: z.string().min(1),
@@ -179,9 +182,15 @@ const supabaseRequiredShape = {
 };
 const baseShape = { ...clientEnvShape, ...serverCoreShape, ...platformShape, ...supabaseRequiredShape };
 export const serverEnvSchema = z.object(baseShape).superRefine(crossFieldRules);
+const optionalShape = <S extends Record<string, z.ZodString>>(shape: S) =>
+  Object.fromEntries(Object.entries(shape).map(([k, s]) => [k, s.optional()])) as { [K in keyof S]: z.ZodOptional<S[K]> };
 export const serverEnvProductionSchema = z
-  .object({ ...baseShape, ...anthropicShape, ...inngestShape })
-  .superRefine(crossFieldRules);
+  .object({ ...baseShape, ...optionalShape(anthropicShape), ...optionalShape(inngestShape) })
+  .superRefine((v, ctx) => {
+    crossFieldRules(v, ctx);
+    requireAllOrNone(v, Object.keys(anthropicShape), ctx);
+    requireAllOrNone(v, Object.keys(inngestShape), ctx);
+  });
 /** PR Preview (APP_ENV=preview): the database is optional. Chosen only when APP_ENV says so (parseServerEnv). */
 export const serverEnvPreviewSchema = z
   .object({ ...baseShape, ...clientEnvShape, SUPABASE_SECRET_KEY: supabaseSecretKey.optional() })
@@ -320,7 +329,7 @@ export function parseEnv<S extends z.ZodType>(scope: string, schema: S, env: Env
   throw new EnvValidationError(scope, [...missing].sort(), [...invalid].sort());
 }
 
-/** Core variables; in production also Anthropic and Inngest; on a PR Preview the database is optional. */
+/** Core variables; in production Anthropic and Inngest are all-or-none; on a PR Preview the database is optional. */
 export const parseServerEnv = (env: EnvRecord): ServerEnvWithSecrets =>
   parseEnv(
     "server environment",
@@ -357,7 +366,7 @@ export function parseConnectorEnv<C extends ConnectorName>(
   return parseEnv(`connector "${connector}"`, factory(runtime), env) as ConnectorEnv<C>;
 }
 
-// ---------------------------------------------------------------- production-only groups (Anthropic, Inngest)
+// ---------------------------------------------------------------- optional groups (Anthropic, Inngest)
 
 /** `missing` lists variables that are absent or invalid. */
 export type GroupResult<T> = ({ configured: true } & T) | { configured: false; missing: string[] };
@@ -365,20 +374,24 @@ export type GroupResult<T> = ({ configured: true } & T) | { configured: false; m
 function resolveGroup<S extends z.ZodType>(
   scope: string,
   schema: S,
+  names: readonly string[],
   env: EnvRecord,
   production: boolean,
 ): GroupResult<z.infer<S>> {
   try {
     return { configured: true, ...(parseEnv(scope, schema, env) as object) } as GroupResult<z.infer<S>>;
   } catch (error) {
-    // Production: fail closed. Elsewhere: a partial group counts as not configured.
-    if (production || !(error instanceof EnvValidationError)) throw error;
+    if (!(error instanceof EnvValidationError)) throw error;
+    // Production: an absent group is "not configured", a partial one fails closed. Elsewhere: not configured.
+    const clean = normalize(env);
+    const absent = names.every((n) => !Object.hasOwn(clean, n));
+    if (production && !absent) throw error;
     return { configured: false, missing: [...error.missing, ...error.invalid].sort() };
   }
 }
 
 /** `production` must come from the real process env (server code), never from a caller-chosen subset. */
 export const resolveAnthropicEnv = (env: EnvRecord, production = isProduction(env)) =>
-  resolveGroup("Anthropic", anthropicEnvSchema, env, production);
+  resolveGroup("Anthropic", anthropicEnvSchema, Object.keys(anthropicShape), env, production);
 export const resolveInngestEnv = (env: EnvRecord, production = isProduction(env)) =>
-  resolveGroup("Inngest", inngestEnvSchema, env, production);
+  resolveGroup("Inngest", inngestEnvSchema, Object.keys(inngestShape), env, production);

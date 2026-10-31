@@ -1,12 +1,15 @@
-// One-time startup warning for optional-outside-production feature groups. Names only, never values.
+// One-time startup warning for optional feature groups. Names only, never values.
 // Not `server-only`: instrumentation.ts imports it.
-import { isProduction, resolveAnthropicEnv, resolveInngestEnv, type EnvRecord } from "./schema";
+import { resolveAnthropicEnv, resolveInngestEnv, type EnvRecord } from "./schema";
 
 let warned = false;
 
-/** Logs at most one warning per process. In production the groups are required (validated elsewhere). */
+/**
+ * Logs at most one warning per process. In production a partial group already failed the build and boot, so here
+ * it only reports groups that are entirely absent.
+ */
 export function warnUnconfiguredFeatures(env: EnvRecord, log: (message: string) => void = console.warn): void {
-  if (warned || isProduction(env)) return;
+  if (warned) return;
   warned = true;
   const parts: string[] = [];
   const ai = resolveAnthropicEnv(env);

@@ -55,7 +55,7 @@ export function getSupabaseSecretKey(): string {
 }
 
 /**
- * Anthropic settings, or `{ configured: false, missing }` outside production when not (fully) set.
+ * Anthropic settings, or `{ configured: false, missing }` when not set (outside production also when partly set).
  * Production is always decided from the real process env; `env` only supplies values (injectable for tests).
  */
 export function getAnthropicEnv(env: EnvRecord = process.env) {
@@ -64,7 +64,7 @@ export function getAnthropicEnv(env: EnvRecord = process.env) {
 }
 
 /**
- * Inngest settings, or `{ configured: false, missing }` outside production when not (fully) set. Production is decided from the real process env.
+ * Inngest settings, or `{ configured: false, missing }` when not set (outside production also when partly set). Production is decided from the real process env.
  */
 export function getInngestEnv(env: EnvRecord = process.env) {
   const result = resolveInngestEnv(env, isProduction(process.env));
