@@ -1,8 +1,7 @@
--- Lanes and lane policies (T-010). Registry contents, restrictive defaults, constraints, grants and RLS.
--- Memberships arrive with T-012; until then core.allowed_lanes() returns no lanes. The cross-lane tests below swap in
--- a stand-in that grants PKG only (inside this transaction, rolled back) to prove the policies themselves.
+-- Lanes and lane policies (T-010). Registry contents, restrictive defaults, constraints, grants and RLS against the
+-- seeded memberships (T-012): owner in every lane, the other personas in PKG only, the outsider in none.
 begin;
-select plan(34);
+select plan(36);
 
 -- ---------------------------------------------------------------- schema
 select has_table('core', 'lanes', 'core.lanes exists');
@@ -68,50 +67,38 @@ select is(has_function_privilege('anon', 'core.allowed_lanes(uuid, text)', 'exec
 select is(has_table_privilege('authenticated', 'core.lane_policies', 'insert, update, delete'), false, 'authenticated has no DML on lane_policies');
 select is(has_table_privilege('authenticated', 'core.lanes', 'insert, update, delete'), false, 'authenticated has no DML on lanes');
 
--- ---------------------------------------------------------------- RLS with the placeholder (no memberships yet)
-select set_config('request.jwt.claims',
-  json_build_object('sub', (select id from auth.users where email = 'owner@example.test'), 'role', 'authenticated', 'aal', 'aal2')::text, true);
+-- ---------------------------------------------------------------- RLS against real memberships
+-- Sets the JWT claims for a persona (run as postgres, before switching role).
+create function pg_temp.claims(p_email text, p_aal text) returns text language sql as $$
+  select set_config('request.jwt.claims',
+    json_build_object('sub', (select id from auth.users where email = p_email), 'role', 'authenticated', 'aal', p_aal)::text, true);
+$$;
+
+select pg_temp.claims('owner@example.test', 'aal2');
 set local role authenticated;
-select is((select count(*)::int from core.lanes), 0, 'placeholder allowed_lanes: no lane is readable');
-select is((select count(*)::int from core.lane_policies), 0, 'placeholder allowed_lanes: no policy is readable');
+select set_eq($$select code from core.lanes$$, array['PKG'], 'owner at AAL2 reads only enabled lanes (PKG)');
+select set_eq($$select lane_id from core.lane_policies$$, array['PKG'], 'owner reads the PKG policy only');
 select throws_ok($$insert into core.lanes (code, name, data_plane) values ('ZZ', 'Synthetic Z', 'core')$$, '42501', null, 'authenticated cannot insert lanes');
 reset role;
 
-set local role anon;
-select throws_ok($$select count(*) from core.lane_policies$$, '42501', null, 'anon cannot read lane_policies');
-reset role;
-
--- ---------------------------------------------------------------- RLS with a stand-in membership: owner in PKG only
--- The stand-in answers only for the owner persona and the two view names these policies must pass, so a policy that
--- sent the wrong uid or view would see nothing and fail the member tests below.
-do $stub$
-begin
-  execute format(
-    'create or replace function core.allowed_lanes(p_uid uuid, p_view text) returns text[] language sql stable set search_path = '''' as $f$ select case when p_uid = %L::uuid and p_view in (%L, %L) then array[%L] else array[]::text[] end $f$',
-    (select id from auth.users where email = 'owner@example.test'), 'lanes', 'lane_policies',
-    'PKG');
-end
-$stub$;
-
+select pg_temp.claims('admin-technical@example.test', 'aal2');
 set local role authenticated;
-select set_eq($$select code from core.lanes$$, array['PKG'], 'a PKG member at AAL2 reads only the PKG lane');
-select is(
-  (select count(*)::int from core.lane_policies where lane_id <> 'PKG'),
-  0,
-  'a PKG member cannot read other lanes'' policies'
-);
-select is((select count(*)::int from core.lane_policies), 1, 'a PKG member reads the PKG policy');
+select set_eq($$select lane_id from core.lane_policies$$, array['PKG'], 'admin_technical reads the PKG policy (config view)');
 reset role;
 
-select set_config('request.jwt.claims',
-  json_build_object('sub', (select id from auth.users where email = 'outsider@example.test'), 'role', 'authenticated', 'aal', 'aal2')::text, true);
+select pg_temp.claims('finance-operator@example.test', 'aal2');
+set local role authenticated;
+select set_eq($$select code from core.lanes$$, array['PKG'], 'finance_operator reads the PKG lane');
+select is((select count(*)::int from core.lane_policies), 0, 'finance_operator has no lane_policies view');
+reset role;
+
+select pg_temp.claims('outsider@example.test', 'aal2');
 set local role authenticated;
 select is((select count(*)::int from core.lanes), 0, 'a non-member at AAL2 reads no lane');
 select is((select count(*)::int from core.lane_policies), 0, 'a non-member at AAL2 reads no policy');
 reset role;
 
-select set_config('request.jwt.claims',
-  json_build_object('sub', (select id from auth.users where email = 'owner@example.test'), 'role', 'authenticated', 'aal', 'aal1')::text, true);
+select pg_temp.claims('owner@example.test', 'aal1');
 set local role authenticated;
 select is((select count(*)::int from core.lanes) + (select count(*)::int from core.lane_policies), 0, 'an AAL1 session is denied');
 reset role;
@@ -120,6 +107,25 @@ select set_config('request.jwt.claims',
   json_build_object('sub', (select id from auth.users where email = 'owner@example.test'), 'role', 'authenticated')::text, true);
 set local role authenticated;
 select is((select count(*)::int from core.lanes) + (select count(*)::int from core.lane_policies), 0, 'a session without an aal claim is denied');
+reset role;
+
+set local role anon;
+select throws_ok($$select count(*) from core.lane_policies$$, '42501', null, 'anon cannot read lane_policies');
+reset role;
+
+-- A member of another lane (APK enabled for this test) cannot read the PKG policy, and PKG members cannot read APK's.
+update core.lanes set enabled = true where code = 'APK';
+insert into auth.users (instance_id, id, aud, role, email)
+  values ('00000000-0000-0000-0000-000000000000', '22222222-2222-4222-8222-222222222222', 'authenticated', 'authenticated', 'apk-admin@example.test');
+insert into core.users (id, display_name) values ('22222222-2222-4222-8222-222222222222', 'Synthetic Admin Technical');
+insert into core.memberships (user_id, lane_id, role) values ('22222222-2222-4222-8222-222222222222', 'APK', 'admin_technical');
+select pg_temp.claims('apk-admin@example.test', 'aal2');
+set local role authenticated;
+select set_eq($$select lane_id from core.lane_policies$$, array['APK'], 'an APK member reads the APK policy and not PKG''s');
+reset role;
+select pg_temp.claims('admin-technical@example.test', 'aal2');
+set local role authenticated;
+select set_eq($$select lane_id from core.lane_policies$$, array['PKG'], 'a PKG member cannot read the APK policy');
 reset role;
 
 select * from finish();

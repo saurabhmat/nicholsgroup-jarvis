@@ -2,6 +2,7 @@
 // (e.g. memberships after lanes and auth-personas). How to add one: see "Seed data" in the root README.
 import authPersonas from "./auth-personas.mjs";
 import lanes from "./lanes.mjs";
+import usersMemberships from "./users-memberships.mjs";
 
 /**
  * @typedef {object} SeedContext
@@ -28,5 +29,5 @@ export const SECTIONS = Object.freeze([
   authPersonas,
   lanes,
   // T-011: lane-config (core.lane_config for PKG, synthetic ids)
-  // T-012: users-memberships (core.users / core.memberships from ctx.data.personas[].memberships)
+  usersMemberships,
 ]);

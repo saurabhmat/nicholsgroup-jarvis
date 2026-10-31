@@ -37,11 +37,11 @@ export const LANES = deepFreeze([
 const ALL_LANES = LANES.map((l) => l.code);
 
 /**
- * Test personas. `memberships` are the intended lane roles for T-012 to seed into `core.memberships`
- * (role ∈ owner / admin_technical / finance_operator / viewer); T-012 may refine them (e.g. viewer named views).
+ * Test personas, seeded into `core.users` and `core.memberships` (T-012). Role ∈ owner / admin_technical /
+ * finance_operator / viewer; `views` are a viewer's named views (core.view_names()).
  * The outsider is a signed-up user with no membership: every lane must deny it.
  * Roles are never written to auth metadata; authorization comes from memberships only.
- * @type {ReadonlyArray<{key: string, displayName: string, email: string, memberships: ReadonlyArray<{lane: string, role: string}>}>}
+ * @type {ReadonlyArray<{key: string, displayName: string, email: string, memberships: ReadonlyArray<{lane: string, role: string, views?: ReadonlyArray<string>}>}>}
  */
 export const PERSONAS = deepFreeze([
   {
@@ -66,7 +66,7 @@ export const PERSONAS = deepFreeze([
     key: "viewer",
     displayName: "Synthetic Viewer",
     email: `viewer@${SYNTHETIC_EMAIL_DOMAIN}`,
-    memberships: [{ lane: "PKG", role: "viewer" }],
+    memberships: [{ lane: "PKG", role: "viewer", views: ["finance"] }],
   },
   {
     key: "outsider",
@@ -100,7 +100,7 @@ export function buildSeedData(seed) {
     lanes: LANES.map((l) => ({ ...l })),
     personas: PERSONAS.map((p) => ({
       ...p,
-      memberships: p.memberships.map((m) => ({ ...m })),
+      memberships: p.memberships.map((m) => ({ ...m, views: [...(m.views ?? [])] })),
       id: createRng(seed, `persona:${p.key}`).uuid(),
     })),
   });
