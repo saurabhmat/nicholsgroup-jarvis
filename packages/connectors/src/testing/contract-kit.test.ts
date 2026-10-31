@@ -5,6 +5,11 @@ import type { Connector } from "../contract/connector";
 import { ConnectorError } from "../contract/errors";
 import type { TestProvider } from "./test-provider";
 
+function need<T>(value: T | null | undefined, what: string): T {
+  if (value === undefined || value === null) throw new Error(`test: ${what} is missing`);
+  return value;
+}
+
 // 1. The mock connector passes the full kit, in each shape it supports.
 describeConnectorContract({ name: "mock (read + sync + subscribe + prepareWrite)", setup: () => mockHarness() });
 describeConnectorContract({ name: "mock (read-only, no sync)", setup: () => mockHarness({ readOnly: true, sync: false, subscribe: false }) });
@@ -118,7 +123,7 @@ describe("contract kit catches broken connectors", () => {
     const h = patched((c) => ({
       ...c,
       sync: (laneId, conn, cursor, sink, options) =>
-        c.sync!(laneId, conn, cursor, (batch) => sink(batch.map((r) => ({ ...r, lane_id: "lane-synthetic-other" }))), options),
+        need(c.sync, "connector.sync").call(c, laneId, conn, cursor, (batch) => sink(batch.map((r) => ({ ...r, lane_id: "lane-synthetic-other" }))), options),
     }));
     expect(await runCheck("sync hands valid RawRecords to the sink and returns a cursor", h)).toMatch(/lane-synthetic-other/);
   });
@@ -127,7 +132,7 @@ describe("contract kit catches broken connectors", () => {
     const h = patched((c) => ({
       ...c,
       sync: (laneId, conn, cursor, sink, options) =>
-        c.sync!(laneId, conn, cursor, async (batch) => {
+        need(c.sync, "connector.sync").call(c, laneId, conn, cursor, async (batch) => {
           await sink(batch).catch(() => undefined);
         }, options),
     }));
@@ -184,7 +189,7 @@ describe("createMockConnector", () => {
   it("counts zero external writes after prepareWrite", async () => {
     const h = mockHarness();
     const conn = await h.connector.connect(h.laneId, h.connectInput);
-    await h.connector.prepareWrite!(h.laneId, conn, h.writeIntents![0]!);
+    await need(h.connector.prepareWrite, "connector.prepareWrite").call(h.connector, h.laneId, conn, need(h.writeIntents?.[0], "writeIntents[0]"));
     expect(h.externalWriteCount()).toBe(0);
   });
 
@@ -193,13 +198,13 @@ describe("createMockConnector", () => {
     const h = mockHarness();
     const conn = await connector.connect(h.laneId, h.connectInput);
     const batches: number[] = [];
-    const first = await connector.sync!(h.laneId, conn, null, async (batch) => {
+    const first = await need(connector.sync, "connector.sync").call(connector, h.laneId, conn, null, async (batch) => {
       batches.push(batch.length);
     });
     expect(batches).toEqual([2, 1]);
     expect(first.mode).toBe("full");
     expect(first.records).toBe(3);
-    const second = await connector.sync!(h.laneId, conn, first.cursor, async () => {});
+    const second = await need(connector.sync, "connector.sync").call(connector, h.laneId, conn, first.cursor, async () => {});
     expect(second).toMatchObject({ mode: "incremental", records: 0 });
   });
 
@@ -207,7 +212,7 @@ describe("createMockConnector", () => {
     const { connector } = createMockConnector();
     const h = mockHarness();
     const conn = await connector.connect(h.laneId, h.connectInput);
-    const summary = await connector.sync!(h.laneId, conn, null, async () => {}, { objectTypes: ["Invoice"] });
+    const summary = await need(connector.sync, "connector.sync").call(connector, h.laneId, conn, null, async () => {}, { objectTypes: ["Invoice"] });
     expect(summary.records).toBe(0);
   });
 

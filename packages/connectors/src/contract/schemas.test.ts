@@ -20,9 +20,7 @@ const CONN_ID = "00000000-0000-4000-8000-000000000001";
 const T0 = "2026-10-28T12:00:00.000Z";
 
 function omit<T extends object>(obj: T, key: keyof T): Partial<T> {
-  const copy: Partial<T> = { ...obj };
-  delete copy[key];
-  return copy;
+  return Object.fromEntries(Object.entries(obj).filter(([k]) => k !== key)) as Partial<T>;
 }
 
 const connection = {
