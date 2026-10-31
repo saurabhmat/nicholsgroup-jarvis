@@ -110,6 +110,11 @@ Under the review policy (dev tooling: one security review, fix BLOCKERs only), t
   - Remaining `env()` placeholders in `config.toml` (OAuth, SMTP, etc.) are CLI defaults and are left as is.
   - Re-link guardrails are tracked as H-022 in `docs/backlog.md`; the CI start step is a proposed `ci.yml` diff in `.agent/pr/T-006.md`.
 
+- **T-007 review** (security + code review Oct 28, 2026; no BLOCKER or HIGH in the diff; required fixes applied in `T-007: review fixes`):
+  - **HIGH (human-owned, H-022):** `.claude/settings.json` allows `Bash(supabase db reset:*)`, and `guard-bash.sh` does not block `--linked`, `--db-url` or `--project-ref`. Today nothing is linked from an agent worktree, so it is latent; it becomes live the moment `supabase/core` is linked (then `supabase db reset --linked` would wipe staging and apply the synthetic seed). The seed's fence aborts when it is applied to a database that already has a non-`example.test` user (e.g. `db push --include-seed` or `psql -f`), but it does **not** help after a reset: the reset wipes the database first, so the fence then passes. Close H-022 (patterns now include `--project-ref`, `--include-seed`, `--include-all`) before any re-link. Agents may not edit `.claude/*`.
+  - **Not fixed (suggestion):** type-check the plain JS in `supabase/core/seed/` and `scripts/` (`checkJs` with a small tsconfig, or move the seed framework into a TS package once Node 22 type stripping is reliable in CI). Fits T-003 (which already has to decide about linting `scripts/**`).
+  - **Not fixed (note):** `node --test supabase/core/seed` (directory form) fails on Node 24, so the root `test` script lists the files with a shell glob (`supabase/core/seed/*.test.mjs`). Keep it that way when adding test files.
+
 ## 7. Decisions log
 
 ### Oct 24, 2026 — Infrastructure (human-owned; closes H-001, H-010)

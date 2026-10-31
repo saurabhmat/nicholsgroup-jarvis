@@ -120,7 +120,7 @@ These tasks have all their dependencies done and all their `needs` checked. A hu
   - Confirm the first sync, the Preferences check (class tracking on) and a report pull on Settings → Connections. Data stays in the production Supabase project.
 - [ ] H-022 Guardrails **before** re-linking the Supabase CLI from `supabase/core` (T-006 review, Oct 24, 2026). Do one or both:
   - (preferred) Link from a **separate clone** that agents never use (for example `~/ops/jarvis-link`), so no agent-visible worktree ever contains `supabase/**/.temp/project-ref`. Run migrations to staging from that clone only.
-  - Harden `.claude/`: add these to the `guard-bash.sh` patterns and the settings deny list: `--linked`, `--project-id`, `--db-url`, `config push`, `db pull`, `db dump`, `migration repair`, `migration up`, `migration fetch`, `inspect `, `branches `, `projects `, `functions deploy`, and the staging ref `lxjhaxdkqtmkhloqaffb`. Narrow the allow list to `supabase db reset --local`, `supabase test db --local` and `supabase gen types typescript --local` (plus `supabase start`, `supabase stop`, `supabase migration new`).
+  - Harden `.claude/`: add these to the `guard-bash.sh` patterns and the settings deny list: `--linked`, `--project-id`, `--project-ref`, `--db-url`, `--include-seed`, `--include-all`, `config push`, `db pull`, `db dump`, `migration repair`, `migration up`, `migration fetch`, `inspect `, `branches `, `projects `, `functions deploy`, and the staging ref `lxjhaxdkqtmkhloqaffb`. Narrow the allow list to `supabase db reset --local`, `supabase test db --local` and `supabase gen types typescript --local` (plus `supabase start`, `supabase stop`, `supabase migration new`).
   - Agents cannot do either (they may not edit `.claude/*`).
 - [ ] H-011 Sentry project DSN (free tier) for staging
 - [ ] H-012 GitHub repo in the Nichols-owned org, with branch protection on `main` and Actions enabled
@@ -203,7 +203,7 @@ Serial spine (main worktree). T-005 and T-006 can run in parallel once T-001/T-0
 - acceptance: `supabase/core` project starts locally, laid out so the pack's `migrate-prod.yml` (which runs the CLI from `supabase/core`) finds `config.toml` and the migrations; check the CLI's expected folder layout first; `pnpm test:db` runs pgTAP in `supabase/core/supabase/tests`; `supabase/nl/` exists as a documented placeholder (deferred data plane); README section for local DB.
 
 ### T-007 Synthetic seed framework
-- status: approved
+- status: done
 - depends: T-006
 - acceptance: deterministic seed (fixed RNG) for lanes PKG, APK, PKI, NC, NL, P with only PKG enabled; synthetic users (owner, admin_technical, finance_operator, viewer, outsider); `pnpm db:reset` reseeds; no real names, emails or companies' records beyond lane names.
 
@@ -871,7 +871,7 @@ Serial. T-171 can start any time after T-004. T-170 is the gate for PKG approval
 - note (Oct 31, 2026): there is no staging environment ("Production only, no staging", `docs/plan-review.md` §7). Re-scope to a production deploy and migration runbook before approval.
 - depends: T-004
 - needs: H-001, H-010
-- acceptance: documented, human-run steps for staging migrations and deploys (agents never run them); a proposed `migrate-staging.yml` mirroring `migrate-prod.yml`, delivered in the PR body for a human to add; env var checklist per Vercel environment (decided Oct 28, 2026): the custom environment **Staging** (branch `staging`, `staging.portal.pub-k.org`, `APP_ENV=staging`) is the only place real-data secrets live (staging Supabase secret key, production Intuit keys, production redirect URI); **Preview** (PR deployments, `APP_ENV=preview`) gets sandbox Intuit keys only and no staging Supabase values; **Production** at go-live; seed policy: real PKG data only in the staging Supabase project and only through the Staging environment, Previews use synthetic data (H-025) or no database; how code reaches `staging` (fast-forward from `main` by a human).
+- acceptance: documented, human-run steps for staging migrations and deploys (agents never run them); a proposed `migrate-staging.yml` mirroring `migrate-prod.yml`, delivered in the PR body for a human to add; env var checklist per Vercel environment (decided Oct 28, 2026): the custom environment **Staging** (branch `staging`, `staging.portal.pub-k.org`, `APP_ENV=staging`) is the only place real-data secrets live (staging Supabase secret key, production Intuit keys, production redirect URI); **Preview** (PR deployments, `APP_ENV=preview`) gets sandbox Intuit keys only and no staging Supabase values; **Production** at go-live; seed policy: real PKG data only in the staging Supabase project and only through the Staging environment, Previews use synthetic data (H-025) or no database; how code reaches `staging` (fast-forward from `main` by a human). The proposed `migrate-staging.yml` must not use `--include-seed` (the T-007 seed is local-only synthetic data).
 
 ### T-172 Tie-out procedure
 - status: proposed
