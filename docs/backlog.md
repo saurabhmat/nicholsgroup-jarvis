@@ -233,12 +233,12 @@ T-010 – T-017 are the serial spine. After T-017: auth/shell (T-018 – T-026) 
 - acceptance: migration template + pgTAP helper for the standard lane policy; a catalog test that fails if any table in lane-scoped schemas lacks `lane_id`, RLS enabled, or a policy; documented in `supabase/core/README.md`. Control-plane tables without `lane_id` by design (`core.lanes`, keyed by `code`; `core.users`) go on an explicit, reviewed allowlist (T-012 review L4). Policies call `core.allowed_lanes(uid, '<view>')` with a name from `core.view_names()`; actions that a view does not imply (e.g. sign-off) use `core.has_lane_role()`.
 
 ### T-014 Append-only audit log (SQL)
-- status: proposed
+- status: done
 - depends: T-012
 - acceptance: `audit.events` (lane_id, actor, action, target, metadata, at timestamptz); insert-only grants + trigger blocking update/delete/truncate; `audit.log()` function; pgTAP proves update/delete fail for every role including service.
 
 ### T-015 Audit API (TypeScript)
-- status: proposed
+- status: done
 - depends: T-014, T-005
 - acceptance: `audit.log({laneId, actor, action, target, metadata})` in `packages/core`; metadata redactor strips token/secret/body-like fields (unit tests); failures to audit fail the calling action.
 
