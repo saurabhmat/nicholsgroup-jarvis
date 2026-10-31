@@ -86,6 +86,7 @@ These tasks have all their dependencies done and all their `needs` checked. A hu
 - T-000 — done (merged).
 - T-001 — done (merged).
 - T-002, T-006, T-075 — done (merged).
+- T-010 — approved by Saurabh Oct 31, 2026; done on the combined branch `agent/pilot-build`.
 - T-005, T-007, T-030, T-022 — approved Oct 28, 2026. Build order: T-005 first, then T-007 in the main worktree, with T-030 and T-022 in parallel worktrees.
 - T-003 (imports T-005's secret-pattern list) — approved Oct 24, 2026; in progress in its own worktree.
 
@@ -211,7 +212,7 @@ Serial spine (main worktree). T-005 and T-006 can run in parallel once T-001/T-0
 T-010 – T-017 are the serial spine. After T-017: auth/shell (T-018 – T-026) is **track W1**. T-022 can start right after T-002.
 
 ### T-010 Lanes and lane policies
-- status: proposed
+- status: done
 - depends: T-007
 - acceptance: `core.lanes` (code, name, data_plane, enabled) and `core.lane_policies` (fields from architecture §5.3, plus `store_outbound_drafts` default false, true for PKG per D-19) with RLS; pgTAP: only PKG enabled; non-members cannot read other lanes' policies; AAL1 sessions are denied.
 
@@ -223,7 +224,7 @@ T-010 – T-017 are the serial spine. After T-017: auth/shell (T-018 – T-026) 
 ### T-012 Users, memberships, roles, allowed_lanes()
 - status: proposed
 - depends: T-010
-- acceptance: `core.users`, `core.memberships` (lane, role ∈ owner/finance_operator/viewer/admin_technical, named views for viewer); `core.allowed_lanes(uid, view)` security-definer function; pgTAP proves cross-lane denial, the AAL2 requirement, viewer limited to named views; finance_operator can generate and sign off finance reports, admin_technical has no content views by default.
+- acceptance: `core.users`, `core.memberships` (lane, role ∈ owner/finance_operator/viewer/admin_technical, named views for viewer); `core.allowed_lanes(uid, view)` security-definer function (replaces T-010's fail-closed placeholder with `create or replace`, same signature; `search_path = ''`, schema-qualified, stable; returns no lanes unless `uid = auth.uid()` or the caller is service_role, and only at aal2, so nobody can list another user's lanes; decide whether disabled lanes are excluded; pgTAP re-asserts anon cannot execute it and its search_path; rewrite T-010's stand-in membership tests in `020_lanes.test.sql` against real memberships, including a non-PKG member who cannot read the PKG policy — T-010 security review M2, L2); pgTAP proves cross-lane denial, the AAL2 requirement, viewer limited to named views; finance_operator can generate and sign off finance reports, admin_technical has no content views by default.
 
 ### T-013 RLS conventions and catalog test
 - status: proposed

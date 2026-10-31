@@ -1,6 +1,7 @@
 // Seed section registry. Sections run in this order; put a section after the ones whose rows it references
 // (e.g. memberships after lanes and auth-personas). How to add one: see "Seed data" in the root README.
 import authPersonas from "./auth-personas.mjs";
+import lanes from "./lanes.mjs";
 
 /**
  * @typedef {object} SeedContext
@@ -25,7 +26,7 @@ import authPersonas from "./auth-personas.mjs";
 /** @type {ReadonlyArray<SeedSection>} */
 export const SECTIONS = Object.freeze([
   authPersonas,
-  // T-010: lanes (core.lanes from ctx.data.lanes)
+  lanes,
   // T-011: lane-config (core.lane_config for PKG, synthetic ids)
   // T-012: users-memberships (core.users / core.memberships from ctx.data.personas[].memberships)
 ]);
