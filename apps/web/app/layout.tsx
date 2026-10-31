@@ -1,17 +1,20 @@
 import type { Metadata } from "next";
-import { Geist, Geist_Mono } from "next/font/google";
+import { Inter, Source_Serif_4 } from "next/font/google";
 import { PACKAGE_ID } from "@nichols/core";
 import "./env-check";
 import "./globals.css";
 
-const geistSans = Geist({
-  variable: "--font-geist-sans",
+// next/font downloads these at build time and self-hosts them; browsers make no requests to Google.
+// The CSS variables are read by the theme in @nichols/ui (--heading-font, --body-font).
+const inter = Inter({
+  variable: "--font-inter",
   subsets: ["latin"],
 });
 
-const geistMono = Geist_Mono({
-  variable: "--font-geist-mono",
+const sourceSerif = Source_Serif_4({
+  variable: "--font-source-serif-4",
   subsets: ["latin"],
+  style: ["normal", "italic"],
 });
 
 export const metadata: Metadata = {
@@ -23,7 +26,7 @@ export default function RootLayout({ children }: LayoutProps<"/">) {
   return (
     <html
       lang="en"
-      className={`${geistSans.variable} ${geistMono.variable} h-full antialiased`}
+      className={`${inter.variable} ${sourceSerif.variable} h-full antialiased`}
     >
       <body className="min-h-full flex flex-col" data-core={PACKAGE_ID}>{children}</body>
     </html>

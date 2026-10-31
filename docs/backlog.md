@@ -272,7 +272,7 @@ T-010 – T-017 are the serial spine. After T-017: auth/shell (T-018 – T-026) 
 - acceptance: Resend SMTP configured for Supabase Auth in staging/prod (Supabase default mail is rate-limited), key from env only; redirect URL allowlist per environment; email templates show the OTP code; sign-ups disabled (invite-only users from `core.users`).
 
 ### T-022 UI foundation (Tailwind + shadcn/ui + packages/ui)
-- status: approved
+- status: done
 - depends: T-002
 - acceptance: shadcn/ui set up in `packages/ui`; theme from the **provisional design tokens** in `docs/plan-review.md` §7 (CSS variables / Tailwind theme only, so the D-20 sign-off changes values, not components; tabular numbers for figures); KPI card, source chip (`as_of`, live/cached/stale), lane chip, empty/error states and a `BookBalance` label component; Storybook-free unit/render tests.
 
