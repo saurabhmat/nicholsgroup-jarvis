@@ -11,7 +11,7 @@ export default defineConfig({
   workers: 1,
   retries: 0,
   reporter: [["list"]],
-  use: { baseURL: `http://localhost:${String(PORT)}`, trace: "retain-on-failure" },
+  use: { baseURL: `http://127.0.0.1:${String(PORT)}`, trace: "retain-on-failure" },
   projects: [
     { name: "desktop", use: { ...devices["Desktop Chrome"] } },
     // MFA enrolment is per persona, so each project signs in as different personas (e2e/personas.ts).
@@ -19,7 +19,7 @@ export default defineConfig({
   ],
   webServer: {
     command: "node scripts/e2e-server.mjs",
-    url: `http://localhost:${String(PORT)}/sign-in`,
+    url: `http://127.0.0.1:${String(PORT)}/sign-in`,
     reuseExistingServer: false,
     timeout: 180_000,
   },

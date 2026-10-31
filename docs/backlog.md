@@ -97,7 +97,7 @@ These tasks have all their dependencies done and all their `needs` checked. A hu
 ### Credentials and accounts
 - [x] H-001 Supabase **staging** project created (Oct 24, 2026): ref `lxjhaxdkqtmkhloqaffb`, East US, public sign-ups off, CLI linked by Saurabh. Agents never apply migrations to it. Details in `docs/plan-review.md` §7 (PL-11)
 - [ ] H-002 Anthropic dev API key with a spend limit (PL-13)
-- [ ] H-003 Inngest account: event key + signing key for staging (PL-12)
+- [ ] H-003 Inngest account: event key + signing key for production (PL-12). Scope them to the Vercel **Production** environment only: a PR Preview build refuses Inngest keys (T-037 review M2). Use Inngest's Vercel integration or the dashboard for app sync (unsigned sync is disabled).
 - [ ] H-004 Confirm the pub-k.org mail/calendar/docs provider (D-1). Sign-in needs no OAuth app (D-6). (PL-15)
 - [x] H-005 Intuit developer app + sandbox company (PL-16). Done Oct 28, 2026: one Intuit app "Jarvis" (QuickBooks Online and Payments, scope `com.intuit.quickbooks.accounting` only) serves every company; each company file connects separately through the in-app OAuth flow (own realmId + tokens per lane). Sandbox keys and `INTUIT_ENVIRONMENT=sandbox`, `INTUIT_REDIRECT_URI=http://localhost:3000/api/connect/qbo/callback` are in `.env.local`; a sandbox company exists. Details in `docs/plan-review.md` §7 (Oct 28)
 - [ ] H-006 Stripe restricted read-only key (test mode first, then live for staging) + webhook signing secret (PL-17)
@@ -350,7 +350,7 @@ T-010 – T-017 are the serial spine. After T-017: auth/shell (T-018 – T-026) 
 
 ### T-037 Inngest setup
 - status: approved
-- note (Oct 31, 2026): built on `agent/pilot-build`; check against the Inngest dev server pending (`.agent/pr/T-037.md`).
+- note (Oct 31, 2026): built and security-reviewed on `agent/pilot-build`; check against the Inngest dev server pending (`.agent/pr/T-037.md`).
 - depends: T-005
 - acceptance: Inngest client, `/api/inngest` route, typed event schemas where `laneId` is required (type test proves events without it fail to compile); runs against the local dev server.
 

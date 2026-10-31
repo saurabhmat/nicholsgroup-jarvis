@@ -114,11 +114,12 @@ export const VENDORS = {
   ...Object.fromEntries(CONNECTOR_ONLY.map((pattern) => [pattern, CONNECTORS])),
   child_process: [...CONNECTORS, ...SCRIPTS],
   "@anthropic-ai/*": AI,
+  inngest: INNGEST_CLIENT, // the SDK reads INNGEST_* from process.env itself (T-037 review L1)
   ...DB_DRIVERS,
 };
 
 /** Patterns whose `import type` is erased at build time and therefore allowed everywhere. */
-export const TYPE_IMPORTS_ALLOWED = Object.keys(DB_DRIVERS);
+export const TYPE_IMPORTS_ALLOWED = [...Object.keys(DB_DRIVERS), "inngest"];
 
 /** Restricted names: where each may be used (see rules/no-restricted-names.js). */
 export const RESTRICTED_NAMES = {
@@ -134,6 +135,7 @@ export const RESTRICTED_NAMES = {
   requireConnectorEnv: { allow: [...CONNECTORS, ...CORE_ENV], hint: "connector credentials are read inside packages/connectors" },
   getAnthropicEnv: { allow: [...AI, ...CORE_ENV], hint: "the Anthropic key is read inside packages/ai" },
   getInngestEnv: { allow: [...INNGEST_CLIENT, ...CORE_ENV], hint: "the Inngest keys are read by the Inngest client only" },
+  getInngest: { allow: INNGEST_CLIENT, hint: "send events with sendLaneEvent (validated, lane-checked)" },
 };
 
 /** Files where no-public-secret-name is off: negative corpora that deliberately spell out secret-looking names. */

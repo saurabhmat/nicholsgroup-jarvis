@@ -363,3 +363,11 @@ Where this lands: backlog H-027, T-021; `.agent/pr/T-018.md`.
 - Future server actions are callable from any page, so every data action calls `requireLane` / `requireRole` / `requireStepUp` itself; the proxy is never the gate (module tasks inherit this rule).
 
 Where this lands: backlog H-028; `.agent/pr/T-019.md`; `docs/runbooks/mfa-recovery.md`.
+
+### Oct 31, 2026 — Background jobs (T-037 security review)
+
+- Inngest runs only where the code is reviewed: never on PR Previews (the env refuses Inngest keys there; the route answers 503), and outside local development every request must be signed (unsigned app sync disabled, app URL pinned to `NEXT_PUBLIC_APP_URL`). Dev mode needs `APP_ENV=local` and a development build.
+- Events are sent only through `sendLaneEvent` (validated against the registered schema, lanes limited to `ENABLED_LANES`); the SDK and the client are importable only from `packages/core/src/inngest` and the route (lint). Functions validate events again on receipt.
+- Nichols Law (later rollout): its jobs get their own Inngest environment and keys (architecture §2), chosen by lane in the Inngest client; until then NL is not in `ENABLED_LANES`.
+
+Where this lands: backlog H-003; `.agent/pr/T-037.md`.

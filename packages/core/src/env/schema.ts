@@ -128,6 +128,8 @@ type CrossFieldInput = {
   NEXT_PUBLIC_SENTRY_DSN?: unknown;
   SUPABASE_NL_URL?: unknown;
   SUPABASE_NL_SECRET_KEY?: unknown;
+  INNGEST_EVENT_KEY?: unknown;
+  INNGEST_SIGNING_KEY?: unknown;
 };
 const HTTPS_OUTSIDE_LOCAL = ["NEXT_PUBLIC_APP_URL", "NEXT_PUBLIC_SUPABASE_URL", "SUPABASE_NL_URL", "NEXT_PUBLIC_SENTRY_DSN"] as const;
 
@@ -152,6 +154,8 @@ function crossFieldRules(v: CrossFieldInput, ctx: z.RefinementCtx): void {
     requireAllOrNone(v, SUPABASE_NAMES, ctx);
     // The Nichols Law data plane is real data: never on a PR Preview.
     for (const name of ["SUPABASE_NL_URL", "SUPABASE_NL_SECRET_KEY"] as const) if (v[name] !== undefined) issue(name);
+    // Job keys sign and send real events: never in unreviewed PR code (T-037 review M2).
+    for (const name of ["INNGEST_EVENT_KEY", "INNGEST_SIGNING_KEY"] as const) if (v[name] !== undefined) issue(name);
   }
   // Production Intuit keys only where real data may live (Staging, Production).
   if (
@@ -175,6 +179,10 @@ const platformShape = {
   VERCEL_ENV: z.string().optional(),
   VERCEL_TARGET_ENV: z.string().optional(),
   INTUIT_ENVIRONMENT: z.enum(["sandbox", "production"]).optional(),
+  // Declared so the cross-field rules see them in every environment (a PR Preview refuses them, T-037 review M2);
+  // their real validation is the Inngest group (all-or-none in production).
+  INNGEST_EVENT_KEY: z.string().optional(),
+  INNGEST_SIGNING_KEY: z.string().optional(),
 };
 const supabaseRequiredShape = {
   NEXT_PUBLIC_SUPABASE_URL: supabaseUrl,

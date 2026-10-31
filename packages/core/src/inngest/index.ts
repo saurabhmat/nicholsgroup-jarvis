@@ -1,13 +1,18 @@
 import "server-only";
 // Inngest client and route handlers (T-037, architecture §8). Import path: @nichols/core/inngest
-// - getInngest(): the client, created on first use. Keys come from getInngestEnv() (only this module may read them,
-//   T-003 lint). Dev mode (local Inngest dev server, no request signing) is on ONLY when APP_ENV=local.
-// - inngestRoute(functions): GET/POST/PUT for app/api/inngest/route.ts. Outside local development, if the Inngest
-//   keys are not configured, the route answers 503 instead of serving unsigned requests.
+// - getInngest(): the client, created on first use (restricted to this folder, lint). Keys come from
+//   getInngestEnv(). Dev mode (local Inngest dev server, no request signing) needs APP_ENV=local AND a development
+//   build, so a production build can never run unsigned (T-037 review L2).
+// - inngestRoute(functions): GET/POST/PUT for app/api/inngest/route.ts. Not on PR Previews (unreviewed code; their
+//   env refuses Inngest keys), and outside local only with keys: otherwise 503. In cloud mode, registration needs a
+//   signed request and the app's URL is pinned to NEXT_PUBLIC_APP_URL (review M1).
+// - sendLaneEvent(event): validates against the REGISTERED schema for the event name and refuses lanes this deployment
+//   does not serve (review L1, L4). Functions validate again on receipt (eventType triggers).
 // Functions take `laneId` from their event and use the lane router's job client (JOB_RUNNERS lint list).
 import { Inngest, type InngestFunction } from "inngest";
 import { serve } from "inngest/next";
-import { getInngestEnv, getServerEnv } from "../env/server";
+import { getInngestEnv, getServerEnv, isDevelopmentRuntime } from "../env/server";
+import { LANE_EVENTS } from "./events";
 
 export { actionApproved, connSyncRequested, LANE_EVENTS, laneIdSchema, systemHeartbeat } from "./events";
 export { platformFunctions } from "./functions";
@@ -15,9 +20,11 @@ export { platformFunctions } from "./functions";
 const APP_ID = "nichols-portal";
 let client: Inngest | undefined;
 
+const isLocalDev = () => getServerEnv().APP_ENV === "local" && isDevelopmentRuntime();
+
 export function getInngest(): Inngest {
   if (client) return client;
-  const local = getServerEnv().APP_ENV === "local";
+  const local = isLocalDev();
   const keys = getInngestEnv();
   client = new Inngest({
     id: APP_ID,
@@ -29,15 +36,21 @@ export function getInngest(): Inngest {
 
 /** Whether this deployment can serve and send Inngest jobs (local dev server, or keys configured). */
 export function inngestAvailable(): boolean {
-  return getServerEnv().APP_ENV === "local" || getInngestEnv().configured;
+  if (getServerEnv().APP_ENV === "preview") return false;
+  return isLocalDev() || getInngestEnv().configured;
 }
 
 /**
  * Validates a lane event against its schema, then sends it. Always use this instead of `getInngest().send()`, so an
  * event without a valid `laneId` (or with unknown fields) never leaves the process.
  */
-export async function sendLaneEvent(event: { name: string; data: { laneId: string }; validate(): Promise<void> }) {
-  await event.validate(); // throws on a missing/invalid laneId or unknown fields
+export async function sendLaneEvent(event: { name: string; data: { laneId: string } }) {
+  const registered = LANE_EVENTS.find((e) => e.name === event.name);
+  if (!registered) throw new Error("unknown event");
+  const parsed = await registered.schema["~standard"].validate(event.data);
+  if (parsed.issues) throw new Error("invalid event data"); // missing/invalid laneId or unknown fields; no values echoed
+  if (!getServerEnv().ENABLED_LANES.includes(event.data.laneId)) throw new Error("lane not served");
+  if (!inngestAvailable()) throw new Error("jobs not configured");
   return getInngest().send({ name: event.name, data: event.data });
 }
 
@@ -53,7 +66,11 @@ export function inngestRoute(
   const route = (method: "GET" | "POST" | "PUT"): Handler => async (request, context) => {
     if (!inngestAvailable()) return unavailable();
     const inngest = getInngest();
-    handlers ??= serve({ client: inngest, functions: [...functions(inngest)] }) as unknown as typeof handlers & object;
+    handlers ??= serve({
+      client: inngest,
+      functions: [...functions(inngest)],
+      ...(isLocalDev() ? {} : { enableUnauthedSync: false, serveOrigin: getServerEnv().NEXT_PUBLIC_APP_URL }),
+    }) as unknown as typeof handlers & object;
     return handlers[method](request, context);
   };
   return { GET: route("GET"), POST: route("POST"), PUT: route("PUT") };

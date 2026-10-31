@@ -39,7 +39,7 @@ if (!/^http:\/\/(127\.0\.0\.1|localhost):/.test(local.API_URL)) {
   process.exit(1);
 }
 
-const child = spawn("pnpm", ["exec", "next", "dev", "--port", String(E2E_PORT)], {
+const child = spawn("pnpm", ["exec", "next", "dev", "--hostname", "127.0.0.1", "--port", String(E2E_PORT)], {
   cwd: web,
   stdio: ["ignore", "inherit", "inherit"],
   // Only what next dev needs from the shell: no credentials from the developer's environment reach the app.

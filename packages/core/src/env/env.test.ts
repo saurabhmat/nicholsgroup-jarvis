@@ -332,7 +332,14 @@ describe("real-data environments (Staging environment, Oct 28, 2026)", () => {
     expect(bad({ ...PREVIEW_CORE, ...SUPABASE_HTTPS }).invalid).toEqual(["APP_ENV"]);
     expect(bad({ ...PREVIEW_CORE, ...SUPABASE_HTTPS, VERCEL: "1", VERCEL_ENV: "production", ...AI, ...JOBS }).invalid).toEqual([
       "APP_ENV",
+      "INNGEST_EVENT_KEY",
+      "INNGEST_SIGNING_KEY",
     ]);
+  });
+
+  it("a PR Preview may not hold Inngest keys (T-037 review M2)", () => {
+    expect(bad({ ...PREVIEW_CORE, ...VERCEL_PREVIEW, ...JOBS }).invalid).toEqual(["INNGEST_EVENT_KEY", "INNGEST_SIGNING_KEY"]);
+    expect(bad({ ...PREVIEW_CORE, ...VERCEL_PREVIEW, INNGEST_SIGNING_KEY: JOBS.INNGEST_SIGNING_KEY }).invalid).toEqual(["INNGEST_SIGNING_KEY"]);
   });
 
   it("a PR Preview needs no Supabase, but all three variables or none", () => {

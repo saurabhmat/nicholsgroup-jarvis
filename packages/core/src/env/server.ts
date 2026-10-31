@@ -71,6 +71,11 @@ export function getInngestEnv(env: EnvRecord = process.env) {
   return result.configured ? withRedaction(result) : result;
 }
 
+/** True when this process runs a development build (`next dev`, tests), never a production build (`next start`). */
+export function isDevelopmentRuntime(): boolean {
+  return process.env.NODE_ENV !== "production";
+}
+
 /**
  * Credentials for one connector, validated when the connector is used. Fails closed: throws an error that names
  * the missing variables and never prints values. `env` is injectable for tests.

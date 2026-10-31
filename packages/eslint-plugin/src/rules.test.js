@@ -56,7 +56,9 @@ tester.run("no-vendor-sdk", noVendorSdk, {
       (s) => ({ code: `import x from "${s}";`, filename: CONNECTOR, options: VENDOR_OPTS }),
     ),
     { code: `import A from "@anthropic-ai/sdk";`, filename: AI, options: VENDOR_OPTS },
-    { code: `import { z } from "zod"; import { Inngest } from "inngest";`, filename: WEB, options: VENDOR_OPTS },
+    // The Inngest SDK only in the Inngest client folder; type imports anywhere (T-037 review L1).
+    { code: `import { z } from "zod"; import { Inngest } from "inngest";`, filename: at("packages/core/src/inngest/index.ts"), options: VENDOR_OPTS },
+    { code: `import type { InngestFunction } from "inngest";`, filename: WEB, options: VENDOR_OPTS },
     { code: `import x from "stripe-mock-helper";`, filename: WEB, options: VENDOR_OPTS }, // similarly named, not the vendor
     { code: `import { createClient } from "@supabase/supabase-js";`, filename: LANE_ROUTER_FILE, options: VENDOR_OPTS },
     { code: `import { createServerClient } from "@supabase/ssr";`, filename: AUTH_FILE, options: VENDOR_OPTS },
@@ -69,6 +71,7 @@ tester.run("no-vendor-sdk", noVendorSdk, {
     { code: `import x from "https://esm.sh/x";`, filename: CONNECTOR, options: VENDOR_OPTS },
   ],
   invalid: [
+    { code: `import { Inngest } from "inngest";`, filename: WEB, options: VENDOR_OPTS, errors: err("vendor") },
     { code: `import Stripe from "stripe";`, filename: WEB, options: VENDOR_OPTS, errors: err("vendor") },
     { code: `import Stripe from "stripe";`, filename: FINANCE, options: VENDOR_OPTS, errors: err("vendor") },
     // Anthropic is packages/ai only, not connectors (T-100)
