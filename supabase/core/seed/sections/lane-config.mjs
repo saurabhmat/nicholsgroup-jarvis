@@ -1,7 +1,7 @@
 // Lane config version 1 per lane (T-011). PKG gets a full synthetic config (fake realm, account, location and ids);
 // every other lane gets {} (all defaults, nothing connected). Validated against the shared Zod schema by
 // packages/core/src/lane-config/lane-config.test.ts.
-import { json, values } from "../sql.mjs";
+import { json, lit, values } from "../sql.mjs";
 
 /** Synthetic PKG config. Ids are obviously fake; the real ones are set in production by a human. */
 export const PKG_CONFIG = Object.freeze({
@@ -50,8 +50,11 @@ export default {
     const { epoch, lanes } = ctx.data;
     return lanes.map(
       (l) =>
-        "insert into core.lane_config (lane_id, version, config, created_at) values (" +
-        `${values(l.code, 1)}, ${json(l.code === "PKG" ? PKG_CONFIG : {})}, ${values(epoch)}) on conflict (lane_id, version) do nothing;`,
+        // `where not exists`, not `on conflict`: the insert-only trigger refuses a duplicate version before any
+        // conflict handling, so this keeps the seed re-runnable.
+        "insert into core.lane_config (lane_id, version, config, created_at) select " +
+        `${values(l.code, 1)}, ${json(l.code === "PKG" ? PKG_CONFIG : {})}, ${values(epoch)} ` +
+        `where not exists (select 1 from core.lane_config where lane_id = ${lit(l.code)});`,
     );
   },
 };

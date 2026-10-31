@@ -89,6 +89,27 @@ describe("lane config schema", () => {
     expect(parseLaneConfig(PKG_CONFIG).entities?.own_entity).toBe("PKG");
   });
 
+  it("accepts free-text GoHighLevel tags with spaces and mixed case", () => {
+    const c = parseLaneConfig({ ghl: { location_id: "loc-1", paid_subscriber_rule: { tags: ["Paid Member", "VIP 2026"] } } });
+    expect(c.ghl?.paid_subscriber_rule?.tags).toEqual(["Paid Member", "VIP 2026"]);
+    expect(() => parseLaneConfig({ ghl: { location_id: "loc-1", paid_subscriber_rule: { tags: ["bad\ntag"] } } })).toThrow(z.ZodError);
+  });
+
+  it("allows only the owner as approver and caps the step-up age", () => {
+    expect(() => parseLaneConfig({ approvals: { approver_roles: ["viewer"] } })).toThrow(z.ZodError);
+    expect(() => parseLaneConfig({ approvals: { approver_roles: ["owner", "finance_operator"] } })).toThrow(z.ZodError);
+    expect(() => parseLaneConfig({ approvals: { approver_roles: [] } })).toThrow(z.ZodError);
+    expect(() => parseLaneConfig({ approvals: { step_up_max_age_s: 3600 } })).toThrow(z.ZodError);
+    expect(parseLaneConfig({}).assistant.max_snippet_chars).toBe(300);
+  });
+
+  it("refuses input nested deeper than the limit without recursing further", () => {
+    let deep: unknown = "x";
+    for (let i = 0; i < 10_000; i++) deep = [deep];
+    expect(findSecretLikeValues(deep)).toHaveLength(1);
+    expect(() => parseLaneConfig({ kpis: deep })).toThrow(z.ZodError);
+  });
+
   it("findSecretLikeValues ignores ordinary values", () => {
     expect(findSecretLikeValues(laneConfigSchema.parse(VALID))).toEqual([]);
   });

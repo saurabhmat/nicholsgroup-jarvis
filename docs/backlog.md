@@ -218,7 +218,7 @@ T-010 – T-017 are the serial spine. After T-017: auth/shell (T-018 – T-026) 
 - acceptance: `core.lanes` (code, name, data_plane, enabled) and `core.lane_policies` (fields from architecture §5.3, plus `store_outbound_drafts` default false, true for PKG per D-19) with RLS; pgTAP: only PKG enabled; non-members cannot read other lanes' policies; AAL1 sessions are denied.
 
 ### T-011 Lane config (per-lane source settings, no secrets)
-- status: proposed
+- status: done
 - depends: T-010
 - acceptance: `core.lane_config` versioned rows (jsonb validated by a shared Zod schema in `packages/core/lane-config`) for QBO realm + entity mapping (file or file+class), Stripe account, GHL location + paid-subscriber rule, mailboxes, priority senders, KPI list, briefing time, approval rules, enabled modules, and the finance/approvals/assistant keys from the T-075 specs (`kpis` ids, `finance.{accounting_method,weekly_cash_time,monthly_close_trigger}`, `metrics.start_month`, `stripe.livemode`, `controls.*` thresholds, `tieout.tolerance`, `approvals.{approvals_live,approver_roles,step_up_max_age_s,expire_after_hours,payload_retention_days}`, `assistant.*` rate limits), and an **entity mapping** per lane: QBO class IDs, QBO customer IDs (fallback when a class is missing), Stripe product IDs, GoHighLevel tags/products, and bank accounts with their legally owning entity — so PKG excludes Ask Pub K and Pub K Institute; a DB check plus a unit test reject secret-looking keys/values; RLS + pgTAP; seed config for PKG (synthetic IDs).
 

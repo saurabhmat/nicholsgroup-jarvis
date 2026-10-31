@@ -10,6 +10,10 @@ const id = z.string().min(1).max(100).regex(/^[A-Za-z0-9_.:-]+$/);
 const hhmm = z.string().regex(/^([01]\d|2[0-3]):[0-5]\d$/); // America/New_York wall-clock time
 const email = z.email().max(254);
 const ids = z.array(id).max(500).default([]);
+/** Free-text labels (GoHighLevel tags, pipeline stage names): any printable text, no control characters. */
+const tags = z.array(z.string().min(1).max(100).regex(/^[^\u0000-\u001f\u007f]+$/)).max(500).default([]);
+/** Nesting beyond this is never a valid config; the scan refuses it instead of recursing. */
+const MAX_DEPTH = 16;
 /** Any JWT; config never holds one. isSecretLikeValue only flags service-role JWTs. */
 const JWT = /^eyJ[\w-]+\.[\w-]+\./;
 
@@ -44,14 +48,13 @@ export const MODULES = [
 ] as const;
 
 export const ACTION_TYPES = ["email.draft", "email.send", "calendar.event", "monday.item", "notion.page"] as const;
-const ROLES = ["owner", "finance_operator", "viewer", "admin_technical"] as const;
 
 /** Which source records belong to one entity (D-17, D-18). */
 const entityMappingSchema = z.strictObject({
   qbo_class_ids: ids,
   qbo_customer_ids: ids, // fallback when a transaction has no class
   stripe_product_ids: ids,
-  ghl_tags: ids,
+  ghl_tags: tags,
   ghl_products: ids,
 });
 
@@ -65,13 +68,13 @@ export const laneConfigSchema = z.strictObject({
       entity_mapping_mode: z.enum(["file", "file_class"]),
     })
     .optional(),
-  stripe: z.strictObject({ account_id: z.string().regex(/^acct_[A-Za-z0-9]+$/), livemode: z.boolean() }).optional(),
+  stripe: z.strictObject({ account_id: z.string().max(64).regex(/^acct_[A-Za-z0-9]+$/), livemode: z.boolean() }).optional(),
   ghl: z
     .strictObject({
       location_id: id,
       // D-3 (open): null until decided; subscriber views return pending_definition meanwhile.
       paid_subscriber_rule: z
-        .strictObject({ tags: ids, pipeline_stage_ids: ids, product_ids: ids })
+        .strictObject({ tags, pipeline_stage_ids: ids, product_ids: ids })
         .nullable()
         .default(null),
     })
@@ -108,8 +111,9 @@ export const laneConfigSchema = z.strictObject({
   approvals: z
     .strictObject({
       approvals_live: z.boolean().default(false), // humans flip it after T-170
-      approver_roles: z.array(z.enum(ROLES)).default(["owner"]),
-      step_up_max_age_s: z.int().min(30).max(3600).default(300),
+      // Only the owner approves (approvals spec §8 test 4: viewer, finance_operator and admin_technical are denied).
+      approver_roles: z.array(z.literal("owner")).min(1).default(["owner"]),
+      step_up_max_age_s: z.int().min(30).max(900).default(300),
       expire_after_hours: z
         .partialRecord(z.enum(ACTION_TYPES), z.int().min(1).max(24 * 30))
         .default({ "email.draft": 72, "email.send": 72, "monday.item": 168 }),
@@ -122,6 +126,7 @@ export const laneConfigSchema = z.strictObject({
     .strictObject({
       messages_per_hour: z.int().min(1).max(1000).default(30),
       messages_per_day: z.int().min(1).max(10000).default(200),
+      max_snippet_chars: z.int().min(50).max(1000).default(300), // assistant spec §6
     })
     .prefault({}),
 });
@@ -129,13 +134,16 @@ export const laneConfigSchema = z.strictObject({
 export type LaneConfig = z.infer<typeof laneConfigSchema>;
 export type LaneConfigInput = z.input<typeof laneConfigSchema>;
 
-/** Paths of string values that look like credentials, JWTs or connection strings with a password. */
-export function findSecretLikeValues(value: unknown, path = "$"): string[] {
+/**
+ * Paths of string values that look like credentials, JWTs or connection strings with a password. Input nested deeper
+ * than MAX_DEPTH is reported at the path where the limit was hit (never a valid config; avoids deep recursion).
+ */
+export function findSecretLikeValues(value: unknown, path = "$", depth = 0): string[] {
   if (typeof value === "string") return isSecretLikeValue(value) || JWT.test(value.trim()) ? [path] : [];
-  if (Array.isArray(value)) return value.flatMap((v, i) => findSecretLikeValues(v, `${path}[${String(i)}]`));
-  if (value !== null && typeof value === "object")
-    return Object.entries(value).flatMap(([k, v]) => findSecretLikeValues(v, `${path}.${k}`));
-  return [];
+  if (value === null || typeof value !== "object") return [];
+  if (depth >= MAX_DEPTH) return [path];
+  if (Array.isArray(value)) return value.flatMap((v, i) => findSecretLikeValues(v, `${path}[${String(i)}]`, depth + 1));
+  return Object.entries(value).flatMap(([k, v]) => findSecretLikeValues(v, `${path}.${k}`, depth + 1));
 }
 
 /**
