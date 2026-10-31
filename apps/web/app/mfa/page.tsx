@@ -12,7 +12,8 @@ import { EnrollForm } from "./enroll-form";
 
 const ERRORS: Record<string, string> = {
   code: "That code is wrong. Use the current code from your authenticator app.",
-  unavailable: "Verification is unavailable right now (or too many attempts). Try again in a few minutes.",
+  locked: "Too many wrong codes. Try again in 15 minutes.",
+  unavailable: "Verification is unavailable right now. Try again in a minute.",
 };
 
 export default function MfaPage(props: PageProps<"/mfa">) {

@@ -7,6 +7,8 @@ import { beginEnrollment, verifyEnrollment, type EnrollmentState, type VerifySta
 
 const ERRORS = {
   code: "That code is wrong. Use the current code from your authenticator app.",
+  locked: "Too many wrong codes. Try again in 15 minutes.",
+  refused: "A new authenticator can only be added after an administrator resets two-factor sign-in.",
   unavailable: "Setup is unavailable right now. Try again in a minute.",
 } as const;
 

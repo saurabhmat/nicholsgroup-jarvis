@@ -62,6 +62,16 @@ describe("status", () => {
 });
 
 describe("beginTotpEnrollment", () => {
+  it("keeps the 2 newest recent unfinished enrolments, removes older or stale ones, then enrols", async () => {
+    const recent = (id: string, minutesAgo: number) => ({ id, factor_type: "totp", status: "unverified", created_at: new Date(Date.now() - minutesAgo * 60_000).toISOString() });
+    state.factors = [recent("a0000000-0000-4000-8000-000000000001", 1), recent("a0000000-0000-4000-8000-000000000002", 2), recent("a0000000-0000-4000-8000-000000000003", 3), STALE];
+    await mfa.beginTotpEnrollment();
+    expect(state.calls.filter((c) => c.method === "unenroll").map((c) => (c.args as { factorId: string }).factorId)).toEqual([
+      "a0000000-0000-4000-8000-000000000003",
+      STALE.id,
+    ]);
+  });
+
   it("removes unfinished enrolments older than 10 minutes (keeps recent ones), then enrols a TOTP factor", async () => {
     state.factors = [STALE, RECENT()];
     const e = await mfa.beginTotpEnrollment();
@@ -89,18 +99,35 @@ describe("qrDataUri", () => {
 describe("verifyTotp", () => {
   it("verifies a 6-digit code for the user's own factor", async () => {
     state.factors = [VERIFIED];
-    expect(await mfa.verifyTotp(VERIFIED.id, " 123456 ")).toBe(true);
+    expect(await mfa.verifyTotp(VERIFIED.id, " 123456 ")).toBe("ok");
     expect(state.calls).toEqual([{ method: "challengeAndVerify", args: { factorId: VERIFIED.id, code: "123456" } }]);
   });
 
   it("refuses malformed input, foreign factors and wrong codes", async () => {
     state.factors = [VERIFIED];
-    expect(await mfa.verifyTotp("not-a-uuid", "123456")).toBe(false);
-    expect(await mfa.verifyTotp(VERIFIED.id, "12345")).toBe(false);
-    expect(await mfa.verifyTotp("44444444-4444-4444-8444-444444444444", "123456")).toBe(false);
+    expect(await mfa.verifyTotp("not-a-uuid", "123456")).toBe("wrong");
+    expect(await mfa.verifyTotp(VERIFIED.id, "12345")).toBe("wrong");
+    expect(await mfa.verifyTotp("44444444-4444-4444-8444-444444444444", "123456")).toBe("wrong");
     expect(state.calls).toEqual([]);
     state.verifyError = { name: "AuthApiError" };
-    expect(await mfa.verifyTotp(VERIFIED.id, "000000")).toBe(false);
+    expect(await mfa.verifyTotp(VERIFIED.id, "000000")).toBe("wrong");
+  });
+
+  it("sign-in codes only count for verified factors; enrolment codes only for the new unverified one", async () => {
+    state.factors = [VERIFIED, STALE];
+    expect(await mfa.verifyTotp(STALE.id, "123456")).toBe("wrong");
+    expect(await mfa.verifyTotp(VERIFIED.id, "123456", { enrolling: true })).toBe("wrong");
+    expect(state.calls).toEqual([]);
+    expect(await mfa.verifyTotp(STALE.id, "123456", { enrolling: true })).toBe("ok");
+  });
+
+  it("maps the database hook's rejections to locked / refused", async () => {
+    state.factors = [VERIFIED];
+    state.verifyError = { name: "AuthApiError", message: "Too many attempts. Try again in 15 minutes." } as never;
+    expect(await mfa.verifyTotp(VERIFIED.id, "123456")).toBe("locked");
+    state.factors = [STALE];
+    state.verifyError = { name: "AuthApiError", message: "A new authenticator can only be added after an administrator resets two-factor sign-in." } as never;
+    expect(await mfa.verifyTotp(STALE.id, "123456", { enrolling: true })).toBe("refused");
   });
 
   it("an outage throws", async () => {

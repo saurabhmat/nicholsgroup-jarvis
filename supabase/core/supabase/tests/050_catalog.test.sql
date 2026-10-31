@@ -17,12 +17,14 @@ create temp table no_lane_id_ok (name text primary key, why text not null) on co
 insert into no_lane_id_ok values
   ('core.lanes', 'the lane registry itself; keyed by code'),
   ('core.users', 'one profile per person across lanes; visibility via memberships'),
-  ('core.mfa_verification_attempts', 'per-user security counter written by the auth hook; no API access');
+  ('core.mfa_verification_attempts', 'per-user security counter written by the auth hook; no API access'),
+  ('core.mfa_enrolment_state', 'per-user MFA enrolment guard (T-020); no API access');
 
 -- Private tables: RLS on with NO policy (deny all) and no grants to API roles; reached only by definer code.
 create temp table private_table_ok (name text primary key, why text not null) on commit drop;
 insert into private_table_ok values
-  ('core.mfa_verification_attempts', 'MFA attempt guard (T-019), written by core.mfa_verification_attempt()');
+  ('core.mfa_verification_attempts', 'MFA attempt guard (T-019), written by core.mfa_verification_attempt()'),
+  ('core.mfa_enrolment_state', 'MFA enrolment guard (T-020); reset allowances are granted by an admin in SQL (runbook)');
 
 -- Tables whose SELECT policy is not the exact standard expression (reviewed by hand; each still requires aal2).
 create temp table custom_policy_ok (name text primary key, why text not null) on commit drop;

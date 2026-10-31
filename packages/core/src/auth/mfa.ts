@@ -7,6 +7,8 @@ import type { Aal, CookieStore } from "./index";
 import { authClient } from "./client";
 
 export type MfaStatus = { aal: Aal | null; verifiedFactorId: string | null };
+/** `locked`: too many wrong codes (15 minutes); `refused`: a new authenticator needs an admin reset (T-020). */
+export type TotpResult = "ok" | "wrong" | "locked" | "refused";
 /** `qrDataUri` is always a `data:image/svg+xml` URI, ready for an <img src>. */
 export type TotpEnrollment = { factorId: string; qrDataUri: string; secret: string };
 
@@ -19,12 +21,25 @@ export type MfaActions = {
    * POST (server action), never while rendering a page.
    */
   beginTotpEnrollment(): Promise<TotpEnrollment>;
-  /** Verifies a code for one of THIS user's TOTP factors; on success the session becomes AAL2 (cookie updated). */
-  verifyTotp(factorId: string, code: string): Promise<boolean>;
+  /**
+   * Verifies a code for one of THIS user's TOTP factors; on "ok" the session becomes AAL2 (cookie updated).
+   * `enrolling`: the factor must be the user's unverified new one; otherwise it must be a verified one, so a code for
+   * a half-added authenticator never counts as signing in or step-up (the database hook enforces the rest).
+   */
+  verifyTotp(factorId: string, code: string, opts?: { enrolling?: boolean }): Promise<TotpResult>;
 };
 
 const factorIdSchema = z.uuid();
 const STALE_ENROLLMENT_MS = 10 * 60 * 1000;
+/** Unfinished enrolments kept (newest first) so a second tab still works, without filling the factor limit. */
+const KEEP_RECENT_UNVERIFIED = 2;
+
+/** Our database hook's reject messages (core.mfa_verification_attempt) mapped to results. */
+function hookResult(message: string | undefined): TotpResult {
+  if (message?.includes("Too many attempts")) return "locked";
+  if (message?.includes("administrator resets")) return "refused";
+  return "wrong";
+}
 const codeSchema = z.string().regex(/^\d{6}$/);
 
 /**
@@ -67,8 +82,11 @@ export function mfaActions(cookies: CookieStore): MfaActions {
       if (listError || !factors) throw new Error("mfa unavailable");
       if (factors.totp.length > 0) throw new Error("already enrolled"); // a verified factor exists: challenge instead
       const staleBefore = Date.now() - STALE_ENROLLMENT_MS;
-      for (const f of factors.all) {
-        if (f.factor_type === "totp" && f.status === "unverified" && Date.parse(f.created_at) < staleBefore) {
+      const unverified = factors.all
+        .filter((f) => f.factor_type === "totp" && f.status === "unverified")
+        .sort((a, b) => Date.parse(b.created_at) - Date.parse(a.created_at));
+      for (const [i, f] of unverified.entries()) {
+        if (Date.parse(f.created_at) < staleBefore || i >= KEEP_RECENT_UNVERIFIED) {
           await client.auth.mfa.unenroll({ factorId: f.id });
         }
       }
@@ -81,18 +99,19 @@ export function mfaActions(cookies: CookieStore): MfaActions {
       return { factorId: data.id, qrDataUri: qrDataUri(data.totp.qr_code), secret: data.totp.secret };
     },
 
-    async verifyTotp(factorId, code) {
+    async verifyTotp(factorId, code, opts) {
       const f = factorIdSchema.safeParse(factorId);
       const c = codeSchema.safeParse(code.trim());
-      if (!f.success || !c.success) return false;
+      if (!f.success || !c.success) return "wrong";
       const client = supabase();
-      // Only this user's own factors (Supabase enforces it too; checking first keeps the error path uniform).
+      // Only this user's own factors, in the expected state (Supabase checks ownership too).
       const { data: factors, error: listError } = await client.auth.mfa.listFactors();
       unavailable(listError);
-      if (!factors?.all.some((x) => x.id === f.data && x.factor_type === "totp")) return false;
+      const wanted = opts?.enrolling ? "unverified" : "verified";
+      if (!factors?.all.some((x) => x.id === f.data && x.factor_type === "totp" && x.status === wanted)) return "wrong";
       const { error } = await client.auth.mfa.challengeAndVerify({ factorId: f.data, code: c.data });
       unavailable(error);
-      return !error;
+      return error ? hookResult(error.message) : "ok";
     },
   };
 }

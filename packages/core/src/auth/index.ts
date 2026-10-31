@@ -140,8 +140,8 @@ export function createGuards(
     const session = await requireSession();
     const nowSeconds = Math.floor(now() / 1000);
     const at = session.mfaVerifiedAt;
-    // A timestamp in the future (clock skew beyond 60 s) does not count either.
-    if (at === null || nowSeconds - at > maxAgeSeconds || at - nowSeconds > 60) throw new AuthError("step_up_required");
+    // A timestamp in the future (clock skew beyond 30 s, as in the approvals spec) does not count either.
+    if (at === null || nowSeconds - at > maxAgeSeconds || at - nowSeconds > 30) throw new AuthError("step_up_required");
     return session;
   };
 
@@ -232,7 +232,7 @@ export function safeNextPath(next: unknown): string {
   return `${url.pathname}${url.search}${url.hash}`;
 }
 
-export { mfaActions, type MfaActions, type MfaStatus, type TotpEnrollment } from "./mfa";
+export { mfaActions, type MfaActions, type MfaStatus, type TotpEnrollment, type TotpResult } from "./mfa";
 
 /** A JSON error Response for an AuthError (no detail beyond the reason); null for any other error. */
 export function authErrorResponse(e: unknown): Response | null {

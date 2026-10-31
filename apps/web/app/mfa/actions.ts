@@ -6,7 +6,7 @@ import { safeNextPath } from "@nichols/core/auth";
 import { mfa } from "@/lib/guards";
 
 export type EnrollmentState = { factorId: string; qrDataUri: string; secret: string } | { error: "unavailable" } | null;
-export type VerifyState = { error: "code" | "unavailable" } | null;
+export type VerifyState = { error: "code" | "locked" | "refused" | "unavailable" } | null;
 
 export async function beginEnrollment(): Promise<EnrollmentState> {
   try {
@@ -18,13 +18,15 @@ export async function beginEnrollment(): Promise<EnrollmentState> {
 
 /** Verifies the first code of a new authenticator; on success the session is AAL2 and the user continues. */
 export async function verifyEnrollment(_prev: VerifyState, formData: FormData): Promise<VerifyState> {
-  let ok = false;
+  let result;
   try {
-    ok = await (await mfa()).verifyTotp(String(formData.get("factorId") ?? ""), String(formData.get("code") ?? ""));
+    result = await (await mfa()).verifyTotp(String(formData.get("factorId") ?? ""), String(formData.get("code") ?? ""), {
+      enrolling: true,
+    });
   } catch {
     return { error: "unavailable" };
   }
-  if (!ok) return { error: "code" };
+  if (result !== "ok") return { error: result === "wrong" ? "code" : result };
   redirect(safeNextPath(formData.get("next")));
 }
 
@@ -34,12 +36,12 @@ export async function verifyTotp(formData: FormData) {
   const reauth = formData.get("reauth") === "1";
   const back = (error: string) =>
     `/mfa?error=${error}${reauth ? "&reauth=1" : ""}${next !== "/" ? `&next=${encodeURIComponent(next)}` : ""}`;
-  let ok = false;
+  let result;
   try {
-    ok = await (await mfa()).verifyTotp(String(formData.get("factorId") ?? ""), String(formData.get("code") ?? ""));
+    result = await (await mfa()).verifyTotp(String(formData.get("factorId") ?? ""), String(formData.get("code") ?? ""));
   } catch {
     redirect(back("unavailable"));
   }
-  if (!ok) redirect(back("code"));
+  if (result !== "ok") redirect(back(result === "wrong" ? "code" : result));
   redirect(next);
 }

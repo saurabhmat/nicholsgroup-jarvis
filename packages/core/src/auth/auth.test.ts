@@ -107,7 +107,8 @@ describe("requireStepUp (T-020)", () => {
   it("403 step_up_required when the code is older than the window, missing, or from the future", async () => {
     expect(await reason(guards(SESSION, 1_000_000 + 301).requireStepUp(300))).toBe("403 step_up_required");
     expect(await reason(guards({ ...SESSION, mfaVerifiedAt: null }, 1_000_000).requireStepUp(300))).toBe("403 step_up_required");
-    expect(await reason(guards(SESSION, 1_000_000 - 120).requireStepUp(300))).toBe("403 step_up_required");
+    expect(await reason(guards(SESSION, 1_000_000 - 31).requireStepUp(300))).toBe("403 step_up_required");
+    expect(await guards(SESSION, 1_000_000 - 30).requireStepUp(300)).toBe(SESSION); // within the 30 s skew
   });
 
   it("still requires a session at AAL2 first", async () => {

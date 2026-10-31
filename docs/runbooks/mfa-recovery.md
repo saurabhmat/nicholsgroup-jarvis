@@ -22,6 +22,16 @@ delete from auth.sessions where user_id = '<affected user id>';      -- refresh 
 select count(*) from auth.refresh_tokens where user_id = '<affected user id>'::text and not revoked;  -- expect 0
 ```
 
+Then allow exactly one new authenticator (a stolen session cannot add one by itself, T-020):
+
+```sql
+insert into core.mfa_enrolment_state (user_id, enrolled_at, reset_allowed_at, reset_allowed_by)
+values ('<affected user id>', now(), now(), '<admin user id>')
+on conflict (user_id) do update set reset_allowed_at = now(), reset_allowed_by = '<admin user id>';
+```
+
+The allowance is used up when the new authenticator's first code is accepted.
+
 ## 3. Record it in the audit log
 
 SQL editor (production project), as the service role:
