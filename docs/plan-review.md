@@ -355,3 +355,11 @@ Where this lands: backlog H-026; `.agent/pr/T-016.md`, `.agent/pr/T-017.md`.
 - **Session cookies** are httpOnly and Secure (outside local); nothing in the browser reads them.
 
 Where this lands: backlog H-027, T-021; `.agent/pr/T-018.md`.
+
+### Oct 31, 2026 — MFA attempt guard (T-019 security review)
+
+- An attacker who gets past the email code holds an AAL1 session and can call Supabase's MFA endpoints directly, so the limit on authenticator codes lives in the database: the Auth hook `core.mfa_verification_attempt` rejects every attempt after 5 failures in 15 minutes and audits lockouts and new authenticators. Supabase also emails the user when an authenticator is added or removed.
+- **Plan check (H-028):** Supabase offers the MFA verification hook only on some plans. If the production plan lacks it, the alternatives are a plan upgrade or accepting the risk with alerting on repeated failures (the email code, CAPTCHA H-027 and the 15-minute token lifetime remain).
+- Future server actions are callable from any page, so every data action calls `requireLane` / `requireRole` / `requireStepUp` itself; the proxy is never the gate (module tasks inherit this rule).
+
+Where this lands: backlog H-028; `.agent/pr/T-019.md`; `docs/runbooks/mfa-recovery.md`.

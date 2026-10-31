@@ -1,7 +1,7 @@
 // TOTP MFA actions (T-019) against a mocked @supabase/ssr auth client.
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
-type Factor = { id: string; factor_type: string; status: string };
+type Factor = { id: string; factor_type: string; status: string; created_at: string };
 const state = {
   factors: [] as Factor[],
   aal: "aal1" as string | null,
@@ -41,8 +41,9 @@ vi.mock("../env/server", () => ({
 
 const { mfaActions } = await import("./index");
 const mfa = mfaActions({ getAll: () => [] });
-const VERIFIED = { id: "22222222-2222-4222-8222-222222222222", factor_type: "totp", status: "verified" };
-const STALE = { id: "33333333-3333-4333-8333-333333333333", factor_type: "totp", status: "unverified" };
+const VERIFIED = { id: "22222222-2222-4222-8222-222222222222", factor_type: "totp", status: "verified", created_at: "2026-01-01T00:00:00Z" };
+const STALE = { id: "33333333-3333-4333-8333-333333333333", factor_type: "totp", status: "unverified", created_at: "2026-01-01T00:00:00Z" };
+const RECENT = () => ({ id: "66666666-6666-4666-8666-666666666666", factor_type: "totp", status: "unverified", created_at: new Date().toISOString() });
 
 beforeEach(() => {
   state.factors = [];
@@ -61,8 +62,8 @@ describe("status", () => {
 });
 
 describe("beginTotpEnrollment", () => {
-  it("removes unfinished enrolments, then enrols a TOTP factor", async () => {
-    state.factors = [STALE];
+  it("removes unfinished enrolments older than 10 minutes (keeps recent ones), then enrols a TOTP factor", async () => {
+    state.factors = [STALE, RECENT()];
     const e = await mfa.beginTotpEnrollment();
     expect(e).toEqual({ factorId: "11111111-1111-4111-8111-111111111111", qrDataUri: "data:image/svg+xml;utf-8,%3Csvg%2F%3E", secret: "JBSWY3DPEHPK3PXP" });
     expect(state.calls.map((c) => c.method)).toEqual(["unenroll", "enroll"]);

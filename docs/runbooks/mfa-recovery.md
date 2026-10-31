@@ -8,13 +8,19 @@ approves and a second person with Supabase dashboard access performs it.
 
 ## 1. Verify the person
 
-Confirm the request by a channel other than email (a phone call or in person). Email alone is not enough: anyone
-with access to the mailbox could request a reset and then enrol their own authenticator.
+Confirm the request by a channel other than email: call the person back on a number **already on file** (never one
+given in the request), or meet in person. Email alone is not enough: anyone with access to the mailbox could request
+a reset and then enrol their own authenticator. Stay on the call until step 4 is done.
 
 ## 2. Remove the factor
 
 Supabase dashboard (production project) → Authentication → Users → the user → **Multi-Factor Authentication** →
-delete the TOTP factor(s). Also sign the user out everywhere (**Sign out user**), so no existing session survives.
+delete the TOTP factor(s). Then end every session of that user in the SQL editor:
+
+```sql
+delete from auth.sessions where user_id = '<affected user id>';      -- refresh tokens go with their sessions
+select count(*) from auth.refresh_tokens where user_id = '<affected user id>'::text and not revoked;  -- expect 0
+```
 
 ## 3. Record it in the audit log
 
@@ -32,10 +38,15 @@ select audit.log(
 
 ## 4. The user enrols again
 
-The user signs in with the email code and is shown the QR code on the two-factor page. Ask them to remove the old
-entry from any authenticator app they still have.
+While still on the call, the user signs in with the email code and sets up the authenticator on the two-factor
+page. Confirm the new factor in the dashboard (its created time is "just now") and that Supabase sent the "factor
+added" email. Ask them to remove the old entry from any authenticator app they still have. If a factor appears that
+the user did not add, remove it and repeat from step 1 with the mailbox secured.
 
 ## Notes
 
-- Sessions expire within 15 minutes of the reset at the latest (access token lifetime, H-026).
+- After step 2, existing access tokens stop working within 15 minutes at the latest (access token lifetime, H-026);
+  refresh is impossible immediately.
+- Five wrong authenticator codes within 15 minutes lock verification for 15 minutes (`mfa.lockout` in the audit log).
+  Repeated lockouts for one user are a sign of an attack on that account: check the mailbox and sessions.
 - If the person's mailbox may be compromised as well, do not re-enable access until the mailbox is secured.

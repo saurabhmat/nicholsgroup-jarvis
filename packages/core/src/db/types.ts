@@ -125,6 +125,20 @@ isOneToOne: false
       referencedColumns: ["id"]
     }
                   ]
+                },"mfa_verification_attempts": {
+                  Row: {
+                    "at": string,"factor_id": string,"id": number,"user_id": string
+                  }
+                  ComputedFields: never
+                  Insert: {
+                    "at"?: string,"factor_id": string,"id"?: never,"user_id": string
+                  }
+                  Update: {
+                    "at"?: string,"factor_id"?: string,"id"?: never,"user_id"?: string
+                  }
+                  Relationships: [
+                    
+                  ]
                 },"users": {
                   Row: {
                     "created_at": string,"display_name": string,"id": string,"updated_at": string
@@ -179,6 +193,9 @@ isOneToOne: false
                            },
 "may_resolve":
 { Args: { "p_uid": string }; Returns: boolean
+                           },
+"mfa_verification_attempt":
+{ Args: { "event": Json }; Returns: Json
                            },
 "role_views":
 { Args: { "p_role": string }; Returns: (string)[]

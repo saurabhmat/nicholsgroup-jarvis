@@ -252,6 +252,13 @@ otp_expiry = 600
 # subject = "You have been invited"
 # content_path = "./supabase/templates/invite.html"
 
+# T-019 review M1: tell the user when an authenticator is added to or removed from their account.
+[auth.email.notification.mfa_factor_enrolled]
+enabled = true
+
+[auth.email.notification.mfa_factor_unenrolled]
+enabled = true
+
 # Uncomment to customize notification email template
 # [auth.email.notification.password_changed]
 # enabled = true
@@ -284,6 +291,11 @@ max_frequency = "5s"
 # timebox = "24h"
 # Force log out if the user has been inactive longer than the specified duration.
 # inactivity_timeout = "8h"
+
+# T-019 review H1: limits TOTP guessing and audits enrolments (migration 20261031063029_mfa_attempt_guard.sql).
+[auth.hook.mfa_verification_attempt]
+enabled = true
+uri = "pg-functions://postgres/core/mfa_verification_attempt"
 
 # This hook runs before a new user is created and allows developers to reject the request based on the incoming user object.
 # [auth.hook.before_user_created]

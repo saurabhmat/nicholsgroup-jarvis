@@ -16,7 +16,13 @@ insert into platform_schemas values
 create temp table no_lane_id_ok (name text primary key, why text not null) on commit drop;
 insert into no_lane_id_ok values
   ('core.lanes', 'the lane registry itself; keyed by code'),
-  ('core.users', 'one profile per person across lanes; visibility via memberships');
+  ('core.users', 'one profile per person across lanes; visibility via memberships'),
+  ('core.mfa_verification_attempts', 'per-user security counter written by the auth hook; no API access');
+
+-- Private tables: RLS on with NO policy (deny all) and no grants to API roles; reached only by definer code.
+create temp table private_table_ok (name text primary key, why text not null) on commit drop;
+insert into private_table_ok values
+  ('core.mfa_verification_attempts', 'MFA attempt guard (T-019), written by core.mfa_verification_attempt()');
 
 -- Tables whose SELECT policy is not the exact standard expression (reviewed by hand; each still requires aal2).
 create temp table custom_policy_ok (name text primary key, why text not null) on commit drop;
@@ -38,7 +44,8 @@ insert into security_definer_ok values
   ('core.allowed_lanes', 'reads memberships for RLS; own uid at aal2 only (T-012)'),
   ('core.has_lane_role', 'role check for actions; own uid at aal2 only (T-012)'),
   ('core.lane_config_public', 'non-sensitive config subset for lane members (T-011)'),
-  ('audit.log', 'the only audit write path; service_role only (T-014)');
+  ('audit.log', 'the only audit write path; service_role only (T-014)'),
+  ('core.mfa_verification_attempt', 'Supabase Auth MFA hook; supabase_auth_admin only (T-019)');
 
 -- App functions authenticated may execute (callable through the API). Each one is reviewed.
 create temp table authenticated_exec_ok (name text primary key, why text not null) on commit drop;
@@ -77,13 +84,19 @@ select is(
   'every app table has RLS enabled'
 );
 select is(
-  array(select t.name from app_tables t where not exists (select 1 from pg_policy p where p.polrelid = t.oid) order by 1),
+  array(select t.name from app_tables t
+        where not exists (select 1 from pg_policy p where p.polrelid = t.oid)
+          and not (t.name in (select name from private_table_ok)
+                   and not has_table_privilege('authenticated', t.oid, 'select, insert, update, delete')
+                   and not has_table_privilege('service_role', t.oid, 'select, insert, update, delete'))
+        order by 1),
   '{}'::text[],
-  'every app table has at least one policy'
+  'every app table has at least one policy (or is a reviewed private table without API grants)'
 );
 select is(
   array(select t.name from app_tables t
         where t.name not in (select name from custom_policy_ok)
+          and t.name not in (select name from private_table_ok)
           and not (
             (select count(*) from pg_policy p where p.polrelid = t.oid and p.polpermissive) = 1
             and exists (
@@ -198,7 +211,8 @@ select is(
 -- ---------------------------------------------------------------- exception lists stay current
 select is(
   array(select e.name from (select name from no_lane_id_ok union select name from custom_policy_ok
-                            union select name from user_dml_ok union select name from unprotected_read_ok) e
+                            union select name from user_dml_ok union select name from unprotected_read_ok
+                            union select name from private_table_ok) e
         where to_regclass(e.name) is null order by 1),
   '{}'::text[],
   'no stale relation entries in the exception lists'

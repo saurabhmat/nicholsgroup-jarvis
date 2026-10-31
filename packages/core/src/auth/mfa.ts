@@ -13,13 +13,18 @@ export type TotpEnrollment = { factorId: string; qrDataUri: string; secret: stri
 export type MfaActions = {
   /** The session's current AAL and the user's verified TOTP factor, if any. */
   status(): Promise<MfaStatus>;
-  /** Starts a new TOTP enrolment (removing any unfinished one). Only for a user without a verified factor. */
+  /**
+   * Starts a new TOTP enrolment for a user without a verified factor. Unfinished enrolments older than 10 minutes are
+   * removed; recent ones are kept (a second tab or a retry does not invalidate a QR code being scanned). Call it from a
+   * POST (server action), never while rendering a page.
+   */
   beginTotpEnrollment(): Promise<TotpEnrollment>;
   /** Verifies a code for one of THIS user's TOTP factors; on success the session becomes AAL2 (cookie updated). */
   verifyTotp(factorId: string, code: string): Promise<boolean>;
 };
 
 const factorIdSchema = z.uuid();
+const STALE_ENROLLMENT_MS = 10 * 60 * 1000;
 const codeSchema = z.string().regex(/^\d{6}$/);
 
 /**
@@ -61,8 +66,11 @@ export function mfaActions(cookies: CookieStore): MfaActions {
       unavailable(listError);
       if (listError || !factors) throw new Error("mfa unavailable");
       if (factors.totp.length > 0) throw new Error("already enrolled"); // a verified factor exists: challenge instead
+      const staleBefore = Date.now() - STALE_ENROLLMENT_MS;
       for (const f of factors.all) {
-        if (f.factor_type === "totp" && f.status === "unverified") await client.auth.mfa.unenroll({ factorId: f.id });
+        if (f.factor_type === "totp" && f.status === "unverified" && Date.parse(f.created_at) < staleBefore) {
+          await client.auth.mfa.unenroll({ factorId: f.id });
+        }
       }
       const { data, error } = await client.auth.mfa.enroll({
         factorType: "totp",

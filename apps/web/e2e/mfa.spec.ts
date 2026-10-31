@@ -14,10 +14,14 @@ test("enrol, reach the app, then sign in again with the authenticator code", asy
   const { member } = personas(info);
   await signInWithEmailCode(page, member);
 
-  // A wrong code during enrolment is refused; the page offers a new QR code.
+  // Enrolment starts from a button (not on page load); a wrong code keeps the same QR code and key.
+  await expect(page.getByTestId("totp-secret")).toHaveCount(0);
+  await page.getByRole("button", { name: "Set up authenticator" }).click();
+  const firstSecret = await page.getByTestId("totp-secret").inputValue();
   await page.getByLabel("Authenticator code").fill("000000");
   await page.getByRole("button", { name: "Verify" }).click();
   await expect(page.getByText("That code is wrong.")).toBeVisible();
+  expect(await page.getByTestId("totp-secret").inputValue()).toBe(firstSecret);
 
   const secret = await enrollTotp(page, member);
   await expect(page.getByText("You are signed in.")).toBeVisible();

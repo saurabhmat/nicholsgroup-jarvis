@@ -21,6 +21,9 @@ export async function signInWithEmailCode(page: Page, email: string, path = "/si
 /** Enrols an authenticator on the /mfa page, remembers and returns its secret. */
 export async function enrollTotp(page: Page, email: string): Promise<string> {
   await expect(page.getByRole("heading", { name: "Set up two-factor authentication" })).toBeVisible();
+  if (await page.getByRole("button", { name: "Set up authenticator" }).isVisible()) {
+    await page.getByRole("button", { name: "Set up authenticator" }).click();
+  }
   const secret = await page.getByTestId("totp-secret").inputValue();
   await page.getByLabel("Authenticator code").fill(totp(secret));
   await page.getByRole("button", { name: "Verify" }).click();
