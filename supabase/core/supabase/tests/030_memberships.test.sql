@@ -81,7 +81,7 @@ select is(pg_temp.lanes_for('owner@example.test', 'assistant'), array['PKG'], 'o
 select is(pg_temp.lanes_for('finance-operator@example.test', 'finance'), array['PKG'], 'finance_operator: finance (generates and signs off reports)');
 select is(pg_temp.lanes_for('finance-operator@example.test', 'approvals'), '{}'::text[], 'finance_operator: no lane-wide approvals view (own proposals come from the act.* policy)');
 select is(pg_temp.lanes_for('viewer@example.test', 'action_index'), array['PKG'], 'every member: action_index (status counts)');
-select is(pg_temp.lanes_for('finance-operator@example.test', 'assistant'), '{}'::text[], 'finance_operator: no assistant');
+select is(pg_temp.lanes_for('finance-operator@example.test', 'assistant'), array['PKG'], 'finance_operator: assistant (decided Oct 31, 2026)');
 select is(pg_temp.lanes_for('admin-technical@example.test', 'connections'), array['PKG'], 'admin_technical: connections');
 select is(pg_temp.lanes_for('admin-technical@example.test', 'finance'), '{}'::text[], 'admin_technical: no finance content');
 select is(pg_temp.lanes_for('admin-technical@example.test', 'comms'), '{}'::text[], 'admin_technical: no comms content');

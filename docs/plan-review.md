@@ -334,3 +334,7 @@ Decided by Saurabh. The pilot has three users (Robert, Saurabh, Sophie), so ther
 - **Development mode:** for now the in-progress tasks (T-003, T-005, T-007, T-022, T-030) are worked on together and split into per-feature PRs later.
 
 Where this lands: backlog H-010, H-023 (now Production), H-024, T-005, T-171, QuickBooks-first schedule.
+
+### Oct 31, 2026 — Finance operator uses the assistant
+
+Decided by Saurabh: the finance operator (Sophie) has the `assistant` view in her lanes (resolves assistant spec Q-S3; architecture §5.4 listed the finance module only). The assistant's tool policy gate still limits what she can query: each tool's required view (e.g. `finance`) must be one her role holds, so she cannot reach approvals or other content through the assistant. Lands in `core.role_views` (T-012).

@@ -42,7 +42,7 @@ set search_path = ''
 as $$
   select case p_role
     when 'owner' then core.view_names()
-    when 'finance_operator' then array['lanes', 'action_index', 'finance']::text[]
+    when 'finance_operator' then array['lanes', 'action_index', 'finance', 'assistant']::text[] -- assistant: Oct 31, 2026
     when 'admin_technical' then array['lanes', 'action_index', 'lane_policies', 'memberships', 'connections', 'health', 'jobs', 'config']::text[]
     when 'viewer' then array['lanes', 'action_index']::text[]
     else '{}'::text[]
