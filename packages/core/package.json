@@ -8,6 +8,8 @@
     "./lanes": "./src/lanes/index.ts",
     "./lane-config": "./src/lane-config/index.ts",
     "./audit": "./src/audit/index.ts",
+    "./auth": "./src/auth/index.ts",
+    "./lane-router": "./src/lane-router/index.ts",
     "./db": "./src/db/index.ts",
     "./env": "./src/env/index.ts",
     "./env/client": "./src/env/client.ts",
@@ -22,6 +24,8 @@
     "test": "vitest run"
   },
   "dependencies": {
+    "@supabase/ssr": "0.12.7",
+    "@supabase/supabase-js": "2.118.0",
     "server-only": "^0.0.1",
     "zod": "^4.6.7"
   }

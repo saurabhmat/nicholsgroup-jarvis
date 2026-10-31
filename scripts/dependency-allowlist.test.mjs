@@ -33,7 +33,8 @@ const ALLOWED = {
   "packages/ai": CORE_ONLY, // @anthropic-ai/sdk joins this list with T-100
   // vendor SDKs join this list with their connectors (T-04x...); zod for the contract schemas, vitest for the kit (T-030)
   "packages/connectors": [...CORE_ONLY, "vitest", "zod"],
-  "packages/core": ["server-only", "zod"],
+  // T-016/T-017: Supabase clients, only importable from the lane router and packages/core/src/auth (lint)
+  "packages/core": ["@supabase/ssr", "@supabase/supabase-js", "server-only", "zod"],
   "packages/eslint-plugin": ["@eslint-community/eslint-plugin-eslint-comments", "@nichols/core", "eslint", "typescript-eslint"],
   // T-022: shadcn/ui primitives and their test setup
   "packages/ui": [
@@ -60,6 +61,12 @@ const ALLOWED = {
 const matches = (/** @type {string} */ dep, /** @type {string} */ pattern) =>
   pattern.endsWith("/*") ? dep.startsWith(pattern.slice(0, -1)) : dep === pattern || dep.startsWith(`${pattern}/`);
 const isUnder = (/** @type {string} */ dir, /** @type {string[]} */ prefixes) => prefixes.some((p) => dir === p || dir.startsWith(`${p}/`));
+/**
+ * A package may DECLARE a vendor SDK when it is under a permitted path or contains one (e.g. packages/core contains
+ * the lane router); the lint rule then restricts the IMPORT to the permitted path inside it.
+ */
+const mayDeclare = (/** @type {string} */ dir, /** @type {string[]} */ prefixes) =>
+  isUnder(dir, prefixes) || (dir !== "." && prefixes.some((p) => p.startsWith(`${dir}/`)));
 
 const declared = (/** @type {string} */ dir) => {
   const pkg = readJson(join(ROOT, dir, "package.json"));
@@ -81,7 +88,7 @@ for (const dir of DIRS) {
     const bad = [];
     for (const dep of declared(dir)) {
       for (const [pattern, allowedPrefixes] of Object.entries(VENDORS)) {
-        if (matches(dep, pattern) && !isUnder(dir, allowedPrefixes)) bad.push(`${dep} (allowed only in ${allowedPrefixes.join(", ")})`);
+        if (matches(dep, pattern) && !mayDeclare(dir, allowedPrefixes)) bad.push(`${dep} (allowed only in ${allowedPrefixes.join(", ")})`);
       }
     }
     assert.deepEqual(bad, []);
@@ -93,7 +100,7 @@ test("the allow-lists themselves never grant a vendor SDK outside its permitted 
   for (const [dir, deps] of Object.entries(ALLOWED)) {
     for (const dep of deps) {
       for (const [pattern, allowedPrefixes] of Object.entries(VENDORS)) {
-        if (matches(dep, pattern) && !isUnder(dir, allowedPrefixes)) bad.push(`${dir}: ${dep}`);
+        if (matches(dep, pattern) && !mayDeclare(dir, allowedPrefixes)) bad.push(`${dir}: ${dep}`);
       }
     }
   }

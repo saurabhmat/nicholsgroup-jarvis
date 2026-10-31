@@ -5,16 +5,189 @@ export type Json = string | number | boolean | null | { [key: string]: Json | un
 
 export type Database = {
   
-  "graphql_public": {
+  "audit": {
           Tables: {
-            [_ in never]: never
+            "events": {
+                  Row: {
+                    "action": string,"actor_id": string | null,"actor_kind": string,"at": string,"id": number,"lane_id": string,"metadata": NonNullable<Json>,"target": string | null
+                  }
+                  ComputedFields: never
+                  Insert: {
+                    "action": string,"actor_id"?: string | null,"actor_kind": string,"at"?: string,"id"?: never,"lane_id": string,"metadata"?: NonNullable<Json>,"target"?: string | null
+                  }
+                  Update: {
+                    "action"?: string,"actor_id"?: string | null,"actor_kind"?: string,"at"?: string,"id"?: never,"lane_id"?: string,"metadata"?: NonNullable<Json>,"target"?: string | null
+                  }
+                  Relationships: [
+                    
+                  ]
+                }
           }
           Views: {
             [_ in never]: never
           }
           Functions: {
-            "graphql":
-{ Args: { "extensions"?: Json,"operationName"?: string,"query"?: string,"variables"?: Json }; Returns: Json
+            "log":
+{ Args: { "p_action": string,"p_actor_id": string,"p_actor_kind": string,"p_lane_id": string,"p_metadata"?: Json,"p_target"?: string }; Returns: number
+                           }
+          }
+          Enums: {
+            [_ in never]: never
+          }
+          CompositeTypes: {
+            [_ in never]: never
+          }
+        },"core": {
+          Tables: {
+            "lane_config": {
+                  Row: {
+                    "config": NonNullable<Json>,"created_at": string,"created_by": string | null,"lane_id": string,"version": number
+                  }
+                  ComputedFields: never
+                  Insert: {
+                    "config": NonNullable<Json>,"created_at"?: string,"created_by"?: string | null,"lane_id": string,"version": number
+                  }
+                  Update: {
+                    "config"?: NonNullable<Json>,"created_at"?: string,"created_by"?: string | null,"lane_id"?: string,"version"?: number
+                  }
+                  Relationships: [
+                    {
+      foreignKeyName: "lane_config_created_by_fkey"
+      columns: ["created_by"]
+isOneToOne: false
+      referencedRelation: "users"
+      referencedColumns: ["id"]
+    },{
+      foreignKeyName: "lane_config_lane_id_fkey"
+      columns: ["lane_id"]
+isOneToOne: false
+      referencedRelation: "lanes"
+      referencedColumns: ["code"]
+    }
+                  ]
+                },"lane_policies": {
+                  Row: {
+                    "created_at": string,"cross_lane_summary_allowed": string,"indexing_enabled": boolean,"lane_id": string,"llm_allowed_categories": (string)[],"retention_days": number,"store_content_bodies": boolean,"store_outbound_drafts": boolean,"updated_at": string,"write_actions_allowed": (string)[]
+                  }
+                  ComputedFields: never
+                  Insert: {
+                    "created_at"?: string,"cross_lane_summary_allowed"?: string,"indexing_enabled"?: boolean,"lane_id": string,"llm_allowed_categories"?: (string)[],"retention_days"?: number,"store_content_bodies"?: boolean,"store_outbound_drafts"?: boolean,"updated_at"?: string,"write_actions_allowed"?: (string)[]
+                  }
+                  Update: {
+                    "created_at"?: string,"cross_lane_summary_allowed"?: string,"indexing_enabled"?: boolean,"lane_id"?: string,"llm_allowed_categories"?: (string)[],"retention_days"?: number,"store_content_bodies"?: boolean,"store_outbound_drafts"?: boolean,"updated_at"?: string,"write_actions_allowed"?: (string)[]
+                  }
+                  Relationships: [
+                    {
+      foreignKeyName: "lane_policies_lane_id_fkey"
+      columns: ["lane_id"]
+isOneToOne: true
+      referencedRelation: "lanes"
+      referencedColumns: ["code"]
+    }
+                  ]
+                },"lanes": {
+                  Row: {
+                    "code": string,"created_at": string,"data_plane": string,"enabled": boolean,"name": string,"updated_at": string
+                  }
+                  ComputedFields: never
+                  Insert: {
+                    "code": string,"created_at"?: string,"data_plane": string,"enabled"?: boolean,"name": string,"updated_at"?: string
+                  }
+                  Update: {
+                    "code"?: string,"created_at"?: string,"data_plane"?: string,"enabled"?: boolean,"name"?: string,"updated_at"?: string
+                  }
+                  Relationships: [
+                    
+                  ]
+                },"memberships": {
+                  Row: {
+                    "created_at": string,"lane_id": string,"role": string,"updated_at": string,"user_id": string,"views": (string)[]
+                  }
+                  ComputedFields: never
+                  Insert: {
+                    "created_at"?: string,"lane_id": string,"role": string,"updated_at"?: string,"user_id": string,"views"?: (string)[]
+                  }
+                  Update: {
+                    "created_at"?: string,"lane_id"?: string,"role"?: string,"updated_at"?: string,"user_id"?: string,"views"?: (string)[]
+                  }
+                  Relationships: [
+                    {
+      foreignKeyName: "memberships_lane_id_fkey"
+      columns: ["lane_id"]
+isOneToOne: false
+      referencedRelation: "lanes"
+      referencedColumns: ["code"]
+    },{
+      foreignKeyName: "memberships_user_id_fkey"
+      columns: ["user_id"]
+isOneToOne: false
+      referencedRelation: "users"
+      referencedColumns: ["id"]
+    }
+                  ]
+                },"users": {
+                  Row: {
+                    "created_at": string,"display_name": string,"id": string,"updated_at": string
+                  }
+                  ComputedFields: never
+                  Insert: {
+                    "created_at"?: string,"display_name": string,"id": string,"updated_at"?: string
+                  }
+                  Update: {
+                    "created_at"?: string,"display_name"?: string,"id"?: string,"updated_at"?: string
+                  }
+                  Relationships: [
+                    
+                  ]
+                }
+          }
+          Views: {
+            "lane_config_current": {
+                  Row: {
+                    "config": NonNullable<Json>,"created_at": string,"created_by": string | null,"lane_id": string,"version": number
+                  }
+                  ComputedFields: never
+                  Relationships: [
+                    {
+      foreignKeyName: "lane_config_created_by_fkey"
+      columns: ["created_by"]
+isOneToOne: false
+      referencedRelation: "users"
+      referencedColumns: ["id"]
+    },{
+      foreignKeyName: "lane_config_lane_id_fkey"
+      columns: ["lane_id"]
+isOneToOne: false
+      referencedRelation: "lanes"
+      referencedColumns: ["code"]
+    }
+                  ]
+                }
+          }
+          Functions: {
+            "allowed_lanes":
+{ Args: { "p_uid": string,"p_view": string }; Returns: (string)[]
+                           },
+"has_lane_role":
+{ Args: { "p_lane": string,"p_roles": (string)[],"p_uid": string }; Returns: boolean
+                           },
+"jsonb_has_secret":
+{ Args: { "p_config": Json }; Returns: boolean
+                           },
+"lane_config_public":
+{ Args: { "p_lane_id": string }; Returns: Json
+                           },
+"may_resolve":
+{ Args: { "p_uid": string }; Returns: boolean
+                           },
+"role_views":
+{ Args: { "p_role": string }; Returns: (string)[]
+                           },
+"view_names":
+{ Args: Record<PropertyKey, never>; Returns: (string)[]
+                           },
+"viewer_view_names":
+{ Args: Record<PropertyKey, never>; Returns: (string)[]
                            }
           }
           Enums: {
@@ -148,7 +321,11 @@ export type CompositeTypes<
   : never
 
 export const Constants = {
-  "graphql_public": {
+  "audit": {
+          Enums: {
+            
+          }
+        },"core": {
           Enums: {
             
           }
