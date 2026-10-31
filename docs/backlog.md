@@ -304,14 +304,14 @@ T-010 – T-017 are the serial spine. After T-017: auth/shell (T-018 – T-026) 
 **Track W2**, parallel with W1. T-030 can start after T-002 and T-037 after T-005; the rest follow T-013.
 
 ### T-030 Connector contract
-- status: approved
+- status: done
 - depends: T-002
 - acceptance: `Connector` interface per architecture §6 M2 with Zod types (`Provider`, `Connection`, `ReadOp`, `SourceResult` with `as_of` + freshness, `RawRecord`); reusable contract test kit that any connector must pass.
 
 ### T-031 Connections and sync runs tables
 - status: proposed
 - depends: T-013
-- acceptance: `core.connections` (lane, provider, external account id, status, token expiry, last_sync, last_error) and `core.sync_runs`; RLS: admin_technical reads health columns only; pgTAP incl. cross-lane denial.
+- acceptance: `core.connections` (lane, provider, external account id, status, token expiry, last_sync, last_error) and `core.sync_runs`; RLS: admin_technical reads health columns only; pgTAP incl. cross-lane denial. The provider check constraint lists real providers only (no `mock`).
 
 ### T-032 Vault token functions
 - status: proposed
@@ -321,7 +321,7 @@ T-010 – T-017 are the serial spine. After T-017: auth/shell (T-018 – T-026) 
 ### T-033 Token access + redaction in connectors
 - status: proposed
 - depends: T-032, T-030
-- acceptance: `getToken(conn)` only exported inside `packages/connectors` (lint-enforced); a shared redacting logger; tests prove tokens never appear in logs, API responses, RSC payloads or prompt builders (canary-token test).
+- acceptance: `getToken(conn)` only exported inside `packages/connectors` (lint-enforced); `@nichols/connectors/internal` (`mintLaneBoundConnection`, `buildProviderSchemas`) importable only from `packages/connectors` and the connection loader (lint rule with a failing fixture; from the T-030 review); a shared redacting logger; tests prove tokens never appear in logs, API responses, RSC payloads or prompt builders (canary-token test).
 
 ### T-034 Connector HTTP client + MSW harness
 - status: proposed
@@ -508,7 +508,7 @@ Scope: read-only, Accounting API only (no Payments, no Payroll); never create, u
 ### T-062 Mail/calendar/docs provider interfaces + mocks
 - status: proposed
 - depends: T-030
-- acceptance: `MailProvider`, `CalendarProvider`, `DocumentProvider` (metadata sync, live body fetch, live search, watch/renew, prepareWrite/executeWrite stubs); mock implementation; contract tests both real providers must pass.
+- acceptance: `MailProvider`, `CalendarProvider`, `DocumentProvider` (metadata sync, live body fetch, live search, watch/renew, `prepareWrite` on the provider; execution only through a `ConnectorWriter` from `@nichols/connectors/writer`, per the T-030 split); mock implementation; contract tests both real providers must pass.
 
 ### T-063 Google: OAuth + Gmail metadata sync + live body
 - status: proposed
