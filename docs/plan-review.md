@@ -346,3 +346,12 @@ Decided by Saurabh: the finance operator (Sophie) has the `assistant` view in he
 - **Job client restricted:** `getLaneJobClient` (bypasses RLS) is a restricted name: Inngest client and route, approvals executor and token vault only; module jobs are added to `JOB_RUNNERS` deliberately when written.
 
 Where this lands: backlog H-026; `.agent/pr/T-016.md`, `.agent/pr/T-017.md`.
+
+### Oct 31, 2026 — Sign-in risks accepted for now (T-018 security review)
+
+- **Account discovery against Supabase directly.** The app's form answers the same for known and unknown addresses, but Supabase's public `/otp` endpoint (publishable key) answers differently. Accepted until production CAPTCHA (H-027): the account list is three people, and the second factor (TOTP, T-019) is mandatory.
+- **Email-code guessing.** Supabase does not cancel a code after wrong guesses; its limits are per IP. The app allows 5 wrong codes per emailed code; mandatory TOTP limits what a guessed code gives. Production: CAPTCHA on send (H-027) and a review of Supabase's per-IP limits for traffic that arrives from the app server's addresses (T-021), so one attacker cannot exhaust everyone's sign-in budget.
+- **Email links sign in on a plain GET.** Link scanners may use up a link; the 6-digit code is the primary flow and is unaffected.
+- **Session cookies** are httpOnly and Secure (outside local); nothing in the browser reads them.
+
+Where this lands: backlog H-027, T-021; `.agent/pr/T-018.md`.

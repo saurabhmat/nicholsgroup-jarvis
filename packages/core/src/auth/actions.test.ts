@@ -18,7 +18,7 @@ vi.mock("@supabase/ssr", () => ({
   }),
 }));
 vi.mock("../env/server", () => ({
-  getServerEnv: () => ({ NEXT_PUBLIC_APP_URL: "https://portal.example.test" }),
+  getServerEnv: () => ({ NEXT_PUBLIC_APP_URL: "https://portal.example.test", APP_ENV: "local" }),
   requireSupabasePublicEnv: () => ({ NEXT_PUBLIC_SUPABASE_URL: "http://127.0.0.1:54321", NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY: "sb_publishable_test" }),
 }));
 
@@ -103,8 +103,21 @@ describe("refreshSession", () => {
 describe("safeNextPath", () => {
   it("allows same-origin paths only", () => {
     expect(safeNextPath("/finance?lane=PKG")).toBe("/finance?lane=PKG");
-    for (const bad of ["https://evil.example", "//evil.example", "/\\evil.example", "javascript:alert(1)", "", null, "/a b", "/" + "x".repeat(600)]) {
+    for (const bad of ["https://evil.example", "//evil.example", "/\\evil.example", "javascript:alert(1)", "", null, "/a b", "/" + "x".repeat(600), "/x\u0000y", "/x\u007fy", "/x\u0085y", "/\t/evil"]) {
       expect(safeNextPath(bad)).toBe("/");
     }
+    // Dot segments are resolved, so "/..//evil" can never come back out as "//evil".
+    expect(safeNextPath("/..//evil.example")).toBe("/");
+    expect(safeNextPath("/a/../finance")).toBe("/finance");
+    expect(safeNextPath("/%2F%2Fevil")).toBe("/%2F%2Fevil");
+  });
+});
+
+describe("session cookie options (T-018 review M3)", () => {
+  it("are httpOnly and SameSite=Lax everywhere, Secure outside local development", async () => {
+    const { SESSION_COOKIE_OPTIONS } = await import("./client");
+    expect(SESSION_COOKIE_OPTIONS("production")).toEqual({ httpOnly: true, secure: true, sameSite: "lax", path: "/" });
+    expect(SESSION_COOKIE_OPTIONS("preview").secure).toBe(true);
+    expect(SESSION_COOKIE_OPTIONS("local")).toEqual({ httpOnly: true, secure: false, sameSite: "lax", path: "/" });
   });
 });

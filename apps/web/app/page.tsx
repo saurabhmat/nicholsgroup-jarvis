@@ -1,7 +1,9 @@
-// Placeholder home (T-018) until the app shell (T-023) is built from the signed-off designs (D-20).
+// Placeholder home (T-018) until the app shell (T-023) is built from the signed-off designs (D-20). AAL2 only (T-019).
 import { Button, Card, CardContent, CardDescription, CardHeader, CardTitle } from "@nichols/ui";
 import { guards } from "@/lib/guards";
+import { redirect } from "next/navigation";
 import { Suspense } from "react";
+import { AuthError } from "@nichols/core/auth";
 import { signOut } from "./sign-in/actions";
 
 export default function Home() {
@@ -13,8 +15,12 @@ export default function Home() {
 }
 
 async function SignedInHome() {
-  // MFA is enforced from T-019 on; until then a signed-in AAL1 session may see this placeholder (no data on it).
-  await (await guards()).requireSession({ allowAal1: true });
+  try {
+    await (await guards()).requireSession();
+  } catch (e) {
+    if (e instanceof AuthError) redirect(e.reason === "mfa_required" ? "/mfa" : "/sign-in");
+    throw e;
+  }
   return (
     <main className="flex min-h-dvh items-center justify-center bg-background p-4">
       <Card className="w-full max-w-sm">

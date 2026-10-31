@@ -9,6 +9,7 @@ const ERRORS: Record<string, string> = {
   email: "Enter a valid email address.",
   unavailable: "Sign-in is unavailable right now. Try again in a minute.",
   link: "That sign-in link has expired or was already used. Request a new code.",
+  attempts: "Too many wrong codes. Request a new code.",
 };
 
 // Reads search params (request data), so it renders inside a Suspense boundary (Next 16 Cache Components).

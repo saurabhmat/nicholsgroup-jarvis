@@ -1,0 +1,41 @@
+# Runbook: two-factor recovery (lost or replaced phone)
+
+Every user signs in with an emailed code and then a code from an authenticator app (D-6, T-019). If the authenticator
+is lost, an admin removes the user's factor so they can enrol a new one. Agents never perform these steps.
+
+**Who:** Saurabh (admin_technical) performs the reset; Robert (owner) is told. For Saurabh's own account, Robert
+approves and a second person with Supabase dashboard access performs it.
+
+## 1. Verify the person
+
+Confirm the request by a channel other than email (a phone call or in person). Email alone is not enough: anyone
+with access to the mailbox could request a reset and then enrol their own authenticator.
+
+## 2. Remove the factor
+
+Supabase dashboard (production project) → Authentication → Users → the user → **Multi-Factor Authentication** →
+delete the TOTP factor(s). Also sign the user out everywhere (**Sign out user**), so no existing session survives.
+
+## 3. Record it in the audit log
+
+SQL editor (production project), as the service role:
+
+```sql
+select audit.log(
+  'PKG',                                  -- the user's primary lane
+  'user', '<admin user id>',              -- who performed the reset
+  'mfa.factor_reset',
+  'user:<affected user id>',
+  '{"reason": "lost_device", "verified_by": "phone_call"}'
+);
+```
+
+## 4. The user enrols again
+
+The user signs in with the email code and is shown the QR code on the two-factor page. Ask them to remove the old
+entry from any authenticator app they still have.
+
+## Notes
+
+- Sessions expire within 15 minutes of the reset at the latest (access token lifetime, H-026).
+- If the person's mailbox may be compromised as well, do not re-enable access until the mailbox is secured.

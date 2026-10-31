@@ -11,11 +11,10 @@ import "server-only";
 // - refreshSession(cookies): for proxy.ts; refreshes the session cookie and reports whether it is signed in.
 // Failures throw AuthError (401 without a valid session, 403 otherwise); authErrorResponse() turns one into a Response.
 // An auth outage or a configuration error is NOT reported as "no session": it propagates (the route answers 503).
-import { createServerClient } from "@supabase/ssr";
 import { z } from "zod";
-import type { Database } from "../db/index";
-import { getServerEnv, requireSupabasePublicEnv } from "../env/server";
+import { getServerEnv } from "../env/server";
 import type { LaneId } from "../lanes/index";
+import { authClient } from "./client";
 import { getLaneClient, LaneAccessError, type LaneClient, type LaneRouter, type LaneSession } from "../lane-router/index";
 
 export type Aal = "aal1" | "aal2";
@@ -29,7 +28,10 @@ export type Role = "owner" | "finance_operator" | "viewer" | "admin_technical";
  */
 export type CookieStore = {
   getAll(): { name: string; value: string }[];
-  setAll?(cookies: { name: string; value: string; options?: Record<string, unknown> }[]): void;
+  setAll?(
+    cookies: { name: string; value: string; options?: Record<string, unknown> }[],
+    headers?: Record<string, string>,
+  ): void;
 };
 
 export class AuthError extends Error {
@@ -41,25 +43,6 @@ export class AuthError extends Error {
     this.reason = reason;
     this.status = reason === "no_session" ? 401 : 403;
   }
-}
-
-/** The auth-only client over the request cookies. Used for `auth.*` calls only, never `.from()` / `.rpc()`. */
-function authClient(cookies: CookieStore) {
-  const { NEXT_PUBLIC_SUPABASE_URL: url, NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY: key } = requireSupabasePublicEnv(getServerEnv());
-  return createServerClient<Database>(url, key, {
-    cookies: {
-      getAll: () => cookies.getAll(),
-      setAll: (list) => {
-        // Refreshed tokens are written back where the framework allows it (proxy, route handlers, server actions); in
-        // a server component setting cookies throws, and proxy.ts refreshes the session instead.
-        try {
-          cookies.setAll?.(list);
-        } catch {
-          /* read-only cookie store */
-        }
-      },
-    },
-  });
 }
 
 export function cookieSessionReader(cookies: CookieStore): SessionReader {
@@ -186,12 +169,24 @@ export async function refreshSession(cookies: CookieStore): Promise<{ signedIn: 
 }
 
 /**
- * A safe post-sign-in destination: a same-origin path only (no scheme, no `//host`, no backslashes); "/" otherwise.
+ * A safe post-sign-in destination: a same-origin path only, returned in normalised form (dot segments resolved), so
+ * nothing downstream can turn it into `//host` (T-018 review L1). "/" for anything else, including schemes, `//host`,
+ * backslashes, whitespace and control characters.
  */
 export function safeNextPath(next: unknown): string {
-  if (typeof next !== "string" || !next.startsWith("/") || next.startsWith("//") || /[\\\s]/.test(next)) return "/";
-  return next.length > 512 ? "/" : next;
+  if (typeof next !== "string" || next.length > 512 || !next.startsWith("/") || next.startsWith("//")) return "/";
+  if (/[\\\s\u0000-\u001f\u007f-\u009f]/.test(next)) return "/";
+  let url: URL;
+  try {
+    url = new URL(next, "http://next.invalid");
+  } catch {
+    return "/";
+  }
+  if (url.origin !== "http://next.invalid" || url.pathname.startsWith("//")) return "/";
+  return `${url.pathname}${url.search}${url.hash}`;
 }
+
+export { mfaActions, type MfaActions, type MfaStatus, type TotpEnrollment } from "./mfa";
 
 /** A JSON error Response for an AuthError (no detail beyond the reason); null for any other error. */
 export function authErrorResponse(e: unknown): Response | null {

@@ -42,8 +42,11 @@ if (!/^http:\/\/(127\.0\.0\.1|localhost):/.test(local.API_URL)) {
 const child = spawn("pnpm", ["exec", "next", "dev", "--port", String(E2E_PORT)], {
   cwd: web,
   stdio: ["ignore", "inherit", "inherit"],
+  // Only what next dev needs from the shell: no credentials from the developer's environment reach the app.
   env: {
-    ...process.env,
+    ...Object.fromEntries(
+      Object.entries(process.env).filter(([k]) => /^(PATH|HOME|USER|SHELL|LANG|LC_[A-Z]+|TERM|TMPDIR|TEMP|TMP|NODE_[A-Z_]+|npm_[a-z_]+|PNPM_[A-Z_]+|COREPACK_[A-Z_]+|XDG_[A-Z_]+)$/.test(k)),
+    ),
     APP_ENV: "local",
     ENABLED_LANES: "PKG",
     NEXT_PUBLIC_APP_URL: `http://localhost:${E2E_PORT}`,

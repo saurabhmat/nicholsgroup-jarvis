@@ -117,6 +117,7 @@ These tasks have all their dependencies done and all their `needs` checked. A hu
 - [ ] H-026 Supabase production API and auth settings (T-016/T-017, Oct 31, 2026; `docs/plan-review.md` §7 "Core and audit schemas over the API"):
   - Project Settings → API → Exposed schemas: `public`, `graphql_public`, `core`, `audit` (nothing else).
   - Authentication → JWT: access token expiry 900 seconds; switch to asymmetric JWT signing keys.
+- [ ] H-027 Bot protection for sign-in (T-018 review, Oct 31, 2026): create a Cloudflare Turnstile site (free) for the production domain, put the site key in Vercel as `NEXT_PUBLIC_TURNSTILE_SITE_KEY` and the secret in Supabase → Authentication → Bot and Abuse Protection (CAPTCHA, Turnstile). An agent then adds the widget to the sign-in form (small follow-up task).
 - [ ] H-025 (optional) A database for Preview deployments with synthetic data only: a separate Supabase project seeded by T-007, or Supabase branching. Until then Previews run without a database (static pages and sign-in screens only).
 - [ ] H-024 Connect the live Pub K Group QuickBooks file in production (needed for tie-out, T-172; no staging since Oct 31, 2026). Only after T-050 – T-053 and T-195 – T-197 are merged and QB-1 – QB-20 pass on the sandbox company, and H-023 is done:
   - Intuit app → Production → Webhooks: endpoint `https://<production domain>/api/webhooks/qbo` for the entities in QB scope; copy the verifier token into the Vercel Production environment as `INTUIT_WEBHOOK_VERIFIER_TOKEN`.
@@ -262,7 +263,8 @@ T-010 – T-017 are the serial spine. After T-017: auth/shell (T-018 – T-026) 
 - acceptance: Supabase Auth email sign-in (D-6): 6-digit email code as the **primary** flow (works inside the installed iPhone app) plus magic link as a secondary option (a link opens in Safari, not the installed app); local Inbucket/Mailpit for tests; sign-in/out pages; session refresh in `proxy.ts` (Next 16); unauthenticated requests redirect; Playwright test.
 
 ### T-019 Enforced MFA (AAL2)
-- status: proposed
+- status: approved
+- note (Oct 31, 2026): built on `agent/pilot-build`; browser Playwright tests pending Chromium system libraries (`.agent/pr/T-019.md`).
 - depends: T-018
 - acceptance: Supabase TOTP enrolment + challenge for all users (D-6); recovery procedure documented (admin-assisted factor reset, audited); every data route and RLS rejects AAL1; Playwright: AAL1 user cannot load data; short session lifetime configured.
 
@@ -275,7 +277,7 @@ T-010 – T-017 are the serial spine. After T-017: auth/shell (T-018 – T-026) 
 - status: proposed
 - depends: T-019
 - needs: H-016
-- acceptance: Resend SMTP configured for Supabase Auth in staging/prod (Supabase default mail is rate-limited), key from env only; redirect URL allowlist per environment; email templates show the OTP code; sign-ups disabled (invite-only users from `core.users`).
+- acceptance: Resend SMTP configured for Supabase Auth in production (Supabase default mail is rate-limited), key from env only; Supabase auth rate limits reviewed for requests that all arrive from the app server (T-018 review M2: one attacker must not exhaust the shared budget); redirect URL allowlist per environment; email templates show the OTP code; sign-ups disabled (invite-only users from `core.users`).
 
 ### T-022 UI foundation (Tailwind + shadcn/ui + packages/ui)
 - status: done
