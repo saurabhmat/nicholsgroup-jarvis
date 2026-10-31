@@ -1,0 +1,150 @@
+// Per-lane source settings (T-011), stored as versioned jsonb rows in core.lane_config. Company settings live here,
+// never in code (CLAUDE.md rule 2). No secrets: credentials live in env or the Vault. Every object is strict (unknown
+// keys rejected), and every string value is scanned with the env secret-pattern list; the database repeats the check.
+// Defaults are the values in docs/specs (finance §4.5 and §9, approvals §4 and §6, assistant §5).
+import { z } from "zod";
+import { isSecretLikeValue } from "../env/secret-patterns";
+
+const laneCode = z.string().regex(/^[A-Z]{1,8}$/);
+const id = z.string().min(1).max(100).regex(/^[A-Za-z0-9_.:-]+$/);
+const hhmm = z.string().regex(/^([01]\d|2[0-3]):[0-5]\d$/); // America/New_York wall-clock time
+const email = z.email().max(254);
+const ids = z.array(id).max(500).default([]);
+/** Any JWT; config never holds one. isSecretLikeValue only flags service-role JWTs. */
+const JWT = /^eyJ[\w-]+\.[\w-]+\./;
+
+export const KPI_IDS = [
+  "cash_book_balance",
+  "ar_total",
+  "ar_over_30",
+  "ap_due_14d",
+  "pnl_mtd",
+  "pnl_ytd",
+  "mrr",
+  "revenue_churn_pct",
+  "customer_churn_pct",
+  "paid_subscribers",
+  "subscribers_new_week",
+  "subscribers_cancelled_week",
+  "controls",
+] as const;
+
+export const MODULES = [
+  "finance",
+  "approvals",
+  "assistant",
+  "briefing",
+  "comms",
+  "calendar",
+  "documents",
+  "projects",
+  "commitments",
+  "memory",
+  "notifications",
+] as const;
+
+export const ACTION_TYPES = ["email.draft", "email.send", "calendar.event", "monday.item", "notion.page"] as const;
+const ROLES = ["owner", "finance_operator", "viewer", "admin_technical"] as const;
+
+/** Which source records belong to one entity (D-17, D-18). */
+const entityMappingSchema = z.strictObject({
+  qbo_class_ids: ids,
+  qbo_customer_ids: ids, // fallback when a transaction has no class
+  stripe_product_ids: ids,
+  ghl_tags: ids,
+  ghl_products: ids,
+});
+
+export const laneConfigSchema = z.strictObject({
+  enabled_modules: z.array(z.enum(MODULES)).default([]),
+  kpis: z.array(z.enum(KPI_IDS)).default([]),
+  qbo: z
+    .strictObject({
+      realm_id: z.string().regex(/^\d{1,20}$/),
+      // "file": the company file is the entity; "file_class": classes inside one file split entities.
+      entity_mapping_mode: z.enum(["file", "file_class"]),
+    })
+    .optional(),
+  stripe: z.strictObject({ account_id: z.string().regex(/^acct_[A-Za-z0-9]+$/), livemode: z.boolean() }).optional(),
+  ghl: z
+    .strictObject({
+      location_id: id,
+      // D-3 (open): null until decided; subscriber views return pending_definition meanwhile.
+      paid_subscriber_rule: z
+        .strictObject({ tags: ids, pipeline_stage_ids: ids, product_ids: ids })
+        .nullable()
+        .default(null),
+    })
+    .optional(),
+  entities: z
+    .strictObject({
+      own_entity: laneCode,
+      by_entity: z.record(laneCode, entityMappingSchema),
+      // Bank accounts with the entity that legally owns them (D-18). Shared accounts are flagged, never allocated.
+      bank_accounts: z.array(z.strictObject({ qbo_account_id: id, owner_entity: laneCode })).max(200).default([]),
+    })
+    .refine((e) => Object.hasOwn(e.by_entity, e.own_entity), { message: "own_entity needs a mapping", path: ["own_entity"] })
+    .optional(),
+  mailboxes: z.array(email).max(20).default([]),
+  priority_senders: z.array(z.union([email, z.string().regex(/^@[a-z0-9.-]+\.[a-z]{2,}$/)])).max(200).default([]),
+  briefing: z.strictObject({ time: hhmm.default("07:00") }).prefault({}),
+  finance: z
+    .strictObject({
+      accounting_method: z.enum(["accrual", "cash"]).default("accrual"),
+      weekly_cash_time: hhmm.default("06:00"),
+      monthly_close_trigger: z.union([z.literal("manual"), z.string().regex(/^day_of_month:([1-9]|1\d|2[0-8])$/)]).default("manual"),
+    })
+    .prefault({}),
+  metrics: z.strictObject({ start_month: z.string().regex(/^\d{4}-(0[1-9]|1[0-2])$/) }).optional(),
+  controls: z
+    .strictObject({
+      unreconciled_over_days: z.int().min(1).max(365).default(30),
+      disconnected_feed_hours: z.int().min(1).max(720).default(36),
+      stripe_ghl_mismatch_threshold: z.int().min(0).max(100000).default(0),
+    })
+    .prefault({}),
+  tieout: z.strictObject({ tolerance: z.string().regex(/^\d{1,6}\.\d{2}$/).default("0.00") }).prefault({}),
+  freshness: z.strictObject({ stale_after_hours: z.int().min(1).max(720).default(36) }).prefault({}),
+  approvals: z
+    .strictObject({
+      approvals_live: z.boolean().default(false), // humans flip it after T-170
+      approver_roles: z.array(z.enum(ROLES)).default(["owner"]),
+      step_up_max_age_s: z.int().min(30).max(3600).default(300),
+      expire_after_hours: z
+        .partialRecord(z.enum(ACTION_TYPES), z.int().min(1).max(24 * 30))
+        .default({ "email.draft": 72, "email.send": 72, "monday.item": 168 }),
+      payload_retention_days: z.int().min(1).max(3650).default(30),
+      allowed_mailboxes: z.array(email).max(20).default([]),
+      monday_column_allowlist: ids,
+    })
+    .prefault({}),
+  assistant: z
+    .strictObject({
+      messages_per_hour: z.int().min(1).max(1000).default(30),
+      messages_per_day: z.int().min(1).max(10000).default(200),
+    })
+    .prefault({}),
+});
+
+export type LaneConfig = z.infer<typeof laneConfigSchema>;
+export type LaneConfigInput = z.input<typeof laneConfigSchema>;
+
+/** Paths of string values that look like credentials, JWTs or connection strings with a password. */
+export function findSecretLikeValues(value: unknown, path = "$"): string[] {
+  if (typeof value === "string") return isSecretLikeValue(value) || JWT.test(value.trim()) ? [path] : [];
+  if (Array.isArray(value)) return value.flatMap((v, i) => findSecretLikeValues(v, `${path}[${String(i)}]`));
+  if (value !== null && typeof value === "object")
+    return Object.entries(value).flatMap(([k, v]) => findSecretLikeValues(v, `${path}.${k}`));
+  return [];
+}
+
+/**
+ * Validates a lane config (throws ZodError; issues carry paths, and secret findings never echo the value).
+ * Use before writing a new core.lane_config version and when reading one.
+ */
+export function parseLaneConfig(input: unknown): LaneConfig {
+  const secrets = findSecretLikeValues(input);
+  if (secrets.length > 0)
+    throw new z.ZodError(secrets.map((p) => ({ code: "custom", message: "secret-like value not allowed", path: [p], input: undefined })));
+  return laneConfigSchema.parse(input);
+}

@@ -6,6 +6,7 @@
   "exports": {
     ".": "./src/index.ts",
     "./lanes": "./src/lanes/index.ts",
+    "./lane-config": "./src/lane-config/index.ts",
     "./db": "./src/db/index.ts",
     "./env": "./src/env/index.ts",
     "./env/client": "./src/env/client.ts",
