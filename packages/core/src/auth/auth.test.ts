@@ -1,9 +1,9 @@
 import { readFileSync } from "node:fs";
 import { describe, expect, it, vi } from "vitest";
 import { LaneAccessError, type LaneClient } from "../lane-router/index";
-import { AuthError, authErrorResponse, createGuards, type VerifiedSession } from "./index";
+import { AuthError, authErrorResponse, createGuards, totpVerifiedAt, type VerifiedSession } from "./index";
 
-const SESSION: VerifiedSession = { userId: "00000000-0000-4000-8000-000000000001", accessToken: "tok", aal: "aal2" };
+const SESSION: VerifiedSession = { userId: "00000000-0000-4000-8000-000000000001", accessToken: "tok", aal: "aal2", mfaVerifiedAt: 1_000_000 };
 
 function laneClient(roleResult: { data: unknown; error: unknown }) {
   const rpc = vi.fn(async () => roleResult);
@@ -93,5 +93,43 @@ describe("authErrorResponse", () => {
     expect(res?.headers.get("cache-control")).toBe("no-store");
     expect(await res?.json()).toEqual({ error: "forbidden" });
     expect(authErrorResponse(new Error("x"))).toBeNull();
+  });
+});
+
+describe("requireStepUp (T-020)", () => {
+  const at = (seconds: number) => () => seconds * 1000;
+  const guards = (session: VerifiedSession | null, nowSeconds: number) => createGuards(async () => session, { getLaneClient: vi.fn() }, at(nowSeconds));
+
+  it("passes when the last TOTP code is within the window", async () => {
+    expect(await guards(SESSION, 1_000_000 + 299).requireStepUp(300)).toBe(SESSION);
+  });
+
+  it("403 step_up_required when the code is older than the window, missing, or from the future", async () => {
+    expect(await reason(guards(SESSION, 1_000_000 + 301).requireStepUp(300))).toBe("403 step_up_required");
+    expect(await reason(guards({ ...SESSION, mfaVerifiedAt: null }, 1_000_000).requireStepUp(300))).toBe("403 step_up_required");
+    expect(await reason(guards(SESSION, 1_000_000 - 120).requireStepUp(300))).toBe("403 step_up_required");
+  });
+
+  it("still requires a session at AAL2 first", async () => {
+    expect(await reason(guards(null, 1_000_000).requireStepUp(300))).toBe("401 no_session");
+    expect(await reason(guards({ ...SESSION, aal: "aal1" }, 1_000_000).requireStepUp(300))).toBe("403 mfa_required");
+  });
+
+  it("refuses nonsense windows", async () => {
+    for (const w of [0, 10, 3601, 1.5, Number.NaN]) expect(await reason(guards(SESSION, 1_000_000).requireStepUp(w))).toBe("403 forbidden");
+  });
+});
+
+describe("totpVerifiedAt", () => {
+  it("takes the latest TOTP timestamp from the detailed amr form", () => {
+    expect(totpVerifiedAt([{ method: "otp", timestamp: 5 }, { method: "totp", timestamp: 10 }, { method: "mfa/totp", timestamp: 20 }])).toBe(20);
+  });
+
+  it("is null for the string form, other methods, bad timestamps and non-arrays", () => {
+    expect(totpVerifiedAt(["totp", "otp"])).toBeNull();
+    expect(totpVerifiedAt([{ method: "otp", timestamp: 5 }])).toBeNull();
+    expect(totpVerifiedAt([{ method: "totp", timestamp: "10" }, { method: "totp", timestamp: Number.POSITIVE_INFINITY }])).toBeNull();
+    expect(totpVerifiedAt(undefined)).toBeNull();
+    expect(totpVerifiedAt({ method: "totp", timestamp: 1 })).toBeNull();
   });
 });

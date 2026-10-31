@@ -1,6 +1,6 @@
 // Two-factor authentication (T-019): enrol once, challenge at every sign-in, AAL2 required for data, return path.
 import { expect, test } from "@playwright/test";
-import { enrollTotp, signInWithEmailCode } from "./helpers";
+import { completeMfa, enrollTotp, nextTotpWindow, signInWithEmailCode } from "./helpers";
 import { clearMailbox } from "./mailpit";
 import { personas } from "./personas";
 import { totp } from "./totp";
@@ -10,6 +10,7 @@ test.beforeEach(async () => {
 });
 
 test("enrol, reach the app, then sign in again with the authenticator code", async ({ page }, info) => {
+  test.setTimeout(90_000);
   const { member } = personas(info);
   await signInWithEmailCode(page, member);
 
@@ -18,7 +19,7 @@ test("enrol, reach the app, then sign in again with the authenticator code", asy
   await page.getByRole("button", { name: "Verify" }).click();
   await expect(page.getByText("That code is wrong.")).toBeVisible();
 
-  const secret = await enrollTotp(page);
+  const secret = await enrollTotp(page, member);
   await expect(page.getByText("You are signed in.")).toBeVisible();
   const lane = await page.request.get("/api/lanes/PKG");
   expect(lane.status()).toBe(200);
@@ -32,6 +33,7 @@ test("enrol, reach the app, then sign in again with the authenticator code", asy
   await signInWithEmailCode(page, member, "/sign-in?next=%2F%3Ffrom%3Dtest");
   await expect(page.getByRole("heading", { name: "Enter your authenticator code" })).toBeVisible();
   await expect(page.getByTestId("totp-secret")).toHaveCount(0);
+  await nextTotpWindow(page); // the enrolment code cannot be replayed
   await page.getByLabel("Authenticator code").fill(totp(secret));
   await page.getByRole("button", { name: "Verify" }).click();
   await expect(page).toHaveURL(/\/\?from=test$/);
@@ -41,7 +43,7 @@ test("enrol, reach the app, then sign in again with the authenticator code", asy
 test("a member of another lane is refused at AAL2", async ({ page }, info) => {
   test.skip(info.project.name !== "desktop", "the outsider persona is enrolled once per run");
   await signInWithEmailCode(page, "outsider@example.test");
-  await enrollTotp(page);
+  await completeMfa(page, "outsider@example.test");
   await expect(page.getByText("You are signed in.")).toBeVisible();
   const res = await page.request.get("/api/lanes/PKG");
   expect(res.status()).toBe(403);
@@ -51,7 +53,7 @@ test("a member of another lane is refused at AAL2", async ({ page }, info) => {
 test("a lane the deployment does not serve is refused even for the owner of every lane", async ({ page }, info) => {
   const { secondMember } = personas(info);
   await signInWithEmailCode(page, secondMember);
-  await enrollTotp(page);
+  await completeMfa(page, secondMember);
   for (const lane of ["APK", "NL", "pkg", "PKG;--"]) {
     const res = await page.request.get(`/api/lanes/${encodeURIComponent(lane)}`);
     expect(res.status()).toBe(403);

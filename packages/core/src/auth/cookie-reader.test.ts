@@ -2,7 +2,7 @@
 // token, never from the cookie's user object; invalid tokens are "no session"; an auth outage is an error.
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
-type Claims = { sub?: unknown; aal?: unknown };
+type Claims = { sub?: unknown; aal?: unknown; amr?: unknown };
 const state: {
   session: { access_token: string; user: { id: string } } | null;
   claims: { data: { claims: Claims } | null; error: { name: string } | null };
@@ -37,8 +37,10 @@ beforeEach(() => {
 
 describe("cookieSessionReader", () => {
   it("verifies the session's own access token and takes the user id from its claims, not the cookie user", async () => {
-    expect(await read()).toEqual({ userId: TOKEN_SUB, accessToken: "the-access-token", aal: "aal2" });
+    expect(await read()).toEqual({ userId: TOKEN_SUB, accessToken: "the-access-token", aal: "aal2", mfaVerifiedAt: null });
     expect(state.verified).toEqual(["the-access-token"]);
+    state.claims = { data: { claims: { sub: TOKEN_SUB, aal: "aal2", amr: [{ method: "totp", timestamp: 42 }] } }, error: null };
+    expect((await read())?.mfaVerifiedAt).toBe(42); // step-up time comes from the verified amr claim
   });
 
   it("reports aal1 unless the verified claims say aal2", async () => {

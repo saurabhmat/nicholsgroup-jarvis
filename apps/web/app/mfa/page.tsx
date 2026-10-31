@@ -33,7 +33,9 @@ async function MfaStep({ searchParams }: PageProps<"/mfa">) {
   const error = typeof params.error === "string" ? ERRORS[params.error] : undefined;
   const actions = await mfa();
   const status = await actions.status();
-  if (status.aal === "aal2") redirect(next);
+  // Step-up (T-020): `reauth=1` asks an AAL2 user for a fresh code before a sensitive action.
+  const reauth = params.reauth === "1" && status.aal === "aal2" && status.verifiedFactorId !== null;
+  if (status.aal === "aal2" && !reauth) redirect(next);
 
   // Enrolment shows a fresh secret on every visit until a code is verified (an unfinished one is replaced).
   const enrollment = status.verifiedFactorId ? null : await actions.beginTotpEnrollment();
@@ -43,7 +45,9 @@ async function MfaStep({ searchParams }: PageProps<"/mfa">) {
     <main className="flex min-h-dvh items-center justify-center bg-background p-4">
       <Card className="w-full max-w-sm">
         <CardHeader>
-          <CardTitle>{enrollment ? "Set up two-factor authentication" : "Enter your authenticator code"}</CardTitle>
+          <CardTitle>
+            {enrollment ? "Set up two-factor authentication" : reauth ? "Confirm it's you" : "Enter your authenticator code"}
+          </CardTitle>
           <CardDescription>
             {enrollment
               ? "Scan this QR code with an authenticator app (for example Apple Passwords, Google Authenticator or 1Password), then enter the 6-digit code it shows."

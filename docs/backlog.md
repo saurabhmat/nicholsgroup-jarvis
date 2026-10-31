@@ -269,7 +269,8 @@ T-010 – T-017 are the serial spine. After T-017: auth/shell (T-018 – T-026) 
 - acceptance: Supabase TOTP enrolment + challenge for all users (D-6); recovery procedure documented (admin-assisted factor reset, audited); every data route and RLS rejects AAL1; Playwright: AAL1 user cannot load data; short session lifetime configured.
 
 ### T-020 Step-up helper
-- status: proposed
+- status: approved
+- note (Oct 31, 2026): built on `agent/pilot-build`; browser test pending (`.agent/pr/T-020.md`).
 - depends: T-019
 - acceptance: `requireStepUp(maxAgeSeconds)` forces a fresh TOTP challenge; unit + Playwright tests; used later by approvals.
 

@@ -7,6 +7,9 @@ import "server-only";
 //   sign-in and MFA pages.
 // - requireLane(laneId): the session plus the lane client from the lane router (membership, enabled lane, AAL2).
 // - requireRole(laneId, roles): requireLane plus core.has_lane_role() for actions a view does not imply.
+// - requireStepUp(maxAgeSeconds): AAL2 AND a TOTP verification within the last maxAgeSeconds (T-020), from the
+//   verified token's `amr` claim; otherwise AuthError("step_up_required") and the page sends the user to
+//   /mfa?reauth=1 for a fresh code. Approvals use it (approvals spec: step_up_max_age_s).
 // - authActions(cookies): sign-in by 6-digit email code (primary, D-6) or email link; sign-out (T-018).
 // - refreshSession(cookies): for proxy.ts; refreshes the session cookie and reports whether it is signed in.
 // Failures throw AuthError (401 without a valid session, 403 otherwise); authErrorResponse() turns one into a Response.
@@ -18,7 +21,8 @@ import { authClient } from "./client";
 import { getLaneClient, LaneAccessError, type LaneClient, type LaneRouter, type LaneSession } from "../lane-router/index";
 
 export type Aal = "aal1" | "aal2";
-export type VerifiedSession = LaneSession & { aal: Aal };
+/** `mfaVerifiedAt`: when the user last entered a TOTP code (epoch seconds, from the verified `amr` claim). */
+export type VerifiedSession = LaneSession & { aal: Aal; mfaVerifiedAt: number | null };
 export type SessionReader = () => Promise<VerifiedSession | null>;
 export type Role = "owner" | "finance_operator" | "viewer" | "admin_technical";
 
@@ -36,9 +40,16 @@ export type CookieStore = {
 
 export class AuthError extends Error {
   readonly status: 401 | 403;
-  readonly reason: "no_session" | "mfa_required" | "forbidden";
+  readonly reason: "no_session" | "mfa_required" | "step_up_required" | "forbidden";
   constructor(reason: AuthError["reason"]) {
-    super({ no_session: "Sign in required.", mfa_required: "Two-factor verification required.", forbidden: "Not allowed." }[reason]);
+    super(
+      {
+        no_session: "Sign in required.",
+        mfa_required: "Two-factor verification required.",
+        step_up_required: "Enter a fresh authenticator code.",
+        forbidden: "Not allowed.",
+      }[reason],
+    );
     this.name = "AuthError";
     this.reason = reason;
     this.status = reason === "no_session" ? 401 : 403;
@@ -56,19 +67,44 @@ export function cookieSessionReader(cookies: CookieStore): SessionReader {
     if (error?.name === "AuthRetryableFetchError") throw new Error("auth service unavailable");
     const claims = data?.claims;
     if (error || !claims || typeof claims.sub !== "string" || claims.sub === "") return null;
-    return { userId: claims.sub, accessToken: token, aal: claims.aal === "aal2" ? "aal2" : "aal1" };
+    return {
+      userId: claims.sub,
+      accessToken: token,
+      aal: claims.aal === "aal2" ? "aal2" : "aal1",
+      mfaVerifiedAt: totpVerifiedAt(claims.amr),
+    };
   };
+}
+
+/**
+ * The latest TOTP verification time in an `amr` claim (epoch seconds), or null. Only the detailed form (objects with
+ * timestamps) counts; the RFC 8176 string form carries no time, so step-up fails closed with it.
+ */
+export function totpVerifiedAt(amr: unknown): number | null {
+  if (!Array.isArray(amr)) return null;
+  let latest: number | null = null;
+  for (const entry of amr as unknown[]) {
+    if (typeof entry !== "object" || entry === null) continue;
+    const { method, timestamp } = entry as { method?: unknown; timestamp?: unknown };
+    if ((method === "totp" || method === "mfa/totp") && typeof timestamp === "number" && Number.isFinite(timestamp)) {
+      latest = latest === null ? timestamp : Math.max(latest, timestamp);
+    }
+  }
+  return latest;
 }
 
 export type Guards = {
   requireSession(opts?: { allowAal1?: boolean }): Promise<VerifiedSession>;
   requireLane(laneId: LaneId): Promise<{ session: VerifiedSession; laneId: LaneId; client: LaneClient }>;
   requireRole(laneId: LaneId, roles: readonly Role[]): Promise<{ session: VerifiedSession; laneId: LaneId; client: LaneClient }>;
+  /** AAL2 plus a TOTP code entered within the last `maxAgeSeconds` (30 – 3600). */
+  requireStepUp(maxAgeSeconds: number): Promise<VerifiedSession>;
 };
 
 export function createGuards(
   readSession: SessionReader,
   router: Pick<LaneRouter, "getLaneClient"> = { getLaneClient },
+  now: () => number = Date.now,
 ): Guards {
   const requireSession: Guards["requireSession"] = async (opts) => {
     // The reader returns null for a missing or invalid session; anything it throws is an outage or misconfiguration.
@@ -99,7 +135,17 @@ export function createGuards(
     return ctx;
   };
 
-  return { requireSession, requireLane, requireRole };
+  const requireStepUp: Guards["requireStepUp"] = async (maxAgeSeconds) => {
+    if (!Number.isInteger(maxAgeSeconds) || maxAgeSeconds < 30 || maxAgeSeconds > 3600) throw new AuthError("forbidden");
+    const session = await requireSession();
+    const nowSeconds = Math.floor(now() / 1000);
+    const at = session.mfaVerifiedAt;
+    // A timestamp in the future (clock skew beyond 60 s) does not count either.
+    if (at === null || nowSeconds - at > maxAgeSeconds || at - nowSeconds > 60) throw new AuthError("step_up_required");
+    return session;
+  };
+
+  return { requireSession, requireLane, requireRole, requireStepUp };
 }
 
 // ---------------------------------------------------------------- sign-in and sign-out (T-018)
