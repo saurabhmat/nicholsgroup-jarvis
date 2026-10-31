@@ -1,11 +1,7 @@
 -- Lane config (T-011): versioned insert-only rows, the database secret check, the current-version view and RLS.
 begin;
 select plan(45);
-
-create function pg_temp.claims(p_email text, p_aal text) returns text language sql as $$
-  select set_config('request.jwt.claims',
-    json_build_object('sub', (select id from auth.users where email = p_email), 'role', 'authenticated', 'aal', p_aal)::text, true);
-$$;
+\ir helpers/lane_rls.psql
 
 -- ---------------------------------------------------------------- schema
 select has_table('core', 'lane_config', 'core.lane_config exists');

@@ -2,30 +2,7 @@
 -- finance_operator and viewer (named view 'finance') in PKG, outsider in none. Only PKG is enabled.
 begin;
 select plan(52);
-
--- Sets the JWT claims for a persona (run as postgres, before switching role).
-create function pg_temp.claims(p_email text, p_aal text) returns text language sql as $$
-  select set_config('request.jwt.claims',
-    json_build_object('sub', (select id from auth.users where email = p_email), 'role', 'authenticated', 'aal', p_aal)::text, true);
-$$;
--- The persona's user id. Security definer (test-only, owned by postgres) so it also works after `set role
--- authenticated`, which cannot read auth.users.
-create function pg_temp.uid(p_email text) returns uuid language sql security definer as $$
-  select id from auth.users where email = p_email;
-$$;
--- allowed_lanes(uid, view) for a persona asking about itself at the given AAL, called as authenticated.
-create function pg_temp.lanes_for(p_email text, p_view text, p_aal text default 'aal2') returns text[] language plpgsql as $$
-declare
-  v_uid uuid := pg_temp.uid(p_email);
-  v_result text[];
-begin
-  perform pg_temp.claims(p_email, p_aal);
-  set local role authenticated;
-  v_result := core.allowed_lanes(v_uid, p_view);
-  reset role;
-  return v_result;
-end;
-$$;
+\ir helpers/lane_rls.psql
 
 -- ---------------------------------------------------------------- schema and function properties
 select has_table('core', 'users', 'core.users exists');

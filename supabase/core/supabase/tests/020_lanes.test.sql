@@ -2,6 +2,7 @@
 -- seeded memberships (T-012): owner in every lane, the other personas in PKG only, the outsider in none.
 begin;
 select plan(36);
+\ir helpers/lane_rls.psql
 
 -- ---------------------------------------------------------------- schema
 select has_table('core', 'lanes', 'core.lanes exists');
@@ -66,13 +67,6 @@ select ok((select updated_at > created_at from core.lanes where code = 'TST'), '
 select is(has_function_privilege('anon', 'core.allowed_lanes(uuid, text)', 'execute'), false, 'anon cannot execute allowed_lanes');
 select is(has_table_privilege('authenticated', 'core.lane_policies', 'insert, update, delete'), false, 'authenticated has no DML on lane_policies');
 select is(has_table_privilege('authenticated', 'core.lanes', 'insert, update, delete'), false, 'authenticated has no DML on lanes');
-
--- ---------------------------------------------------------------- RLS against real memberships
--- Sets the JWT claims for a persona (run as postgres, before switching role).
-create function pg_temp.claims(p_email text, p_aal text) returns text language sql as $$
-  select set_config('request.jwt.claims',
-    json_build_object('sub', (select id from auth.users where email = p_email), 'role', 'authenticated', 'aal', p_aal)::text, true);
-$$;
 
 select pg_temp.claims('owner@example.test', 'aal2');
 set local role authenticated;

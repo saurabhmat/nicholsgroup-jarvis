@@ -86,7 +86,7 @@ These tasks have all their dependencies done and all their `needs` checked. A hu
 - T-000 — done (merged).
 - T-001 — done (merged).
 - T-002, T-006, T-075 — done (merged).
-- T-010, T-011, T-012 — approved by Saurabh Oct 31, 2026; built on the combined branch `agent/pilot-build`.
+- T-010 – T-017 — approved by Saurabh Oct 31, 2026 ("continue with the remaining code"); built on the combined branch `agent/pilot-build`.
 - T-005, T-007, T-030, T-022 — approved Oct 28, 2026. Build order: T-005 first, then T-007 in the main worktree, with T-030 and T-022 in parallel worktrees.
 - T-003 (imports T-005's secret-pattern list) — approved Oct 24, 2026; in progress in its own worktree.
 
@@ -228,7 +228,7 @@ T-010 – T-017 are the serial spine. After T-017: auth/shell (T-018 – T-026) 
 - acceptance: `core.users`, `core.memberships` (lane, role ∈ owner/finance_operator/viewer/admin_technical, named views for viewer); `core.allowed_lanes(uid, view)` security-definer function (replaces T-010's fail-closed placeholder with `create or replace`, same signature; `search_path = ''`, schema-qualified, stable; returns no lanes unless `uid = auth.uid()` or the caller is service_role, and only at aal2, so nobody can list another user's lanes; decide whether disabled lanes are excluded; pgTAP re-asserts anon cannot execute it and its search_path; rewrite T-010's stand-in membership tests in `020_lanes.test.sql` against real memberships, including a non-PKG member who cannot read the PKG policy — T-010 security review M2, L2); pgTAP proves cross-lane denial, the AAL2 requirement, viewer limited to named views; finance_operator can generate and sign off finance reports, admin_technical has no content views by default.
 
 ### T-013 RLS conventions and catalog test
-- status: proposed
+- status: done
 - depends: T-012
 - acceptance: migration template + pgTAP helper for the standard lane policy; a catalog test that fails if any table in lane-scoped schemas lacks `lane_id`, RLS enabled, or a policy; documented in `supabase/core/README.md`. Control-plane tables without `lane_id` by design (`core.lanes`, keyed by `code`; `core.users`) go on an explicit, reviewed allowlist (T-012 review L4). Policies call `core.allowed_lanes(uid, '<view>')` with a name from `core.view_names()`; actions that a view does not imply (e.g. sign-off) use `core.has_lane_role()`.
 
