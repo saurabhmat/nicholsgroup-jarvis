@@ -349,7 +349,8 @@ T-010 – T-017 are the serial spine. After T-017: auth/shell (T-018 – T-026) 
 - acceptance: route per provider with raw-body signature verification interface, timestamp tolerance, dedupe table `core.webhook_events` (lane_id, provider, event id) + RLS + pgTAP; unsigned/replayed requests rejected (tests); payloads enqueued as Inngest events, not processed inline.
 
 ### T-037 Inngest setup
-- status: proposed
+- status: approved
+- note (Oct 31, 2026): built on `agent/pilot-build`; check against the Inngest dev server pending (`.agent/pr/T-037.md`).
 - depends: T-005
 - acceptance: Inngest client, `/api/inngest` route, typed event schemas where `laneId` is required (type test proves events without it fail to compile); runs against the local dev server.
 

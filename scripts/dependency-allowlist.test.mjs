@@ -35,7 +35,7 @@ const ALLOWED = {
   // vendor SDKs join this list with their connectors (T-04x...); zod for the contract schemas, vitest for the kit (T-030)
   "packages/connectors": [...CORE_ONLY, "vitest", "zod"],
   // T-016/T-017: Supabase clients, only importable from the lane router and packages/core/src/auth (lint)
-  "packages/core": ["@supabase/ssr", "@supabase/supabase-js", "server-only", "zod"],
+  "packages/core": ["@supabase/ssr", "@supabase/supabase-js", "inngest", "server-only", "zod"], // inngest: T-037
   "packages/eslint-plugin": ["@eslint-community/eslint-plugin-eslint-comments", "@nichols/core", "eslint", "typescript-eslint"],
   // T-022: shadcn/ui primitives and their test setup
   "packages/ui": [
