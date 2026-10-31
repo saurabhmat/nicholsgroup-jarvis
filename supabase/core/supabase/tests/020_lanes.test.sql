@@ -83,7 +83,7 @@ reset role;
 
 select pg_temp.claims('admin-technical@example.test', 'aal2');
 set local role authenticated;
-select set_eq($$select lane_id from core.lane_policies$$, array['PKG'], 'admin_technical reads the PKG policy (config view)');
+select set_eq($$select lane_id from core.lane_policies$$, array['PKG'], 'admin_technical reads the PKG policy (lane_policies view)');
 reset role;
 
 select pg_temp.claims('finance-operator@example.test', 'aal2');

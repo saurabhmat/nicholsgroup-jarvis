@@ -6,21 +6,35 @@
 -- ---------------------------------------------------------------- views and roles
 
 -- Every view name a policy may pass to allowed_lanes(). Adding a module's view = `create or replace` here (reviewed).
+-- Removing one needs a data migration for memberships.views (the check below is not re-validated); allowed_lanes()
+-- also intersects with this list, so a removed name stops granting access at once.
 create function core.view_names() returns text[]
 language sql
 immutable
 set search_path = ''
 as $$
   select array[
-    'lanes', 'lane_policies', 'memberships',                                  -- registry and administration
+    'lanes', 'lane_policies', 'memberships', 'action_index',                  -- registry and administration
     'finance', 'approvals', 'assistant', 'briefing', 'comms', 'calendar',     -- content
     'documents', 'projects', 'commitments', 'memory',
     'connections', 'health', 'jobs', 'config', 'audit'                        -- operations (no content)
   ]::text[];
 $$;
 
+-- Content views a viewer may be granted by name (architecture §5.4, e.g. NL weekly cash). Never administration,
+-- operations, approvals or the assistant.
+create function core.viewer_view_names() returns text[]
+language sql
+immutable
+set search_path = ''
+as $$
+  select array['finance', 'briefing', 'projects', 'calendar', 'commitments']::text[];
+$$;
+
 -- Views each role gets in a lane it belongs to. A viewer additionally gets the named views on its membership.
 -- admin_technical has no content view (architecture §5.4); break-glass access is a separate, time-boxed grant.
+-- 'approvals' is owner-only here: a proposer (e.g. finance_operator) sees its own proposals through the act.* policy's
+-- proposer clause (docs/specs/approvals.md §4). 'action_index' (status counts, no content) is for every member.
 create function core.role_views(p_role text) returns text[]
 language sql
 immutable
@@ -28,16 +42,17 @@ set search_path = ''
 as $$
   select case p_role
     when 'owner' then core.view_names()
-    when 'finance_operator' then array['lanes', 'finance', 'approvals']::text[]
-    when 'admin_technical' then array['lanes', 'lane_policies', 'memberships', 'connections', 'health', 'jobs', 'config']::text[]
-    when 'viewer' then array['lanes']::text[]
+    when 'finance_operator' then array['lanes', 'action_index', 'finance']::text[]
+    when 'admin_technical' then array['lanes', 'action_index', 'lane_policies', 'memberships', 'connections', 'health', 'jobs', 'config']::text[]
+    when 'viewer' then array['lanes', 'action_index']::text[]
     else '{}'::text[]
   end;
 $$;
 
 revoke all on function core.view_names() from public, anon;
+revoke all on function core.viewer_view_names() from public, anon;
 revoke all on function core.role_views(text) from public, anon;
-grant execute on function core.view_names(), core.role_views(text) to authenticated, service_role;
+grant execute on function core.view_names(), core.viewer_view_names(), core.role_views(text) to authenticated, service_role;
 
 -- ---------------------------------------------------------------- core.users
 
@@ -59,7 +74,7 @@ create table core.memberships (
   lane_id text not null references core.lanes (code) on update restrict on delete restrict,
   role text not null check (role in ('owner', 'finance_operator', 'viewer', 'admin_technical')),
   -- Named views a viewer may open in this lane (e.g. 'finance'). Only viewers carry them.
-  views text[] not null default '{}' check (array_position(views, null) is null and views <@ core.view_names()),
+  views text[] not null default '{}' check (array_position(views, null) is null and views <@ core.viewer_view_names()),
   created_at timestamptz not null default now(),
   updated_at timestamptz not null default now(),
   primary key (user_id, lane_id),
@@ -74,9 +89,24 @@ create trigger memberships_set_updated_at before update on core.memberships
 
 -- ---------------------------------------------------------------- core.allowed_lanes (replaces the T-010 placeholder)
 
--- Lanes in which p_uid may open p_view. Fails closed (empty array) unless:
---   - the caller asks about itself (p_uid = auth.uid()) with an aal2 session, or the caller is service_role;
---   - the lane is enabled and p_uid has a membership whose role (or viewer's named views) includes p_view.
+-- True when the caller may ask about p_uid: it is the caller itself at aal2, or the session's database role is
+-- service_role (jobs). The role is the one PostgREST set from the verified JWT (`set role`), read from the `role`
+-- setting; inside a security-definer function that is still the caller's role. JWT claims alone are not trusted
+-- for this, because any session can set request.jwt.claims.
+create function core.may_resolve(p_uid uuid) returns boolean
+language sql
+stable
+set search_path = ''
+as $$
+  select p_uid is not null and (
+    pg_catalog.current_setting('role', true) = 'service_role'
+    or (p_uid = (select auth.uid()) and (select auth.jwt() ->> 'aal') = 'aal2')
+  );
+$$;
+revoke all on function core.may_resolve(uuid) from public, anon, authenticated;
+
+-- Lanes in which p_uid may open p_view. Fails closed (empty array) unless core.may_resolve(p_uid), the lane is
+-- enabled, and p_uid's membership role (or a viewer's named views) includes p_view, a currently known view name.
 -- Security definer so RLS policies can call it without granting users read access to other members' rows.
 create or replace function core.allowed_lanes(p_uid uuid, p_view text) returns text[]
 language sql
@@ -87,21 +117,41 @@ as $$
   select coalesce(array_agg(m.lane_id order by m.lane_id), '{}'::text[])
   from core.memberships m
   join core.lanes l on l.code = m.lane_id
-  where p_uid is not null
+  where core.may_resolve(p_uid)
     and p_view is not null
     and m.user_id = p_uid
     and l.enabled
-    and (
-      (select auth.jwt() ->> 'role') = 'service_role'
-      or (p_uid = (select auth.uid()) and (select auth.jwt() ->> 'aal') = 'aal2')
-    )
-    and p_view = any (core.role_views(m.role) || m.views);
+    and p_view = any (core.role_views(m.role) || m.views)
+    and p_view = any (core.view_names());
 $$;
 comment on function core.allowed_lanes(uuid, text) is
   'Lanes where p_uid may open p_view. Own uid at aal2 only (service_role: any uid); enabled lanes only.';
 -- `create or replace` keeps the T-010 grants; restate them so this file is the reference.
 revoke all on function core.allowed_lanes(uuid, text) from public, anon;
 grant execute on function core.allowed_lanes(uuid, text) to authenticated, service_role;
+
+-- True when p_uid holds one of p_roles in an enabled lane p_lane, under the same rules as allowed_lanes(). For
+-- actions a view does not imply, e.g. finance sign-off (owner, finance_operator) that a viewer with the 'finance'
+-- view must not perform.
+create function core.has_lane_role(p_uid uuid, p_lane text, p_roles text[]) returns boolean
+language sql
+stable
+security definer
+set search_path = ''
+as $$
+  select exists (
+    select 1
+    from core.memberships m
+    join core.lanes l on l.code = m.lane_id
+    where core.may_resolve(p_uid)
+      and m.user_id = p_uid
+      and m.lane_id = p_lane
+      and l.enabled
+      and m.role = any (p_roles)
+  );
+$$;
+revoke all on function core.has_lane_role(uuid, text, text[]) from public, anon;
+grant execute on function core.has_lane_role(uuid, text, text[]) to authenticated, service_role;
 
 -- ---------------------------------------------------------------- RLS
 
