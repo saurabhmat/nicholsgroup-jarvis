@@ -205,7 +205,7 @@ T-010 – T-017 are the serial spine. After T-017: auth/shell (T-018 – T-026) 
 ### T-016 Lane router
 - status: proposed
 - depends: T-012, T-005
-- acceptance: `getLaneClient(laneId, session)` returns a client for the lane's data plane (registry: `core` only, `nl` slot defined); throws without membership or for disabled lanes; service client only for jobs via `getLaneJobClient(laneId)`; unit tests incl. disabled-lane and non-member cases.
+- acceptance: `getLaneClient(laneId, session)` returns a client for the lane's data plane (registry: `core` only, `nl` slot defined); throws without membership or for disabled lanes; service client only for jobs via `getLaneJobClient(laneId)`; unit tests incl. disabled-lane and non-member cases. The lane router entry module must `import "server-only"`, with a test that reads the source and fails without it (T-003 lint review M2). It lives at `packages/core/src/lane-router`, the only path allowed to create Supabase clients or touch the secret key besides the token vault (`packages/connectors/src/vault`) and `packages/core/src/env`.
 
 ### T-017 Session → allowed lanes helpers
 - status: proposed
@@ -268,7 +268,7 @@ T-010 – T-017 are the serial spine. After T-017: auth/shell (T-018 – T-026) 
 ### T-030 Connector contract
 - status: proposed
 - depends: T-002
-- acceptance: `Connector` interface per architecture §6 M2 with Zod types (`Provider`, `Connection`, `ReadOp`, `SourceResult` with `as_of` + freshness, `RawRecord`); reusable contract test kit that any connector must pass.
+- acceptance: `Connector` interface per architecture §6 M2 with Zod types (`Provider`, `Connection`, `ReadOp`, `SourceResult` with `as_of` + freshness, `RawRecord`); reusable contract test kit that any connector must pass. Every connector entry module and `packages/connectors/src/vault/**` must `import "server-only"`, with a test that fails without it (T-003 lint review M2). Writes are exposed only via `@nichols/connectors/write` (an approvals-only import; boundary lint fails any other importer) and `executeWrite` requires the branded `ApprovedAction`. Inside `packages/connectors` a connector may define `executeWrite` and re-export it without renaming, but never import and call it (T-003 lint review H6).
 
 ### T-031 Connections and sync runs tables
 - status: proposed
@@ -283,7 +283,7 @@ T-010 – T-017 are the serial spine. After T-017: auth/shell (T-018 – T-026) 
 ### T-033 Token access + redaction in connectors
 - status: proposed
 - depends: T-032, T-030
-- acceptance: `getToken(conn)` only exported inside `packages/connectors` (lint-enforced); a shared redacting logger; tests prove tokens never appear in logs, API responses, RSC payloads or prompt builders (canary-token test).
+- acceptance: `getToken(conn)` only exported inside `packages/connectors` (lint-enforced); a shared redacting logger; tests prove tokens never appear in logs, API responses, RSC payloads or prompt builders (canary-token test). The token vault code lives under `packages/connectors/src/vault/**`: that is the only path outside the lane router and `packages/core/src/env` allowed to call `getSupabaseSecretKey` (T-003 lint rule).
 
 ### T-034 Connector HTTP client + MSW harness
 - status: proposed
@@ -653,7 +653,7 @@ T-110, T-111 and T-114 are **track W5**, parallel with the connectors. T-112 nee
 - status: proposed
 - depends: T-013, T-014
 - needs: D-19
-- acceptance: Spec: `docs/specs/approvals.md` §4. `act.proposed_actions` (full column set in the spec incl. `payload_sha256` over canonical JSON of lane+type+connection+target+payload, `expected_before`, `consequences`, `approved_hash`, `deferred_until`, `expires_at`), insert-only `act.status_history` and `act.execution_claims` (primary key action_id: exactly one claim, no attempt column), allowed transitions enforced in SQL (proposed→approved/rejected/expired/invalidated; approved→executing/expired/invalidated; executing→verified/failed); payload/hash/target immutable after `proposed`; `act.is_allowed_type()` with excluded classes rejected at DB level; `authenticated` has no direct DML; `act.propose` is service-role only (the app computes the JCS hash) and users call security-definer functions (`approve` with in-SQL step-up check of the JWT `amr` or an equivalent single-use token, `reject`, `defer`, `supersede`; every security-definer function sets an explicit `search_path`) and service-only `claim_execution`/`mark_*`/`invalidate_approved`/`purge_content` (purge clears payload body, consequences, rationale, source_refs and expected_before, keeping hash, recipients, subject and timestamps; per D-19 it runs in the same transaction as every transition into a terminal state, and pgTAP proves no terminal action keeps a body); `email.*` refused unless `lane_policies.store_outbound_drafts`; index row `core.action_index`; pgTAP for every illegal transition, tampering, AAL1/stale step-up, viewer/finance_operator/admin_technical denial and cross-lane denial.
+- acceptance: Spec: `docs/specs/approvals.md` §4. `act.proposed_actions` (full column set in the spec incl. `payload_sha256` over canonical JSON of lane+type+connection+target+payload, `expected_before`, `consequences`, `approved_hash`, `deferred_until`, `expires_at`), insert-only `act.status_history` and `act.execution_claims` (primary key action_id: exactly one claim, no attempt column), allowed transitions enforced in SQL (proposed→approved/rejected/expired/invalidated; approved→executing/expired/invalidated; executing→verified/failed); payload/hash/target immutable after `proposed`; `act.is_allowed_type()` with excluded classes rejected at DB level; `authenticated` has no direct DML; `act.propose` is service-role only (the app computes the JCS hash) and users call security-definer functions (`approve` with in-SQL step-up check of the JWT `amr` or an equivalent single-use token, `reject`, `defer`, `supersede`; every security-definer function sets an explicit `search_path`) and service-only `claim_execution`/`mark_*`/`invalidate_approved`/`purge_content` (purge clears payload body, consequences, rationale, source_refs and expected_before, keeping hash, recipients, subject and timestamps; per D-19 it runs in the same transaction as every transition into a terminal state, and pgTAP proves no terminal action keeps a body); `email.*` refused unless `lane_policies.store_outbound_drafts`; index row `core.action_index`; pgTAP for every illegal transition, tampering, AAL1/stale step-up, viewer/finance_operator/admin_technical denial and cross-lane denial. Write exposure: connector writes are reachable only via `@nichols/connectors/write` (approvals-only import) and `executeWrite` requires the branded `ApprovedAction` (T-003 lint review H6).
 
 ### T-111 Proposal service
 - status: proposed
@@ -664,7 +664,7 @@ T-110, T-111 and T-114 are **track W5**, parallel with the connectors. T-112 nee
 ### T-193 ApprovedAction brand and mint boundary
 - status: proposed
 - depends: T-111, T-003
-- acceptance: Spec: `docs/specs/approvals.md` §5. `ApprovedAction` branded type constructible only by `mintApprovedAction` inside `packages/modules/approvals`; connector `executeWrite` accepts only that type and re-checks `sha256(payload) === payloadSha256`; boundary lint rule fails any import of `executeWrite` or the mint function outside the approvals package (lint fixture test); `prepareWrite` never executes (contract-kit test).
+- acceptance: Spec: `docs/specs/approvals.md` §5. `ApprovedAction` branded type constructible only by `mintApprovedAction` inside `packages/modules/approvals`; connector `executeWrite` accepts only that type and re-checks `sha256(payload) === payloadSha256`; boundary lint rule fails any import of `executeWrite` or the mint function outside the approvals package (lint fixture test); `prepareWrite` never executes (contract-kit test). Writes are exposed only via `@nichols/connectors/write` (approvals-only import) and `executeWrite` requires the branded `ApprovedAction`; renaming re-exports of `executeWrite` or `mintApprovedAction` is also a lint failure.
 
 ### T-112 Approve/reject API
 - status: proposed

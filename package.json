@@ -10,8 +10,8 @@
     "dev": "turbo run dev --filter=@nichols/web",
     "build": "turbo run build",
     "typecheck": "turbo run typecheck",
-    "lint": "turbo run lint",
-    "test": "turbo run test && node --test scripts/next-task.test.mjs",
+    "lint": "turbo run lint && eslint --no-error-on-unmatched-pattern scripts supabase/functions eslint.config.mjs",
+    "test": "turbo run test && node --test scripts/next-task.test.mjs scripts/tsconfig-strict.test.mjs scripts/eslint-enforcement.test.mjs scripts/dependency-allowlist.test.mjs scripts/no-lint-bypass.test.mjs",
     "test:db": "node scripts/test-db.mjs",
     "db:start": "supabase start --workdir supabase/core",
     "db:stop": "supabase stop --workdir supabase/core",
@@ -21,6 +21,8 @@
     "test:injection": "node -e \"console.log('test:injection: placeholder, real suite arrives in T-102')\""
   },
   "devDependencies": {
+    "@nichols/core": "workspace:*",
+    "@nichols/eslint-plugin": "workspace:*",
     "@types/node": "20.19.43",
     "eslint": "9.39.5",
     "turbo": "^2",

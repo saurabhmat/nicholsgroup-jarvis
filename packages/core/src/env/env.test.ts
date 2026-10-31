@@ -80,8 +80,7 @@ describe("server env", () => {
   });
 
   it.each(CORE_REQUIRED)("fails fast when %s is missing (local)", (name) => {
-    const env: Record<string, string> = { ...CORE };
-    delete env[name];
+    const env: Record<string, string> = Object.fromEntries(Object.entries(CORE).filter(([key]) => key !== name));
     const err = catchError(() => parseServerEnv(env));
     expect(err).toBeInstanceOf(EnvValidationError);
     expect((err as EnvValidationError).missing).toEqual([name]);

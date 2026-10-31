@@ -1,5 +1,8 @@
 {
   "$schema": "https://turborepo.dev/schema.json",
+  "globalDependencies": [
+    "tsconfig.base.json"
+  ],
   "tasks": {
     "dev": {
       "cache": false,
@@ -25,7 +28,8 @@
     "lint": {
       "dependsOn": [
         "^lint"
-      ]
+      ],
+      "cache": false
     },
     "test": {
       "dependsOn": [

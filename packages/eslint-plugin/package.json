@@ -1,0 +1,23 @@
+{
+  "name": "@nichols/eslint-plugin",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Architectural boundary lint rules for the Nichols portal (CLAUDE.md non-negotiable rules 1, 4, 5).",
+  "exports": {
+    ".": "./src/index.js"
+  },
+  "scripts": {
+    "typecheck": "tsc -p tsconfig.json",
+    "lint": "eslint .",
+    "test": "vitest run"
+  },
+  "dependencies": {
+    "@eslint-community/eslint-plugin-eslint-comments": "^4.8.1",
+    "@nichols/core": "workspace:*"
+  },
+  "devDependencies": {
+    "eslint": "9.39.5",
+    "typescript-eslint": "8.72.0"
+  }
+}
