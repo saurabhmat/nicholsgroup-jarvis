@@ -14,6 +14,7 @@ const CORE_ONLY = ["@nichols/core"];
 const ALLOWED = {
   ".": ["@nichols/core", "@nichols/eslint-plugin", "@types/node", "eslint", "turbo", "typescript", "typescript-eslint", "vitest"],
   "apps/web": [
+    "@nichols/connectors", // T-035: the /api/connect routes wrap @nichols/connectors/oauth (no vendor SDKs come with it)
     "@nichols/core",
     "@nichols/eslint-plugin",
     "@nichols/ui", // T-022

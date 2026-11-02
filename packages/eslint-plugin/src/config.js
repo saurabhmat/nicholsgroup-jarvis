@@ -167,13 +167,15 @@ export const RESTRICTED_NAMES = {
   rememberSecret: { allow: TOKEN_VAULT, hint: "SecretValue registers credentials itself" },
   scrubKnownSecrets: { allow: [...TOKEN_VAULT, ...CONNECTOR_LOG], hint: "use redactText from @nichols/connectors/redact" },
   forgetSecretsForTests: {
-    allow: [...TOKEN_VAULT, "packages/connectors/src/http/client.test.ts"],
+    allow: [...TOKEN_VAULT, "packages/connectors/src/http/client.test.ts", "packages/connectors/src/oauth/flow.test.ts"],
     hint: "clearing the registry switches off exact-match redaction; vault tests only",
   },
   mintLaneBoundConnection: { allow: CONNECTORS, hint: "connections are minted by the connection loader; use loadConnection" },
   buildProviderSchemas: { allow: CONNECTORS, hint: "internal to the connector contract" },
   connectionLoader: { allow: CONNECTORS, hint: "it reads with the RLS-bypassing job client; ask a connector" },
   createConnectionLoader: { allow: TOKEN_VAULT, hint: "internal to the token vault; use connectionLoader inside packages/connectors" },
+  connectionStore: { allow: CONNECTORS, hint: "it writes connection rows with the job client; the OAuth callback uses it (T-035)" },
+  createConnectionStore: { allow: TOKEN_VAULT, hint: "internal to the token vault; use connectionStore inside packages/connectors" },
 };
 
 /** Files where no-public-secret-name is off: negative corpora that deliberately spell out secret-looking names. */

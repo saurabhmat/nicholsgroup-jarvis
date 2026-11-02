@@ -136,6 +136,11 @@ const cases = [
   ["connectors testing in a module test", `import { useMockServer } from "@nichols/connectors/testing/msw";`, "packages/modules/finance/src/x.test.ts", undefined],
   ["msw in the harness itself", `import { setupServer } from "msw/node";`, "packages/connectors/src/testing/msw/index.ts", undefined],
   ["msw type import in app code", `import type { RequestHandler } from "msw";`, "apps/web/app/x.ts", undefined],
+  // T-035: connection rows are created only inside packages/connectors; the oauth subpath is the app's entry point
+  ["connectionStore in apps/web", `export const s = vault.connectionStore;`, "apps/web/app/api/x/route.ts", "nichols/no-restricted-names"],
+  ["connectionStore in the OAuth flow", `import { connectionStore } from "../vault/index";`, "packages/connectors/src/oauth/index.ts", undefined],
+  ["createConnectionStore outside the vault", `import { createConnectionStore } from "../vault/connections";`, "packages/connectors/src/oauth/index.ts", "nichols/no-restricted-names"],
+  ["oauth subpath in an app route", `import { oauthFlow } from "@nichols/connectors/oauth";`, "apps/web/app/api/connect/x/route.ts", undefined],
   ["redact subpath in apps/web", `import { redactText } from "@nichols/connectors/redact";`, "apps/web/instrumentation.ts", undefined],
 ];
 

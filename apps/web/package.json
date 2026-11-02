@@ -12,6 +12,7 @@
     "test:e2e": "playwright test"
   },
   "dependencies": {
+    "@nichols/connectors": "workspace:*",
     "@nichols/core": "workspace:*",
     "@nichols/ui": "workspace:*",
     "next": "16.4.2",

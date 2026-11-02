@@ -9,7 +9,8 @@
     "./testing/msw": "./src/testing/msw/index.ts",
     "./writer": "./src/contract/writer.ts",
     "./internal": "./src/contract/internal.ts",
-    "./redact": "./src/redact.ts"
+    "./redact": "./src/redact.ts",
+    "./oauth": "./src/oauth/index.ts"
   },
   "scripts": {
     "typecheck": "tsc -b",

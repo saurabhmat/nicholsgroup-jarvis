@@ -205,6 +205,26 @@ isOneToOne: false
                   Relationships: [
                     
                   ]
+                },"oauth_states": {
+                  Row: {
+                    "code_verifier": string,"created_at": string,"expires_at": string,"id": string,"lane_id": string,"provider": string,"redirect_uri": string,"state_hash": string,"user_id": string
+                  }
+                  ComputedFields: never
+                  Insert: {
+                    "code_verifier": string,"created_at"?: string,"expires_at"?: string,"id"?: string,"lane_id": string,"provider": string,"redirect_uri": string,"state_hash": string,"user_id": string
+                  }
+                  Update: {
+                    "code_verifier"?: string,"created_at"?: string,"expires_at"?: string,"id"?: string,"lane_id"?: string,"provider"?: string,"redirect_uri"?: string,"state_hash"?: string,"user_id"?: string
+                  }
+                  Relationships: [
+                    {
+      foreignKeyName: "oauth_states_lane_id_fkey"
+      columns: ["lane_id"]
+isOneToOne: false
+      referencedRelation: "lanes"
+      referencedColumns: ["code"]
+    }
+                  ]
                 },"sync_runs": {
                   Row: {
                     "connection_id": string,"created_at": string,"error": Json | null,"finished_at": string | null,"id": string,"job_run_id": string | null,"kind": string,"lane_id": string,"records_received": number,"records_written": number,"started_at": string,"status": string,"trigger": string,"updated_at": string
@@ -312,6 +332,14 @@ isOneToOne: false
                            },
 "mfa_verification_attempt":
 { Args: { "event": Json }; Returns: Json
+                           },
+"oauth_state_consume":
+{ Args: { "p_lane": string,"p_state_hash": string }; Returns: {
+              "code_verifier": string,"provider": string,"redirect_uri": string
+            }[]
+                           },
+"oauth_state_create":
+{ Args: { "p_code_verifier": string,"p_lane": string,"p_provider": string,"p_redirect_uri": string,"p_state_hash": string }; Returns: undefined
                            },
 "role_views":
 { Args: { "p_role": string }; Returns: (string)[]
