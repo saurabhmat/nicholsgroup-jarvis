@@ -356,7 +356,9 @@ begin
        with ordinality as r (object_type, external_id, payload, source_updated_at, deleted, synced_at, n)
   -- Within one batch the newest provider version of an object wins (undated versions rank last); among equal ones the
   -- later element.
-  order by r.object_type, r.external_id, r.source_updated_at desc nulls last, r.n desc
+  -- An undated deletion ranks first, so in-batch ordering matches the cross-batch rule below.
+  order by r.object_type, r.external_id, coalesce(r.deleted and r.source_updated_at is null, false) desc,
+           r.source_updated_at desc nulls last, r.n desc
   on conflict (connection_id, object_type, external_id) do update
     set payload = excluded.payload,
         -- An undated deletion keeps the stored provider time, so a late older update is still skipped afterwards.
@@ -365,8 +367,13 @@ begin
     -- An older provider version never overwrites a newer one (late or replayed batches). A record with no
     -- source_updated_at never overwrites one that has it (it is skipped like a stale one), except a deletion: a delete
     -- (Graph @removed, Stripe deleted) must win unless the stored version is strictly newer than a dated one.
+    -- At an equal provider time only a deletion, or an update over a row that is not deleted, applies: replaying the
+    -- update a deletion followed cannot undo it. A strictly newer dated update does un-delete (a newer version means
+    -- the provider restored the object); that is intended.
     where raw.source_records.source_updated_at is null
-       or excluded.source_updated_at >= raw.source_records.source_updated_at
+       or excluded.source_updated_at > raw.source_records.source_updated_at
+       or (excluded.source_updated_at = raw.source_records.source_updated_at
+           and (excluded.deleted or not raw.source_records.deleted))
        or (excluded.deleted and excluded.source_updated_at is null);
   get diagnostics v_count = row_count;
   return v_count;

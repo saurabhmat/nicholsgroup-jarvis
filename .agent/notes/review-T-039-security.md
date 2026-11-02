@@ -38,4 +38,10 @@
 | LOW-4 | `stripForbidden` lost an own `__proto__` key | Fixed: copied with `defineProperty`; test. |
 | LOW-5 | Several TS walks | Partly: NUL and key length share one walk (`payloadProblem`), the guards scan once. Left as is: JSON size is a separate stringify. |
 
-Known and accepted (not fixed): containment false positives caffeine, itinerary, sewage (fein, itin, wage are substring terms); run-together all-caps or lower-case names (`EMPLOYEESSN`, `employeessn`, `sSNLast`, `secretsmanager`); a punctuated word glued to another (`employee.S.S.N`); cross-script look-alikes; the first-round deferrals. Within one batch an undated deletion loses to a dated update of the same object.
+Known and accepted (not fixed): containment false positives caffeine, itinerary, sewage (fein, itin, wage are substring terms); run-together all-caps or lower-case names (`EMPLOYEESSN`, `employeessn`, `sSNLast`, `secretsmanager`); a punctuated word glued to another (`employee.S.S.N`); cross-script look-alikes; the first-round deferrals.
+
+## Round 4 (security-reviewer on 02f8d64)
+| ID | Finding | Resolution |
+|---|---|---|
+| HIGH-1 | A replayed update with an equal `source_updated_at` undid an undated deletion (the delete keeps the stored time, and `>=` let the replay through). | Fixed: equal time applies only for a deletion or over a non-deleted row; strictly newer dated update still un-deletes (intended: newer version means restored). pgTAP added. |
+| MED-1 | In-batch dedupe let a dated update beat an undated deletion, unlike across batches. | Fixed: order by `(deleted and source_updated_at is null) desc` first. pgTAP added. |

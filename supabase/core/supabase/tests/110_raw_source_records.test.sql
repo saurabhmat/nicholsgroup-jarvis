@@ -1,7 +1,7 @@
 -- Raw source records (T-039): private table, service_role-only upsert bound to the connection's lane, server-set hash
 -- and provider, the content-body guard (database side), and cross-lane / API-role denial.
 begin;
-select plan(281);
+select plan(289);
 \ir helpers/lane_rls.psql
 
 select has_table('raw', 'source_records', 'raw.source_records exists');
@@ -390,6 +390,36 @@ select core.source_records_upsert('PKG', '00000000-0000-4000-8000-000000000391',
 reset role;
 select is((select payload ->> 'v' from raw.source_records where external_id = 'b2' and object_type = 'Ord'), 'tie-later',
           'undated versions rank last; equal times fall back to the later element');
+
+-- replay of an update after an undated deletion must not undo it; a strictly newer update may restore
+set local role service_role;
+select is(core.source_records_upsert('PKG', '00000000-0000-4000-8000-000000000391',
+  '[{"object_type": "Inv", "external_id": "r1", "payload": {"v": 1}, "source_updated_at": "2026-11-01T10:00:00Z", "synced_at": "2026-11-05T01:00:00Z"}]'),
+  1, 'a dated update is stored');
+select is(core.source_records_upsert('PKG', '00000000-0000-4000-8000-000000000391',
+  '[{"object_type": "Inv", "external_id": "r1", "payload": {"v": 1}, "deleted": true, "synced_at": "2026-11-05T02:00:00Z"}]'),
+  1, 'an undated deletion applies');
+select is(core.source_records_upsert('PKG', '00000000-0000-4000-8000-000000000391',
+  '[{"object_type": "Inv", "external_id": "r1", "payload": {"v": 1}, "source_updated_at": "2026-11-01T10:00:00Z", "synced_at": "2026-11-05T03:00:00Z"}]'),
+  0, 'a replay of the same update after the deletion is skipped');
+reset role;
+select is((select deleted from raw.source_records where external_id = 'r1' and object_type = 'Inv'), true,
+          'the object stays deleted after the replay');
+set local role service_role;
+select is(core.source_records_upsert('PKG', '00000000-0000-4000-8000-000000000391',
+  '[{"object_type": "Inv", "external_id": "r1", "payload": {"v": 2}, "source_updated_at": "2026-11-02T10:00:00Z", "synced_at": "2026-11-05T04:00:00Z"}]'),
+  1, 'a strictly newer dated update after a deletion is applied (restored object)');
+reset role;
+select is((select deleted from raw.source_records where external_id = 'r1' and object_type = 'Inv'), false,
+          'a strictly newer update un-deletes (intended)');
+set local role service_role;
+select is(core.source_records_upsert('PKG', '00000000-0000-4000-8000-000000000391',
+  '[{"object_type": "Inv", "external_id": "r2", "payload": {"v": 1}, "source_updated_at": "2026-11-01T10:00:00Z", "synced_at": "2026-11-05T01:00:00Z"},
+    {"object_type": "Inv", "external_id": "r2", "payload": {"v": 1}, "deleted": true, "synced_at": "2026-11-05T01:00:01Z"}]'),
+  1, 'a batch of a dated update and an undated deletion writes one row');
+reset role;
+select is((select deleted from raw.source_records where external_id = 'r2' and object_type = 'Inv'), true,
+          'in one batch an undated deletion beats a dated update (matches cross-batch)');
 
 -- a key literally named !deep is stored (it is not the deep-nesting marker)
 set local role service_role;
