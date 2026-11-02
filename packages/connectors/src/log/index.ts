@@ -65,7 +65,13 @@ export function createConnectorLogger(options: { sink?: LogSink; context?: LogCo
     info: (event, fields) => write("info", event, fields),
     warn: (event, fields) => write("warn", event, fields),
     error: (event, fields) => write("error", event, fields),
-    child: (more) => createConnectorLogger({ sink, now, context: { ...context, ...more } }),
+    // Only defined keys override: binding `{ laneId: undefined }` must not drop a lane bound earlier.
+    child: (more) =>
+      createConnectorLogger({
+        sink,
+        now,
+        context: { ...context, ...Object.fromEntries(Object.entries(more).filter(([, v]) => v !== undefined)) },
+      }),
   };
 }
 

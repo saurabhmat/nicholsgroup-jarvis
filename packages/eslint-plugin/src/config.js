@@ -28,6 +28,7 @@ import { noPublicSecretName } from "./rules/no-public-secret-name.js";
 import { noRestrictedNames } from "./rules/no-restricted-names.js";
 import { noServerSecretInClient } from "./rules/no-server-secret-in-client.js";
 import { noSupabaseSecret } from "./rules/no-supabase-secret.js";
+import { noTestOnlyImport } from "./rules/no-test-only-import.js";
 import { noVaultAccess } from "./rules/no-vault-access.js";
 import { noVendorSdk } from "./rules/no-vendor-sdk.js";
 
@@ -45,6 +46,7 @@ export const plugin = {
     "no-process-env": noProcessEnv,
     "no-vault-access": noVaultAccess,
     "no-cross-package-relative": noCrossPackageRelative,
+    "no-test-only-import": noTestOnlyImport,
   },
 };
 
@@ -68,6 +70,9 @@ export const VAULT_NAMES_ALLOWED = [...TOKEN_VAULT, "packages/core/src/db/types.
  * executor and the token vault. Module jobs join this list deliberately (reviewed) when they are written.
  */
 export const JOB_RUNNERS = [...INNGEST_CLIENT, ...APPROVALS, ...TOKEN_VAULT];
+/** Test harness modules: test files only (T-034), plus the harness's own sources. */
+export const TEST_ONLY_MODULES = ["msw", "@nichols/connectors/testing"];
+export const TEST_HARNESS = ["packages/connectors/src/testing"];
 /** Files that may read process.env (besides test files and vitest configs). */
 export const PROCESS_ENV_ALLOWED = [
   ...CORE_ENV,
@@ -205,6 +210,7 @@ export function nicholsConfig({ root }) {
         "nichols/no-process-env": ["error", { allow: PROCESS_ENV_ALLOWED }],
         "nichols/no-vault-access": ["error", { allow: VAULT_NAMES_ALLOWED }],
         "nichols/no-cross-package-relative": "error",
+        "nichols/no-test-only-import": ["error", { modules: TEST_ONLY_MODULES, allow: TEST_HARNESS }],
         // The boundary rules cannot be switched off from inside a file.
         "@eslint-community/eslint-comments/no-restricted-disable": ["error", "nichols/*"],
         "@eslint-community/eslint-comments/no-unlimited-disable": "error",

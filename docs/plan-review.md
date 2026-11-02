@@ -129,6 +129,11 @@ Under the review policy (dev tooling: one security review, fix BLOCKERs only), t
   - **LOW, not fixed:** nested token-set fields are not registered (L2); the 8-character minimum for exact-match scrubbing is not documented for connector authors (L3); `reveal` and `getToken` are generic names that could clash (L4/L6: consider `revealForProvider`); `export * from` the vault is only caught by the relative-import rule, not by name (L5); `actorUserId` is not validated as a UUID, so a bad value maps to `transient` instead of `invalid_input` (L6/L3); tests for PostgREST `PGRST202` and the logger's sink/child edge cases (code L1/L2); the RSC and prompt-builder canary tests are approximations (L9).
   - **Deployment (security L8, human):** production Postgres must not log statement parameters (`log_min_duration_statement`, `auto_explain`, `pgaudit` parameter logging): the token functions take the secret as a bind parameter.
 
+- **T-034 review** (security + code review Nov 2, 2026; both HIGHs and all MEDIUMs fixed in `T-034: review fixes`):
+  - **Contract note for connectors (T-050 – T-070):** a 401 is `forbidden` with `http_status: 401`; that status is the refresh signal (refresh once, retry once; pass `auth` as a function). A caller's own abort rejects with the abort reason (AbortError), not a ConnectorError: it is not a provider failure and must not be written to `sync_runs.error`. Path parameters fill one segment and cannot be `.`, `..` or empty.
+  - **Assigned to T-050:** the OAuth token endpoint needs an `errorCode` extractor reading `body.error`, so `invalid_grant` reaches `provider_error_code` and maps to `reconnect_required` (T-195).
+  - **LOW, not fixed:** rate-limit buckets are never freed and keep the first caller's clock (code L2; a few dozen connections per process, so bounded in practice); the MSW guard is per test file (`useMockServer`), not a global vitest setup (security L4; unmocked requests are blocked and fail the test in files that use it).
+
 ## 7. Decisions log
 
 ### Oct 24, 2026 — Infrastructure (human-owned; closes H-001, H-010)

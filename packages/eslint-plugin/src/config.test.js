@@ -129,6 +129,13 @@ const cases = [
   ["scrubKnownSecrets in a connector", `import { scrubKnownSecrets } from "../vault/secret";`, "packages/connectors/src/quickbooks/index.ts", "nichols/no-restricted-names"],
   ["forgetSecretsForTests in a module", `secret.forgetSecretsForTests();`, "packages/modules/finance/src/x.test.ts", "nichols/no-restricted-names"],
   ["forgetSecretsForTests in the vault tests", `import { forgetSecretsForTests } from "./secret";`, "packages/connectors/src/vault/x.test.ts", undefined],
+  // T-034: test harnesses only in tests
+  ["msw in app code", `import { http } from "msw";`, "apps/web/app/x.ts", "nichols/no-test-only-import"],
+  ["msw/node in a module", `import { setupServer } from "msw/node";`, "packages/modules/finance/src/x.ts", "nichols/no-test-only-import"],
+  ["connectors testing subpath in apps/web", `import { useMockServer } from "@nichols/connectors/testing/msw";`, "apps/web/lib/x.ts", "nichols/no-test-only-import"],
+  ["connectors testing in a module test", `import { useMockServer } from "@nichols/connectors/testing/msw";`, "packages/modules/finance/src/x.test.ts", undefined],
+  ["msw in the harness itself", `import { setupServer } from "msw/node";`, "packages/connectors/src/testing/msw/index.ts", undefined],
+  ["msw type import in app code", `import type { RequestHandler } from "msw";`, "apps/web/app/x.ts", undefined],
   ["redact subpath in apps/web", `import { redactText } from "@nichols/connectors/redact";`, "apps/web/instrumentation.ts", undefined],
 ];
 
