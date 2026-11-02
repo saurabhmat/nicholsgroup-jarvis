@@ -11,6 +11,10 @@
 //  - The Supabase secret key accessor: lane router, the connector token vault (packages/connectors/src/vault, the path
 //    T-032/T-033 must use) and packages/core/src/env.
 //  - Inngest client location: packages/core/src/inngest (client + event schemas, T-037) and the route handler.
+//  - Connector tokens (T-033): the token functions are used only inside packages/connectors; the Vault itself (SQL
+//    names) only in the token vault (packages/connectors/src/vault) and the generated DB types; the internal contract
+//    subpath (`@nichols/connectors/internal`: mint, schema builder) only inside packages/connectors, where the
+//    connection loader also lives (packages/connectors/src/vault).
 import { fileURLToPath } from "node:url";
 import eslintComments from "@eslint-community/eslint-plugin-eslint-comments";
 import { noEnvResultCopy } from "./rules/no-env-result-copy.js";
@@ -21,6 +25,7 @@ import { noPublicSecretName } from "./rules/no-public-secret-name.js";
 import { noRestrictedNames } from "./rules/no-restricted-names.js";
 import { noServerSecretInClient } from "./rules/no-server-secret-in-client.js";
 import { noSupabaseSecret } from "./rules/no-supabase-secret.js";
+import { noVaultAccess } from "./rules/no-vault-access.js";
 import { noVendorSdk } from "./rules/no-vendor-sdk.js";
 
 export const plugin = {
@@ -35,6 +40,7 @@ export const plugin = {
     "no-env-result-copy": noEnvResultCopy,
     "no-free-text-env-read": noFreeTextEnvRead,
     "no-process-env": noProcessEnv,
+    "no-vault-access": noVaultAccess,
   },
 };
 
@@ -47,6 +53,11 @@ export const TOKEN_VAULT = ["packages/connectors/src/vault"];
 export const AUTH_SESSION = ["packages/core/src/auth", "apps/web/proxy.ts"];
 export const INNGEST_CLIENT = ["packages/core/src/inngest", "apps/web/app/api/inngest"];
 export const SCRIPTS = ["scripts", "apps/web/scripts"];
+/**
+ * Where the Vault and the token functions may be named: the token vault, the generated DB types (type keys), and this
+ * plugin's own sources (the rule and its fixtures spell the names out on purpose).
+ */
+export const VAULT_NAMES_ALLOWED = [...TOKEN_VAULT, "packages/core/src/db/types.ts", "packages/eslint-plugin/src"];
 /**
  * Code that may use the RLS-bypassing job client (T-016 review H1): the Inngest client and route, the approvals
  * executor and the token vault. Module jobs join this list deliberately (reviewed) when they are written.
@@ -114,6 +125,7 @@ export const VENDORS = {
   ...Object.fromEntries(CONNECTOR_ONLY.map((pattern) => [pattern, CONNECTORS])),
   child_process: [...CONNECTORS, ...SCRIPTS],
   "@anthropic-ai/*": AI,
+  "@nichols/connectors/internal": CONNECTORS, // mint + schema builder: connector implementations and the loader (T-033)
   inngest: INNGEST_CLIENT, // the SDK reads INNGEST_* from process.env itself (T-037 review L1)
   ...DB_DRIVERS,
 };
@@ -136,6 +148,12 @@ export const RESTRICTED_NAMES = {
   getAnthropicEnv: { allow: [...AI, ...CORE_ENV], hint: "the Anthropic key is read inside packages/ai" },
   getInngestEnv: { allow: [...INNGEST_CLIENT, ...CORE_ENV], hint: "the Inngest keys are read by the Inngest client only" },
   getInngest: { allow: INNGEST_CLIENT, hint: "send events with sendLaneEvent (validated, lane-checked)" },
+  getToken: { allow: CONNECTORS, hint: "connector tokens are read only inside packages/connectors" },
+  storeToken: { allow: CONNECTORS, hint: "connector tokens are written only inside packages/connectors" },
+  rotateToken: { allow: CONNECTORS, hint: "connector tokens are written only inside packages/connectors" },
+  revokeToken: { allow: CONNECTORS, hint: "connector tokens are deleted only inside packages/connectors" },
+  createTokenVault: { allow: TOKEN_VAULT, hint: "internal to the token vault; use getToken" },
+  reveal: { allow: CONNECTORS, hint: "a SecretValue is revealed only inside packages/connectors (HTTP client, token refresh)" },
 };
 
 /** Files where no-public-secret-name is off: negative corpora that deliberately spell out secret-looking names. */
@@ -170,6 +188,7 @@ export function nicholsConfig({ root }) {
         "nichols/no-env-result-copy": "error",
         "nichols/no-free-text-env-read": ["error", { allow: CORE_ENV }],
         "nichols/no-process-env": ["error", { allow: PROCESS_ENV_ALLOWED }],
+        "nichols/no-vault-access": ["error", { allow: VAULT_NAMES_ALLOWED }],
         // The boundary rules cannot be switched off from inside a file.
         "@eslint-community/eslint-comments/no-restricted-disable": ["error", "nichols/*"],
         "@eslint-community/eslint-comments/no-unlimited-disable": "error",

@@ -8,6 +8,7 @@
     "./lanes": "./src/lanes/index.ts",
     "./lane-config": "./src/lane-config/index.ts",
     "./audit": "./src/audit/index.ts",
+    "./secrets": "./src/secrets/index.ts",
     "./auth": "./src/auth/index.ts",
     "./lane-router": "./src/lane-router/index.ts",
     "./inngest": "./src/inngest/index.ts",

@@ -21,6 +21,7 @@ import { noPublicSecretName } from "./rules/no-public-secret-name.js";
 import { noRestrictedNames } from "./rules/no-restricted-names.js";
 import { noServerSecretInClient } from "./rules/no-server-secret-in-client.js";
 import { noSupabaseSecret } from "./rules/no-supabase-secret.js";
+import { noVaultAccess } from "./rules/no-vault-access.js";
 import { noVendorSdk } from "./rules/no-vendor-sdk.js";
 
 RuleTester.describe = describe;
@@ -380,5 +381,18 @@ tester.run("no-free-text-env-read", noFreeTextEnvRead, {
     { code: `const m = process.env["NEXT_PUBLIC_VERCEL_GIT_COMMIT_REF"];`, filename: WEB, options: FREE, errors: err("freeText") },
     { code: `const { NEXT_PUBLIC_VERCEL_GIT_REPO_OWNER } = process.env;`, filename: FINANCE, options: FREE, errors: err("freeText") },
     { code: `const m = globalThis.process.env.NEXT_PUBLIC_VERCEL_GIT_COMMIT_MESSAGE;`, filename: WEB, options: FREE, errors: err("freeText") },
+  ],
+});
+
+tester.run("no-vault-access", noVaultAccess, {
+  valid: [
+    { code: `db.schema("core").rpc("connection_token_read", a);`, filename: VAULT, options: [{ allow: ["packages/connectors/src/vault"] }] },
+    { code: `const s = "vaulted"; const t = "my vault";`, filename: WEB, options: [{ allow: ["packages/connectors/src/vault"] }] },
+  ],
+  invalid: [
+    { code: `db.schema("vault");`, filename: CONNECTOR, options: [{ allow: ["packages/connectors/src/vault"] }], errors: err("vault") },
+    { code: `const t = " Vault.secrets ";`, filename: WEB, options: [{ allow: [] }], errors: err("vault") },
+    { code: "db.rpc(`connection_token_${x}`);", filename: FINANCE, options: [{ allow: [] }], errors: err("vault") },
+    { code: `db.from("connection_secrets");`, filename: AI, options: [{ allow: [] }], errors: err("vault") },
   ],
 });

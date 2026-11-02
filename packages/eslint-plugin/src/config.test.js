@@ -85,6 +85,26 @@ const cases = [
   ["spreading a connector env", `const e = requireConnectorEnv("stripe"); export const c = { ...e };`, "packages/connectors/src/x.ts", "nichols/no-env-result-copy"],
   ["parseConnectorEnv in a connector", `import { parseConnectorEnv } from "@nichols/core/env/server";`, "packages/connectors/src/x.ts", "nichols/no-restricted-names"],
   ["free-text env read in app code", `export const m = process.env.NEXT_PUBLIC_VERCEL_GIT_COMMIT_MESSAGE;`, "apps/web/app/x.ts", "nichols/no-free-text-env-read"],
+  // T-033: connector tokens, the Vault and the internal contract subpath
+  ["internal subpath in apps/web", `import { mintLaneBoundConnection } from "@nichols/connectors/internal";`, "apps/web/app/x.ts", "nichols/no-vendor-sdk"],
+  ["internal subpath in a module", `import { buildProviderSchemas } from "@nichols/connectors/internal";`, "packages/modules/finance/src/x.ts", "nichols/no-vendor-sdk"],
+  ["internal subpath in the approvals module", `import { mintLaneBoundConnection } from "@nichols/connectors/internal";`, "packages/modules/approvals/src/x.ts", "nichols/no-vendor-sdk"],
+  ["internal subpath inside connectors", `import { mintLaneBoundConnection } from "@nichols/connectors/internal";`, "packages/connectors/src/quickbooks/index.ts", undefined],
+  ["getToken in apps/web", `import { getToken } from "@nichols/connectors";`, "apps/web/app/x.ts", "nichols/no-restricted-names"],
+  ["getToken member access in a module", `export const t = vault.getToken("PKG", c);`, "packages/modules/finance/src/x.ts", "nichols/no-restricted-names"],
+  ["getToken in a connector", `import { getToken } from "../vault/index";`, "packages/connectors/src/quickbooks/index.ts", undefined],
+  ["revokeToken in the approvals module", `import { revokeToken } from "@nichols/connectors";`, "packages/modules/approvals/src/x.ts", "nichols/no-restricted-names"],
+  ["SecretValue.reveal in apps/web", `export const v = secret.reveal();`, "apps/web/app/x.ts", "nichols/no-restricted-names"],
+  ["SecretValue.reveal in packages/ai", `export const v = secret.reveal();`, "packages/ai/src/prompt.ts", "nichols/no-restricted-names"],
+  ["SecretValue.reveal in a connector", `export const v = secret.reveal();`, "packages/connectors/src/http/client.ts", undefined],
+  ["createTokenVault outside the vault", `import { createTokenVault } from "../vault/tokens";`, "packages/connectors/src/quickbooks/index.ts", "nichols/no-restricted-names"],
+  ["Vault schema in a module", `await db.schema("vault").from("decrypted_secrets").select();`, "packages/modules/admin/src/x.ts", "nichols/no-vault-access"],
+  ["Vault table name in apps/web", `export const t = "vault.decrypted_secrets";`, "apps/web/app/x.ts", "nichols/no-vault-access"],
+  ["token RPC in a connector outside the vault", `await db.schema("core").rpc("connection_token_read", a);`, "packages/connectors/src/quickbooks/index.ts", "nichols/no-vault-access"],
+  ["token RPC in a template", "export const f = `connection_token_${op}`;", "packages/core/src/lane-router/x.ts", "nichols/no-vault-access"],
+  ["token RPC in the token vault", `await db.schema("core").rpc("connection_token_read", a);`, "packages/connectors/src/vault/tokens.ts", undefined],
+  ["generated DB types name the token functions", `export type F = { "connection_token_read": 1 };`, "packages/core/src/db/types.ts", undefined],
+  ["ordinary word containing vault", `export const s = "vaulted ceiling";`, "apps/web/app/x.ts", undefined],
 ];
 
 const DISABLE = "@eslint-community/eslint-comments";

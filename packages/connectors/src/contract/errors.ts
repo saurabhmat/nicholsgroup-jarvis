@@ -1,3 +1,4 @@
+import { redactText } from "../log/redact";
 import {
   ERROR_MESSAGE_MAX,
   type ConnectorErrorInfo,
@@ -40,15 +41,17 @@ export class ConnectorError extends Error {
   readonly info: Readonly<ConnectorErrorInfo>;
 
   constructor(init: ConnectorErrorInit) {
-    const message = init.message.slice(0, ERROR_MESSAGE_MAX);
+    // Redacted here, once, for every connector: provider messages can echo tokens (T-033).
+    const message = redactText(init.message).slice(0, ERROR_MESSAGE_MAX) || "Connector error";
+    const id = (v: string | null | undefined) => (v == null ? null : redactText(v));
     super(message);
     this.info = Object.freeze({
       kind: init.kind,
       disposition: dispositionFor(init.kind),
       message,
       http_status: init.http_status ?? null,
-      provider_error_code: init.provider_error_code ?? null,
-      provider_tid: init.provider_tid ?? null,
+      provider_error_code: id(init.provider_error_code),
+      provider_tid: id(init.provider_tid),
       retry_after_seconds: init.retry_after_seconds ?? null,
       endpoint: init.endpoint ?? null,
     });
