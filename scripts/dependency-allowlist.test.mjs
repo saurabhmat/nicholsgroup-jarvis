@@ -33,7 +33,7 @@ const ALLOWED = {
   ],
   "packages/ai": CORE_ONLY, // @anthropic-ai/sdk joins this list with T-100
   // vendor SDKs join this list with their connectors (T-04x...); zod for the contract schemas, vitest for the kit (T-030)
-  "packages/connectors": [...CORE_ONLY, "vitest", "zod"],
+  "packages/connectors": [...CORE_ONLY, "msw", "vitest", "zod"], // msw: provider mocks for tests (T-034)
   // T-016/T-017: Supabase clients, only importable from the lane router and packages/core/src/auth (lint)
   "packages/core": ["@supabase/ssr", "@supabase/supabase-js", "inngest", "server-only", "zod"], // inngest: T-037
   "packages/eslint-plugin": ["@eslint-community/eslint-plugin-eslint-comments", "@nichols/core", "eslint", "typescript-eslint"],
