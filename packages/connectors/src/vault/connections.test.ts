@@ -34,6 +34,12 @@ function fake(opts: { upsertError?: unknown; row?: unknown; selectError?: unknow
 const kind = async (p: Promise<unknown>) => p.then(() => "ok", (e: { info?: { kind: string } }) => e.info?.kind);
 
 describe("createConnectionStore", () => {
+  it("records who started the connect as created_by", async () => {
+    const f = fake();
+    await createConnectionStore(f.clientFor).ensureConnection("PKG", "quickbooks", "realm-synthetic-1", "00000000-0000-4000-8000-0000000000a1");
+    expect(f.calls.upsert?.[0]).toMatchObject({ created_by: "00000000-0000-4000-8000-0000000000a1" });
+  });
+
   it("creates the row pending without touching an existing one, then reads it back by lane, provider and account", async () => {
     const f = fake();
     const conn = await createConnectionStore(f.clientFor).ensureConnection("PKG", "quickbooks", "realm-synthetic-1");

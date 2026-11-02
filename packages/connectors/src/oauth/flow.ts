@@ -64,7 +64,7 @@ export type Authorized = { userId: string; client: LaneClient };
 export type OAuthFlowDeps = {
   providers: readonly OAuthProvider[];
   states: StateStore;
-  connections: { ensureConnection(laneId: LaneId, provider: Provider, externalAccountId: string): Promise<LaneBoundConnection> };
+  connections: { ensureConnection(laneId: LaneId, provider: Provider, externalAccountId: string, createdBy?: string): Promise<LaneBoundConnection> };
   storeToken(laneId: LaneId, conn: LaneBoundConnection<string>, secret: SecretValue, expiresAt: Date | null, actorUserId?: string): Promise<void>;
   audit: Audit;
   /** HTTP client for a provider's token endpoint (injected in tests). */
@@ -88,6 +88,9 @@ export type CallbackResult =
 /** Thrown by `authorize` callbacks; the route maps it to 401/403. Anything else is an outage. */
 export type AuthorizeFn = (laneId: LaneId) => Promise<Authorized>;
 
+const OUTAGE_KINDS: ReadonlySet<string> = new Set(["transient", "rate_limited", "connection_unavailable"]);
+/** Scopes any OpenID provider adds on its own; everything else the token carries must have been requested. */
+const OIDC_SCOPES = ["openid", "profile", "email", "offline_access"];
 const SLUG = /^[a-z][a-z0-9-]{1,31}$/;
 
 export function createOAuthFlow(deps: OAuthFlowDeps) {
@@ -114,6 +117,8 @@ export function createOAuthFlow(deps: OAuthFlowDeps) {
       const { userId, client } = await authorize(laneId);
       const { clientId, redirectUri } = p.client();
       const { authorization } = await p.endpoints();
+      const url = new URL(authorization);
+      if (url.protocol !== "https:") throw new ConnectorError({ kind: "provider_error", message: "Authorization endpoint must be https" });
       const state = newState(laneId, deps.random);
       const verifier = newCodeVerifier(deps.random);
       await deps.states.create(client, laneId, p.provider, hashState(state), verifier, redirectUri);
@@ -123,8 +128,6 @@ export function createOAuthFlow(deps: OAuthFlowDeps) {
         action: "connection.connect_started",
         target: `provider:${p.provider}`,
       });
-      const url = new URL(authorization);
-      if (url.protocol !== "https:") throw new ConnectorError({ kind: "provider_error", message: "Authorization endpoint must be https" });
       const params = {
         ...p.authorizationParams,
         response_type: "code",
@@ -174,9 +177,11 @@ export function createOAuthFlow(deps: OAuthFlowDeps) {
           try {
             identity = await p.identify({ laneId, tokens, callback: query, http });
           } catch (e) {
+            // An outage while checking the account is not a refusal of the account.
+            if (isConnectorError(e) && OUTAGE_KINDS.has(e.info.kind)) throw e;
             throw new RefusedAccount(e);
           }
-          const connection = await deps.connections.ensureConnection(laneId, p.provider, identity.externalAccountId);
+          const connection = await deps.connections.ensureConnection(laneId, p.provider, identity.externalAccountId, userId);
           await deps.storeToken(laneId, connection, new SecretValue(JSON.stringify({ ...tokens, obtained_at: new Date().toISOString() })), identity.expiresAt, userId);
           return connection;
         });
@@ -216,6 +221,14 @@ export function createOAuthFlow(deps: OAuthFlowDeps) {
       });
       const parsed = TokenResponseSchema.safeParse(res.data);
       if (!parsed.success) throw new ConnectorError({ kind: "provider_error", message: "Token response is not valid", http_status: res.status });
+      // A token broader than the scopes we asked for is refused (e.g. a provider that merges earlier grants).
+      if (parsed.data.scope !== undefined) {
+        const allowed = new Set([...p.scopes, ...OIDC_SCOPES]);
+        if (parsed.data.scope.split(/[\s,]+/).some((g) => g !== "" && !allowed.has(g))) {
+          new SecretValue(JSON.stringify(parsed.data));
+          throw new ConnectorError({ kind: "provider_error", message: "Token carries scopes that were not requested" });
+        }
+      }
       // Register every credential the response carries before anything can log it.
       new SecretValue(JSON.stringify(parsed.data));
       return parsed.data;

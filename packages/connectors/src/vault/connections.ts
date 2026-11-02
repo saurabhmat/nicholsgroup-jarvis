@@ -11,14 +11,14 @@ import type { JobClientFor } from "./tokens";
 
 export interface ConnectionStore {
   /** The lane's connection for this provider account, created `pending` when there is none; minted lane-bound. */
-  ensureConnection(laneId: LaneId, provider: Provider, externalAccountId: string): Promise<LaneBoundConnection>;
+  ensureConnection(laneId: LaneId, provider: Provider, externalAccountId: string, createdBy?: string): Promise<LaneBoundConnection>;
 }
 
 const LANE_ID = /^[A-Z]{1,8}$/;
 
 export function createConnectionStore(clientFor: JobClientFor): ConnectionStore {
   return {
-    async ensureConnection(laneId, provider, externalAccountId) {
+    async ensureConnection(laneId, provider, externalAccountId, createdBy) {
       if (typeof laneId !== "string" || !LANE_ID.test(laneId) || typeof externalAccountId !== "string" || externalAccountId.length === 0) {
         throw new ConnectorError({ kind: "invalid_input", message: "A lane and an account id are required" });
       }
@@ -32,7 +32,7 @@ export function createConnectionStore(clientFor: JobClientFor): ConnectionStore 
       try {
         const table = () => client.schema("core").from("connections");
         const inserted = await table().upsert(
-          { lane_id: laneId, provider, external_account_id: externalAccountId, status: "pending" },
+          { lane_id: laneId, provider, external_account_id: externalAccountId, status: "pending", ...(createdBy ? { created_by: createdBy } : {}) },
           { onConflict: "lane_id,provider,external_account_id", ignoreDuplicates: true },
         );
         // 23514: a check refused the account id (format, or it looks like a secret). Database text is never passed on.

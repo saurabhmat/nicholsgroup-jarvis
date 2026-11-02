@@ -59,8 +59,8 @@ select is(pg_temp.try_create('admin-technical@example.test', 'aal2', 'APK', 's-c
 select is(pg_temp.try_create('owner@example.test', 'aal2', 'NL', 's-disabled'), '42501', 'a disabled lane is refused');
 select is(pg_temp.try_create('owner@example.test', 'aal2', 'PKG', 's-badprov', 'dropbox'), '23514', 'an unknown provider is refused');
 select is((select count(*)::int from core.oauth_states), 2, 'only the two allowed connects were stored');
-select ok(not exists (select 1 from core.oauth_states where state_hash in (select pg_temp.h('s-admin')) and code_verifier = 's-admin'),
-          'the state itself is not stored, only its hash');
+select is((select count(*)::int from core.oauth_states where state_hash = pg_temp.h('s-admin')), 1,
+          'the row is keyed by the SHA-256 of the state (the column cannot hold the raw state)');
 
 -- ---------------------------------------------------------------- consume: binding and single use
 select is(pg_temp.try_consume('owner@example.test', 'aal2', 'PKG', 's-admin'), null, 'another user (even an owner) cannot consume it');

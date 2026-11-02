@@ -10,5 +10,3 @@ export async function connectAuthorizer(): Promise<AuthorizeFn> {
     return { userId: session.userId, client };
   };
 }
-
-export const NO_STORE = { "cache-control": "no-store" } as const;

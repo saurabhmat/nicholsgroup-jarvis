@@ -12,6 +12,8 @@ import { http, HttpResponse, useMockServer } from "../testing/msw/index";
 import { forgetSecretsForTests, isSecretValue, SecretValue } from "../vault/secret";
 import { createHttpClient } from "../http/client";
 import { createOAuthFlow, type OAuthProvider } from "./flow";
+import { createConnectHandlers } from "./handlers";
+import { AuthError } from "@nichols/core/auth";
 import { codeChallenge, hashState } from "./pkce";
 import type { StateStore } from "./state";
 
@@ -60,7 +62,7 @@ function setup(over: { provider?: Partial<OAuthProvider>; auditFails?: boolean }
       audits.push(e);
     },
   };
-  const ensured: [string, string, string][] = [];
+  const ensured: [string, string, string, string | undefined][] = [];
   const stored: { laneId: string; connId: string; secret: SecretValue; expiresAt: Date | null; actor?: string }[] = [];
   const logs: LogEntry[] = [];
   const provider: OAuthProvider = {
@@ -79,8 +81,8 @@ function setup(over: { provider?: Partial<OAuthProvider>; auditFails?: boolean }
     providers: [provider],
     states: stateStore,
     connections: {
-      async ensureConnection(laneId, prov, externalAccountId) {
-        ensured.push([laneId, prov, externalAccountId]);
+      async ensureConnection(laneId, prov, externalAccountId, createdBy) {
+        ensured.push([laneId, prov, externalAccountId, createdBy]);
         return mintLaneBoundConnection({
           id: "00000000-0000-4000-8000-0000000000c9",
           lane_id: laneId,
@@ -104,7 +106,7 @@ function setup(over: { provider?: Partial<OAuthProvider>; auditFails?: boolean }
       createHttpClient({ provider: p.provider, laneId, baseUrl, errorCode: (b) => (b as { error?: string } | null)?.error, logger: createConnectorLogger({ sink: (e) => logs.push(e) }) }),
   });
   const as = (userId: string) => async (laneId: string) => ({ userId, client: { uid: userId, laneId } as never });
-  return { flow, states, audits, ensured, stored, logs, now, as };
+  return { flow, provider, states, audits, ensured, stored, logs, now, as };
 }
 
 /** Plays the provider: reads the authorization URL and builds the redirect back to the callback. */
@@ -150,7 +152,7 @@ describe("connect flow end to end (mock OAuth server)", () => {
     expect(form.get("client_secret")).toBeNull();
     expect(tokenRequests[0]?.auth).toBe(`Basic ${Buffer.from("synthetic-client-id:synthetic-client-secret").toString("base64")}`);
 
-    expect(t.ensured).toEqual([["PKG", "quickbooks", "realm-synthetic-1"]]);
+    expect(t.ensured).toEqual([["PKG", "quickbooks", "realm-synthetic-1", ADMIN]]); // created_by = who started it
     expect(t.stored).toHaveLength(1);
     const s = t.stored[0];
     expect(isSecretValue(s?.secret)).toBe(true);
@@ -312,8 +314,121 @@ describe("failures", () => {
   });
 
   it("refuses duplicate or malformed provider slugs", () => {
-    const base = setup();
-    void base;
     expect(() => setup({ provider: { slug: "Bad Slug" } })).toThrow(TypeError);
+    const p = setup().provider;
+    expect(() => createOAuthFlow({ providers: [p, p], states: {} as never, connections: {} as never, storeToken: (async () => undefined) as never, audit: {} as never })).toThrow(TypeError);
+  });
+});
+
+describe("flow hardening (T-035 review)", () => {
+  it("does not store a state when the authorization endpoint is not https", async () => {
+    const t = setup({ provider: { endpoints: async () => ({ authorization: "http://oauth.mock.test/authorize", token: `${OAUTH}/token` }) } });
+    await expect(t.flow.start("mockqbo", "PKG", t.as(ADMIN))).rejects.toBeInstanceOf(ConnectorError);
+    expect(t.states.size).toBe(0);
+    expect(t.audits).toHaveLength(0);
+  });
+
+  it("refuses a token that carries scopes that were not requested", async () => {
+    mockTokenEndpoint({ body: { access_token: ACCESS, scope: "com.intuit.quickbooks.accounting com.intuit.quickbooks.payment" } });
+    const t = setup();
+    const { query } = providerRedirect(await t.flow.start("mockqbo", "PKG", t.as(ADMIN)));
+    expect(await t.flow.callback("mockqbo", query, t.as(ADMIN))).toMatchObject({ ok: false, reason: "exchange_failed" });
+    expect(t.stored).toHaveLength(0);
+  });
+
+  it("accepts the requested scopes plus the OpenID basics", async () => {
+    mockTokenEndpoint({ body: { access_token: ACCESS, scope: "com.intuit.quickbooks.accounting openid email", x_refresh_token_expires_in: 100 } });
+    const t = setup();
+    const { query } = providerRedirect(await t.flow.start("mockqbo", "PKG", t.as(ADMIN)));
+    expect((await t.flow.callback("mockqbo", query, t.as(ADMIN))).ok).toBe(true);
+  });
+
+  it("an outage while identifying the account is unavailable; a refusal is account_refused", async () => {
+    mockTokenEndpoint();
+    const outage = setup({ provider: { identify: async () => { throw new ConnectorError({ kind: "transient", message: "x" }); } } });
+    const a = providerRedirect(await outage.flow.start("mockqbo", "PKG", outage.as(ADMIN)));
+    expect(await outage.flow.callback("mockqbo", a.query, outage.as(ADMIN))).toMatchObject({ ok: false, reason: "unavailable" });
+
+    const refuse = setup({ provider: { identify: async () => { throw new ConnectorError({ kind: "forbidden", message: "x" }); } } });
+    const b = providerRedirect(await refuse.flow.start("mockqbo", "PKG", refuse.as(ADMIN)));
+    expect(await refuse.flow.callback("mockqbo", b.query, refuse.as(ADMIN))).toMatchObject({ ok: false, reason: "account_refused" });
+  });
+});
+
+describe("route handlers (createConnectHandlers) over the real flow", () => {
+  const ORIGIN = "https://portal.example.test";
+  const start = (h: ReturnType<typeof createConnectHandlers>, opts: { origin?: string | null; provider?: string; lane?: string } = {}) =>
+    h.start(
+      new Request(`${ORIGIN}/api/connect/mockqbo/start?lane=${opts.lane ?? "PKG"}`, {
+        method: "POST",
+        headers: opts.origin === null ? {} : { origin: opts.origin ?? ORIGIN },
+      }),
+      opts.provider ?? "mockqbo",
+    );
+  const handlersFor = (t: ReturnType<typeof setup>, authorize: (laneId: string) => Promise<never> | Promise<{ userId: string; client: never }> = t.as(ADMIN)) =>
+    createConnectHandlers(t.flow, async () => authorize as never);
+
+  it("start: same-origin POST answers 303 to the consent page with no-store", async () => {
+    const t = setup();
+    const res = await start(handlersFor(t));
+    expect(res.status).toBe(303);
+    expect(res.headers.get("cache-control")).toBe("no-store");
+    expect(new URL(res.headers.get("location") as string).origin).toBe(OAUTH);
+  });
+
+  it("start: unknown provider 404, missing or foreign Origin 403, nothing stored", async () => {
+    const t = setup();
+    const h = handlersFor(t);
+    expect((await start(h, { provider: "nope" })).status).toBe(404);
+    expect((await start(h, { origin: null })).status).toBe(403);
+    expect((await start(h, { origin: "https://evil.example.test" })).status).toBe(403);
+    expect(t.states.size).toBe(0);
+  });
+
+  it("start: no session 401, wrong role 403, outage 503", async () => {
+    const t = setup();
+    expect((await start(handlersFor(t, async () => { throw new AuthError("no_session"); }))).status).toBe(401);
+    expect((await start(handlersFor(t, async () => { throw new AuthError("forbidden"); }))).status).toBe(403);
+    const quiet = console.error;
+    console.error = () => undefined;
+    try {
+      expect((await start(handlersFor(t, async () => { throw new Error("db down"); }))).status).toBe(503);
+    } finally {
+      console.error = quiet;
+    }
+  });
+
+  it("start: a rate-limited connect answers 429", async () => {
+    const t = setup({ provider: { endpoints: async () => { throw new ConnectorError({ kind: "rate_limited", message: "x" }); } } });
+    expect((await start(handlersFor(t))).status).toBe(429);
+  });
+
+  it("callback: success redirects to a fixed path with ok, no-store and no-referrer; code and state are not echoed", async () => {
+    mockTokenEndpoint();
+    const t = setup();
+    const h = handlersFor(t);
+    const { query } = providerRedirect(new URL((await start(h)).headers.get("location") as string).toString());
+    const res = await h.callback(new Request(`${ORIGIN}/api/connect/mockqbo/callback?${query}`), "mockqbo");
+    expect(res.status).toBe(303);
+    expect(res.headers.get("location")).toBe("/?connect=ok&provider=quickbooks");
+    expect(res.headers.get("cache-control")).toBe("no-store");
+    expect(res.headers.get("referrer-policy")).toBe("no-referrer");
+  });
+
+  it("callback: a failure redirects with the coarse reason; replay gives invalid_state", async () => {
+    mockTokenEndpoint();
+    const t = setup();
+    const h = handlersFor(t);
+    const { query } = providerRedirect((await start(h)).headers.get("location") as string);
+    const req = () => new Request(`${ORIGIN}/api/connect/mockqbo/callback?${query}`);
+    expect((await h.callback(req(), "mockqbo")).headers.get("location")).toBe("/?connect=ok&provider=quickbooks");
+    expect((await h.callback(req(), "mockqbo")).headers.get("location")).toBe("/?connect=invalid_state&provider=quickbooks");
+  });
+
+  it("callback: unknown provider 404, no session 401", async () => {
+    const t = setup();
+    const url = `${ORIGIN}/api/connect/mockqbo/callback?state=PKG.${"a".repeat(43)}&code=c`;
+    expect((await handlersFor(t).callback(new Request(url), "nope")).status).toBe(404);
+    expect((await handlersFor(t, async () => { throw new AuthError("no_session"); }).callback(new Request(url), "mockqbo")).status).toBe(401);
   });
 });
