@@ -87,6 +87,7 @@ These tasks have all their dependencies done and all their `needs` checked. A hu
 - T-001 — done (merged).
 - T-002, T-006, T-075 — done (merged).
 - T-010 – T-017 — approved by Saurabh Oct 31, 2026 ("continue with the remaining code"); built on the combined branch `agent/pilot-build`.
+- T-031 – T-035 (connector chain) and T-039 (raw source records) — approved by Saurabh Nov 2, 2026 ("approve the connector chain"); built on `agent/pilot-build`.
 - T-005, T-007, T-030, T-022 — approved Oct 28, 2026. Build order: T-005 first, then T-007 in the main worktree, with T-030 and T-022 in parallel worktrees.
 - T-003 (imports T-005's secret-pattern list) — approved Oct 24, 2026; in progress in its own worktree.
 
@@ -319,27 +320,27 @@ T-010 – T-017 are the serial spine. After T-017: auth/shell (T-018 – T-026) 
 - acceptance: `Connector` interface per architecture §6 M2 with Zod types (`Provider`, `Connection`, `ReadOp`, `SourceResult` with `as_of` + freshness, `RawRecord`); reusable contract test kit that any connector must pass. Every connector entry module and `packages/connectors/src/vault/**` must `import "server-only"`, with a test that fails without it (T-003 lint review M2). Writes are exposed only via `@nichols/connectors/write` (an approvals-only import; boundary lint fails any other importer) and `executeWrite` requires the branded `ApprovedAction`. Inside `packages/connectors` a connector may define `executeWrite` and re-export it without renaming, but never import and call it (T-003 lint review H6).
 
 ### T-031 Connections and sync runs tables
-- status: proposed
+- status: approved
 - depends: T-013
 - acceptance: `core.connections` (lane, provider, external account id, status, token expiry, last_sync, last_error) and `core.sync_runs`; RLS: admin_technical reads health columns only; pgTAP incl. cross-lane denial. The provider check constraint lists real providers only (no `mock`).
 
 ### T-032 Vault token functions
-- status: proposed
+- status: approved
 - depends: T-031
 - acceptance: security-definer `store/read/rotate/revoke` keyed by connection_id; execute revoked from `anon` and `authenticated`; pgTAP proves authenticated users cannot call them or read `vault.*`.
 
 ### T-033 Token access + redaction in connectors
-- status: proposed
+- status: approved
 - depends: T-032, T-030
 - acceptance: `getToken(conn)` only exported inside `packages/connectors` (lint-enforced); `@nichols/connectors/internal` (`mintLaneBoundConnection`, `buildProviderSchemas`) importable only from `packages/connectors` and the connection loader (lint rule with a failing fixture; from the T-030 review); a shared redacting logger; tests prove tokens never appear in logs, API responses, RSC payloads or prompt builders (canary-token test). The token vault code lives under `packages/connectors/src/vault/**`: that is the only path outside the lane router and `packages/core/src/env` allowed to call `getSupabaseSecretKey` (T-003 lint rule).
 
 ### T-034 Connector HTTP client + MSW harness
-- status: proposed
+- status: approved
 - depends: T-033
 - acceptance: shared client with timeouts, retry/backoff on 429/5xx with `Retry-After`, per-provider rate limit, redacted logging; MSW handlers directory per provider; tests.
 
 ### T-035 OAuth flow framework
-- status: proposed
+- status: approved
 - depends: T-034, T-017, T-015
 - acceptance: generic start/callback route handlers with `state` + PKCE bound to lane + user; tokens go straight to Vault; connection row created; audited; tested end-to-end against a mock OAuth server.
 
@@ -360,7 +361,7 @@ T-010 – T-017 are the serial spine. After T-017: auth/shell (T-018 – T-026) 
 - acceptance: `conn.sync` with concurrency key = connection id, retries, cursor persistence, `sync_runs` start/finish/error logging; tested with a mock provider, including one connection failing without blocking another.
 
 ### T-039 Raw source records
-- status: proposed
+- status: approved
 - depends: T-013
 - acceptance: `raw.source_records` (lane_id, provider, object_type, external_id, payload jsonb, payload_hash, synced_at) + RLS + pgTAP; upsert helper; a guard rejects records from comms/docs providers that contain body fields unless lane policy `store_content_bodies` is true (test).
 
