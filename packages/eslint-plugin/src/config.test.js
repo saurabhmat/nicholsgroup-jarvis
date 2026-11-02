@@ -140,6 +140,9 @@ const cases = [
   ["connectionStore in apps/web", `export const s = vault.connectionStore;`, "apps/web/app/api/x/route.ts", "nichols/no-restricted-names"],
   ["connectionStore in the OAuth flow", `import { connectionStore } from "../vault/index";`, "packages/connectors/src/oauth/index.ts", undefined],
   ["createConnectionStore outside the vault", `import { createConnectionStore } from "../vault/connections";`, "packages/connectors/src/oauth/index.ts", "nichols/no-restricted-names"],
+  // T-039: raw records are written only inside packages/connectors
+  ["rawRecords in apps/web", `export const r = vault.rawRecords;`, "apps/web/app/api/x/route.ts", "nichols/no-restricted-names"],
+  ["rawRecords in a connector", `import { rawRecords } from "../vault/index";`, "packages/connectors/src/raw/index.ts", undefined],
   ["oauth subpath in an app route", `import { oauthFlow } from "@nichols/connectors/oauth";`, "apps/web/app/api/connect/x/route.ts", undefined],
   ["redact subpath in apps/web", `import { redactText } from "@nichols/connectors/redact";`, "apps/web/instrumentation.ts", undefined],
 ];

@@ -26,7 +26,8 @@ insert into private_table_ok values
   ('core.mfa_verification_attempts', 'MFA attempt guard (T-019), written by core.mfa_verification_attempt()'),
   ('core.mfa_enrolment_state', 'MFA enrolment guard (T-020); reset allowances are granted by an admin in SQL (runbook)'),
   ('core.connection_secrets', 'connection -> Vault secret id (T-032); only the core.connection_token_* functions'),
-  ('core.oauth_states', 'OAuth connect state + PKCE verifier (T-035); only core.oauth_state_create / _consume');
+  ('core.oauth_states', 'OAuth connect state + PKCE verifier (T-035); only core.oauth_state_create / _consume'),
+  ('raw.source_records', 'raw provider payloads (T-039); only core.source_records_upsert');
 
 -- Tables whose SELECT policy is not the exact standard expression (reviewed by hand; each still requires aal2).
 create temp table custom_policy_ok (name text primary key, why text not null) on commit drop;
@@ -56,7 +57,8 @@ insert into security_definer_ok values
   ('core.connection_token_revoke', 'deletes from the Vault and disconnects; service_role only, lane-checked (T-032)'),
   ('core.connections_no_orphan_secret', 'trigger only: reads the private Vault mapping on status changes (T-032)'),
   ('core.oauth_state_create', 'starts a connect; owner/admin_technical of the lane at aal2 only (T-035)'),
-  ('core.oauth_state_consume', 'finishes a connect; own unexpired state, same lane, role re-checked (T-035)');
+  ('core.oauth_state_consume', 'finishes a connect; own unexpired state, same lane, role re-checked (T-035)'),
+  ('core.source_records_upsert', 'writes the private raw.source_records; service_role only, lane-checked against the connection (T-039)');
 
 -- App functions authenticated may execute (callable through the API). Each one is reviewed.
 create temp table authenticated_exec_ok (name text primary key, why text not null) on commit drop;

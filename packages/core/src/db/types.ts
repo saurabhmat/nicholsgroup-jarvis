@@ -344,6 +344,9 @@ isOneToOne: false
 "role_views":
 { Args: { "p_role": string }; Returns: (string)[]
                            },
+"source_records_upsert":
+{ Args: { "p_connection_id": string,"p_lane": string,"p_records": Json }; Returns: number
+                           },
 "view_names":
 { Args: Record<PropertyKey, never>; Returns: (string)[]
                            },

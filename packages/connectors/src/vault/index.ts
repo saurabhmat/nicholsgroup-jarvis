@@ -3,6 +3,7 @@
 import { getLaneJobClient } from "@nichols/core/lane-router";
 import { createConnectionStore } from "./connections";
 import { createConnectionLoader } from "./loader";
+import { createRawRecordStore } from "../raw/store";
 import { createTokenVault } from "./tokens";
 
 const vault = createTokenVault(getLaneJobClient);
@@ -14,6 +15,9 @@ export const connectionLoader = createConnectionLoader(getLaneJobClient);
 
 /** Creates (or reuses) the connection row an OAuth callback stores its token on (T-035). */
 export const connectionStore = createConnectionStore(getLaneJobClient);
+
+/** Upserts raw provider payloads into raw.source_records with the lane's job client (T-039). */
+export const rawRecords = createRawRecordStore(getLaneJobClient);
 
 export { SecretValue, isSecretValue } from "./secret";
 export type { TokenVault } from "./tokens";

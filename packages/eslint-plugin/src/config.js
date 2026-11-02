@@ -175,6 +175,8 @@ export const RESTRICTED_NAMES = {
   connectionLoader: { allow: CONNECTORS, hint: "it reads with the RLS-bypassing job client; ask a connector" },
   createConnectionLoader: { allow: TOKEN_VAULT, hint: "internal to the token vault; use connectionLoader inside packages/connectors" },
   connectionStore: { allow: CONNECTORS, hint: "it writes connection rows with the job client; the OAuth callback uses it (T-035)" },
+  rawRecords: { allow: CONNECTORS, hint: "it writes raw provider payloads with the job client; connectors store records through their sync sink (T-039)" },
+  createRawRecordStore: { allow: ["packages/connectors/src/raw", ...TOKEN_VAULT], hint: "internal to the raw record store; use rawRecords inside packages/connectors" },
   createConnectionStore: { allow: TOKEN_VAULT, hint: "internal to the token vault; use connectionStore inside packages/connectors" },
 };
 
