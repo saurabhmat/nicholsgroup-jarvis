@@ -1,6 +1,6 @@
 # Checkpoint — Nov 2, 2026
 
-Branch `agent/pilot-build` in `~/dev/pubk-projects/jarvis/T-005` (pushed). Supersedes the Oct 31 note's "Next".
+Branch `agent/pilot-build` in `~/dev/pubk-projects/jarvis/pilot-build` (pushed). Supersedes the Oct 31 note's "Next".
 
 ## Done today
 - Approved by Saurabh: T-031 – T-035, T-039 (commit db4c8d5).
