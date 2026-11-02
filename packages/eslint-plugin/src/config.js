@@ -14,9 +14,12 @@
 //  - Connector tokens (T-033): the token functions are used only inside packages/connectors; the Vault itself (SQL
 //    names) only in the token vault (packages/connectors/src/vault) and the generated DB types; the internal contract
 //    subpath (`@nichols/connectors/internal`: mint, schema builder) only inside packages/connectors, where the
-//    connection loader also lives (packages/connectors/src/vault).
+//    connection loader also lives (packages/connectors/src/vault). The secret registry (`rememberSecret`,
+//    `scrubKnownSecrets`) stays in the token vault and the connector logger. Relative imports cannot reach into
+//    another package's sources (no-cross-package-relative), so these boundaries cannot be skipped with `../../`.
 import { fileURLToPath } from "node:url";
 import eslintComments from "@eslint-community/eslint-plugin-eslint-comments";
+import { noCrossPackageRelative } from "./rules/no-cross-package-relative.js";
 import { noEnvResultCopy } from "./rules/no-env-result-copy.js";
 import { noExternalFetch } from "./rules/no-external-fetch.js";
 import { noFreeTextEnvRead } from "./rules/no-free-text-env-read.js";
@@ -41,6 +44,7 @@ export const plugin = {
     "no-free-text-env-read": noFreeTextEnvRead,
     "no-process-env": noProcessEnv,
     "no-vault-access": noVaultAccess,
+    "no-cross-package-relative": noCrossPackageRelative,
   },
 };
 
@@ -50,6 +54,7 @@ export const APPROVALS = ["packages/modules/approvals"];
 export const LANE_ROUTER = ["packages/core/src/lane-router"];
 export const CORE_ENV = ["packages/core/src/env"];
 export const TOKEN_VAULT = ["packages/connectors/src/vault"];
+export const CONNECTOR_LOG = ["packages/connectors/src/log"];
 export const AUTH_SESSION = ["packages/core/src/auth", "apps/web/proxy.ts"];
 export const INNGEST_CLIENT = ["packages/core/src/inngest", "apps/web/app/api/inngest"];
 export const SCRIPTS = ["scripts", "apps/web/scripts"];
@@ -154,6 +159,16 @@ export const RESTRICTED_NAMES = {
   revokeToken: { allow: CONNECTORS, hint: "connector tokens are deleted only inside packages/connectors" },
   createTokenVault: { allow: TOKEN_VAULT, hint: "internal to the token vault; use getToken" },
   reveal: { allow: CONNECTORS, hint: "a SecretValue is revealed only inside packages/connectors (HTTP client, token refresh)" },
+  rememberSecret: { allow: TOKEN_VAULT, hint: "SecretValue registers credentials itself" },
+  scrubKnownSecrets: { allow: [...TOKEN_VAULT, ...CONNECTOR_LOG], hint: "use redactText from @nichols/connectors/redact" },
+  forgetSecretsForTests: {
+    allow: [...TOKEN_VAULT, "packages/connectors/src/http/client.test.ts"],
+    hint: "clearing the registry switches off exact-match redaction; vault tests only",
+  },
+  mintLaneBoundConnection: { allow: CONNECTORS, hint: "connections are minted by the connection loader; use loadConnection" },
+  buildProviderSchemas: { allow: CONNECTORS, hint: "internal to the connector contract" },
+  connectionLoader: { allow: CONNECTORS, hint: "it reads with the RLS-bypassing job client; ask a connector" },
+  createConnectionLoader: { allow: TOKEN_VAULT, hint: "internal to the token vault; use connectionLoader inside packages/connectors" },
 };
 
 /** Files where no-public-secret-name is off: negative corpora that deliberately spell out secret-looking names. */
@@ -189,6 +204,7 @@ export function nicholsConfig({ root }) {
         "nichols/no-free-text-env-read": ["error", { allow: CORE_ENV }],
         "nichols/no-process-env": ["error", { allow: PROCESS_ENV_ALLOWED }],
         "nichols/no-vault-access": ["error", { allow: VAULT_NAMES_ALLOWED }],
+        "nichols/no-cross-package-relative": "error",
         // The boundary rules cannot be switched off from inside a file.
         "@eslint-community/eslint-comments/no-restricted-disable": ["error", "nichols/*"],
         "@eslint-community/eslint-comments/no-unlimited-disable": "error",

@@ -21,9 +21,15 @@ export function createConnectionLoader(clientFor: JobClientFor): ConnectionLoade
       if (typeof laneId !== "string" || !LANE_ID.test(laneId) || typeof connectionId !== "string" || !UUID.test(connectionId)) {
         throw new ConnectorError({ kind: "invalid_input", message: "A lane and a connection id are required" });
       }
+      let client: Awaited<ReturnType<JobClientFor>>;
+      try {
+        client = await clientFor(laneId);
+      } catch {
+        // Same as the token vault: an unknown or unconfigured lane is not a transient failure.
+        throw new ConnectorError({ kind: "connection_unavailable", message: "Lane is not available for connection access" });
+      }
       let row: unknown;
       try {
-        const client = await clientFor(laneId);
         const { data, error } = await client
           .schema("core")
           .from("connections")

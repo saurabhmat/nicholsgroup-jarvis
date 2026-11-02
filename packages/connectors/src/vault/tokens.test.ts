@@ -179,4 +179,11 @@ describe("createConnectionLoader", () => {
     expect(await kindOf(createConnectionLoader(fakeTable(null, { code: "XX" }).clientFor).loadConnection("PKG", ID))).toBe("transient");
     expect(await kindOf(createConnectionLoader(fakeTable({ ...row, extra: 1 }).clientFor).loadConnection("PKG", ID))).toBe("provider_error");
   });
+
+  it("reports a lane without a job client as connection_unavailable, not transient (review M4)", async () => {
+    const loader = createConnectionLoader(async () => {
+      throw new Error("Unknown lane");
+    });
+    expect(await kindOf(loader.loadConnection("PKG", ID))).toBe("connection_unavailable");
+  });
 });

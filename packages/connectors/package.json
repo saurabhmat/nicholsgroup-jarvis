@@ -8,7 +8,8 @@
     "./testing": "./src/testing/index.ts",
     "./testing/msw": "./src/testing/msw/index.ts",
     "./writer": "./src/contract/writer.ts",
-    "./internal": "./src/contract/internal.ts"
+    "./internal": "./src/contract/internal.ts",
+    "./redact": "./src/redact.ts"
   },
   "scripts": {
     "typecheck": "tsc -b",

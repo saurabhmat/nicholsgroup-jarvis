@@ -121,6 +121,14 @@ Under the review policy (dev tooling: one security review, fix BLOCKERs only), t
   - **Note for readers of `core.connections`:** the table also exposes `created_at` / `updated_at`, which the strict `ConnectionSchema` does not list; select only the schema's columns when parsing.
   - **Accepted:** the secret scan on `external_account_id` refuses a mailbox whose local part starts with a vendor key prefix (e.g. `secret_...@`).
 
+- **T-033 review** (security + code review Nov 2, 2026; 4 HIGH and the MEDIUMs fixed in `T-033: review fixes`):
+  - **Assigned to T-050 (code M5, decision proposed, Saurabh to confirm):** concurrent refresh must not lose a rotating refresh token. Use a compare-and-swap in `core.connection_token_rotate` (a `p_expected` version or hash of the secret being replaced; a mismatch raises a distinct code and the loser re-reads the token) rather than an Inngest concurrency key alone: refresh-on-401 also runs inline in request handlers on several serverless instances, which a job-level key does not serialise. Needs a T-032 migration; T-050's "concurrent refresh doesn't lose the token" test covers it.
+  - **Assigned to T-035 (security M3, second half):** the first connector code that calls `requireConnectorEnv` wraps it inside packages/connectors so every returned credential (`INTUIT_CLIENT_SECRET`, `STRIPE_RESTRICTED_KEY`, ...) is registered with the redactor (wrap in `SecretValue`). Nothing in packages/connectors reads connector env yet.
+  - **Assigned to T-035 (review note):** the OAuth callback lives in packages/connectors (`storeToken` is restricted there) with apps/web routes as thin wrappers, and needs a create-connection-row-and-mint path before `storeToken`.
+  - **Assigned to T-041 (code M6):** Sentry `beforeSend` uses `@nichols/connectors/redact` (`redactText`, `redactFields`), added in the review fixes.
+  - **LOW, not fixed:** nested token-set fields are not registered (L2); the 8-character minimum for exact-match scrubbing is not documented for connector authors (L3); `reveal` and `getToken` are generic names that could clash (L4/L6: consider `revealForProvider`); `export * from` the vault is only caught by the relative-import rule, not by name (L5); `actorUserId` is not validated as a UUID, so a bad value maps to `transient` instead of `invalid_input` (L6/L3); tests for PostgREST `PGRST202` and the logger's sink/child edge cases (code L1/L2); the RSC and prompt-builder canary tests are approximations (L9).
+  - **Deployment (security L8, human):** production Postgres must not log statement parameters (`log_min_duration_statement`, `auto_explain`, `pgaudit` parameter logging): the token functions take the secret as a bind parameter.
+
 ## 7. Decisions log
 
 ### Oct 24, 2026 — Infrastructure (human-owned; closes H-001, H-010)

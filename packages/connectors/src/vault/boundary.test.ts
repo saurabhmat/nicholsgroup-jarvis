@@ -14,4 +14,9 @@ describe("token vault boundary", () => {
     const pkg = JSON.parse(readFileSync(new URL("../../package.json", import.meta.url), "utf8")) as { exports: Record<string, string> };
     expect(Object.values(pkg.exports).filter((p) => p.includes("/vault/") || p.includes("/log/"))).toEqual([]);
   });
+
+  it("offers only the text and field redactors on the redact subpath (no registry, no logger)", async () => {
+    const redact = await import("../redact");
+    expect(Object.keys(redact).sort()).toEqual(["REDACTED", "redactFields", "redactText"]);
+  });
 });

@@ -3,17 +3,21 @@
 // server code away from the stored credentials: it flags any string (literal or template part) that names the vault
 // schema or the token functions/mapping table outside the allowed paths.
 //
-// Flagged: "vault" and "vault.<anything>" (e.g. `.schema("vault")`, `"vault.decrypted_secrets"`), and any string
+// Flagged: "vault" and "vault.<anything>" (e.g. `.schema("vault")`, `"vault.decrypted_secrets"`); `vault.<name>`
+// anywhere in a string, so SQL text is caught too (`select * from vault.decrypted_secrets`, T-033 review M2); the Vault
+// object and function names (`decrypted_secrets`, `create_secret`, `update_secret`) anywhere; and any string
 // containing `connection_token_` or `connection_secrets` (e.g. `.rpc("connection_token_read")`).
+// Prose such as "the token vault. Use ..." is not flagged: a space after the dot is not a qualified name.
 // Limits: a name assembled at runtime from parts that are each harmless is not seen.
 
 import { isUnder, repoPath } from "../ast.js";
 
 const VAULT_NAME = /^vault(\.|$)/i;
-const TOKEN_NAMES = /connection_token_|connection_secrets/i;
+const VAULT_QUALIFIED = /(^|[^\w])vault\s*\."?[A-Za-z_]/i;
+const TOKEN_NAMES = /connection_token_|connection_secrets|decrypted_secrets|create_secret|update_secret/i;
 
 /** @param {string} text */
-const isVaultName = (text) => VAULT_NAME.test(text.trim()) || TOKEN_NAMES.test(text);
+const isVaultName = (text) => VAULT_NAME.test(text.trim()) || VAULT_QUALIFIED.test(text) || TOKEN_NAMES.test(text);
 
 /** @type {import("eslint").Rule.RuleModule} */
 export const noVaultAccess = {

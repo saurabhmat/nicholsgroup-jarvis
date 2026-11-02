@@ -105,6 +105,31 @@ const cases = [
   ["token RPC in the token vault", `await db.schema("core").rpc("connection_token_read", a);`, "packages/connectors/src/vault/tokens.ts", undefined],
   ["generated DB types name the token functions", `export type F = { "connection_token_read": 1 };`, "packages/core/src/db/types.ts", undefined],
   ["ordinary word containing vault", `export const s = "vaulted ceiling";`, "apps/web/app/x.ts", undefined],
+  // T-033 review fixes: SQL text naming the Vault (M2)
+  ["Vault SQL text in a module", "export const q = `select * from vault.decrypted_secrets`;", "packages/modules/admin/src/x.ts", "nichols/no-vault-access"],
+  ["Vault function in SQL text", `export const q = "select vault.create_secret($1)";`, "apps/web/app/x.ts", "nichols/no-vault-access"],
+  ["Vault view name alone", `export const t = "decrypted_secrets";`, "packages/core/src/lane-router/x.ts", "nichols/no-vault-access"],
+  ["prose mentioning the token vault", `export const m = "Stored in the token vault. Use getToken.";`, "apps/web/app/x.ts", undefined],
+  // relative paths into another package (H2)
+  ["relative import of the internal contract from apps/web", `import { mintLaneBoundConnection } from "../../../packages/connectors/src/contract/internal";`, "apps/web/app/api/x.ts", "nichols/no-cross-package-relative"],
+  ["relative import of the lane-bound contract from apps/web", `import * as lb from "../../../packages/connectors/src/contract/lane-bound";`, "apps/web/app/api/x.ts", "nichols/no-cross-package-relative"],
+  ["relative import of the vault from apps/web", `import { connectionLoader } from "../../../packages/connectors/src/vault/index";`, "apps/web/app/api/x.ts", "nichols/no-cross-package-relative"],
+  ["relative import of connectors from a module", `export * from "../../../connectors/src/vault/index";`, "packages/modules/finance/src/x.ts", "nichols/no-cross-package-relative"],
+  ["relative dynamic import of the vault from a module", `await import("../../../connectors/src/vault/secret");`, "packages/modules/finance/src/x.ts", "nichols/no-cross-package-relative"],
+  ["relative import inside a package", `import { x } from "../contract/errors";`, "packages/connectors/src/vault/x.ts", undefined],
+  ["relative import inside apps/web", `import { x } from "../../lib/x";`, "apps/web/app/api/x.ts", undefined],
+  // names restricted by the review fixes (H1, H2)
+  ["mint in apps/web by name", `import { mintLaneBoundConnection } from "@nichols/connectors";`, "apps/web/app/x.ts", "nichols/no-restricted-names"],
+  ["schema builder in a module by name", `import { buildProviderSchemas } from "@nichols/connectors";`, "packages/modules/finance/src/x.ts", "nichols/no-restricted-names"],
+  ["connectionLoader in apps/web", `export const l = vault.connectionLoader;`, "apps/web/app/x.ts", "nichols/no-restricted-names"],
+  ["connectionLoader in a connector", `import { connectionLoader } from "../vault/index";`, "packages/connectors/src/quickbooks/index.ts", undefined],
+  ["createConnectionLoader in a connector", `import { createConnectionLoader } from "../vault/loader";`, "packages/connectors/src/quickbooks/index.ts", "nichols/no-restricted-names"],
+  ["rememberSecret outside the vault", `import { rememberSecret } from "../vault/secret";`, "packages/connectors/src/http/client.ts", "nichols/no-restricted-names"],
+  ["scrubKnownSecrets in the connector logger", `import { scrubKnownSecrets } from "../vault/secret";`, "packages/connectors/src/log/redact.ts", undefined],
+  ["scrubKnownSecrets in a connector", `import { scrubKnownSecrets } from "../vault/secret";`, "packages/connectors/src/quickbooks/index.ts", "nichols/no-restricted-names"],
+  ["forgetSecretsForTests in a module", `secret.forgetSecretsForTests();`, "packages/modules/finance/src/x.test.ts", "nichols/no-restricted-names"],
+  ["forgetSecretsForTests in the vault tests", `import { forgetSecretsForTests } from "./secret";`, "packages/connectors/src/vault/x.test.ts", undefined],
+  ["redact subpath in apps/web", `import { redactText } from "@nichols/connectors/redact";`, "apps/web/instrumentation.ts", undefined],
 ];
 
 const DISABLE = "@eslint-community/eslint-comments";
