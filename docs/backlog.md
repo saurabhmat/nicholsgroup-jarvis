@@ -330,12 +330,12 @@ T-010 – T-017 are the serial spine. After T-017: auth/shell (T-018 – T-026) 
 - acceptance: security-definer `store/read/rotate/revoke` keyed by connection_id; execute revoked from `anon` and `authenticated`; pgTAP proves authenticated users cannot call them or read `vault.*`.
 
 ### T-033 Token access + redaction in connectors
-- status: approved
+- status: done
 - depends: T-032, T-030
 - acceptance: `getToken(conn)` only exported inside `packages/connectors` (lint-enforced); `@nichols/connectors/internal` (`mintLaneBoundConnection`, `buildProviderSchemas`) importable only from `packages/connectors` and the connection loader (lint rule with a failing fixture; from the T-030 review); a shared redacting logger; tests prove tokens never appear in logs, API responses, RSC payloads or prompt builders (canary-token test). The token vault code lives under `packages/connectors/src/vault/**`: that is the only path outside the lane router and `packages/core/src/env` allowed to call `getSupabaseSecretKey` (T-003 lint rule).
 
 ### T-034 Connector HTTP client + MSW harness
-- status: approved
+- status: done
 - depends: T-033
 - acceptance: shared client with timeouts, retry/backoff on 429/5xx with `Retry-After`, per-provider rate limit, redacted logging; MSW handlers directory per provider; tests.
 
