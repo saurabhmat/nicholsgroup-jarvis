@@ -24,7 +24,8 @@ insert into no_lane_id_ok values
 create temp table private_table_ok (name text primary key, why text not null) on commit drop;
 insert into private_table_ok values
   ('core.mfa_verification_attempts', 'MFA attempt guard (T-019), written by core.mfa_verification_attempt()'),
-  ('core.mfa_enrolment_state', 'MFA enrolment guard (T-020); reset allowances are granted by an admin in SQL (runbook)');
+  ('core.mfa_enrolment_state', 'MFA enrolment guard (T-020); reset allowances are granted by an admin in SQL (runbook)'),
+  ('core.connection_secrets', 'connection -> Vault secret id (T-032); only the core.connection_token_* functions');
 
 -- Tables whose SELECT policy is not the exact standard expression (reviewed by hand; each still requires aal2).
 create temp table custom_policy_ok (name text primary key, why text not null) on commit drop;
@@ -47,7 +48,11 @@ insert into security_definer_ok values
   ('core.has_lane_role', 'role check for actions; own uid at aal2 only (T-012)'),
   ('core.lane_config_public', 'non-sensitive config subset for lane members (T-011)'),
   ('audit.log', 'the only audit write path; service_role only (T-014)'),
-  ('core.mfa_verification_attempt', 'Supabase Auth MFA hook; supabase_auth_admin only (T-019)');
+  ('core.mfa_verification_attempt', 'Supabase Auth MFA hook; supabase_auth_admin only (T-019)'),
+  ('core.connection_token_store', 'writes the Vault; service_role only, lane-checked (T-032)'),
+  ('core.connection_token_read', 'reads the Vault; service_role only, lane-checked (T-032)'),
+  ('core.connection_token_rotate', 'updates the Vault; service_role only, lane-checked (T-032)'),
+  ('core.connection_token_revoke', 'deletes from the Vault; service_role only, lane-checked (T-032)');
 
 -- App functions authenticated may execute (callable through the API). Each one is reviewed.
 create temp table authenticated_exec_ok (name text primary key, why text not null) on commit drop;
