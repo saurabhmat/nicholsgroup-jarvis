@@ -115,6 +115,12 @@ Under the review policy (dev tooling: one security review, fix BLOCKERs only), t
   - **Not fixed (suggestion):** type-check the plain JS in `supabase/core/seed/` and `scripts/` (`checkJs` with a small tsconfig, or move the seed framework into a TS package once Node 22 type stripping is reliable in CI). Fits T-003 (which already has to decide about linting `scripts/**`).
   - **Not fixed (note):** `node --test supabase/core/seed` (directory form) fails on Node 24, so the root `test` script lists the files with a shell glob (`supabase/core/seed/*.test.mjs`). Keep it that way when adding test files.
 
+- **T-031 / T-032 review** (security + code review Nov 2, 2026; one HIGH, fixed: sync_runs cross-lane/AAL1/anon tests; required fixes in `T-031, T-032: review fixes`):
+  - **Assigned to T-033:** a lint rule that only `packages/connectors/src/vault/**` may reference `vault.` or `connection_token_` (service_role can reach `vault.*` directly; see §7 Nov 2). The vault module passes secrets as bind parameters only, never as SQL literals (a failing statement is logged with its text); test it.
+  - **Assigned to T-038:** the sync cursor lives in a private per-(connection, stream) table, not on `core.connections` (mail, calendar and drive streams advance separately; targeted runs advance some). Consider a partial unique index on `sync_runs (connection_id) where status = 'running'` as a backstop to the concurrency key, and an `object_types` column for targeted runs (T-053).
+  - **Note for readers of `core.connections`:** the table also exposes `created_at` / `updated_at`, which the strict `ConnectionSchema` does not list; select only the schema's columns when parsing.
+  - **Accepted:** the secret scan on `external_account_id` refuses a mailbox whose local part starts with a vendor key prefix (e.g. `secret_...@`).
+
 ## 7. Decisions log
 
 ### Oct 24, 2026 — Infrastructure (human-owned; closes H-001, H-010)
@@ -371,3 +377,11 @@ Where this lands: backlog H-028; `.agent/pr/T-019.md`; `docs/runbooks/mfa-recove
 - Nichols Law (later rollout): its jobs get their own Inngest environment and keys (architecture §2), chosen by lane in the Inngest client; until then NL is not in `ENABLED_LANES`.
 
 Where this lands: backlog H-003; `.agent/pr/T-037.md`.
+
+### Nov 2, 2026 — Connector tokens in the Vault (T-032 review)
+
+- A connection's credential is one Vault secret, reached through `core.connection_token_store/read/rotate/revoke` (service_role only, lane-checked, serialised per connection by a row lock). Store is connect/reconnect and sets the connection active; revoke is the disconnect and sets it disconnected; both are audited with the acting user when there is one, rotate (hourly token refresh) is not.
+- `core.connections.token_expires_at` is the expiry of the credential whose loss forces a reconnect (refresh token, API key), not the access token's. T-040 warns on it.
+- **Known limit, accepted:** Supabase's vault extension grants service_role direct read/write on `vault.*`. The grant comes from `supabase_admin`, so our migrations cannot revoke it (tried Nov 2, 2026). Lane isolation of tokens therefore holds in the database for every API user, but for server code it also relies on code discipline: only `packages/connectors/src/vault/**` may use the Vault (lint rule, T-033). A pgTAP test pins the current grant so a platform change is noticed.
+
+Where this lands: `.agent/pr/T-031.md`, `.agent/pr/T-032.md`; follow-ups in §6.

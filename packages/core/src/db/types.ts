@@ -275,22 +275,28 @@ isOneToOne: false
 { Args: { "p_uid": string,"p_view": string }; Returns: (string)[]
                            },
 "connection_for_token":
-{ Args: { "p_connection_id": string,"p_lane_id": string }; Returns: string
+{ Args: { "p_connection_id": string,"p_lane_id": string,"p_lock": boolean }; Returns: string
+                           },
+"connection_token_check_secret":
+{ Args: { "p_secret": string }; Returns: undefined
                            },
 "connection_token_read":
 { Args: { "p_connection_id": string,"p_lane_id": string }; Returns: string
                            },
 "connection_token_revoke":
-{ Args: { "p_connection_id": string,"p_lane_id": string }; Returns: boolean
+{ Args: { "p_actor_id"?: string,"p_connection_id": string,"p_lane_id": string }; Returns: boolean
                            },
 "connection_token_rotate":
-{ Args: { "p_connection_id": string,"p_expires_at"?: string,"p_lane_id": string,"p_secret": string }; Returns: undefined
+{ Args: { "p_connection_id": string,"p_expires_at": string,"p_lane_id": string,"p_secret": string }; Returns: undefined
                            },
 "connection_token_store":
-{ Args: { "p_connection_id": string,"p_expires_at"?: string,"p_lane_id": string,"p_secret": string }; Returns: undefined
+{ Args: { "p_actor_id"?: string,"p_connection_id": string,"p_expires_at": string,"p_lane_id": string,"p_secret": string }; Returns: undefined
                            },
 "has_lane_role":
 { Args: { "p_lane": string,"p_roles": (string)[],"p_uid": string }; Returns: boolean
+                           },
+"is_connection_features":
+{ Args: { "p_features": Json }; Returns: boolean
                            },
 "is_connector_error":
 { Args: { "p_error": Json }; Returns: boolean

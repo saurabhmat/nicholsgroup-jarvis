@@ -4,26 +4,75 @@
 -- Read: AAL2 members with the 'connections' view (owner, admin_technical) read the health columns of core.connections;
 -- the 'health' view (same roles) reads core.sync_runs. Column-level grants list the readable columns, so a column added
 -- later is hidden until it is granted on purpose. Write: service_role only (connector code, jobs).
+-- Sync cursors do not belong on core.connections: a connection can have several streams (mail, calendar, drive) and a
+-- targeted run advances only some of them. T-038 adds a private per-(connection, stream) cursor table.
 
--- A storable ConnectorErrorInfo (schemas.ts): an object with the required keys, only known keys, bounded size, and
--- nothing that looks like a credential. The connector redacts first (T-033); this is the database's second line.
+-- A storable ConnectorErrorInfo, value for value (ConnectorErrorInfoSchema in schemas.ts: strict, every key present,
+-- nullable ones may be null), bounded and free of anything credential-like. The connector redacts first (T-033); this
+-- is the database's second line, and keeps rows parseable by the strict Zod schema.
 create function core.is_connector_error(p_error jsonb) returns boolean
 language sql
 immutable
 set search_path = ''
 as $$
-  select pg_catalog.jsonb_typeof(p_error) = 'object'
-    and p_error ?& array['kind', 'disposition', 'message']
-    and not exists (
-      select 1 from pg_catalog.jsonb_object_keys(p_error) k
-      where k not in ('kind', 'disposition', 'message', 'http_status', 'provider_error_code', 'provider_tid',
-                      'retry_after_seconds', 'endpoint')
-    )
-    and pg_catalog.pg_column_size(p_error) < 4096
-    and not core.jsonb_has_secret(p_error);
+  -- CASE, not AND: SQL does not promise left-to-right evaluation, and the key and cast steps need an object.
+  select case
+    when p_error is null or pg_catalog.jsonb_typeof(p_error) <> 'object' then false
+    when (select pg_catalog.array_agg(k order by k) from pg_catalog.jsonb_object_keys(p_error) k)
+         is distinct from array['disposition', 'endpoint', 'http_status', 'kind', 'message', 'provider_error_code',
+                                'provider_tid', 'retry_after_seconds'] then false
+    else
+      p_error ->> 'kind' in ('lane_mismatch', 'connection_unavailable', 'reconnect_required', 'unsupported_op',
+                             'invalid_input', 'rate_limited', 'transient', 'timeout', 'not_found', 'forbidden',
+                             'provider_error')
+      and p_error ->> 'disposition' in ('retry', 'reconnect_required', 'fail')
+      and pg_catalog.jsonb_typeof(p_error -> 'message') = 'string'
+      and length(p_error ->> 'message') between 1 and 500
+      and case pg_catalog.jsonb_typeof(p_error -> 'http_status')
+            when 'null' then true
+            when 'number' then (p_error ->> 'http_status') ~ '^[1-5][0-9]{2}$'
+            else false end
+      and case pg_catalog.jsonb_typeof(p_error -> 'provider_error_code')
+            when 'null' then true
+            when 'string' then length(p_error ->> 'provider_error_code') <= 128
+            else false end
+      and case pg_catalog.jsonb_typeof(p_error -> 'provider_tid')
+            when 'null' then true
+            when 'string' then length(p_error ->> 'provider_tid') <= 256
+            else false end
+      and case pg_catalog.jsonb_typeof(p_error -> 'retry_after_seconds')
+            when 'null' then true
+            when 'number' then (p_error ->> 'retry_after_seconds') ~ '^[0-9]{1,9}$'
+            else false end
+      -- A path template: no scheme/host, query, fragment or whitespace (ids and PII ride in those).
+      and case pg_catalog.jsonb_typeof(p_error -> 'endpoint')
+            when 'null' then true
+            when 'string' then (p_error ->> 'endpoint') ~ '^/[^?#[:space:]]*$' and length(p_error ->> 'endpoint') <= 256
+            else false end
+      and not core.jsonb_has_secret(p_error)
+  end;
 $$;
 revoke all on function core.is_connector_error(jsonb) from public, anon, authenticated;
 grant execute on function core.is_connector_error(jsonb) to service_role;
+
+-- Detected features: snake_case keys (SnakeKeySchema) to booleans (ConnectionFeaturesSchema), no credential-named keys.
+create function core.is_connection_features(p_features jsonb) returns boolean
+language sql
+immutable
+set search_path = ''
+as $$
+  select case
+    when p_features is null or pg_catalog.jsonb_typeof(p_features) <> 'object' then false
+    else pg_catalog.pg_column_size(p_features) < 4096
+      and not exists (
+        select 1 from pg_catalog.jsonb_each(p_features) e
+        where e.key !~ '^[a-z][a-z0-9_]{0,63}$' or pg_catalog.jsonb_typeof(e.value) <> 'boolean'
+      )
+      and not core.jsonb_has_secret(p_features)
+  end;
+$$;
+revoke all on function core.is_connection_features(jsonb) from public, anon, authenticated;
+grant execute on function core.is_connection_features(jsonb) to service_role;
 
 -- ---------------------------------------------------------------- core.connections
 
@@ -34,16 +83,14 @@ create table core.connections (
   provider text not null
     check (provider in ('quickbooks', 'stripe', 'gohighlevel', 'google', 'microsoft', 'monday', 'notion', 'timesolv')),
   -- Provider account id (QuickBooks realmId, Stripe account, mailbox, workspace), from the provider, not code.
+  -- The secret scan also runs here, so a key pasted as an account id is refused. Accepted false positive: a mailbox
+  -- whose local part starts with a vendor key prefix (e.g. `secret_...@`); such a mailbox cannot be connected.
   external_account_id text not null
     check (external_account_id = pg_catalog.btrim(external_account_id) and length(external_account_id) between 1 and 256)
     check (not core.jsonb_has_secret(pg_catalog.jsonb_build_object('v', external_account_id))),
   status text not null default 'pending'
     check (status in ('pending', 'active', 'degraded', 'reconnect_required', 'disconnected')),
-  -- Edition/plan features detected on the account (e.g. class_tracking), snake_case keys to booleans.
-  features jsonb not null default '{}'
-    check (pg_catalog.jsonb_typeof(features) = 'object')
-    check (pg_catalog.pg_column_size(features) < 4096)
-    check (not core.jsonb_has_secret(features)),
+  features jsonb not null default '{}' check (core.is_connection_features(features)),
   features_checked_at timestamptz,
   token_expires_at timestamptz,
   last_sync_at timestamptz,
@@ -53,17 +100,38 @@ create table core.connections (
   created_at timestamptz not null default now(),
   updated_at timestamptz not null default now(),
   unique (lane_id, provider, external_account_id),
-  -- Target for lane-consistent foreign keys (sync runs, later raw records and webhook events).
+  -- Target for lane-consistent foreign keys (sync runs, Vault mapping, later raw records and webhook events).
   unique (id, lane_id),
-  -- Disconnecting deletes the tokens (QB-8), so nothing can still expire.
+  -- Disconnecting deletes the credential (QB-8), so nothing can still expire.
   check (status <> 'disconnected' or token_expires_at is null)
 );
 comment on table core.connections is
   'A lane''s connection to one provider account (T-031). No tokens: those are in the Vault, keyed by connection id (T-032).';
+comment on column core.connections.token_expires_at is
+  'Expiry of the credential whose loss forces a reconnect (OAuth refresh token, API key), not the short-lived access token. Null = does not expire or unknown. T-040 warns on it.';
+comment on column core.connections.last_sync_at is 'End of the last successful sync run.';
 create index connections_lane_id_idx on core.connections (lane_id);
 
 create trigger connections_set_updated_at before update on core.connections
   for each row execute function core.set_updated_at();
+
+-- A connection never moves between lanes (its tokens, runs and records are lane-bound), nor changes provider/account.
+create function core.connections_identity_immutable() returns trigger
+language plpgsql
+set search_path = ''
+as $$
+begin
+  if new.lane_id is distinct from old.lane_id or new.provider is distinct from old.provider
+     or new.external_account_id is distinct from old.external_account_id then
+    raise exception 'core.connections: lane, provider and account cannot change' using errcode = '42501';
+  end if;
+  return new;
+end;
+$$;
+revoke all on function core.connections_identity_immutable() from public, anon, authenticated;
+
+create trigger connections_identity_immutable before update on core.connections
+  for each row execute function core.connections_identity_immutable();
 
 alter table core.connections enable row level security;
 
@@ -74,6 +142,7 @@ create policy connections_select on core.connections
     and lane_id = any ((select core.allowed_lanes((select auth.uid()), 'connections'))::text[])
   );
 
+-- external_account_id is shown on Settings -> Connections (T-197) so the admin can check the right file is connected.
 revoke all on core.connections from public, anon, authenticated;
 grant select (id, lane_id, provider, external_account_id, status, features, features_checked_at, token_expires_at,
               last_sync_at, last_error, created_at, updated_at)

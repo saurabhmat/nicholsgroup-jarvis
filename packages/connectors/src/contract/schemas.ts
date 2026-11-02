@@ -168,6 +168,7 @@ export function buildProviderSchemas<P extends z.ZodType<string>>(provider: P) {
     status: ConnectionStatusSchema,
     features: ConnectionFeaturesSchema.default({}),
     features_checked_at: InstantSchema.nullable(),
+    /** Expiry of the credential whose loss forces a reconnect (refresh token, API key), not the access token's. */
     token_expires_at: InstantSchema.nullable(),
     last_sync_at: InstantSchema.nullable(),
     last_error: ConnectorErrorInfoSchema.nullable(),

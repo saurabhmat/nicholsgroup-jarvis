@@ -320,12 +320,12 @@ T-010 – T-017 are the serial spine. After T-017: auth/shell (T-018 – T-026) 
 - acceptance: `Connector` interface per architecture §6 M2 with Zod types (`Provider`, `Connection`, `ReadOp`, `SourceResult` with `as_of` + freshness, `RawRecord`); reusable contract test kit that any connector must pass. Every connector entry module and `packages/connectors/src/vault/**` must `import "server-only"`, with a test that fails without it (T-003 lint review M2). Writes are exposed only via `@nichols/connectors/write` (an approvals-only import; boundary lint fails any other importer) and `executeWrite` requires the branded `ApprovedAction`. Inside `packages/connectors` a connector may define `executeWrite` and re-export it without renaming, but never import and call it (T-003 lint review H6).
 
 ### T-031 Connections and sync runs tables
-- status: approved
+- status: done
 - depends: T-013
 - acceptance: `core.connections` (lane, provider, external account id, status, token expiry, last_sync, last_error) and `core.sync_runs`; RLS: admin_technical reads health columns only; pgTAP incl. cross-lane denial. The provider check constraint lists real providers only (no `mock`).
 
 ### T-032 Vault token functions
-- status: approved
+- status: done
 - depends: T-031
 - acceptance: security-definer `store/read/rotate/revoke` keyed by connection_id; execute revoked from `anon` and `authenticated`; pgTAP proves authenticated users cannot call them or read `vault.*`.
 

@@ -52,7 +52,8 @@ insert into security_definer_ok values
   ('core.connection_token_store', 'writes the Vault; service_role only, lane-checked (T-032)'),
   ('core.connection_token_read', 'reads the Vault; service_role only, lane-checked (T-032)'),
   ('core.connection_token_rotate', 'updates the Vault; service_role only, lane-checked (T-032)'),
-  ('core.connection_token_revoke', 'deletes from the Vault; service_role only, lane-checked (T-032)');
+  ('core.connection_token_revoke', 'deletes from the Vault and disconnects; service_role only, lane-checked (T-032)'),
+  ('core.connections_no_orphan_secret', 'trigger only: reads the private Vault mapping on status changes (T-032)');
 
 -- App functions authenticated may execute (callable through the API). Each one is reviewed.
 create temp table authenticated_exec_ok (name text primary key, why text not null) on commit drop;
