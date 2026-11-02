@@ -7,7 +7,7 @@ Branch `agent/pilot-build` in `~/dev/pubk-projects/jarvis/T-005` (pushed). Super
 - **T-031 + T-032 done** (87b5f35, review fixes 5e90976): core.connections, core.sync_runs, Vault token functions (store = connect/reconnect, read, rotate, revoke = disconnect; row-locked, audited). Security + code reviews run, HIGH fixed. PR notes in `.agent/pr/T-031.md`, `T-032.md`. pgTAP 10 files pass.
 
 ## In progress
-- **T-033** (689b2b4, pending review fixes): SecretValue, token vault (`packages/connectors/src/vault`), DB connection loader, shared redacting logger (`src/log`), ConnectorError redacts messages, lint rule `no-vault-access` + restricted names. Security review: **2 HIGH + 4 MEDIUM to fix** — see `.agent/notes/review-T-033-security.md`. The code review was still running at pause; re-run it if its result is lost.
+- **T-033** (689b2b4, pending review fixes): SecretValue, token vault (`packages/connectors/src/vault`), DB connection loader, shared redacting logger (`src/log`), ConnectorError redacts messages, lint rule `no-vault-access` + restricted names. Security review: **2 HIGH + 4 MEDIUM to fix** — see `.agent/notes/review-T-033-security.md`. Code review: **2 more HIGH + 6 MEDIUM** (overlapping on endpoint redaction and pattern gaps) — `.agent/notes/review-T-033-code.md`.
 - **T-034** (WIP commit, not reviewed): `packages/connectors/src/http/{client,rate-limit}.ts` + tests (26), MSW 3.0.3 harness at `@nichols/connectors/testing/msw` with a folder per provider. Last edits (MSW 3 option `onUnhandledFrame`, body type, unmocked-request test) are in, but the full `pnpm typecheck && pnpm lint && pnpm test` was interrupted — run it first.
 
 ## Next
