@@ -3,4 +3,5 @@ packages:
   - packages/*
   - packages/modules/*
 allowBuilds:
+  protobufjs: false
   unrs-resolver: false
