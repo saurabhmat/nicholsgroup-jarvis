@@ -16,3 +16,6 @@
 | ID | Finding | Disposition |
 |----|---------|-------------|
 | - | No separate code-review findings this round; the security findings above (H-1, M-A, M-B, M-C, L-1..L-3) were all fixed. | See review-T-039-security.md. Parity of SQL and TS lists, regex alternation order (no safe token is a prefix of a later one) and shared key_words fixtures are pinned by tests. |
+
+## Round 3
+No separate code-review findings; see the Round 3 table in review-T-039-security.md. Parity (lists, `forbidden_word_ends`, timestamp regex) is pinned by tests; the pgTAP and Vitest probe lists are the same.

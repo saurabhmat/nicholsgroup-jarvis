@@ -52,21 +52,29 @@ as $$ select array['contentdisposition', 'contentlanguage', 'contentencoding', '
 -- Forbidden-data rules (PII, bank identifiers, rates, credentials), applied to every provider. A key is split into words
 -- (camelCase, digits, `_`, `-`, `.` and other punctuation are boundaries; see raw.key_words) and also kept in joined,
 -- normalised form. Refused when:
---   * a word equals one of forbidden_words (whole words only: classname and pinned pass);
+--   * a word, or the joined key, equals one of forbidden_words, with or without a trailing plural s (whole words only:
+--     classname and pinned pass; S.S.N., s_sn, sSN, ssns and SSNs are refused);
 --   * the joined form contains one of forbidden_contained;
---   * a word ends in `token`, unless the joined key is one of token_safe_names (SyncToken, nextPageToken, ...);
---   * the word `rate` sits next to one of rate_neighbours (hourlyRate, rate_bill), or, for timesolv, appears at all.
+--   * the words, joined by spaces, end in one of forbidden_word_ends (clientSecret yes, secretary no);
+--   * a word ends in `token`/`tokens`, unless the joined key is one of token_safe_names (SyncToken, nextPageToken, ...);
+--   * the word `rate`/`rates` sits next to one of rate_neighbours (hourlyRate, rate_bill), or, for timesolv, appears at all.
 create function raw.forbidden_words() returns text[]
 language sql immutable set search_path = ''
 as $$ select array['ssn', 'sin', 'ein', 'tin', 'pin', 'iban', 'swift', 'bic'] $$;
 create function raw.forbidden_contained() returns text[]
 language sql immutable set search_path = ''
-as $$ select array['socialsecurity', 'taxid', 'acctnum', 'accountnum', 'accountno', 'routing', 'salary', 'wage',
-                   'compensation', 'payroll', 'password', 'passwd', 'secret', 'apikey', 'privatekey', 'credential',
-                   'billrate', 'costrate', 'payrate', 'hourlyrate'] $$;
+as $$ select array['socialsecurity', 'taxid', 'acctnum', 'accountnum', 'acctno', 'routing', 'salary', 'wage',
+                   'compensation', 'payroll', 'password', 'passwd', 'apikey', 'privatekey', 'credential',
+                   'billrate', 'costrate', 'payrate', 'hourlyrate', 'billingrate', 'fein', 'itin', 'authorization',
+                   'cookie', 'passcode', 'pwd'] $$;
+-- Forbidden at the end of a word (optional plural s), tested on the words joined by single spaces: clientsecret,
+-- webhook_secret, accountNo, account_no match; secretary and accountNotes do not.
+create function raw.forbidden_word_ends() returns text[]
+language sql immutable set search_path = ''
+as $$ select array['secret', 'secretkey', 'accountno', 'account no'] $$;
 create function raw.token_safe_names() returns text[]
 language sql immutable set search_path = ''
-as $$ select array['synctoken', 'pagetoken', 'nextpagetoken', 'deltatoken'] $$;
+as $$ select array['synctoken', 'pagetoken', 'nextpagetoken', 'deltatoken', 'nextsynctoken', 'startpagetoken'] $$;
 create function raw.rate_neighbours() returns text[]
 language sql immutable set search_path = ''
 as $$ select array['bill', 'cost', 'pay', 'hourly'] $$;
@@ -78,17 +86,18 @@ language sql immutable set search_path = ''
 as $$
   select coalesce(pg_catalog.string_to_array(pg_catalog.btrim(pg_catalog.regexp_replace(pg_catalog.lower(
     pg_catalog.regexp_replace(pg_catalog.regexp_replace(pg_catalog.regexp_replace(pg_catalog.regexp_replace(
-      pg_catalog.regexp_replace(normalize(p_key, NFKD), '[̀-ͯ]', '', 'g'),
+      pg_catalog.regexp_replace(pg_catalog.regexp_replace(normalize(p_key, NFKD), '[̀-ͯ]', '', 'g'),
+                                '[\u200B-\u200D\u2060\uFEFF\u00AD]', '', 'g'),
       '([a-z0-9])([A-Z])', '\1 \2', 'g'),
-      '([A-Z]+)([A-Z][a-z])', '\1 \2', 'g'),
+      '([A-Z])(?=[A-Z](?:[a-rt-z]|s[a-z]))', '\1 ', 'g'),
       '([A-Za-z])([0-9])', '\1 \2', 'g'),
       '([0-9])([A-Za-z])', '\1 \2', 'g')),
     '[^a-z0-9]+', ' ', 'g'), ' '), ' '), '{}'::text[])
 $$;
 
--- Every key at any depth (raw, not normalised). Emits the sentinel '!deep' when anything sits 16 or more levels down
--- (fails closed). Callers normalise.
-create function raw.payload_key_names(p_payload jsonb) returns setof text
+-- Every key at any depth (raw, not normalised) as (k, is_deep) rows. When anything sits 16 or more levels down one extra
+-- row (null, true) is emitted (fails closed); a key can never be confused with it, whatever it is named. Callers normalise.
+create function raw.payload_key_names(p_payload jsonb) returns table (k text, is_deep boolean)
 language sql immutable set search_path = ''
 as $$
   with recursive walk (v, depth) as (
@@ -103,20 +112,21 @@ as $$
     ) c
     where w.depth < 16
   )
-  select '!deep' where exists (select 1 from walk where depth >= 16)
+  select null::text, true where exists (select 1 from walk where depth >= 16)
   union all
-  select k from walk w cross join lateral pg_catalog.jsonb_object_keys(w.v) k where pg_catalog.jsonb_typeof(w.v) = 'object';
+  select jk, false from walk w cross join lateral pg_catalog.jsonb_object_keys(w.v) jk where pg_catalog.jsonb_typeof(w.v) = 'object';
 $$;
 
 -- One walk, one normalisation per distinct key, for both guards. Returns whether any key trips the forbidden-data rules
--- and (when p_want_body) the content-body rules. Distinct keys are capped at 20000 (fails closed, 22023); anything 16 or
--- more levels down trips both. The body test removes the safe tokens once and then runs a single combined regex.
+-- and (when p_want_body) the content-body rules. Distinct keys are capped at 20000 and one key at 256 characters (fails
+-- closed, 22023, before any key is normalised); anything 16 or more levels down trips both. The body test removes the safe tokens once and then runs a single combined regex.
 create function raw.payload_scan(p_payload jsonb, p_provider text, p_want_body boolean,
                                  out has_forbidden boolean, out has_body boolean)
 language plpgsql immutable set search_path = ''
 as $$
 declare
   v_keys text[];
+  v_deep boolean;
   v_k text;
   v_nk text;
   v_words text[];
@@ -126,33 +136,42 @@ declare
   v_exact text[] := raw.body_exact_names();
   v_fwords text[] := raw.forbidden_words();
   v_tsafe text[] := raw.token_safe_names();
+  v_ends_re text := '(?:' || pg_catalog.array_to_string(raw.forbidden_word_ends(), '|') || ')s?(?: |$)';
   v_neigh text[] := raw.rate_neighbours();
 begin
   has_forbidden := false;
   has_body := false;
-  select pg_catalog.array_agg(d.n) into v_keys
-  from (select distinct n from raw.payload_key_names(p_payload) n limit 20001) d;
+  select pg_catalog.array_agg(d.k) filter (where not d.is_deep), coalesce(pg_catalog.bool_or(d.is_deep), false)
+  into v_keys, v_deep
+  from (select distinct n.k, n.is_deep from raw.payload_key_names(p_payload) n limit 20002) d;
   if pg_catalog.cardinality(v_keys) > 20000 then
     raise exception 'raw.source_records: payload has too many distinct keys' using errcode = '22023';
   end if;
+  if exists (select 1 from pg_catalog.unnest(v_keys) x where pg_catalog.char_length(x) > 256) then
+    raise exception 'raw.source_records: payload has a key that is too long' using errcode = '22023';
+  end if;
+  if v_deep then
+    has_forbidden := true;
+    has_body := p_want_body;
+  end if;
   foreach v_k in array coalesce(v_keys, '{}'::text[]) loop
     exit when has_forbidden and (has_body or not p_want_body);
-    if v_k = '!deep' then
-      has_forbidden := true;
-      has_body := p_want_body;
-      continue;
-    end if;
     v_nk := raw.normalize_key(v_k);
     if not has_forbidden then
       v_words := raw.key_words(v_k);
       has_forbidden := coalesce(
         v_words && v_fwords
+        or exists (select 1 from pg_catalog.unnest(v_words) w
+                   where pg_catalog.length(w) > 3 and w ~ 's$' and pg_catalog.left(w, -1) = any (v_fwords))
+        or v_nk = any (v_fwords)
+        or (pg_catalog.length(v_nk) > 3 and v_nk ~ 's$' and pg_catalog.left(v_nk, -1) = any (v_fwords))
         or v_nk ~ v_forb_re
-        or (v_nk <> all (v_tsafe) and exists (select 1 from pg_catalog.unnest(v_words) w where w ~ 'token$'))
-        or ('rate' = any (v_words)
+        or pg_catalog.array_to_string(v_words, ' ') ~ v_ends_re
+        or (v_nk <> all (v_tsafe) and exists (select 1 from pg_catalog.unnest(v_words) w where w ~ 'tokens?$'))
+        or (v_words && array['rate', 'rates']
             and (p_provider = 'timesolv'
                  or exists (select 1 from pg_catalog.generate_subscripts(v_words, 1) i
-                            where v_words[i] = 'rate' and (v_words[i - 1] = any (v_neigh) or v_words[i + 1] = any (v_neigh))))),
+                            where v_words[i] in ('rate', 'rates') and (v_words[i - 1] = any (v_neigh) or v_words[i + 1] = any (v_neigh))))),
         false);
     end if;
     if p_want_body and not has_body then
@@ -177,6 +196,7 @@ revoke all on function raw.body_substrings() from public, anon, authenticated;
 revoke all on function raw.body_safe_tokens() from public, anon, authenticated;
 revoke all on function raw.forbidden_words() from public, anon, authenticated;
 revoke all on function raw.forbidden_contained() from public, anon, authenticated;
+revoke all on function raw.forbidden_word_ends() from public, anon, authenticated;
 revoke all on function raw.token_safe_names() from public, anon, authenticated;
 revoke all on function raw.rate_neighbours() from public, anon, authenticated;
 revoke all on function raw.key_words(text) from public, anon, authenticated;
@@ -251,7 +271,7 @@ create trigger source_records_before_write before insert or update on raw.source
   for each row execute function raw.source_records_before_write();
 
 -- Batch upsert for one connection. Each element: {object_type, external_id, payload, source_updated_at, deleted,
--- synced_at}. Returns the number of rows written (rows skipped as stale are not counted). A bad lane/connection pair,
+-- synced_at}. Returns the number of rows written (rows skipped as stale or superseded in the batch are not counted). A bad lane/connection pair,
 -- a connection that is not active/degraded, or a disabled lane is the same 42501 error as a missing connection (no
 -- probing). Every element is validated here before any insert, with our own messages and no DETAIL, so a payload never
 -- reaches the Postgres log through a constraint error. Limits: 1000 records and 8 MB per call here (the TypeScript
@@ -334,16 +354,20 @@ begin
   from rows from (pg_catalog.jsonb_to_recordset(p_records) as (object_type text, external_id text, payload jsonb,
                                                       source_updated_at timestamptz, deleted boolean, synced_at timestamptz))
        with ordinality as r (object_type, external_id, payload, source_updated_at, deleted, synced_at, n)
-  -- Within one batch the last element for an object wins.
-  order by r.object_type, r.external_id, r.n desc
+  -- Within one batch the newest provider version of an object wins (undated versions rank last); among equal ones the
+  -- later element.
+  order by r.object_type, r.external_id, r.source_updated_at desc nulls last, r.n desc
   on conflict (connection_id, object_type, external_id) do update
-    set payload = excluded.payload, source_updated_at = excluded.source_updated_at, deleted = excluded.deleted,
-        synced_at = excluded.synced_at
+    set payload = excluded.payload,
+        -- An undated deletion keeps the stored provider time, so a late older update is still skipped afterwards.
+        source_updated_at = coalesce(excluded.source_updated_at, raw.source_records.source_updated_at),
+        deleted = excluded.deleted, synced_at = excluded.synced_at
     -- An older provider version never overwrites a newer one (late or replayed batches). A record with no
-    -- source_updated_at never overwrites one that has it (it is skipped like a stale one); it can only replace a row
-    -- that has none.
+    -- source_updated_at never overwrites one that has it (it is skipped like a stale one), except a deletion: a delete
+    -- (Graph @removed, Stripe deleted) must win unless the stored version is strictly newer than a dated one.
     where raw.source_records.source_updated_at is null
-       or excluded.source_updated_at >= raw.source_records.source_updated_at;
+       or excluded.source_updated_at >= raw.source_records.source_updated_at
+       or (excluded.deleted and excluded.source_updated_at is null);
   get diagnostics v_count = row_count;
   return v_count;
 end;

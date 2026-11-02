@@ -1,7 +1,8 @@
 import { describe, expect, it } from "vitest";
 import { mintLaneBoundConnection } from "../contract/lane-bound";
 import type { RawRecord } from "../contract/index";
-import { RAW_BATCH_BYTES, RAW_BATCH_SIZE, RAW_RECORD_MAX_BYTES, createRawRecordStore } from "./store";
+import { readFileSync, readdirSync } from "node:fs";
+import { RAW_BATCH_BYTES, RAW_BATCH_SIZE, RAW_RECORD_MAX_BYTES, RAW_TIMESTAMP_RE, createRawRecordStore, payloadJsonBytes } from "./store";
 
 const CONN_ID = "00000000-0000-4000-8000-0000000003a1";
 const row = (provider: string, lane = "PKG") => ({
@@ -105,6 +106,57 @@ describe("upsertRawRecords", () => {
     const overhead = Buffer.byteLength(JSON.stringify({ v: "" }));
     expect(await f.store.upsertRawRecords("PKG", qbo(), [rec({ payload: { v: "x".repeat(RAW_RECORD_MAX_BYTES - overhead) } })])).toBe(1);
     expect(await kind(f.store.upsertRawRecords("PKG", qbo(), [rec({ payload: { v: "x".repeat(RAW_RECORD_MAX_BYTES - overhead + 1) } })]))).toBe("invalid_input");
+  });
+
+  it("refuses an over-long key before any guard runs, fast, without writing", async () => {
+    const f = fake();
+    const t = performance.now();
+    expect(await kind(f.store.upsertRawRecords("PKG", qbo(), [rec({ payload: { ["A".repeat(80_000)]: 1 } })]))).toBe("invalid_input");
+    expect(await kind(f.store.upsertRawRecords("PKG", qbo(), [rec({ payload: { a: [{ ["k".repeat(257)]: 1 }] } })]))).toBe("invalid_input");
+    expect(performance.now() - t).toBeLessThan(100);
+    expect(await f.store.upsertRawRecords("PKG", qbo(), [rec({ payload: { ["k".repeat(256)]: 1 } })])).toBe(1);
+    expect(f.calls.rpc).toHaveLength(1);
+  });
+
+  it("measures large and tiny numbers by what jsonb prints, so the size cap stays conservative", () => {
+    expect(payloadJsonBytes({ v: 1e300 })).toBeGreaterThan(300);
+    expect(payloadJsonBytes({ v: 1e-9 })).toBeGreaterThan(300);
+    expect(payloadJsonBytes({ v: 12.5 })).toBe(Buffer.byteLength('{"v":12.5}'));
+  });
+
+  it("timestamps follow the database rule: at most 9 fractional digits, seconds and an offset", async () => {
+    const f = fake();
+    expect(RAW_TIMESTAMP_RE.test("2026-11-02T10:00:00.123456789Z")).toBe(true);
+    for (const bad of ["2026-11-02T10:00:00.1234567890Z", "2026-11-02T10:00Z", "2026-11-02T10:00:00"]) {
+      expect(await kind(f.store.upsertRawRecords("PKG", qbo(), [rec({ synced_at: bad })]))).toBe("invalid_input");
+      expect(await kind(f.store.upsertRawRecords("PKG", qbo(), [rec({ source_updated_at: bad })]))).toBe("invalid_input");
+    }
+    expect(f.calls.rpc).toEqual([]);
+    expect(await f.store.upsertRawRecords("PKG", qbo(), [rec({ synced_at: "2026-11-02T10:00:00.123456789+05:30", source_updated_at: "2026-11-02T10:00:00Z" })])).toBe(1);
+  });
+
+  it("the timestamp regex is the one in the migration", () => {
+    const dir = new URL("../../../../supabase/core/supabase/migrations/", import.meta.url);
+    const file = readdirSync(dir).find((n) => n.endsWith("_raw_source_records.sql")) as string;
+    const sql = readFileSync(new URL(file, dir), "utf8");
+    const m = /v_ts_re constant text := '([^']+)'/.exec(sql);
+    expect(m?.[1]).toBe(RAW_TIMESTAMP_RE.source);
+  });
+
+  it("reports skipped (stale or superseded) records without breaking the number-returning call", async () => {
+    const f = fake();
+    // the fake echoes the batch length; make the database write one fewer
+    const schemaRpc = { data: 1, error: null };
+    const store = createRawRecordStore((async () => ({
+      schema: () => ({
+        from: () => ({ select: () => ({ eq: () => ({ maybeSingle: async () => ({ data: { store_content_bodies: false }, error: null }) }) }) }),
+        rpc: async () => schemaRpc,
+      }),
+    })) as never);
+    const two = [rec({ external_id: "a" }), rec({ external_id: "b" })];
+    expect(await store.upsertRawRecordsDetailed("PKG", qbo(), two)).toEqual({ written: 1, skipped: 1 });
+    expect(await store.upsertRawRecords("PKG", qbo(), two)).toBe(1);
+    expect(await f.store.upsertRawRecordsDetailed("PKG", qbo(), two)).toEqual({ written: 2, skipped: 0 });
   });
 
   it("refuses U+0000 in a string or key as invalid_input without writing", async () => {

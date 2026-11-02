@@ -23,3 +23,19 @@
 | L-1 | TS size limit vs jsonb text; NUL in strings | Fixed: 680000 bytes of JSON; U+0000 refused as invalid_input. |
 | L-2 | Special timestamp strings; null source_updated_at overwrote | Fixed: ISO-8601 with offset and isfinite; null incoming skipped when stored value is non-null. |
 | L-3 | No shared strip helper | Added `stripForbidden()` (key paths only). |
+
+## Round 3 (security-reviewer on 3d839ee)
+
+| ID | Finding | Disposition |
+|----|---------|-------------|
+| HIGH-1 | `([A-Z]+)([A-Z][a-z])` split was quadratic (80k-char key = 7.5 s) and ran before the size check | Fixed: linear lookahead split `([A-Z])(?=[A-Z](?:[a-rt-z]\|s[a-z]))` in TS and SQL; keys over 256 characters (code points) fail closed (`invalid_input` in TS, 22023 in SQL) before any normalisation; store runs size, then NUL/key-length, then the guards. Timing tests (80k key refused under 100 ms) in Vitest and pgTAP. |
+| MED-1 | Deletion with null `source_updated_at` was dropped | Fixed: a delete is applied unless a dated incoming version is older than the stored one; an undated delete keeps the stored provider time. Store has `upsertRawRecordsDetailed` returning `{written, skipped}`; `upsertRawRecords` still returns the number. pgTAP cases. |
+| MED-2 | In-batch older version beat the newer | Fixed: dedupe orders by `source_updated_at desc nulls last, n desc`. pgTAP cases. |
+| MED-3 | Forbidden-word evasion | Fixed: joined normalised key tested as a word (S.S.N., s_sn, sSN, ssN, zero-width); one trailing plural s stripped (ssns, pins, ibans, rates, tokens); acronym plurals no longer split (SSNs, PINs, IBANs); contained terms acctno, fein, itin, authorization, cookie, passcode, pwd, billingrate; zero-width characters stripped. `secret` and `accountno` now match only at the end of a word (`forbidden_word_ends`), so secretary and accountNotes pass. nextSyncToken and startPageToken are safe token names. Probes in both test suites. |
+| MED-4 | Custom-field name/value arrays bypass key-name guards | No code. Recorded in docs/plan-review.md: adapters must drop or allowlist QBO `CustomField` and GHL `customFields`. |
+| LOW-2 | TS size measure under-counts exponent-form numbers; zod accepts 9+ fractional digits that SQL refuses | Fixed: numbers JSON prints in exponent form count 330 extra bytes; store checks timestamps with the same regex as SQL (`RAW_TIMESTAMP_RE`, pinned to the migration by a test). |
+| LOW-3 | `!deep` sentinel could collide with a key | Fixed: `payload_key_names` returns `(k, is_deep)`; test stores a key named `!deep` (SQL and TS). |
+| LOW-4 | `stripForbidden` lost an own `__proto__` key | Fixed: copied with `defineProperty`; test. |
+| LOW-5 | Several TS walks | Partly: NUL and key length share one walk (`payloadProblem`), the guards scan once. Left as is: JSON size is a separate stringify. |
+
+Known and accepted (not fixed): containment false positives caffeine, itinerary, sewage (fein, itin, wage are substring terms); run-together all-caps or lower-case names (`EMPLOYEESSN`, `employeessn`, `sSNLast`, `secretsmanager`); a punctuated word glued to another (`employee.S.S.N`); cross-script look-alikes; the first-round deferrals. Within one batch an undated deletion loses to a dated update of the same object.

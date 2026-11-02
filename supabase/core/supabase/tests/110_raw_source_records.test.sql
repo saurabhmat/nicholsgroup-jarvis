@@ -1,7 +1,7 @@
 -- Raw source records (T-039): private table, service_role-only upsert bound to the connection's lane, server-set hash
 -- and provider, the content-body guard (database side), and cross-lane / API-role denial.
 begin;
-select plan(200);
+select plan(281);
 \ir helpers/lane_rls.psql
 
 select has_table('raw', 'source_records', 'raw.source_records exists');
@@ -49,12 +49,23 @@ from unnest(array['BankAcctNum', 'compensation', 'hourlyRate', 'wage', 'ssn_last
                   'bankAccountNumber', 'routingNumber', 'IBAN', 'billRate', 'costRate', 'payRate', 'bill_rate', 'salary', 'pin',
                   'password', 'passwd', 'secret', 'clientSecret', 'accessToken', 'refresh_token', 'socialSecurityNumber',
                   'payroll', 'accountNo', 'privateKey', 'apiKey', 'credentials', 'swift', 'bic', 'tin', 'sin', 'rate_bill',
-                  'hourly.rate']) as k;
+                  'hourly.rate',
+                  -- round 3: punctuation, plurals, acronym plurals, case and zero-width evasions, new contained terms
+                  'S.S.N.', 's_sn', 'S-S-N', 'ssns', 'pins', 'ibans', 'rates_bill', 'tokens', 'SSNs', 'PINs', 'IBANs', 'acctno',
+                  'AcctNo', 'FEIN', 'fein', 'ITIN', 'itin', 'authorization', 'Authorization', 'cookie', 'Cookies', 'passcode',
+                  'pwd', 'billingrate', 'billing_rate', 'sSN', 'ssN', E's\u200bsn', E'ss\u200dn', E'ssn\ufeff', 'clientsecrets',
+                  'account_no', 'AccountNo', 'accountno', 'secretKey', 'secrets', 'refreshTokens', 'billRates', 'secretkey']) as k;
 select ok(raw.payload_has_forbidden_field('{"bank": {"routing": "x", "account": "y"}}'), 'a nested routing key is found');
 select ok(not raw.payload_has_forbidden_field('{"bank": {"account": "y"}}'), 'account alone is not forbidden');
 select ok(not raw.payload_has_forbidden_field(jsonb_build_object(k, 'x'), 'quickbooks'), 'allowed key: ' || k)
 from unnest(array['SyncToken', 'nextPageToken', 'pageToken', 'deltaToken', 'classname', 'pinned', 'Id', 'TotalAmt', 'rate', 'Rate',
-                  'pinning', 'single', 'winner', 'operate', 'tokenizer', 'generate', 'ratio', 'CurrencyRef', 'MetaData']) as k;
+                  'pinning', 'single', 'winner', 'operate', 'tokenizer', 'generate', 'ratio', 'CurrencyRef', 'MetaData',
+                  'nextSyncToken', 'startPageToken', 'secretary', 'accountNotes', 'Secretary', 'rates', 'Rates', 'spinner',
+                  '!deep', '__proto__']) as k;
+select ok(raw.payload_has_forbidden_field('{"rates": 1}', 'timesolv') and not raw.payload_has_forbidden_field('{"rates": 1}', 'stripe')
+          and raw.payload_has_forbidden_field('{"hourlyRates": 1}', 'stripe'), 'rates is like rate');
+select ok(not raw.payload_has_forbidden_field('{"!deep": 1}') and not raw.payload_has_body_field('{"!deep": 1}'),
+          'a key literally named !deep is an ordinary key (no sentinel)');
 select ok(raw.payload_has_forbidden_field('{"Rate": 1}', 'timesolv') and not raw.payload_has_forbidden_field('{"Rate": 1}', 'stripe')
           and not raw.payload_has_forbidden_field('{"Rate": 1}'), 'bare rate is forbidden for timesolv only');
 select ok(raw.payload_has_forbidden_field('{"a": {"b": {"c": {"d": {"e": {"f": {"g": {"h": {"i": {"j": {"k": {"l": {"m": {"n": {"o": {"p": {"q": 1}}}}}}}}}}}}}}}}}'),
@@ -70,7 +81,30 @@ select is(raw.key_words(E'classname'), array['classname'], 'words: classname');
 select is(raw.key_words(E'id_token'), array['id', 'token'], 'words: id_token');
 select is(raw.key_words(E'PrimaryTaxIdentifier'), array['primary', 'tax', 'identifier'], 'words: PrimaryTaxIdentifier');
 select is(raw.key_words(E'bódy.text'), array['body', 'text'], 'words: accents dropped, dot splits');
+select is(raw.key_words(E'SSNs'), array['ssns'], 'words: SSNs');
+select is(raw.key_words(E'PINs'), array['pins'], 'words: PINs');
+select is(raw.key_words(E'IBANs'), array['ibans'], 'words: IBANs');
+select is(raw.key_words(E'PINsList'), array['pins', 'list'], 'words: PINsList');
+select is(raw.key_words(E'SSNStatus'), array['ssn', 'status'], 'words: SSNStatus');
+select is(raw.key_words(E'XMLHttpRequest'), array['xml', 'http', 'request'], 'words: XMLHttpRequest');
+select is(raw.key_words(E's\u200bsn'), array['ssn'], 'words: zero-width characters are dropped');
 select is(raw.key_words(''), '{}'::text[], 'words: empty key');
+
+-- key length: over 256 characters fails closed before anything is normalised; an 80k-character key is cheap
+select throws_ok(format('select raw.payload_has_forbidden_field(jsonb_build_object(%L, 1))', repeat('k', 257)),
+                 '22023', 'raw.source_records: payload has a key that is too long', 'a 257-character key is refused (forbidden scan)');
+select throws_ok(format('select raw.payload_has_body_field(jsonb_build_object(%L, 1))', repeat('k', 257)),
+                 '22023', null, 'a 257-character key is refused (body scan)');
+select lives_ok(format('select raw.payload_has_forbidden_field(jsonb_build_object(%L, 1))', repeat('k', 256)), 'a 256-character key is accepted');
+select throws_ok(format('select raw.payload_has_forbidden_field(jsonb_build_object(%L, 1))', repeat(E'\U0001F600', 257)),
+                 '22023', null, 'the limit counts characters, not bytes (257 emoji refused)');
+select lives_ok(format('select raw.payload_has_forbidden_field(jsonb_build_object(%L, 1))', repeat(E'\U0001F600', 256)), '256 emoji are accepted');
+create temp table t_long_start as select clock_timestamp() as t;
+select throws_ok(format('select raw.payload_has_forbidden_field(jsonb_build_object(%L, 1))', repeat('A', 80000)),
+                 '22023', null, 'an 80k uppercase key is refused');
+select throws_ok(format('select raw.payload_has_forbidden_field(jsonb_build_object(%L, 1))', repeat('aB', 40000)),
+                 '22023', null, 'an 80k camel key is refused');
+select ok(clock_timestamp() - (select t from t_long_start) < interval '500 milliseconds', 'long keys are refused quickly (no quadratic regex)');
 
 -- key cap and cost: 20000 distinct keys is the limit; a wide payload is cheap
 select throws_ok($$select raw.payload_has_forbidden_field((select jsonb_object_agg('k' || g, 1) from generate_series(1, 20001) g))$$,
@@ -315,6 +349,65 @@ select throws_ok($$update raw.source_records set payload = '{"salary": 1}' where
                  'a direct UPDATE with a forbidden key is refused by the trigger');
 select throws_ok($$update raw.source_records set provider = 'google', payload = '{"body": "x"}' where external_id = 'o1'$$, '42501', null,
                  'a direct UPDATE to a content provider with a body is refused by the trigger');
+
+-- ---------------------------------------------------------------- deletions and in-batch ordering (round 3)
+set local role service_role;
+select core.source_records_upsert('PKG', '00000000-0000-4000-8000-000000000391',
+  '[{"object_type": "Del", "external_id": "d1", "payload": {"v": 1}, "source_updated_at": "2026-11-05T00:00:00Z", "synced_at": "2026-11-05T01:00:00Z"}]');
+select is(core.source_records_upsert('PKG', '00000000-0000-4000-8000-000000000391',
+  '[{"object_type": "Del", "external_id": "d1", "payload": {"v": 1}, "deleted": true, "synced_at": "2026-11-05T02:00:00Z"}]'),
+  1, 'an undated deletion is applied over a dated row');
+reset role;
+select ok((select deleted from raw.source_records where external_id = 'd1'), 'the deletion marker is stored');
+select is((select source_updated_at from raw.source_records where external_id = 'd1'), '2026-11-05T00:00:00Z'::timestamptz,
+          'an undated deletion keeps the stored provider time');
+set local role service_role;
+select is(core.source_records_upsert('PKG', '00000000-0000-4000-8000-000000000391',
+  '[{"object_type": "Del", "external_id": "d1", "payload": {"v": 0}, "source_updated_at": "2026-11-01T00:00:00Z", "synced_at": "2026-11-05T03:00:00Z"}]'),
+  0, 'a late older update does not undo the deletion');
+select is(core.source_records_upsert('PKG', '00000000-0000-4000-8000-000000000391',
+  '[{"object_type": "Del", "external_id": "d1", "payload": {"v": 0}, "deleted": true, "source_updated_at": "2026-11-01T00:00:00Z", "synced_at": "2026-11-05T03:00:00Z"}]'),
+  0, 'a dated deletion older than the stored version is skipped');
+select is(core.source_records_upsert('PKG', '00000000-0000-4000-8000-000000000391',
+  '[{"object_type": "Del", "external_id": "d2", "payload": {"v": 1}, "deleted": true, "synced_at": "2026-11-05T02:00:00Z"}]'),
+  1, 'an undated deletion of an unseen object is stored');
+select is(core.source_records_upsert('PKG', '00000000-0000-4000-8000-000000000391',
+  '[{"object_type": "Del", "external_id": "d2", "payload": {"v": 2}, "deleted": true, "synced_at": "2026-11-05T03:00:00Z"}]'),
+  1, 'an undated deletion over an undated row is applied');
+-- in one batch the newest provider version wins, whatever the element order
+select is(core.source_records_upsert('PKG', '00000000-0000-4000-8000-000000000391',
+  '[{"object_type": "Ord", "external_id": "b1", "payload": {"v": "newer"}, "source_updated_at": "2026-11-05T00:00:00Z", "synced_at": "2026-11-05T01:00:00Z"},
+    {"object_type": "Ord", "external_id": "b1", "payload": {"v": "older"}, "source_updated_at": "2026-11-01T00:00:00Z", "synced_at": "2026-11-05T01:00:01Z"}]'),
+  1, 'two versions of one object in a batch write one row');
+reset role;
+select is((select payload ->> 'v' from raw.source_records where external_id = 'b1' and object_type = 'Ord'), 'newer',
+          'the newer version wins even when listed first');
+set local role service_role;
+select core.source_records_upsert('PKG', '00000000-0000-4000-8000-000000000391',
+  '[{"object_type": "Ord", "external_id": "b2", "payload": {"v": "undated"}, "synced_at": "2026-11-05T01:00:00Z"},
+    {"object_type": "Ord", "external_id": "b2", "payload": {"v": "dated"}, "source_updated_at": "2026-11-01T00:00:00Z", "synced_at": "2026-11-05T01:00:01Z"},
+    {"object_type": "Ord", "external_id": "b2", "payload": {"v": "tie-later"}, "source_updated_at": "2026-11-01T00:00:00Z", "synced_at": "2026-11-05T01:00:02Z"}]');
+reset role;
+select is((select payload ->> 'v' from raw.source_records where external_id = 'b2' and object_type = 'Ord'), 'tie-later',
+          'undated versions rank last; equal times fall back to the later element');
+
+-- a key literally named !deep is stored (it is not the deep-nesting marker)
+set local role service_role;
+select lives_ok($$select core.source_records_upsert('PKG', '00000000-0000-4000-8000-000000000391',
+  '[{"object_type": "Odd", "external_id": "k1", "payload": {"!deep": 1}, "synced_at": "2026-11-05T01:00:00Z"}]')$$,
+  'a payload with a key named !deep is stored');
+select throws_ok(format($$select core.source_records_upsert('PKG', '00000000-0000-4000-8000-000000000391', %L::jsonb)$$,
+  jsonb_build_array(jsonb_build_object('object_type', 'Odd', 'external_id', 'k2', 'synced_at', '2026-11-05T01:00:00Z',
+    'payload', jsonb_build_object(repeat('k', 257), 1)))::text),
+  '22023', 'raw.source_records: payload has a key that is too long', 'a key over 256 characters is refused at write time');
+select lives_ok($$select core.source_records_upsert('PKG', '00000000-0000-4000-8000-000000000391',
+  '[{"object_type": "Odd", "external_id": "k3", "payload": {}, "source_updated_at": "2026-11-05T01:00:00.123456789Z", "synced_at": "2026-11-05T01:00:00Z"}]')$$,
+  'nine fractional digits are accepted');
+select throws_ok($$select core.source_records_upsert('PKG', '00000000-0000-4000-8000-000000000391',
+  '[{"object_type": "Odd", "external_id": "k4", "payload": {}, "source_updated_at": "2026-11-05T01:00:00.1234567890Z", "synced_at": "2026-11-05T01:00:00Z"}]')$$,
+  '22023', 'record 1: a timestamp is invalid', 'ten fractional digits are refused (the TypeScript store agrees)');
+reset role;
+select is((select count(*)::int from raw.source_records where external_id in ('k1')), 1, 'the !deep payload is in the table');
 
 -- ---------------------------------------------------------------- API roles
 select pg_temp.claims('owner@example.test', 'aal2');

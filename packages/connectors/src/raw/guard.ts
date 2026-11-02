@@ -32,12 +32,20 @@ export const BODY_SAFE_TOKENS: readonly string[] = [
 export const FORBIDDEN_WORDS: readonly string[] = ["ssn", "sin", "ein", "tin", "pin", "iban", "swift", "bic"];
 /** Forbidden: the joined, normalised key contains one of these. */
 export const FORBIDDEN_CONTAINED: readonly string[] = [
-  "socialsecurity", "taxid", "acctnum", "accountnum", "accountno", "routing", "salary", "wage",
-  "compensation", "payroll", "password", "passwd", "secret", "apikey", "privatekey", "credential",
-  "billrate", "costrate", "payrate", "hourlyrate",
+  "socialsecurity", "taxid", "acctnum", "accountnum", "acctno", "routing", "salary", "wage",
+  "compensation", "payroll", "password", "passwd", "apikey", "privatekey", "credential",
+  "billrate", "costrate", "payrate", "hourlyrate", "billingrate", "fein", "itin", "authorization",
+  "cookie", "passcode", "pwd",
 ];
+/**
+ * Forbidden at the end of a word (optional plural s), tested on the words joined by single spaces: `clientsecret`,
+ * `webhook_secret`, `accountNo` and `account_no` match; `secretary` and `accountNotes` do not.
+ */
+export const FORBIDDEN_WORD_ENDS: readonly string[] = ["secret", "secretkey", "accountno", "account no"];
 /** A key whose last word is `token` is forbidden unless the whole joined key is one of these. */
-export const TOKEN_SAFE_NAMES: readonly string[] = ["synctoken", "pagetoken", "nextpagetoken", "deltatoken"];
+export const TOKEN_SAFE_NAMES: readonly string[] = [
+  "synctoken", "pagetoken", "nextpagetoken", "deltatoken", "nextsynctoken", "startpagetoken",
+];
 /** The word `rate` next to one of these is forbidden (hourlyRate); for timesolv, any `rate` word is. */
 export const RATE_NEIGHBOURS: readonly string[] = ["bill", "cost", "pay", "hourly"];
 
@@ -48,6 +56,10 @@ const NEIGH = new Set(RATE_NEIGHBOURS);
 const SAFE_RE = new RegExp(BODY_SAFE_TOKENS.join("|"), "g");
 const BODY_RE = new RegExp(BODY_SUBSTRINGS.join("|"));
 const FORB_RE = new RegExp(FORBIDDEN_CONTAINED.join("|"));
+const ENDS_RE = new RegExp(`(?:${FORBIDDEN_WORD_ENDS.join("|")})s?(?: |$)`);
+const ZERO_WIDTH_RE = /[\u200B-\u200D\u2060\uFEFF\u00AD]/g;
+/** Longest key accepted (characters); a longer key fails closed (the database enforces the same with 22023). */
+export const MAX_KEY_LENGTH = 256;
 const MAX_DEPTH = 16;
 /** Distinct keys per payload; more fails closed (the database enforces the same cap with 22023). */
 export const MAX_DISTINCT_KEYS = 20000;
@@ -62,8 +74,10 @@ export const keyWords = (key: string): string[] =>
   key
     .normalize("NFKD")
     .replace(/[̀-ͯ]/g, "")
+    .replace(ZERO_WIDTH_RE, "")
     .replace(/([a-z0-9])([A-Z])/g, "$1 $2")
-    .replace(/([A-Z]+)([A-Z][a-z])/g, "$1 $2")
+    // Linear split at the end of an acronym (SSNLast -> SSN Last), but not before a plural s (SSNs, PINs stay whole).
+    .replace(/([A-Z])(?=[A-Z](?:[a-rt-z]|s[a-z]))/g, "$1 ")
     .replace(/([A-Za-z])([0-9])/g, "$1 $2")
     .replace(/([0-9])([A-Za-z])/g, "$1 $2")
     .toLowerCase()
@@ -74,13 +88,29 @@ export const keyWords = (key: string): string[] =>
 
 const isBodyKey = (nk: string): boolean => EXACT.has(nk) || BODY_RE.test(nk.replace(SAFE_RE, ""));
 
+/** Drops one trailing plural s (ssns -> ssn). Only for words of 4+ letters. */
+const singular = (w: string): string => (w.length > 3 && w.endsWith("s") ? w.slice(0, -1) : w);
+const isForbiddenWord = (w: string): boolean => FWORDS.has(w) || FWORDS.has(singular(w));
+const isRateWord = (w: string | undefined): boolean => w === "rate" || w === "rates";
+
 const isForbiddenKey = (key: string, nk: string, provider: string | undefined): boolean => {
   const words = keyWords(key);
-  if (words.some((w) => FWORDS.has(w))) return true;
+  if (words.some(isForbiddenWord)) return true;
+  // The joined key too: S.S.N., s_sn and sSN are one word once punctuation and case are gone.
+  if (isForbiddenWord(nk)) return true;
   if (FORB_RE.test(nk)) return true;
-  if (!TSAFE.has(nk) && words.some((w) => w.endsWith("token"))) return true;
-  return words.some((w, i) => w === "rate" && (provider === "timesolv" || NEIGH.has(words[i - 1] ?? "") || NEIGH.has(words[i + 1] ?? "")));
+  if (ENDS_RE.test(words.join(" "))) return true;
+  if (!TSAFE.has(nk) && words.some((w) => /tokens?$/.test(w))) return true;
+  return words.some((w, i) => isRateWord(w) && (provider === "timesolv" || NEIGH.has(words[i - 1] ?? "") || NEIGH.has(words[i + 1] ?? "")));
 };
+
+/** Characters (code points) of a key over 256? Cheap for short keys and for absurdly long ones. */
+export const keyTooLong = (key: string): boolean => {
+  if (key.length <= MAX_KEY_LENGTH) return false;
+  if (key.length > 2 * MAX_KEY_LENGTH) return true;
+  return Array.from(key).length > MAX_KEY_LENGTH;
+};
+const longKey = () => new ConnectorError({ kind: "invalid_input", message: "A raw record payload has a key that is too long" });
 
 const tooMany = () => new ConnectorError({ kind: "invalid_input", message: "A raw record payload has too many distinct keys" });
 
@@ -105,6 +135,7 @@ function scan(payload: unknown, provider: string | undefined, wantBody: boolean)
       continue;
     }
     for (const [k, v] of Object.entries(value)) {
+      if (keyTooLong(k)) throw longKey();
       keys.add(k);
       if (keys.size > MAX_DISTINCT_KEYS) throw tooMany();
       stack.push([v, depth + 1]);
@@ -146,12 +177,16 @@ export function stripForbidden<T>(payload: T, provider?: string): { payload: T; 
     if (Array.isArray(value)) return value.map((v, i) => walk(v, `${path}[${i}]`, depth + 1));
     const out: Record<string, unknown> = {};
     for (const [k, v] of Object.entries(value)) {
+      if (keyTooLong(k)) throw longKey();
       const p = path === "" ? k : `${path}.${k}`;
       if (isForbiddenKeyName(k, provider)) {
         removed.push(p);
         continue;
       }
-      out[k] = walk(v, p, depth + 1);
+      const copied = walk(v, p, depth + 1);
+      // A plain assignment to `__proto__` would change the prototype instead of copying the key.
+      if (k === "__proto__") Object.defineProperty(out, k, { value: copied, enumerable: true, writable: true, configurable: true });
+      else out[k] = copied;
     }
     return out;
   };
@@ -175,6 +210,29 @@ export function hasNul(payload: unknown): boolean {
     }
   }
   return false;
+}
+
+/**
+ * One cheap walk for the checks that must come before the guards: a NUL in a key or string (`nul`) and a key over 256
+ * characters (`long_key`). Iterative, any depth; the first problem found is returned.
+ */
+export function payloadProblem(payload: unknown): "nul" | "long_key" | null {
+  const stack: unknown[] = [payload];
+  while (stack.length > 0) {
+    const value = stack.pop();
+    if (typeof value === "string") {
+      if (value.includes("\u0000")) return "nul";
+    } else if (Array.isArray(value)) {
+      for (const v of value) stack.push(v);
+    } else if (typeof value === "object" && value !== null) {
+      for (const [k, v] of Object.entries(value)) {
+        if (keyTooLong(k)) return "long_key";
+        if (k.includes("\u0000")) return "nul";
+        stack.push(v);
+      }
+    }
+  }
+  return null;
 }
 
 /**
