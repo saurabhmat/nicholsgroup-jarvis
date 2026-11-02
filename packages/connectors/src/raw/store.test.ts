@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { mintLaneBoundConnection } from "../contract/lane-bound";
 import type { RawRecord } from "../contract/index";
-import { RAW_BATCH_SIZE, createRawRecordStore } from "./store";
+import { RAW_BATCH_BYTES, RAW_BATCH_SIZE, createRawRecordStore } from "./store";
 
 const CONN_ID = "00000000-0000-4000-8000-0000000003a1";
 const row = (provider: string, lane = "PKG") => ({
@@ -85,6 +85,38 @@ describe("upsertRawRecords", () => {
     expect(f.calls.rpc).toEqual([]);
   });
 
+  it("splits by total bytes as well as count", async () => {
+    const f = fake();
+    const big = "x".repeat(900 * 1024);
+    const recs = Array.from({ length: 8 }, (_, i) => rec({ external_id: `inv-${i}`, payload: { v: big } }));
+    expect(await f.store.upsertRawRecords("PKG", qbo(), recs)).toBe(8);
+    expect(f.calls.rpc.length).toBeGreaterThan(1);
+    for (const c of f.calls.rpc) expect(Buffer.byteLength(JSON.stringify(c.args.p_records))).toBeLessThan(RAW_BATCH_BYTES + 4096);
+  });
+
+  it("refuses a payload over 1 MB as invalid_input without writing", async () => {
+    const f = fake();
+    expect(await kind(f.store.upsertRawRecords("PKG", qbo(), [rec({ payload: { v: "x".repeat(1100000) } })]))).toBe("invalid_input");
+    expect(f.calls.rpc).toEqual([]);
+  });
+
+  it("refuses forbidden fields for every provider, without writing or echoing", async () => {
+    const f = fake({ storeBodies: true });
+    for (const [conn, provider] of [[qbo(), "quickbooks"], [google(), "google"]] as const) {
+      const e = await f.store.upsertRawRecords("PKG", conn, [rec({ provider, payload: { Id: "1", SSN: "000-00-0000" } })]).catch((x: Error) => x);
+      expect((e as unknown as { info: { kind: string } }).info.kind).toBe("invalid_input");
+      expect(String((e as Error).message)).not.toMatch(/ssn|000/i);
+    }
+    expect(f.calls.rpc).toEqual([]);
+  });
+
+  it("is idempotent: the same call twice sends identical rows", async () => {
+    const f = fake();
+    expect(await f.store.upsertRawRecords("PKG", qbo(), [rec()])).toBe(1);
+    expect(await f.store.upsertRawRecords("PKG", qbo(), [rec()])).toBe(1);
+    expect(f.calls.rpc[1]?.args).toEqual(f.calls.rpc[0]?.args);
+  });
+
   it("rejects malformed records without writing", async () => {
     const f = fake();
     expect(await kind(f.store.upsertRawRecords("PKG", qbo(), [rec({ external_id: "" })]))).toBe("invalid_input");
@@ -128,6 +160,11 @@ describe("upsertRawRecords", () => {
     expect((e as unknown as { info: { kind: string } }).info.kind).toBe("forbidden");
     expect(String((e as Error).message)).not.toMatch(/inv-1|100\.00/);
     expect(await kind(fake({ rpcError: { code: "XX000" } }).store.upsertRawRecords("PKG", qbo(), [rec()]))).toBe("transient");
+    for (const code of ["22023", "23514", "23502", "54000"]) {
+      const r = await fake({ rpcError: { code } }).store.upsertRawRecords("PKG", qbo(), [rec()]).catch((x: Error) => x);
+      expect((r as unknown as { info: { kind: string } }).info.kind).toBe("invalid_input");
+      expect(String((r as Error).message)).not.toMatch(/inv-1|100\.00/);
+    }
   });
 
   it("reports an unavailable lane", async () => {
@@ -146,6 +183,6 @@ describe("sinkFor", () => {
   it("a refused batch aborts the sync run", async () => {
     const f = fake();
     const sink = f.store.sinkFor("PKG", qbo());
-    await expect(sink([rec({ lane_id: "APK" })])).rejects.toBeTruthy();
+    expect(await kind(sink([rec({ lane_id: "APK" })]))).toBe("lane_mismatch");
   });
 });

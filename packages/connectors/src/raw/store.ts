@@ -7,13 +7,19 @@ import { ConnectorError } from "../contract/errors";
 import { assertLaneBound, type LaneBoundConnection } from "../contract/lane-bound";
 import { RawRecordSchema, type RawRecord, type SyncSink } from "../contract/index";
 import type { JobClientFor } from "../vault/tokens";
-import { assertContentAllowed } from "./guard";
+import { assertContentAllowed, assertNoForbiddenFields } from "./guard";
 
-/** Matches the database batch limit. */
+/**
+ * Per-call limits. The database accepts up to 1000 records and 8 MB per call; the store stays under that with 500
+ * records and ~5 MB per call. One payload may be at most 1 MB (measured on its JSON text; the database measures the
+ * slightly longer jsonb text, so a borderline payload can still be refused there, as invalid_input).
+ */
 export const RAW_BATCH_SIZE = 500;
+export const RAW_BATCH_BYTES = 5 * 1024 * 1024;
+export const RAW_RECORD_MAX_BYTES = 1024 * 1024;
 
 export interface RawRecordStore {
-  /** Upserts the records of one connection; returns the number of rows written. All-or-nothing per batch of 500. */
+  /** Upserts the records of one connection; returns the number of rows written. All-or-nothing per call batch (500 records / ~5 MB). */
   upsertRawRecords(laneId: LaneId, conn: LaneBoundConnection<string>, records: readonly RawRecord<string>[]): Promise<number>;
   /** A `SyncSink` that stores each batch it receives (what `Connector.sync` writes to). */
   sinkFor(laneId: LaneId, conn: LaneBoundConnection<string>): SyncSink<string>;
@@ -40,6 +46,9 @@ export function createRawRecordStore(clientFor: JobClientFor): RawRecordStore {
       }
       validated.push(rec);
     }
+    assertNoForbiddenFields(validated);
+    const sizes = validated.map((r) => Buffer.byteLength(JSON.stringify(r.payload), "utf8"));
+    if (sizes.some((n) => n > RAW_RECORD_MAX_BYTES)) throw invalid("A raw record payload is over 1 MB");
 
     let client: Awaited<ReturnType<JobClientFor>>;
     try {
@@ -60,9 +69,25 @@ export function createRawRecordStore(clientFor: JobClientFor): RawRecordStore {
     assertContentAllowed(validated, { storeContentBodies });
 
     const rpc = client.schema("core").rpc.bind(client.schema("core")) as unknown as Rpc;
+    // Batches are cut by record count and by total payload bytes.
+    const batches: RawRecord<string>[][] = [];
+    let current: RawRecord<string>[] = [];
+    let currentBytes = 0;
+    validated.forEach((r, i) => {
+      const n = sizes[i] as number;
+      if (current.length > 0 && (current.length >= RAW_BATCH_SIZE || currentBytes + n > RAW_BATCH_BYTES)) {
+        batches.push(current);
+        current = [];
+        currentBytes = 0;
+      }
+      current.push(r);
+      currentBytes += n;
+    });
+    if (current.length > 0) batches.push(current);
+
     let written = 0;
-    for (let i = 0; i < validated.length; i += RAW_BATCH_SIZE) {
-      const batch = validated.slice(i, i + RAW_BATCH_SIZE).map((r) => ({
+    for (const group of batches) {
+      const batch = group.map((r) => ({
         object_type: r.object_type,
         external_id: r.external_id,
         payload: r.payload,
@@ -78,7 +103,10 @@ export function createRawRecordStore(clientFor: JobClientFor): RawRecordStore {
       }
       if (result.error) {
         // Database text can echo values; only a fixed message leaves this function.
-        if (result.error.code === "42501") throw new ConnectorError({ kind: "forbidden", message: "Raw record write refused" });
+        const code = result.error.code ?? "";
+        if (code === "42501") throw new ConnectorError({ kind: "forbidden", message: "Raw record write refused" });
+        // Data exceptions (22xxx), constraint violations (23xxx) and limit exceeded (54000) will not succeed on retry.
+        if (/^(22|23)/.test(code) || code === "54000") throw invalid("Raw record write rejected as invalid");
         throw new ConnectorError({ kind: "transient", message: "Raw record store unavailable" });
       }
       written += typeof result.data === "number" ? result.data : 0;

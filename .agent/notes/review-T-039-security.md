@@ -1,20 +1,13 @@
-# T-039 security review (Nov 2, 2026)
+# T-039 security review (independent security-reviewer on b7c50df)
 
-Reviewer note: the `security-reviewer` subagent could not be launched from this run (no sub-agent tool was available to the builder), so this is a structured self-review of the diff against the CLAUDE.md rules and the T-035 review checklist. It needs the human's second pass or a re-run with the subagent.
-
-Result: 0 BLOCKER, 0 HIGH. 3 MEDIUM and 3 LOW logged.
-
-Checked and fine
-- Access: `raw.source_records` has RLS on, no policy and no grant to anon, authenticated or service_role (catalog test pins this); schema `raw` has no usage for API roles and is not in config.toml `schemas`. Only `core.source_records_upsert` writes, SECURITY DEFINER with `search_path = ''`, execute for service_role only (pgTAP: owner at aal2 and anon denied).
-- Lane isolation: the function resolves the provider from `core.connections where id and lane_id` (same error for unknown and other-lane); the table has a composite FK (connection_id, lane_id); TS asserts lane-bound connection and rejects any record whose lane, connection or provider differs (nothing written). Cross-lane tests in pgTAP and Vitest.
-- Rule 6: guard in TS (policy read through the lane's job client, missing/erroring policy = not allowed) and a table trigger (every writer, including a future one). Error text carries neither key nor value.
-- Hash set by trigger, not the caller. Payload must be a JSON object, at most 1 MB. Batch cap 1000 in SQL, 500 in TS.
-- Errors from the database are replaced by fixed messages. No logging added.
-
-Findings (logged, not blocking)
-- M1: the body-field list is a key-name heuristic. Provider shapes with content under other names (Google Calendar `description`, Drive `description`, Notion nested property text) pass. Each connector adapter (T-050+, google/microsoft/notion) must project to metadata before the sink, and add provider names to both lists (SQL + TS; a test pins that they match).
-- M2: raw payloads for finance providers are stored whole; they may contain provider-side secrets-like fields (e.g. Stripe `client_secret` on payment intents). No `jsonb_has_secret` check was added because it would fail legitimate syncs; adapters should drop such fields. Decide with T-051/T-052.
-- M3: no read path yet. Normalizers need a reviewed definer read function (lane-checked) when the first one is built; today nothing can read the table except the owner.
-- L1: `deleted` rows keep their payload until retention (T-042) must register this table.
-- L2: payload_hash uses jsonb text form, stable per jsonb value but not RFC 8785; only used for change detection.
-- L3: `synced_at` is updated on every upsert even if the payload is unchanged (churn, not a leak).
+| ID | Finding | Disposition |
+|----|---------|-------------|
+| H1 | Content-body guard was exact-name and bypassable (description, notes, contentBytes, formattedText, ...); monday/gohighlevel not covered | Fixed: substring match on the normalised key (NFKD fold, lower-case, a-z0-9 only) with a small explicit safe-token list (contentType, contentLength, textColor, messageId, context, ...). monday, gohighlevel, timesolv added as content providers. SQL and TS lists pinned by tests. |
+| H2 | No forbidden-data guard (SSN, bank ids, rates, credentials) | Fixed: trigger (authoritative) and TS reject these keys for every provider at any depth, fail closed when too deep, no echo. Connectors must strip these fields before storing. |
+| M1 | Constraint errors (23514/23502) can put the payload in Postgres logs via DETAIL | Fixed: upsert validates every element first and raises its own errors without DETAIL. |
+| M2 | TS had no per-record or per-byte limit, coarse error mapping | Fixed: 1 MB per record, batches cut at 500 records / ~5 MB, SQLSTATE 22/23/54000 map to invalid_input. |
+| M4 | Connection status and lane enabled not checked | Fixed: status in (active, degraded) and lane enabled, same 42501 error. |
+| L1 | Stored bodies persist after policy flips to false | Deferred: register raw.source_records in the T-042 purge. |
+| L5 | No ordering guard on conflict update | Fixed (see code review). |
+| - | monday/gohighlevel adapters should still reduce to metadata | Deferred to the adapter tasks. |
+| - | Cross-script look-alike keys (Cyrillic o in "body") not folded | Accepted: documented; adapters project to metadata. |

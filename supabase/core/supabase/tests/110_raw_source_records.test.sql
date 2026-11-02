@@ -1,7 +1,7 @@
 -- Raw source records (T-039): private table, service_role-only upsert bound to the connection's lane, server-set hash
 -- and provider, the content-body guard (database side), and cross-lane / API-role denial.
 begin;
-select plan(36);
+select plan(105);
 \ir helpers/lane_rls.psql
 
 select has_table('raw', 'source_records', 'raw.source_records exists');
@@ -29,15 +29,34 @@ select ok(not raw.payload_has_body_field('{"id": "m1", "subject": "Hello", "from
           'metadata only has no body field');
 select ok(not raw.payload_has_body_field('{"note": "the body is here"}'), 'values are not scanned, only keys');
 select ok(raw.is_content_provider('google') and raw.is_content_provider('microsoft') and raw.is_content_provider('notion')
+          and raw.is_content_provider('monday') and raw.is_content_provider('gohighlevel') and raw.is_content_provider('timesolv')
           and not raw.is_content_provider('quickbooks') and not raw.is_content_provider('stripe'),
-          'content providers are google, microsoft, notion');
+          'content providers are google, microsoft, notion, monday, gohighlevel, timesolv');
+
+select ok(raw.payload_has_body_field(jsonb_build_object(k, 'x')), 'body-like key found: ' || k)
+from unnest(array['description', 'notes', 'contentBytes', 'formattedText', 'argumentText', 'indexableText', 'values',
+                  'messageBody', 'bodyText', 'bodyContent', 'fullText', 'emailBody', 'comment', 'attachmentData',
+                  'dataUrl', 'narrative', 'raw', 'contentTypeBody', E'b\u00f3dy', E'\uff42\uff4f\uff44\uff59']) as k;
+select ok(not raw.payload_has_body_field('{"contentType": "text/plain", "contentLength": 4, "textColor": "red", "messageId": "m", "internetMessageId": "<x>", "context_id": "c", "hasAttachments": true}'),
+          'documented safe metadata keys stay storable');
+select ok(raw.payload_has_forbidden_field(jsonb_build_object(k, 'x')) and raw.payload_has_forbidden_field(jsonb_build_object('a', jsonb_build_array(jsonb_build_object(upper(k), 'x')))),
+          'forbidden key found at any depth: ' || k)
+from unnest(array['ssn', 'taxId', 'tax_identifier', 'AcctNum', 'account-number', 'bankAccountNumber', 'routingNumber', 'IBAN',
+                  'billRate', 'costRate', 'salary', 'payRate', 'pin', 'password', 'secret', 'clientSecret', 'accessToken',
+                  'refresh_token']) as k;
+select ok(not raw.payload_has_forbidden_field('{"Id": "1", "pinned": true, "TotalAmt": "1.00"}'), 'ordinary finance keys pass the forbidden guard');
+select ok(raw.payload_has_forbidden_field('{"a": {"b": {"c": {"d": {"e": {"f": {"g": {"h": {"i": {"j": {"k": {"l": {"m": {"n": {"o": {"p": {"q": 1}}}}}}}}}}}}}}}}}'),
+          'forbidden guard fails closed on deep nesting');
 
 -- ---------------------------------------------------------------- fixtures (service_role is the real writer)
 set local role service_role;
 insert into core.connections (id, lane_id, provider, external_account_id, status) values
   ('00000000-0000-4000-8000-000000000391', 'PKG', 'quickbooks', 'realm-synthetic-39', 'active'),
   ('00000000-0000-4000-8000-000000000392', 'PKG', 'google', 'mailbox-synthetic-39', 'active'),
-  ('00000000-0000-4000-8000-000000000393', 'APK', 'quickbooks', 'realm-synthetic-39b', 'active');
+  ('00000000-0000-4000-8000-000000000393', 'APK', 'quickbooks', 'realm-synthetic-39b', 'active'),
+  ('00000000-0000-4000-8000-000000000394', 'PKG', 'quickbooks', 'realm-synthetic-39c', 'reconnect_required'),
+  ('00000000-0000-4000-8000-000000000395', 'PKG', 'stripe', 'acct-synthetic-39d', 'degraded'),
+  ('00000000-0000-4000-8000-000000000396', 'PKG', 'timesolv', 'firm-synthetic-39', 'active');
 
 select is(
   core.source_records_upsert('PKG', '00000000-0000-4000-8000-000000000391', $j$[
@@ -89,7 +108,7 @@ select throws_ok($$insert into raw.source_records (lane_id, connection_id, provi
 set local role service_role;
 select throws_ok(format($$select core.source_records_upsert('PKG', '00000000-0000-4000-8000-000000000391',
   '[{"object_type": "Invoice", "external_id": "big", "payload": {"v": "%s"}, "synced_at": "2026-11-03T10:00:00Z"}]')$$, repeat('x', 1100000)),
-  '23514', null, 'a payload over 1 MB is refused');
+  '22023', null, 'a payload over 1 MB is refused by our own check (no constraint DETAIL)');
 reset role;
 
 -- ---------------------------------------------------------------- content guard (database side)
@@ -113,6 +132,105 @@ select lives_ok($$select core.source_records_upsert('PKG', '00000000-0000-4000-8
   '[{"object_type": "Invoice", "external_id": "inv-3", "payload": {"Id": "inv-3", "text": "memo"}, "synced_at": "2026-11-03T10:00:00Z"}]')$$,
   'the guard does not apply to finance providers');
 reset role;
+
+-- ---------------------------------------------------------------- validation (own errors, no payload in the message)
+set local role service_role;
+select throws_ok($$select core.source_records_upsert('PKG', '00000000-0000-4000-8000-000000000391', '["not an object"]')$$, '22023', null, 'a non-object element is refused');
+select throws_ok($$select core.source_records_upsert('PKG', '00000000-0000-4000-8000-000000000391',
+  '[{"object_type": "Invoice", "external_id": "x", "payload": [1], "synced_at": "2026-11-03T10:00:00Z"}]')$$, '22023', null, 'a non-object payload is refused');
+select throws_ok($$select core.source_records_upsert('PKG', '00000000-0000-4000-8000-000000000391',
+  '[{"object_type": "1bad type", "external_id": "x", "payload": {}, "synced_at": "2026-11-03T10:00:00Z"}]')$$, '22023', null, 'a bad object_type is refused');
+select throws_ok($$select core.source_records_upsert('PKG', '00000000-0000-4000-8000-000000000391',
+  '[{"object_type": "Invoice", "external_id": "", "payload": {}, "synced_at": "2026-11-03T10:00:00Z"}]')$$, '22023', null, 'an empty external_id is refused');
+select throws_ok(format($$select core.source_records_upsert('PKG', '00000000-0000-4000-8000-000000000391',
+  '[{"object_type": "Invoice", "external_id": "%s", "payload": {}, "synced_at": "2026-11-03T10:00:00Z"}]')$$, repeat('e', 257)),
+  '22023', null, 'an over-long external_id is refused');
+select throws_ok($$select core.source_records_upsert('PKG', '00000000-0000-4000-8000-000000000391',
+  '[{"object_type": "Invoice", "external_id": "x", "payload": {}}]')$$, '22023', null, 'a missing synced_at is refused');
+select throws_ok($$select core.source_records_upsert('PKG', '00000000-0000-4000-8000-000000000391',
+  '[{"object_type": "Invoice", "external_id": "x", "payload": {}, "synced_at": "SECRET-not-a-time"}]')$$, '22023', null, 'a bad timestamp is refused');
+select throws_ok($$select core.source_records_upsert('PKG', '00000000-0000-4000-8000-000000000391',
+  '[{"object_type": "Invoice", "external_id": "x", "payload": {}, "deleted": "yes", "synced_at": "2026-11-03T10:00:00Z"}]')$$, '22023', null, 'a non-boolean deleted is refused');
+select throws_ok($$select core.source_records_upsert('PKG', '00000000-0000-4000-8000-000000000391',
+  '[{"object_type": "Invoice", "external_id": "x", "payload": {"secretvalue": "SYNTH-LEAK-1"}, "synced_at": "SECRET-not-a-time"}]')$$,
+  '22023', 'record 1: a timestamp is invalid', 'the error text carries no payload or input value');
+select throws_ok(format($$select core.source_records_upsert('PKG', '00000000-0000-4000-8000-000000000391', %L::jsonb)$$,
+  (select jsonb_agg(jsonb_build_object('object_type', 'T', 'external_id', 'e' || g, 'payload', '{}'::jsonb, 'synced_at', '2026-11-03T10:00:00Z'))::text
+   from generate_series(1, 1001) g)),
+  '54000', null, 'more than 1000 records in one call is refused');
+reset role;
+
+-- ---------------------------------------------------------------- forbidden-data guard (every provider)
+set local role service_role;
+select throws_ok($$select core.source_records_upsert('PKG', '00000000-0000-4000-8000-000000000391',
+  '[{"object_type": "Customer", "external_id": "c1", "payload": {"Id": "c1", "Nested": [{"AcctNum": "SYNTH-123"}]}, "synced_at": "2026-11-03T10:00:00Z"}]')$$,
+  '22023', 'raw.source_records: payload contains a field that must not be stored', 'a finance payload with a bank identifier key is refused, nothing echoed');
+select throws_ok($$select core.source_records_upsert('PKG', '00000000-0000-4000-8000-000000000396',
+  '[{"object_type": "TimeEntry", "external_id": "t1", "payload": {"id": "t1", "billRate": "250.00"}, "synced_at": "2026-11-03T10:00:00Z"}]')$$,
+  '22023', null, 'a rate key is refused for timesolv');
+reset role;
+select is((select count(*)::int from raw.source_records where external_id in ('c1', 't1')), 0, 'nothing was stored');
+
+-- ---------------------------------------------------------------- content providers added in this revision
+set local role service_role;
+select throws_ok($$select core.source_records_upsert('PKG', '00000000-0000-4000-8000-000000000396',
+  '[{"object_type": "TimeEntry", "external_id": "t2", "payload": {"id": "t2", "narrative": "synthetic"}, "synced_at": "2026-11-03T10:00:00Z"}]')$$,
+  '42501', null, 'a timesolv narrative is refused while store_content_bodies is false');
+select lives_ok($$select core.source_records_upsert('PKG', '00000000-0000-4000-8000-000000000396',
+  '[{"object_type": "TimeEntry", "external_id": "t3", "payload": {"id": "t3", "hours": "1.50"}, "synced_at": "2026-11-03T10:00:00Z"}]')$$,
+  'timesolv metadata is stored');
+select throws_ok($$select core.source_records_upsert('PKG', '00000000-0000-4000-8000-000000000392',
+  '[{"object_type": "message", "external_id": "m9", "payload": {"id": "m9", "bodyContent": "x"}, "synced_at": "2026-11-03T10:00:00Z"}]')$$,
+  '42501', null, 'a substring-style body key is refused (bodyContent)');
+reset role;
+
+-- ---------------------------------------------------------------- connection status and lane enabled
+set local role service_role;
+select throws_ok($$select core.source_records_upsert('PKG', '00000000-0000-4000-8000-000000000394',
+  '[{"object_type": "Invoice", "external_id": "x", "payload": {}, "synced_at": "2026-11-03T10:00:00Z"}]')$$,
+  '42501', 'connection not found in this lane', 'a reconnect_required connection is refused with the same error');
+select lives_ok($$select core.source_records_upsert('PKG', '00000000-0000-4000-8000-000000000395',
+  '[{"object_type": "Charge", "external_id": "ch1", "payload": {"id": "ch1"}, "synced_at": "2026-11-03T10:00:00Z"}]')$$,
+  'a degraded connection is accepted');
+reset role;
+update core.lanes set enabled = false where code = 'PKG';
+set local role service_role;
+select throws_ok($$select core.source_records_upsert('PKG', '00000000-0000-4000-8000-000000000391',
+  '[{"object_type": "Invoice", "external_id": "x", "payload": {}, "synced_at": "2026-11-03T10:00:00Z"}]')$$,
+  '42501', 'connection not found in this lane', 'a disabled lane is refused with the same error');
+reset role;
+update core.lanes set enabled = true where code = 'PKG';
+
+-- ---------------------------------------------------------------- ordering guard, unchanged hash, direct UPDATE
+set local role service_role;
+select core.source_records_upsert('PKG', '00000000-0000-4000-8000-000000000391',
+  '[{"object_type": "Order", "external_id": "o1", "payload": {"v": "new"}, "source_updated_at": "2026-11-05T00:00:00Z", "synced_at": "2026-11-05T01:00:00Z"}]');
+select is(core.source_records_upsert('PKG', '00000000-0000-4000-8000-000000000391',
+  '[{"object_type": "Order", "external_id": "o1", "payload": {"v": "old"}, "source_updated_at": "2026-11-01T00:00:00Z", "synced_at": "2026-11-05T02:00:00Z"}]'),
+  0, 'a stale (older source_updated_at) overwrite is skipped and not counted');
+reset role;
+select is((select payload ->> 'v' from raw.source_records where external_id = 'o1'), 'new', 'the newer payload is kept');
+select is((select synced_at from raw.source_records where external_id = 'o1'), '2026-11-05T01:00:00Z'::timestamptz, 'synced_at was not touched by the skipped write');
+set local role service_role;
+select is(core.source_records_upsert('PKG', '00000000-0000-4000-8000-000000000391',
+  '[{"object_type": "Order", "external_id": "o1", "payload": {"v": "newer"}, "source_updated_at": "2026-11-06T00:00:00Z", "synced_at": "2026-11-06T01:00:00Z"}]'),
+  1, 'a newer version overwrites');
+reset role;
+create temp table h0 as select payload_hash from raw.source_records where external_id = 'o1';
+set local role service_role;
+select core.source_records_upsert('PKG', '00000000-0000-4000-8000-000000000391',
+  '[{"object_type": "Order", "external_id": "o1", "payload": {"v": "newer"}, "source_updated_at": "2026-11-06T00:00:00Z", "synced_at": "2026-11-06T02:00:00Z"}]');
+reset role;
+select is((select payload_hash from raw.source_records where external_id = 'o1'), (select payload_hash from h0), 'an identical re-upsert keeps the same hash');
+select is((select count(*)::int from raw.source_records where external_id = 'o1'), 1, 'and still one row');
+
+update raw.source_records set payload = '{"v": "direct"}' where external_id = 'o1';
+select is((select payload_hash from raw.source_records where external_id = 'o1'),
+          encode(sha256(convert_to('{"v": "direct"}', 'UTF8')), 'hex'), 'a direct UPDATE goes through the trigger (hash recomputed)');
+select throws_ok($$update raw.source_records set payload = '{"salary": 1}' where external_id = 'o1'$$, '22023', null,
+                 'a direct UPDATE with a forbidden key is refused by the trigger');
+select throws_ok($$update raw.source_records set provider = 'google', payload = '{"body": "x"}' where external_id = 'o1'$$, '42501', null,
+                 'a direct UPDATE to a content provider with a body is refused by the trigger');
 
 -- ---------------------------------------------------------------- API roles
 select pg_temp.claims('owner@example.test', 'aal2');
