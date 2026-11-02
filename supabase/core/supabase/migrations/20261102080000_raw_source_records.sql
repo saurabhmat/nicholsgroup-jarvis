@@ -7,6 +7,7 @@
 --   core.source_records_upsert(lane, connection, records): service_role only; the connection must belong to the lane
 --   and the provider is taken from the connection row, never from the caller.
 -- Forbidden-data guard (every provider): payloads with SSN / bank / rate / credential keys are refused (trigger, authoritative).
+-- Both guards are DENYLISTS and only a backstop: each adapter must project to a strict per-provider/object_type allowlist.
 -- Content guard (rule 6): for content providers a payload that carries a body field is refused unless the lane policy
 -- store_content_bodies is true. Enforced by a trigger on the table (so no write path skips it) and again in TypeScript.
 -- The schema `raw` is not in the API's exposed schemas (config.toml): nothing here is reachable through PostgREST.
@@ -35,22 +36,55 @@ as $$ select array['raw'] $$;
 create function raw.body_substrings() returns text[]
 language sql immutable set search_path = ''
 as $$ select array['body', 'content', 'text', 'description', 'notes', 'snippet', 'html', 'markdown', 'message',
-                   'comment', 'attachment', 'bytes', 'values', 'dataurl', 'narrative'] $$;
--- Safe tokens, longest first. Documented: content type/length/id/encoding/language/disposition/md5, "context",
--- text colour, and message/comment/attachment ids and counts stay storable.
+                   'comment', 'attachment', 'bytes', 'values', 'dataurl', 'narrative', 'note', 'memo', 'transcript',
+                   'preview', 'excerpt', 'caption'] $$;
+-- Safe tokens, longest first (no token is a prefix of a later one, so leftmost-first and leftmost-longest regex engines
+-- agree). Documented: content type/length/id/encoding/language/disposition/md5, "context", text colour, message/comment/
+-- attachment ids and counts, link fields (htmlLink, webContentLink) and mailbox counters stay storable.
 create function raw.body_safe_tokens() returns text[]
 language sql immutable set search_path = ''
-as $$ select array['contentdisposition', 'contentlanguage', 'contentencoding', 'attachmentcount', 'hasattachments',
+as $$ select array['contentdisposition', 'contentlanguage', 'contentencoding', 'attachmentcount', 'lastmessagetype',
+                   'lastmessagedate', 'hasattachments', 'webcontentlink', 'messagesunread', 'messagestotal',
                    'contentlength', 'contenttype', 'attachmentid', 'hasattachment', 'messagecount', 'commentcount',
-                   'textcolor', 'messageids', 'messageid', 'commentid', 'contentmd5', 'contentid', 'context'] $$;
+                   'textcolor', 'messageids', 'messageid', 'commentid', 'contentmd5', 'contentid', 'htmllink',
+                   'context'] $$;
 
--- Fields that must never be stored for any provider (PII, bank identifiers, rates, credentials). Exact normalised names.
--- Connectors strip these before storing.
-create function raw.forbidden_names() returns text[]
+-- Forbidden-data rules (PII, bank identifiers, rates, credentials), applied to every provider. A key is split into words
+-- (camelCase, digits, `_`, `-`, `.` and other punctuation are boundaries; see raw.key_words) and also kept in joined,
+-- normalised form. Refused when:
+--   * a word equals one of forbidden_words (whole words only: classname and pinned pass);
+--   * the joined form contains one of forbidden_contained;
+--   * a word ends in `token`, unless the joined key is one of token_safe_names (SyncToken, nextPageToken, ...);
+--   * the word `rate` sits next to one of rate_neighbours (hourlyRate, rate_bill), or, for timesolv, appears at all.
+create function raw.forbidden_words() returns text[]
 language sql immutable set search_path = ''
-as $$ select array['ssn', 'socialsecuritynumber', 'taxid', 'taxidentifier', 'acctnum', 'accountnumber',
-                   'bankaccountnumber', 'routingnumber', 'iban', 'billrate', 'costrate', 'salary', 'payrate', 'pin',
-                   'password', 'secret', 'clientsecret', 'accesstoken', 'refreshtoken'] $$;
+as $$ select array['ssn', 'sin', 'ein', 'tin', 'pin', 'iban', 'swift', 'bic'] $$;
+create function raw.forbidden_contained() returns text[]
+language sql immutable set search_path = ''
+as $$ select array['socialsecurity', 'taxid', 'acctnum', 'accountnum', 'accountno', 'routing', 'salary', 'wage',
+                   'compensation', 'payroll', 'password', 'passwd', 'secret', 'apikey', 'privatekey', 'credential',
+                   'billrate', 'costrate', 'payrate', 'hourlyrate'] $$;
+create function raw.token_safe_names() returns text[]
+language sql immutable set search_path = ''
+as $$ select array['synctoken', 'pagetoken', 'nextpagetoken', 'deltatoken'] $$;
+create function raw.rate_neighbours() returns text[]
+language sql immutable set search_path = ''
+as $$ select array['bill', 'cost', 'pay', 'hourly'] $$;
+
+-- Words of a key: NFKD fold, combining marks dropped, boundaries at camelCase / acronym ends / letter-digit changes,
+-- lower-cased, anything but a-z0-9 is a separator. `employeeSsn` -> {employee,ssn}; `SSNLast4` -> {ssn,last,4}.
+create function raw.key_words(p_key text) returns text[]
+language sql immutable set search_path = ''
+as $$
+  select coalesce(pg_catalog.string_to_array(pg_catalog.btrim(pg_catalog.regexp_replace(pg_catalog.lower(
+    pg_catalog.regexp_replace(pg_catalog.regexp_replace(pg_catalog.regexp_replace(pg_catalog.regexp_replace(
+      pg_catalog.regexp_replace(normalize(p_key, NFKD), '[̀-ͯ]', '', 'g'),
+      '([a-z0-9])([A-Z])', '\1 \2', 'g'),
+      '([A-Z]+)([A-Z][a-z])', '\1 \2', 'g'),
+      '([A-Za-z])([0-9])', '\1 \2', 'g'),
+      '([0-9])([A-Za-z])', '\1 \2', 'g')),
+    '[^a-z0-9]+', ' ', 'g'), ' '), ' '), '{}'::text[])
+$$;
 
 -- Every key at any depth (raw, not normalised). Emits the sentinel '!deep' when anything sits 16 or more levels down
 -- (fails closed). Callers normalise.
@@ -74,39 +108,82 @@ as $$
   select k from walk w cross join lateral pg_catalog.jsonb_object_keys(w.v) k where pg_catalog.jsonb_typeof(w.v) = 'object';
 $$;
 
-create function raw.payload_has_body_field(p_payload jsonb) returns boolean
-language sql immutable set search_path = ''
+-- One walk, one normalisation per distinct key, for both guards. Returns whether any key trips the forbidden-data rules
+-- and (when p_want_body) the content-body rules. Distinct keys are capped at 20000 (fails closed, 22023); anything 16 or
+-- more levels down trips both. The body test removes the safe tokens once and then runs a single combined regex.
+create function raw.payload_scan(p_payload jsonb, p_provider text, p_want_body boolean,
+                                 out has_forbidden boolean, out has_body boolean)
+language plpgsql immutable set search_path = ''
 as $$
-  select exists (
-    select 1 from raw.payload_key_names(p_payload) k
-    where k = '!deep'
-       or raw.normalize_key(k) = any (raw.body_exact_names())
-       or exists (
-            select 1 from pg_catalog.unnest(raw.body_substrings()) s
-            where pg_catalog.strpos(
-                    pg_catalog.regexp_replace(raw.normalize_key(k), pg_catalog.array_to_string(raw.body_safe_tokens(), '|'), '', 'g'),
-                    s) > 0)
-  );
+declare
+  v_keys text[];
+  v_k text;
+  v_nk text;
+  v_words text[];
+  v_safe_re text := pg_catalog.array_to_string(raw.body_safe_tokens(), '|');
+  v_body_re text := pg_catalog.array_to_string(raw.body_substrings(), '|');
+  v_forb_re text := pg_catalog.array_to_string(raw.forbidden_contained(), '|');
+  v_exact text[] := raw.body_exact_names();
+  v_fwords text[] := raw.forbidden_words();
+  v_tsafe text[] := raw.token_safe_names();
+  v_neigh text[] := raw.rate_neighbours();
+begin
+  has_forbidden := false;
+  has_body := false;
+  select pg_catalog.array_agg(d.n) into v_keys
+  from (select distinct n from raw.payload_key_names(p_payload) n limit 20001) d;
+  if pg_catalog.cardinality(v_keys) > 20000 then
+    raise exception 'raw.source_records: payload has too many distinct keys' using errcode = '22023';
+  end if;
+  foreach v_k in array coalesce(v_keys, '{}'::text[]) loop
+    exit when has_forbidden and (has_body or not p_want_body);
+    if v_k = '!deep' then
+      has_forbidden := true;
+      has_body := p_want_body;
+      continue;
+    end if;
+    v_nk := raw.normalize_key(v_k);
+    if not has_forbidden then
+      v_words := raw.key_words(v_k);
+      has_forbidden := coalesce(
+        v_words && v_fwords
+        or v_nk ~ v_forb_re
+        or (v_nk <> all (v_tsafe) and exists (select 1 from pg_catalog.unnest(v_words) w where w ~ 'token$'))
+        or ('rate' = any (v_words)
+            and (p_provider = 'timesolv'
+                 or exists (select 1 from pg_catalog.generate_subscripts(v_words, 1) i
+                            where v_words[i] = 'rate' and (v_words[i - 1] = any (v_neigh) or v_words[i + 1] = any (v_neigh))))),
+        false);
+    end if;
+    if p_want_body and not has_body then
+      has_body := v_nk = any (v_exact) or pg_catalog.regexp_replace(v_nk, v_safe_re, '', 'g') ~ v_body_re;
+    end if;
+  end loop;
+end;
 $$;
 
-create function raw.payload_has_forbidden_field(p_payload jsonb) returns boolean
+create function raw.payload_has_body_field(p_payload jsonb) returns boolean
 language sql immutable set search_path = ''
-as $$
-  select exists (
-    select 1 from raw.payload_key_names(p_payload) k
-    where k = '!deep' or raw.normalize_key(k) = any (raw.forbidden_names())
-  );
-$$;
+as $$ select (raw.payload_scan(p_payload, null, true)).has_body $$;
+
+create function raw.payload_has_forbidden_field(p_payload jsonb, p_provider text default null) returns boolean
+language sql immutable set search_path = ''
+as $$ select (raw.payload_scan(p_payload, p_provider, false)).has_forbidden $$;
 
 revoke all on function raw.is_content_provider(text) from public, anon, authenticated;
 revoke all on function raw.normalize_key(text) from public, anon, authenticated;
 revoke all on function raw.body_exact_names() from public, anon, authenticated;
 revoke all on function raw.body_substrings() from public, anon, authenticated;
 revoke all on function raw.body_safe_tokens() from public, anon, authenticated;
-revoke all on function raw.forbidden_names() from public, anon, authenticated;
+revoke all on function raw.forbidden_words() from public, anon, authenticated;
+revoke all on function raw.forbidden_contained() from public, anon, authenticated;
+revoke all on function raw.token_safe_names() from public, anon, authenticated;
+revoke all on function raw.rate_neighbours() from public, anon, authenticated;
+revoke all on function raw.key_words(text) from public, anon, authenticated;
+revoke all on function raw.payload_scan(jsonb, text, boolean) from public, anon, authenticated;
 revoke all on function raw.payload_key_names(jsonb) from public, anon, authenticated;
 revoke all on function raw.payload_has_body_field(jsonb) from public, anon, authenticated;
-revoke all on function raw.payload_has_forbidden_field(jsonb) from public, anon, authenticated;
+revoke all on function raw.payload_has_forbidden_field(jsonb, text) from public, anon, authenticated;
 
 create table raw.source_records (
   id uuid primary key default gen_random_uuid(),
@@ -139,17 +216,30 @@ alter table raw.source_records enable row level security;
 revoke all on raw.source_records from public, anon, authenticated, service_role;
 
 -- Sets the hash and applies the forbidden-data and content guards on every insert/update, whoever writes.
+-- One scan serves both guards. Cost note: an upsert that hits ON CONFLICT DO UPDATE runs the guards on the proposed row
+-- (BEFORE INSERT) and, when the payload changed, again on the updated row (BEFORE UPDATE); the second run is skipped when
+-- the payload, provider and lane are unchanged (the stored payload was guarded when it was written; an unchanged payload
+-- stores no new content even if the lane policy has since tightened). Each scan is bounded by the 1 MB payload limit
+-- and the 20000 distinct-key cap.
 create function raw.source_records_before_write() returns trigger
 language plpgsql set search_path = ''
 as $$
+declare
+  v_scan record;
+  v_content boolean;
 begin
   new.payload_hash := pg_catalog.encode(pg_catalog.sha256(pg_catalog.convert_to(new.payload::text, 'UTF8')), 'hex');
+  if tg_op = 'UPDATE' and new.payload is not distinct from old.payload
+     and new.provider = old.provider and new.lane_id = old.lane_id then
+    return new;
+  end if;
+  v_content := raw.is_content_provider(new.provider);
+  v_scan := raw.payload_scan(new.payload, new.provider, v_content);
   -- Forbidden data (any provider): refused with no detail, the payload is never echoed.
-  if raw.payload_has_forbidden_field(new.payload) then
+  if v_scan.has_forbidden then
     raise exception 'raw.source_records: payload contains a field that must not be stored' using errcode = '22023';
   end if;
-  if raw.is_content_provider(new.provider)
-     and raw.payload_has_body_field(new.payload)
+  if v_content and v_scan.has_body
      and not coalesce((select p.store_content_bodies from core.lane_policies p where p.lane_id = new.lane_id), false) then
     raise exception 'raw.source_records: lane % does not store content bodies', new.lane_id using errcode = '42501';
   end if;
@@ -177,6 +267,7 @@ declare
   v_count integer;
   v_e jsonb;
   v_n integer := 0;
+  v_ts_re constant text := '^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}(\.[0-9]{1,9})?(Z|[+-][0-9]{2}(:?[0-9]{2})?)$';
 begin
   if p_lane is null or p_connection_id is null or p_records is null or pg_catalog.jsonb_typeof(p_records) <> 'array' then
     raise exception 'lane, connection and a records array are required' using errcode = '22004';
@@ -215,10 +306,15 @@ begin
     if pg_catalog.jsonb_typeof(v_e -> 'synced_at') is distinct from 'string' then
       raise exception 'record %: synced_at is required', v_n using errcode = '22023';
     end if;
+    -- Timestamps: ISO-8601 with an explicit offset and finite ('infinity', 'now', 'epoch' and the like are refused).
     begin
-      perform (v_e ->> 'synced_at')::timestamptz;
+      if (v_e ->> 'synced_at') !~ v_ts_re or not pg_catalog.isfinite((v_e ->> 'synced_at')::timestamptz) then
+        raise exception 'bad time' using errcode = '22007';
+      end if;
       if pg_catalog.jsonb_typeof(v_e -> 'source_updated_at') = 'string' then
-        perform (v_e ->> 'source_updated_at')::timestamptz;
+        if (v_e ->> 'source_updated_at') !~ v_ts_re or not pg_catalog.isfinite((v_e ->> 'source_updated_at')::timestamptz) then
+          raise exception 'bad time' using errcode = '22007';
+        end if;
       elsif pg_catalog.jsonb_typeof(v_e -> 'source_updated_at') not in ('null') and v_e ? 'source_updated_at' then
         raise exception 'bad time' using errcode = '22007';
       end if;
@@ -243,8 +339,10 @@ begin
   on conflict (connection_id, object_type, external_id) do update
     set payload = excluded.payload, source_updated_at = excluded.source_updated_at, deleted = excluded.deleted,
         synced_at = excluded.synced_at
-    -- An older provider version never overwrites a newer one (late or replayed batches).
-    where excluded.source_updated_at is null or raw.source_records.source_updated_at is null
+    -- An older provider version never overwrites a newer one (late or replayed batches). A record with no
+    -- source_updated_at never overwrites one that has it (it is skipped like a stale one); it can only replace a row
+    -- that has none.
+    where raw.source_records.source_updated_at is null
        or excluded.source_updated_at >= raw.source_records.source_updated_at;
   get diagnostics v_count = row_count;
   return v_count;

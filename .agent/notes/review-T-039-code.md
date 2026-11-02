@@ -10,3 +10,9 @@
 | Low | No store-level idempotency test | Added. |
 | Low | Missing pgTAP: direct UPDATE through trigger, 1000-record cap (54000), non-object payload, identical re-upsert hash | Added. |
 | Note | SQL batch limit (1000 records, 8 MB) differs from TS (500 records, ~5 MB) | Deliberate; documented in both files. |
+
+## Round 2 (changes reviewed with the security round on 173484c)
+
+| ID | Finding | Disposition |
+|----|---------|-------------|
+| - | No separate code-review findings this round; the security findings above (H-1, M-A, M-B, M-C, L-1..L-3) were all fixed. | See review-T-039-security.md. Parity of SQL and TS lists, regex alternation order (no safe token is a prefix of a later one) and shared key_words fixtures are pinned by tests. |

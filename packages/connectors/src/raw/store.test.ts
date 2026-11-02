@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { mintLaneBoundConnection } from "../contract/lane-bound";
 import type { RawRecord } from "../contract/index";
-import { RAW_BATCH_BYTES, RAW_BATCH_SIZE, createRawRecordStore } from "./store";
+import { RAW_BATCH_BYTES, RAW_BATCH_SIZE, RAW_RECORD_MAX_BYTES, createRawRecordStore } from "./store";
 
 const CONN_ID = "00000000-0000-4000-8000-0000000003a1";
 const row = (provider: string, lane = "PKG") => ({
@@ -87,9 +87,9 @@ describe("upsertRawRecords", () => {
 
   it("splits by total bytes as well as count", async () => {
     const f = fake();
-    const big = "x".repeat(900 * 1024);
-    const recs = Array.from({ length: 8 }, (_, i) => rec({ external_id: `inv-${i}`, payload: { v: big } }));
-    expect(await f.store.upsertRawRecords("PKG", qbo(), recs)).toBe(8);
+    const big = "x".repeat(600 * 1024);
+    const recs = Array.from({ length: 10 }, (_, i) => rec({ external_id: `inv-${i}`, payload: { v: big } }));
+    expect(await f.store.upsertRawRecords("PKG", qbo(), recs)).toBe(10);
     expect(f.calls.rpc.length).toBeGreaterThan(1);
     for (const c of f.calls.rpc) expect(Buffer.byteLength(JSON.stringify(c.args.p_records))).toBeLessThan(RAW_BATCH_BYTES + 4096);
   });
@@ -98,6 +98,29 @@ describe("upsertRawRecords", () => {
     const f = fake();
     expect(await kind(f.store.upsertRawRecords("PKG", qbo(), [rec({ payload: { v: "x".repeat(1100000) } })]))).toBe("invalid_input");
     expect(f.calls.rpc).toEqual([]);
+  });
+
+  it("caps a payload at 680000 bytes of JSON (jsonb text is longer than the 1 MB database limit allows beyond that)", async () => {
+    const f = fake();
+    const overhead = Buffer.byteLength(JSON.stringify({ v: "" }));
+    expect(await f.store.upsertRawRecords("PKG", qbo(), [rec({ payload: { v: "x".repeat(RAW_RECORD_MAX_BYTES - overhead) } })])).toBe(1);
+    expect(await kind(f.store.upsertRawRecords("PKG", qbo(), [rec({ payload: { v: "x".repeat(RAW_RECORD_MAX_BYTES - overhead + 1) } })]))).toBe("invalid_input");
+  });
+
+  it("refuses U+0000 in a string or key as invalid_input without writing", async () => {
+    const f = fake();
+    expect(await kind(f.store.upsertRawRecords("PKG", qbo(), [rec({ payload: { a: { b: ["x\u0000y"] } } })]))).toBe("invalid_input");
+    expect(await kind(f.store.upsertRawRecords("PKG", qbo(), [rec({ payload: { ["k\u0000"]: 1 } })]))).toBe("invalid_input");
+    expect(f.calls.rpc).toEqual([]);
+  });
+
+  it("refuses the provider-specific forbidden rule (timesolv bare rate) and words like employeeSsn", async () => {
+    const f = fake({ storeBodies: true });
+    const ts = mintLaneBoundConnection(row("timesolv") as never);
+    expect(await kind(f.store.upsertRawRecords("PKG", ts, [rec({ provider: "timesolv", payload: { id: "t", Rate: 1 } })]))).toBe("invalid_input");
+    expect(await kind(f.store.upsertRawRecords("PKG", qbo(), [rec({ payload: { employeeSsn: "x" } })]))).toBe("invalid_input");
+    expect(await kind(f.store.upsertRawRecords("PKG", qbo(), [rec({ payload: { SyncToken: "0" } })]))).toBe("ok");
+    expect(f.calls.rpc).toHaveLength(1);
   });
 
   it("refuses forbidden fields for every provider, without writing or echoing", async () => {
@@ -160,7 +183,7 @@ describe("upsertRawRecords", () => {
     expect((e as unknown as { info: { kind: string } }).info.kind).toBe("forbidden");
     expect(String((e as Error).message)).not.toMatch(/inv-1|100\.00/);
     expect(await kind(fake({ rpcError: { code: "XX000" } }).store.upsertRawRecords("PKG", qbo(), [rec()]))).toBe("transient");
-    for (const code of ["22023", "23514", "23502", "54000"]) {
+    for (const code of ["22023", "23514", "23502", "54000", "57014"]) {
       const r = await fake({ rpcError: { code } }).store.upsertRawRecords("PKG", qbo(), [rec()]).catch((x: Error) => x);
       expect((r as unknown as { info: { kind: string } }).info.kind).toBe("invalid_input");
       expect(String((r as Error).message)).not.toMatch(/inv-1|100\.00/);

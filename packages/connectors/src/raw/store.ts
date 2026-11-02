@@ -7,16 +7,17 @@ import { ConnectorError } from "../contract/errors";
 import { assertLaneBound, type LaneBoundConnection } from "../contract/lane-bound";
 import { RawRecordSchema, type RawRecord, type SyncSink } from "../contract/index";
 import type { JobClientFor } from "../vault/tokens";
-import { assertContentAllowed, assertNoForbiddenFields } from "./guard";
+import { assertContentAllowed, assertNoForbiddenFields, hasNul } from "./guard";
 
 /**
  * Per-call limits. The database accepts up to 1000 records and 8 MB per call; the store stays under that with 500
- * records and ~5 MB per call. One payload may be at most 1 MB (measured on its JSON text; the database measures the
- * slightly longer jsonb text, so a borderline payload can still be refused there, as invalid_input).
+ * records and ~5 MB per call. One payload may be at most 680000 bytes of JSON text: the database measures the jsonb text
+ * (`: ` and `, ` separators, escapes), which is longer, against 1 MB, so this keeps a payload accepted here from being
+ * refused there. A refusal in the database is still mapped to invalid_input.
  */
 export const RAW_BATCH_SIZE = 500;
 export const RAW_BATCH_BYTES = 5 * 1024 * 1024;
-export const RAW_RECORD_MAX_BYTES = 1024 * 1024;
+export const RAW_RECORD_MAX_BYTES = 680_000;
 
 export interface RawRecordStore {
   /** Upserts the records of one connection; returns the number of rows written. All-or-nothing per call batch (500 records / ~5 MB). */
@@ -46,9 +47,11 @@ export function createRawRecordStore(clientFor: JobClientFor): RawRecordStore {
       }
       validated.push(rec);
     }
+    // jsonb cannot hold U+0000 in a string or key.
+    if (validated.some((r) => hasNul(r.payload))) throw invalid("A raw record payload contains a NUL character");
     assertNoForbiddenFields(validated);
     const sizes = validated.map((r) => Buffer.byteLength(JSON.stringify(r.payload), "utf8"));
-    if (sizes.some((n) => n > RAW_RECORD_MAX_BYTES)) throw invalid("A raw record payload is over 1 MB");
+    if (sizes.some((n) => n > RAW_RECORD_MAX_BYTES)) throw invalid("A raw record payload is too large");
 
     let client: Awaited<ReturnType<JobClientFor>>;
     try {
@@ -105,8 +108,9 @@ export function createRawRecordStore(clientFor: JobClientFor): RawRecordStore {
         // Database text can echo values; only a fixed message leaves this function.
         const code = result.error.code ?? "";
         if (code === "42501") throw new ConnectorError({ kind: "forbidden", message: "Raw record write refused" });
-        // Data exceptions (22xxx), constraint violations (23xxx) and limit exceeded (54000) will not succeed on retry.
-        if (/^(22|23)/.test(code) || code === "54000") throw invalid("Raw record write rejected as invalid");
+        // Data exceptions (22xxx), constraint violations (23xxx), limit exceeded (54000) and a statement timeout (57014,
+        // which a payload that is too expensive to scan produces) will not succeed on retry.
+        if (/^(22|23)/.test(code) || code === "54000" || code === "57014") throw invalid("Raw record write rejected as invalid");
         throw new ConnectorError({ kind: "transient", message: "Raw record store unavailable" });
       }
       written += typeof result.data === "number" ? result.data : 0;

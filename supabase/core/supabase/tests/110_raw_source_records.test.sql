@@ -1,7 +1,7 @@
 -- Raw source records (T-039): private table, service_role-only upsert bound to the connection's lane, server-set hash
 -- and provider, the content-body guard (database side), and cross-lane / API-role denial.
 begin;
-select plan(105);
+select plan(200);
 \ir helpers/lane_rls.psql
 
 select has_table('raw', 'source_records', 'raw.source_records exists');
@@ -27,7 +27,7 @@ select ok(raw.payload_has_body_field('{"a": {"b": {"c": {"d": {"e": {"f": {"g": 
           'nesting deeper than 16 levels fails closed');
 select ok(not raw.payload_has_body_field('{"id": "m1", "subject": "Hello", "from": "a@example.test", "labels": ["INBOX"]}'),
           'metadata only has no body field');
-select ok(not raw.payload_has_body_field('{"note": "the body is here"}'), 'values are not scanned, only keys');
+select ok(not raw.payload_has_body_field('{"subject2": "the body is here"}'), 'values are not scanned, only keys');
 select ok(raw.is_content_provider('google') and raw.is_content_provider('microsoft') and raw.is_content_provider('notion')
           and raw.is_content_provider('monday') and raw.is_content_provider('gohighlevel') and raw.is_content_provider('timesolv')
           and not raw.is_content_provider('quickbooks') and not raw.is_content_provider('stripe'),
@@ -36,17 +36,54 @@ select ok(raw.is_content_provider('google') and raw.is_content_provider('microso
 select ok(raw.payload_has_body_field(jsonb_build_object(k, 'x')), 'body-like key found: ' || k)
 from unnest(array['description', 'notes', 'contentBytes', 'formattedText', 'argumentText', 'indexableText', 'values',
                   'messageBody', 'bodyText', 'bodyContent', 'fullText', 'emailBody', 'comment', 'attachmentData',
-                  'dataUrl', 'narrative', 'raw', 'contentTypeBody', E'b\u00f3dy', E'\uff42\uff4f\uff44\uff59']) as k;
+                  'dataUrl', 'narrative', 'raw', 'contentTypeBody', 'note', 'memo', 'transcript', 'preview', 'excerpt', 'caption',
+                  'internalNote', 'MeetingTranscript', E'b\u00f3dy', E'\uff42\uff4f\uff44\uff59']) as k;
 select ok(not raw.payload_has_body_field('{"contentType": "text/plain", "contentLength": 4, "textColor": "red", "messageId": "m", "internetMessageId": "<x>", "context_id": "c", "hasAttachments": true}'),
           'documented safe metadata keys stay storable');
-select ok(raw.payload_has_forbidden_field(jsonb_build_object(k, 'x')) and raw.payload_has_forbidden_field(jsonb_build_object('a', jsonb_build_array(jsonb_build_object(upper(k), 'x')))),
+select ok(not raw.payload_has_body_field('{"htmlLink": "u", "webContentLink": "u", "messagesTotal": 1, "messagesUnread": 0, "lastMessageType": "t", "lastMessageDate": "2026-11-01T00:00:00Z"}'),
+          'link and mailbox counter keys stay storable');
+select ok(raw.payload_has_forbidden_field(jsonb_build_object(k, 'x')) and raw.payload_has_forbidden_field(jsonb_build_object('a', jsonb_build_array(jsonb_build_object(k, 'x'))), 'quickbooks'),
           'forbidden key found at any depth: ' || k)
-from unnest(array['ssn', 'taxId', 'tax_identifier', 'AcctNum', 'account-number', 'bankAccountNumber', 'routingNumber', 'IBAN',
-                  'billRate', 'costRate', 'salary', 'payRate', 'pin', 'password', 'secret', 'clientSecret', 'accessToken',
-                  'refresh_token']) as k;
-select ok(not raw.payload_has_forbidden_field('{"Id": "1", "pinned": true, "TotalAmt": "1.00"}'), 'ordinary finance keys pass the forbidden guard');
+from unnest(array['BankAcctNum', 'compensation', 'hourlyRate', 'wage', 'ssn_last4', 'employeeSsn', 'PrimaryTaxIdentifier', 'ein',
+                  'api_key', 'id_token', 'webhook_secret', 'ssn', 'taxId', 'tax_identifier', 'AcctNum', 'account-number',
+                  'bankAccountNumber', 'routingNumber', 'IBAN', 'billRate', 'costRate', 'payRate', 'bill_rate', 'salary', 'pin',
+                  'password', 'passwd', 'secret', 'clientSecret', 'accessToken', 'refresh_token', 'socialSecurityNumber',
+                  'payroll', 'accountNo', 'privateKey', 'apiKey', 'credentials', 'swift', 'bic', 'tin', 'sin', 'rate_bill',
+                  'hourly.rate']) as k;
+select ok(raw.payload_has_forbidden_field('{"bank": {"routing": "x", "account": "y"}}'), 'a nested routing key is found');
+select ok(not raw.payload_has_forbidden_field('{"bank": {"account": "y"}}'), 'account alone is not forbidden');
+select ok(not raw.payload_has_forbidden_field(jsonb_build_object(k, 'x'), 'quickbooks'), 'allowed key: ' || k)
+from unnest(array['SyncToken', 'nextPageToken', 'pageToken', 'deltaToken', 'classname', 'pinned', 'Id', 'TotalAmt', 'rate', 'Rate',
+                  'pinning', 'single', 'winner', 'operate', 'tokenizer', 'generate', 'ratio', 'CurrencyRef', 'MetaData']) as k;
+select ok(raw.payload_has_forbidden_field('{"Rate": 1}', 'timesolv') and not raw.payload_has_forbidden_field('{"Rate": 1}', 'stripe')
+          and not raw.payload_has_forbidden_field('{"Rate": 1}'), 'bare rate is forbidden for timesolv only');
 select ok(raw.payload_has_forbidden_field('{"a": {"b": {"c": {"d": {"e": {"f": {"g": {"h": {"i": {"j": {"k": {"l": {"m": {"n": {"o": {"p": {"q": 1}}}}}}}}}}}}}}}}}'),
           'forbidden guard fails closed on deep nesting');
+
+-- key_words fixtures (the same list is tested in packages/connectors/src/raw/guard.test.ts)
+select is(raw.key_words(E'employeeSsn'), array['employee', 'ssn'], 'words: employeeSsn');
+select is(raw.key_words(E'SSNLast4'), array['ssn', 'last', '4'], 'words: SSNLast4');
+select is(raw.key_words(E'ssn_last4'), array['ssn', 'last', '4'], 'words: ssn_last4');
+select is(raw.key_words(E'Body-Preview'), array['body', 'preview'], 'words: Body-Preview');
+select is(raw.key_words(E'hourlyRate'), array['hourly', 'rate'], 'words: hourlyRate');
+select is(raw.key_words(E'classname'), array['classname'], 'words: classname');
+select is(raw.key_words(E'id_token'), array['id', 'token'], 'words: id_token');
+select is(raw.key_words(E'PrimaryTaxIdentifier'), array['primary', 'tax', 'identifier'], 'words: PrimaryTaxIdentifier');
+select is(raw.key_words(E'bódy.text'), array['body', 'text'], 'words: accents dropped, dot splits');
+select is(raw.key_words(''), '{}'::text[], 'words: empty key');
+
+-- key cap and cost: 20000 distinct keys is the limit; a wide payload is cheap
+select throws_ok($$select raw.payload_has_forbidden_field((select jsonb_object_agg('k' || g, 1) from generate_series(1, 20001) g))$$,
+                 '22023', 'raw.source_records: payload has too many distinct keys', 'more than 20000 distinct keys fails closed (forbidden scan)');
+select throws_ok($$select raw.payload_has_body_field((select jsonb_object_agg('k' || g, 1) from generate_series(1, 20001) g))$$,
+                 '22023', null, 'more than 20000 distinct keys fails closed (body scan)');
+select lives_ok($$select raw.payload_has_forbidden_field((select jsonb_object_agg('k' || g, 1) from generate_series(1, 20000) g))$$,
+                'exactly 20000 distinct keys is accepted');
+create temp table t_scan_start as select clock_timestamp() as t;
+select ok(not raw.payload_has_forbidden_field((select jsonb_object_agg('field' || g || 'Name', g) from generate_series(1, 5000) g), 'google')
+          and not raw.payload_has_body_field((select jsonb_object_agg('field' || g || 'Name', g) from generate_series(1, 5000) g)),
+          'a 5000-key payload is clean');
+select ok(clock_timestamp() - (select t from t_scan_start) < interval '3 seconds', 'a 5000-key payload is scanned in well under 3 seconds');
 
 -- ---------------------------------------------------------------- fixtures (service_role is the real writer)
 set local role service_role;
@@ -74,7 +111,7 @@ select is((select deleted from raw.source_records where external_id = 'inv-2'), 
 -- upsert: same key updates in place, the hash follows the payload
 set local role service_role;
 select is(core.source_records_upsert('PKG', '00000000-0000-4000-8000-000000000391',
-  '[{"object_type": "Invoice", "external_id": "inv-1", "payload": {"Id": "inv-1", "TotalAmt": "250.00"}, "deleted": true, "synced_at": "2026-11-03T10:00:00Z"}]'),
+  '[{"object_type": "Invoice", "external_id": "inv-1", "payload": {"Id": "inv-1", "TotalAmt": "250.00"}, "source_updated_at": "2026-11-02T10:00:00Z", "deleted": true, "synced_at": "2026-11-03T10:00:00Z"}]'),
   1, 'an existing object is updated');
 reset role;
 select is((select count(*)::int from raw.source_records where external_id = 'inv-1'), 1, 'still one row for the object');
@@ -160,6 +197,42 @@ select throws_ok(format($$select core.source_records_upsert('PKG', '00000000-000
   '54000', null, 'more than 1000 records in one call is refused');
 reset role;
 
+-- timestamps: ISO-8601 with an offset, finite
+select throws_ok(format($$select core.source_records_upsert('PKG', '00000000-0000-4000-8000-000000000391',
+  '[{"object_type": "Invoice", "external_id": "x", "payload": {}, "synced_at": %s}]')$$, to_json(v)::text),
+  '22023', 'record 1: a timestamp is invalid', 'synced_at refused: ' || v)
+from unnest(array['infinity', '-infinity', 'now', 'epoch', 'today', 'tomorrow', 'yesterday', 'allballs', '2026-11-03', '2026-11-03 10:00:00',
+                  '2026-11-03T10:00:00', 'November 3 2026 10:00 UTC', '2026-13-03T10:00:00Z']) as v;
+select throws_ok($$select core.source_records_upsert('PKG', '00000000-0000-4000-8000-000000000391',
+  '[{"object_type": "Invoice", "external_id": "x", "payload": {}, "source_updated_at": "infinity", "synced_at": "2026-11-03T10:00:00Z"}]')$$,
+  '22023', 'record 1: a timestamp is invalid', 'source_updated_at infinity is refused');
+select throws_ok($$select core.source_records_upsert('PKG', '00000000-0000-4000-8000-000000000391',
+  '[{"object_type": "Invoice", "external_id": "x", "payload": {}, "source_updated_at": "epoch", "synced_at": "2026-11-03T10:00:00Z"}]')$$,
+  '22023', null, 'source_updated_at epoch is refused');
+select lives_ok($$select core.source_records_upsert('PKG', '00000000-0000-4000-8000-000000000391',
+  '[{"object_type": "Invoice", "external_id": "ts1", "payload": {}, "source_updated_at": "2026-11-03T10:00:00.123+05:30", "synced_at": "2026-11-03T10:00:00Z"}]')$$,
+  'ISO-8601 with fractional seconds and an offset is accepted');
+
+-- a null source_updated_at does not overwrite a row that has one (it is skipped); it can replace a row without one
+select is(core.source_records_upsert('PKG', '00000000-0000-4000-8000-000000000391',
+  '[{"object_type": "Invoice", "external_id": "inv-1", "payload": {"Id": "inv-1", "TotalAmt": "999.00"}, "synced_at": "2026-11-04T10:00:00Z"}]'),
+  0, 'a record with no source_updated_at does not overwrite one that has it');
+reset role;
+select is((select payload ->> 'TotalAmt' from raw.source_records where external_id = 'inv-1'), '250.00', 'the stored payload is unchanged');
+set local role service_role;
+select is(core.source_records_upsert('PKG', '00000000-0000-4000-8000-000000000391',
+  '[{"object_type": "Invoice", "external_id": "inv-2", "payload": {"Id": "inv-2", "TotalAmt": "5.00"}, "synced_at": "2026-11-04T10:00:00Z"}]'),
+  1, 'a record with no source_updated_at replaces a row that has none');
+select lives_ok(format($$select core.source_records_upsert('PKG', '00000000-0000-4000-8000-000000000391', %L::jsonb)$$,
+  (select jsonb_build_array(jsonb_build_object('object_type', 'Wide', 'external_id', 'w1', 'synced_at', '2026-11-03T10:00:00Z',
+     'payload', (select jsonb_object_agg('field' || g || 'Name', g) from generate_series(1, 5000) g)))::text)),
+  'a 5000-key payload is stored (single scan, fast)');
+select throws_ok(format($$select core.source_records_upsert('PKG', '00000000-0000-4000-8000-000000000391', %L::jsonb)$$,
+  (select jsonb_build_array(jsonb_build_object('object_type', 'Wide', 'external_id', 'w2', 'synced_at', '2026-11-03T10:00:00Z',
+     'payload', (select jsonb_object_agg('f' || g, g) from generate_series(1, 20001) g)))::text)),
+  '22023', 'raw.source_records: payload has too many distinct keys', 'more than 20000 distinct keys is refused at write time');
+reset role;
+
 -- ---------------------------------------------------------------- forbidden-data guard (every provider)
 set local role service_role;
 select throws_ok($$select core.source_records_upsert('PKG', '00000000-0000-4000-8000-000000000391',
@@ -169,7 +242,16 @@ select throws_ok($$select core.source_records_upsert('PKG', '00000000-0000-4000-
   '[{"object_type": "TimeEntry", "external_id": "t1", "payload": {"id": "t1", "billRate": "250.00"}, "synced_at": "2026-11-03T10:00:00Z"}]')$$,
   '22023', null, 'a rate key is refused for timesolv');
 reset role;
-select is((select count(*)::int from raw.source_records where external_id in ('c1', 't1')), 0, 'nothing was stored');
+select throws_ok($$select core.source_records_upsert('PKG', '00000000-0000-4000-8000-000000000391',
+  '[{"object_type": "Customer", "external_id": "c2", "payload": {"Id": "c2", "bank": {"routing": "SYNTH", "account": "SYNTH"}}, "synced_at": "2026-11-03T10:00:00Z"}]')$$,
+  '22023', null, 'a nested routing key is refused at write time');
+select throws_ok($$select core.source_records_upsert('PKG', '00000000-0000-4000-8000-000000000396',
+  '[{"object_type": "TimeEntry", "external_id": "t4", "payload": {"id": "t4", "Rate": "250.00"}, "synced_at": "2026-11-03T10:00:00Z"}]')$$,
+  '22023', null, 'a bare Rate key is refused for timesolv at write time');
+select lives_ok($$select core.source_records_upsert('PKG', '00000000-0000-4000-8000-000000000391',
+  '[{"object_type": "Customer", "external_id": "c3", "payload": {"Id": "c3", "SyncToken": "0", "Rate": 1}, "synced_at": "2026-11-03T10:00:00Z"}]')$$,
+  'SyncToken and a bare Rate (non-timesolv) are stored');
+select is((select count(*)::int from raw.source_records where external_id in ('c1', 't1', 'c2', 't4')), 0, 'nothing was stored');
 
 -- ---------------------------------------------------------------- content providers added in this revision
 set local role service_role;
@@ -227,6 +309,8 @@ select is((select count(*)::int from raw.source_records where external_id = 'o1'
 update raw.source_records set payload = '{"v": "direct"}' where external_id = 'o1';
 select is((select payload_hash from raw.source_records where external_id = 'o1'),
           encode(sha256(convert_to('{"v": "direct"}', 'UTF8')), 'hex'), 'a direct UPDATE goes through the trigger (hash recomputed)');
+update raw.source_records set deleted = true where external_id = 'o1';
+select ok((select deleted from raw.source_records where external_id = 'o1'), 'an update that leaves the payload unchanged skips the guard scan and works');
 select throws_ok($$update raw.source_records set payload = '{"salary": 1}' where external_id = 'o1'$$, '22023', null,
                  'a direct UPDATE with a forbidden key is refused by the trigger');
 select throws_ok($$update raw.source_records set provider = 'google', payload = '{"body": "x"}' where external_id = 'o1'$$, '42501', null,
