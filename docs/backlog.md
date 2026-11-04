@@ -89,6 +89,7 @@ These tasks have all their dependencies done and all their `needs` checked. A hu
 - T-010 – T-017 — approved by Saurabh Oct 31, 2026 ("continue with the remaining code"); built on the combined branch `agent/pilot-build`.
 - T-031 – T-035 (connector chain) and T-039 (raw source records) — approved by Saurabh Nov 2, 2026 ("approve the connector chain"); built on `agent/pilot-build`.
 - T-005, T-007, T-030, T-022 — approved Oct 28, 2026. Build order: T-005 first, then T-007 in the main worktree, with T-030 and T-022 in parallel worktrees.
+- T-050, T-055, T-036 (QuickBooks OAuth, finance schema part 1, webhook receiver) — approved by Saurabh Nov 4, 2026 ("yes"); built on `agent/pilot-build`.
 - T-023, T-024 (app shell, navigation) — approved by Saurabh Nov 4, 2026 ("approved all points", D-20 batch 1); built on `agent/pilot-build`.
 - T-003 (imports T-005's secret-pattern list) — approved Oct 24, 2026; in progress in its own worktree.
 
@@ -346,13 +347,12 @@ T-010 – T-017 are the serial spine. After T-017: auth/shell (T-018 – T-026) 
 - acceptance: generic start/callback route handlers with `state` + PKCE bound to lane + user; tokens go straight to Vault; connection row created; audited; tested end-to-end against a mock OAuth server.
 
 ### T-036 Webhook receiver framework
-- status: proposed
+- status: approved
 - depends: T-034, T-031
 - acceptance: route per provider with raw-body signature verification interface, timestamp tolerance, dedupe table `core.webhook_events` (lane_id, provider, event id) + RLS + pgTAP; unsigned/replayed requests rejected (tests); payloads enqueued as Inngest events, not processed inline.
 
 ### T-037 Inngest setup
-- status: approved
-- note (Oct 31, 2026): built and security-reviewed on `agent/pilot-build`; check against the Inngest dev server pending (`.agent/pr/T-037.md`).
+- status: done
 - depends: T-005
 - acceptance: Inngest client, `/api/inngest` route, typed event schemas where `laneId` is required (type test proves events without it fail to compile); runs against the local dev server.
 
@@ -435,7 +435,7 @@ Scope: read-only, Accounting API only (no Payments, no Payroll); never create, u
 20. QuickBooks data is visible only to members of that company's lane (RLS); cross-company only in the owner's consolidated summary (not in the pilot).
 
 ### T-050 QuickBooks OAuth (sandbox) + health
-- status: proposed
+- status: approved
 - depends: T-035, T-011
 - needs: H-005
 - acceptance: Owns QB-2, QB-5, QB-6 (CSRF, expired access token), QB-7, QB-9, QB-17, QB-18. Intuit OAuth on the T-035 framework with scope `com.intuit.quickbooks.accounting` only; authorization, token and revocation endpoints read from Intuit's OpenID discovery document for `INTUIT_ENVIRONMENT` and cached; `state` stored server-side per request and bound to lane + user, mismatch or replay rejected (test); connect allowed only for owner or admin_technical of the lane at AAL2, audited; callback `realmId` must equal the lane_config QBO realm when one is set (mismatch rejected, test); tokens enter the Vault only from the callback (no import path for Playground or offline tokens); proactive refresh before expiry and refresh on 401, rotating refresh token stored atomically on every refresh with the old one discarded (test that a concurrent refresh doesn't lose the token); `intuit_tid` captured from every response into the redacted log; a test that every `INTUIT_*` name is server-only, `INTUIT_CLIENT_SECRET` and `INTUIT_WEBHOOK_VERIFIER_TOKEN` match T-005's secret patterns, and a canary value never reaches the client bundle; health check reads CompanyInfo; contract tests pass.
@@ -477,7 +477,7 @@ Scope: read-only, Accounting API only (no Payments, no Payroll); never create, u
 - acceptance: restricted key read from Vault; health; sync customers, products, prices, subscriptions, invoices, charges, refunds, payouts, balance transactions into raw; pagination + rate limits; contract tests.
 
 ### T-055 Finance normalized schema (part 1: ledger and reports)
-- status: proposed
+- status: approved
 - depends: T-013
 - acceptance: `fin.accounts`, `fin.transactions`, `fin.invoices`, `fin.payments`, `fin.bills`, `fin.report_cache` with `numeric(18,2)`, `timestamptz`, source refs, entity/class columns; RLS + pgTAP; only finance roles and owner can read.
 
