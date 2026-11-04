@@ -28,6 +28,9 @@ Local only for agents: `pnpm db:start`, `pnpm db:reset` (regenerates the seed, t
   `custom_policy_ok`, `user_dml_ok`, `unprotected_read_ok`, `security_definer_ok`, `authenticated_exec_ok`) are
   reviewed lists with a reason per entry; a new security-definer function or callable function must be added there.
 
+- **Finance (`fin`, T-055).** Six ledger/report tables on the `finance` view; rows tie to a same-lane QuickBooks connection and
+  raw record by composite FKs. Not exposed to PostgREST yet (T-081). See `.agent/pr/T-055.md`.
+
 ## Tests
 
 `supabase/tests/*.test.sql`, one transaction each, rolled back. Include the shared helpers with

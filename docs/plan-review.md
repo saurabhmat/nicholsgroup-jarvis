@@ -193,6 +193,15 @@ Under the review policy (dev tooling: one security review, fix BLOCKERs only), t
     - L (security): lint rules miss `@/..` alias paths, `createRequire` and TS `import x = require()`; the approvals module could re-export the write side; `canonicalJson` accepts lone surrogates and sparse arrays (reject them, add the RFC 8785 vectors); any realm-to-lane lookup (webhooks, T-053) must apply the index filter and `lower()`; same-lane case-differing mailbox ids get a misleading refusal; several comments name `/writer` where the rule covers `/write`.
     - L (DB): the index build would fail on an existing database with case-differing duplicates across lanes (fresh and local databases are fine); the index-shape regex tests are loose.
     - e2e: sign-out waits raised to 30 s (first compile of the sign-out action).
+- **T-055 (Nov 4, 2026; finance schema part 1, SQL by the builder, db-engineer/security/code reviews pending with the coordinator):** open items, all MEDIUM or lower:
+  - M: `fin.report_cache.payload` has no database-side forbidden-key guard (raw.source_records has one). The T-052 connector must project reports to an allowlist; consider calling `raw.payload_has_forbidden_field` from a reviewed security-definer trigger.
+  - M: `fin` is not exposed to PostgREST (`config.toml` `api.schemas` and `scripts/supabase-config.test.mjs` unchanged). T-081 (query layer) must expose it deliberately; RLS and the catalog test already cover it. Types for `fin` are generated now.
+  - M: sign convention of `fin.transactions.amount` and the `posted_at` rule are left to T-056 (documented in the migration comments); T-056 must pin both in a test.
+  - L: extra columns beyond the spec list: `connection_id`, `provider`, `raw_record_id`, `source_updated_at`, `deleted` (ledger tables), `line_no` (transactions), `created_at`/`updated_at`. `report_cache` uniqueness includes `connection_id`. Reviewers may veto.
+  - L: bill payments (QuickBooks BillPayment) have no table in part 1; the spec lists none. AP uses `fin.bills.balance`.
+  - L: `entity_code` has a shape check only (`^[A-Za-z0-9_]{1,32}$`); membership of the lane's entity list is the normalizer's job (rule 2: lists live in lane_config).
+  - L: two unique indexes were added to other tables to carry composite foreign keys: `core.connections (id, lane_id, provider)` and `raw.source_records (id, connection_id)`.
+  - L: viewers who hold the named `finance` view read every row of all six tables, including cached report payloads (spec §5). A narrower viewer scope would need views in T-080+.
 ## 7. Decisions log
 
 ### Oct 24, 2026 — Infrastructure (human-owned; closes H-001, H-010)
