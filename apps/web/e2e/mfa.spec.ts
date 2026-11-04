@@ -30,7 +30,7 @@ test("enrol, reach the app, then sign in again with the authenticator code", asy
   expect(await lane.json()).toEqual({ lane: "PKG" });
 
   await signOutViaUi(page);
-  await expect(page).toHaveURL(/\/sign-in$/);
+  await expect(page).toHaveURL(/\/sign-in$/, { timeout: 30_000 }); // first compile of the sign-out action
 
   // Second sign-in: no QR code any more, just the authenticator code; the return path survives both steps.
   await clearMailbox();

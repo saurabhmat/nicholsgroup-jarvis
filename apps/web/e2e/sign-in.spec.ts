@@ -12,7 +12,7 @@ test.beforeEach(async () => {
 
 test("signed-out page requests go to /sign-in, keeping a safe return path", async ({ page }) => {
   await page.goto("/");
-  await expect(page).toHaveURL(/\/sign-in$/);
+  await expect(page).toHaveURL(/\/sign-in$/, { timeout: 30_000 }); // first compile of the sign-out action
   await page.goto("/finance?lane=PKG");
   await expect(page).toHaveURL(/\/sign-in\?next=%2Ffinance%3Flane%3DPKG$/);
 });
@@ -26,9 +26,9 @@ test("signed-out API requests get 401 JSON, not a redirect", async ({ request })
 test("the 6-digit code leads to the two-factor step; sign-out from there ends the session", async ({ page }) => {
   await signInWithEmailCode(page, OWNER);
   await page.getByRole("button", { name: "Sign out" }).click();
-  await expect(page).toHaveURL(/\/sign-in$/);
+  await expect(page).toHaveURL(/\/sign-in$/, { timeout: 30_000 }); // first compile of the sign-out action
   await page.goto("/");
-  await expect(page).toHaveURL(/\/sign-in$/);
+  await expect(page).toHaveURL(/\/sign-in$/, { timeout: 30_000 }); // first compile of the sign-out action
 });
 
 test("a wrong code is refused", async ({ page }) => {

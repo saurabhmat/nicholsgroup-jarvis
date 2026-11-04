@@ -185,6 +185,14 @@ Under the review policy (dev tooling: one security review, fix BLOCKERs only), t
     - L: next dev logs "Could not validate `instant`… NEXT_HTTP_ERROR_FALLBACK;404" for refused lanes. This is dev-only noise from the intended 404.
     - Fixed in the e2e run: helpers wait up to 30 s for first compiles (`/mfa`, `/`), the lane-home check matches the new "Good morning" H1, the iPhone eyebrow check is scoped to the visible eyebrow, and the root-file check now proves the app (not the proxy) answered (`/_next/` assets).
 
+  - **T-050 / D-23 final reviews (Nov 4, 2026; security, code and DB: no BLOCKER or HIGH; full Playwright suite 31 passed, 5 skipped):** T-050 and T-198 set to done. **Open:**
+    - M (DB): the custom SQLSTATE `D0023` is in a class the SQL standard reserves (A–H). Move it to `Z0023` in the migration, `vault/tokens.ts`, its test and pgTAP 120, together, before the next migration on `core.connection_token_store`.
+    - M (DB): the "other 23505 stays 23505" pgTAP cases never reach the new exception block (the Vault name clash and the `connection_secrets_pkey` insert happen outside it), so the `raise;` branch is untested. Add a comment that the final update can only hit this index, or test it with a temporary second unique index.
+    - M (security F-M1): the writer's hash and approver come from the caller. This is now in the T-195 acceptance: read both from the locked approval row.
+    - M (security F-M2): a refused connect leaves a newer secret-less `pending` row, and `findConnection` returns the newest non-disconnected row, so the lane's real active connection shows as `not_connected`. Order usable statuses before `pending` (test: an active row plus a newer abandoned pending row), or delete the lane's own pending row on D0023.
+    - L (security): lint rules miss `@/..` alias paths, `createRequire` and TS `import x = require()`; the approvals module could re-export the write side; `canonicalJson` accepts lone surrogates and sparse arrays (reject them, add the RFC 8785 vectors); any realm-to-lane lookup (webhooks, T-053) must apply the index filter and `lower()`; same-lane case-differing mailbox ids get a misleading refusal; several comments name `/writer` where the rule covers `/write`.
+    - L (DB): the index build would fail on an existing database with case-differing duplicates across lanes (fresh and local databases are fine); the index-shape regex tests are loose.
+    - e2e: sign-out waits raised to 30 s (first compile of the sign-out action).
 ## 7. Decisions log
 
 ### Oct 24, 2026 — Infrastructure (human-owned; closes H-001, H-010)
