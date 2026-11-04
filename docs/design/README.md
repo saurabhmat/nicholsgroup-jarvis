@@ -4,8 +4,8 @@ The signed-off screens that screen tasks build to. Tokens live as CSS variables 
 
 ## Batch 1 — signed off Nov 4, 2026 (D-20)
 
-- **Source:** `Jarvis_Pilot_Prototype_Batch1_v2` (PDF, 7 pages; to be saved here, H-030). Canvas: https://claude.ai/artifact/FuyFYrgeWUsgCscdB3tsgA
-- **Approved by:** Saurabh Gopal for Robert Nichols, Nov 4, 2026, together with every change below.
+- **Source:** `Jarvis_Pilot_Prototype_Batch1_v2` (PDF, 7 pages). Screenshots of every page are in [`batch1/`](batch1/) (from Saurabh, Nov 4, 2026); the PDF itself is H-030. Canvas: https://claude.ai/artifact/FuyFYrgeWUsgCscdB3tsgA
+- **Approved by:** Saurabh Gopal for Robert Nichols, Nov 4, 2026, together with every change below. Saurabh's answers the same day: Projects is shown (Release A, from monday.com), "All companies" comes after the pilot, the tokens are final, and the app has light and dark mode.
 - **Figures in the prototype are placeholders** ("Sample data"). The live app never shows the "Sample data" label; synthetic previews may.
 
 | Page | Screen | Built in |
@@ -20,23 +20,37 @@ The signed-off screens that screen tasks build to. Tokens live as CSS variables 
 ### Tokens (final)
 The v2 tokens in `docs/plan-review.md` §7 "Provisional design tokens" are final: Source Serif 4 headings with an italic accent word, Inter body with tabular numbers, cream ground `#F7F4EC`, white cards, navy `#0E2A47`, gold `#D4AF5A` for decoration only, radius 8px controls / 12px cards, navy side menu with a 3px gold edge on the active item.
 
-- **Light only** in the pilot. No dark mode until Release B.
-- **Chart palette** (Recharts), in this order. Each colour is at least 4.5:1 on white and on cream:
+- **Chart palette** (Recharts, tokens `--chart-1` … `--chart-4`), in this order. Light colours are at least 4.5:1 on white and cream; dark colours at least 3:1 on dark cards (the WCAG level for graphics):
 
-| Use | Colour |
-|---|---|
-| Primary / positive series (Current, New) | navy `#0E2A47` |
-| Secondary positive (1–30 days, Expansion) | blue `#3B6EA5` |
-| Warning (31–60 days, Contraction) | orange `#B45309` |
-| Worst (60+ days, Churned) | brown `#7C2D12` |
+| Use | Light | Dark |
+|---|---|---|
+| Primary / positive series (Current, New) | navy `#0E2A47` | `#9DB9DC` |
+| Secondary positive (1–30 days, Expansion) | blue `#3B6EA5` | `#5B8FCB` |
+| Warning (31–60 days, Contraction) | orange `#B45309` | `#F0A35E` |
+| Worst (60+ days, Churned) | brown `#7C2D12` | `#E8590C` |
 
 Every bar has a text label and value, so colour is never the only cue. Prototype pages 4 and 3 used two similar oranges; the palette above replaces them.
 
+### Light and dark mode
+Both modes ship in Release A. The app follows the device setting; the user can override it (a `data-theme` attribute on `<html>`, set before first paint, the choice kept in the browser, never in lane data). The prototype only shows light, so the dark set below is derived from it: same structure, navy-black ground, the navy side menu darker than the page, gold kept for accents. Every text pair is at least 4.5:1 (checked in `packages/ui/src/styles/tokens.test.ts`). Robert can adjust any value; only `theme.css` changes.
+
+| Token | Dark value |
+|---|---|
+| Ground / card | `#0B1626` / `#13233A` |
+| Border / divider | `#2A3D57` / `#1B2D47` |
+| Text / muted text | `#F3F4F6` / `#A9B8CC` |
+| Primary button | `#D5DEEA` with navy `#0E2A47` text; selected tint `#1F3A5C` |
+| Accent italic | `#9DB9DC` |
+| Gold | `#D4AF5A` (text allowed on dark grounds) |
+| Alert | `#F0A35E`; alert text `#F5C08A` on `#3A2512` |
+| Success | `#86EFAC` on `#12321F` |
+| Side menu | `#081322`; active item `#1F4A7A` with the gold edge; switcher `#10223A` |
+
 ### Navigation (T-023, T-024)
-- **Desktop:** navy side menu. "Pub K" wordmark with a gold star, then "Jarvis · Executive Portal", then the company switcher, then Home · Finance · Inbox · Calendar · Approvals (count badge) · Assistant · Settings. Content max-width 1200px.
-- **iPhone:** navy header band with the company switcher; bottom tabs Home · Approvals · Inbox · Ask · More. Tabs have no back link (drop page 7's "‹ Home"); a back link appears only on pages pushed from another page.
+- **Desktop:** navy side menu. "Pub K" wordmark with a gold star, then "Jarvis · Executive Portal", then the company switcher, then Home · Finance · Inbox · Calendar · Approvals (count badge) · Assistant · Projects · Settings. Content max-width 1200px.
+- **iPhone:** navy header band with the company switcher; bottom tabs Home · Approvals · Inbox · Ask · More (Finance, Calendar, Projects and Settings are under More). Tabs have no back link (drop page 7's "‹ Home"); a back link appears only on pages pushed from another page.
 - **Company switcher:** lists only lanes that are enabled and allowed for the user. In the pilot that is Pub K Group. Ask Pub K, Pub K Institute, Nichols Capital and Nichols Law (finance) appear when their lanes switch on. **"All companies (owner)" is after the pilot** and needs its own decision (a view across lanes).
-- **Projects is hidden in the pilot** (Release B, T-150): no menu entry and no "Projects at a glance" on Home. Search and Commitments are Release B too.
+- **Projects is in Release A**, pulled from monday.com (read-only): a menu entry, a Projects page (T-150; page design in batch 2) and "Projects at a glance" on Home (T-163). Changes to monday.com items still go through Approvals. The sitemap's dashed (Release B) border on Projects is superseded. Search and Commitments stay in Release B.
 - The approvals badge counts the selected lane only.
 
 ### Required changes to the prototype

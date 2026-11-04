@@ -5,7 +5,7 @@ Only humans change `proposed` → `approved`. Agents pick the next `approved` ta
 Board references (PL-xx) point to the Personal Chatbot board in monday.com.
 
 **Releases (see `docs/pilot-scope.md`)**
-- **Release A — live Nov 25 (PKG):** platform core, connectors (QuickBooks, Stripe, GoHighLevel, mail/calendar, monday.com), finance, assistant, priority inbox + reply drafts, calendar view, daily briefing, admin/health, basic web push, and the Approval Center for email send + monday.com updates. PKG approvals switch on only after the pilot security test T-170 passes.
+- **Release A — live Nov 25 (PKG):** platform core, connectors (QuickBooks, Stripe, GoHighLevel, mail/calendar, monday.com), finance, assistant, priority inbox + reply drafts, calendar view, daily briefing, projects (monday.com, read-only; T-150), admin/health, basic web push, and the Approval Center for email send + monday.com updates. PKG approvals switch on only after the pilot security test T-170 passes.
 - **Release B — Dec 7 – 31:** federated search + opt-in indexing, Notion read/writes, meeting prep packs, calendar actions, commitments, memory, projects view, notification polish, onboarding playbook; action modules for other lanes go live Dec 29.
 
 **Task fields**
@@ -139,7 +139,7 @@ These tasks have all their dependencies done and all their `needs` checked. A hu
 - [x] H-017 Intuit **production** approval (Oct 28, 2026): app assessment submitted, production keys issued and kept in 1Password only (never in `.env.local`). Connecting the live PKG file moved to H-024
 - [x] H-018 Local toolchain (Oct 23, 2026): Node 24.19.0 kept locally (CI stays on 22), pnpm 12.15.0 via corepack, Supabase CLI 2.122.0 (npm global)
 - [ ] H-029 App icon for the installable app (T-025): a square master at least 1024×1024 px (PNG or SVG, no transparency for iOS), approved by Robert, saved as `docs/design/app-icon.png` (or `.svg`). The agent generates the manifest sizes from it.
-- [ ] H-030 Save the batch-1 prototype PDF as `docs/design/Jarvis_Pilot_Prototype_Batch1_v2.pdf` and make the canvas link readable by the Claude Code account (it returned "not found" on Nov 4, 2026). D-20 is closed on Saurabh's approval; this keeps the signed-off record in the repo.
+- [ ] H-030 (optional; screenshots of every page are already in `docs/design/batch1/`) Save the batch-1 prototype PDF as `docs/design/Jarvis_Pilot_Prototype_Batch1_v2.pdf` and make the canvas link readable by the Claude Code account (it returned "not found" on Nov 4, 2026). D-20 is closed on Saurabh's approval; this keeps the signed-off record in the repo.
 - [x] H-020 Docker access for your user (Oct 24, 2026): user is in the `docker` group; `docker info` works in a fresh login. A process started before the group change (e.g. an old VS Code server / Claude Code session) still gets "permission denied" until it is restarted.
 - [x] H-019 Agents can read `.env.example` (deny rule narrowed Oct 24, 2026; real env files still blocked). Publishable/secret rename and cleanup applied Oct 24 and mirrored in Vercel Preview (see `docs/plan-review.md` §7).
 
@@ -984,6 +984,7 @@ Search connectors for the unconfirmed mail provider (T-186 or T-187) can be drop
 - status: proposed
 - depends: T-070, T-024, T-101
 - needs: D-21 (design sign-off, batch 2)
+- note (Nov 4, 2026): moved to **Release A** (Saurabh: Projects is pulled from monday.com in the pilot). Also feeds "Projects at a glance" on Home (T-163). See `docs/plan-review.md` §7 (Nov 4, 2026).
 - acceptance: view of monday.com items by Company/project with Exec Priority, overdue and owner; `get_tasks` tool.
 
 ### T-151 Commitments schema

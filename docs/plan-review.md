@@ -288,7 +288,7 @@ Contrast (WCAG 2.x) checked for every text pair above: all ≥ 4.5:1. Tightest: 
 - iPhone header: navy band (`#0E2A47`) with a white title and a gold accent word.
 - Book balances are always labelled "book balance" (rule 7).
 
-Not yet decided: dark mode and chart palette (Recharts). Raise both at the sign-off. **Settled Nov 4, 2026** (D-20 batch 1): tokens final as above, light only in the pilot, chart palette in `docs/design/README.md`.
+Not yet decided: dark mode and chart palette (Recharts). Raise both at the sign-off. **Settled Nov 4, 2026** (D-20 batch 1): tokens final as above; light and dark mode (dark set and chart palette in `docs/design/README.md`).
 
 Where this lands: backlog D-15, D-20, T-022 and the screen tasks listed above; parallel-worktrees table (W1).
 
@@ -414,11 +414,12 @@ Where this lands: `.agent/pr/T-031.md`, `.agent/pr/T-032.md`; follow-ups in §6.
 
 ### Nov 4, 2026 — Design sign-off, batch 1 (closes D-20, opens D-21, H-029, H-030)
 
-Saurabh approved every point of the batch-1 design review ("approved all points"). Where a point was a choice, the safe default was taken. Each can be reversed with a one-line note.
-- **Tokens:** the provisional v2 tokens above are final. **Light only** in the pilot; dark mode is reconsidered in Release B.
-- **Chart palette:** fixed, not generated: navy `#0E2A47`, blue `#3B6EA5`, orange `#B45309`, brown `#7C2D12` (each ≥ 4.5:1 on white and cream; blue vs orange is colour-blind safe). Every bar carries a text label, so colour is never the only cue.
+Saurabh approved every point of the batch-1 design review ("approved all points") and then answered the open choices the same day.
+- **Tokens:** the provisional v2 tokens above are final.
+- **Light and dark mode** both ship in Release A. The app follows the device setting with a user override. The dark set is derived from the light one (the prototype shows light only) and is in `docs/design/README.md` and `packages/ui/src/styles/theme.css`; every text pair is ≥ 4.5:1 (tested).
+- **Chart palette** (`--chart-1` … `--chart-4`): light navy `#0E2A47`, blue `#3B6EA5`, orange `#B45309`, brown `#7C2D12` (each ≥ 4.5:1 on white and cream); dark `#9DB9DC`, `#5B8FCB`, `#F0A35E`, `#E8590C` (each ≥ 3:1 on dark cards). Blue vs orange is colour-blind safe, and every bar carries a text label, so colour is never the only cue.
 - **Required changes to the prototype** (apply in the screen tasks): "book balance" in full on iPhone; the approval card shows the exact payload; Edit on iPhone approvals; a source/freshness chip on every figure card. Details in `docs/design/README.md`.
-- **Projects** stays hidden in the pilot (Release B per the sitemap): no side-menu entry and no "Projects at a glance" on Home until T-150.
+- **Projects is in Release A**, read-only from monday.com: side-menu entry (T-023), Projects page (T-150, moved to Release A; page design in batch 2, D-21) and "Projects at a glance" on Home (T-163). This supersedes the sitemap's Release B marking. **Schedule:** T-150 adds one task to Release A; it depends on T-070 (monday.com connector, H-009) and T-101, both already in Release A.
 - **"All companies (owner)"** comes after the pilot. A combined view across lanes needs its own design (every query is per lane) and its own decision. The pilot switcher lists only enabled, allowed lanes.
 - **Fonts:** Source Serif 4 and Inter confirmed (the PDF renders with fallbacks).
 - **Meeting provider:** "Teams" on the prototype is sample text; D-1 remains open.

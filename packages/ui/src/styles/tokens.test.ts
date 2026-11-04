@@ -46,7 +46,7 @@ function contrast(a: string, b: string): number {
   return (hi + 0.05) / (lo + 0.05);
 }
 
-describe("provisional design tokens (docs/plan-review.md §7, v2)", () => {
+describe("light design tokens (docs/plan-review.md §7, v2; final with D-20)", () => {
   it.each([
     ["--background", "#F7F4EC"],
     ["--card", "#FFFFFF"],
@@ -117,8 +117,83 @@ describe("provisional design tokens (docs/plan-review.md §7, v2)", () => {
     expect(source).not.toMatch(/bg-alert-surface[^"]*\btext-alert(?!-foreground)\b|\btext-alert(?!-foreground)\b[^"]*bg-alert-surface/);
   });
 
-  it("does not define dark-mode values yet (undecided until D-20)", () => {
-    expect(themeCss).not.toMatch(/prefers-color-scheme|\.dark\b/);
+  it.each([
+    ["--chart-1", "#0E2A47"],
+    ["--chart-2", "#3B6EA5"],
+    ["--chart-3", "#B45309"],
+    ["--chart-4", "#7C2D12"],
+  ])("light chart %s = %s", (name, value) => {
+    expect(tokens.get(name)?.toUpperCase()).toBe(value.toUpperCase());
+  });
+
+  it.each(["--chart-1", "--chart-2", "--chart-3", "--chart-4"])("light chart %s meets 4.5:1 on card and ground", (name) => {
+    expect(contrast(hex(name), hex("--card"))).toBeGreaterThanOrEqual(4.5);
+    expect(contrast(hex(name), hex("--background"))).toBeGreaterThanOrEqual(4.5);
+  });
+});
+
+function block(css: string, selector: RegExp): Map<string, string> {
+  const m = selector.exec(css);
+  if (!m?.[1]) throw new Error(`no block for ${selector}`);
+  const out = new Map<string, string>();
+  for (const d of m[1].matchAll(/(--[\w-]+)\s*:\s*([^;]+);/g)) {
+    if (d[1] && d[2]) out.set(d[1], d[2].trim());
+  }
+  return out;
+}
+
+const darkMedia = block(themeCss, /@media \(prefers-color-scheme: dark\)\s*\{\s*:root:not\(\[data-theme="light"\]\)\s*\{([^}]*)\}/);
+const darkAttr = block(themeCss, /:root\[data-theme="dark"\]\s*\{([^}]*)\}/);
+
+function darkHex(name: string): string {
+  const value = darkAttr.get(name) ?? tokens.get(name);
+  if (!value || !/^#[0-9a-f]{6}$/i.test(value)) throw new Error(`${name} is not a 6-digit hex colour: ${value}`);
+  return value;
+}
+
+describe("dark design tokens (docs/design/README.md, Nov 4, 2026)", () => {
+  it("the system-dark block and the data-theme=dark block are identical", () => {
+    expect([...darkMedia.entries()]).toEqual([...darkAttr.entries()]);
+  });
+
+  it("overrides every light colour token", () => {
+    const colourNames = [...tokens.entries()].filter(([, v]) => /^#[0-9a-f]{6}$/i.test(v)).map(([k]) => k);
+    expect(colourNames.filter((k) => !darkAttr.has(k))).toEqual([]);
+  });
+
+  it("sets color-scheme per mode", () => {
+    expect(themeCss).toMatch(/^:root\s*\{[^}]*color-scheme:\s*light/m);
+    expect(themeCss).toMatch(/:root\[data-theme="dark"\]\s*\{[^}]*color-scheme:\s*dark/);
+  });
+
+  it.each([
+    ["--foreground", "--background"],
+    ["--foreground", "--card"],
+    ["--muted-foreground", "--background"],
+    ["--muted-foreground", "--card"],
+    ["--muted-foreground", "--muted"],
+    ["--primary-foreground", "--primary"],
+    ["--primary", "--primary-tint"],
+    ["--foreground", "--primary-tint"],
+    ["--accent-italic", "--background"],
+    ["--accent-italic", "--card"],
+    ["--gold-foreground", "--background"],
+    ["--gold-foreground", "--card"],
+    ["--alert", "--background"],
+    ["--alert", "--card"],
+    ["--alert-foreground", "--alert-surface"],
+    ["--success", "--success-surface"],
+    ["--sidebar-foreground", "--sidebar"],
+    ["--sidebar-section", "--sidebar"],
+    ["--sidebar-foreground", "--sidebar-active"],
+    ["--gold", "--sidebar"],
+    ["--destructive-foreground", "--destructive"],
+  ])("dark text %s on %s meets WCAG AA (4.5:1)", (fg, bg) => {
+    expect(contrast(darkHex(fg), darkHex(bg))).toBeGreaterThanOrEqual(4.5);
+  });
+
+  it.each(["--chart-1", "--chart-2", "--chart-3", "--chart-4"])("dark chart %s meets 3:1 (graphics) on card", (name) => {
+    expect(contrast(darkHex(name), darkHex("--card"))).toBeGreaterThanOrEqual(3);
   });
 });
 
