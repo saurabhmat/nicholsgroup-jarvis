@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { ConnectorError } from "../contract/errors";
 import { mintLaneBoundConnection } from "../contract/lane-bound";
@@ -104,7 +105,7 @@ describe("createTokenVault", () => {
     const { calls, clientFor } = fakeClient({ data: null });
     const vault = createTokenVault(clientFor);
     await vault.storeToken("PKG", conn(), new SecretValue("synthetic-token-2"), new Date("2027-02-01T00:00:00Z"), "00000000-0000-4000-8000-0000000000aa");
-    await vault.rotateToken("PKG", conn(), new SecretValue("synthetic-token-3"), null);
+    expect(await vault.rotateToken("PKG", conn(), new SecretValue("synthetic-token-3"), null, new SecretValue("synthetic-token-2"))).toBe(true);
     expect(calls).toEqual([
       {
         schema: "core",
@@ -120,16 +121,39 @@ describe("createTokenVault", () => {
       {
         schema: "core",
         fn: "connection_token_rotate",
-        args: { p_lane_id: "PKG", p_connection_id: ID, p_secret: "synthetic-token-3", p_expires_at: null },
+        args: {
+          p_lane_id: "PKG",
+          p_connection_id: ID,
+          p_secret: "synthetic-token-3",
+          p_expires_at: null,
+          // sha256("synthetic-token-2"): names the stored text this write replaces
+          p_expected_hash: createHash("sha256").update("synthetic-token-2").digest("hex"),
+        },
       },
     ]);
+  });
+
+  it("a rotate that lost the compare-and-swap (40001) resolves false; other failures still throw", async () => {
+    const lost = fakeClient({ error: { code: "40001", message: "synthetic db text" } });
+    expect(await createTokenVault(lost.clientFor).rotateToken("PKG", conn(), new SecretValue("synthetic-token-5"), null, new SecretValue("synthetic-token-4"))).toBe(false);
+    const other = fakeClient({ error: { code: "55000" } });
+    expect(await kindOf(createTokenVault(other.clientFor).rotateToken("PKG", conn(), new SecretValue("synthetic-token-5"), null, new SecretValue("synthetic-token-4")))).toBe("connection_unavailable");
+    // 40001 from any other function is not a conflict signal
+    const read = fakeClient({ error: { code: "40001" } });
+    expect(await kindOf(createTokenVault(read.clientFor).getToken("PKG", conn()))).toBe("transient");
+  });
+
+  it("rotate needs the replaced credential as a SecretValue", async () => {
+    const { calls, clientFor } = fakeClient({ data: null });
+    expect(await kindOf(createTokenVault(clientFor).rotateToken("PKG", conn(), new SecretValue("synthetic-token-5"), null, "plain" as never))).toBe("invalid_input");
+    expect(calls).toEqual([]);
   });
 
   it("only accepts credentials as SecretValue and expiries as valid dates", async () => {
     const { calls, clientFor } = fakeClient({ data: null });
     const vault = createTokenVault(clientFor);
     expect(await kindOf(vault.storeToken("PKG", conn(), "plain" as never, null))).toBe("invalid_input");
-    expect(await kindOf(vault.rotateToken("PKG", conn(), new SecretValue("synthetic-token-4"), new Date("nope")))).toBe("invalid_input");
+    expect(await kindOf(vault.rotateToken("PKG", conn(), new SecretValue("synthetic-token-4"), new Date("nope"), new SecretValue("synthetic-token-3")))).toBe("invalid_input");
     expect(calls).toEqual([]);
   });
 

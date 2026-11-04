@@ -237,7 +237,9 @@ export const connectorEnvShapes = {
     INTUIT_CLIENT_SECRET: nonEmpty,
     INTUIT_ENVIRONMENT: intuitEnvironment.optional(),
     INTUIT_REDIRECT_URI: httpUrl(),
-    INTUIT_WEBHOOK_VERIFIER_TOKEN: nonEmpty,
+    // Added when the webhook endpoint exists (H-024). Optional here so connecting needs only the four OAuth variables;
+    // the webhook receiver (T-053) fails closed when it is unset.
+    INTUIT_WEBHOOK_VERIFIER_TOKEN: nonEmpty.optional(),
   },
   stripe: {
     STRIPE_RESTRICTED_KEY: nonEmpty,

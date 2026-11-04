@@ -1,0 +1,253 @@
+// A fully wired QuickBooks connector over in-memory twins (T-050 tests only): the real connector, OAuth provider,
+// token manager, API client and discovery, with the database-backed pieces (Vault, connection rows, lane config,
+// connect state) replaced by faithful in-memory versions, and Intuit replaced by the MSW fake in ./msw/quickbooks.
+// The Vault twin keeps the SQL's rules: lane-checked, disconnected cannot be read or rotated, and rotate is a
+// compare-and-swap on the exact stored text (core.connection_token_rotate, 40001).
+import { randomUUID } from "node:crypto";
+import type { Audit, AuditEntry } from "@nichols/core/audit";
+import { ConnectorError } from "../contract/errors";
+import { assertLaneBound, mintLaneBoundConnection, type LaneBoundConnection } from "../contract/lane-bound";
+import type { Connection } from "../contract/schemas";
+import { createHttpClient } from "../http/client";
+import { createConnectorLogger, type LogEntry } from "../log/index";
+import { createOAuthFlow } from "../oauth/flow";
+import { hashState } from "../oauth/pkce";
+import type { StateStore } from "../oauth/state";
+import { createQboApi } from "../quickbooks/api";
+import { createQuickBooksConnector, type QboConnection } from "../quickbooks/connector";
+import { createDiscovery } from "../quickbooks/discovery";
+import { createQuickBooksOAuthProvider } from "../quickbooks/provider";
+import { createTokenManager } from "../quickbooks/token-manager";
+import { SecretValue } from "../vault/secret";
+import type { TokenVault } from "../vault/tokens";
+import { FAKE_CLIENT_ID, FAKE_CLIENT_SECRET, FAKE_REALM, type FakeIntuit } from "./msw/quickbooks/handlers";
+
+export const HARNESS_REDIRECT = "http://localhost:3000/api/connect/qbo/callback";
+
+export type QboHarnessOptions = {
+  intuit: FakeIntuit;
+  environment?: "sandbox" | "production";
+  /** Configured realm per lane (`lane_config.qbo.realm_id`); missing or null: none set. */
+  realms?: Record<string, string | null>;
+  /** Lanes that exist (rows in other lanes are invisible). */
+  startTime?: number;
+};
+
+type Row = { -readonly [K in keyof Connection<"quickbooks">]: Connection<"quickbooks">[K] };
+
+export function createQboHarness(options: QboHarnessOptions) {
+  const environment = options.environment ?? "sandbox";
+  // Starts at the real time: the connect flow stamps `obtained_at` with the real clock.
+  const clock = { t: options.startTime ?? Date.now() };
+  const now = () => clock.t;
+  const logs: LogEntry[] = [];
+  const logger = createConnectorLogger({ sink: (e) => logs.push(e), now: () => new Date(clock.t) });
+  const audits: AuditEntry[] = [];
+  const audit: Audit = {
+    async log(entry) {
+      audits.push(entry);
+    },
+  };
+
+  const rows = new Map<string, Row>();
+  const secrets = new Map<string, string>();
+  const realms: Record<string, string | null> = { ...options.realms };
+  const stats = { rotations: 0, lostRaces: 0, stores: 0, revokes: 0 };
+  const bind = (row: Row): QboConnection => mintLaneBoundConnection<"quickbooks">({ ...row, features: { ...row.features } });
+
+  const rowOf = (laneId: string, conn: { id: string }): Row => {
+    const row = rows.get(conn.id);
+    if (!row || row.lane_id !== laneId) throw new ConnectorError({ kind: "not_found", message: "Connection not found" });
+    return row;
+  };
+
+  const vault: Pick<TokenVault, "getToken" | "storeToken" | "rotateToken" | "revokeToken"> = {
+    async getToken(laneId, conn) {
+      assertLaneBound(laneId, conn);
+      const row = rowOf(laneId, conn);
+      if (row.status === "disconnected") throw new ConnectorError({ kind: "connection_unavailable", message: "The connection is disconnected" });
+      const text = secrets.get(row.id);
+      if (text === undefined) throw new ConnectorError({ kind: "not_found", message: "No stored credential for this connection" });
+      return new SecretValue(text);
+    },
+    async storeToken(laneId, conn, secret, expiresAt) {
+      assertLaneBound(laneId, conn);
+      const row = rowOf(laneId, conn);
+      secrets.set(row.id, secret.reveal());
+      row.status = "active";
+      row.token_expires_at = expiresAt ? expiresAt.toISOString() : null;
+      stats.stores += 1;
+    },
+    async rotateToken(laneId, conn, secret, expiresAt, replaces) {
+      assertLaneBound(laneId, conn);
+      const row = rowOf(laneId, conn);
+      if (row.status === "disconnected") throw new ConnectorError({ kind: "connection_unavailable", message: "The connection is disconnected" });
+      // One synchronous step: compare, then write (the SQL does this under the connection's row lock).
+      if (secrets.get(row.id) !== replaces.reveal()) {
+        stats.lostRaces += 1;
+        return false;
+      }
+      secrets.set(row.id, secret.reveal());
+      row.token_expires_at = expiresAt ? expiresAt.toISOString() : null;
+      stats.rotations += 1;
+      return true;
+    },
+    async revokeToken(laneId, conn) {
+      assertLaneBound(laneId, conn);
+      const row = rowOf(laneId, conn);
+      const had = secrets.delete(row.id);
+      row.status = "disconnected";
+      row.token_expires_at = null;
+      stats.revokes += 1;
+      return had;
+    },
+  };
+
+  const connections = {
+    async ensureConnection(laneId: string, provider: string, externalAccountId: string) {
+      let row = [...rows.values()].find((r) => r.lane_id === laneId && r.provider === provider && r.external_account_id === externalAccountId);
+      if (!row) {
+        row = {
+          id: randomUUID(),
+          lane_id: laneId,
+          provider: provider as "quickbooks",
+          external_account_id: externalAccountId,
+          status: "pending",
+          features: {},
+          features_checked_at: null,
+          token_expires_at: null,
+          last_sync_at: null,
+          last_error: null,
+        };
+        rows.set(row.id, row);
+      }
+      return bind(row) as LaneBoundConnection;
+    },
+    async load(laneId: string, id: string) {
+      const row = rows.get(id);
+      if (!row || row.lane_id !== laneId) throw new ConnectorError({ kind: "not_found", message: "Connection not found" });
+      return bind(row);
+    },
+  };
+
+  const laneConfig = {
+    async qboRealmId(laneId: string) {
+      return realms[laneId] ?? null;
+    },
+  };
+
+  const fastHttp = (laneId: string, connectionId: string | undefined, baseUrl: string) =>
+    createHttpClient({
+      provider: "quickbooks",
+      baseUrl,
+      laneId,
+      ...(connectionId ? { connectionId } : {}),
+      requestIdHeader: "intuit_tid",
+      errorCode: (b) => (b as { error?: unknown } | null)?.error as string | undefined,
+      retryBaseMs: 1,
+      retryMaxMs: 5,
+      logger,
+    });
+
+  const client = () => ({ clientId: FAKE_CLIENT_ID, clientSecret: new SecretValue(FAKE_CLIENT_SECRET), redirectUri: HARNESS_REDIRECT });
+  const discovery = createDiscovery({ now, logger });
+  const provider = createQuickBooksOAuthProvider({ environment: () => environment, client, discovery, laneConfig, now });
+
+  /** A token manager of its own (a second serverless instance sharing the same Vault). */
+  const newTokenManager = () =>
+    createTokenManager({
+      vault,
+      tokenEndpoint: async (laneId) => (await discovery.get(laneId, environment)).token,
+      client,
+      httpFor: fastHttp,
+      now,
+      logger,
+    });
+  const tokens = newTokenManager();
+  const api = createQboApi({ tokens, environment: () => environment, logger, httpOptions: { retryBaseMs: 1, retryMaxMs: 5 } });
+  const connector = createQuickBooksConnector({
+    provider,
+    environment: () => environment,
+    client,
+    discovery,
+    laneConfig,
+    vault,
+    connections,
+    tokens,
+    api,
+    now,
+    logger,
+    httpFor: (laneId, baseUrl) => fastHttp(laneId, undefined, baseUrl),
+  });
+
+  // ---- connect state (twin of core.oauth_state_create / _consume): bound to user and lane, single use, 10 minutes.
+  const states = new Map<string, { laneId: string; userId: string; provider: string; codeVerifier: string; redirectUri: string; expires: number }>();
+  const stateStore: StateStore = {
+    async create(c, laneId, prov, stateHash, codeVerifier, redirectUri) {
+      states.set(stateHash, { laneId, userId: (c as unknown as { uid: string }).uid, provider: prov, codeVerifier, redirectUri, expires: clock.t + 600_000 });
+    },
+    async consume(c, laneId, stateHash) {
+      const s = states.get(stateHash);
+      if (!s || s.laneId !== laneId || s.userId !== (c as unknown as { uid: string }).uid || s.expires <= clock.t) return null;
+      states.delete(stateHash);
+      return { provider: s.provider, codeVerifier: s.codeVerifier, redirectUri: s.redirectUri };
+    },
+  };
+  const flow = createOAuthFlow({
+    providers: [provider],
+    states: stateStore,
+    connections,
+    storeToken: (laneId, conn, secret, expiresAt) => vault.storeToken(laneId, conn, secret, expiresAt),
+    audit,
+    logger,
+    httpFor: (_p, laneId, baseUrl) => fastHttp(laneId, undefined, baseUrl),
+  });
+  /** Session guard stand-in: the user and the lane client the state store is keyed by. */
+  const as = (userId: string) => async (laneId: string) => ({ userId, client: { uid: userId, laneId } as never });
+
+  /** Connects `laneId` through the real callback path against the fake, returning the connection. */
+  async function connectViaCallback(laneId: string, userId = "00000000-0000-4000-8000-0000000000a1", realm = FAKE_REALM, code = "synthetic-code-0001") {
+    const url = await flow.start("qbo", laneId, as(userId));
+    const state = new URL(url).searchParams.get("state") ?? "";
+    const result = await flow.callback("qbo", new URLSearchParams({ state, code, realmId: realm }), as(userId));
+    if (!result.ok) throw new Error(`harness connect failed: ${result.reason}`);
+    return connections.load(laneId, result.connectionId);
+  }
+
+  return {
+    clock,
+    logs,
+    audits,
+    rows,
+    secrets,
+    realms,
+    stats,
+    vault,
+    connections,
+    laneConfig,
+    discovery,
+    provider,
+    tokens,
+    newTokenManager,
+    api,
+    connector,
+    flow,
+    states,
+    stateHash: hashState,
+    as,
+    connectViaCallback,
+    bind,
+    /** The stored token set, parsed (tests only). */
+    storedSet(connectionId: string) {
+      const text = secrets.get(connectionId);
+      return text === undefined ? null : (JSON.parse(text) as Record<string, unknown>);
+    },
+    /** Replaces the stored set with an expired-access one (same refresh token). */
+    expireStoredAccess(connectionId: string) {
+      const set = JSON.parse(secrets.get(connectionId) ?? "{}") as Record<string, unknown>;
+      secrets.set(connectionId, JSON.stringify({ ...set, obtained_at: new Date(clock.t - 7200_000).toISOString() }));
+    },
+  };
+}
+
+export type QboHarness = ReturnType<typeof createQboHarness>;

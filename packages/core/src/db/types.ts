@@ -307,7 +307,7 @@ isOneToOne: false
 { Args: { "p_actor_id"?: string,"p_connection_id": string,"p_lane_id": string }; Returns: boolean
                            },
 "connection_token_rotate":
-{ Args: { "p_connection_id": string,"p_expires_at": string,"p_lane_id": string,"p_secret": string }; Returns: undefined
+{ Args: { "p_connection_id": string,"p_expected_hash": string,"p_expires_at": string,"p_lane_id": string,"p_secret": string }; Returns: undefined
                            },
 "connection_token_store":
 { Args: { "p_actor_id"?: string,"p_connection_id": string,"p_expires_at": string,"p_lane_id": string,"p_secret": string }; Returns: undefined

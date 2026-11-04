@@ -44,11 +44,18 @@ export interface OAuthProvider {
   slug: string;
   scopes: readonly string[];
   /** Authorization and token endpoints (from discovery where the provider has it). */
-  endpoints(): Promise<{ authorization: string; token: string }>;
+  endpoints(laneId: LaneId): Promise<{ authorization: string; token: string }>;
   /** Client credentials and the registered redirect URI, read from the connector env at call time. */
   client(): { clientId: string; clientSecret: SecretValue; redirectUri: string; tokenAuth: "basic" | "post" };
+  /** Response header carrying the provider's transaction id (Intuit `intuit_tid`); logged for every call. */
+  requestIdHeader?: string;
   /** Extra authorization parameters (e.g. Google `access_type=offline`, `prompt=consent`). */
   authorizationParams?: Readonly<Record<string, string>>;
+  /**
+   * Optional check of the callback before the code is exchanged (e.g. QuickBooks: the realm must be the lane's). Throw a
+   * ConnectorError to refuse; no token is requested then. `identify` still runs after the exchange.
+   */
+  precheck?(input: { laneId: LaneId; callback: URLSearchParams }): Promise<void>;
   /**
    * The connected account and the expiry of the credential whose loss forces a reconnect. Throw a ConnectorError to
    * refuse the account (e.g. a QuickBooks realm that is not the lane's). May call the provider with `http`.
@@ -93,16 +100,25 @@ const OUTAGE_KINDS: ReadonlySet<string> = new Set(["transient", "rate_limited", 
 const OIDC_SCOPES = ["openid", "profile", "email", "offline_access"];
 const SLUG = /^[a-z][a-z0-9-]{1,31}$/;
 
+/** The HTTP client for a provider's token endpoint: OAuth error codes (`error`) and the provider's request id are captured. */
+export function defaultOAuthHttp(p: OAuthProvider, laneId: LaneId, baseUrl: string, logger?: ConnectorLogger): HttpClient {
+  return createHttpClient({
+    provider: p.provider,
+    laneId,
+    baseUrl,
+    ...(logger ? { logger } : {}),
+    ...(p.requestIdHeader ? { requestIdHeader: p.requestIdHeader } : {}),
+    errorCode: (b) => (b as { error?: unknown } | null)?.error as string | undefined,
+  });
+}
+
 export function createOAuthFlow(deps: OAuthFlowDeps) {
   const bySlug = new Map<string, OAuthProvider>();
   for (const p of deps.providers) {
     if (!SLUG.test(p.slug) || bySlug.has(p.slug)) throw new TypeError(`invalid or duplicate OAuth provider slug ${p.slug}`);
     bySlug.set(p.slug, p);
   }
-  const httpFor =
-    deps.httpFor ??
-    ((p: OAuthProvider, laneId: LaneId, baseUrl: string) =>
-      createHttpClient({ provider: p.provider, laneId, baseUrl, errorCode: (b) => (b as { error?: unknown } | null)?.error as string | undefined }));
+  const httpFor = deps.httpFor ?? defaultOAuthHttp;
 
   return {
     /** Whether a provider slug is registered (routes return 404 otherwise). */
@@ -116,7 +132,7 @@ export function createOAuthFlow(deps: OAuthFlowDeps) {
       if (!p) throw new ConnectorError({ kind: "not_found", message: "Unknown provider" });
       const { userId, client } = await authorize(laneId);
       const { clientId, redirectUri } = p.client();
-      const { authorization } = await p.endpoints();
+      const { authorization } = await p.endpoints(laneId);
       const url = new URL(authorization);
       if (url.protocol !== "https:") throw new ConnectorError({ kind: "provider_error", message: "Authorization endpoint must be https" });
       const state = newState(laneId, deps.random);
@@ -171,8 +187,16 @@ export function createOAuthFlow(deps: OAuthFlowDeps) {
 
       try {
         const conn = await withAudit(deps.audit, entry, async () => {
+          if (p.precheck) {
+            try {
+              await p.precheck({ laneId, callback: query });
+            } catch (e) {
+              if (isConnectorError(e) && OUTAGE_KINDS.has(e.info.kind)) throw e;
+              throw new RefusedAccount(e);
+            }
+          }
           const tokens = await exchange(p, laneId, code, stored.codeVerifier, stored.redirectUri);
-          const http = httpFor(p, laneId, new URL((await p.endpoints()).token).origin);
+          const http = httpFor(p, laneId, new URL((await p.endpoints(laneId)).token).origin);
           let identity: { externalAccountId: string; expiresAt: Date | null };
           try {
             identity = await p.identify({ laneId, tokens, callback: query, http });
@@ -198,44 +222,60 @@ export function createOAuthFlow(deps: OAuthFlowDeps) {
     },
   };
 
-  /** Code → token set at the provider's token endpoint (form body; client authenticated by Basic or in the body). */
+  /** Code → token set (see `exchangeAuthorizationCode`); any failure is an ExchangeFailed. */
   async function exchange(p: OAuthProvider, laneId: LaneId, code: string, verifier: string, redirectUri: string): Promise<TokenResponse> {
     try {
-      const { token } = await p.endpoints();
-      const tokenUrl = new URL(token);
-      if (tokenUrl.protocol !== "https:" || tokenUrl.search || tokenUrl.hash) {
-        throw new ConnectorError({ kind: "provider_error", message: "Token endpoint must be an https URL without query" });
-      }
-      const { clientId, clientSecret, tokenAuth } = p.client();
-      const form = new URLSearchParams({ grant_type: "authorization_code", code, redirect_uri: redirectUri, code_verifier: verifier });
-      if (tokenAuth === "post") {
-        form.set("client_id", clientId);
-        form.set("client_secret", clientSecret.reveal());
-      }
-      const res = await httpFor(p, laneId, tokenUrl.origin).request({
-        method: "POST",
-        path: tokenUrl.pathname,
-        body: form,
-        retry: false, // a code works once
-        ...(tokenAuth === "basic" ? { auth: { scheme: "Basic" as const, secret: basicCredentials(clientId, clientSecret) } } : {}),
-      });
-      const parsed = TokenResponseSchema.safeParse(res.data);
-      if (!parsed.success) throw new ConnectorError({ kind: "provider_error", message: "Token response is not valid", http_status: res.status });
-      // A token broader than the scopes we asked for is refused (e.g. a provider that merges earlier grants).
-      if (parsed.data.scope !== undefined) {
-        const allowed = new Set([...p.scopes, ...OIDC_SCOPES]);
-        if (parsed.data.scope.split(/[\s,]+/).some((g) => g !== "" && !allowed.has(g))) {
-          new SecretValue(JSON.stringify(parsed.data));
-          throw new ConnectorError({ kind: "provider_error", message: "Token carries scopes that were not requested" });
-        }
-      }
-      // Register every credential the response carries before anything can log it.
-      new SecretValue(JSON.stringify(parsed.data));
-      return parsed.data;
+      return await exchangeAuthorizationCode(p, httpFor, laneId, code, verifier, redirectUri);
     } catch (e) {
       throw new ExchangeFailed(e);
     }
   }
+}
+
+/**
+ * Code → token set at the provider's token endpoint (form body; client authenticated by Basic or in the body). Shared
+ * by the callback and by a connector's `connect` (T-050). Throws ConnectorError; every credential in the response is
+ * registered for redaction before it is returned.
+ */
+export async function exchangeAuthorizationCode(
+  p: OAuthProvider,
+  httpFor: (provider: OAuthProvider, laneId: LaneId, baseUrl: string) => HttpClient,
+  laneId: LaneId,
+  code: string,
+  verifier: string | undefined,
+  redirectUri: string,
+): Promise<TokenResponse> {
+  const { token } = await p.endpoints(laneId);
+  const tokenUrl = new URL(token);
+  if (tokenUrl.protocol !== "https:" || tokenUrl.search || tokenUrl.hash) {
+    throw new ConnectorError({ kind: "provider_error", message: "Token endpoint must be an https URL without query" });
+  }
+  const { clientId, clientSecret, tokenAuth } = p.client();
+  const form = new URLSearchParams({ grant_type: "authorization_code", code, redirect_uri: redirectUri });
+  if (verifier !== undefined) form.set("code_verifier", verifier);
+  if (tokenAuth === "post") {
+    form.set("client_id", clientId);
+    form.set("client_secret", clientSecret.reveal());
+  }
+  const res = await httpFor(p, laneId, tokenUrl.origin).request({
+    method: "POST",
+    path: tokenUrl.pathname,
+    body: form,
+    retry: false, // a code works once
+    ...(tokenAuth === "basic" ? { auth: { scheme: "Basic" as const, secret: basicCredentials(clientId, clientSecret) } } : {}),
+  });
+  const parsed = TokenResponseSchema.safeParse(res.data);
+  if (!parsed.success) throw new ConnectorError({ kind: "provider_error", message: "Token response is not valid", http_status: res.status });
+  // Register every credential the response carries before anything can log it.
+  new SecretValue(JSON.stringify(parsed.data));
+  // A token broader than the scopes we asked for is refused (e.g. a provider that merges earlier grants).
+  if (parsed.data.scope !== undefined) {
+    const allowed = new Set([...p.scopes, ...OIDC_SCOPES]);
+    if (parsed.data.scope.split(/[\s,]+/).some((g) => g !== "" && !allowed.has(g))) {
+      throw new ConnectorError({ kind: "provider_error", message: "Token carries scopes that were not requested" });
+    }
+  }
+  return parsed.data;
 }
 
 class ExchangeFailed extends Error {

@@ -4,6 +4,7 @@
 // checks the lane again before it touches the Vault.
 // Secrets cross this boundary only as SecretValue, go to the database only as RPC (JSON body, bind parameters, never
 // SQL text), and never appear in an error: database messages are replaced by fixed text.
+import { createHash } from "node:crypto";
 import type { LaneId } from "@nichols/core";
 import type { LaneClient } from "@nichols/core/lane-router";
 import { assertLaneBound, type LaneBoundConnection } from "../contract/lane-bound";
@@ -27,8 +28,18 @@ export interface TokenVault {
     expiresAt: Date | null,
     actorUserId?: string,
   ): Promise<void>;
-  /** Token refresh / key rotation; keeps the status. */
-  rotateToken(laneId: LaneId, conn: LaneBoundConnection<string>, secret: SecretValue, expiresAt: Date | null): Promise<void>;
+  /**
+   * Token refresh / key rotation; keeps the status. A compare-and-swap (T-050): `replaces` is the credential the caller
+   * read and is replacing. Resolves true when stored; false when the stored credential is no longer `replaces`
+   * (another refresh won), in which case nothing was changed and the caller re-reads with `getToken`.
+   */
+  rotateToken(
+    laneId: LaneId,
+    conn: LaneBoundConnection<string>,
+    secret: SecretValue,
+    expiresAt: Date | null,
+    replaces: SecretValue,
+  ): Promise<boolean>;
   /** Disconnect: delete the credential and mark the connection disconnected. True when a credential was deleted. */
   revokeToken(laneId: LaneId, conn: LaneBoundConnection<string>, actorUserId?: string): Promise<boolean>;
 }
@@ -39,6 +50,7 @@ const ERRORS: Record<string, { kind: ConnectorErrorKind; message: string }> = {
   "55000": { kind: "connection_unavailable", message: "The connection is disconnected" },
   "22023": { kind: "invalid_input", message: "The credential is empty or too long" },
   "22004": { kind: "invalid_input", message: "Lane and connection are required" },
+  // 40001 (a lost compare-and-swap) is handled by rotateToken itself and never reaches this map.
   "42501": { kind: "forbidden", message: "Token access refused" },
   "42883": { kind: "provider_error", message: "Token functions are not installed" },
 };
@@ -63,6 +75,11 @@ const requireSecret = (secret: unknown): SecretValue => {
   return secret;
 };
 
+/** A rotate lost its compare-and-swap (SQLSTATE 40001). Internal: `rotateToken` turns it into `false`. */
+class ConflictSignal extends Error {
+  override readonly name = "ConflictSignal";
+}
+
 /** Internal: the token vault over a job-client source (injected in tests). */
 export function createTokenVault(clientFor: JobClientFor): TokenVault {
   // Generated RPC types mark every argument non-null; the SQL functions take null expiries and actors.
@@ -81,7 +98,10 @@ export function createTokenVault(clientFor: JobClientFor): TokenVault {
     } catch {
       throw new ConnectorError({ kind: "transient", message: "Token store unavailable" });
     }
-    if (result.error) throw vaultError(result.error);
+    if (result.error) {
+      if (fn === "connection_token_rotate" && result.error.code === "40001") throw new ConflictSignal();
+      throw vaultError(result.error);
+    }
     return result.data;
   };
 
@@ -103,15 +123,24 @@ export function createTokenVault(clientFor: JobClientFor): TokenVault {
         p_actor_id: actorUserId ?? null,
       });
     },
-    async rotateToken(laneId, conn, secret, expiresAt) {
+    async rotateToken(laneId, conn, secret, expiresAt, replaces) {
       assertLaneBound(laneId, conn);
       const value = requireSecret(secret).reveal();
-      await call(laneId, "connection_token_rotate", {
-        p_lane_id: laneId,
-        p_connection_id: conn.id,
-        p_secret: value,
-        p_expires_at: iso(expiresAt),
-      });
+      // The hash names the stored text this write replaces; the database compares it under the connection's row lock.
+      const expectedHash = createHash("sha256").update(requireSecret(replaces).reveal(), "utf8").digest("hex");
+      try {
+        await call(laneId, "connection_token_rotate", {
+          p_lane_id: laneId,
+          p_connection_id: conn.id,
+          p_secret: value,
+          p_expires_at: iso(expiresAt),
+          p_expected_hash: expectedHash,
+        });
+      } catch (e) {
+        if (e instanceof ConflictSignal) return false;
+        throw e;
+      }
+      return true;
     },
     async revokeToken(laneId, conn, actorUserId) {
       assertLaneBound(laneId, conn);

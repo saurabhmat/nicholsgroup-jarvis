@@ -10,6 +10,7 @@ export default defineConfig([
   globalIgnores([
     "**/dist/**",
     "**/.next/**",
+    "**/.next-canary/**",
     "**/node_modules/**",
     "**/next-env.d.ts",
     "apps/web/**", // linted by apps/web/eslint.config.mjs (Next 16 has no `next lint`; it runs `eslint` directly)
