@@ -4,6 +4,7 @@
 import { redirect } from "next/navigation";
 import { safeNextPath } from "@nichols/core/auth";
 import { mfa } from "@/lib/guards";
+import { landingPath } from "@/lib/landing";
 
 export type EnrollmentState = { factorId: string; qrDataUri: string; secret: string } | { error: "unavailable" } | null;
 export type VerifyState = { error: "code" | "locked" | "refused" | "unavailable" } | null;
@@ -27,7 +28,7 @@ export async function verifyEnrollment(_prev: VerifyState, formData: FormData): 
     return { error: "unavailable" };
   }
   if (result !== "ok") return { error: result === "wrong" ? "code" : result };
-  redirect(safeNextPath(formData.get("next")));
+  redirect(await landingPath(safeNextPath(formData.get("next"))));
 }
 
 /** Verifies a code for the user's existing authenticator (every sign-in, and step-up with `reauth`). */
@@ -43,5 +44,5 @@ export async function verifyTotp(formData: FormData) {
     redirect(back("unavailable"));
   }
   if (result !== "ok") redirect(back(result === "wrong" ? "code" : result));
-  redirect(next);
+  redirect(await landingPath(next));
 }

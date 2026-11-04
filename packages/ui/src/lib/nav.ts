@@ -19,7 +19,7 @@ export const NAV_ITEMS: readonly NavItem[] = [
   { key: "finance", label: "Finance", segment: "finance", placeholder: { title: "Finance is not set up yet", description: "Figures appear here once the accounting, payments and subscriber sources are connected." } },
   { key: "inbox", label: "Inbox", segment: "inbox", placeholder: { title: "Inbox is not set up yet", description: "Priority mail appears here once a mailbox is connected." } },
   { key: "calendar", label: "Calendar", segment: "calendar", placeholder: { title: "Calendar is not set up yet", description: "Upcoming events appear here once a calendar is connected." } },
-  { key: "approvals", label: "Approvals", segment: "approvals", placeholder: { title: "Nothing waiting for approval", description: "Nothing is sent or changed until you approve it." } },
+  { key: "approvals", label: "Approvals", segment: "approvals", placeholder: { title: "Approvals are not set up yet", description: "Nothing is sent or changed until you approve it." } },
   { key: "assistant", label: "Assistant", segment: "assistant", placeholder: { title: "Assistant is not set up yet", description: "Ask questions about this company once its sources are connected." } },
   { key: "projects", label: "Projects", segment: "projects", placeholder: { title: "Projects are not set up yet", description: "Projects appear here, read-only, once the project board is connected." } },
   { key: "settings", label: "Settings", segment: "settings", placeholder: { title: "Settings are not set up yet", description: "Preferences and connection health will appear here." } },

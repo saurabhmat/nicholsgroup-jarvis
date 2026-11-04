@@ -27,10 +27,10 @@ test("a member sees the shell, a switcher with only the allowed lane, and a 404 
     await tabs.getByRole("link", { name: "Inbox" }).click();
   } else {
     const menu = page.getByRole("navigation", { name: "Main" });
-    await expect(menu.getByRole("link")).toHaveText(["Home", "Finance", "Inbox", "Calendar", "Approvals", "Assistant", "Settings"]);
+    await expect(menu.getByRole("link")).toHaveText(["Home", "Finance", "Inbox", "Calendar", "Approvals", "Assistant", "Projects", "Settings"]);
     await menu.getByRole("link", { name: "Inbox" }).click();
   }
-  await expect(page).toHaveURL(/\/PKG\/inbox$/);
+  await expect(page).toHaveURL(/\/PKG\/inbox$/, { timeout: 30_000 }); // first visit compiles the route in next dev
   await expect(page.getByRole("heading", { name: "Inbox", level: 1 })).toBeVisible();
   await expect(page.getByText("Sample data")).toHaveCount(0);
 

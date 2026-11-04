@@ -10,9 +10,11 @@ export async function GET(request: NextRequest) {
   } catch {
     ok = false;
   }
-  const url = request.nextUrl.clone();
-  url.search = "";
-  url.pathname = ok ? "/" : "/sign-in";
-  if (!ok) url.searchParams.set("error", "link");
-  return NextResponse.redirect(url);
+  // A relative Location keeps the browser on the host it signed in on. request.nextUrl can name a different host than
+  // the browser used (next dev reports localhost for 127.0.0.1), and the session cookie would not follow. Every user
+  // has MFA (D-6), so a valid link ends at AAL1 and goes straight to the two-factor step.
+  return new NextResponse(null, {
+    status: 303,
+    headers: { location: ok ? "/mfa" : "/sign-in?error=link", "cache-control": "private, no-store" },
+  });
 }

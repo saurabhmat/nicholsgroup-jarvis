@@ -12,7 +12,8 @@ export const rememberAuthenticator = (email: string, key: string): void => void 
 
 /** After sign-in the browser lands on the lane home (T-023): its heading is the "signed in" signal on every viewport. */
 export async function expectLaneHome(page: Page, lane = "PKG"): Promise<void> {
-  await expect(page).toHaveURL(new RegExp(`/${lane}$`));
+  // Generous timeout: next dev compiles the lane routes on first visit, which can exceed the default 5 s.
+  await expect(page).toHaveURL(new RegExp(`/${lane}$`), { timeout: 30_000 });
   await expect(page.getByRole("heading", { name: "Home", level: 1 })).toBeVisible();
 }
 
@@ -21,7 +22,7 @@ export async function signOutViaUi(page: Page): Promise<void> {
   const tabs = page.getByRole("navigation", { name: "Tabs" });
   if (await tabs.isVisible()) {
     await tabs.getByRole("link", { name: "More" }).click();
-    await expect(page.getByRole("heading", { name: "More", level: 1 })).toBeVisible();
+    await expect(page.getByRole("heading", { name: "More", level: 1 })).toBeVisible({ timeout: 30_000 }); // first compile
   }
   await page.getByRole("button", { name: "Sign out" }).click();
 }
@@ -31,7 +32,7 @@ export async function signInWithEmailCode(page: Page, email: string, path = "/si
   await page.goto(path);
   await page.getByLabel("Email").fill(email);
   await page.getByRole("button", { name: "Email me a code" }).click();
-  await expect(page).toHaveURL(/\/sign-in\/verify$/);
+  await expect(page).toHaveURL(/\/sign-in\/verify$/, { timeout: 30_000 }); // first compile in next dev
   const { code } = await latestSignInEmail(email);
   await page.getByLabel("Code").fill(code);
   await page.getByRole("button", { name: "Sign in" }).click();

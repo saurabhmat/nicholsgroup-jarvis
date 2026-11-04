@@ -140,6 +140,7 @@ These tasks have all their dependencies done and all their `needs` checked. A hu
 - [x] H-018 Local toolchain (Oct 23, 2026): Node 24.19.0 kept locally (CI stays on 22), pnpm 12.15.0 via corepack, Supabase CLI 2.122.0 (npm global)
 - [ ] H-029 App icon for the installable app (T-025): a square master at least 1024×1024 px (PNG or SVG, no transparency for iOS), approved by Robert, saved as `docs/design/app-icon.png` (or `.svg`). The agent generates the manifest sizes from it.
 - [ ] H-030 (optional; screenshots of every page are already in `docs/design/batch1/`) Save the batch-1 prototype PDF as `docs/design/Jarvis_Pilot_Prototype_Batch1_v2.pdf` and make the canvas link readable by the Claude Code account (it returned "not found" on Nov 4, 2026). D-20 is closed on Saurabh's approval; this keeps the signed-off record in the repo.
+- [ ] D-22 Brand wordmark (T-023 reviews, rule 2): the shell shows "Pub K" with a gold star and "Jarvis · Executive Portal" for every lane, from a constant in `apps/web/lib/brand.ts`. Decide: (a) accept it as the product brand for every company (record the exception), or (b) make it configurable: per lane in `lane_config` (each company shows its own name), or per deployment with `NEXT_PUBLIC_BRAND_NAME` / `NEXT_PUBLIC_PRODUCT_NAME` (a human adds them to `.env.example` and Vercel). Not blocking while only PKG is enabled; needed before a second lane is switched on.
 - [x] H-020 Docker access for your user (Oct 24, 2026): user is in the `docker` group; `docker info` works in a fresh login. A process started before the group change (e.g. an old VS Code server / Claude Code session) still gets "permission denied" until it is restarted.
 - [x] H-019 Agents can read `.env.example` (deny rule narrowed Oct 24, 2026; real env files still blocked). Publishable/secret rename and cleanup applied Oct 24 and mirrored in Vercel Preview (see `docs/plan-review.md` §7).
 
@@ -262,20 +263,20 @@ T-010 – T-017 are the serial spine. After T-017: auth/shell (T-018 – T-026) 
 - acceptance: `requireSession()`, `requireLane(laneId)`, `requireRole(laneId, role)` for route handlers/server actions; unit tests; used by a sample protected route.
 
 ### T-018 Sign-in (local test IdP)
-- status: approved
-- note (Oct 31, 2026): built on `agent/pilot-build`; browser Playwright tests pending Chromium system libraries on the dev machine (`.agent/pr/T-018.md`). Set to done after they pass.
+- status: done
+- note (Nov 4, 2026): browser Playwright tests now run (Chromium libraries unpacked in the user's home, `docs/runbooks/e2e-browsers.md`) and pass on desktop and iPhone; the code-sign-in redirect now goes straight to `/mfa` and the email-link redirect is relative (found by the first browser run, fixed in T-023).
 - depends: T-017
 - acceptance: Supabase Auth email sign-in (D-6): 6-digit email code as the **primary** flow (works inside the installed iPhone app) plus magic link as a secondary option (a link opens in Safari, not the installed app); local Inbucket/Mailpit for tests; sign-in/out pages; session refresh in `proxy.ts` (Next 16); unauthenticated requests redirect; Playwright test.
 
 ### T-019 Enforced MFA (AAL2)
-- status: approved
-- note (Oct 31, 2026): built on `agent/pilot-build`; browser Playwright tests pending Chromium system libraries (`.agent/pr/T-019.md`).
+- status: done
+- note (Nov 4, 2026): browser Playwright tests pass on desktop and iPhone (`docs/runbooks/e2e-browsers.md`); after the authenticator code the user lands on their first company (fixed in T-023).
 - depends: T-018
 - acceptance: Supabase TOTP enrolment + challenge for all users (D-6); recovery procedure documented (admin-assisted factor reset, audited); every data route and RLS rejects AAL1; Playwright: AAL1 user cannot load data; short session lifetime configured.
 
 ### T-020 Step-up helper
-- status: approved
-- note (Oct 31, 2026): built on `agent/pilot-build`; browser test pending (`.agent/pr/T-020.md`).
+- status: done
+- note (Nov 4, 2026): browser Playwright test passes on desktop and iPhone (`docs/runbooks/e2e-browsers.md`).
 - depends: T-019
 - acceptance: `requireStepUp(maxAgeSeconds)` forces a fresh TOTP challenge; unit + Playwright tests; used later by approvals.
 
@@ -291,8 +292,8 @@ T-010 – T-017 are the serial spine. After T-017: auth/shell (T-018 – T-026) 
 - acceptance: shadcn/ui set up in `packages/ui`; theme from the **provisional design tokens** in `docs/plan-review.md` §7 (CSS variables / Tailwind theme only, so the D-20 sign-off changes values, not components; tabular numbers for figures); KPI card, source chip (`as_of`, live/cached/stale), lane chip, empty/error states and a `BookBalance` label component; Storybook-free unit/render tests.
 
 ### T-023 App shell and lane switcher (provisional nav)
-- status: approved
-- note (Nov 4, 2026): built on `agent/pilot-build` (scope per Saurabh Nov 4: Projects shown, light/dark theme); HTTP-level Playwright checks pass on the local stack, browser tests (`shell.spec.ts`) pending Chromium system libraries (`.agent/pr/T-023.md`). Set to done after they pass.
+- status: done
+- note (Nov 4, 2026): built on `agent/pilot-build` (scope per Saurabh Nov 4: Projects shown, light/dark theme). Full Playwright suite passes (31 passed, 5 skipped by design) on desktop and iPhone; security and code review: no BLOCKER or HIGH (`.agent/pr/T-023.md`).
 - depends: T-017, T-022
 - needs: D-20 (design sign-off, batch 1)
 - acceptance: authenticated layout, lane switcher limited to allowed lanes, module placeholder routes; current lane in URL; Playwright test that a non-member lane is not listed and its URL returns 404/403.

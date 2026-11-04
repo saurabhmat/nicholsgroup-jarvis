@@ -18,7 +18,7 @@ describe("real root config file", () => {
   it("the root config enforces the boundary rules for packages and future Edge Functions", async () => {
     expect(await run(rootEslint, `import Stripe from "stripe";\nexport default Stripe;`, "packages/modules/finance/src/x.ts")).toContain("nichols/no-vendor-sdk");
     expect(await run(rootEslint, `export const k = process.env.X;`, "supabase/functions/hook/index.ts")).toContain("nichols/no-process-env");
-  });
+  }, 30_000); // the first lint loads the whole root config and parser: over 5 s when turbo runs every package at once
   it("the root config does not lint apps/web (its own config does)", async () => {
     expect(await rootEslint.isPathIgnored(path.join(ROOT, "apps/web/app/x.ts"))).toBe(true);
   });

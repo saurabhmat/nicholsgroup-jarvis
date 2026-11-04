@@ -6,6 +6,7 @@ import { Suspense } from "react";
 import { Alert, AlertDescription, Button, Card, CardContent, CardDescription, CardHeader, CardTitle, Input, Label } from "@nichols/ui";
 import { AuthError, safeNextPath } from "@nichols/core/auth";
 import { guards, mfa } from "@/lib/guards";
+import { landingPath } from "@/lib/landing";
 import { signOut } from "../sign-in/actions";
 import { verifyTotp } from "./actions";
 import { EnrollForm } from "./enroll-form";
@@ -39,7 +40,7 @@ async function MfaStep({ searchParams }: PageProps<"/mfa">) {
   const status = await actions.status();
   // Step-up (T-020): `reauth=1` asks an AAL2 user for a fresh code before a sensitive action.
   const reauth = params.reauth === "1" && status.aal === "aal2" && status.verifiedFactorId !== null;
-  if (status.aal === "aal2" && !reauth) redirect(next);
+  if (status.aal === "aal2" && !reauth) redirect(await landingPath(next));
 
   const enrolling = status.verifiedFactorId === null;
 

@@ -58,7 +58,14 @@ export async function verifyCode(formData: FormData) {
     redirect("/sign-in/verify?error=code");
   }
   store.delete({ name: PENDING, path: "/sign-in" });
-  redirect(safeNextPath(pending.next));
+  // Every user has MFA (D-6), so the email code always ends at AAL1: go straight to the two-factor step. Redirecting to
+  // the next page and letting the proxy bounce it to /mfa renders /mfa under the old URL (client navigation after a
+  // server-action redirect does not follow the proxy's redirect in the address bar).
+  redirect(mfaPath(safeNextPath(pending.next)));
+}
+
+function mfaPath(next: string): string {
+  return next === "/" ? "/mfa" : `/mfa?next=${encodeURIComponent(next)}`;
 }
 
 export async function signOut() {

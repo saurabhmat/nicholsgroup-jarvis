@@ -22,8 +22,10 @@ async function Entry() {
   try {
     first = (await (await guards()).listLanes())[0]?.laneId;
   } catch (e) {
-    if (e instanceof AuthError) redirect(e.reason === "mfa_required" ? "/mfa" : "/sign-in");
-    throw e;
+    if (!(e instanceof AuthError)) throw e;
+    if (e.reason === "no_session") redirect("/sign-in");
+    if (e.reason === "mfa_required") redirect("/mfa");
+    // forbidden / step_up_required: show the no-access notice below (redirecting to /sign-in could loop)
   }
   if (first) redirect(`/${first}`);
   return (
