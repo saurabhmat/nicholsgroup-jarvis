@@ -1,10 +1,10 @@
 import { Suspense } from "react";
-import { ModulePage } from "@/components/module-page";
+import { HomePage } from "@/components/home-page";
 
 export default function Page(props: PageProps<"/[laneId]">) {
   return (
     <Suspense fallback={null}>
-      <ModulePage module="home" params={props.params} />
+      <HomePage params={props.params} />
     </Suspense>
   );
 }

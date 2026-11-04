@@ -207,8 +207,11 @@ describe("components use tokens only", () => {
     expect(source).not.toMatch(/\b(?:rgb|hsl|oklch)a?\(/i);
   });
 
-  it.each(sources())("%s never uses raw gold for text", (_file, source) => {
-    expect(source).not.toMatch(/\btext-gold(?!-foreground)\b/);
+  // Exception (T-024): the iPhone header band is navy in light AND dark mode, and the prototype sets the accent word
+  // in gold there (D-20, README "Gold ... text allowed on dark grounds"). Only app-shell.tsx may do this, and only once.
+  it.each(sources())("%s never uses raw gold for text", (file, source) => {
+    const uses = source.match(/\btext-gold(?!-foreground)\b/g) ?? [];
+    expect(uses.length).toBe(String(file).endsWith("app-shell.tsx") ? 1 : 0);
   });
 
   it.each(sources())("%s does not inject HTML", (_file, source) => {

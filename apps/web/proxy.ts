@@ -40,8 +40,9 @@ export async function proxy(request: NextRequest) {
     if (segment && signedIn && (await laneVerdict(createGuards(cookieSessionReader(cookieStore)), segment)) === "denied") {
       const hidden = new NextResponse(NOT_FOUND_HTML, { status: 404, headers: { "content-type": "text/html; charset=utf-8" } });
       for (const c of response.cookies.getAll()) hidden.cookies.set(c);
-      const cacheControl = response.headers.get("cache-control");
-      if (cacheControl) hidden.headers.set("cache-control", cacheControl);
+      // Per user and never stored, whether or not the session was refreshed on this request.
+      hidden.headers.set("cache-control", "private, no-store");
+      hidden.headers.set("vary", "cookie");
       return hidden;
     }
     return response;

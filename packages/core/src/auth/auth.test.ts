@@ -163,7 +163,11 @@ describe("laneSegment and laneVerdict (lane in the URL)", () => {
   it("takes the first path segment as the lane, except for the non-lane paths", () => {
     expect(laneSegment("/PKG")).toBe("PKG");
     expect(laneSegment("/PKG/finance")).toBe("PKG");
-    expect(laneSegment("/apk/x")).toBe("apk");
+    expect(laneSegment("/apk/x")).toBe("apk"); // not canonical: kept so requireLane refuses it (404)
+    expect(laneSegment("/%50KG")).toBe("%50KG"); // non-canonical encoding: kept and refused
+    expect(laneSegment("/%E0%A4%A")).toBe("%E0%A4%A"); // malformed encoding: fail closed
+    expect(laneSegment("/PKG;--")).toBe("PKG;--"); // not canonical: refused
+    for (const p of ["/robots.txt", "/sitemap.xml", "/.well-known/x", "/manifest.webmanifest", "/PKG.txt", "/%2Ewell-known/x"]) expect(laneSegment(p)).toBeNull();
     for (const p of ["/", "", "/sign-in", "/sign-in/verify", "/mfa", "/auth/confirm", "/api/lanes/PKG"]) expect(laneSegment(p)).toBeNull();
   });
 

@@ -33,6 +33,40 @@ test("a member sees the shell, a switcher with only the allowed lane, and a 404 
   await expect(page).toHaveURL(/\/PKG\/inbox$/, { timeout: 30_000 }); // first visit compiles the route in next dev
   await expect(page.getByRole("heading", { name: "Inbox", level: 1 })).toBeVisible();
   await expect(page.getByText("Sample data")).toHaveCount(0);
+  await expect(page.getByText("Pub K Group").first()).toBeVisible(); // eyebrow: the company name comes from the lane record
+
+  // Page structure per the signed-off prototype (D-20): shared header, sections as empty states, no figures.
+  await page.goto("/PKG/finance");
+  await expect(page.getByRole("heading", { name: "Finance at a glance", level: 1 })).toBeVisible();
+  await expect(page.getByRole("group", { name: "Period" }).getByRole("button")).toHaveText(["This week (Sat–Fri)", "Month to date", "Year to date"]);
+  for (const title of ["Subscriptions", "Receivables aging", "Cash by account", "Controls", "Reports"]) {
+    await expect(page.getByRole("heading", { name: title, level: 2 })).toBeVisible();
+  }
+  await expect(page.getByText("Book balance").first()).toBeVisible();
+  await page.getByRole("button", { name: "Year to date" }).click();
+  await expect(page.getByRole("button", { name: "Year to date" })).toHaveAttribute("aria-pressed", "true");
+
+  await page.goto("/PKG/approvals");
+  await expect(page.getByRole("heading", { name: "Approvals waiting for you", level: 1 })).toBeVisible();
+  await expect(page.getByText("Nothing is sent or changed until you approve it")).toBeVisible();
+  await expect(page.getByRole("heading", { name: "Waiting for you", level: 2 })).toBeVisible();
+  await expect(page.locator("[data-slot=side-menu], [data-slot=tab-bar]").getByLabel(/pending/)).toHaveCount(0); // no badge without a count
+
+  await page.goto("/PKG");
+  await expect(page.getByRole("heading", { name: "Good morning", level: 1 })).toBeVisible();
+  for (const title of ["Today's briefing", "Needs your attention", "Today's meetings", "Projects at a glance"]) {
+    await expect(page.getByRole("heading", { name: title, level: 2 })).toBeVisible();
+  }
+  await expect(page.getByRole("link", { name: "Ask Jarvis" })).toHaveAttribute("href", "/PKG/assistant");
+  if (isMobile) {
+    const band = page.locator("[data-slot=mobile-header]");
+    await expect(band).toContainText("Pub K Group");
+    await expect(band).toContainText("Good morning");
+    for (const link of await page.getByRole("navigation", { name: "Tabs" }).getByRole("link").all()) {
+      await expect(link.locator("svg[aria-hidden=true]")).toHaveCount(1);
+    }
+    await expect(page.getByText(/‹/)).toHaveCount(0); // no back link on tab pages
+  }
 
   // Owner of every seeded lane, but only PKG is enabled: another lane's URL is a 404, same as an unknown lane.
   for (const lane of ["APK", "NL", "ZZZ"]) {

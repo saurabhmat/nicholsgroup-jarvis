@@ -54,7 +54,8 @@ export type ClientFactory = {
   enabledLanes(): readonly string[];
 };
 
-const LANE_ID = /^[A-Z]{1,8}$/;
+/** The canonical lane code: 1 to 8 capital letters. The only shape accepted as a lane in a URL or a call. */
+export const LANE_ID = /^[A-Z]{1,8}$/;
 const NO_SESSION_STORAGE = { auth: { persistSession: false, autoRefreshToken: false, detectSessionInUrl: false } } as const;
 
 let serviceSingleton: LaneClient | undefined;

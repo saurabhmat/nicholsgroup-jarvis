@@ -19,5 +19,22 @@ export { FreshnessBadge, SourceChip, type Freshness, type SourceChipProps } from
 
 export { AppShell, type AppShellProps, type ShellBrand } from "./components/app-shell";
 export { LaneSwitcher, type LaneSwitcherProps, type ShellLane, type ShellLink } from "./components/lane-switcher";
-export { activeKey, laneHref, MOBILE_TABS, MORE_ITEMS, NAV_ITEMS, navItem, type MobileTab, type NavItem, type NavKey } from "./lib/nav";
+export { PageHeader, type PageHeaderProps } from "./components/page-header";
+export { PageSection, type PageSectionProps } from "./components/page-section";
+export { PERIODS, PeriodToggle, type PeriodKey, type PeriodToggleProps } from "./components/period-toggle";
+export { TabIcon } from "./components/tab-icon";
+export {
+  activeKey,
+  homeHeading,
+  laneHref,
+  MOBILE_TABS,
+  MORE_ITEMS,
+  NAV_ITEMS,
+  navItem,
+  pageHeading,
+  type MobileTab,
+  type NavItem,
+  type NavKey,
+  type TabIconName,
+} from "./lib/nav";
 export { applyTheme, readTheme, THEME_INIT, THEME_KEY, THEMES, type Theme } from "./lib/theme";

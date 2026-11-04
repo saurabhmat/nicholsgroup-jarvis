@@ -42,7 +42,22 @@ test("a member sees only the lanes that are enabled and allowed, and 404 for eve
   for (const segment of ["finance", "inbox", "calendar", "approvals", "assistant", "projects", "settings", "more"]) {
     expect((await c.get(`/PKG/${segment}`)).status(), segment).toBe(200);
   }
-  for (const path of ["/APK", "/APK/finance", "/NL", "/PKI", "/pkg", "/ZZZ", "/PKG;--", "/PKG/search", "/PKG/commitments"]) {
+  // Root files and well-known paths are not lanes (T-024): the proxy leaves them alone for a signed-in user. Nothing
+  // serves them yet, so the app answers as for any unknown path; what matters is that the proxy's lane 404 is not used.
+  for (const path of ["/robots.txt", "/sitemap.xml", "/.well-known/x", "/manifest.webmanifest"]) {
+    const res = await c.get(path);
+    expect(await res.text(), path).not.toContain("This page does not exist, or you do not have access to it.");
+  }
+  // Only the canonical lane code is a lane: lowercase and non-canonical encodings are refused with the proxy's 404,
+  // which is never cached or shared.
+  for (const path of ["/pkg", "/%50KG", "/%50KG/finance"]) {
+    const res = await c.get(path);
+    expect(res.status(), path).toBe(404);
+    expect(res.headers()["cache-control"], path).toBe("private, no-store");
+    expect(res.headers()["vary"], path).toContain("cookie");
+    expect(await res.text(), path).not.toContain("Pub K Group");
+  }
+  for (const path of ["/APK", "/APK/finance", "/NL", "/PKI", "/ZZZ", "/PKG;--", "/PKG/search", "/PKG/commitments"]) {
     const res = await c.get(path);
     expect(res.status(), path).toBe(404);
     expect(await res.text()).not.toContain("Pub K Group");

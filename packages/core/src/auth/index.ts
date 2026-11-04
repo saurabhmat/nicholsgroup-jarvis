@@ -18,7 +18,7 @@ import { z } from "zod";
 import { getServerEnv } from "../env/server";
 import type { LaneId, LaneSummary } from "../lanes/index";
 import { authClient } from "./client";
-import { getLaneClient, listLanes, LaneAccessError, type LaneClient, type LaneRouter, type LaneSession } from "../lane-router/index";
+import { getLaneClient, LANE_ID, listLanes, LaneAccessError, type LaneClient, type LaneRouter, type LaneSession } from "../lane-router/index";
 
 export type Aal = "aal1" | "aal2";
 /** `mfaVerifiedAt`: when the user last entered a TOTP code (epoch seconds, from the verified `amr` claim). */
@@ -166,11 +166,25 @@ export function createGuards(
 /** Top-level paths that are not lanes. Every other first path segment is a lane id from the URL. */
 const NON_LANE_SEGMENTS = new Set(["sign-in", "auth", "mfa", "api"]);
 
-/** The lane segment of a page path (`/PKG/finance` → "PKG"), or null for `/` and the sign-in, MFA and API paths. */
+/**
+ * The lane segment of a page path (`/PKG/finance` → "PKG"), or null when the first segment is not lane-shaped: `/`,
+ * the sign-in, MFA and API paths, and root files (`/robots.txt`, `/sitemap.xml`, `/.well-known/x`,
+ * `/manifest.webmanifest`). Only the canonical lane code (LANE_ID) is a lane. Any other segment is returned as it is,
+ * so requireLane refuses it and the proxy answers 404 (`/pkg`, `/%50KG`, `/PKG;--`, a malformed encoding: fail
+ * closed), EXCEPT a segment that contains a dot once decoded, which is a file name and is left to Next. The page's
+ * own check is the gate either way.
+ */
 export function laneSegment(pathname: string): string | null {
   const first = pathname.split("/")[1] ?? "";
   if (first === "" || NON_LANE_SEGMENTS.has(first)) return null;
-  return first;
+  if (LANE_ID.test(first)) return first;
+  let decoded: string;
+  try {
+    decoded = decodeURIComponent(first);
+  } catch {
+    return first;
+  }
+  return decoded.includes(".") ? null : first;
 }
 
 /**

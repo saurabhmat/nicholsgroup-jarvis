@@ -9,6 +9,7 @@
     "typecheck": "next typegen && tsc --noEmit",
     "lint": "eslint",
     "check:env-build": "node scripts/check-env-build.mjs",
+    "test": "vitest run",
     "test:e2e": "playwright test"
   },
   "dependencies": {
@@ -30,6 +31,7 @@
     "eslint-config-next": "16.4.2",
     "tailwindcss": "^4",
     "typescript": "^5",
-    "typescript-eslint": "8.72.0"
+    "typescript-eslint": "8.72.0",
+    "vitest": "5.0.5"
   }
 }

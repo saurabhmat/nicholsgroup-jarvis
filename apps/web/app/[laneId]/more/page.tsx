@@ -1,7 +1,7 @@
 // iPhone "More" tab: the menu entries that have no tab of their own, and sign-out. A tab page, so no back link.
 import Link from "next/link";
 import { Suspense } from "react";
-import { Button, laneHref, MORE_ITEMS, navItem } from "@nichols/ui";
+import { Button, laneHref, MORE_ITEMS, navItem, PageHeader } from "@nichols/ui";
 import { ThemeToggle } from "@/components/theme-toggle";
 import { loadLane } from "@/lib/lane-page";
 import { signOut } from "../../sign-in/actions";
@@ -18,7 +18,7 @@ async function More({ params }: { params: Promise<{ laneId: string }> }) {
   const lane = await loadLane((await params).laneId);
   return (
     <div className="flex flex-col gap-6">
-      <h1 className="font-heading text-2xl font-semibold text-foreground">More</h1>
+      <PageHeader eyebrow={lane.name} title="More" />
       <ul className="flex flex-col divide-y divide-divider rounded-card border border-border bg-card">
         {MORE_ITEMS.map((key) => {
           const item = navItem(key);

@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { activeKey, laneHref, MOBILE_TABS, MORE_ITEMS, NAV_ITEMS, navItem } from "./nav";
+import { activeKey, homeHeading, laneHref, pageHeading, MOBILE_TABS, MORE_ITEMS, NAV_ITEMS, navItem } from "./nav";
 
 describe("navigation data", () => {
   it("has the desktop order (Projects between Assistant and Settings) and no hidden modules", () => {
@@ -29,5 +29,29 @@ describe("navigation data", () => {
     expect(activeKey("PKG", "/PKGX/finance")).toBeNull();
     expect(activeKey("PKG", "/APK/finance")).toBeNull();
     expect(navItem("approvals").segment).toBe("approvals");
+  });
+});
+
+describe("headings and the More tab", () => {
+  it("derives the More tab's covers from MORE_ITEMS (single source)", () => {
+    expect(MOBILE_TABS.find((t) => t.key === "more")?.covers).toBe(MORE_ITEMS);
+  });
+
+  it("has the prototype headings with accents", () => {
+    expect(navItem("finance").heading).toEqual({ lead: "Finance", accent: "at a glance" });
+    expect(navItem("approvals").heading).toEqual({ lead: "Approvals", accent: "waiting for you" });
+    expect(navItem("inbox").heading).toEqual({ lead: "Inbox" });
+  });
+
+  it("builds the Home title with or without a name", () => {
+    expect(homeHeading("Robert")).toEqual({ lead: "Good morning,", accent: "Robert" });
+    expect(homeHeading()).toEqual({ lead: "Good morning" });
+    expect(homeHeading("  ")).toEqual({ lead: "Good morning" });
+    expect(pageHeading("more")).toEqual({ lead: "More" });
+    expect(pageHeading("home", "Robert").accent).toBe("Robert");
+  });
+
+  it("gives every tab an icon", () => {
+    expect(MOBILE_TABS.map((t) => t.icon)).toEqual(["home", "check", "mail", "chat", "more"]);
   });
 });

@@ -1,10 +1,10 @@
 import { Suspense } from "react";
-import { ModulePage } from "@/components/module-page";
+import { FinancePage } from "@/components/finance-page";
 
 export default function Page(props: PageProps<"/[laneId]/finance">) {
   return (
     <Suspense fallback={null}>
-      <ModulePage module="finance" params={props.params} />
+      <FinancePage params={props.params} />
     </Suspense>
   );
 }

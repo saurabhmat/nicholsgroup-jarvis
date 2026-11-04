@@ -6,6 +6,7 @@ import { redirect } from "next/navigation";
 import { safeNextPath } from "@nichols/core/auth";
 import { getServerEnv } from "@nichols/core/env/server";
 import { auth } from "@/lib/guards";
+import { mfaPath } from "@/lib/mfa-path";
 
 const PENDING = "signin_pending";
 /** Wrong codes allowed per emailed code before a new one is required (T-018 review M2). */
@@ -62,10 +63,6 @@ export async function verifyCode(formData: FormData) {
   // the next page and letting the proxy bounce it to /mfa renders /mfa under the old URL (client navigation after a
   // server-action redirect does not follow the proxy's redirect in the address bar).
   redirect(mfaPath(safeNextPath(pending.next)));
-}
-
-function mfaPath(next: string): string {
-  return next === "/" ? "/mfa" : `/mfa?next=${encodeURIComponent(next)}`;
 }
 
 export async function signOut() {

@@ -15,6 +15,8 @@ export type LaneSwitcherProps = {
   segment?: string;
   Link?: ShellLink;
   className?: string;
+  /** iPhone header band: a compact rounded chip instead of the full-width box. */
+  chip?: boolean;
 };
 
 const DefaultLink: ShellLink = (props) => <a {...props} />;
@@ -24,10 +26,11 @@ const DefaultLink: ShellLink = (props) => <a {...props} />;
  * several it is a disclosure list of links (works without JavaScript). The URL carries the lane; the server checks
  * it again on every page, so this list is a convenience and never the gate.
  */
-export function LaneSwitcher({ lanes, currentLaneId, segment = "", Link = DefaultLink, className }: LaneSwitcherProps) {
+export function LaneSwitcher({ lanes, currentLaneId, segment = "", Link = DefaultLink, className, chip = false }: LaneSwitcherProps) {
   const current = lanes.find((l) => l.laneId === currentLaneId);
-  const box =
-    "w-full rounded-control border border-sidebar-switcher-border bg-sidebar-switcher px-3 py-2 text-left text-sm font-medium text-primary-foreground";
+  const box = chip
+    ? "inline-block max-w-full rounded-full border border-sidebar-switcher-border bg-sidebar-active px-3 py-1.5 text-left text-sm font-semibold text-primary-foreground"
+    : "w-full rounded-control border border-sidebar-switcher-border bg-sidebar-switcher px-3 py-2 text-left text-sm font-medium text-primary-foreground";
   if (lanes.length <= 1) {
     return (
       <div data-slot="lane-switcher" className={cn(box, className)}>
@@ -37,12 +40,12 @@ export function LaneSwitcher({ lanes, currentLaneId, segment = "", Link = Defaul
     );
   }
   return (
-    <details data-slot="lane-switcher" className={cn("relative", className)}>
+    <details data-slot="lane-switcher" className={cn("relative", chip && "w-fit max-w-full", className)}>
       <summary className={cn(box, "cursor-pointer list-none")}>
         <span className="sr-only">Company: </span>
         {current?.name ?? currentLaneId}
       </summary>
-      <ul className="absolute z-20 mt-1 w-full rounded-control border border-border bg-popover p-1 text-popover-foreground shadow-md">
+      <ul className="absolute z-20 mt-1 w-full min-w-48 rounded-control border border-border bg-popover p-1 text-popover-foreground shadow-md">
         {lanes.map((l) => (
           <li key={l.laneId}>
             <Link

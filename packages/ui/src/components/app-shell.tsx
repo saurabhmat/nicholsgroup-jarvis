@@ -1,7 +1,8 @@
 import type { ReactNode } from "react";
 import { cn } from "../lib/utils";
-import { activeKey, laneHref, MOBILE_TABS, NAV_ITEMS } from "../lib/nav";
+import { activeKey, laneHref, MOBILE_TABS, NAV_ITEMS, pageHeading } from "../lib/nav";
 import { Badge } from "./badge";
+import { TabIcon } from "./tab-icon";
 import { LaneSwitcher, type ShellLane, type ShellLink } from "./lane-switcher";
 
 export type ShellBrand = { wordmark: string; product: string };
@@ -14,6 +15,8 @@ export type AppShellProps = {
   pathname: string;
   /** Pending approvals in the SELECTED lane only; the badge is hidden at 0 or when unknown. */
   approvalsCount?: number;
+  /** First name for the Home title on the iPhone header band; omitted when unknown. */
+  firstName?: string;
   /** Form action that signs the user out. */
   signOut: (formData: FormData) => void | Promise<void>;
   /** Optional control above Sign out in the side menu (the theme toggle). */
@@ -32,10 +35,10 @@ function Star({ className }: { className?: string }) {
   );
 }
 
-function CountBadge({ count }: { count?: number }) {
+function CountBadge({ count, className }: { count?: number; className?: string }) {
   if (!count || count < 1) return null;
   return (
-    <Badge variant="gold" className="ml-auto" aria-label={`${String(count)} pending`}>
+    <Badge variant="gold" className={className ?? "ml-auto"} aria-label={`${String(count)} pending`}>
       {count > 99 ? "99+" : count}
     </Badge>
   );
@@ -46,8 +49,9 @@ function CountBadge({ count }: { count?: number }) {
  * bottom tabs on iPhone. Presentational only: the app decides what the user may see and passes the lanes in.
  * Light theme, colours from the T-022 tokens only.
  */
-export function AppShell({ brand, lanes, currentLaneId, pathname, approvalsCount, signOut, menuExtra, Link = DefaultLink, children }: AppShellProps) {
+export function AppShell({ brand, lanes, currentLaneId, pathname, approvalsCount, firstName, signOut, menuExtra, Link = DefaultLink, children }: AppShellProps) {
   const active = activeKey(currentLaneId, pathname);
+  const heading = pageHeading(active, firstName);
   const segment = NAV_ITEMS.find((i) => i.key === active)?.segment ?? "";
   return (
     <div className="flex min-h-dvh flex-col md:flex-row">
@@ -99,12 +103,18 @@ export function AppShell({ brand, lanes, currentLaneId, pathname, approvalsCount
       </aside>
 
       {/* iPhone header band */}
-      <header data-slot="mobile-header" className="flex items-center gap-3 bg-sidebar px-4 py-3 text-sidebar-foreground md:hidden">
-        <p className="flex shrink-0 items-center gap-1 font-heading text-lg font-semibold text-primary-foreground">
-          {brand.wordmark}
-          <Star className="size-3" />
+      <header data-slot="mobile-header" className="flex flex-col gap-3 bg-sidebar px-4 pb-4 pt-3 text-sidebar-foreground md:hidden">
+        <LaneSwitcher lanes={lanes} currentLaneId={currentLaneId} segment={segment} Link={Link} chip />
+        {/* Visual title only: the page's own h1 stays in the accessibility tree. */}
+        <p aria-hidden="true" data-slot="mobile-title" className="font-heading text-2xl font-semibold text-primary-foreground">
+          {heading.lead}
+          {heading.accent ? (
+            <>
+              {" "}
+              <em className="font-normal italic text-gold">{heading.accent}</em>
+            </>
+          ) : null}
         </p>
-        <LaneSwitcher lanes={lanes} currentLaneId={currentLaneId} segment={segment} Link={Link} className="min-w-0 flex-1" />
       </header>
 
       <main id="content" className="mx-auto w-full max-w-content flex-1 p-4 pb-24 md:p-8 md:pb-8">
@@ -125,12 +135,13 @@ export function AppShell({ brand, lanes, currentLaneId, pathname, approvalsCount
               href={laneHref(currentLaneId, tab.segment)}
               aria-current={selected ? "page" : undefined}
               className={cn(
-                "flex flex-1 items-center justify-center gap-1 border-t-[3px] py-3 text-xs",
+                "relative flex flex-1 flex-col items-center justify-center gap-0.5 border-t-[3px] py-2 text-xs",
                 selected ? "border-gold font-semibold text-primary" : "border-transparent text-muted-foreground",
               )}
             >
+              <TabIcon name={tab.icon} />
               {tab.label}
-              {tab.key === "approvals" ? <CountBadge count={approvalsCount} /> : null}
+              {tab.key === "approvals" ? <CountBadge count={approvalsCount} className="absolute right-3 top-1" /> : null}
             </Link>
           );
         })}
