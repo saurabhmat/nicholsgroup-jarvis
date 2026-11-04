@@ -182,6 +182,8 @@ export const RESTRICTED_NAMES = {
   connectionStore: { allow: CONNECTORS, hint: "it writes connection rows with the job client; the OAuth callback uses it (T-035)" },
   rawRecords: { allow: CONNECTORS, hint: "it writes raw provider payloads with the job client; connectors store records through their sync sink (T-039)" },
   createRawRecordStore: { allow: ["packages/connectors/src/raw", ...TOKEN_VAULT], hint: "internal to the raw record store; use rawRecords inside packages/connectors" },
+  webhookStore: { allow: CONNECTORS, hint: "it resolves accounts to lanes and records events with the job client; the webhook receiver uses it (T-036)" },
+  createWebhookStore: { allow: ["packages/connectors/src/webhooks", ...TOKEN_VAULT], hint: "internal to the webhook receiver; use webhookStore inside packages/connectors" },
   createConnectionStore: { allow: TOKEN_VAULT, hint: "internal to the token vault; use connectionStore inside packages/connectors" },
 };
 

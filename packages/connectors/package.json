@@ -12,6 +12,7 @@
     "./redact": "./src/redact.ts",
     "./oauth": "./src/oauth/index.ts",
     "./raw": "./src/raw/index.ts",
+    "./webhooks": "./src/webhooks/index.ts",
     "./write": "./src/write/index.ts",
     "./connection-test": "./src/connection-test.ts"
   },

@@ -59,6 +59,10 @@ insert into security_definer_ok values
   ('core.oauth_state_create', 'starts a connect; owner/admin_technical of the lane at aal2 only (T-035)'),
   ('core.oauth_state_consume', 'finishes a connect; own unexpired state, same lane, role re-checked (T-035)'),
   ('core.source_records_upsert', 'writes the private raw.source_records; service_role only, lane-checked against the connection (T-039)'),
+  ('core.webhook_resolve_connection', 'webhook receiver: the usable connection of a lane for a provider account; service_role only (T-036)'),
+  ('core.webhook_event_claim', 'webhook receiver: records an event once per (lane, provider, event id); service_role only, lane-checked (T-036)'),
+  ('core.webhook_event_mark', 'webhook receiver: received -> enqueued | failed, lane-bound; service_role only (T-036)'),
+  ('core.webhook_events_purge', 'webhook receipt retention, per lane, minimum 7 days; service_role only (T-036)'),
   ('fin.report_cache_guard', 'trigger only: calls the private raw.payload_scan on a report payload; reads and writes nothing (T-055)');
 
 -- App functions authenticated may execute (callable through the API). Each one is reviewed.

@@ -265,6 +265,32 @@ isOneToOne: false
                   Relationships: [
                     
                   ]
+                },"webhook_events": {
+                  Row: {
+                    "attempts": number,"connection_id": string,"event_id": string,"event_type": string,"id": string,"lane_id": string,"payload_hash": string,"provider": string,"received_at": string,"status": string,"updated_at": string
+                  }
+                  ComputedFields: never
+                  Insert: {
+                    "attempts"?: number,"connection_id": string,"event_id": string,"event_type": string,"id"?: string,"lane_id": string,"payload_hash": string,"provider": string,"received_at"?: string,"status"?: string,"updated_at"?: string
+                  }
+                  Update: {
+                    "attempts"?: number,"connection_id"?: string,"event_id"?: string,"event_type"?: string,"id"?: string,"lane_id"?: string,"payload_hash"?: string,"provider"?: string,"received_at"?: string,"status"?: string,"updated_at"?: string
+                  }
+                  Relationships: [
+                    {
+      foreignKeyName: "webhook_events_connection_id_lane_id_fkey"
+      columns: ["connection_id","lane_id"]
+isOneToOne: false
+      referencedRelation: "connections"
+      referencedColumns: ["id","lane_id"]
+    },{
+      foreignKeyName: "webhook_events_lane_id_fkey"
+      columns: ["lane_id"]
+isOneToOne: false
+      referencedRelation: "lanes"
+      referencedColumns: ["code"]
+    }
+                  ]
                 }
           }
           Views: {
@@ -352,6 +378,18 @@ isOneToOne: false
                            },
 "viewer_view_names":
 { Args: Record<PropertyKey, never>; Returns: (string)[]
+                           },
+"webhook_event_claim":
+{ Args: { "p_connection_id": string,"p_event_id": string,"p_event_type": string,"p_lane": string,"p_payload_hash": string,"p_provider": string }; Returns: string
+                           },
+"webhook_event_mark":
+{ Args: { "p_event_id": string,"p_lane": string,"p_provider": string,"p_status": string }; Returns: boolean
+                           },
+"webhook_events_purge":
+{ Args: { "p_keep"?: string,"p_lane": string }; Returns: number
+                           },
+"webhook_resolve_connection":
+{ Args: { "p_account": string,"p_lane": string,"p_provider": string }; Returns: string
                            }
           }
           Enums: {

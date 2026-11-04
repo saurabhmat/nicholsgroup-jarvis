@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { actionApproved, connSyncRequested, LANE_EVENTS, systemHeartbeat } from "./events";
+import { actionApproved, connSyncRequested, LANE_EVENTS, systemHeartbeat, webhookReceived } from "./events";
 
 const CONN = "00000000-0000-4000-8000-000000000001";
 
@@ -28,5 +28,15 @@ describe("lane events (T-037)", () => {
     await expect(
       (actionApproved.create as (d: unknown) => { validate(): Promise<unknown> })({ laneId: "PKG", actionId: CONN, body: "x" }).validate(),
     ).rejects.toThrow();
+  });
+
+  it("webhook/received carries ids only (T-036)", async () => {
+    const ok = { laneId: "PKG", provider: "quickbooks", connectionId: CONN, eventId: "e1", eventType: "Invoice.Update", refs: [{ type: "Invoice", id: "1" }] };
+    const make = (d: unknown) => (webhookReceived as unknown as { create(d: unknown): { validate(): Promise<unknown> } }).create(d);
+    await expect(make(ok).validate()).resolves.toBeUndefined();
+    await expect(make({ ...ok, payload: { x: 1 } }).validate()).rejects.toThrow();
+    await expect(make({ ...ok, refs: [{ type: "Invoice", id: "1", body: "x" }] }).validate()).rejects.toThrow();
+    await expect(make({ ...ok, connectionId: "nope" }).validate()).rejects.toThrow();
+    await expect(make({ ...ok, refs: Array.from({ length: 101 }, (_, i) => ({ type: "T", id: String(i) })) }).validate()).rejects.toThrow();
   });
 });

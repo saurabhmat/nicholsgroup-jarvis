@@ -14,7 +14,7 @@ import { serve } from "inngest/next";
 import { getInngestEnv, getServerEnv, isDevelopmentRuntime } from "../env/server";
 import { LANE_EVENTS } from "./events";
 
-export { actionApproved, connSyncRequested, LANE_EVENTS, laneIdSchema, systemHeartbeat } from "./events";
+export { actionApproved, connSyncRequested, LANE_EVENTS, laneIdSchema, systemHeartbeat, webhookReceived } from "./events";
 export { platformFunctions } from "./functions";
 
 const APP_ID = "nichols-portal";
@@ -42,16 +42,17 @@ export function inngestAvailable(): boolean {
 
 /**
  * Validates a lane event against its schema, then sends it. Always use this instead of `getInngest().send()`, so an
- * event without a valid `laneId` (or with unknown fields) never leaves the process.
+ * event without a valid `laneId` (or with unknown fields) never leaves the process. `id` (optional) is Inngest's event
+ * id: a second send with the same id inside Inngest's dedupe window is dropped (webhook receiver, T-036).
  */
-export async function sendLaneEvent(event: { name: string; data: { laneId: string } }) {
+export async function sendLaneEvent(event: { name: string; data: { laneId: string }; id?: string }) {
   const registered = LANE_EVENTS.find((e) => e.name === event.name);
   if (!registered) throw new Error("unknown event");
   const parsed = await registered.schema["~standard"].validate(event.data);
   if (parsed.issues) throw new Error("invalid event data"); // missing/invalid laneId or unknown fields; no values echoed
   if (!getServerEnv().ENABLED_LANES.includes(event.data.laneId)) throw new Error("lane not served");
   if (!inngestAvailable()) throw new Error("jobs not configured");
-  return getInngest().send({ name: event.name, data: event.data });
+  return getInngest().send({ name: event.name, data: event.data, ...(event.id ? { id: event.id } : {}) });
 }
 
 type Handler = (request: Request, context: unknown) => Promise<Response>;

@@ -27,6 +27,11 @@ describe("sendLaneEvent", () => {
     expect(sent.at(-1)).toEqual({ name: "conn/sync.requested", data: { laneId: "PKG", connectionId: CONN } });
   });
 
+  it("passes an optional Inngest event id through (dedupe for webhook events) and nothing else", async () => {
+    await sendLaneEvent({ ...connSyncRequested.create({ laneId: "PKG", connectionId: CONN }), id: "wh:PKG:x" });
+    expect(sent.at(-1)).toEqual({ name: "conn/sync.requested", data: { laneId: "PKG", connectionId: CONN }, id: "wh:PKG:x" });
+  });
+
   it("validates against the registered schema, not the caller's validate()", async () => {
     const forged = { name: "conn/sync.requested", data: { laneId: "PKG", connectionId: "nope" }, validate: async () => {} };
     await expect(sendLaneEvent(forged)).rejects.toThrow("invalid event data");

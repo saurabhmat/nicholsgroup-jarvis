@@ -143,6 +143,9 @@ const cases = [
   // T-039: raw records are written only inside packages/connectors
   ["rawRecords in apps/web", `export const r = vault.rawRecords;`, "apps/web/app/api/x/route.ts", "nichols/no-restricted-names"],
   ["rawRecords in a connector", `import { rawRecords } from "../vault/index";`, "packages/connectors/src/raw/index.ts", undefined],
+  ["webhookStore in apps/web", `export const r = vault.webhookStore;`, "apps/web/app/api/x/route.ts", "nichols/no-restricted-names"],
+  ["webhookStore in a connector", `import { webhookStore } from "../vault/index";`, "packages/connectors/src/webhooks/index.ts", undefined],
+  ["createWebhookStore outside the receiver", `import { createWebhookStore } from "../webhooks/store";`, "packages/connectors/src/oauth/index.ts", "nichols/no-restricted-names"],
   // T-050 R-L1: the write subpath belongs to the approvals module only
   ["write subpath in apps/web", `import { quickbooksWriter } from "@nichols/connectors/write";`, "apps/web/app/api/x/route.ts", "nichols/no-write-subpath-import"],
   ["write subpath in a finance module", `import { quickbooksWriter } from "@nichols/connectors/write";`, "packages/modules/finance/src/x.ts", "nichols/no-write-subpath-import"],

@@ -14,7 +14,7 @@ vi.mock("@nichols/core/auth", async (importActual) => {
   };
 });
 
-const { proxy } = await import("../proxy");
+const { proxy, config } = await import("../proxy");
 
 const get = (path: string) => proxy(new NextRequest(new URL(path, "http://127.0.0.1:3100")));
 
@@ -57,5 +57,20 @@ describe("proxy lane check", () => {
     refreshSession.mockResolvedValue({ signedIn: true, aal: "aal1" });
     expect((await get("/PKG/inbox")).headers.get("location")).toContain("/mfa?next=%2FPKG%2Finbox");
     expect(laneVerdict).not.toHaveBeenCalled();
+  });
+});
+
+describe("proxy matcher (T-036)", () => {
+  const matches = (path: string) => new RegExp(`^${config.matcher[0]}$`).test(path);
+
+  it("does not run for provider webhooks, which carry no session", () => {
+    expect(matches("/api/webhooks/quickbooks")).toBe(false);
+    expect(matches("/api/webhooks/stripe/")).toBe(false);
+  });
+
+  it("still runs for other API routes and pages", () => {
+    expect(matches("/api/connect/quickbooks/start")).toBe(true);
+    expect(matches("/api/webhooksx")).toBe(true);
+    expect(matches("/PKG/finance")).toBe(true);
   });
 });

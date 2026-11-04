@@ -60,7 +60,8 @@ export async function proxy(request: NextRequest) {
 }
 
 export const config = {
-  // Everything except static assets and images. The proxy is not the auth gate: every page and route calls the
-  // guards (T-017) itself; the proxy only refreshes cookies and redirects.
-  matcher: ["/((?!_next/static/|_next/image$|favicon\\.ico$|[^?]*\\.(?:svg|png|jpg|jpeg|gif|webp|ico)$).*)"],
+  // Everything except static assets and images and provider webhooks. The proxy is not the auth gate: every page and
+  // route calls the guards (T-017) itself; the proxy only refreshes cookies and redirects. Webhooks (T-036) carry no
+  // session: the provider's signature is their credential, and the proxy must not read cookies or call Supabase for them.
+  matcher: ["/((?!_next/static/|_next/image$|api/webhooks/|favicon\\.ico$|[^?]*\\.(?:svg|png|jpg|jpeg|gif|webp|ico)$).*)"],
 };
