@@ -1,3 +1,3 @@
-// Product branding for the signed-off shell (D-20 batch 1: "Pub K" wordmark, "Jarvis · Executive Portal"). This is the
-// pilot's product brand, shown the same in every lane; the lane's own display name always comes from its lane record.
-export const BRAND = { wordmark: "Pub K", product: "Jarvis · Executive Portal" } as const;
+// Product branding for the shell (D-22, Nov 4, 2026): the product is "Jarvis" for every company. No company name here
+// (rule 2): the selected company's display name always comes from its lane record (the switcher).
+export const BRAND = { wordmark: "Jarvis", product: "Executive Portal" } as const;

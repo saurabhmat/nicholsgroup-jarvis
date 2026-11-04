@@ -140,7 +140,7 @@ These tasks have all their dependencies done and all their `needs` checked. A hu
 - [x] H-018 Local toolchain (Oct 23, 2026): Node 24.19.0 kept locally (CI stays on 22), pnpm 12.15.0 via corepack, Supabase CLI 2.122.0 (npm global)
 - [ ] H-029 App icon for the installable app (T-025): a square master at least 1024×1024 px (PNG or SVG, no transparency for iOS), approved by Robert, saved as `docs/design/app-icon.png` (or `.svg`). The agent generates the manifest sizes from it.
 - [ ] H-030 (optional; screenshots of every page are already in `docs/design/batch1/`) Save the batch-1 prototype PDF as `docs/design/Jarvis_Pilot_Prototype_Batch1_v2.pdf` and make the canvas link readable by the Claude Code account (it returned "not found" on Nov 4, 2026). D-20 is closed on Saurabh's approval; this keeps the signed-off record in the repo.
-- [ ] D-22 Brand wordmark (T-023 reviews, rule 2): the shell shows "Pub K" with a gold star and "Jarvis · Executive Portal" for every lane, from a constant in `apps/web/lib/brand.ts`. Decide: (a) accept it as the product brand for every company (record the exception), or (b) make it configurable: per lane in `lane_config` (each company shows its own name), or per deployment with `NEXT_PUBLIC_BRAND_NAME` / `NEXT_PUBLIC_PRODUCT_NAME` (a human adds them to `.env.example` and Vercel). Not blocking while only PKG is enabled; needed before a second lane is switched on.
+- [x] D-22 Brand wordmark (T-023 reviews, rule 2). Decided Nov 4, 2026 by Saurabh: the wordmark is the product name **"Jarvis"** with "Executive Portal" for every company; Pub K is one company of several and its name appears only in the company switcher (from the lane record). Applied in `apps/web/lib/brand.ts`.
 - [x] H-020 Docker access for your user (Oct 24, 2026): user is in the `docker` group; `docker info` works in a fresh login. A process started before the group change (e.g. an old VS Code server / Claude Code session) still gets "permission denied" until it is restarted.
 - [x] H-019 Agents can read `.env.example` (deny rule narrowed Oct 24, 2026; real env files still blocked). Publishable/secret rename and cleanup applied Oct 24 and mirrored in Vercel Preview (see `docs/plan-review.md` §7).
 
@@ -264,19 +264,16 @@ T-010 – T-017 are the serial spine. After T-017: auth/shell (T-018 – T-026) 
 
 ### T-018 Sign-in (local test IdP)
 - status: done
-- note (Nov 4, 2026): browser Playwright tests now run (Chromium libraries unpacked in the user's home, `docs/runbooks/e2e-browsers.md`) and pass on desktop and iPhone; the code-sign-in redirect now goes straight to `/mfa` and the email-link redirect is relative (found by the first browser run, fixed in T-023).
 - depends: T-017
 - acceptance: Supabase Auth email sign-in (D-6): 6-digit email code as the **primary** flow (works inside the installed iPhone app) plus magic link as a secondary option (a link opens in Safari, not the installed app); local Inbucket/Mailpit for tests; sign-in/out pages; session refresh in `proxy.ts` (Next 16); unauthenticated requests redirect; Playwright test.
 
 ### T-019 Enforced MFA (AAL2)
 - status: done
-- note (Nov 4, 2026): browser Playwright tests pass on desktop and iPhone (`docs/runbooks/e2e-browsers.md`); after the authenticator code the user lands on their first company (fixed in T-023).
 - depends: T-018
 - acceptance: Supabase TOTP enrolment + challenge for all users (D-6); recovery procedure documented (admin-assisted factor reset, audited); every data route and RLS rejects AAL1; Playwright: AAL1 user cannot load data; short session lifetime configured.
 
 ### T-020 Step-up helper
 - status: done
-- note (Nov 4, 2026): browser Playwright test passes on desktop and iPhone (`docs/runbooks/e2e-browsers.md`).
 - depends: T-019
 - acceptance: `requireStepUp(maxAgeSeconds)` forces a fresh TOTP challenge; unit + Playwright tests; used later by approvals.
 
@@ -293,27 +290,26 @@ T-010 – T-017 are the serial spine. After T-017: auth/shell (T-018 – T-026) 
 
 ### T-023 App shell and lane switcher (provisional nav)
 - status: done
-- note (Nov 4, 2026): built on `agent/pilot-build` (scope per Saurabh Nov 4: Projects shown, light/dark theme). Full Playwright suite passes (31 passed, 5 skipped by design) on desktop and iPhone; security and code review: no BLOCKER or HIGH (`.agent/pr/T-023.md`).
 - depends: T-017, T-022
-- needs: D-20 (design sign-off, batch 1)
+- needs: D-20 (design sign-off batch 1)
 - acceptance: authenticated layout, lane switcher limited to allowed lanes, module placeholder routes; current lane in URL; Playwright test that a non-member lane is not listed and its URL returns 404/403.
 
 ### T-024 Navigation per approved prototype
 - status: approved
 - depends: T-023
-- needs: D-20 (design sign-off, batch 1)
+- needs: D-20 (design sign-off batch 1)
 - acceptance: navigation and page structure match the signed-off prototype.
 
 ### T-025 PWA install (Mac + iPhone)
 - status: proposed
 - depends: T-023
-- needs: D-20 (design sign-off, batch 1), H-029 (app icon)
+- needs: D-20 (design sign-off batch 1), H-029 (app icon)
 - acceptance: web manifest, icons, Serwist service worker (verify Next 16 compatibility first; fall back to a hand-written SW if needed); no lane data cached by the SW; Lighthouse installability check runnable locally (`pnpm lighthouse`), with the CI step proposed for a human to add; manual install checklist for Mac Safari/Chrome and iOS.
 
 ### T-026 Settings page (user + lane config read view)
 - status: proposed
 - depends: T-023, T-011
-- needs: D-21 (design sign-off, batch 2)
+- needs: D-21 (design sign-off batch 2)
 - acceptance: owner can view lane config and policies (read-only in pilot; editing is T-047); others see only their own preferences.
 
 ## Phase A3 — Connector platform and jobs (PL-29)
@@ -392,19 +388,19 @@ Joins W1 + W2 (needs T-023 and T-038).
 ### T-045 Connection health page
 - status: proposed
 - depends: T-038, T-023
-- needs: D-21 (design sign-off, batch 2)
+- needs: D-21 (design sign-off batch 2)
 - acceptance: status, last sync, token expiry, last error per connection; admin_technical sees no content or figures (Playwright check).
 
 ### T-046 Sync runs, job failures and audit viewer
 - status: proposed
 - depends: T-045, T-014
-- needs: D-21 (design sign-off, batch 2)
+- needs: D-21 (design sign-off batch 2)
 - acceptance: paginated sync run history and failures; audit viewer filtered by lane and actor, owner + admin only; no payload bodies shown.
 
 ### T-047 Lane policy and config editor (owner only)
 - status: proposed
 - depends: T-026, T-015
-- needs: D-21 (design sign-off, batch 2)
+- needs: D-21 (design sign-off batch 2)
 - acceptance: owner edits lane_config/policies with Zod validation and step-up MFA; every change versioned and audited; others are denied (RLS + UI test).
 
 ## Phase A5 — Connectors (PL-30 – PL-33)
@@ -682,19 +678,19 @@ T-080 joins W3 early. T-081 – T-097 form **track W12** once W6 – W8 are merg
 ### T-095 Finance dashboard UI
 - status: proposed
 - depends: T-081, T-088, T-024
-- needs: D-2, D-20 (design sign-off, batch 1)
+- needs: D-2, D-20 (design sign-off batch 1)
 - acceptance: Spec: `docs/specs/finance.md` §10. KPI cards from the lane_config KPI list (ids in spec §4.1) with source chips, freshness and as-of; "Book balance" label visible; data fetched over HTTPS only, no Realtime (QB-19); the shared QuickBooks error banner (T-197, with "Contact support") and the class-tracking-off warning shown when they apply; customer churn card shows "Pending definition (D-3)" while status is `pending_definition`; MTD figures labelled; Playwright test incl. AAL1 redirect and viewer denial.
 
 ### T-096 Finance detail pages
 - status: proposed
 - depends: T-095
-- needs: D-21 (design sign-off, batch 2)
+- needs: D-21 (design sign-off batch 2)
 - acceptance: AR/AP aging tables (TanStack Table), P&L, MRR/churn and subscriber charts (Recharts), controls panel; all values from the query layer.
 
 ### T-097 Weekly report and tie-out pages
 - status: proposed
 - depends: T-091, T-094, T-096
-- needs: D-21 (design sign-off, batch 2)
+- needs: D-21 (design sign-off batch 2)
 - acceptance: Spec: `docs/specs/finance.md` §10. `/finance/reports` and `/finance/tie-out`: view and sign off the weekly snapshot (step-up, shows the hash signed), view tie-out history, enter reference figures and reconciliation dates; finance_operator and owner only.
 
 ## Phase A8 — Assistant (PL-38)
@@ -734,7 +730,7 @@ T-100 – T-103 are **track W4**, parallel with the connectors (after T-017). T-
 ### T-106 Assistant UI
 - status: proposed
 - depends: T-105, T-024
-- needs: D-21 (design sign-off, batch 2)
+- needs: D-21 (design sign-off batch 2)
 - acceptance: Spec: `docs/specs/assistant.md` §4. Chat page with lane chip, streaming text, tool-progress line, source chips with freshness, grounding warning chip, conversation list and delete, iPhone layout, disabled state when no categories are allowed; Playwright test.
 
 ### T-194 Assistant golden-question eval set
@@ -785,7 +781,7 @@ T-110, T-111 and T-114 are **track W5**, parallel with the connectors. T-112 nee
 ### T-115 Approval Center UI
 - status: proposed
 - depends: T-112, T-024
-- needs: D-20 (design sign-off, batch 1)
+- needs: D-20 (design sign-off batch 1)
 - acceptance: Spec: `docs/specs/approvals.md` §10. `/approvals` (Pending, Deferred, History) and `/approvals/[id]` showing the exact content as executed, sending account, recipients with new-recipient/external/bcc flags, target, server-built consequences, the assistant's rationale labelled unverified, short hash and status timeline; approve (step-up modal showing the hash), edit (new proposal + diff), reject, defer; "Not live" banner; works on iPhone width; push deep link; Playwright incl. step-up.
 
 ### T-116 Executor: email send
@@ -820,7 +816,7 @@ T-110, T-111 and T-114 are **track W5**, parallel with the connectors. T-112 nee
 ### T-122 Priority inbox UI
 - status: proposed
 - depends: T-121, T-024
-- needs: D-21 (design sign-off, batch 2)
+- needs: D-21 (design sign-off batch 2)
 - acceptance: list filtered by lane/priority; thread view fetches bodies live (no persistence, `no-store`); Playwright.
 
 ### T-123 Comms tools
@@ -842,7 +838,7 @@ T-110, T-111 and T-114 are **track W5**, parallel with the connectors. T-112 nee
 ### T-131 Unified calendar UI
 - status: proposed
 - depends: T-130, T-024
-- needs: D-21 (design sign-off, batch 2)
+- needs: D-21 (design sign-off batch 2)
 - acceptance: day/week views across lanes the user may see; Playwright.
 
 ### T-133 Calendar tools
@@ -872,7 +868,7 @@ T-160/T-161 can run in parallel after T-025. T-162/T-163 wait for W12, W13 and t
 ### T-163 Home page
 - status: proposed
 - depends: T-162, T-095, T-115
-- needs: D-20 (design sign-off, batch 1)
+- needs: D-20 (design sign-off batch 1)
 - acceptance: briefing, attention queue, today's meetings, approvals waiting, lane tiles; Playwright.
 
 ## Phase A13 — Pilot hardening and go-live (PL-45 – PL-50)
@@ -960,7 +956,7 @@ Search connectors for the unconfirmed mail provider (T-186 or T-187) can be drop
 ### T-141 Search UI + tools
 - status: proposed
 - depends: T-140, T-101, T-024
-- needs: D-21 (design sign-off, batch 2)
+- needs: D-21 (design sign-off batch 2)
 - acceptance: search page with source links; `search_documents`, `read_document` (live fetch, untrusted wrapping).
 
 ### T-132 Meeting prep pack
@@ -985,8 +981,7 @@ Search connectors for the unconfirmed mail provider (T-186 or T-187) can be drop
 ### T-150 Projects rollup
 - status: proposed
 - depends: T-070, T-024, T-101
-- needs: D-21 (design sign-off, batch 2)
-- note (Nov 4, 2026): moved to **Release A** (Saurabh: Projects is pulled from monday.com in the pilot). Also feeds "Projects at a glance" on Home (T-163). See `docs/plan-review.md` §7 (Nov 4, 2026).
+- needs: D-21 (design sign-off batch 2)
 - acceptance: view of monday.com items by Company/project with Exec Priority, overdue and owner; `get_tasks` tool.
 
 ### T-151 Commitments schema
@@ -1008,7 +1003,7 @@ Search connectors for the unconfirmed mail provider (T-186 or T-187) can be drop
 ### T-154 Commitments UI + tool
 - status: proposed
 - depends: T-153, T-024
-- needs: D-21 (design sign-off, batch 2)
+- needs: D-21 (design sign-off batch 2)
 - acceptance: list due/overdue; accept/dismiss; `get_commitments` tool; feeds briefing.
 
 ### T-155 Memory items + explicit-only write path
@@ -1019,7 +1014,7 @@ Search connectors for the unconfirmed mail provider (T-186 or T-187) can be drop
 ### T-156 Memory settings UI + assistant integration
 - status: proposed
 - depends: T-155, T-106
-- needs: D-21 (design sign-off, batch 2)
+- needs: D-21 (design sign-off batch 2)
 - acceptance: view/delete per lane in Settings; assistant reads only current-lane memory; audited deletes.
 
 ### T-183 Commitments in briefing and meeting prep

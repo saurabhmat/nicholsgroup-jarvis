@@ -4,6 +4,7 @@ import { PACKAGE_ID } from "@nichols/core";
 import "./env-check";
 import "./globals.css";
 import { THEME_INIT } from "@nichols/ui";
+import { BRAND } from "@/lib/brand";
 
 // next/font downloads these at build time and self-hosts them; browsers make no requests to Google.
 // The CSS variables are read by the theme in @nichols/ui (--heading-font, --body-font).
@@ -19,7 +20,7 @@ const sourceSerif = Source_Serif_4({
 });
 
 export const metadata: Metadata = {
-  title: "Jarvis · Executive Portal",
+  title: `${BRAND.wordmark} · ${BRAND.product}`,
   description: "Executive portal",
 };
 
