@@ -33,7 +33,7 @@ test("a member sees the shell, a switcher with only the allowed lane, and a 404 
   await expect(page).toHaveURL(/\/PKG\/inbox$/, { timeout: 30_000 }); // first visit compiles the route in next dev
   await expect(page.getByRole("heading", { name: "Inbox", level: 1 })).toBeVisible();
   await expect(page.getByText("Sample data")).toHaveCount(0);
-  await expect(page.getByText("Pub K Group").first()).toBeVisible(); // eyebrow: the company name comes from the lane record
+  await expect(page.locator("[data-slot=page-eyebrow]:visible")).toContainText("Pub K Group"); // from the lane record
 
   // Page structure per the signed-off prototype (D-20): shared header, sections as empty states, no figures.
   await page.goto("/PKG/finance");

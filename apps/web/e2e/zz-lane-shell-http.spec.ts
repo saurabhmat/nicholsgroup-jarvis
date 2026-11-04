@@ -46,7 +46,8 @@ test("a member sees only the lanes that are enabled and allowed, and 404 for eve
   // serves them yet, so the app answers as for any unknown path; what matters is that the proxy's lane 404 is not used.
   for (const path of ["/robots.txt", "/sitemap.xml", "/.well-known/x", "/manifest.webmanifest"]) {
     const res = await c.get(path);
-    expect(await res.text(), path).not.toContain("This page does not exist, or you do not have access to it.");
+    // The app's own not-found page loads Next assets; the proxy's plain 404 body has none (it shares the wording).
+    expect(await res.text(), path).toContain("/_next/");
   }
   // Only the canonical lane code is a lane: lowercase and non-canonical encodings are refused with the proxy's 404,
   // which is never cached or shared.

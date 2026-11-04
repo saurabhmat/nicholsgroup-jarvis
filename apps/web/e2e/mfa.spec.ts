@@ -47,7 +47,7 @@ test("a member of another lane is refused at AAL2", async ({ page }, info) => {
   test.skip(info.project.name !== "desktop", "the outsider persona is enrolled once per run");
   await signInWithEmailCode(page, "outsider@example.test");
   await completeMfa(page, "outsider@example.test");
-  await expect(page.getByText("no company access")).toBeVisible();
+  await expect(page.getByText("no company access")).toBeVisible({ timeout: 30_000 }); // first compile of "/"
   const res = await page.request.get("/api/lanes/PKG");
   expect(res.status()).toBe(403);
   expect(await res.json()).toEqual({ error: "forbidden" });

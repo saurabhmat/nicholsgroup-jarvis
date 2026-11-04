@@ -297,7 +297,7 @@ T-010 – T-017 are the serial spine. After T-017: auth/shell (T-018 – T-026) 
 - acceptance: authenticated layout, lane switcher limited to allowed lanes, module placeholder routes; current lane in URL; Playwright test that a non-member lane is not listed and its URL returns 404/403.
 
 ### T-024 Navigation per approved prototype
-- status: approved
+- status: done
 - depends: T-023
 - needs: D-20 (design sign-off batch 1)
 - acceptance: navigation and page structure match the signed-off prototype.
