@@ -89,6 +89,7 @@ These tasks have all their dependencies done and all their `needs` checked. A hu
 - T-010 – T-017 — approved by Saurabh Oct 31, 2026 ("continue with the remaining code"); built on the combined branch `agent/pilot-build`.
 - T-031 – T-035 (connector chain) and T-039 (raw source records) — approved by Saurabh Nov 2, 2026 ("approve the connector chain"); built on `agent/pilot-build`.
 - T-005, T-007, T-030, T-022 — approved Oct 28, 2026. Build order: T-005 first, then T-007 in the main worktree, with T-030 and T-022 in parallel worktrees.
+- T-038, T-040, T-061, T-062 (sync skeleton, token health, comms/calendar index tables, mail/calendar/docs interfaces) — approved by Saurabh Nov 4, 2026; built on `agent/pilot-build`.
 - T-050, T-055, T-036 (QuickBooks OAuth, finance schema part 1, webhook receiver) — approved by Saurabh Nov 4, 2026 ("yes"); built on `agent/pilot-build`.
 - T-023, T-024 (app shell, navigation) — approved by Saurabh Nov 4, 2026 ("approved all points", D-20 batch 1); built on `agent/pilot-build`.
 - T-003 (imports T-005's secret-pattern list) — approved Oct 24, 2026; in progress in its own worktree.
@@ -105,7 +106,7 @@ These tasks have all their dependencies done and all their `needs` checked. A hu
 - [x] H-005 Intuit developer app + sandbox company (PL-16). Done Oct 28, 2026: one Intuit app "Jarvis" (QuickBooks Online and Payments, scope `com.intuit.quickbooks.accounting` only) serves every company; each company file connects separately through the in-app OAuth flow (own realmId + tokens per lane). Sandbox keys and `INTUIT_ENVIRONMENT=sandbox`, `INTUIT_REDIRECT_URI=http://localhost:3000/api/connect/qbo/callback` are in `.env.local`; a sandbox company exists. Details in `docs/plan-review.md` §7 (Oct 28)
 - [ ] H-006 Stripe restricted read-only key (test mode first, then live for staging) + webhook signing secret (PL-17)
 - [ ] H-007 GoHighLevel Private Integration token (read-only scopes) + location ID (PL-18)
-- [ ] H-008 Mail/calendar/docs API permissions for pub-k.org: Google OAuth client (Internal app type) with Gmail/Calendar/Drive scopes, **or** Entra app with admin consent for Mail/Calendars/Files/Sites read (PL-19)
+- [ ] H-008 Mail/calendar/docs API permissions for pub-k.org (Google, D-1 decided Nov 4, 2026): Google OAuth client (Internal app type) in the pub-k.org Google Cloud project with read-only Gmail, Calendar and Drive scopes; client ID and secret into `.env.local` as `GOOGLE_OAUTH_CLIENT_ID` / `GOOGLE_OAUTH_CLIENT_SECRET` (never in chat) (PL-19)
 - [ ] H-009 monday.com API token (IT workspace); Notion internal integration shared to the target pages/databases (PL-20)
 - [x] H-010 Vercel project linked to the repo (Oct 24, 2026), with **Root Directory = `apps/web`** and **"Include files outside the root directory"** turned on; production branch `main`; a Preview deployment per PR (no real-data secrets since Oct 28, 2026; see H-023); Production is the only real-data environment since Oct 31, 2026 (no staging); Vercel Authentication on for Preview and Production; env vars set by Saurabh in the dashboard. Production-domain DNS moved to H-021 (PL-10)
 - [ ] H-021 DNS for the production domain once D-5 is decided (split out of H-010)
@@ -146,7 +147,7 @@ These tasks have all their dependencies done and all their `needs` checked. A hu
 - [x] H-019 Agents can read `.env.example` (deny rule narrowed Oct 24, 2026; real env files still blocked). Publishable/secret rename and cleanup applied Oct 24 and mirrored in Vercel Preview (see `docs/plan-review.md` §7).
 
 ### Decisions (details and options in `docs/plan-review.md`)
-- [ ] D-1 pub-k.org provider: Google Workspace or Microsoft 365 (pilot-scope open decision 1). Both are built behind one interface meanwhile.
+- [x] D-1 pub-k.org provider (pilot-scope open decision 1). Decided Nov 4, 2026 by Saurabh: **Google Workspace for Pub K Group**. Release A builds the Google tasks (T-063 – T-065, search T-186); the Microsoft tasks (T-066 – T-068, T-187) move to Release B or later and stay behind the same interface for companies on Microsoft 365. The provider is per lane in `lane_config`, never in code (rule 2). Next human items: H-008 (Google OAuth client) and H-013 (Pub/Sub for Gmail watch).
 - [x] D-2 Pilot KPI list (Oct 24, 2026): cash (book balance), AR total + AR >30 days, AP due ≤14 days, P&L MTD/YTD, MRR, monthly churn, paid subscribers (GoHighLevel, new/cancelled this week), controls (unreconciled >30 days, disconnected feeds, uncategorized transactions). Details in `docs/plan-review.md` §7
 - [ ] D-3 GoHighLevel "paid subscriber" definition (tag, pipeline stage or product)
 - [x] D-4 Roles: Robert owner, Saurabh admin_technical, Sophie finance_operator (pilot-scope decision 4)
@@ -357,7 +358,7 @@ T-010 – T-017 are the serial spine. After T-017: auth/shell (T-018 – T-026) 
 - acceptance: Inngest client, `/api/inngest` route, typed event schemas where `laneId` is required (type test proves events without it fail to compile); runs against the local dev server.
 
 ### T-038 conn.sync skeleton
-- status: proposed
+- status: approved
 - depends: T-037, T-031, T-030
 - acceptance: `conn.sync` with concurrency key = connection id, retries, cursor persistence, `sync_runs` start/finish/error logging; tested with a mock provider, including one connection failing without blocking another.
 
@@ -367,7 +368,7 @@ T-010 – T-017 are the serial spine. After T-017: auth/shell (T-018 – T-026) 
 - acceptance: `raw.source_records` (lane_id, provider, object_type, external_id, payload jsonb, payload_hash, synced_at) + RLS + pgTAP; upsert helper; a guard rejects records from comms/docs providers that contain body fields unless lane policy `store_content_bodies` is true (test).
 
 ### T-040 conn.token_health and subscriptions_renew skeleton
-- status: proposed
+- status: approved
 - depends: T-038
 - acceptance: daily job flags tokens expiring within 7 days and failing health checks; renewal job interface for push subscriptions; both update `core.connections` and emit a notification event (T-181 consumes it).
 
@@ -514,12 +515,12 @@ Scope: read-only, Accounting API only (no Payments, no Payroll); never create, u
 - acceptance: Spec: `docs/specs/finance.md` §4.3, §5. Rule from lane_config (tag / pipeline stage / product, combinable) evaluated into `fin.subscriber_status` and append-only `fin.subscriber_events` (new, cancelled, trial→paid, failed payment; carries `rule_version`) so point-in-time membership and customer churn can be rebuilt; unit tests per rule type; APK/PKI tags/products excluded via the lane_config mapping (D-17); no amounts copied from GHL; documents the backfill depth available from GHL (spec Q-F7); registers its `fin.sync` schedule on the T-090 pattern.
 
 ### T-061 Comms and calendar index tables
-- status: proposed
+- status: approved
 - depends: T-013
 - acceptance: `comms.message_index` (metadata only, per architecture §6 M5, priority fields, optional approved summary) and `cal.event_index`; pgTAP column check proves no body column exists; RLS + pgTAP; registered with retention purge.
 
 ### T-062 Mail/calendar/docs provider interfaces + mocks
-- status: proposed
+- status: approved
 - depends: T-030
 - acceptance: `MailProvider`, `CalendarProvider`, `DocumentProvider` (metadata sync, live body fetch, live search, watch/renew, `prepareWrite` on the provider; execution only through a `ConnectorWriter` from `@nichols/connectors/writer`, per the T-030 split); mock implementation; contract tests both real providers must pass.
 
