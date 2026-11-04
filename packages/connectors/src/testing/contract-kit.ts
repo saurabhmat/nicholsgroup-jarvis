@@ -52,10 +52,17 @@ export interface ContractHarness {
    */
   disconnectForTest?: (laneId: LaneId, conn: AnyConnection) => Promise<AnyConnection>;
   /**
-   * Optional: a lane-bound connection of ANOTHER provider in the same lane, with a stored credential, and a count of
-   * every request the provider mock has received. The kit proves the connector refuses it before any request.
+   * Required unless `foreignProviderOptOut` is set (security review L2): a lane-bound connection of ANOTHER provider
+   * in the same lane, with a stored credential, and a count of every request the provider mock has received. The kit
+   * proves the connector refuses it before any request. A connector whose credentials are keyed by connection id (all
+   * real ones) must supply it, otherwise a missing provider guard would go unnoticed.
    */
   foreignProviderConnection?: () => Promise<AnyConnection>;
+  /**
+   * The explicit exception: why this connector cannot be given a foreign-provider connection (at least 20 characters,
+   * reviewed like a lint disable). The kit still fails if neither this nor `foreignProviderConnection` is set.
+   */
+  foreignProviderOptOut?: string;
   externalRequestCount?: () => number;
   /** Optional: true while the foreign connection's credential is still stored (a refused call must not touch it). */
   foreignCredentialIntact?: () => boolean;
@@ -213,8 +220,17 @@ async function expectGuarded(
 export const contractChecks: readonly ContractCheck[] = [
   {
     name: "refuses a connection of another provider before any request",
-    applies: (h) => typeof h.foreignProviderConnection === "function",
     run: async (h) => {
+      if (typeof h.foreignProviderConnection !== "function") {
+        const reason = h.foreignProviderOptOut;
+        if (typeof reason === "string" && reason.trim().length >= 20) {
+          console.warn(`contract kit: ${h.connector.provider} OPTED OUT of the foreign-provider check: ${reason.trim()}`);
+          return;
+        }
+        throw new Error(
+          "contract kit: supply foreignProviderConnection (a same-lane connection of another provider) so the provider guard is tested, or set foreignProviderOptOut to a reason of at least 20 characters",
+        );
+      }
       const foreign = await need(h.foreignProviderConnection, "foreignProviderConnection")();
       expect(foreign.provider, "the foreign connection must belong to another provider").not.toBe(h.connector.provider);
       expect(foreign.lane_id).toBe(h.laneId);

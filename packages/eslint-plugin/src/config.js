@@ -31,6 +31,7 @@ import { noSupabaseSecret } from "./rules/no-supabase-secret.js";
 import { noTestOnlyImport } from "./rules/no-test-only-import.js";
 import { noVaultAccess } from "./rules/no-vault-access.js";
 import { noVendorSdk } from "./rules/no-vendor-sdk.js";
+import { noWriteSubpathImport } from "./rules/no-write-subpath-import.js";
 
 export const plugin = {
   meta: { name: "@nichols/eslint-plugin", version: "0.1.0" },
@@ -47,6 +48,7 @@ export const plugin = {
     "no-vault-access": noVaultAccess,
     "no-cross-package-relative": noCrossPackageRelative,
     "no-test-only-import": noTestOnlyImport,
+    "no-write-subpath-import": noWriteSubpathImport,
   },
 };
 
@@ -70,6 +72,9 @@ export const VAULT_NAMES_ALLOWED = [...TOKEN_VAULT, "packages/core/src/db/types.
  * executor and the token vault. Module jobs join this list deliberately (reviewed) when they are written.
  */
 export const JOB_RUNNERS = [...INNGEST_CLIENT, ...APPROVALS, ...TOKEN_VAULT];
+/** The connectors' write side (rule 5): only the approvals module imports it, by package name or by relative path. */
+export const WRITE_SUBPATHS = ["@nichols/connectors/write"];
+export const WRITE_DIRS = ["packages/connectors/src/write", "packages/connectors/dist/write"];
 /** Test harness modules: test files only (T-034), plus the harness's own sources. */
 export const TEST_ONLY_MODULES = ["msw", "@nichols/connectors/testing"];
 export const TEST_HARNESS = ["packages/connectors/src/testing"];
@@ -215,6 +220,7 @@ export function nicholsConfig({ root }) {
         "nichols/no-vault-access": ["error", { allow: VAULT_NAMES_ALLOWED }],
         "nichols/no-cross-package-relative": "error",
         "nichols/no-test-only-import": ["error", { modules: TEST_ONLY_MODULES, allow: TEST_HARNESS }],
+        "nichols/no-write-subpath-import": ["error", { specifiers: WRITE_SUBPATHS, dirs: WRITE_DIRS, allow: APPROVALS }],
         // The boundary rules cannot be switched off from inside a file.
         "@eslint-community/eslint-comments/no-restricted-disable": ["error", "nichols/*"],
         "@eslint-community/eslint-comments/no-unlimited-disable": "error",

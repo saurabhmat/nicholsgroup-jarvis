@@ -4,7 +4,7 @@ import { RateLimiter } from "../http/rate-limit";
 import { http, HttpResponse, useMockServer } from "../testing/msw/index";
 import { API_SANDBOX, createFakeIntuit, FAKE_REALM } from "../testing/msw/quickbooks/handlers";
 import { createQboHarness } from "../testing/quickbooks-harness";
-import { createConnectionCheck } from "./connection-check";
+import { createConnectionCheck, MAX_INTUIT_TID_LENGTH } from "./connection-check";
 
 const server = useMockServer();
 afterEach(() => RateLimiter.resetForTests());
@@ -46,6 +46,21 @@ describe("connection check", () => {
     expect(intuit.state.apiRequests.map((r) => r.method)).toEqual(["GET"]);
     expect(intuit.state.revokeRequests).toHaveLength(0);
     expect(intuit.state.tokenRequests.filter((t) => t.grant !== "authorization_code")).toHaveLength(0);
+  });
+
+  it("clamps an over-long intuit_tid to the 256 characters the Settings client accepts", async () => {
+    const { h } = setup();
+    const conn = await h.connectViaCallback("PKG");
+    const long = "t".repeat(1000);
+    const check = createConnectionCheck({
+      find: async () => conn,
+      connector: { health: async () => ({ ok: true, status: "ok", checked_at: "2026-11-04T10:00:00.000Z", provider_tid: long }) as never },
+      now: () => h.clock.t,
+    });
+    const res = await check("PKG");
+    expect(res.status).toBe("ok");
+    expect(res.intuit_tid).toHaveLength(MAX_INTUIT_TID_LENGTH);
+    expect(res.intuit_tid).toBe(long.slice(0, 256));
   });
 
   it("reconnect_required when Intuit rejects the refresh token", async () => {

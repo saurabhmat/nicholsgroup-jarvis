@@ -12,6 +12,8 @@ import {
   RESTRICTED_NAMES,
   TYPE_IMPORTS_ALLOWED,
   VENDORS,
+  WRITE_DIRS,
+  WRITE_SUBPATHS,
 } from "./config.js";
 import { noEnvResultCopy } from "./rules/no-env-result-copy.js";
 import { noExternalFetch } from "./rules/no-external-fetch.js";
@@ -23,6 +25,7 @@ import { noServerSecretInClient } from "./rules/no-server-secret-in-client.js";
 import { noSupabaseSecret } from "./rules/no-supabase-secret.js";
 import { noVaultAccess } from "./rules/no-vault-access.js";
 import { noVendorSdk } from "./rules/no-vendor-sdk.js";
+import { noWriteSubpathImport } from "./rules/no-write-subpath-import.js";
 
 RuleTester.describe = describe;
 RuleTester.it = it;
@@ -394,5 +397,26 @@ tester.run("no-vault-access", noVaultAccess, {
     { code: `const t = " Vault.secrets ";`, filename: WEB, options: [{ allow: [] }], errors: err("vault") },
     { code: "db.rpc(`connection_token_${x}`);", filename: FINANCE, options: [{ allow: [] }], errors: err("vault") },
     { code: `db.from("connection_secrets");`, filename: AI, options: [{ allow: [] }], errors: err("vault") },
+  ],
+});
+
+const WRITE = [{ specifiers: WRITE_SUBPATHS, dirs: WRITE_DIRS, allow: ["packages/modules/approvals"] }];
+tester.run("no-write-subpath-import", noWriteSubpathImport, {
+  valid: [
+    { code: `import { quickbooksWriter } from "@nichols/connectors/write";`, filename: APPROVALS, options: WRITE },
+    { code: `import { x } from "@nichols/connectors/oauth";`, filename: WEB, options: WRITE },
+    { code: `import { x } from "@nichols/connectors/writer-tools";`, filename: WEB, options: WRITE },
+    { code: `import { x } from "../writers/x";`, filename: CONNECTOR, options: WRITE },
+    { code: `import { x } from "./writer";`, filename: at("packages/connectors/src/quickbooks/index.ts"), options: WRITE },
+  ],
+  invalid: [
+    { code: `import { w } from "@nichols/connectors/write";`, filename: WEB, options: WRITE, errors: err("write") },
+    { code: `import type { W } from "@nichols/connectors/write";`, filename: WEB, options: WRITE, errors: err("write") },
+    { code: `export * from "@nichols/connectors/write/index";`, filename: FINANCE, options: WRITE, errors: err("write") },
+    { code: `const w = require("@nichols/connectors/write");`, filename: FINANCE, options: WRITE, errors: err("write") },
+    { code: `import { w } from "../../../../../packages/connectors/src/write/index";`, filename: at("apps/web/app/api/x/route.ts"), options: WRITE, errors: err("write") },
+    { code: `import { w } from "../write";`, filename: at("packages/connectors/src/quickbooks/x.ts"), options: WRITE, errors: err("write") },
+    { code: `import { w } from "../write.js";`, filename: at("packages/connectors/src/quickbooks/x.ts"), options: WRITE, errors: err("write") },
+    { code: `import { w } from "../../dist/write/index.js";`, filename: at("packages/connectors/src/quickbooks/x.ts"), options: WRITE, errors: err("write") },
   ],
 });

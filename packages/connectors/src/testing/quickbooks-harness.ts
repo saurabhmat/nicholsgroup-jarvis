@@ -17,6 +17,7 @@ import { createQboApi } from "../quickbooks/api";
 import { createQuickBooksConnector } from "../quickbooks/connector";
 import type { QboConnection } from "../quickbooks/guard";
 import { createQuickBooksRevoker, QBO_REVOKE_ACTION } from "../quickbooks/writer";
+import { computePayloadSha256 } from "../contract/writer";
 import { createDiscovery } from "../quickbooks/discovery";
 import { createQuickBooksOAuthProvider } from "../quickbooks/provider";
 import { createTokenManager } from "../quickbooks/token-manager";
@@ -76,6 +77,13 @@ export function createQboHarness(options: QboHarnessOptions) {
     async storeToken(laneId, conn, secret, expiresAt) {
       assertLaneBound(laneId, conn);
       const row = rowOf(laneId, conn);
+      // Twin of the unique index connections_one_lane_per_account (D-23) and of core.connection_token_store: a
+      // connection becomes usable (active) only if no other usable connection holds the account (case-insensitive).
+      // Disconnected and pending rows hold nothing. Nothing is stored when it is refused.
+      const holder = [...rows.values()].find(
+        (r) => r.id !== row.id && r.provider === row.provider && r.external_account_id.toLowerCase() === row.external_account_id.toLowerCase() && r.status !== "disconnected" && r.status !== "pending",
+      );
+      if (holder) throw new ConnectorError({ kind: "forbidden", message: ACCOUNT_IN_USE_MESSAGE });
       secrets.set(row.id, secret.reveal());
       row.status = "active";
       row.token_expires_at = expiresAt ? expiresAt.toISOString() : null;
@@ -111,9 +119,7 @@ export function createQboHarness(options: QboHarnessOptions) {
     async ensureConnection(laneId: string, provider: string, externalAccountId: string) {
       let row = [...rows.values()].find((r) => r.lane_id === laneId && r.provider === provider && r.external_account_id === externalAccountId);
       if (!row) {
-        // Twin of the unique index connections_one_lane_per_account (D-23): one connected lane per provider account.
-        const holder = [...rows.values()].find((r) => r.provider === provider && r.external_account_id === externalAccountId && r.status !== "disconnected");
-        if (holder) throw new ConnectorError({ kind: "forbidden", message: ACCOUNT_IN_USE_MESSAGE });
+        // A new row is `pending`, which holds no account (see storeToken: the refusal comes when it becomes active).
         row = {
           id: randomUUID(),
           lane_id: laneId,
@@ -196,17 +202,18 @@ export function createQboHarness(options: QboHarnessOptions) {
   });
   const APPROVER = "00000000-0000-4000-8000-0000000000b1";
   /** An approved revoke action for a connection (what the approvals module will hand the writer; T-193 brands it). */
-  const approvedRevoke = (laneId: string, conn: { id: string }, approvedBy: string = APPROVER) => ({
-    id: randomUUID(),
-    lane_id: laneId,
-    connection_id: conn.id,
-    action_type: QBO_REVOKE_ACTION,
-    target: {},
-    payload: {},
-    payload_schema_version: 1,
-    payload_sha256: "0".repeat(64),
-    approved_by: approvedBy,
-  });
+  const approvedRevoke = (laneId: string, conn: { id: string; external_account_id: string }, approvedBy: string = APPROVER) => {
+    const action = {
+      id: randomUUID(),
+      lane_id: laneId,
+      connection_id: conn.id,
+      action_type: QBO_REVOKE_ACTION,
+      target: { realm_id: conn.external_account_id },
+      payload: {},
+      payload_schema_version: 1,
+    };
+    return { ...action, payload_sha256: computePayloadSha256(action), approved_by: approvedBy };
+  };
   /** Test-only disconnect: the production writer, as the approvals module would call it. */
   const disconnectForTest = async (laneId: string, conn: QboConnection) => {
     await revoker.run(laneId, conn, approvedRevoke(laneId, conn));

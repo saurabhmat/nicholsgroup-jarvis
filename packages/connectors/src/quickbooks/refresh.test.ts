@@ -171,7 +171,7 @@ describe("concurrent refresh does not lose the rotating token", () => {
   });
 
   it("the refresh POST is not retried when the response is lost; if the store moved on meanwhile, that set is used", async () => {
-    const { intuit, h, conn } = await setup({ strictRotation: true });
+    const { h, conn } = await setup({ strictRotation: true });
     const before = h.secrets.get(conn.id);
     let posts = 0;
     server.use(
@@ -187,7 +187,6 @@ describe("concurrent refresh does not lose the rotating token", () => {
     const token = await h.tokens.accessToken(LANE, conn);
     expect(posts).toBe(1);
     expect(token.reveal()).toBe("synthetic-winner-access");
-    void intuit;
   });
 
   it("a timeout with nothing new in the store reports the failure (not reconnect_required) and does not retry", async () => {

@@ -332,6 +332,8 @@ export function mockHarness(options: MockConnectorOptions = {}): ContractHarness
     externalWriteCount: mock.externalWriteCount,
     markReconnectRequired: mock.markReconnectRequired,
     simulateInvalidGrant: mock.simulateInvalidGrant,
+    // The mock keeps connections in memory by id and has no provider-keyed Vault, so it has no provider guard to test.
+    foreignProviderOptOut: "in-memory mock connector: connections are not keyed by provider, there is no Vault to guard",
     secrets: [MOCK_SECRET_CANARY],
   };
 }

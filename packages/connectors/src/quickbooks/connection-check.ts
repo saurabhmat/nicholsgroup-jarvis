@@ -6,6 +6,9 @@ import type { LaneId } from "@nichols/core";
 import type { Connector } from "../contract/connector";
 import type { LaneBoundConnection } from "../contract/lane-bound";
 
+/** The longest `intuit_tid` handed on; the Settings client refuses anything longer (apps/web connection-check-view). */
+export const MAX_INTUIT_TID_LENGTH = 256;
+
 export type ConnectionCheckStatus = "ok" | "reconnect_required" | "not_connected" | "error";
 export type ConnectionCheck = { status: ConnectionCheckStatus; checked_at: string; intuit_tid: string | null };
 
@@ -31,7 +34,7 @@ export function createConnectionCheck(deps: ConnectionCheckDeps): (laneId: LaneI
     try {
       const h = await deps.connector.health(laneId, conn as LaneBoundConnection<"quickbooks">);
       const status: ConnectionCheckStatus = h.ok ? "ok" : h.status === "reconnect_required" ? "reconnect_required" : "error";
-      return { status, checked_at: h.checked_at, intuit_tid: h.provider_tid ?? null };
+      return { status, checked_at: h.checked_at, intuit_tid: typeof h.provider_tid === "string" ? h.provider_tid.slice(0, MAX_INTUIT_TID_LENGTH) : null };
     } catch {
       return { status: "error", checked_at: checked_at(), intuit_tid: null };
     }

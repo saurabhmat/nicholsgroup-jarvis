@@ -9,8 +9,16 @@
 // invalid_token/invalid_grant ("already revoked or expired") deletes them; 401/403 (possibly our own wrong client
 // credentials), 5xx and timeouts keep the tokens and fail, so the grant is never left live with nobody holding it.
 // The approving user goes to the audit row of the Vault revocation.
+//
+// Verified before anything is sent to Intuit or changed in the Vault (security W1): the action's `payload_sha256` is
+// recomputed (JCS + SHA-256 over lane, action type, connection, target, payload, schema version) and compared in
+// constant time, and `target.realm_id` must be the connection's own QuickBooks company. A tampered payload or hash, or
+// a target naming another company, is refused with `invalid_input`. Remaining gap until T-193: `approved_by` is
+// carried by the caller and only checked to be a UUID; the approvals executor must read it from the approval row
+// (`act.proposed_actions.approved_by`), which this connector cannot verify on its own.
+import { timingSafeEqual } from "node:crypto";
 import type { LaneId } from "@nichols/core";
-import type { ConnectorWriter, ApprovedActionShape } from "../contract/writer";
+import { computePayloadSha256, type ConnectorWriter, type ApprovedActionShape } from "../contract/writer";
 import { ConnectorError, isConnectorError, toConnectorError } from "../contract/errors";
 import { assertLaneBound, type LaneBoundConnection } from "../contract/lane-bound";
 import type { ExecResult } from "../contract/schemas";
@@ -49,6 +57,31 @@ export type QboWriterDeps = {
 const TRANSIENT_KINDS: ReadonlySet<string> = new Set(["transient", "timeout", "rate_limited"]);
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
+const refused = (message: string) => new ConnectorError({ kind: "invalid_input", message });
+
+/** Recomputes the approved hash; a missing, malformed or different hash (or an unhashable payload) is refused. */
+function assertPayloadHash(action: QboApprovedAction): void {
+  let expected: string;
+  try {
+    expected = computePayloadSha256(action);
+  } catch {
+    throw refused("The approved action cannot be verified");
+  }
+  const given = action.payload_sha256;
+  if (typeof given !== "string" || !/^[0-9a-f]{64}$/.test(given) || !timingSafeEqual(Buffer.from(given, "utf8"), Buffer.from(expected, "utf8"))) {
+    throw refused("The approved action does not match its approval");
+  }
+}
+
+/** The action's target must be exactly this connection's QuickBooks company. */
+function assertTargetIsConnection(action: QboApprovedAction, row: LaneBoundConnection<string>): void {
+  const target = action.target as Record<string, unknown> | null;
+  const keys = target && typeof target === "object" ? Object.keys(target) : [];
+  if (keys.length !== 1 || keys[0] !== "realm_id" || target?.realm_id !== row.external_account_id) {
+    throw refused("The approved action targets another company");
+  }
+}
+
 /**
  * The revoke-and-delete operation itself. Only `createQuickBooksWriter` (production, approvals-only) and the contract
  * kit's test harness build one; a test fails if any other production file does.
@@ -68,8 +101,10 @@ export function createQuickBooksRevoker(deps: QboWriterDeps) {
       if (typeof action.approved_by !== "string" || !UUID.test(action.approved_by)) {
         throw new ConnectorError({ kind: "invalid_input", message: "The approving user is required" });
       }
+      assertPayloadHash(action);
       const row = await deps.connections.load(laneId, conn.id);
       assertQuickbooksConnection(row);
+      assertTargetIsConnection(action, row);
       const executed_at = () => new Date(now()).toISOString();
       if (row.status === "disconnected") return { outcome: "already_applied", external_id: null, executed_at: executed_at(), provider_tid: null };
 

@@ -3,6 +3,7 @@
 import { readFileSync } from "node:fs";
 import { afterEach, describe, expect, it } from "vitest";
 import { ConnectorError } from "../contract/errors";
+import { canonicalJson, computePayloadSha256 } from "../contract/writer";
 import { HealthStatusSchema } from "../contract/schemas";
 import { RateLimiter } from "../http/rate-limit";
 import { http, HttpResponse, useMockServer } from "../testing/msw/index";
@@ -164,7 +165,7 @@ describe("lanes", () => {
 });
 
 describe("revoke-and-delete is an approvals-only write (D-24), not a connector method", () => {
-  const ASSERT = (h: Awaited<ReturnType<typeof setup>>["h"], conn: { id: string }) => h.approvedRevoke(LANE, conn);
+  const ASSERT = (h: Awaited<ReturnType<typeof setup>>["h"], conn: { id: string; external_account_id: string }) => h.approvedRevoke(LANE, conn);
 
   it("the connector object has no disconnect and no write", async () => {
     const { h } = await setup();
@@ -211,7 +212,7 @@ describe("revoke-and-delete is an approvals-only write (D-24), not a connector m
     ["400 with another error", () => HttpResponse.json({ error: "invalid_request" }, { status: 400 }), "connection_unavailable"],
     ["503", () => new HttpResponse(null, { status: 503 }), "transient"],
   ])("a %s from the revoke call fails and keeps the Vault tokens", async (_name, respond, kind) => {
-    const { intuit, h, conn } = await setup();
+    const { h, conn } = await setup();
     const before = h.secrets.get(conn.id);
     server.use(http.post(REVOKE_URL, respond));
     const err = (await h.revoker.run(LANE, conn, ASSERT(h, conn)).catch((e: unknown) => e)) as ConnectorError;
@@ -220,7 +221,6 @@ describe("revoke-and-delete is an approvals-only write (D-24), not a connector m
     expect(h.secrets.get(conn.id)).toBe(before);
     expect(h.rows.get(conn.id)?.status).toBe("active");
     expect(h.stats.revokes).toBe(0);
-    void intuit;
   });
 
   it("a timeout fails and keeps the Vault tokens", async () => {
@@ -246,6 +246,78 @@ describe("revoke-and-delete is an approvals-only write (D-24), not a connector m
     expect(h.secrets.has(conn.id)).toBe(true);
   });
 
+  describe("the approved payload is verified before anything is sent or changed (security W1)", () => {
+    type H = Awaited<ReturnType<typeof setup>>["h"];
+    // Each refusal: invalid_input, no request to Intuit (not even a token refresh), Vault and row untouched.
+    const expectRefused = async (action: unknown, kind = "invalid_input") => {
+      const { intuit, h, conn } = await setup();
+      const before = { secret: h.secrets.get(conn.id), status: h.rows.get(conn.id)?.status, stores: h.stats.stores, rotations: h.stats.rotations };
+      const requests = intuit.state.revokeRequests.length;
+      const act = typeof action === "function" ? (action as (h: H, c: typeof conn) => unknown)(h, conn) : action;
+      await expect(h.revoker.run(LANE, conn, act as never)).rejects.toMatchObject({ info: { kind } });
+      expect(intuit.state.revokeRequests).toHaveLength(requests);
+      expect(h.secrets.get(conn.id)).toBe(before.secret);
+      expect(h.rows.get(conn.id)?.status).toBe(before.status);
+      expect([h.stats.revokes, h.stats.stores, h.stats.rotations]).toEqual([0, before.stores, before.rotations]);
+      expect(h.stats.revokeActors).toEqual([]);
+    };
+    const good = (h: H, conn: { id: string; external_account_id: string }) => ASSERT(h, conn);
+
+    it("a tampered payload (the hash no longer matches) is refused", async () => {
+      await expectRefused((h: H, c: { id: string; external_account_id: string }) => ({ ...good(h, c), payload: { also: "revoke everything" } }));
+    });
+
+    it("a tampered schema version (hash not recomputed) is refused", async () => {
+      await expectRefused((h: H, c: { id: string; external_account_id: string }) => ({ ...good(h, c), payload_schema_version: 2 }));
+    });
+
+    it("a tampered hash is refused", async () => {
+      await expectRefused((h: H, c: { id: string; external_account_id: string }) => ({ ...good(h, c), payload_sha256: "0".repeat(64) }));
+      await expectRefused((h: H, c: { id: string; external_account_id: string }) => ({ ...good(h, c), payload_sha256: good(h, c).payload_sha256.toUpperCase() }));
+      await expectRefused((h: H, c: { id: string; external_account_id: string }) => ({ ...good(h, c), payload_sha256: undefined }));
+    });
+
+    it("a target naming another company is refused even with a hash that matches it", async () => {
+      await expectRefused((h: H, c: { id: string; external_account_id: string }) => {
+        const action = { ...good(h, c), target: { realm_id: "9999999999999999" } };
+        return { ...action, payload_sha256: computePayloadSha256(action) };
+      });
+    });
+
+    it("a target with extra keys, or none, is refused even with a matching hash", async () => {
+      for (const target of [{} as Record<string, string | number>, { realm_id: FAKE_REALM, other: 1 }]) {
+        await expectRefused((h: H, c: { id: string; external_account_id: string }) => {
+          const action = { ...good(h, c), target };
+          return { ...action, payload_sha256: computePayloadSha256(action) };
+        });
+      }
+    });
+
+    it("a non-UUID approver is refused", async () => {
+      for (const approved_by of ["not-a-uuid", "", undefined, 7]) {
+        await expectRefused((h: H, c: { id: string; external_account_id: string }) => ({ ...good(h, c), approved_by }));
+      }
+    });
+
+    it("an unhashable payload is refused, not thrown as a raw error", async () => {
+      await expectRefused((h: H, c: { id: string; external_account_id: string }) => ({ ...good(h, c), payload: { n: Number.NaN } }));
+    });
+
+    it("the hash is the JCS one: key order does not matter, the value does (known vector)", () => {
+      const a = { lane_id: "PKG", action_type: "x", connection_id: "c", target: { b: 1, a: 2 }, payload: { z: [1, "é"], y: null }, payload_schema_version: 1 };
+      const b = { ...a, target: { a: 2, b: 1 }, payload: { y: null, z: [1, "é"] } };
+      expect(computePayloadSha256(a)).toBe(computePayloadSha256(b));
+      expect(canonicalJson(a.target)).toBe('{"a":2,"b":1}');
+      expect(canonicalJson({ n: [1.5, -0, 1e21, "\u2028"] })).toBe('{"n":[1.5,0,1e+21,"\u2028"]}');
+      expect(computePayloadSha256({ ...a, payload_schema_version: 2 })).not.toBe(computePayloadSha256(a));
+    });
+
+    it("an action built from the real hash still revokes (positive control)", async () => {
+      const { h, conn } = await setup();
+      expect(await h.revoker.run(LANE, conn, good(h, conn))).toMatchObject({ outcome: "accepted" });
+    });
+  });
+
   it("nothing in production code reaches the writer: only the writer module, the wiring and the writer-side subpath import it", async () => {
     const { readFileSync, readdirSync, statSync } = await import("node:fs");
     const { join, relative } = await import("node:path");
@@ -264,7 +336,8 @@ describe("revoke-and-delete is an approvals-only write (D-24), not a connector m
     const offenders = files
       .filter((f) => /quickbooksWriter|createQuickBooksWriter|createQuickBooksRevoker|@nichols\/connectors\/write\b/.test(readFileSync(f, "utf8")))
       .map((f) => relative(root, f))
-      .filter((f) => !f.startsWith("packages/modules/approvals/"))
+      // The approvals module is the allowed caller; the lint plugin spells the names out to forbid them.
+      .filter((f) => !f.startsWith("packages/modules/approvals/") && !f.startsWith("packages/eslint-plugin/src/"))
       .sort();
     expect(offenders).toEqual([
       "packages/connectors/src/quickbooks/index.ts",

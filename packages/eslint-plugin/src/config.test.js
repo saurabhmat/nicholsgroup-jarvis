@@ -143,6 +143,19 @@ const cases = [
   // T-039: raw records are written only inside packages/connectors
   ["rawRecords in apps/web", `export const r = vault.rawRecords;`, "apps/web/app/api/x/route.ts", "nichols/no-restricted-names"],
   ["rawRecords in a connector", `import { rawRecords } from "../vault/index";`, "packages/connectors/src/raw/index.ts", undefined],
+  // T-050 R-L1: the write subpath belongs to the approvals module only
+  ["write subpath in apps/web", `import { quickbooksWriter } from "@nichols/connectors/write";`, "apps/web/app/api/x/route.ts", "nichols/no-write-subpath-import"],
+  ["write subpath in a finance module", `import { quickbooksWriter } from "@nichols/connectors/write";`, "packages/modules/finance/src/x.ts", "nichols/no-write-subpath-import"],
+  ["write subpath type import in apps/web", `import type { QboApprovedAction } from "@nichols/connectors/write";`, "apps/web/lib/x.ts", "nichols/no-write-subpath-import"],
+  ["write subpath re-exported by a module", `export { quickbooksWriter } from "@nichols/connectors/write";`, "packages/modules/finance/src/x.ts", "nichols/no-write-subpath-import"],
+  ["write subpath required dynamically", `const w = await import("@nichols/connectors/write");`, "packages/core/src/x.ts", "nichols/no-write-subpath-import"],
+  ["write subpath inside connectors", `import { quickbooksWriter } from "@nichols/connectors/write";`, "packages/connectors/src/oauth/x.ts", "nichols/no-write-subpath-import"],
+  ["relative import of the write dir from apps/web", `import { quickbooksWriter } from "../../../../../packages/connectors/src/write/index";`, "apps/web/app/api/x/route.ts", "nichols/no-write-subpath-import"],
+  ["relative import of the write dir (no index) from a module", `import { quickbooksWriter } from "../../../../connectors/src/write";`, "packages/modules/finance/src/domain/x.ts", "nichols/no-write-subpath-import"],
+  ["relative import of the write dir from inside connectors", `import { quickbooksWriter } from "../write/index";`, "packages/connectors/src/quickbooks/x.ts", "nichols/no-write-subpath-import"],
+  ["relative import of the built write dir", `import { quickbooksWriter } from "../../../connectors/dist/write/index.js";`, "packages/modules/finance/src/x.ts", "nichols/no-write-subpath-import"],
+  ["write subpath in the approvals module", `import { quickbooksWriter } from "@nichols/connectors/write";`, "packages/modules/approvals/src/jobs/execute.ts", undefined],
+  ["a sibling directory named like write", `import { x } from "../writers/x";`, "packages/connectors/src/quickbooks/x.ts", undefined],
   ["oauth subpath in an app route", `import { oauthFlow } from "@nichols/connectors/oauth";`, "apps/web/app/api/connect/x/route.ts", undefined],
   ["redact subpath in apps/web", `import { redactText } from "@nichols/connectors/redact";`, "apps/web/instrumentation.ts", undefined],
 ];

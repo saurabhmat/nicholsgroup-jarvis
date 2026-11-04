@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { contractChecks, describeConnectorContract, runContractCheck, type ContractHarness } from "./contract-kit";
 import { createMockConnector, MOCK_SECRET_CANARY, mockHarness, type MockConnectorOptions } from "./mock-connector";
 import type { Connector } from "../contract/connector";
@@ -37,6 +37,23 @@ describe("contract kit catches broken connectors", () => {
     const names = contractChecks.map((c) => c.name);
     expect(new Set(names).size).toBe(names.length);
     expect(names.length).toBeGreaterThanOrEqual(18);
+  });
+
+  it("fails a connector that supplies neither the foreign-provider hooks nor an opt-out reason", async () => {
+    const h = { ...mockHarness(), foreignProviderOptOut: undefined };
+    expect(await runCheck("refuses a connection of another provider before any request", h)).toMatch(/foreignProviderConnection .* foreignProviderOptOut/);
+  });
+
+  it("fails an opt-out without a real reason, and accepts a reasoned one (with a loud warning)", async () => {
+    const name = "refuses a connection of another provider before any request";
+    expect(await runCheck(name, { ...mockHarness(), foreignProviderOptOut: "n/a" })).toMatch(/foreignProviderOptOut/);
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => undefined);
+    try {
+      expect(await runCheck(name, mockHarness())).toBe("(check passed)");
+      expect(warn).toHaveBeenCalledWith(expect.stringContaining("OPTED OUT of the foreign-provider check"));
+    } finally {
+      warn.mockRestore();
+    }
   });
 
   it("flags a connector that exposes executeWrite", async () => {

@@ -376,8 +376,8 @@ describe("one provider account per lane (D-23)", () => {
       laneId: "APK",
       message: expect.stringContaining("This QuickBooks company is already connected to another company in Jarvis."),
     });
-    // The first lane keeps its connection; the second lane has no row and no tokens.
-    expect([...h.rows.values()].map((r) => [r.lane_id, r.status])).toEqual([["PKG", "active"]]);
+    // The first lane keeps its connection; the second lane has a pending row (it holds nothing) and no tokens.
+    expect([...h.rows.values()].map((r) => [r.lane_id, r.status])).toEqual([["PKG", "active"], ["APK", "pending"]]);
     expect(h.secrets.size).toBe(1);
     expect(h.secrets.has(first.id)).toBe(true);
     expect(intuit.state.revokeRequests).toHaveLength(0);
@@ -393,6 +393,16 @@ describe("one provider account per lane (D-23)", () => {
     const handlers = createConnectHandlers(h.flow, async () => h.as(ADMIN));
     const res = await handlers.callback(new Request(`http://localhost:3000/api/connect/qbo/callback?${query(url)}`), "qbo");
     expect(res.headers.get("location")).toBe("/?connect=account_refused&provider=quickbooks&notice=remove_app_access");
+  });
+
+  it("an abandoned pending row does not hold the account (the token store failed once): another lane can connect it, and the pending lane is then refused", async () => {
+    const { h } = setup();
+    const abandoned = await h.connections.ensureConnection("PKG", "quickbooks", FAKE_REALM);
+    expect(abandoned.status).toBe("pending");
+    expect((await h.connectViaCallback("APK")).lane_id).toBe("APK");
+    await expect(h.vault.storeToken("PKG", abandoned, new SecretValue("synthetic-token-late"), null)).rejects.toMatchObject({
+      info: { kind: "forbidden", message: ACCOUNT_IN_USE_MESSAGE },
+    });
   });
 
   it("a disconnected connection does not hold the account: another lane can connect it", async () => {
