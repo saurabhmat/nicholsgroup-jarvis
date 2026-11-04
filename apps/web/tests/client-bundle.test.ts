@@ -1,10 +1,10 @@
-// QB-17 (T-050): a canary in every INTUIT_* server secret (and the Supabase secret key) must not appear anywhere the
-// browser can receive from a real production build. The scanner is proven first on planted files.
+// QB-17 (T-050): the canary scanner, proven on planted files (fast; part of the default `vitest run`). The real
+// `next build` that feeds it is tests/bundle/client-bundle-build.test.ts, run by `pnpm test:bundle`.
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { afterAll, describe, expect, it } from "vitest";
-import { buildWithCanaries, CANARIES, DIST_DIR, scanForCanaries } from "../scripts/client-bundle-check.mjs";
+import { CANARIES, CONTROL_CANARIES, scanForCanaries } from "../scripts/client-bundle-check.mjs";
 
 const scratch = mkdtempSync(path.join(tmpdir(), "bundle-scan-"));
 afterAll(() => rmSync(scratch, { recursive: true, force: true }));
@@ -22,25 +22,17 @@ describe("canary scanner", () => {
     expect(scanned).toBe(4);
     expect(hits.map((h) => h.file).sort()).toEqual([path.join("static", "b64.js"), path.join("static", "plain.js"), path.join("static", "url.js")]);
   });
-});
 
-describe("production build", () => {
-  it(
-    "contains no INTUIT_* or Supabase secret canary in anything served to the browser",
-    () => {
-      const dist = buildWithCanaries() as string;
-      try {
-        const { hits, scanned } = scanForCanaries(dist) as { hits: { file: string; name: string }[]; scanned: number };
-        // The scan must have looked at real client output.
-        expect(scanned).toBeGreaterThan(50);
-        const { hits: staticHits, scanned: staticScanned } = scanForCanaries(path.join(dist, "static")) as { hits: unknown[]; scanned: number };
-        expect(staticScanned).toBeGreaterThan(3);
-        expect(staticHits).toEqual([]);
-        expect(hits.map((h) => `${h.name} in ${h.file}`)).toEqual([]);
-      } finally {
-        rmSync(path.join(path.dirname(dist), DIST_DIR), { recursive: true, force: true });
-      }
-    },
-    10 * 60 * 1000,
-  );
+  it("finds the NEXT_PUBLIC_ positive control, and the control is not one of the secrets", () => {
+    const dir = path.join(scratch, "control");
+    mkdirSync(dir, { recursive: true });
+    const [name, value] = Object.entries(CONTROL_CANARIES)[0] as [string, string];
+    writeFileSync(path.join(dir, "chunk.js"), `var k="${value}";`);
+    const { hits } = scanForCanaries(dir, CONTROL_CANARIES) as { hits: { name: string }[] };
+    expect(hits.map((h) => h.name)).toEqual([name]);
+    expect(name).toMatch(/^NEXT_PUBLIC_/);
+    expect(Object.keys(CANARIES).some((k) => k.startsWith("NEXT_PUBLIC_"))).toBe(false);
+    // Scanning the secrets alone does not match the control value.
+    expect((scanForCanaries(dir) as { hits: unknown[] }).hits).toEqual([]);
+  });
 });

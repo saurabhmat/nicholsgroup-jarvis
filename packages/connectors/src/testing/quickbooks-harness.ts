@@ -14,7 +14,9 @@ import { createOAuthFlow } from "../oauth/flow";
 import { hashState } from "../oauth/pkce";
 import type { StateStore } from "../oauth/state";
 import { createQboApi } from "../quickbooks/api";
-import { createQuickBooksConnector, type QboConnection } from "../quickbooks/connector";
+import { createQuickBooksConnector } from "../quickbooks/connector";
+import type { QboConnection } from "../quickbooks/guard";
+import { createQuickBooksRevoker, QBO_REVOKE_ACTION } from "../quickbooks/writer";
 import { createDiscovery } from "../quickbooks/discovery";
 import { createQuickBooksOAuthProvider } from "../quickbooks/provider";
 import { createTokenManager } from "../quickbooks/token-manager";
@@ -29,7 +31,8 @@ export type QboHarnessOptions = {
   environment?: "sandbox" | "production";
   /** Configured realm per lane (`lane_config.qbo.realm_id`); missing or null: none set. */
   realms?: Record<string, string | null>;
-  /** Lanes that exist (rows in other lanes are invisible). */
+  /** Production mode: a lane with no configured realm refuses to connect. */
+  requireConfiguredRealm?: boolean;
   startTime?: number;
 };
 
@@ -52,7 +55,7 @@ export function createQboHarness(options: QboHarnessOptions) {
   const rows = new Map<string, Row>();
   const secrets = new Map<string, string>();
   const realms: Record<string, string | null> = { ...options.realms };
-  const stats = { rotations: 0, lostRaces: 0, stores: 0, revokes: 0 };
+  const stats = { rotations: 0, lostRaces: 0, stores: 0, revokes: 0, revokeActors: [] as (string | undefined)[] };
   const bind = (row: Row): QboConnection => mintLaneBoundConnection<"quickbooks">({ ...row, features: { ...row.features } });
 
   const rowOf = (laneId: string, conn: { id: string }): Row => {
@@ -92,8 +95,9 @@ export function createQboHarness(options: QboHarnessOptions) {
       stats.rotations += 1;
       return true;
     },
-    async revokeToken(laneId, conn) {
+    async revokeToken(laneId, conn, actorUserId) {
       assertLaneBound(laneId, conn);
+      stats.revokeActors.push(actorUserId);
       const row = rowOf(laneId, conn);
       const had = secrets.delete(row.id);
       row.status = "disconnected";
@@ -151,7 +155,16 @@ export function createQboHarness(options: QboHarnessOptions) {
 
   const client = () => ({ clientId: FAKE_CLIENT_ID, clientSecret: new SecretValue(FAKE_CLIENT_SECRET), redirectUri: HARNESS_REDIRECT });
   const discovery = createDiscovery({ now, logger });
-  const provider = createQuickBooksOAuthProvider({ environment: () => environment, client, discovery, laneConfig, now });
+  const provider = createQuickBooksOAuthProvider({
+    environment: () => environment,
+    client,
+    discovery,
+    laneConfig,
+    requireConfiguredRealm: () => options.requireConfiguredRealm ?? false,
+    now,
+    logger,
+    httpFor: (laneId, baseUrl) => fastHttp(laneId, undefined, baseUrl),
+  });
 
   /** A token manager of its own (a second serverless instance sharing the same Vault). */
   const newTokenManager = () =>
@@ -162,23 +175,40 @@ export function createQboHarness(options: QboHarnessOptions) {
       httpFor: fastHttp,
       now,
       logger,
+      sleep: (ms) => new Promise((resolve) => setTimeout(resolve, Math.min(ms, 5))),
     });
   const tokens = newTokenManager();
   const api = createQboApi({ tokens, environment: () => environment, logger, httpOptions: { retryBaseMs: 1, retryMaxMs: 5 } });
-  const connector = createQuickBooksConnector({
+  const connector = createQuickBooksConnector({ connections, api, now });
+  const revoker = createQuickBooksRevoker({
     provider,
     environment: () => environment,
     client,
     discovery,
-    laneConfig,
     vault,
     connections,
     tokens,
-    api,
     now,
-    logger,
     httpFor: (laneId, baseUrl) => fastHttp(laneId, undefined, baseUrl),
   });
+  const APPROVER = "00000000-0000-4000-8000-0000000000b1";
+  /** An approved revoke action for a connection (what the approvals module will hand the writer; T-193 brands it). */
+  const approvedRevoke = (laneId: string, conn: { id: string }, approvedBy: string = APPROVER) => ({
+    id: randomUUID(),
+    lane_id: laneId,
+    connection_id: conn.id,
+    action_type: QBO_REVOKE_ACTION,
+    target: {},
+    payload: {},
+    payload_schema_version: 1,
+    payload_sha256: "0".repeat(64),
+    approved_by: approvedBy,
+  });
+  /** Test-only disconnect: the production writer, as the approvals module would call it. */
+  const disconnectForTest = async (laneId: string, conn: QboConnection) => {
+    await revoker.run(laneId, conn, approvedRevoke(laneId, conn));
+    return connections.load(laneId, conn.id);
+  };
 
   // ---- connect state (twin of core.oauth_state_create / _consume): bound to user and lane, single use, 10 minutes.
   const states = new Map<string, { laneId: string; userId: string; provider: string; codeVerifier: string; redirectUri: string; expires: number }>();
@@ -232,6 +262,27 @@ export function createQboHarness(options: QboHarnessOptions) {
     api,
     connector,
     flow,
+    revoker,
+    approvedRevoke,
+    disconnectForTest,
+    /** Adds a connection of another provider in the lane with a stored credential (a Google-shaped token set). */
+    addForeignConnection(laneId: string, providerName: "google" | "stripe" = "google") {
+      const row = {
+        id: randomUUID(),
+        lane_id: laneId,
+        provider: providerName,
+        external_account_id: "synthetic-foreign-account",
+        status: "active",
+        features: {},
+        features_checked_at: null,
+        token_expires_at: null,
+        last_sync_at: null,
+        last_error: null,
+      } as unknown as Row;
+      rows.set(row.id, row);
+      secrets.set(row.id, JSON.stringify({ access_token: "synthetic-foreign-access-0001", refresh_token: "synthetic-foreign-refresh-0001", expires_in: 3600, obtained_at: new Date(clock.t - 7200_000).toISOString() }));
+      return mintLaneBoundConnection({ ...row, features: {} } as never) as unknown as QboConnection;
+    },
     states,
     stateHash: hashState,
     as,

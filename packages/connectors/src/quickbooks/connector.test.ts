@@ -21,6 +21,7 @@ async function setup(realms: Record<string, string | null> = {}) {
   server.use(...intuit.handlers);
   const h = createQboHarness({ intuit, realms });
   const conn = await h.connectViaCallback(LANE);
+  intuit.state.apiRequests.length = 0; // the connect callback's own CompanyInfo check is not under test here
   return { intuit, h, conn };
 }
 
@@ -161,36 +162,149 @@ describe("lanes", () => {
   });
 });
 
-describe("disconnect (minimal; T-195 owns the full behaviour)", () => {
-  it("revokes the refresh token at Intuit's discovered revocation endpoint, deletes the Vault tokens and returns disconnected", async () => {
+describe("revoke-and-delete is an approvals-only write (D-24), not a connector method", () => {
+  const ASSERT = (h: Awaited<ReturnType<typeof setup>>["h"], conn: { id: string }) => h.approvedRevoke(LANE, conn);
+
+  it("the connector object has no disconnect and no write", async () => {
+    const { h } = await setup();
+    expect("disconnect" in h.connector).toBe(false);
+    expect("executeWrite" in h.connector).toBe(false);
+    expect(Object.keys(h.connector).sort()).toEqual(["capabilities", "connect", "featureKeys", "health", "provider", "read", "readOps"]);
+  });
+
+  it("the revoke operation revokes the refresh token at Intuit's discovered endpoint, deletes the Vault tokens and records the approver", async () => {
     const { intuit, h, conn } = await setup();
     const refresh = h.storedSet(conn.id)?.refresh_token;
-    const out = await h.connector.disconnect(LANE, conn);
-    expect(out.status).toBe("disconnected");
+    const action = ASSERT(h, conn);
+    const res = await h.revoker.run(LANE, conn, action);
+    expect(res).toMatchObject({ outcome: "accepted", provider_tid: expect.stringMatching(/^synthetic-tid-/) });
     expect(intuit.state.revokeRequests).toHaveLength(1);
     expect(intuit.state.revokeRequests[0]).toMatchObject({ body: { token: refresh } });
     expect(intuit.state.revokeRequests[0]?.auth).toMatch(/^Basic /);
     expect(h.secrets.has(conn.id)).toBe(false);
+    expect(h.rows.get(conn.id)?.status).toBe("disconnected");
+    // The approving user goes to the audit row.
+    expect(h.stats.revokeActors).toEqual([action.approved_by]);
   });
 
   it("is idempotent and does not call Intuit again for a disconnected connection", async () => {
     const { intuit, h, conn } = await setup();
-    await h.connector.disconnect(LANE, conn);
-    await h.connector.disconnect(LANE, conn);
+    await h.revoker.run(LANE, conn, ASSERT(h, conn));
+    expect(await h.revoker.run(LANE, conn, ASSERT(h, conn))).toMatchObject({ outcome: "already_applied" });
     expect(intuit.state.revokeRequests).toHaveLength(1);
   });
 
-  it("a token Intuit no longer knows (400) does not keep ours; a transient failure stops before deleting anything", async () => {
-    const { h, conn } = await setup();
-    server.use(http.post(REVOKE_URL, () => HttpResponse.json({ error: "invalid_token" }, { status: 400 })));
-    expect((await h.connector.disconnect(LANE, conn)).status).toBe("disconnected");
+  it("only a 400 invalid_token / invalid_grant counts as already revoked and then deletes our copy", async () => {
+    for (const error of ["invalid_token", "invalid_grant"]) {
+      const { h, conn } = await setup();
+      server.use(http.post(REVOKE_URL, () => HttpResponse.json({ error }, { status: 400 })));
+      expect(await h.revoker.run(LANE, conn, ASSERT(h, conn))).toMatchObject({ outcome: "already_applied" });
+      expect(h.rows.get(conn.id)?.status).toBe("disconnected");
+      expect(h.secrets.has(conn.id)).toBe(false);
+    }
+  });
 
-    const second = await setup();
-    server.use(http.post(REVOKE_URL, () => new HttpResponse(null, { status: 503 })));
-    const err = (await second.h.connector.disconnect(LANE, second.conn).catch((e: unknown) => e)) as ConnectorError;
+  it.each([
+    ["401 (maybe our own wrong client secret)", () => HttpResponse.json({ error: "invalid_client" }, { status: 401 }), "connection_unavailable"],
+    ["403", () => HttpResponse.json({ error: "access_denied" }, { status: 403 }), "connection_unavailable"],
+    ["400 with another error", () => HttpResponse.json({ error: "invalid_request" }, { status: 400 }), "connection_unavailable"],
+    ["503", () => new HttpResponse(null, { status: 503 }), "transient"],
+  ])("a %s from the revoke call fails and keeps the Vault tokens", async (_name, respond, kind) => {
+    const { intuit, h, conn } = await setup();
+    const before = h.secrets.get(conn.id);
+    server.use(http.post(REVOKE_URL, respond));
+    const err = (await h.revoker.run(LANE, conn, ASSERT(h, conn)).catch((e: unknown) => e)) as ConnectorError;
     expect(err).toBeInstanceOf(ConnectorError);
-    expect(err.info.kind).toBe("transient");
-    expect(second.h.secrets.has(second.conn.id)).toBe(true);
-    expect(second.h.rows.get(second.conn.id)?.status).toBe("active");
+    expect(err.info.kind).toBe(kind);
+    expect(h.secrets.get(conn.id)).toBe(before);
+    expect(h.rows.get(conn.id)?.status).toBe("active");
+    expect(h.stats.revokes).toBe(0);
+    void intuit;
+  });
+
+  it("a timeout fails and keeps the Vault tokens", async () => {
+    const { h, conn } = await setup();
+    const before = h.secrets.get(conn.id);
+    server.use(http.post(REVOKE_URL, () => HttpResponse.error()));
+    await expect(h.revoker.run(LANE, conn, ASSERT(h, conn))).rejects.toBeInstanceOf(ConnectorError);
+    expect(h.secrets.get(conn.id)).toBe(before);
+    expect(h.stats.revokes).toBe(0);
+  });
+
+  it("refuses an action for another lane or connection, another type, or without a valid approver, before any request", async () => {
+    const { intuit, h, conn } = await setup();
+    const good = ASSERT(h, conn);
+    const bad = [
+      { ...good, lane_id: "APK" },
+      { ...good, connection_id: "00000000-0000-4000-8000-00000000dead" },
+      { ...good, action_type: "qbo.create_invoice" },
+      { ...good, approved_by: "not-a-uuid" },
+    ];
+    for (const action of bad) await expect(h.revoker.run(LANE, conn, action)).rejects.toBeInstanceOf(ConnectorError);
+    expect(intuit.state.revokeRequests).toHaveLength(0);
+    expect(h.secrets.has(conn.id)).toBe(true);
+  });
+
+  it("nothing in production code reaches the writer: only the writer module, the wiring and the writer-side subpath import it", async () => {
+    const { readFileSync, readdirSync, statSync } = await import("node:fs");
+    const { join, relative } = await import("node:path");
+    const root = new URL("../../../../", import.meta.url).pathname;
+    const files: string[] = [];
+    const walk = (dir: string) => {
+      for (const name of readdirSync(dir)) {
+        if (["node_modules", "dist", ".next", ".next-canary", ".turbo", ".git"].includes(name)) continue;
+        const full = join(dir, name);
+        if (statSync(full).isDirectory()) walk(full);
+        else if (/\.(ts|tsx|mts|js|mjs)$/.test(name) && !/\.(test|spec)\./.test(name)) files.push(full);
+      }
+    };
+    walk(join(root, "apps"));
+    walk(join(root, "packages"));
+    const offenders = files
+      .filter((f) => /quickbooksWriter|createQuickBooksWriter|createQuickBooksRevoker|@nichols\/connectors\/write\b/.test(readFileSync(f, "utf8")))
+      .map((f) => relative(root, f))
+      .filter((f) => !f.startsWith("packages/modules/approvals/"))
+      .sort();
+    expect(offenders).toEqual([
+      "packages/connectors/src/quickbooks/index.ts",
+      "packages/connectors/src/quickbooks/writer.ts",
+      "packages/connectors/src/testing/quickbooks-harness.ts",
+      "packages/connectors/src/write/index.ts",
+    ]);
+  });
+});
+
+describe("another provider's connection is refused before any network call or Vault change (security H1)", () => {
+  it.each(["google", "stripe"] as const)("a %s-shaped connection in the same lane", async (providerName) => {
+    const { intuit, h } = await setup();
+    const foreign = h.addForeignConnection(LANE, providerName);
+    const before = h.secrets.get(foreign.id);
+    const requests = () => intuit.state.apiRequests.length + intuit.state.tokenRequests.length + intuit.state.revokeRequests.length;
+    const base = requests();
+    const refuse = async (call: () => Promise<unknown>) => {
+      const err = (await call().catch((e: unknown) => e)) as ConnectorError;
+      expect(err).toBeInstanceOf(ConnectorError);
+      expect(["lane_mismatch", "not_found"]).toContain(err.info.kind);
+    };
+    await refuse(() => h.connector.health(LANE, foreign as never));
+    await refuse(() => h.connector.read(LANE, foreign as never, { op: "company_info" }));
+    await refuse(() => h.revoker.run(LANE, foreign as never, h.approvedRevoke(LANE, foreign)));
+    await refuse(() => h.tokens.accessToken(LANE, foreign));
+    await refuse(() => h.tokens.refreshToken(LANE, foreign));
+    await refuse(() => h.api.get(LANE, foreign, "/v3/company/{realm}/companyinfo/{realm}", { realm: FAKE_REALM }));
+    // No request reached Intuit; the other provider's credential is untouched and its row is still active.
+    expect(requests()).toBe(base);
+    expect(h.secrets.get(foreign.id)).toBe(before);
+    expect(h.rows.get(foreign.id)?.status).toBe("active");
+    expect(h.stats.revokes).toBe(0);
+  });
+
+  it("an authoritative row of another provider behind a quickbooks-shaped object is refused too", async () => {
+    const { intuit, h, conn } = await setup();
+    const row = h.rows.get(conn.id);
+    if (row) (row as { provider: string }).provider = "google"; // the stored row now says google
+    const before = intuit.state.apiRequests.length;
+    await expect(h.connector.health(LANE, conn)).rejects.toMatchObject({ info: { kind: "lane_mismatch" } });
+    expect(intuit.state.apiRequests).toHaveLength(before);
   });
 });

@@ -16,6 +16,8 @@ coverage/
 # next.js
 .next/
 .next-canary/
+# left by an interrupted client-bundle check (T-050); restored and removed by the script
+next-env.d.ts.canary-backup
 out/
 
 # production

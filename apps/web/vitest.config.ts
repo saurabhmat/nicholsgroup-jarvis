@@ -13,5 +13,7 @@ export default defineConfig({
   test: {
     environment: "node",
     include: ["tests/**/*.test.ts", "lib/**/*.test.ts"],
+    // The real `next build` canary scan is `pnpm test:bundle` (vitest.bundle.config.ts).
+    exclude: ["tests/bundle/**", "node_modules/**"],
   },
 });

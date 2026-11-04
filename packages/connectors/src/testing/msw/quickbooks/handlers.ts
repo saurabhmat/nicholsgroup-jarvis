@@ -42,6 +42,11 @@ export type FakeIntuitOptions = {
   expiresIn?: number;
   /** Seconds in `x_refresh_token_expires_in`. Default 8726400 (101 days). */
   refreshExpiresIn?: number;
+  /**
+   * No grace period: only the newest refresh token is valid, so a second refresh with a token that was just replaced is
+   * `invalid_grant` (the strictest reading of "the refresh token rotates").
+   */
+  strictRotation?: boolean;
 };
 
 export type FakeIntuit = {
@@ -96,7 +101,7 @@ export function createFakeIntuit(options: FakeIntuitOptions = {}): FakeIntuit {
     state.validAccess.add(pair.access);
     state.validRefresh.add(pair.refresh);
     // grace: keep only the two newest refresh tokens usable
-    const keep = state.issued.slice(-2).map((p) => p.refresh);
+    const keep = state.issued.slice(options.strictRotation ? -1 : -2).map((p) => p.refresh);
     for (const r of [...state.validRefresh]) if (!keep.includes(r)) state.validRefresh.delete(r);
     return {
       access_token: pair.access,

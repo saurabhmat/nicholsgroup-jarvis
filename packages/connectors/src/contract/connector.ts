@@ -69,6 +69,9 @@ export interface Connector<P extends string = Provider> {
   /**
    * Store a connection in `laneId` from the in-app OAuth result or a Vault secret reference; tokens go straight to the
    * Vault. With `reconnect_connection_id`, the existing row must be in the same lane, provider and account.
+   * A connector whose tokens arrive through the OAuth redirect (QuickBooks) refuses every input here: its tokens enter
+   * the Vault only from `oauthFlow.callback`, which checks state, user, AAL2 and PKCE, and the contract kit drives that
+   * flow (`ContractHarness.connectVia`) instead.
    */
   connect(laneId: LaneId, input: ConnectInput): Promise<LaneBoundConnection<P>>;
 
@@ -96,6 +99,11 @@ export interface Connector<P extends string = Provider> {
   /** Build the exact payload for a proposal. Never executes anything against the provider. */
   prepareWrite?(laneId: LaneId, conn: LaneBoundConnection<P>, intent: WriteIntent): Promise<ProposedPayload<P>>;
 
-  /** Revoke at the provider, delete the Vault secret (QB-8) and return the connection as `disconnected`. */
-  disconnect(laneId: LaneId, conn: LaneBoundConnection<P>): Promise<LaneBoundConnection<P>>;
+  /**
+   * Revoke at the provider, delete the Vault secret (QB-8) and return the connection as `disconnected`.
+   * Absent on a connector whose revocation is an external write (QuickBooks, decided D-24): that revocation is a
+   * `ConnectorWriter` action (`@nichols/connectors/writer`) that only the approvals module executes, after a human
+   * approved the exact payload. The contract kit then needs `ContractHarness.disconnectForTest`.
+   */
+  disconnect?(laneId: LaneId, conn: LaneBoundConnection<P>): Promise<LaneBoundConnection<P>>;
 }

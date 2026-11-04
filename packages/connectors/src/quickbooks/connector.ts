@@ -1,69 +1,50 @@
 // The QuickBooks Online connector (T-050), read-only. It implements the shared connector contract:
-//  - connect: completes an in-app OAuth callback (the authorization code + the realm the callback named). It is the
-//    only way a token set enters the Vault, besides the connect flow's own callback, which does the same steps; a
-//    `vault_secret` reference, an OAuth Playground token or an offline token is refused (QB-7).
+//  - connect: always refused. QuickBooks tokens enter the Vault only from the OAuth callback (`oauthFlow.callback`),
+//    which checks state, user, AAL2 and PKCE and that the token is for the realm named (QB-7, T-050 security M2). A
+//    second entry here would skip all of that, so there is none; the contract kit connects through the flow instead.
 //  - health: reads CompanyInfo (one cheap authenticated call) and reports; it does not throw for connection problems.
 //  - read: `company_info` for now (T-051 and T-052 add entities and reports).
-//  - disconnect: revokes the refresh token at Intuit and deletes the Vault tokens (minimal; T-195 adds the error map,
-//    audit actor and reconnect handling).
+//  - no disconnect: revoking the grant at Intuit is an external write (D-24), so it exists only as an approvals-only
+//    `ConnectorWriter` action (./writer.ts, `@nichols/connectors/writer`), not on this object.
+// Every method refuses a connection whose provider is not "quickbooks" before any network call or Vault change.
 // No sync, subscribe or prepareWrite: QuickBooks is read-only in the pilot.
 import type { LaneId } from "@nichols/core";
 import type { Connector } from "../contract/connector";
 import { ConnectorError, toConnectorError } from "../contract/errors";
 import { assertStatusUsable } from "../contract/guards";
-import { assertLaneBound, type LaneBoundConnection } from "../contract/lane-bound";
-import { ConnectInputSchema, LaneIdSchema, ReadOpSchema, type HealthStatus } from "../contract/schemas";
-import { basicCredentials, type HttpClient } from "../http/client";
-import { exchangeAuthorizationCode, defaultOAuthHttp, type OAuthProvider } from "../oauth/flow";
-import type { ConnectorLogger } from "../log/index";
-import { SecretValue } from "../vault/secret";
-import type { ConnectionStore } from "../vault/connections";
-import type { LaneConfigReader } from "../vault/lane-config";
-import type { TokenVault } from "../vault/tokens";
+import { assertLaneBound } from "../contract/lane-bound";
+import { LaneIdSchema, ReadOpSchema, type HealthStatus } from "../contract/schemas";
+import type { LaneBoundConnection } from "../contract/lane-bound";
 import type { QboApi } from "./api";
 import { fetchCompanyInfo } from "./company-info";
-import type { Discovery } from "./discovery";
-import type { IntuitEnvironment } from "./constants";
-import { refreshExpiry, type QboClientConfig } from "./provider";
-import { assertRealmAllowed } from "./realm";
-import type { TokenManager } from "./token-manager";
+import { assertQuickbooksConnection, type QboConnection } from "./guard";
 
 type QboProvider = "quickbooks";
-export type QboConnection = LaneBoundConnection<QboProvider>;
+export type { QboConnection } from "./guard";
 
 export const QBO_READ_OPS = ["company_info"] as const;
 /** Edition features T-051 detects from Preferences; declared here so the contract knows them. */
 export const QBO_FEATURE_KEYS = ["class_tracking", "location_tracking", "multicurrency"] as const;
 
 export type QboConnectorDeps = {
-  provider: OAuthProvider;
-  environment: () => IntuitEnvironment;
-  client: () => QboClientConfig;
-  discovery: Discovery;
-  laneConfig: LaneConfigReader;
-  vault: Pick<TokenVault, "storeToken" | "revokeToken">;
-  connections: Pick<ConnectionStore, "ensureConnection"> & {
-    /** The authoritative row by (lane, id): `not_found` for a missing row or another lane's. */
-    load(laneId: LaneId, connectionId: string): Promise<QboConnection>;
+  connections: {
+    /** The authoritative row by (lane, id): `not_found` for a missing row or another lane's. Any provider's row. */
+    load(laneId: LaneId, connectionId: string): Promise<LaneBoundConnection<string>>;
   };
-  tokens: TokenManager;
   api: QboApi;
   now?: () => number;
-  logger?: ConnectorLogger;
-  /** Test hook for the OAuth token and revocation hosts. */
-  httpFor?: (laneId: LaneId, baseUrl: string) => HttpClient;
 };
-
-const TRANSIENT_KINDS: ReadonlySet<string> = new Set(["transient", "timeout", "rate_limited"]);
 
 export function createQuickBooksConnector(deps: QboConnectorDeps): Connector<QboProvider> {
   const now = deps.now ?? Date.now;
-  const oauthHttp = (laneId: LaneId, baseUrl: string) => (deps.httpFor ? deps.httpFor(laneId, baseUrl) : defaultOAuthHttp(deps.provider, laneId, baseUrl, deps.logger));
 
-  /** Brand + lane check, then the authoritative row. */
+  /** Brand, lane and provider checks, then the authoritative row (which must also be a QuickBooks row). */
   async function loadRow(laneId: LaneId, conn: unknown): Promise<QboConnection> {
     assertLaneBound(laneId, conn);
-    return deps.connections.load(laneId, conn.id) as Promise<QboConnection>;
+    assertQuickbooksConnection(conn);
+    const row = await deps.connections.load(laneId, conn.id);
+    assertQuickbooksConnection(row);
+    return row;
   }
 
   /** Authoritative status must be usable (active or degraded); `reconnect_required` is never retried. */
@@ -79,39 +60,11 @@ export function createQuickBooksConnector(deps: QboConnectorDeps): Connector<Qbo
     readOps: QBO_READ_OPS,
     featureKeys: QBO_FEATURE_KEYS,
 
-    async connect(laneId, input) {
+    async connect(laneId) {
       if (!LaneIdSchema.safeParse(laneId).success) throw new ConnectorError({ kind: "invalid_input", message: "laneId is required" });
-      const parsed = ConnectInputSchema.safeParse(input);
-      if (!parsed.success) throw new ConnectorError({ kind: "invalid_input", message: "Invalid connect input" });
-      const data = parsed.data;
-      // QB-7: tokens come only from the in-app authorization flow, never from a stored secret reference, the OAuth
-      // Playground or an offline token.
-      if (data.kind !== "oauth_code") {
-        throw new ConnectorError({ kind: "invalid_input", message: "QuickBooks connects only through the in-app authorization flow" });
-      }
-      const realm = data.external_account_id;
-      if (realm === undefined) throw new ConnectorError({ kind: "invalid_input", message: "The QuickBooks company (realmId) is required" });
-      const { redirectUri } = deps.provider.client();
-      if (data.redirect_uri !== redirectUri) throw new ConnectorError({ kind: "invalid_input", message: "redirect_uri is not the registered one" });
-
-      if (data.reconnect_connection_id !== undefined) {
-        // Same lane (not_found otherwise) and the same company.
-        const existing = await deps.connections.load(laneId, data.reconnect_connection_id);
-        if (existing.provider !== "quickbooks" || existing.external_account_id !== realm) {
-          throw new ConnectorError({ kind: "invalid_input", message: "Reconnect must use the same QuickBooks company" });
-        }
-      }
-      await assertRealmAllowed(deps.laneConfig, laneId, realm);
-
-      const tokens = await exchangeAuthorizationCode(deps.provider, (_p, lane, baseUrl) => oauthHttp(lane, baseUrl), laneId, data.code, data.code_verifier, redirectUri);
-      const conn = await deps.connections.ensureConnection(laneId, "quickbooks", realm);
-      await deps.vault.storeToken(
-        laneId,
-        conn,
-        new SecretValue(JSON.stringify({ ...tokens, obtained_at: new Date(now()).toISOString() })),
-        refreshExpiry(tokens, now()),
-      );
-      return deps.connections.load(laneId, conn.id);
+      // QB-7 and security M2: no code, no secret reference, no Playground or offline token is accepted here. Tokens
+      // enter the Vault only from oauthFlow.callback (state, user, AAL2, PKCE, realm check).
+      throw new ConnectorError({ kind: "invalid_input", message: "QuickBooks connects only through the in-app authorization flow" });
     },
 
     async health(laneId, conn): Promise<HealthStatus> {
@@ -128,6 +81,8 @@ export function createQuickBooksConnector(deps: QboConnectorDeps): Connector<Qbo
       }
       try {
         const { providerTid } = await fetchCompanyInfo(deps.api, laneId, row);
+        // The reported status is the check's outcome. The row is not updated here (T-195/T-196 persist status), so a
+        // `degraded` row reports `active` after a good check without the stored status changing.
         return { ok: true, status: "active", checked_at, provider_tid: providerTid, error: null };
       } catch (e) {
         const err = toConnectorError(e);
@@ -158,40 +113,6 @@ export function createQuickBooksConnector(deps: QboConnectorDeps): Connector<Qbo
         source_refs: [{ kind: "qbo_company", ref: row.external_account_id }],
         notes: [],
       };
-    },
-
-    async disconnect(laneId, conn) {
-      const row = await loadRow(laneId, conn);
-      // Revoke the refresh token at Intuit first. A transient failure stops here (nothing deleted, retry later); a
-      // token Intuit no longer knows (already revoked or expired) is not a reason to keep ours.
-      if (row.status !== "disconnected") {
-        let refresh: SecretValue | null = null;
-        try {
-          refresh = await deps.tokens.refreshToken(laneId, row);
-        } catch (e) {
-          if (!(e instanceof ConnectorError) || !["not_found", "connection_unavailable", "provider_error"].includes(e.info.kind)) throw e;
-        }
-        if (refresh) {
-          try {
-            const { revocation } = await deps.discovery.get(laneId, deps.environment());
-            const url = new URL(revocation);
-            const { clientId, clientSecret } = deps.client();
-            await oauthHttp(laneId, url.origin).request({
-              method: "POST",
-              path: url.pathname,
-              body: { token: refresh.reveal() },
-              auth: { scheme: "Basic", secret: basicCredentials(clientId, clientSecret) },
-              retry: true,
-            });
-          } catch (e) {
-            if (e instanceof ConnectorError && TRANSIENT_KINDS.has(e.info.kind)) throw e;
-            if (!(e instanceof ConnectorError)) throw toConnectorError(e);
-            // 400/401/403/404 from the revoke call: the token is not valid at Intuit any more.
-          }
-        }
-      }
-      await deps.vault.revokeToken(laneId, row);
-      return deps.connections.load(laneId, row.id);
     },
   };
 }

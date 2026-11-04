@@ -2,8 +2,8 @@
 // discovery document for INTUIT_ENVIRONMENT and cached in memory (24 h; a stale copy is served for up to 7 days if
 // Intuit cannot be reached). The document is public provider metadata, not lane data, so one cache serves every lane;
 // the HTTP client still needs a lane for its logs and rate bucket, so callers pass theirs.
-// A poisoned or mistaken document cannot redirect credentials: every endpoint must be https on an intuit.com host and
-// the token and revocation endpoints must not carry a query.
+// A poisoned or mistaken document cannot redirect credentials: every endpoint must be https on the one host Intuit's
+// document names for it (pinned below), with no userinfo, port, query or fragment.
 import type { LaneId } from "@nichols/core";
 import { z } from "zod";
 import { ConnectorError, isConnectorError } from "../contract/errors";
@@ -22,12 +22,18 @@ const Doc = z.looseObject({
   revocation_endpoint: z.string().max(2048),
 });
 
-function checked(name: string, value: string, allowQuery: boolean): string {
+/** The exact host each endpoint is served from (Intuit's sandbox and production documents agree). */
+export const ENDPOINT_HOSTS = {
+  authorization_endpoint: "appcenter.intuit.com",
+  token_endpoint: "oauth.platform.intuit.com",
+  revocation_endpoint: "developer.api.intuit.com",
+} as const;
+
+function checked(name: keyof typeof ENDPOINT_HOSTS, value: string): string {
   const bad = () => new ConnectorError({ kind: "provider_error", message: `Discovery document has an unusable ${name}` });
   if (!URL.canParse(value)) throw bad();
   const u = new URL(value);
-  const intuitHost = u.hostname === "intuit.com" || u.hostname.endsWith(".intuit.com");
-  if (u.protocol !== "https:" || !intuitHost || u.username || u.password || u.port || u.hash || (!allowQuery && u.search)) throw bad();
+  if (u.protocol !== "https:" || u.hostname !== ENDPOINT_HOSTS[name] || u.username || u.password || u.port || u.hash || u.search) throw bad();
   return u.toString();
 }
 
@@ -35,9 +41,9 @@ export function parseDiscoveryDocument(body: unknown): IntuitEndpoints {
   const parsed = Doc.safeParse(body);
   if (!parsed.success) throw new ConnectorError({ kind: "provider_error", message: "Discovery document is not valid" });
   return {
-    authorization: checked("authorization_endpoint", parsed.data.authorization_endpoint, false),
-    token: checked("token_endpoint", parsed.data.token_endpoint, false),
-    revocation: checked("revocation_endpoint", parsed.data.revocation_endpoint, false),
+    authorization: checked("authorization_endpoint", parsed.data.authorization_endpoint),
+    token: checked("token_endpoint", parsed.data.token_endpoint),
+    revocation: checked("revocation_endpoint", parsed.data.revocation_endpoint),
   };
 }
 

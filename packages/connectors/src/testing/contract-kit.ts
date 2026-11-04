@@ -41,6 +41,24 @@ export interface ContractHarness {
   externalWriteCount: () => number;
   /** Mark the stored connection row `reconnect_required` (what T-195 does after `invalid_grant`). */
   markReconnectRequired: (conn: AnyConnection) => void | Promise<void>;
+  /**
+   * For a connector whose tokens arrive through an OAuth redirect (QuickBooks): connects through the real flow
+   * (state, user, AAL2, PKCE), since the connector's own `connect` refuses every input. Defaults to `connector.connect`.
+   */
+  connectVia?: (laneId: LaneId) => Promise<AnyConnection>;
+  /**
+   * For a connector without a public `disconnect` (revocation is an approvals-only write, D-24): a test-only path to the
+   * same revoke-and-delete code. Lives in the test harness, which production code cannot import.
+   */
+  disconnectForTest?: (laneId: LaneId, conn: AnyConnection) => Promise<AnyConnection>;
+  /**
+   * Optional: a lane-bound connection of ANOTHER provider in the same lane, with a stored credential, and a count of
+   * every request the provider mock has received. The kit proves the connector refuses it before any request.
+   */
+  foreignProviderConnection?: () => Promise<AnyConnection>;
+  externalRequestCount?: () => number;
+  /** Optional: true while the foreign connection's credential is still stored (a refused call must not touch it). */
+  foreignCredentialIntact?: () => boolean;
   /** Optional: make the provider mock answer `invalid_grant` on the next token refresh/use. */
   simulateInvalidGrant?: (conn: AnyConnection) => void | Promise<void>;
   /** Canary values the connector can see (synthetic tokens, client secret). None may appear in any output or error. */
@@ -141,14 +159,20 @@ async function expectConnectorError(
 }
 
 async function connect(h: ContractHarness): Promise<AnyConnection> {
-  const conn = await h.connector.connect(h.laneId, h.connectInput);
+  const conn = h.connectVia ? await h.connectVia(h.laneId) : await h.connector.connect(h.laneId, h.connectInput);
   testSchemas.ConnectionSchema.parse(conn);
   return conn;
 }
 
 async function disconnect(h: ContractHarness, state: CheckState, laneId: LaneId, conn: AnyConnection): Promise<AnyConnection> {
   state.revokes += 1;
-  return h.connector.disconnect(laneId, conn);
+  return disconnectPath(h)(laneId, conn);
+}
+
+/** The connector's own `disconnect`, or the harness's test-only path when the connector has none (D-24). */
+function disconnectPath(h: ContractHarness): (laneId: LaneId, conn: AnyConnection) => Promise<AnyConnection> {
+  if (typeof h.connector.disconnect === "function") return (laneId, conn) => need(h.connector.disconnect, "connector.disconnect").call(h.connector, laneId, conn);
+  return need(h.disconnectForTest, "disconnectForTest (the connector has no public disconnect)");
 }
 
 function expectFeaturesDeclared(h: ContractHarness, features: Record<string, boolean> | undefined, where: string): void {
@@ -188,6 +212,28 @@ async function expectGuarded(
 
 export const contractChecks: readonly ContractCheck[] = [
   {
+    name: "refuses a connection of another provider before any request",
+    applies: (h) => typeof h.foreignProviderConnection === "function",
+    run: async (h) => {
+      const foreign = await need(h.foreignProviderConnection, "foreignProviderConnection")();
+      expect(foreign.provider, "the foreign connection must belong to another provider").not.toBe(h.connector.provider);
+      expect(foreign.lane_id).toBe(h.laneId);
+      const requests = h.externalRequestCount?.() ?? 0;
+      const writes = h.externalWriteCount();
+      const calls: [string, () => Promise<unknown>][] = [
+        ["health", () => h.connector.health(h.laneId, foreign as never)],
+        ["read", () => h.connector.read(h.laneId, foreign as never, need(h.readOps[0], "readOps[0]"))],
+        ["disconnect", () => disconnectPath(h)(h.laneId, foreign as never)],
+      ];
+      for (const [name, call] of calls) {
+        await expectConnectorError(h, call, ["lane_mismatch", "not_found", "invalid_input"], `${name} with another provider's connection`);
+      }
+      if (h.externalRequestCount) expect(h.externalRequestCount(), "no request may reach the provider").toBe(requests);
+      expect(h.externalWriteCount(), "no write may reach the provider").toBe(writes);
+      if (h.foreignCredentialIntact) expect(h.foreignCredentialIntact(), "the other provider's credential must be untouched").toBe(true);
+    },
+  },
+  {
     name: "exposes only contract methods (no executeWrite)",
     run: async (h) => {
       expect("executeWrite" in h.connector, "executeWrite belongs on a ConnectorWriter (approvals only)").toBe(false);
@@ -208,7 +254,7 @@ export const contractChecks: readonly ContractCheck[] = [
       expect(c.capabilities.sync, "capabilities.sync").toBe(typeof c.sync === "function");
       expect(c.capabilities.subscribe, "capabilities.subscribe").toBe(typeof c.subscribe === "function");
       expect(c.capabilities.prepareWrite, "capabilities.prepareWrite").toBe(typeof c.prepareWrite === "function");
-      expect(typeof c.disconnect, "disconnect is required").toBe("function");
+      expect(typeof c.disconnect === "function" || typeof h.disconnectForTest === "function", "a disconnect path (connector.disconnect or the harness's disconnectForTest) is required").toBe(true);
     },
   },
   {
@@ -438,7 +484,7 @@ export const contractChecks: readonly ContractCheck[] = [
   {
     name: "disconnect revokes and returns the connection as disconnected",
     run: async (h, state) => {
-      await expectLaneEnforced(h, (laneId, conn) => h.connector.disconnect(laneId, conn), "disconnect");
+      await expectLaneEnforced(h, (laneId, conn) => disconnectPath(h)(laneId, conn), "disconnect");
       const conn = await connect(h);
       const before = h.externalWriteCount();
       const out = await disconnect(h, state, h.laneId, conn);

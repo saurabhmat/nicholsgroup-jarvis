@@ -21,6 +21,13 @@ describeConnectorContract({
     const h = createQboHarness({ intuit });
     const harness: ContractHarness = {
       connector: h.connector as never,
+      // Tokens enter the Vault only from the real callback; the connector's own connect refuses everything.
+      connectVia: (laneId) => h.connectViaCallback(laneId) as never,
+      // QuickBooks has no public disconnect (D-24): the test-only path runs the approvals-only writer.
+      disconnectForTest: (laneId, conn) => h.disconnectForTest(laneId, conn as never) as never,
+      foreignProviderConnection: async () => h.addForeignConnection("PKG", "google") as never,
+      externalRequestCount: () => intuit.state.apiRequests.length + intuit.state.tokenRequests.length + intuit.state.revokeRequests.length,
+      foreignCredentialIntact: () => [...h.rows.values()].filter((r) => (r.provider as string) === "google").every((r) => h.secrets.has(r.id)),
       loader: { loadConnection: (laneId: string, id: string) => h.connections.load(laneId, id) } as unknown as ConnectionLoader<never>,
       laneId: "PKG",
       otherLaneId: "APK",

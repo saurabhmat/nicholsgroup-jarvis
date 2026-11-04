@@ -70,6 +70,24 @@
       "dependsOn": [
         "^test"
       ]
+    },
+    "test:bundle": {
+      "inputs": [
+        "app/**",
+        "components/**",
+        "lib/**",
+        "proxy.ts",
+        "instrumentation.ts",
+        "next.config.ts",
+        "package.json",
+        "tsconfig.json",
+        "scripts/client-bundle-check.mjs",
+        "tests/bundle/**",
+        "vitest.bundle.config.ts",
+        "../../packages/*/src/**",
+        "../../packages/*/package.json"
+      ],
+      "outputs": []
     }
   }
 }

@@ -90,7 +90,7 @@ export type ConnectFailure =
 
 export type CallbackResult =
   | { ok: true; provider: Provider; laneId: LaneId; connectionId: string }
-  | { ok: false; reason: ConnectFailure; provider?: Provider; laneId?: LaneId };
+  | { ok: false; reason: ConnectFailure; provider?: Provider; laneId?: LaneId; message?: string };
 
 /** Thrown by `authorize` callbacks; the route maps it to 401/403. Anything else is an outage. */
 export type AuthorizeFn = (laneId: LaneId) => Promise<Authorized>;
@@ -99,6 +99,13 @@ const OUTAGE_KINDS: ReadonlySet<string> = new Set(["transient", "rate_limited", 
 /** Scopes any OpenID provider adds on its own; everything else the token carries must have been requested. */
 const OIDC_SCOPES = ["openid", "profile", "email", "offline_access"];
 const SLUG = /^[a-z][a-z0-9-]{1,31}$/;
+/**
+ * Shown when the code was exchanged but the account was refused or storing failed. The tokens are dropped from memory and
+ * never stored. Revoking the grant at the provider is an external write and may run only through approvals (D-24), so
+ * the flow does not do it: the user is told to remove the app's access at the provider.
+ */
+export const GRANT_NOT_STORED_MESSAGE =
+  "Nothing was connected and no access was stored. If the provider still lists this app as authorised, remove its access in your provider account.";
 
 /** The HTTP client for a provider's token endpoint: OAuth error codes (`error`) and the provider's request id are captured. */
 export function defaultOAuthHttp(p: OAuthProvider, laneId: LaneId, baseUrl: string, logger?: ConnectorLogger): HttpClient {
@@ -184,6 +191,7 @@ export function createOAuthFlow(deps: OAuthFlowDeps) {
         return { ok: false, reason: "denied", provider: p.provider, laneId };
       }
       const code = query.get("code") as string;
+      let exchanged = false; // a grant exists at the provider (see GRANT_NOT_STORED_MESSAGE)
 
       try {
         const conn = await withAudit(deps.audit, entry, async () => {
@@ -196,6 +204,9 @@ export function createOAuthFlow(deps: OAuthFlowDeps) {
             }
           }
           const tokens = await exchange(p, laneId, code, stored.codeVerifier, stored.redirectUri);
+          // From here a grant exists at the provider. If anything stops us before it is stored, the tokens are simply
+          // dropped (never stored, never logged) and the owner is told to remove the app's access (D-24: no revoke here).
+          exchanged = true;
           const http = httpFor(p, laneId, new URL((await p.endpoints(laneId)).token).origin);
           let identity: { externalAccountId: string; expiresAt: Date | null };
           try {
@@ -217,6 +228,12 @@ export function createOAuthFlow(deps: OAuthFlowDeps) {
           reason,
           error: isConnectorError(cause) ? cause : { error_name: cause instanceof Error ? cause.name : typeof cause },
         });
+        if (exchanged) {
+          await deps.audit
+            .log({ ...entry, action: "connection.connect.grant_not_stored", metadata: { reason } })
+            .catch(() => undefined);
+          return { ok: false, reason, provider: p.provider, laneId, message: GRANT_NOT_STORED_MESSAGE };
+        }
         return { ok: false, reason, provider: p.provider, laneId };
       }
     },

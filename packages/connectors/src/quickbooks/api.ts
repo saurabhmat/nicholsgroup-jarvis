@@ -5,6 +5,7 @@
 import type { LaneId } from "@nichols/core";
 import { isConnectorError } from "../contract/errors";
 import type { LaneBoundConnection } from "../contract/lane-bound";
+import { assertQuickbooksConnection } from "./guard";
 import { createHttpClient, type ConnectorResponse, type HttpClient, type HttpClientOptions } from "../http/client";
 import type { ConnectorLogger } from "../log/index";
 import type { SecretValue } from "../vault/secret";
@@ -57,6 +58,7 @@ export function createQboApi(deps: QboApiDeps): QboApi {
 
   return {
     async get<T = unknown>(laneId: LaneId, conn: LaneBoundConnection<string>, path: string, params?: Record<string, string | number>, query?: Record<string, string | number | boolean | null | undefined>) {
+      assertQuickbooksConnection(conn); // before any request or token read: another provider's token never goes to Intuit
       const http = httpFor(laneId, conn);
       let used: SecretValue | undefined;
       const request = (rejected?: SecretValue) =>

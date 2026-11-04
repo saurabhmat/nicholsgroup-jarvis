@@ -9,8 +9,11 @@
 //    stored a newer set. The loser discards its own result and uses the winner's stored token;
 //  - the new set is stored in the same step that discards the old one (one Vault secret per connection), so there is
 //    never a moment with two stored refresh tokens or none.
-// `invalid_grant` (revoked or expired refresh token) is `reconnect_required` and is never retried (QB-3, QB-4);
-// recording that status and notifying the admin is T-195.
+// The refresh POST is never retried once it may have been sent: if Intuit rotates the token on the first request, a
+// repeat with the old one is `invalid_grant`. When the POST times out, or Intuit answers `invalid_grant`, the Vault is
+// read again: if the stored set changed, another instance won the race and its set is used, whatever grace period
+// Intuit does or does not give the previous refresh token. Only an unchanged store means `reconnect_required` (QB-3,
+// QB-4); recording that status and notifying the admin is T-195.
 import type { LaneId } from "@nichols/core";
 import { z } from "zod";
 import { ConnectorError, isConnectorError } from "../contract/errors";
@@ -21,6 +24,7 @@ import { TokenResponseSchema } from "../oauth/flow";
 import type { TokenVault } from "../vault/tokens";
 import { SecretValue } from "../vault/secret";
 import { INTUIT_TID_HEADER, REFRESH_SKEW_MS } from "./constants";
+import { assertQuickbooksConnection } from "./guard";
 
 const StoredSchema = z.looseObject({
   access_token: z.string().min(1).max(8192),
@@ -48,7 +52,12 @@ export type TokenManagerDeps = {
   httpFor?: (laneId: LaneId, connectionId: string, baseUrl: string) => HttpClient;
   now?: () => number;
   logger?: ConnectorLogger;
+  /** Pauses between re-reads of the Vault after a failed refresh (a winner may not have stored yet). Test hook. */
+  sleep?: (ms: number) => Promise<void>;
 };
+
+/** Re-reads of the Vault after a failed refresh, and the pause before each: the winner stores right after Intuit answers. */
+const REREAD_DELAYS_MS = [0, 250, 500];
 
 export interface TokenManager {
   /**
@@ -96,10 +105,25 @@ export function createTokenManager(deps: TokenManagerDeps): TokenManager {
         errorCode: (b) => (b as { error?: unknown } | null)?.error as string | undefined,
         ...(deps.logger ? { logger: deps.logger } : {}),
       }));
+  const sleep = deps.sleep ?? ((ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms)));
   const inflight = new Map<string, Promise<StoredTokens>>();
 
   async function readStored(laneId: LaneId, conn: LaneBoundConnection<string>): Promise<StoredTokens> {
     return parseStored(await deps.vault.getToken(laneId, conn));
+  }
+
+  /** The stored set when it is not `stored` any more (re-read a few times: the winner stores just after Intuit answers). */
+  async function newerStored(laneId: LaneId, conn: LaneBoundConnection<string>, stored: StoredTokens): Promise<StoredTokens | null> {
+    for (const delay of REREAD_DELAYS_MS) {
+      if (delay > 0) await sleep(delay);
+      try {
+        const current = await readStored(laneId, conn);
+        if (current.raw.reveal() !== stored.raw.reveal()) return current;
+      } catch {
+        return null; // cannot tell: report the original failure
+      }
+    }
+    return null;
   }
 
   async function refresh(laneId: LaneId, conn: LaneBoundConnection<string>, stored: StoredTokens): Promise<StoredTokens> {
@@ -112,12 +136,20 @@ export function createTokenManager(deps: TokenManagerDeps): TokenManager {
         path: tokenUrl.pathname,
         body: new URLSearchParams({ grant_type: "refresh_token", refresh_token: stored.refresh.reveal() }),
         auth: { scheme: "Basic", secret: basicCredentials(clientId, clientSecret) },
-        // Safe to retry: a refresh whose response was lost leaves the old refresh token usable (it is only replaced
-        // when we store the new one).
-        retry: true,
+        // Never retried: once sent, Intuit may already have rotated the token, and a repeat would be `invalid_grant`.
+        retry: false,
       });
       data = res.data;
     } catch (e) {
+      if (isConnectorError(e) && (e.info.provider_error_code === "invalid_grant" || e.info.kind === "timeout" || e.info.kind === "transient")) {
+        // The request may have been processed, or another instance's refresh may have used our refresh token first:
+        // if the stored set is no longer the one we used, someone else won and that set is the answer.
+        const winner = await newerStored(laneId, conn, stored);
+        if (winner) {
+          log.child({ laneId, provider: "quickbooks", connectionId: conn.id }).warn("connector.token_refresh_lost_race", {});
+          return winner;
+        }
+      }
       if (isConnectorError(e) && e.info.provider_error_code === "invalid_grant") {
         throw new ConnectorError({
           kind: "reconnect_required",
@@ -173,6 +205,7 @@ export function createTokenManager(deps: TokenManagerDeps): TokenManager {
   return {
     async accessToken(laneId, conn, options) {
       assertLaneBound(laneId, conn);
+      assertQuickbooksConnection(conn);
       const rejected = options?.rejected?.reveal();
       let tokens = await flight(laneId, conn, rejected);
       // Joined a flight that started before this caller's 401 and found nothing to do: go around once more.
@@ -181,6 +214,7 @@ export function createTokenManager(deps: TokenManagerDeps): TokenManager {
     },
     async refreshToken(laneId, conn) {
       assertLaneBound(laneId, conn);
+      assertQuickbooksConnection(conn);
       return (await readStored(laneId, conn)).refresh;
     },
   };

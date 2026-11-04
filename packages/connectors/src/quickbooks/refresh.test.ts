@@ -23,6 +23,7 @@ async function setup(intuitOptions: Parameters<typeof createFakeIntuit>[0] = {},
   server.use(...intuit.handlers);
   const h = createQboHarness({ intuit, realms });
   const conn = await h.connectViaCallback(LANE);
+  intuit.state.apiRequests.length = 0; // the connect callback's own CompanyInfo check is not under test here
   return { intuit, h, conn };
 }
 
@@ -148,6 +149,63 @@ describe("concurrent refresh does not lose the rotating token", () => {
     expect(h.logs.filter((l) => l.event === "connector.token_refresh_lost_race")).toHaveLength(1);
   });
 
+  it("strict Intuit (no grace period): the loser's refresh is invalid_grant, yet it ends up with the winner's tokens (security M4)", async () => {
+    const { intuit, h, conn } = await setup({ tokenDelayMs: 25, strictRotation: true });
+    const instanceA = h.newTokenManager();
+    const instanceB = h.newTokenManager();
+    h.clock.t += 59 * 60_000;
+    const [a, b] = await Promise.all([instanceA.accessToken(LANE, conn), instanceB.accessToken(LANE, conn)]);
+    // Both really called Intuit with the same refresh token; one was refused because the winner's rotation replaced it.
+    expect(refreshCalls(intuit)).toHaveLength(2);
+    expect(new Set(refreshCalls(intuit).map((r) => r.form.get("refresh_token"))).size).toBe(1);
+    expect(intuit.state.issued).toHaveLength(2); // the first connect, one successful refresh
+    // The loser did not report reconnect_required: both callers hold the stored (winner's) token.
+    const set = stored(h, conn.id);
+    expect(a.reveal()).toBe(set.access_token);
+    expect(b.reveal()).toBe(set.access_token);
+    expect(h.stats.rotations).toBe(1);
+    expect(intuit.state.validRefresh.has(set.refresh_token)).toBe(true);
+    expect(h.logs.filter((l) => l.event === "connector.token_refresh_lost_race")).toHaveLength(1);
+    // The refresh POST was never repeated.
+    expect(refreshCalls(intuit)).toHaveLength(2);
+  });
+
+  it("the refresh POST is not retried when the response is lost; if the store moved on meanwhile, that set is used", async () => {
+    const { intuit, h, conn } = await setup({ strictRotation: true });
+    const before = h.secrets.get(conn.id);
+    let posts = 0;
+    server.use(
+      http.post(OAUTH_TOKEN, async () => {
+        posts += 1;
+        // Another instance won while this request was in flight: store its set, then lose our response.
+        const { SecretValue } = await import("../vault/secret");
+        await h.vault.rotateToken(LANE, conn, new SecretValue(JSON.stringify({ access_token: "synthetic-winner-access", refresh_token: "synthetic-winner-refresh", expires_in: 3600, obtained_at: new Date(h.clock.t).toISOString() })), null, new SecretValue(before ?? ""));
+        return HttpResponse.error();
+      }),
+    );
+    h.clock.t += 59 * 60_000;
+    const token = await h.tokens.accessToken(LANE, conn);
+    expect(posts).toBe(1);
+    expect(token.reveal()).toBe("synthetic-winner-access");
+    void intuit;
+  });
+
+  it("a timeout with nothing new in the store reports the failure (not reconnect_required) and does not retry", async () => {
+    const { h, conn } = await setup();
+    let posts = 0;
+    server.use(
+      http.post(OAUTH_TOKEN, () => {
+        posts += 1;
+        return HttpResponse.error();
+      }),
+    );
+    h.clock.t += 59 * 60_000;
+    const err = (await h.tokens.accessToken(LANE, conn).catch((e: unknown) => e)) as ConnectorError;
+    expect(err).toBeInstanceOf(ConnectorError);
+    expect(err.info.kind).not.toBe("reconnect_required");
+    expect(posts).toBe(1);
+  });
+
   it("a stale writer cannot overwrite a newer set (the compare-and-swap itself)", async () => {
     const { h, conn } = await setup();
     const before = need(h.secrets.get(conn.id));
@@ -189,24 +247,20 @@ describe("failures", () => {
     expect(err.info.provider_error_code).toBe("invalid_client");
   });
 
-  it("a transient token endpoint failure is retried and does not lose the old refresh token", async () => {
-    const { intuit, h, conn } = await setup();
+  it("a transient token endpoint failure is NOT retried (the request may have been processed) and keeps the old refresh token", async () => {
+    const { h, conn } = await setup();
+    const before = h.secrets.get(conn.id);
     let calls = 0;
     server.use(
-      http.post(OAUTH_TOKEN, async ({ request }) => {
+      http.post(OAUTH_TOKEN, () => {
         calls += 1;
-        if (calls === 1) return new HttpResponse(null, { status: 503 });
-        // fall through to the fake for the retry
-        const form = new URLSearchParams(await request.text());
-        const old = need(intuit.state.issued[0]);
-        if (form.get("refresh_token") !== old.refresh) return HttpResponse.json({ error: "invalid_grant" }, { status: 400 });
-        return HttpResponse.json({ access_token: "synthetic-access-token-retry", refresh_token: "synthetic-refresh-token-retry", expires_in: 3600, x_refresh_token_expires_in: 8_726_400 });
+        return new HttpResponse(null, { status: 503 });
       }),
     );
     h.clock.t += 59 * 60_000;
-    const token = await h.tokens.accessToken(LANE, conn);
-    expect(calls).toBe(2);
-    expect(token.reveal()).toBe("synthetic-access-token-retry");
+    await expect(h.tokens.accessToken(LANE, conn)).rejects.toMatchObject({ info: { kind: "transient" } });
+    expect(calls).toBe(1);
+    expect(h.secrets.get(conn.id)).toBe(before);
   });
 
   it("a malformed stored credential is a provider_error that never echoes the stored text", async () => {

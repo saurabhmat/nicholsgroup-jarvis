@@ -10,6 +10,7 @@
     "lint": "eslint",
     "check:env-build": "node scripts/check-env-build.mjs",
     "test": "vitest run",
+    "test:bundle": "vitest run --config vitest.bundle.config.ts",
     "test:e2e": "playwright test"
   },
   "dependencies": {

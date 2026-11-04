@@ -38,6 +38,8 @@ export function createConnectHandlers(flow: Pick<ReturnType<typeof createOAuthFl
         const home = new URL("/", url.origin);
         home.searchParams.set("connect", result.ok ? "ok" : result.reason);
         if (result.provider) home.searchParams.set("provider", result.provider);
+        // The code was exchanged but nothing was stored: the owner is told to remove the app's access at the provider (D-24).
+        if (!result.ok && result.message) home.searchParams.set("notice", "remove_app_access");
         return new Response(null, { status: 303, headers: { ...NO_STORE, location: home.pathname + home.search, "referrer-policy": "no-referrer" } });
       } catch (e) {
         const res = authErrorResponse(e);

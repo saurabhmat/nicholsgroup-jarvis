@@ -18,6 +18,15 @@ export const CANARIES = {
   SUPABASE_SECRET_KEY: "sb_secret_canaryServerKey0123456789",
 };
 
+/**
+ * Positive control: a NEXT_PUBLIC_ value, which Next.js inlines wherever code reads it literally. The scan of a real build
+ * must FIND it; if it does not, the build never saw the environment or the scan looked at the wrong place, and a clean
+ * result for the secrets above would mean nothing.
+ */
+export const CONTROL_CANARIES = {
+  NEXT_PUBLIC_APP_URL: "http://canary-control-8f2a41.localhost:3000",
+};
+
 /** A canary plus the encodings it could leak in. */
 export function forms(value) {
   const bytes = Buffer.from(value, "utf8");
@@ -36,7 +45,11 @@ function* walk(dir) {
   }
 }
 
-/** Files under `dir` that contain any canary (in any encoding). Returns [{ file, name }] and the number of files scanned. */
+/**
+ * Files under `dir` that contain any canary (in any encoding). Returns [{ file, name }] and the number of files scanned.
+ * @param {string} dir
+ * @param {Record<string, string>} [canaries]
+ */
 export function scanForCanaries(dir, canaries = CANARIES) {
   const needles = Object.entries(canaries).flatMap(([name, value]) => forms(value).map((form) => ({ name, form })));
   const hits = [];
@@ -56,6 +69,12 @@ export function buildWithCanaries() {
   if (polluting.length > 0) throw new Error(`client-bundle-check refused: remove ${polluting.join(", ")} first (Next.js would load it).`);
   const dist = path.join(web, DIST_DIR);
   rmSync(dist, { recursive: true, force: true });
+  // A killed earlier run may have left its backup: put the original back first.
+  const staleBackup = path.join(web, "next-env.d.ts.canary-backup");
+  if (existsSync(staleBackup)) {
+    copyFileSync(staleBackup, path.join(web, "next-env.d.ts"));
+    unlinkSync(staleBackup);
+  }
   const env = {
     ...Object.fromEntries(
       Object.entries(process.env).filter(([k]) => /^(PATH|HOME|USER|SHELL|LANG|LC_[A-Z]+|TERM|TMPDIR|TEMP|TMP|NODE_[A-Z_]+|npm_[a-z_]+|PNPM_[A-Z_]+|COREPACK_[A-Z_]+|XDG_[A-Z_]+)$/.test(k)),
@@ -63,24 +82,28 @@ export function buildWithCanaries() {
     NEXT_DIST_DIR: DIST_DIR,
     APP_ENV: "local",
     ENABLED_LANES: "PKG",
-    NEXT_PUBLIC_APP_URL: "http://localhost:3000",
     NEXT_PUBLIC_SUPABASE_URL: "http://127.0.0.1:54321",
     NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY: "sb_publishable_canaryPublicKey0123456789",
+    ...CONTROL_CANARIES,
     ...CANARIES,
   };
-  // `next build` may rewrite next-env.d.ts; put it back as it was.
+  // `next build` may rewrite next-env.d.ts; put it back as it was, whatever happens (the backup is never left behind).
   const dts = path.join(web, "next-env.d.ts");
   const backup = `${dts}.canary-backup`;
-  if (existsSync(dts)) copyFileSync(dts, backup);
-  const result = spawnSync("pnpm", ["exec", "next", "build"], { cwd: web, env, encoding: "utf8", timeout: 8 * 60 * 1000, maxBuffer: 64 * 1024 * 1024 });
-  if (existsSync(backup)) {
-    copyFileSync(backup, dts);
-    unlinkSync(backup);
+  let result;
+  try {
+    if (existsSync(dts)) copyFileSync(dts, backup);
+    result = spawnSync("pnpm", ["exec", "next", "build"], { cwd: web, env, encoding: "utf8", timeout: 8 * 60 * 1000, maxBuffer: 64 * 1024 * 1024 });
+  } finally {
+    if (existsSync(backup)) {
+      copyFileSync(backup, dts);
+      unlinkSync(backup);
+    }
   }
   if (result.error || result.status !== 0) {
-    // Build output can echo configuration; print only its tail, and only if it carries no canary.
+    // Build output can echo configuration; print only its tail, and only if it carries no canary (in any encoding).
     const tail = `${result.stdout ?? ""}${result.stderr ?? ""}`.split("\n").slice(-40).join("\n");
-    const safe = Object.values(CANARIES).every((c) => !tail.includes(c));
+    const safe = Object.values({ ...CANARIES, ...CONTROL_CANARIES }).every((c) => forms(c).every((f) => !tail.includes(f)));
     throw new Error(`next build failed (status ${result.status ?? "none"})${safe ? `:\n${tail}` : " (output withheld)"}`);
   }
   if (!existsSync(dist)) throw new Error(`build produced no ${DIST_DIR}`);

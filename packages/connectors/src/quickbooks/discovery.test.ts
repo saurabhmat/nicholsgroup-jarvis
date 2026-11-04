@@ -76,6 +76,12 @@ describe("parseDiscoveryDocument", () => {
     ["query on the token endpoint", { token_endpoint: `${OAUTH_TOKEN}?x=1` }],
     ["custom port", { token_endpoint: "https://oauth.platform.intuit.com:8443/oauth2/v1/tokens/bearer" }],
     ["not a URL", { revocation_endpoint: "nope" }],
+    // Pinned per endpoint (security L2): another intuit.com host is not good enough.
+    ["token endpoint on another intuit.com host", { token_endpoint: "https://appcenter.intuit.com/oauth2/v1/tokens/bearer" }],
+    ["authorization endpoint on the token host", { authorization_endpoint: "https://oauth.platform.intuit.com/connect/oauth2" }],
+    ["revocation endpoint on a sandbox api host", { revocation_endpoint: "https://sandbox-quickbooks.api.intuit.com/v2/oauth2/tokens/revoke" }],
+    ["bare intuit.com", { token_endpoint: "https://intuit.com/oauth2/v1/tokens/bearer" }],
+    ["trailing-dot host", { token_endpoint: "https://oauth.platform.intuit.com./oauth2/v1/tokens/bearer" }],
     ["missing field", { token_endpoint: undefined }],
   ])("refuses %s", (_name, patch) => {
     expect(() => parseDiscoveryDocument({ ...good, ...patch })).toThrow(ConnectorError);

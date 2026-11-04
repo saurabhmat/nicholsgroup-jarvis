@@ -7,9 +7,9 @@ import { ConnectorError } from "../contract/errors";
 import { createConnectHandlers } from "../oauth/handlers";
 import { CONNECT_ROLES } from "../oauth/flow";
 import { RateLimiter } from "../http/rate-limit";
-import { useMockServer } from "../testing/msw/index";
+import { http, HttpResponse, useMockServer } from "../testing/msw/index";
 import { createQboHarness } from "../testing/quickbooks-harness";
-import { AUTHORIZE_URL, createFakeIntuit, FAKE_CLIENT_ID, FAKE_CODE, FAKE_REALM } from "../testing/msw/quickbooks/handlers";
+import { API_SANDBOX, AUTHORIZE_URL, createFakeIntuit, FAKE_CLIENT_ID, FAKE_CODE, FAKE_REALM } from "../testing/msw/quickbooks/handlers";
 import { SecretValue } from "../vault/secret";
 import { createQuickBooksOAuthProvider } from "./provider";
 
@@ -295,40 +295,130 @@ describe("who may connect (owner or admin_technical of the lane, at aal2)", () =
   });
 });
 
-describe("tokens enter the Vault only from the callback (QB-7)", () => {
-  it("the connector refuses a Vault secret reference, so no Playground or offline token can be imported", async () => {
-    const { h } = setup();
-    await expect(
-      h.connector.connect("PKG", { kind: "vault_secret", secret_ref: "00000000-0000-4000-8000-0000000000f1", external_account_id: FAKE_REALM }),
-    ).rejects.toMatchObject({ info: { kind: "invalid_input", message: expect.stringContaining("in-app") } });
+describe("the realm in the redirect URL must be the realm of the token (security M1, L6, D-24)", () => {
+  const OTHER_REALM = "1234567890123456";
+
+  it("an edited realmId (token is for company A, URL says B) is refused: nothing stored, no revoke request, the tokens are dropped", async () => {
+    // Intuit issues a token for the fake's company (FAKE_REALM); the user edits the callback to name another company.
+    const { intuit, h } = setup({ PKG: null });
+    // The lane is already connected to the other company with working tokens.
+    const existing = await h.connectViaCallback("PKG", ADMIN, FAKE_REALM);
+    const storedBefore = h.secrets.get(existing.id);
+    const url = await h.flow.start("qbo", "PKG", h.as(ADMIN));
+    const r = await h.flow.callback("qbo", query(url, { code: FAKE_CODE, realmId: OTHER_REALM }), h.as(ADMIN));
+    expect(r).toMatchObject({ ok: false, reason: "account_refused", laneId: "PKG", message: expect.stringContaining("remove its access") });
+    // The code was exchanged (a grant exists) and CompanyInfo for the edited realm failed with the new token.
+    expect(intuit.state.tokenRequests.filter((t) => t.grant === "authorization_code")).toHaveLength(2);
+    // Nothing stored, no new connection, the existing tokens are untouched.
+    expect(h.secrets.get(existing.id)).toBe(storedBefore);
+    expect(h.rows.size).toBe(1);
+    expect(h.stats.stores).toBe(1);
+    // D-24: no revoke request is sent (it would be an external write); the refusal is audited.
+    expect(intuit.state.revokeRequests).toHaveLength(0);
+    expect(h.audits.map((a) => a.action)).toContain("connection.connect.failed");
+    expect(h.audits.map((a) => a.action)).toContain("connection.connect.grant_not_stored");
+    // The tokens never reach the log or the audit trail.
+    const text = JSON.stringify([h.logs, h.audits]);
+    for (const pair of intuit.state.issued) expect(text).not.toMatch(new RegExp(`${pair.access}|${pair.refresh}`));
+  });
+
+  it("a CompanyInfo answer for a different company than the realm is refused the same way", async () => {
+    const { intuit, h } = setup();
+    server.use(
+      http.get(`${API_SANDBOX}/v3/company/:realm/companyinfo/:id`, () => HttpResponse.json({ CompanyInfo: { Id: "5555555555" } }, { headers: { intuit_tid: "synthetic-tid-x" } })),
+    );
+    const url = await h.flow.start("qbo", "PKG", h.as(ADMIN));
+    expect(await h.flow.callback("qbo", query(url), h.as(ADMIN))).toMatchObject({ ok: false, reason: "account_refused" });
     expect(h.secrets.size).toBe(0);
     expect(h.rows.size).toBe(0);
+    expect(intuit.state.revokeRequests).toHaveLength(0);
   });
 
-  it("the connector's own connect needs the registered redirect URI and the realm", async () => {
+  it("an outage while checking CompanyInfo is 'unavailable', not a refusal, and still stores nothing and revokes nothing", async () => {
     const { intuit, h } = setup();
-    const base = { kind: "oauth_code" as const, code: FAKE_CODE, external_account_id: FAKE_REALM };
-    await expect(h.connector.connect("PKG", { ...base, redirect_uri: "https://evil.example.test/cb" })).rejects.toMatchObject({ info: { kind: "invalid_input" } });
-    await expect(h.connector.connect("PKG", { kind: "oauth_code", code: FAKE_CODE, redirect_uri: REDIRECT })).rejects.toMatchObject({ info: { kind: "invalid_input" } });
-    expect(intuit.state.tokenRequests).toHaveLength(0);
+    intuit.state.failApi = { status: 503, times: 10 };
+    const url = await h.flow.start("qbo", "PKG", h.as(ADMIN));
+    const r = await h.flow.callback("qbo", query(url), h.as(ADMIN));
+    expect(r).toMatchObject({ ok: false, reason: "unavailable", message: expect.stringContaining("remove its access") });
+    expect(h.secrets.size).toBe(0);
+    expect(intuit.state.revokeRequests).toHaveLength(0);
   });
 
-  it("the connector's connect enforces the lane's realm before exchanging the code", async () => {
-    const { intuit, h } = setup({ PKG: "1111111111111111" });
-    await expect(h.connector.connect("PKG", { kind: "oauth_code", code: FAKE_CODE, redirect_uri: REDIRECT, external_account_id: FAKE_REALM })).rejects.toMatchObject({
-      info: { kind: "forbidden" },
-    });
-    expect(intuit.state.tokenRequests).toHaveLength(0);
+  it("the callback route adds a notice so the owner is told to remove the app's access in Intuit", async () => {
+    const { h } = setup();
+    server.use(http.get(`${API_SANDBOX}/v3/company/:realm/companyinfo/:id`, () => HttpResponse.json({ CompanyInfo: { Id: "5555555555" } })));
+    const url = await h.flow.start("qbo", "PKG", h.as(ADMIN));
+    const handlers = createConnectHandlers(h.flow, async () => h.as(ADMIN));
+    const res = await handlers.callback(new Request(`http://localhost:3000/api/connect/qbo/callback?${query(url)}`), "qbo");
+    expect(res.headers.get("location")).toBe("/?connect=account_refused&provider=quickbooks&notice=remove_app_access");
   });
 
-  it("nothing else in the package stores a token for QuickBooks: only the callback path and connect call storeToken", async () => {
+  it("a refusal before the exchange (wrong configured realm) has no grant and no notice", async () => {
+    const { h } = setup({ PKG: "1111111111111111" });
+    const url = await h.flow.start("qbo", "PKG", h.as(ADMIN));
+    const r = await h.flow.callback("qbo", query(url), h.as(ADMIN));
+    expect(r).toMatchObject({ ok: false, reason: "account_refused" });
+    expect(r).not.toHaveProperty("message");
+  });
+});
+
+describe("production: a lane without a configured realm cannot connect (security L1)", () => {
+  it("fails closed before any token is requested", async () => {
+    const intuit = createFakeIntuit();
+    server.use(...intuit.handlers);
+    const h = createQboHarness({ intuit, requireConfiguredRealm: true });
+    const url = await h.flow.start("qbo", "PKG", h.as(ADMIN));
+    expect(await h.flow.callback("qbo", query(url), h.as(ADMIN))).toMatchObject({ ok: false, reason: "account_refused" });
+    expect(intuit.state.tokenRequests).toHaveLength(0);
+    expect(h.secrets.size).toBe(0);
+  });
+
+  it("connects when the realm is configured", async () => {
+    const intuit = createFakeIntuit();
+    server.use(...intuit.handlers);
+    const h = createQboHarness({ intuit, requireConfiguredRealm: true, realms: { PKG: FAKE_REALM } });
+    expect((await h.connectViaCallback("PKG")).external_account_id).toBe(FAKE_REALM);
+  });
+
+  it("local and preview keep the first-connect behaviour (no realm configured is allowed)", async () => {
+    const intuit = createFakeIntuit();
+    server.use(...intuit.handlers);
+    const h = createQboHarness({ intuit, requireConfiguredRealm: false });
+    expect((await h.connectViaCallback("PKG")).external_account_id).toBe(FAKE_REALM);
+  });
+
+  it("the wiring requires a configured realm exactly when APP_ENV is production", async () => {
+    const { readFileSync } = await import("node:fs");
+    const src = readFileSync(new URL("./index.ts", import.meta.url), "utf8");
+    expect(src).toMatch(/requireConfiguredRealm:\s*\(\)\s*=>\s*getServerEnv\(\)\.APP_ENV === "production"/);
+  });
+});
+
+describe("tokens enter the Vault only from the callback (QB-7, security M2)", () => {
+  it("the connector's connect refuses every input (Vault reference, authorization code, Playground or offline token) with no request and no write", async () => {
+    const { intuit, h } = setup();
+    const inputs = [
+      { kind: "vault_secret" as const, secret_ref: "00000000-0000-4000-8000-0000000000f1", external_account_id: FAKE_REALM },
+      { kind: "oauth_code" as const, code: FAKE_CODE, redirect_uri: REDIRECT, external_account_id: FAKE_REALM, code_verifier: "v".repeat(43) },
+      { kind: "oauth_code" as const, code: FAKE_CODE, redirect_uri: REDIRECT },
+    ];
+    for (const input of inputs) {
+      await expect(h.connector.connect("PKG", input)).rejects.toMatchObject({ info: { kind: "invalid_input", message: expect.stringContaining("in-app") } });
+    }
+    expect(intuit.state.tokenRequests).toHaveLength(0);
+    expect(h.secrets.size).toBe(0);
+    expect(h.rows.size).toBe(0);
+    expect(h.stats.stores).toBe(0);
+  });
+
+  it("nothing else in the package stores a token for QuickBooks: only the wiring of the callback path calls storeToken", async () => {
     const { readFileSync, readdirSync } = await import("node:fs");
     const dir = new URL(".", import.meta.url);
     const offenders = readdirSync(dir)
       .filter((f) => f.endsWith(".ts") && !f.endsWith(".test.ts"))
       .filter((f) => /\bstoreToken\b/.test(readFileSync(new URL(f, dir), "utf8")))
       .sort();
-    // connector.ts (connect) and index.ts (wiring) only.
-    expect(offenders).toEqual(["connector.ts", "index.ts"]);
+    // index.ts (wiring) only; connector.ts has no way to store a token.
+    expect(offenders).toEqual(["index.ts"]);
   });
 });

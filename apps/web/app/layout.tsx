@@ -1,6 +1,7 @@
 import type { Metadata } from "next";
 import { Inter, Source_Serif_4 } from "next/font/google";
 import { PACKAGE_ID } from "@nichols/core";
+import { readClientEnvFromProcess } from "@nichols/core/env/client";
 import "./env-check";
 import "./globals.css";
 import { THEME_INIT } from "@nichols/ui";
@@ -19,7 +20,12 @@ const sourceSerif = Source_Serif_4({
   style: ["normal", "italic"],
 });
 
+// The public app URL (NEXT_PUBLIC_APP_URL) resolves relative metadata URLs. It is read literally, so Next.js inlines it at
+// build time: that is also the client-bundle test's positive control (tests/bundle).
+const appUrl = readClientEnvFromProcess().NEXT_PUBLIC_APP_URL;
+
 export const metadata: Metadata = {
+  ...(appUrl && URL.canParse(appUrl) ? { metadataBase: new URL(appUrl) } : {}),
   title: `${BRAND.wordmark} · ${BRAND.product}`,
   description: "Executive portal",
 };
