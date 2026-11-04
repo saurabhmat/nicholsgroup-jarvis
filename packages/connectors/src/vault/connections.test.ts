@@ -85,6 +85,15 @@ describe("createConnectionStore", () => {
     expect(JSON.stringify(err)).not.toMatch(/9341450000000001|connections_one_lane/);
   });
 
+  it("reports only the one-lane-per-account index as 'account in use'; any other unique violation is an outage", async () => {
+    const other = { code: "23505", message: 'duplicate key value violates unique constraint "some_other_key"' };
+    const err = await createConnectionStore(fake({ upsertError: other }).clientFor)
+      .ensureConnection("PKG", "quickbooks", "r")
+      .then(() => null, (e: { info: { kind: string; message: string } }) => e);
+    expect(err?.info.kind).toBe("transient");
+    expect(err?.info.message).not.toMatch(/another company/);
+  });
+
   it("maps refusals and outages without database text", async () => {
     expect(await kind(createConnectionStore(fake({ upsertError: { code: "23514", message: "violates check sk_live_x" } }).clientFor).ensureConnection("PKG", "quickbooks", "sk_live_x"))).toBe("invalid_input");
     expect(await kind(createConnectionStore(fake({ upsertError: { code: "XX000" } }).clientFor).ensureConnection("PKG", "quickbooks", "r"))).toBe("transient");

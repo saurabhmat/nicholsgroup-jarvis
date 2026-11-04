@@ -1,6 +1,6 @@
 import { createHash } from "node:crypto";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { ConnectorError } from "../contract/errors";
+import { ACCOUNT_IN_USE_MESSAGE, ConnectorError } from "../contract/errors";
 import { mintLaneBoundConnection } from "../contract/lane-bound";
 import { createConnectionLoader, CONNECTION_COLUMNS } from "./loader";
 import { forgetSecretsForTests, SecretValue } from "./secret";
@@ -77,13 +77,23 @@ describe("createTokenVault", () => {
     ["55000", "connection_unavailable"],
     ["22023", "invalid_input"],
     ["42501", "forbidden"],
-    ["23505", "forbidden"],
+    ["D0023", "forbidden"],
+    ["23505", "transient"],
     ["XX000", "transient"],
   ])("maps database error %s to %s without passing the database message on", async (code, kind) => {
     const { clientFor } = fakeClient({ error: { code, message: "row (synthetic-leak-1) failed" } });
     const p = createTokenVault(clientFor).getToken("PKG", conn());
     expect(await kindOf(p)).toBe(kind);
     await p.catch((e: ConnectorError) => expect(JSON.stringify(e)).not.toContain("synthetic-leak-1"));
+  });
+
+  it("reports 'account in use' for D0023 only, never for a plain unique violation (23505)", async () => {
+    const msg = async (code: string) => {
+      const { clientFor } = fakeClient({ error: { code, message: "x" } });
+      return createTokenVault(clientFor).storeToken("PKG", conn(), new SecretValue("synthetic-token-9"), null).then(() => "", (e: ConnectorError) => e.info.message);
+    };
+    expect(await msg("D0023")).toBe(ACCOUNT_IN_USE_MESSAGE);
+    expect(await msg("23505")).not.toBe(ACCOUNT_IN_USE_MESSAGE);
   });
 
   it("treats a thrown client or an unavailable lane as safe errors", async () => {

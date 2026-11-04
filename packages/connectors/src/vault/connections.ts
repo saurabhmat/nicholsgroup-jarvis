@@ -16,6 +16,7 @@ export interface ConnectionStore {
   findConnection(laneId: LaneId, provider: Provider): Promise<LaneBoundConnection | null>;
 }
 
+const ONE_LANE_INDEX = "connections_one_lane_per_account";
 const LANE_ID = /^[A-Z]{1,8}$/;
 
 export function createConnectionStore(clientFor: JobClientFor): ConnectionStore {
@@ -38,8 +39,10 @@ export function createConnectionStore(clientFor: JobClientFor): ConnectionStore 
           { onConflict: "lane_id,provider,external_account_id", ignoreDuplicates: true },
         );
         // 23514: a check refused the account id (format, or it looks like a secret). Database text is never passed on.
-        // 23505: the one-lane-per-account index (D-23): this account is connected in another lane.
-        if (inserted.error?.code === "23505") throw new ConnectorError({ kind: "forbidden", message: ACCOUNT_IN_USE_MESSAGE });
+        // 23505 on the one-lane-per-account index (D-23): this account is connected in another lane. The index is
+        // identified by its name in the error; any other unique violation stays a generic outage. (The index excludes
+        // pending rows, so this insert is not expected to hit it; the refusal normally comes when the token is stored.)
+        if (inserted.error?.code === "23505" && typeof inserted.error.message === "string" && inserted.error.message.includes(ONE_LANE_INDEX)) throw new ConnectorError({ kind: "forbidden", message: ACCOUNT_IN_USE_MESSAGE });
         if (inserted.error?.code === "23514") throw new ConnectorError({ kind: "invalid_input", message: "The provider account id was refused" });
         if (inserted.error) throw inserted.error;
         const { data, error } = await table()

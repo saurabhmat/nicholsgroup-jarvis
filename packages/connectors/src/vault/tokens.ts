@@ -52,8 +52,10 @@ const ERRORS: Record<string, { kind: ConnectorErrorKind; message: string }> = {
   "22004": { kind: "invalid_input", message: "Lane and connection are required" },
   // 40001 (a lost compare-and-swap) is handled by rotateToken itself and never reaches this map.
   "42501": { kind: "forbidden", message: "Token access refused" },
-  // Reactivating a connection whose account another lane now holds (D-23, unique index connections_one_lane_per_account).
-  "23505": { kind: "forbidden", message: ACCOUNT_IN_USE_MESSAGE },
+  // The provider account is held by another lane (D-23): raised by core.connection_token_store only for a violation of
+  // the index connections_one_lane_per_account. Any other 23505 (connection_secrets key, Vault secret name) is a real
+  // fault and stays a generic "Token store unavailable".
+  D0023: { kind: "forbidden", message: ACCOUNT_IN_USE_MESSAGE },
   "42883": { kind: "provider_error", message: "Token functions are not installed" },
 };
 
