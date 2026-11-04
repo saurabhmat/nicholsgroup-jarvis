@@ -141,6 +141,7 @@ These tasks have all their dependencies done and all their `needs` checked. A hu
 - [x] H-017 Intuit **production** approval (Oct 28, 2026): app assessment submitted, production keys issued and kept in 1Password only (never in `.env.local`). Connecting the live PKG file moved to H-024
 - [x] H-018 Local toolchain (Oct 23, 2026): Node 24.19.0 kept locally (CI stays on 22), pnpm 12.15.0 via corepack, Supabase CLI 2.122.0 (npm global)
 - [ ] H-029 App icon for the installable app (T-025): a square master at least 1024×1024 px (PNG or SVG, no transparency for iOS), approved by Robert, saved as `docs/design/app-icon.png` (or `.svg`). The agent generates the manifest sizes from it.
+- [x] D-23 One provider account per lane (T-035 security M1). Decided Nov 4, 2026 by Saurabh: a provider account (QuickBooks realm, and likewise Stripe account, GoHighLevel location) connects to **one lane only**, never shared. Enforced by a partial unique index on `core.connections` (provider + external account id, active connections) with pgTAP, in the T-050 follow-up.
 - [ ] H-030 (optional; screenshots of every page are already in `docs/design/batch1/`) Save the batch-1 prototype PDF as `docs/design/Jarvis_Pilot_Prototype_Batch1_v2.pdf` and make the canvas link readable by the Claude Code account (it returned "not found" on Nov 4, 2026). D-20 is closed on Saurabh's approval; this keeps the signed-off record in the repo.
 - [x] D-22 Brand wordmark (T-023 reviews, rule 2). Decided Nov 4, 2026 by Saurabh: the wordmark is the product name **"Jarvis"** with "Executive Portal" for every company; Pub K is one company of several and its name appears only in the company switcher (from the lane record). Applied in `apps/web/lib/brand.ts`.
 - [x] H-020 Docker access for your user (Oct 24, 2026): user is in the `docker` group; `docker info` works in a fresh login. A process started before the group change (e.g. an old VS Code server / Claude Code session) still gets "permission denied" until it is restarted.
@@ -154,7 +155,7 @@ These tasks have all their dependencies done and all their `needs` checked. A hu
 - [ ] D-5 Production domain (default `portal.pub-k.org`)
 - [x] D-6 Sign-in: Supabase 6-digit email code (primary; required inside the installed iPhone app) or magic link, plus Supabase TOTP MFA (AAL2) for all users; Resend for delivery
 - [x] D-7 Keep Next.js 16 (`proxy.ts`); pnpm workspaces + Turborepo
-- [ ] D-8 Sophie supplies the lane_config entity mapping values: the QBO class IDs (and customer IDs where classes are missing), Stripe product IDs, GoHighLevel tags/products and bank-account owners for Ask Pub K and Pub K Institute. Decided: PKG excludes APK and PKI. Also open (Oct 28, 2026): whether Ask Pub K, Pub K Institute and Nichols Capital are classes inside the PKG QuickBooks file or separate files; if separate, Sophie grants Saurabh access or connects them herself.
+- [ ] D-8 Sophie supplies the lane_config entity mapping values: the QBO class IDs (and customer IDs where classes are missing), Stripe product IDs, GoHighLevel tags/products and bank-account owners for Ask Pub K and Pub K Institute. Decided: PKG excludes APK and PKI. Partly answered Nov 4, 2026 (Saurabh): **Pub K Group, Ask Pub K and Nichols Law each have their own QuickBooks file**; each connects to its own lane only. Still open: whether Pub K Institute and Nichols Capital are classes inside the PKG file or separate files; for a separate file, Sophie grants Saurabh access or connects it herself.
 - [x] D-9 MRR and churn definitions (Oct 24, 2026); full definitions in `docs/plan-review.md` §7
 - [x] D-10 Release A by Nov 25 / Release B Dec 7–31 (see "Releases" above)
 - [x] D-11 PKG approvals go live Nov 25 after the pilot security test (T-170); Dec 29 applies to other lanes only
@@ -465,6 +466,11 @@ Scope: read-only, Accounting API only (no Payments, no Payroll); never create, u
 - status: proposed
 - depends: T-050, T-031, T-041
 - acceptance: Owns QB-9 (storage), QB-15. Per-connection sync runs (`core.sync_runs`) and a lane-scoped `core.connector_api_errors` (lane_id, connection_id, at, endpoint, http_status, provider_error_code, provider_message, provider_tid) with RLS + pgTAP incl. cross-lane denial; redaction test proves no tokens, emails or names are stored; errors also sent to Sentry with the same scrubbing; owner and admin_technical can export a date range as CSV or JSON for Intuit support, audited.
+
+### T-198 Temporary QuickBooks connect and health controls (pilot sandbox run)
+- status: approved
+- depends: T-050
+- acceptance: Approved by Saurabh Nov 4, 2026 for the Nov 12 QB-1 – QB-20 sandbox run, until T-045 (connection health page, D-21) replaces it. On the lane's Settings page, visible only to owner and admin_technical at AAL2 and labelled "Temporary: connection test": a "Connect QuickBooks" button (starts the existing T-050 connect flow) and a "Check connection" button that calls a new authenticated route running the T-050 CompanyInfo health check for that lane's connection. The route returns only status (`ok` / `reconnect_required` / `not_connected` / `error`), checked-at time and the Intuit request id, never tokens, realm id or company data; it requires `requireRole(lane, owner|admin_technical)` at AAL2; other roles and other lanes get 403/404 (tests); no external write (rule 5); behind `lane_config` or an env flag so it can be switched off. Removed or folded into T-045 when that ships.
 
 ### T-197 Settings → Connections (functional)
 - status: proposed
