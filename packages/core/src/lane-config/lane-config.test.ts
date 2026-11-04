@@ -110,6 +110,14 @@ describe("lane config schema", () => {
     expect(() => parseLaneConfig({ kpis: deep })).toThrow(z.ZodError);
   });
 
+  it("pilot.connection_test_enabled (T-198) is optional, boolean and strict", () => {
+    expect(parseLaneConfig({}).pilot).toBeUndefined();
+    expect(parseLaneConfig({ pilot: {} }).pilot?.connection_test_enabled).toBe(false);
+    expect(parseLaneConfig({ pilot: { connection_test_enabled: true } }).pilot?.connection_test_enabled).toBe(true);
+    expect(() => parseLaneConfig({ pilot: { connection_test_enabled: "yes" } })).toThrow(z.ZodError);
+    expect(() => parseLaneConfig({ pilot: { connection_test_enabled: true, other: 1 } })).toThrow(z.ZodError);
+  });
+
   it("findSecretLikeValues ignores ordinary values", () => {
     expect(findSecretLikeValues(laneConfigSchema.parse(VALID))).toEqual([]);
   });

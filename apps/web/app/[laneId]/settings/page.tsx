@@ -1,10 +1,10 @@
 import { Suspense } from "react";
-import { ModulePage } from "@/components/module-page";
+import { SettingsPage } from "@/components/settings-page";
 
 export default function Page(props: PageProps<"/[laneId]/settings">) {
   return (
     <Suspense fallback={null}>
-      <ModulePage module="settings" params={props.params} />
+      <SettingsPage params={props.params} />
     </Suspense>
   );
 }

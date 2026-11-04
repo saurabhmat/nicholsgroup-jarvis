@@ -12,6 +12,8 @@ import type { JobClientFor } from "./tokens";
 export interface ConnectionStore {
   /** The lane's connection for this provider account, created `pending` when there is none; minted lane-bound. */
   ensureConnection(laneId: LaneId, provider: Provider, externalAccountId: string, createdBy?: string): Promise<LaneBoundConnection>;
+  /** The lane's newest connection for the provider that is not disconnected, or null. Read-only (T-198 health check). */
+  findConnection(laneId: LaneId, provider: Provider): Promise<LaneBoundConnection | null>;
 }
 
 const LANE_ID = /^[A-Z]{1,8}$/;
@@ -53,6 +55,38 @@ export function createConnectionStore(clientFor: JobClientFor): ConnectionStore 
         throw new ConnectorError({ kind: "transient", message: "Connection store unavailable" });
       }
       if (!row) throw new ConnectorError({ kind: "transient", message: "Connection store unavailable" });
+      try {
+        return mintLaneBoundConnection(row as Connection);
+      } catch {
+        throw new ConnectorError({ kind: "provider_error", message: "Stored connection row is invalid" });
+      }
+    },
+    async findConnection(laneId, provider) {
+      if (typeof laneId !== "string" || !LANE_ID.test(laneId)) throw new ConnectorError({ kind: "invalid_input", message: "A lane is required" });
+      let client: Awaited<ReturnType<JobClientFor>>;
+      try {
+        client = await clientFor(laneId);
+      } catch {
+        throw new ConnectorError({ kind: "connection_unavailable", message: "Lane is not available for connection access" });
+      }
+      let row: unknown;
+      try {
+        const { data, error } = await client
+          .schema("core")
+          .from("connections")
+          .select(CONNECTION_COLUMNS)
+          .eq("lane_id", laneId)
+          .eq("provider", provider)
+          .neq("status", "disconnected")
+          .order("updated_at", { ascending: false })
+          .limit(1)
+          .maybeSingle();
+        if (error) throw error;
+        row = data;
+      } catch {
+        throw new ConnectorError({ kind: "transient", message: "Connection store unavailable" });
+      }
+      if (!row) return null;
       try {
         return mintLaneBoundConnection(row as Connection);
       } catch {

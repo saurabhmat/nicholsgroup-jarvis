@@ -17,10 +17,13 @@ const ROW = {
 
 /** A fake job client recording the upsert and the select. */
 function fake(opts: { upsertError?: unknown; row?: unknown; selectError?: unknown } = {}) {
-  const calls: { upsert?: [unknown, unknown]; selected?: string; filters: [string, unknown][] } = { filters: [] };
+  const calls: { upsert?: [unknown, unknown]; selected?: string; filters: [string, unknown][]; ordered?: unknown; limit?: number } = { filters: [] };
   const q = {
     select: (cols: string) => ((calls.selected = cols), q),
     eq: (col: string, v: unknown) => (calls.filters.push([col, v]), q),
+    neq: (col: string, v: unknown) => (calls.filters.push([`!${col}`, v]), q),
+    order: (col: string, o: unknown) => ((calls.ordered = [col, o]), q),
+    limit: (n: number) => ((calls.limit = n), q),
     maybeSingle: async () => ({ data: opts.row === undefined ? ROW : opts.row, error: opts.selectError ?? null }),
   };
   const table = {
@@ -32,6 +35,25 @@ function fake(opts: { upsertError?: unknown; row?: unknown; selectError?: unknow
 }
 
 const kind = async (p: Promise<unknown>) => p.then(() => "ok", (e: { info?: { kind: string } }) => e.info?.kind);
+
+describe("findConnection (read-only)", () => {
+  it("selects the lane's newest non-disconnected connection for the provider and mints it lane-bound", async () => {
+    const f = fake();
+    const conn = await createConnectionStore(f.clientFor).findConnection("PKG", "quickbooks");
+    expect(conn?.id).toBe(ROW.id);
+    expect(f.calls.filters).toEqual([["lane_id", "PKG"], ["provider", "quickbooks"], ["!status", "disconnected"]]);
+    expect(f.calls.ordered).toEqual(["updated_at", { ascending: false }]);
+    expect(f.calls.limit).toBe(1);
+    expect(f.calls.upsert).toBeUndefined(); // never writes
+  });
+
+  it("returns null when there is none, and maps outages and bad rows without database text", async () => {
+    expect(await createConnectionStore(fake({ row: null }).clientFor).findConnection("PKG", "quickbooks")).toBeNull();
+    expect(await kind(createConnectionStore(fake({ selectError: { message: "secret" } }).clientFor).findConnection("PKG", "quickbooks"))).toBe("transient");
+    expect(await kind(createConnectionStore(fake({ row: { ...ROW, extra: 1 } }).clientFor).findConnection("PKG", "quickbooks"))).toBe("provider_error");
+    expect(await kind(createConnectionStore(fake().clientFor).findConnection("pkg", "quickbooks"))).toBe("invalid_input");
+  });
+});
 
 describe("createConnectionStore", () => {
   it("records who started the connect as created_by", async () => {

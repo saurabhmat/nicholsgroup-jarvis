@@ -86,6 +86,9 @@ export const laneConfigSchema = z.strictObject({
     })
     .refine((e) => Object.hasOwn(e.by_entity, e.own_entity), { message: "own_entity needs a mapping", path: ["own_entity"] })
     .optional(),
+  // Pilot-only switches that are removed with the feature they guard. `connection_test_enabled` shows the temporary
+  // "Temporary: connection test" section on Settings (T-198, until T-045 replaces it). Off unless set to true.
+  pilot: z.strictObject({ connection_test_enabled: z.boolean().default(false) }).optional(),
   mailboxes: z.array(email).max(20).default([]),
   priority_senders: z.array(z.union([email, z.string().regex(/^@[a-z0-9.-]+\.[a-z]{2,}$/)])).max(200).default([]),
   briefing: z.strictObject({ time: hhmm.default("07:00") }).prefault({}),
