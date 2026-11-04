@@ -134,6 +134,14 @@ Under the review policy (dev tooling: one security review, fix BLOCKERs only), t
   - **Assigned to T-050:** the OAuth token endpoint needs an `errorCode` extractor reading `body.error`, so `invalid_grant` reaches `provider_error_code` and maps to `reconnect_required` (T-195).
   - **LOW, not fixed:** rate-limit buckets are never freed and keep the first caller's clock (code L2; a few dozen connections per process, so bounded in practice); the MSW guard is per test file (`useMockServer`), not a global vitest setup (security L4; unmocked requests are blocked and fail the test in files that use it).
 
+- **T-023 app shell (Nov 4, 2026; no BLOCKER or HIGH):**
+  - M: `proxy.ts` now checks lane membership (one extra session read + one `core.lanes` query per page request) only to answer a refused lane with a real 404 before streaming; pages and layout still gate. If latency matters, cache the verdict per request or drop the proxy check and accept a streamed 200 with the not-found UI.
+  - M: the proxy treats every first path segment other than `/sign-in`, `/auth`, `/mfa`, `/api` as a lane id, so a signed-in request for a future root file (T-025 `/manifest.webmanifest`, `/robots.txt`) would 404 unless the matcher excludes it. T-025 must extend the matcher or `NON_LANE_SEGMENTS`.
+  - L: the proxy's 404 body is plain HTML (a rewrite to the styled page is proxied by origin and fails when `next dev` listens on 127.0.0.1); the styled not-found shows when the page's own check refuses.
+  - L: `/` redirects to the first lane while streaming (status 200 plus in-document redirect), not a 307.
+  - L: the theme choice lives in `localStorage` (this browser only), applied by an inline head script; a strict CSP (later) needs a nonce or hash for it.
+  - L: brand wordmark "Pub K" is a constant in `apps/web/lib/brand.ts` (signed-off pilot brand, same in every lane); revisit when a second brand appears.
+
 ## 7. Decisions log
 
 ### Oct 24, 2026 — Infrastructure (human-owned; closes H-001, H-010)

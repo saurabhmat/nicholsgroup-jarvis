@@ -103,6 +103,49 @@ describe("getLaneClient", () => {
   });
 });
 
+/** A list-shaped stand-in: the router awaits the chain after order(). */
+function listClient(rows: { code: string; name: string; data_plane: string }[], error = false) {
+  const calls: { eq: [string, unknown][]; select: string[]; order: string[] } = { eq: [], select: [], order: [] };
+  const builder = {
+    select: (cols: string) => (calls.select.push(cols), builder),
+    eq: (col: string, val: unknown) => (calls.eq.push([col, val]), builder),
+    order: async (col: string) => (calls.order.push(col), error ? { data: null, error: { message: "boom" } } : { data: rows, error: null }),
+  };
+  const client = { schema: () => ({ from: () => builder }) } as unknown as LaneClient;
+  return { client, calls };
+}
+
+describe("listLanes", () => {
+  const rows = [
+    { code: "APK", name: "Ask Pub K", data_plane: "core" },
+    { code: "NL", name: "Nichols Law", data_plane: "nl" },
+    { code: "PKG", name: "Pub K Group", data_plane: "core" },
+  ];
+
+  it("lists what the user's own client can see, limited to served core-plane lanes", async () => {
+    const user = listClient(rows);
+    const { f, tokens } = factory(user as never, fakeClient(null), ["PKG", "NL"]);
+    const lanes = await createLaneRouter(f).listLanes(SESSION);
+    expect(lanes).toEqual([{ laneId: "PKG", name: "Pub K Group" }]); // APK not served, NL data plane not configured
+    expect(tokens).toEqual(["user-access-token"]);
+    expect(user.calls.eq).toEqual([["enabled", true]]);
+    expect(user.calls.order).toEqual(["code"]);
+  });
+
+  it("is empty when RLS shows nothing, and refuses without a session", async () => {
+    const { f, tokens } = factory(listClient([]) as never, fakeClient(null));
+    const router = createLaneRouter(f);
+    expect(await router.listLanes(SESSION)).toEqual([]);
+    expect(await reason(router.listLanes({ userId: "x", accessToken: "" }))).toBe("not_allowed");
+    expect(tokens).toEqual(["user-access-token"]);
+  });
+
+  it("a failed query is an outage, not an empty list", async () => {
+    const { f } = factory(listClient([], true) as never, fakeClient(null));
+    await expect(createLaneRouter(f).listLanes(SESSION)).rejects.toThrow("lane list unavailable");
+  });
+});
+
 describe("getLaneJobClient", () => {
   it("returns the service client for an enabled, served lane", async () => {
     const service = fakeClient({ data_plane: "core" });

@@ -6,6 +6,26 @@ import { totp } from "./totp";
 
 const SECRETS = new Map<string, string>();
 
+/** The authenticator secret enrolled for `email` earlier in this run, if any (used by the HTTP-level specs). */
+export const knownAuthenticator = (email: string): string | undefined => SECRETS.get(email);
+export const rememberAuthenticator = (email: string, key: string): void => void SECRETS.set(email, key);
+
+/** After sign-in the browser lands on the lane home (T-023): its heading is the "signed in" signal on every viewport. */
+export async function expectLaneHome(page: Page, lane = "PKG"): Promise<void> {
+  await expect(page).toHaveURL(new RegExp(`/${lane}$`));
+  await expect(page.getByRole("heading", { name: "Home", level: 1 })).toBeVisible();
+}
+
+/** Signs out through the UI: the side menu on desktop; the More tab on iPhone (the side menu is hidden there). */
+export async function signOutViaUi(page: Page): Promise<void> {
+  const tabs = page.getByRole("navigation", { name: "Tabs" });
+  if (await tabs.isVisible()) {
+    await tabs.getByRole("link", { name: "More" }).click();
+    await expect(page.getByRole("heading", { name: "More", level: 1 })).toBeVisible();
+  }
+  await page.getByRole("button", { name: "Sign out" }).click();
+}
+
 /** Signs in with the emailed 6-digit code; the browser ends on the /mfa step. */
 export async function signInWithEmailCode(page: Page, email: string, path = "/sign-in"): Promise<void> {
   await page.goto(path);

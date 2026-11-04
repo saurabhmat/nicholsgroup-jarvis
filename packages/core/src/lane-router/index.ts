@@ -7,6 +7,7 @@ import "server-only";
 // - getLaneClient(laneId, session): a client acting as the signed-in user (publishable key + the user's access
 //   token), so RLS applies to every query. Before returning it, the router asks the database, with that same token,
 //   for the lane row: RLS returns it only to a member at AAL2 of an enabled lane. No row, no client.
+// - listLanes(session): the lanes the user may open, for the lane switcher (same RLS + served-list rules).
 // - getLaneJobClient(laneId): the service client for jobs (bypasses RLS). Only for enabled lanes that the deployment
 //   serves (ENABLED_LANES); every query must still filter lane_id.
 // - getAudit(): the audit API (T-015) wired to audit.log() through the service client.
@@ -17,7 +18,7 @@ import { createClient, type SupabaseClient } from "@supabase/supabase-js";
 import { createAudit, type Audit } from "../audit/index";
 import type { Database } from "../db/index";
 import { getServerEnv, getSupabaseSecretKey, requireSupabasePublicEnv } from "../env/server";
-import type { LaneId } from "../lanes/index";
+import type { LaneId, LaneSummary } from "../lanes/index";
 
 export type LaneClient = SupabaseClient<Database>;
 
@@ -79,6 +80,8 @@ const defaultClientFactory: ClientFactory = {
 
 export type LaneRouter = {
   getLaneClient(laneId: LaneId, session: LaneSession): Promise<LaneClient>;
+  /** The lanes the session's user may open (member at AAL2, enabled in the registry and served here), by code. */
+  listLanes(session: LaneSession): Promise<LaneSummary[]>;
   getLaneJobClient(laneId: LaneId): Promise<LaneClient>;
   getAudit(): Audit;
 };
@@ -116,6 +119,24 @@ export function createLaneRouter(factory: ClientFactory = defaultClientFactory):
       if (!row) throw new LaneAccessError("not_allowed");
       return forPlane(row.data_plane, client);
     },
+    async listLanes(session) {
+      if (!session?.accessToken || !session.userId) throw new LaneAccessError("not_allowed");
+      // The user's own client: RLS on core.lanes returns only enabled lanes of which the user is a member at AAL2.
+      // The deployment's served list and the data plane are applied on top, exactly as getLaneClient does, so a
+      // listed lane is always one getLaneClient would open. A failed query is an outage, not an empty list.
+      const { data, error } = await factory
+        .userClient(session.accessToken)
+        .schema("core")
+        .from("lanes")
+        .select("code, name, data_plane")
+        .eq("enabled", true)
+        .order("code");
+      if (error) throw new Error("lane list unavailable");
+      const served = factory.enabledLanes();
+      return data
+        .filter((r) => r.data_plane === "core" && served.includes(r.code))
+        .map((r) => ({ laneId: r.code, name: r.name }));
+    },
     async getLaneJobClient(laneId) {
       served(laneId);
       const client = factory.serviceClient();
@@ -139,5 +160,6 @@ export function createLaneRouter(factory: ClientFactory = defaultClientFactory):
 
 const router = createLaneRouter();
 export const getLaneClient = router.getLaneClient;
+export const listLanes = router.listLanes;
 export const getLaneJobClient = router.getLaneJobClient;
 export const getAudit = router.getAudit;

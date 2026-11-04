@@ -292,6 +292,7 @@ T-010 – T-017 are the serial spine. After T-017: auth/shell (T-018 – T-026) 
 
 ### T-023 App shell and lane switcher (provisional nav)
 - status: approved
+- note (Nov 4, 2026): built on `agent/pilot-build` (scope per Saurabh Nov 4: Projects shown, light/dark theme); HTTP-level Playwright checks pass on the local stack, browser tests (`shell.spec.ts`) pending Chromium system libraries (`.agent/pr/T-023.md`). Set to done after they pass.
 - depends: T-017, T-022
 - needs: D-20 (design sign-off, batch 1)
 - acceptance: authenticated layout, lane switcher limited to allowed lanes, module placeholder routes; current lane in URL; Playwright test that a non-member lane is not listed and its URL returns 404/403.

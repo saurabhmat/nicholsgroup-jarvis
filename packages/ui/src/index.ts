@@ -16,3 +16,8 @@ export { ErrorState, type ErrorStateProps } from "./components/error-state";
 export { KpiCard, type KpiCardProps, type KpiStatus } from "./components/kpi-card";
 export { LaneChip, type LaneChipProps } from "./components/lane-chip";
 export { FreshnessBadge, SourceChip, type Freshness, type SourceChipProps } from "./components/source-chip";
+
+export { AppShell, type AppShellProps, type ShellBrand } from "./components/app-shell";
+export { LaneSwitcher, type LaneSwitcherProps, type ShellLane, type ShellLink } from "./components/lane-switcher";
+export { activeKey, laneHref, MOBILE_TABS, MORE_ITEMS, NAV_ITEMS, navItem, type MobileTab, type NavItem, type NavKey } from "./lib/nav";
+export { applyTheme, readTheme, THEME_INIT, THEME_KEY, THEMES, type Theme } from "./lib/theme";

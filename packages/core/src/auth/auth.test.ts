@@ -1,7 +1,7 @@
 import { readFileSync } from "node:fs";
 import { describe, expect, it, vi } from "vitest";
 import { LaneAccessError, type LaneClient } from "../lane-router/index";
-import { AuthError, authErrorResponse, createGuards, totpVerifiedAt, type VerifiedSession } from "./index";
+import { AuthError, authErrorResponse, createGuards, laneSegment, laneVerdict, totpVerifiedAt, type VerifiedSession } from "./index";
 
 const SESSION: VerifiedSession = { userId: "00000000-0000-4000-8000-000000000001", accessToken: "tok", aal: "aal2", mfaVerifiedAt: 1_000_000 };
 
@@ -132,5 +132,47 @@ describe("totpVerifiedAt", () => {
     expect(totpVerifiedAt([{ method: "totp", timestamp: "10" }, { method: "totp", timestamp: Number.POSITIVE_INFINITY }])).toBeNull();
     expect(totpVerifiedAt(undefined)).toBeNull();
     expect(totpVerifiedAt({ method: "totp", timestamp: 1 })).toBeNull();
+  });
+});
+
+describe("listLanes", () => {
+  const getLaneClient = vi.fn();
+
+  it("passes the verified session to the router and returns its lanes", async () => {
+    const listLanes = vi.fn(async () => [{ laneId: "PKG", name: "Pub K Group" }]);
+    expect(await createGuards(async () => SESSION, { getLaneClient, listLanes }).listLanes()).toEqual([{ laneId: "PKG", name: "Pub K Group" }]);
+    expect(listLanes).toHaveBeenCalledWith(SESSION);
+  });
+
+  it("never asks the router without a session or at AAL1", async () => {
+    const listLanes = vi.fn();
+    expect(await reason(createGuards(async () => null, { getLaneClient, listLanes }).listLanes())).toBe("401 no_session");
+    expect(await reason(createGuards(async () => ({ ...SESSION, aal: "aal1" }), { getLaneClient, listLanes }).listLanes())).toBe("403 mfa_required");
+    expect(listLanes).not.toHaveBeenCalled();
+  });
+
+  it("maps a lane refusal to 403 and lets outages propagate", async () => {
+    const refused = vi.fn(async () => Promise.reject(new LaneAccessError("not_allowed")));
+    expect(await reason(createGuards(async () => SESSION, { getLaneClient, listLanes: refused }).listLanes())).toBe("403 forbidden");
+    const down = vi.fn(async () => Promise.reject(new Error("lane list unavailable")));
+    expect(await reason(createGuards(async () => SESSION, { getLaneClient, listLanes: down }).listLanes())).toBe("Error: lane list unavailable");
+  });
+});
+
+describe("laneSegment and laneVerdict (lane in the URL)", () => {
+  it("takes the first path segment as the lane, except for the non-lane paths", () => {
+    expect(laneSegment("/PKG")).toBe("PKG");
+    expect(laneSegment("/PKG/finance")).toBe("PKG");
+    expect(laneSegment("/apk/x")).toBe("apk");
+    for (const p of ["/", "", "/sign-in", "/sign-in/verify", "/mfa", "/auth/confirm", "/api/lanes/PKG"]) expect(laneSegment(p)).toBeNull();
+  });
+
+  it("denies only a definite refusal; everything else is left to the page", async () => {
+    const guard = (impl: () => Promise<unknown>) => ({ requireLane: impl as never });
+    expect(await laneVerdict(guard(async () => ({})), "PKG")).toBe("allowed");
+    expect(await laneVerdict(guard(() => Promise.reject(new AuthError("forbidden"))), "APK")).toBe("denied");
+    expect(await laneVerdict(guard(() => Promise.reject(new AuthError("no_session"))), "PKG")).toBe("unknown");
+    expect(await laneVerdict(guard(() => Promise.reject(new AuthError("mfa_required"))), "PKG")).toBe("unknown");
+    expect(await laneVerdict(guard(() => Promise.reject(new Error("outage"))), "PKG")).toBe("unknown");
   });
 });

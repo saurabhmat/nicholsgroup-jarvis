@@ -1,6 +1,6 @@
 // Step-up (T-020): a fresh authenticator code is required for sensitive actions; /mfa?reauth=1 provides it.
 import { expect, test } from "@playwright/test";
-import { completeMfa, nextTotpWindow, signInWithEmailCode } from "./helpers";
+import { completeMfa, expectLaneHome, nextTotpWindow, signInWithEmailCode } from "./helpers";
 import { clearMailbox } from "./mailpit";
 import { personas } from "./personas";
 import { totp } from "./totp";
@@ -12,7 +12,7 @@ test("a fresh code passes step-up, an old one does not, and re-entering a code r
   await signInWithEmailCode(page, member);
   await nextTotpWindow(page); // a code from an earlier spec may still be in its window
   const secret = await completeMfa(page, member);
-  await expect(page.getByText("You are signed in.")).toBeVisible();
+  await expectLaneHome(page);
   expect((await page.request.get("/api/session/step-up?maxAge=30")).status()).toBe(200);
 
   await page.waitForTimeout(31_000);
@@ -25,7 +25,7 @@ test("a fresh code passes step-up, an old one does not, and re-entering a code r
   await nextTotpWindow(page);
   await page.getByLabel("Authenticator code").fill(totp(secret));
   await page.getByRole("button", { name: "Verify" }).click();
-  await expect(page.getByText("You are signed in.")).toBeVisible();
+  await expectLaneHome(page);
   expect((await page.request.get("/api/session/step-up?maxAge=30")).status()).toBe(200);
 });
 

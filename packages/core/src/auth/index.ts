@@ -16,9 +16,9 @@ import "server-only";
 // An auth outage or a configuration error is NOT reported as "no session": it propagates (the route answers 503).
 import { z } from "zod";
 import { getServerEnv } from "../env/server";
-import type { LaneId } from "../lanes/index";
+import type { LaneId, LaneSummary } from "../lanes/index";
 import { authClient } from "./client";
-import { getLaneClient, LaneAccessError, type LaneClient, type LaneRouter, type LaneSession } from "../lane-router/index";
+import { getLaneClient, listLanes, LaneAccessError, type LaneClient, type LaneRouter, type LaneSession } from "../lane-router/index";
 
 export type Aal = "aal1" | "aal2";
 /** `mfaVerifiedAt`: when the user last entered a TOTP code (epoch seconds, from the verified `amr` claim). */
@@ -96,6 +96,8 @@ export function totpVerifiedAt(amr: unknown): number | null {
 export type Guards = {
   requireSession(opts?: { allowAal1?: boolean }): Promise<VerifiedSession>;
   requireLane(laneId: LaneId): Promise<{ session: VerifiedSession; laneId: LaneId; client: LaneClient }>;
+  /** The session plus the lanes its user may open (the lane switcher's list); AAL2 required. */
+  listLanes(): Promise<LaneSummary[]>;
   requireRole(laneId: LaneId, roles: readonly Role[]): Promise<{ session: VerifiedSession; laneId: LaneId; client: LaneClient }>;
   /** AAL2 plus a TOTP code entered within the last `maxAgeSeconds` (30 – 3600). */
   requireStepUp(maxAgeSeconds: number): Promise<VerifiedSession>;
@@ -103,7 +105,7 @@ export type Guards = {
 
 export function createGuards(
   readSession: SessionReader,
-  router: Pick<LaneRouter, "getLaneClient"> = { getLaneClient },
+  router: Pick<LaneRouter, "getLaneClient"> & Partial<Pick<LaneRouter, "listLanes">> = { getLaneClient, listLanes },
   now: () => number = Date.now,
 ): Guards {
   const requireSession: Guards["requireSession"] = async (opts) => {
@@ -119,6 +121,17 @@ export function createGuards(
     try {
       const client = await router.getLaneClient(laneId, session);
       return { session, laneId, client };
+    } catch (e) {
+      if (e instanceof LaneAccessError) throw new AuthError("forbidden");
+      throw e;
+    }
+  };
+
+  const listAllowed: Guards["listLanes"] = async () => {
+    const session = await requireSession();
+    if (!router.listLanes) throw new Error("lane listing is not configured");
+    try {
+      return await router.listLanes(session);
     } catch (e) {
       if (e instanceof LaneAccessError) throw new AuthError("forbidden");
       throw e;
@@ -145,7 +158,33 @@ export function createGuards(
     return session;
   };
 
-  return { requireSession, requireLane, requireRole, requireStepUp };
+  return { requireSession, requireLane, listLanes: listAllowed, requireRole, requireStepUp };
+}
+
+// ---------------------------------------------------------------- lane in the URL (T-023)
+
+/** Top-level paths that are not lanes. Every other first path segment is a lane id from the URL. */
+const NON_LANE_SEGMENTS = new Set(["sign-in", "auth", "mfa", "api"]);
+
+/** The lane segment of a page path (`/PKG/finance` → "PKG"), or null for `/` and the sign-in, MFA and API paths. */
+export function laneSegment(pathname: string): string | null {
+  const first = pathname.split("/")[1] ?? "";
+  if (first === "" || NON_LANE_SEGMENTS.has(first)) return null;
+  return first;
+}
+
+/**
+ * "denied" when the signed-in user definitely may not open this lane (not a member, lane disabled or unknown, or an
+ * invalid id); "unknown" for anything else (no session, AAL1, outage), which the page itself then answers. Used by
+ * the proxy ONLY to answer with a real 404 status before streaming starts; pages call requireLane regardless.
+ */
+export async function laneVerdict(guards: Pick<Guards, "requireLane">, segment: string): Promise<"allowed" | "denied" | "unknown"> {
+  try {
+    await guards.requireLane(segment);
+    return "allowed";
+  } catch (e) {
+    return e instanceof AuthError && e.reason === "forbidden" ? "denied" : "unknown";
+  }
 }
 
 // ---------------------------------------------------------------- sign-in and sign-out (T-018)
