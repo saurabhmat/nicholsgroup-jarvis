@@ -7,7 +7,7 @@ select plan(61);
 
 insert into core.connections (id, lane_id, provider, external_account_id, status)
 values ('00000000-0000-4000-8000-000000000041', 'PKG', 'quickbooks', 'realm-synthetic-tok', 'pending'),
-       ('00000000-0000-4000-8000-000000000042', 'APK', 'quickbooks', 'realm-synthetic-tok', 'active'),
+       ('00000000-0000-4000-8000-000000000042', 'APK', 'quickbooks', 'realm-synthetic-tok-apk', 'active'),
        ('00000000-0000-4000-8000-000000000043', 'PKG', 'stripe', 'acct_synthetic_off', 'disconnected');
 
 -- ---------------------------------------------------------------- privileges

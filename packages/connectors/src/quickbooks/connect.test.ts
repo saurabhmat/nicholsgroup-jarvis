@@ -3,7 +3,7 @@
 // and tokens entering the Vault only from the callback. Mocks only (rule 10).
 import { AuthError } from "@nichols/core/auth";
 import { afterEach, describe, expect, it } from "vitest";
-import { ConnectorError } from "../contract/errors";
+import { ACCOUNT_IN_USE_MESSAGE, ConnectorError } from "../contract/errors";
 import { createConnectHandlers } from "../oauth/handlers";
 import { CONNECT_ROLES } from "../oauth/flow";
 import { RateLimiter } from "../http/rate-limit";
@@ -359,6 +359,71 @@ describe("the realm in the redirect URL must be the realm of the token (security
     const r = await h.flow.callback("qbo", query(url), h.as(ADMIN));
     expect(r).toMatchObject({ ok: false, reason: "account_refused" });
     expect(r).not.toHaveProperty("message");
+  });
+});
+
+describe("one provider account per lane (D-23)", () => {
+  const OTHER_REALM = "2222222222222222";
+
+  it("the same QuickBooks company cannot be connected in a second lane: refused with a clear message, nothing stored, no revoke", async () => {
+    const { intuit, h } = setup();
+    const first = await h.connectViaCallback("PKG");
+    const url = await h.flow.start("qbo", "APK", h.as(ADMIN));
+    const r = await h.flow.callback("qbo", query(url), h.as(ADMIN));
+    expect(r).toMatchObject({
+      ok: false,
+      reason: "account_refused",
+      laneId: "APK",
+      message: expect.stringContaining("This QuickBooks company is already connected to another company in Jarvis."),
+    });
+    // The first lane keeps its connection; the second lane has no row and no tokens.
+    expect([...h.rows.values()].map((r) => [r.lane_id, r.status])).toEqual([["PKG", "active"]]);
+    expect(h.secrets.size).toBe(1);
+    expect(h.secrets.has(first.id)).toBe(true);
+    expect(intuit.state.revokeRequests).toHaveLength(0);
+    expect(h.audits.map((a) => a.action)).toContain("connection.connect.grant_not_stored");
+    // The message never names the other lane.
+    expect(JSON.stringify(r)).not.toContain("PKG");
+  });
+
+  it("the callback route reports it as a refused account", async () => {
+    const { h } = setup();
+    await h.connectViaCallback("PKG");
+    const url = await h.flow.start("qbo", "APK", h.as(ADMIN));
+    const handlers = createConnectHandlers(h.flow, async () => h.as(ADMIN));
+    const res = await handlers.callback(new Request(`http://localhost:3000/api/connect/qbo/callback?${query(url)}`), "qbo");
+    expect(res.headers.get("location")).toBe("/?connect=account_refused&provider=quickbooks&notice=remove_app_access");
+  });
+
+  it("a disconnected connection does not hold the account: another lane can connect it", async () => {
+    const { h } = setup();
+    const first = await h.connectViaCallback("PKG");
+    await h.disconnectForTest("PKG", first);
+    expect((await h.connectViaCallback("APK")).lane_id).toBe("APK");
+  });
+
+  it("a different company in the second lane is fine", async () => {
+    const intuit = createFakeIntuit({ extraRealms: [OTHER_REALM] });
+    server.use(...intuit.handlers);
+    const h = createQboHarness({ intuit });
+    await h.connectViaCallback("PKG");
+    expect((await h.connectViaCallback("APK", ADMIN, OTHER_REALM)).external_account_id).toBe(OTHER_REALM);
+  });
+
+  it("reconnecting in the same lane is still allowed", async () => {
+    const { h } = setup();
+    const a = await h.connectViaCallback("PKG");
+    const b = await h.connectViaCallback("PKG");
+    expect(b.id).toBe(a.id);
+  });
+
+  it("an account refused when the token is stored (it was taken after the row was made) is refused the same way", async () => {
+    const { h } = setup();
+    h.vault.storeToken = async () => {
+      throw new ConnectorError({ kind: "forbidden", message: ACCOUNT_IN_USE_MESSAGE });
+    };
+    const url = await h.flow.start("qbo", "PKG", h.as(ADMIN));
+    expect(await h.flow.callback("qbo", query(url), h.as(ADMIN))).toMatchObject({ ok: false, reason: "account_refused" });
   });
 });
 

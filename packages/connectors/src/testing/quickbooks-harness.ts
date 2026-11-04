@@ -5,7 +5,7 @@
 // compare-and-swap on the exact stored text (core.connection_token_rotate, 40001).
 import { randomUUID } from "node:crypto";
 import type { Audit, AuditEntry } from "@nichols/core/audit";
-import { ConnectorError } from "../contract/errors";
+import { ACCOUNT_IN_USE_MESSAGE, ConnectorError } from "../contract/errors";
 import { assertLaneBound, mintLaneBoundConnection, type LaneBoundConnection } from "../contract/lane-bound";
 import type { Connection } from "../contract/schemas";
 import { createHttpClient } from "../http/client";
@@ -111,6 +111,9 @@ export function createQboHarness(options: QboHarnessOptions) {
     async ensureConnection(laneId: string, provider: string, externalAccountId: string) {
       let row = [...rows.values()].find((r) => r.lane_id === laneId && r.provider === provider && r.external_account_id === externalAccountId);
       if (!row) {
+        // Twin of the unique index connections_one_lane_per_account (D-23): one connected lane per provider account.
+        const holder = [...rows.values()].find((r) => r.provider === provider && r.external_account_id === externalAccountId && r.status !== "disconnected");
+        if (holder) throw new ConnectorError({ kind: "forbidden", message: ACCOUNT_IN_USE_MESSAGE });
         row = {
           id: randomUUID(),
           lane_id: laneId,

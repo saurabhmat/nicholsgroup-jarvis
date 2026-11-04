@@ -21,6 +21,14 @@ const DISPOSITION: Record<ConnectorErrorKind, ErrorDisposition> = {
 };
 
 /** Retry only transient failures; `reconnect_required` (e.g. `invalid_grant`) is never retried (QB-3, QB-4). */
+/**
+ * D-23: a provider account (QuickBooks realm, Stripe account, GoHighLevel location) connects to one lane only. The
+ * database refuses a second connection for it (unique index `connections_one_lane_per_account`); the connection store
+ * and the token vault turn that into a `forbidden` ConnectorError with exactly this message, which the connect flow
+ * recognises and reports as a refused account. Fixed text: database messages are never passed on.
+ */
+export const ACCOUNT_IN_USE_MESSAGE = "This provider account is already connected to another company";
+
 export function dispositionFor(kind: ConnectorErrorKind): ErrorDisposition {
   return DISPOSITION[kind];
 }

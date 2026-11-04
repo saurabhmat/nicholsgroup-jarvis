@@ -3,7 +3,7 @@
 // An existing row for the same (lane, provider, account) is reused untouched (a reconnect), so a failed reconnect never
 // downgrades an active connection. Uses the lane's job client: `connectionStore` is a restricted name (connectors only).
 import type { LaneId } from "@nichols/core";
-import { ConnectorError } from "../contract/errors";
+import { ACCOUNT_IN_USE_MESSAGE, ConnectorError } from "../contract/errors";
 import { mintLaneBoundConnection, type LaneBoundConnection } from "../contract/lane-bound";
 import type { Connection, Provider } from "../contract/schemas";
 import { CONNECTION_COLUMNS } from "./loader";
@@ -36,6 +36,8 @@ export function createConnectionStore(clientFor: JobClientFor): ConnectionStore 
           { onConflict: "lane_id,provider,external_account_id", ignoreDuplicates: true },
         );
         // 23514: a check refused the account id (format, or it looks like a secret). Database text is never passed on.
+        // 23505: the one-lane-per-account index (D-23): this account is connected in another lane.
+        if (inserted.error?.code === "23505") throw new ConnectorError({ kind: "forbidden", message: ACCOUNT_IN_USE_MESSAGE });
         if (inserted.error?.code === "23514") throw new ConnectorError({ kind: "invalid_input", message: "The provider account id was refused" });
         if (inserted.error) throw inserted.error;
         const { data, error } = await table()

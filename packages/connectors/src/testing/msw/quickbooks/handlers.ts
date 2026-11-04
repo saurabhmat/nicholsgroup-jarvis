@@ -36,6 +36,8 @@ export type FakeIntuitOptions = {
   environment?: "sandbox" | "production";
   /** Realm the CompanyInfo API answers for. */
   realm?: string;
+  /** More realms the CompanyInfo API answers for (a token is valid for every company the fake knows). */
+  extraRealms?: string[];
   /** Milliseconds each token-endpoint call takes (lets tests overlap refreshes). */
   tokenDelayMs?: number;
   /** Seconds in `expires_in`. Default 3600. */
@@ -168,13 +170,13 @@ export function createFakeIntuit(options: FakeIntuitOptions = {}): FakeIntuit {
       if (!state.validAccess.has(token)) {
         return HttpResponse.json({ Fault: { Error: [{ Message: "AuthenticationFailed", code: "003200", Detail: "Token invalid" }], type: "AUTHENTICATION" } }, { status: 401, headers: tidHeader() });
       }
-      if (params.realm !== realm || params.id !== realm) {
+      if (!(params.realm === realm || options.extraRealms?.includes(String(params.realm))) || params.id !== params.realm) {
         return HttpResponse.json({ Fault: { Error: [{ Message: "Not found", code: "610" }], type: "ValidationFault" } }, { status: 404, headers: tidHeader() });
       }
       return HttpResponse.json(
         {
           CompanyInfo: {
-            Id: realm,
+            Id: String(params.realm),
             CompanyName: "Synthetic Test Company",
             LegalName: "Synthetic Test Company LLC",
             Country: "US",

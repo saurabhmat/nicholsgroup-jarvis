@@ -8,7 +8,7 @@ import { createHash } from "node:crypto";
 import type { LaneId } from "@nichols/core";
 import type { LaneClient } from "@nichols/core/lane-router";
 import { assertLaneBound, type LaneBoundConnection } from "../contract/lane-bound";
-import { ConnectorError } from "../contract/errors";
+import { ACCOUNT_IN_USE_MESSAGE, ConnectorError } from "../contract/errors";
 import type { ConnectorErrorKind } from "../contract/schemas";
 import { SecretValue } from "./secret";
 
@@ -52,6 +52,8 @@ const ERRORS: Record<string, { kind: ConnectorErrorKind; message: string }> = {
   "22004": { kind: "invalid_input", message: "Lane and connection are required" },
   // 40001 (a lost compare-and-swap) is handled by rotateToken itself and never reaches this map.
   "42501": { kind: "forbidden", message: "Token access refused" },
+  // Reactivating a connection whose account another lane now holds (D-23, unique index connections_one_lane_per_account).
+  "23505": { kind: "forbidden", message: ACCOUNT_IN_USE_MESSAGE },
   "42883": { kind: "provider_error", message: "Token functions are not installed" },
 };
 

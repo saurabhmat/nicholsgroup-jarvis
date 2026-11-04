@@ -58,8 +58,8 @@ select throws_ok($$insert into core.connections (lane_id, provider, external_acc
                  '23514', null, 'the mock provider is rejected');
 select throws_ok($$insert into core.connections (lane_id, provider, external_account_id) values ('PKG', 'quickbooks', 'realm-synthetic-1')$$,
                  '23505', null, 'one connection per lane, provider and account');
-select lives_ok($$insert into core.connections (lane_id, provider, external_account_id) values ('APK', 'quickbooks', 'realm-synthetic-1')$$,
-                'the same account may be connected in another lane');
+select throws_ok($$insert into core.connections (lane_id, provider, external_account_id) values ('APK', 'quickbooks', 'realm-synthetic-1')$$,
+                 '23505', null, 'the same account cannot be connected in a second lane (D-23; see 120_connections_one_lane_per_account)');
 select throws_ok($$insert into core.connections (lane_id, provider, external_account_id, status) values ('PKG', 'stripe', 'a', 'broken')$$,
                  '23514', null, 'unknown status rejected');
 select throws_ok($$insert into core.connections (lane_id, provider, external_account_id) values ('PKG', 'stripe', ' padded ')$$,

@@ -13,7 +13,7 @@ import type { LaneId } from "@nichols/core";
 import { withAudit, type Audit } from "@nichols/core/audit";
 import type { LaneClient } from "@nichols/core/lane-router";
 import { z } from "zod";
-import { ConnectorError, isConnectorError } from "../contract/errors";
+import { ACCOUNT_IN_USE_MESSAGE, ConnectorError, isConnectorError } from "../contract/errors";
 import type { LaneBoundConnection } from "../contract/lane-bound";
 import type { Provider } from "../contract/schemas";
 import { createHttpClient, basicCredentials, type HttpClient } from "../http/client";
@@ -43,6 +43,8 @@ export interface OAuthProvider {
   /** Route segment, e.g. "qbo" for /api/connect/qbo/callback (must match the redirect URI registered with the provider). */
   slug: string;
   scopes: readonly string[];
+  /** What the provider calls the account, for messages: "QuickBooks company", "Stripe account". Default "account". */
+  accountLabel?: string;
   /** Authorization and token endpoints (from discovery where the provider has it). */
   endpoints(laneId: LaneId): Promise<{ authorization: string; token: string }>;
   /** Client credentials and the registered redirect URI, read from the connector env at call time. */
@@ -216,8 +218,19 @@ export function createOAuthFlow(deps: OAuthFlowDeps) {
             if (isConnectorError(e) && OUTAGE_KINDS.has(e.info.kind)) throw e;
             throw new RefusedAccount(e);
           }
-          const connection = await deps.connections.ensureConnection(laneId, p.provider, identity.externalAccountId, userId);
-          await deps.storeToken(laneId, connection, new SecretValue(JSON.stringify({ ...tokens, obtained_at: new Date().toISOString() })), identity.expiresAt, userId);
+          // D-23: the account may already be connected to another lane; the database refuses it (unique index).
+          const refuseInUse = async <T>(call: () => Promise<T>): Promise<T> => {
+            try {
+              return await call();
+            } catch (e) {
+              if (isConnectorError(e) && e.info.kind === "forbidden" && e.info.message === ACCOUNT_IN_USE_MESSAGE) throw new RefusedAccount(e);
+              throw e;
+            }
+          };
+          const connection = await refuseInUse(() => deps.connections.ensureConnection(laneId, p.provider, identity.externalAccountId, userId));
+          await refuseInUse(() =>
+            deps.storeToken(laneId, connection, new SecretValue(JSON.stringify({ ...tokens, obtained_at: new Date().toISOString() })), identity.expiresAt, userId),
+          );
           return connection;
         });
         return { ok: true, provider: p.provider, laneId, connectionId: conn.id };
@@ -232,7 +245,11 @@ export function createOAuthFlow(deps: OAuthFlowDeps) {
           await deps.audit
             .log({ ...entry, action: "connection.connect.grant_not_stored", metadata: { reason } })
             .catch(() => undefined);
-          return { ok: false, reason, provider: p.provider, laneId, message: GRANT_NOT_STORED_MESSAGE };
+          const inUse = isConnectorError(cause) && cause.info.message === ACCOUNT_IN_USE_MESSAGE;
+          const message = inUse
+            ? `This ${p.accountLabel ?? "account"} is already connected to another company in Jarvis. ${GRANT_NOT_STORED_MESSAGE}`
+            : GRANT_NOT_STORED_MESSAGE;
+          return { ok: false, reason, provider: p.provider, laneId, message };
         }
         return { ok: false, reason, provider: p.provider, laneId };
       }

@@ -77,6 +77,7 @@ describe("createTokenVault", () => {
     ["55000", "connection_unavailable"],
     ["22023", "invalid_input"],
     ["42501", "forbidden"],
+    ["23505", "forbidden"],
     ["XX000", "transient"],
   ])("maps database error %s to %s without passing the database message on", async (code, kind) => {
     const { clientFor } = fakeClient({ error: { code, message: "row (synthetic-leak-1) failed" } });

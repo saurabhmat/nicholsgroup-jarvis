@@ -66,6 +66,7 @@ export function createQuickBooksOAuthProvider(deps: QboProviderDeps): OAuthProvi
   return {
     provider: "quickbooks",
     slug: QBO_SLUG,
+    accountLabel: "QuickBooks company",
     scopes: [QBO_SCOPE],
     requestIdHeader: INTUIT_TID_HEADER,
     async endpoints(laneId: LaneId) {

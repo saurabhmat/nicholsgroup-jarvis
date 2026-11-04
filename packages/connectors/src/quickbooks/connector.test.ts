@@ -149,11 +149,12 @@ describe("the QuickBooks client is read-only", () => {
 
 describe("lanes", () => {
   it("the same Intuit app serves each lane with its own realm, tokens and Vault entry", async () => {
-    const intuit = createFakeIntuit();
+    const intuit = createFakeIntuit({ extraRealms: ["2222222222222222"] });
     server.use(...intuit.handlers);
     const h = createQboHarness({ intuit });
     const a = await h.connectViaCallback("PKG");
-    const b = await h.connectViaCallback("APK");
+    // One provider account connects to one lane only (D-23), so the other lane connects another company.
+    const b = await h.connectViaCallback("APK", undefined, "2222222222222222");
     expect(a.id).not.toBe(b.id);
     expect(h.secrets.get(a.id)).not.toBe(h.secrets.get(b.id));
     // A connection cannot be used from the other lane.
