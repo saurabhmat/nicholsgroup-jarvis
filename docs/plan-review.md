@@ -288,7 +288,7 @@ Contrast (WCAG 2.x) checked for every text pair above: all ≥ 4.5:1. Tightest: 
 - iPhone header: navy band (`#0E2A47`) with a white title and a gold accent word.
 - Book balances are always labelled "book balance" (rule 7).
 
-Not yet decided: dark mode and chart palette (Recharts). Raise both at the sign-off.
+Not yet decided: dark mode and chart palette (Recharts). Raise both at the sign-off. **Settled Nov 4, 2026** (D-20 batch 1): tokens final as above, light only in the pilot, chart palette in `docs/design/README.md`.
 
 Where this lands: backlog D-15, D-20, T-022 and the screen tasks listed above; parallel-worktrees table (W1).
 
@@ -411,3 +411,17 @@ Where this lands: `.agent/pr/T-031.md`, `.agent/pr/T-032.md`; follow-ups in §6.
 
 - **Custom-field arrays bypass the key guards.** QuickBooks `CustomField: [{Name, StringValue}]` and GoHighLevel `customFields: [{id, value}]` carry the field name as a value, so a field called "SSN" or "Bank account" is not seen by the key-name guards. Every adapter's allowlist projection must drop these arrays or allowlist the field names/ids it keeps.
 - Remaining known gaps: guards are denylists on key names only; run-together names (`EMPLOYEESSN`, `employeessn`, `sSNLast`) and cross-script look-alikes are missed; substring terms fein, itin, wage refuse caffeine, itinerary, sewage; stored bodies persist after the policy turns off (T-042 purge); monday/Notion content decision above is still open.
+
+### Nov 4, 2026 — Design sign-off, batch 1 (closes D-20, opens D-21, H-029, H-030)
+
+Saurabh approved every point of the batch-1 design review ("approved all points"). Where a point was a choice, the safe default was taken. Each can be reversed with a one-line note.
+- **Tokens:** the provisional v2 tokens above are final. **Light only** in the pilot; dark mode is reconsidered in Release B.
+- **Chart palette:** fixed, not generated: navy `#0E2A47`, blue `#3B6EA5`, orange `#B45309`, brown `#7C2D12` (each ≥ 4.5:1 on white and cream; blue vs orange is colour-blind safe). Every bar carries a text label, so colour is never the only cue.
+- **Required changes to the prototype** (apply in the screen tasks): "book balance" in full on iPhone; the approval card shows the exact payload; Edit on iPhone approvals; a source/freshness chip on every figure card. Details in `docs/design/README.md`.
+- **Projects** stays hidden in the pilot (Release B per the sitemap): no side-menu entry and no "Projects at a glance" on Home until T-150.
+- **"All companies (owner)"** comes after the pilot. A combined view across lanes needs its own design (every query is per lane) and its own decision. The pilot switcher lists only enabled, allowed lanes.
+- **Fonts:** Source Serif 4 and Inter confirmed (the PDF renders with fallbacks).
+- **Meeting provider:** "Teams" on the prototype is sample text; D-1 remains open.
+
+Where this lands: backlog D-20, D-21, H-029, H-030, T-023 – T-026 and the screen tasks' `needs`; `docs/design/README.md`.
+
