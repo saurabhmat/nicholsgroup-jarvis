@@ -378,42 +378,42 @@ isOneToOne: false
                   ]
                 },"bills": {
                   Row: {
-                    "balance": number,"class_id": string | null,"connection_id": string,"created_at": string,"deleted": boolean,"due_date": string | null,"entity_code": string,"id": string,"issue_date": string,"lane_id": string,"provider": string,"raw_record_id": string | null,"source_id": string,"source_updated_at": string | null,"total": number,"updated_at": string,"vendor_id": string | null,"voided": boolean
+                    "balance": number,"class_id": string | null,"connection_id": string,"created_at": string,"currency_code": string,"deleted": boolean,"due_date": string | null,"entity_code": string,"id": string,"issue_date": string,"lane_id": string,"multi_class": boolean,"provider": string,"raw_record_id": string | null,"source_id": string,"source_updated_at": string | null,"total": number,"updated_at": string,"vendor_id": string | null,"vendor_name": string | null,"voided": boolean
                   }
                   ComputedFields: never
                   Insert: {
-                    "balance": number,"class_id"?: string | null,"connection_id": string,"created_at"?: string,"deleted"?: boolean,"due_date"?: string | null,"entity_code"?: string,"id"?: string,"issue_date": string,"lane_id": string,"provider"?: string,"raw_record_id"?: string | null,"source_id": string,"source_updated_at"?: string | null,"total": number,"updated_at"?: string,"vendor_id"?: string | null,"voided"?: boolean
+                    "balance": number,"class_id"?: string | null,"connection_id": string,"created_at"?: string,"currency_code"?: string,"deleted"?: boolean,"due_date"?: string | null,"entity_code"?: string,"id"?: string,"issue_date": string,"lane_id": string,"multi_class"?: boolean,"provider"?: string,"raw_record_id"?: string | null,"source_id": string,"source_updated_at"?: string | null,"total": number,"updated_at"?: string,"vendor_id"?: string | null,"vendor_name"?: string | null,"voided"?: boolean
                   }
                   Update: {
-                    "balance"?: number,"class_id"?: string | null,"connection_id"?: string,"created_at"?: string,"deleted"?: boolean,"due_date"?: string | null,"entity_code"?: string,"id"?: string,"issue_date"?: string,"lane_id"?: string,"provider"?: string,"raw_record_id"?: string | null,"source_id"?: string,"source_updated_at"?: string | null,"total"?: number,"updated_at"?: string,"vendor_id"?: string | null,"voided"?: boolean
+                    "balance"?: number,"class_id"?: string | null,"connection_id"?: string,"created_at"?: string,"currency_code"?: string,"deleted"?: boolean,"due_date"?: string | null,"entity_code"?: string,"id"?: string,"issue_date"?: string,"lane_id"?: string,"multi_class"?: boolean,"provider"?: string,"raw_record_id"?: string | null,"source_id"?: string,"source_updated_at"?: string | null,"total"?: number,"updated_at"?: string,"vendor_id"?: string | null,"vendor_name"?: string | null,"voided"?: boolean
                   }
                   Relationships: [
                     
                   ]
                 },"invoices": {
                   Row: {
-                    "balance": number,"class_id": string | null,"connection_id": string,"created_at": string,"customer_id": string | null,"deleted": boolean,"due_date": string | null,"entity_code": string,"id": string,"issue_date": string,"lane_id": string,"provider": string,"raw_record_id": string | null,"source_id": string,"source_updated_at": string | null,"total": number,"updated_at": string,"voided": boolean
+                    "balance": number,"class_id": string | null,"connection_id": string,"created_at": string,"currency_code": string,"customer_id": string | null,"customer_name": string | null,"deleted": boolean,"due_date": string | null,"entity_code": string,"id": string,"issue_date": string,"lane_id": string,"multi_class": boolean,"provider": string,"raw_record_id": string | null,"source_id": string,"source_updated_at": string | null,"total": number,"updated_at": string,"voided": boolean
                   }
                   ComputedFields: never
                   Insert: {
-                    "balance": number,"class_id"?: string | null,"connection_id": string,"created_at"?: string,"customer_id"?: string | null,"deleted"?: boolean,"due_date"?: string | null,"entity_code"?: string,"id"?: string,"issue_date": string,"lane_id": string,"provider"?: string,"raw_record_id"?: string | null,"source_id": string,"source_updated_at"?: string | null,"total": number,"updated_at"?: string,"voided"?: boolean
+                    "balance": number,"class_id"?: string | null,"connection_id": string,"created_at"?: string,"currency_code"?: string,"customer_id"?: string | null,"customer_name"?: string | null,"deleted"?: boolean,"due_date"?: string | null,"entity_code"?: string,"id"?: string,"issue_date": string,"lane_id": string,"multi_class"?: boolean,"provider"?: string,"raw_record_id"?: string | null,"source_id": string,"source_updated_at"?: string | null,"total": number,"updated_at"?: string,"voided"?: boolean
                   }
                   Update: {
-                    "balance"?: number,"class_id"?: string | null,"connection_id"?: string,"created_at"?: string,"customer_id"?: string | null,"deleted"?: boolean,"due_date"?: string | null,"entity_code"?: string,"id"?: string,"issue_date"?: string,"lane_id"?: string,"provider"?: string,"raw_record_id"?: string | null,"source_id"?: string,"source_updated_at"?: string | null,"total"?: number,"updated_at"?: string,"voided"?: boolean
+                    "balance"?: number,"class_id"?: string | null,"connection_id"?: string,"created_at"?: string,"currency_code"?: string,"customer_id"?: string | null,"customer_name"?: string | null,"deleted"?: boolean,"due_date"?: string | null,"entity_code"?: string,"id"?: string,"issue_date"?: string,"lane_id"?: string,"multi_class"?: boolean,"provider"?: string,"raw_record_id"?: string | null,"source_id"?: string,"source_updated_at"?: string | null,"total"?: number,"updated_at"?: string,"voided"?: boolean
                   }
                   Relationships: [
                     
                   ]
                 },"payments": {
                   Row: {
-                    "amount": number,"connection_id": string,"created_at": string,"deleted": boolean,"entity_code": string,"id": string,"invoice_id": string | null,"lane_id": string,"paid_at": string,"provider": string,"raw_record_id": string | null,"source_id": string,"source_updated_at": string | null,"updated_at": string,"voided": boolean
+                    "alloc_no": number,"amount": number,"connection_id": string,"created_at": string,"currency_code": string,"customer_name": string | null,"deleted": boolean,"entity_code": string,"id": string,"invoice_id": string | null,"lane_id": string,"paid_at": string,"provider": string,"raw_record_id": string | null,"source_id": string,"source_updated_at": string | null,"updated_at": string,"voided": boolean
                   }
                   ComputedFields: never
                   Insert: {
-                    "amount": number,"connection_id": string,"created_at"?: string,"deleted"?: boolean,"entity_code"?: string,"id"?: string,"invoice_id"?: string | null,"lane_id": string,"paid_at": string,"provider"?: string,"raw_record_id"?: string | null,"source_id": string,"source_updated_at"?: string | null,"updated_at"?: string,"voided"?: boolean
+                    "alloc_no"?: number,"amount": number,"connection_id": string,"created_at"?: string,"currency_code"?: string,"customer_name"?: string | null,"deleted"?: boolean,"entity_code"?: string,"id"?: string,"invoice_id"?: string | null,"lane_id": string,"paid_at": string,"provider"?: string,"raw_record_id"?: string | null,"source_id": string,"source_updated_at"?: string | null,"updated_at"?: string,"voided"?: boolean
                   }
                   Update: {
-                    "amount"?: number,"connection_id"?: string,"created_at"?: string,"deleted"?: boolean,"entity_code"?: string,"id"?: string,"invoice_id"?: string | null,"lane_id"?: string,"paid_at"?: string,"provider"?: string,"raw_record_id"?: string | null,"source_id"?: string,"source_updated_at"?: string | null,"updated_at"?: string,"voided"?: boolean
+                    "alloc_no"?: number,"amount"?: number,"connection_id"?: string,"created_at"?: string,"currency_code"?: string,"customer_name"?: string | null,"deleted"?: boolean,"entity_code"?: string,"id"?: string,"invoice_id"?: string | null,"lane_id"?: string,"paid_at"?: string,"provider"?: string,"raw_record_id"?: string | null,"source_id"?: string,"source_updated_at"?: string | null,"updated_at"?: string,"voided"?: boolean
                   }
                   Relationships: [
                     {
@@ -440,14 +440,14 @@ isOneToOne: false
                   ]
                 },"transactions": {
                   Row: {
-                    "account_id": string | null,"amount": number,"class_id": string | null,"connection_id": string,"created_at": string,"deleted": boolean,"entity_code": string,"id": string,"is_uncategorized": boolean,"lane_id": string,"line_no": number,"posted_at": string | null,"provider": string,"raw_record_id": string | null,"source_id": string,"source_updated_at": string | null,"txn_date": string,"txn_type": string,"updated_at": string,"voided": boolean
+                    "account_id": string | null,"amount": number,"class_id": string | null,"connection_id": string,"created_at": string,"currency_code": string,"deleted": boolean,"entity_code": string,"id": string,"is_uncategorized": boolean,"lane_id": string,"line_no": number,"posted_at": string | null,"provider": string,"raw_record_id": string | null,"source_id": string,"source_updated_at": string | null,"txn_date": string,"txn_type": string,"updated_at": string,"voided": boolean
                   }
                   ComputedFields: never
                   Insert: {
-                    "account_id"?: string | null,"amount": number,"class_id"?: string | null,"connection_id": string,"created_at"?: string,"deleted"?: boolean,"entity_code"?: string,"id"?: string,"is_uncategorized"?: boolean,"lane_id": string,"line_no"?: number,"posted_at"?: string | null,"provider"?: string,"raw_record_id"?: string | null,"source_id": string,"source_updated_at"?: string | null,"txn_date": string,"txn_type": string,"updated_at"?: string,"voided"?: boolean
+                    "account_id"?: string | null,"amount": number,"class_id"?: string | null,"connection_id": string,"created_at"?: string,"currency_code"?: string,"deleted"?: boolean,"entity_code"?: string,"id"?: string,"is_uncategorized"?: boolean,"lane_id": string,"line_no"?: number,"posted_at"?: string | null,"provider"?: string,"raw_record_id"?: string | null,"source_id": string,"source_updated_at"?: string | null,"txn_date": string,"txn_type": string,"updated_at"?: string,"voided"?: boolean
                   }
                   Update: {
-                    "account_id"?: string | null,"amount"?: number,"class_id"?: string | null,"connection_id"?: string,"created_at"?: string,"deleted"?: boolean,"entity_code"?: string,"id"?: string,"is_uncategorized"?: boolean,"lane_id"?: string,"line_no"?: number,"posted_at"?: string | null,"provider"?: string,"raw_record_id"?: string | null,"source_id"?: string,"source_updated_at"?: string | null,"txn_date"?: string,"txn_type"?: string,"updated_at"?: string,"voided"?: boolean
+                    "account_id"?: string | null,"amount"?: number,"class_id"?: string | null,"connection_id"?: string,"created_at"?: string,"currency_code"?: string,"deleted"?: boolean,"entity_code"?: string,"id"?: string,"is_uncategorized"?: boolean,"lane_id"?: string,"line_no"?: number,"posted_at"?: string | null,"provider"?: string,"raw_record_id"?: string | null,"source_id"?: string,"source_updated_at"?: string | null,"txn_date"?: string,"txn_type"?: string,"updated_at"?: string,"voided"?: boolean
                   }
                   Relationships: [
                     {

@@ -58,7 +58,8 @@ insert into security_definer_ok values
   ('core.connections_no_orphan_secret', 'trigger only: reads the private Vault mapping on status changes (T-032)'),
   ('core.oauth_state_create', 'starts a connect; owner/admin_technical of the lane at aal2 only (T-035)'),
   ('core.oauth_state_consume', 'finishes a connect; own unexpired state, same lane, role re-checked (T-035)'),
-  ('core.source_records_upsert', 'writes the private raw.source_records; service_role only, lane-checked against the connection (T-039)');
+  ('core.source_records_upsert', 'writes the private raw.source_records; service_role only, lane-checked against the connection (T-039)'),
+  ('fin.report_cache_guard', 'trigger only: calls the private raw.payload_scan on a report payload; reads and writes nothing (T-055)');
 
 -- App functions authenticated may execute (callable through the API). Each one is reviewed.
 create temp table authenticated_exec_ok (name text primary key, why text not null) on commit drop;
