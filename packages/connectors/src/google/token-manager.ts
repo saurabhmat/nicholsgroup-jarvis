@@ -16,7 +16,7 @@ import { connectorLog, type ConnectorLogger } from "../log/index";
 import { TokenResponseSchema } from "../oauth/flow";
 import { SecretValue } from "../vault/secret";
 import type { TokenVault } from "../vault/tokens";
-import { GOOGLE_TOKEN_URL, REFRESH_SKEW_MS } from "./constants";
+import { GOOGLE_TOKEN_HOSTS, GOOGLE_TOKEN_URL, REFRESH_SKEW_MS } from "./constants";
 import { assertGoogleConnection } from "./guard";
 import { createGoogleHttp, type GoogleHttpFor } from "./http";
 
@@ -70,7 +70,7 @@ export function createGoogleTokenManager(deps: GoogleTokenManagerDeps): GoogleTo
   const log = deps.logger ?? connectorLog;
   const httpFor: GoogleHttpFor =
     deps.httpFor ??
-    ((laneId, connectionId, baseUrl) => createGoogleHttp({ baseUrl, laneId, ...(connectionId ? { connectionId } : {}), ...(deps.logger ? { logger: deps.logger } : {}) }));
+    ((laneId, connectionId, baseUrl) => createGoogleHttp({ baseUrl, laneId, ...(connectionId ? { connectionId } : {}), ...(deps.logger ? { logger: deps.logger } : {}) }, GOOGLE_TOKEN_HOSTS));
   const sleep = deps.sleep ?? ((ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms)));
   const inflight = new Map<string, Promise<StoredTokens>>();
 

@@ -41,14 +41,13 @@ import {
   type WatchInfo,
 } from "../comms/schemas";
 import { ConnectorError, isConnectorError } from "../contract/errors";
-import { assertStatusUsable } from "../contract/guards";
-import { assertLaneBound, type LaneBoundConnection } from "../contract/lane-bound";
+import type { LaneBoundConnection } from "../contract/lane-bound";
 import { ProposedPayloadSchema, type ProposedPayload, type SourceResult } from "../contract/schemas";
 import { connectorLog, type ConnectorLogger } from "../log/index";
 import type { LaneConfigReader } from "../vault/lane-config";
 import type { GoogleApi } from "./api";
 import { DEFAULT_FULL_SYNC_DAYS, DEFAULT_MAX_BODY_CHARS, HISTORY_TYPES, METADATA_HEADERS } from "./constants";
-import { assertGoogleConnection } from "./guard";
+import { createProviderGuard } from "./guard";
 import { cleanText, MAX_SINGLE_HEADER, parseAddressList, parseSubject } from "./headers";
 import { extractText, type GmailPart } from "./mime";
 
@@ -151,26 +150,7 @@ export function createGmailProvider(deps: GmailProviderDeps): MailProvider<"goog
   const concurrency = deps.concurrency ?? 8;
   const capabilities: MailCapabilities = { watch: "polling", prepareWrite: true };
 
-  /**
-   * Lane brand, provider, authoritative row (status, lane, provider) and, for calls that reach Gmail, the lane's current
-   * mailbox list - all before any token read or request. Returns the AUTHORITATIVE row: use it, not the caller's object.
-   */
-  async function guard(laneId: LaneId, conn: unknown, opts: { mailbox?: boolean } = {}): Promise<LaneBoundConnection<"google">> {
-    assertLaneBound(laneId, conn);
-    assertGoogleConnection(conn);
-    const row = await deps.connections.load(laneId, conn.id);
-    assertGoogleConnection(row);
-    if (row.id !== conn.id) throw new ConnectorError({ kind: "lane_mismatch", message: "Connection row does not match" });
-    assertStatusUsable(row.status);
-    if (opts.mailbox) {
-      // Fail closed: a mailbox no longer on the lane's list (or an empty list) is not read.
-      const allowed = await deps.laneConfig.mailboxes(laneId);
-      if (!allowed.includes(row.external_account_id.toLowerCase())) {
-        throw new ConnectorError({ kind: "forbidden", message: "This mailbox is not one of the lane's configured mailboxes" });
-      }
-    }
-    return row;
-  }
+  const guard = createProviderGuard({ connections: deps.connections, laneConfig: deps.laneConfig });
 
   const envelope = <T>(laneId: LaneId, conn: LaneBoundConnection<"google">, op: string, data: T): SourceResult<T, "google"> => {
     const at = new Date(now()).toISOString();

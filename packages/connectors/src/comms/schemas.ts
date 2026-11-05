@@ -211,7 +211,23 @@ export function syncResultSchema<U extends z.ZodType, R extends z.ZodType>(upser
     });
 }
 export const MailSyncResultSchema = syncResultSchema(MessageMetaSchema, MessageRemovalSchema);
-export const CalendarSyncResultSchema = syncResultSchema(EventMetaSchema, EventRemovalSchema);
+/**
+ * Same rules as `syncResultSchema`, plus `dropCalendars` (Google, T-064): calendars that left the synced selection in a
+ * discovery that SUCCEEDED; the apply deletes their rows for this lane and connection in the same transaction as the
+ * page. Absent/empty = none.
+ */
+export const CalendarSyncResultSchema = z
+  .strictObject({
+    upserts: z.array(EventMetaSchema),
+    removals: z.array(EventRemovalSchema),
+    nextCursor: CommsCursorSchema.nullable(),
+    hasMore: z.boolean(),
+    fullResyncRequired: z.boolean(),
+    dropCalendars: z.array(z.string().min(1).max(512)).max(10).optional(),
+  })
+  .refine((r) => (r.fullResyncRequired ? r.nextCursor === null && !r.hasMore && r.upserts.length === 0 && r.removals.length === 0 : r.nextCursor !== null), {
+    message: "fullResyncRequired results are empty with a null cursor; all others carry a cursor",
+  });
 export type MailSyncResult = z.infer<typeof MailSyncResultSchema>;
 export type CalendarSyncResult = z.infer<typeof CalendarSyncResultSchema>;
 

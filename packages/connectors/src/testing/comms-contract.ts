@@ -47,6 +47,11 @@ export interface CommsContractHarness {
   removeMessage: (conn: { id: string }) => string;
   addEvent: (conn: { id: string }) => string;
   removeEvent: (conn: { id: string }) => string;
+  /**
+   * The provider reports a hard-deleted event as a cancelled stub in `upserts` instead of a `removals` entry (Google:
+   * a deletion is `status: cancelled`). Default false (Graph and the mock use removals).
+   */
+  removedEventsAreStubs?: boolean;
   /** Source-side: an existing event becomes a cancelled stub (status cancelled, no times); returns its event id. */
   cancelEvent: (conn: { id: string }) => string;
   /** Provider write calls received (sends, drafts, event writes). Must stay 0 through every check here. */
@@ -527,7 +532,13 @@ export function describeCommsContract(fixture: CommsContractFixture): void {
         const stub = ups.find((e) => e.event_id === cancelled);
         expect(stub?.status).toBe("cancelled");
         expect(stub?.start_at).toBeNull();
-        expect((delta.removals as { event_id: string }[]).map((e) => e.event_id)).toContain(removed);
+        if (x.removedEventsAreStubs) {
+          const gone = ups.find((e) => e.event_id === removed);
+          expect(gone?.status, "a deleted event must arrive as a cancelled stub").toBe("cancelled");
+          expect(gone?.start_at).toBeNull();
+        } else {
+          expect((delta.removals as { event_id: string }[]).map((e) => e.event_id)).toContain(removed);
+        }
         const stale = await cal.sync(x.laneId, conn, { value: "stale-token" });
         expect(stale.fullResyncRequired).toBe(true);
         expect(stale.nextCursor).toBeNull();

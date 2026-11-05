@@ -31,6 +31,19 @@ const issuesOf = (fn: () => unknown) => {
   throw new Error("expected a ZodError");
 };
 
+describe("calendar section (T-064)", () => {
+  it("is optional; accepts raw Google calendar ids, include_read_only and forward_days with defaults", () => {
+    expect(parseLaneConfig(VALID).calendar).toBeUndefined();
+    const c = parseLaneConfig({ ...VALID, calendar: { calendar_ids: ["en.usa#holiday@group.v.calendar.google.com"] } });
+    expect(c.calendar).toEqual({ calendar_ids: ["en.usa#holiday@group.v.calendar.google.com"], include_read_only: false, forward_days: 365 });
+  });
+  it("rejects unknown keys, bad ids and out-of-range look-ahead", () => {
+    for (const calendar of [{ extra: 1 }, { calendar_ids: [] }, { calendar_ids: ["a b"] }, { calendar_ids: [""] }, { calendar_ids: Array.from({ length: 11 }, (_v, i) => `c${String(i)}`) }, { forward_days: 6 }, { forward_days: 731 }, { include_read_only: "yes" }]) {
+      expect(() => parseLaneConfig({ ...VALID, calendar }), JSON.stringify(calendar)).toThrow();
+    }
+  });
+});
+
 describe("lane config schema", () => {
   it("accepts a valid config and fills the spec defaults", () => {
     const c = parseLaneConfig(VALID);

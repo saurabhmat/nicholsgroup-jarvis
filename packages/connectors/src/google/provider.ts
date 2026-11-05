@@ -21,7 +21,7 @@ import type { ConnectorLogger } from "../log/index";
 import type { OAuthProvider, TokenResponse } from "../oauth/flow";
 import type { LaneConfigReader } from "../vault/lane-config";
 import { SecretValue } from "../vault/secret";
-import { GMAIL_BASE, GMAIL_RATE_LIMIT, GOOGLE_AUTHORIZATION_PARAMS, GOOGLE_AUTHORIZATION_URL, GOOGLE_CALLBACK_PATH, GOOGLE_SCOPES, GOOGLE_SLUG, GOOGLE_TOKEN_URL } from "./constants";
+import { GMAIL_BASE, GMAIL_RATE_LIMIT, GOOGLE_GMAIL_HOSTS, GOOGLE_AUTHORIZATION_PARAMS, GOOGLE_AUTHORIZATION_URL, GOOGLE_CALLBACK_PATH, GOOGLE_SCOPES, GOOGLE_SLUG, GOOGLE_TOKEN_URL } from "./constants";
 import { createGoogleHttp } from "./http";
 
 export type GoogleClientConfig = { clientId: string; clientSecret: SecretValue; redirectUri: string };
@@ -64,7 +64,7 @@ export function createGoogleOAuthProvider(deps: GoogleProviderDeps): OAuthProvid
   const httpFor = (laneId: LaneId, baseUrl: string): HttpClient =>
     deps.httpFor
       ? deps.httpFor(laneId, baseUrl)
-      : createGoogleHttp({ baseUrl, laneId, rateLimit: GMAIL_RATE_LIMIT, ...(deps.logger ? { logger: deps.logger } : {}) });
+      : createGoogleHttp({ baseUrl, laneId, rateLimit: GMAIL_RATE_LIMIT, ...(deps.logger ? { logger: deps.logger } : {}) }, GOOGLE_GMAIL_HOSTS);
   const allowlist = async (laneId: LaneId): Promise<string[]> => {
     const mailboxes = await deps.laneConfig.mailboxes(laneId);
     if (mailboxes.length === 0) throw new ConnectorError({ kind: "forbidden", message: "No mailboxes are configured for this lane" });
