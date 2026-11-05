@@ -851,7 +851,7 @@ T-110, T-111 and T-114 are **track W5**, parallel with the connectors. T-112 nee
 
 ## Phase A11 — Calendar and meetings (PL-40)
 ### T-130 cal.ingest_delta
-- status: approved
+- status: done
 - depends: T-064
 - acceptance: delta updates to `cal.event_index`; retention 180 days.
 

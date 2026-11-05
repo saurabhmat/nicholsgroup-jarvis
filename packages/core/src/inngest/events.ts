@@ -7,12 +7,12 @@ import { z } from "zod";
 
 export const laneIdSchema = z.string().regex(/^[A-Z]{1,8}$/);
 
-/** Run a connection's sync (T-038). `trigger` says why (default "manual"); it is logged on the run, nothing else reads it. */
+/** Run a connection's sync (T-038). `trigger` says why and is required (T-130): it is logged on the run, nothing else reads it. */
 export const connSyncRequested = eventType("conn/sync.requested", {
   schema: z.strictObject({
     laneId: laneIdSchema,
     connectionId: z.uuid(),
-    trigger: z.enum(["schedule", "manual", "webhook", "connect"]).optional(),
+    trigger: z.enum(["schedule", "manual", "webhook", "connect"]),
   }),
 });
 

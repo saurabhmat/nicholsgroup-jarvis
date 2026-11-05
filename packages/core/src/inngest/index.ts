@@ -16,6 +16,17 @@ import { LANE_EVENTS } from "./events";
 
 export { actionApproved, connSyncRequested, LANE_EVENTS, laneIdSchema, retentionPurgeRequested, systemHeartbeat, webhookReceived } from "./events";
 export { platformFunctions } from "./functions";
+export {
+  CAL_INGEST_CADENCE_MS,
+  CAL_INGEST_CRON,
+  CAL_INGEST_RETRIES,
+  calIngestEventId,
+  calIngestFunction,
+  calIngestSlot,
+  handleCalIngest,
+  planCalIngest,
+} from "./cal-ingest";
+export type { CalIngestDeps, CalIngestPlan } from "./cal-ingest";
 export { CONN_SYNC_CONCURRENCY, CONN_SYNC_RETRIES, connSyncFunction, handleConnSync } from "./conn-sync";
 export {
   RETENTION_CRON,

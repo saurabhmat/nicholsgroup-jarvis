@@ -23,23 +23,23 @@ const CONN = "00000000-0000-4000-8000-000000000001";
 
 describe("sendLaneEvent", () => {
   it("sends a valid event for a served lane (name and data only)", async () => {
-    await sendLaneEvent(connSyncRequested.create({ laneId: "PKG", connectionId: CONN }));
-    expect(sent.at(-1)).toEqual({ name: "conn/sync.requested", data: { laneId: "PKG", connectionId: CONN } });
+    await sendLaneEvent(connSyncRequested.create({ laneId: "PKG", connectionId: CONN, trigger: "manual" }));
+    expect(sent.at(-1)).toEqual({ name: "conn/sync.requested", data: { laneId: "PKG", connectionId: CONN, trigger: "manual" } });
   });
 
   it("passes an optional Inngest event id through (dedupe for webhook events) and nothing else", async () => {
-    await sendLaneEvent({ ...connSyncRequested.create({ laneId: "PKG", connectionId: CONN }), id: "wh:PKG:x" });
-    expect(sent.at(-1)).toEqual({ name: "conn/sync.requested", data: { laneId: "PKG", connectionId: CONN }, id: "wh:PKG:x" });
+    await sendLaneEvent({ ...connSyncRequested.create({ laneId: "PKG", connectionId: CONN, trigger: "manual" }), id: "wh:PKG:x" });
+    expect(sent.at(-1)).toEqual({ name: "conn/sync.requested", data: { laneId: "PKG", connectionId: CONN, trigger: "manual" }, id: "wh:PKG:x" });
   });
 
   it("validates against the registered schema, not the caller's validate()", async () => {
-    const forged = { name: "conn/sync.requested", data: { laneId: "PKG", connectionId: "nope" }, validate: async () => {} };
+    const forged = { name: "conn/sync.requested", data: { laneId: "PKG", connectionId: "nope", trigger: "manual" }, validate: async () => {} };
     await expect(sendLaneEvent(forged)).rejects.toThrow("invalid event data");
     await expect(sendLaneEvent({ name: "made/up", data: { laneId: "PKG" } })).rejects.toThrow("unknown event");
   });
 
   it("refuses lanes this deployment does not serve", async () => {
-    await expect(sendLaneEvent(connSyncRequested.create({ laneId: "NL", connectionId: CONN }))).rejects.toThrow("lane not served");
+    await expect(sendLaneEvent(connSyncRequested.create({ laneId: "NL", connectionId: CONN, trigger: "manual" }))).rejects.toThrow("lane not served");
   });
 });
 

@@ -10,6 +10,7 @@ import { createRetentionStore } from "../retention/store";
 import { getServerEnv } from "@nichols/core/env/server";
 import { createTokenVault } from "./tokens";
 import { createSyncCursorStore, createSyncRunStore } from "../sync/store";
+import { createSyncTargetLister } from "../sync/targets";
 import { createCalendarIndexStore } from "../google/cal-store";
 import { createMailIndexStore } from "../google/mail-store";
 
@@ -37,6 +38,9 @@ export const calendarIndexStore = createCalendarIndexStore(getLaneJobClient);
 
 /** Logs conn.sync runs (core.sync_runs) and the connection's last sync with the lane's job client (T-038). */
 export const syncRunStore = createSyncRunStore(getLaneJobClient);
+
+/** Lists a lane's usable calendar-capable connections for the scheduled calendar sync (T-130). */
+export const syncTargetLister = createSyncTargetLister(getLaneJobClient);
 
 /** The generic sync cursor (core.sync_cursor_get/put) with the lane's job client (T-038). */
 export const syncCursorStore = createSyncCursorStore(getLaneJobClient);
