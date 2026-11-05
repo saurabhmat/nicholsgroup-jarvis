@@ -1,0 +1,7 @@
+<!-- Sign-in email (T-018, D-6). The code is the primary flow (it works inside the installed iPhone app); the link is a
+     fallback that opens in the browser. Production uses the same template through Resend (T-021). -->
+<h2>Your sign-in code</h2>
+<p style="font-size: 28px; letter-spacing: 6px; font-weight: 600;">{{ .Token }}</p>
+<p>Enter this code in the Executive Portal. It expires in 10 minutes.</p>
+<p>Or <a href="{{ .SiteURL }}/auth/confirm?token_hash={{ .TokenHash }}&amp;type=email">sign in with this link</a> (opens in your browser).</p>
+<p>If you did not ask to sign in, you can ignore this email.</p>

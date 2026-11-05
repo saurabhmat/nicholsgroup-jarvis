@@ -1,0 +1,77 @@
+-- MFA attempt guard (T-019 review H1/M1): the auth hook limits TOTP guessing and audits lockouts and enrolments.
+begin;
+select plan(19);
+\ir helpers/lane_rls.psql
+
+-- The hook is called directly (postgres cannot switch to supabase_auth_admin here); the privilege tests below show
+-- only Supabase Auth may call it, and the live probe in the PR notes exercises it through GoTrue.
+-- A synthetic unverified TOTP factor for the owner (no secret needed: the hook only sees the verdict).
+insert into auth.mfa_factors (id, user_id, friendly_name, factor_type, status, created_at, updated_at)
+values ('55555555-5555-4555-8555-555555555555', pg_temp.uid('owner@example.test'), 'test', 'totp', 'unverified', now(), now());
+
+create function pg_temp.attempt(p_email text, p_valid boolean) returns text language sql security definer as $$
+  select core.mfa_verification_attempt(jsonb_build_object(
+    'user_id', pg_temp.uid(p_email), 'factor_id', '55555555-5555-4555-8555-555555555555',
+    'factor_type', 'totp', 'valid', p_valid)) ->> 'decision';
+$$;
+
+-- ---------------------------------------------------------------- privileges
+select is(has_function_privilege('supabase_auth_admin', 'core.mfa_verification_attempt(jsonb)', 'execute'), true, 'Supabase Auth can call the hook');
+select is(has_function_privilege('authenticated', 'core.mfa_verification_attempt(jsonb)', 'execute'), false, 'authenticated cannot call the hook');
+select is(has_function_privilege('service_role', 'core.mfa_verification_attempt(jsonb)', 'execute'), false, 'service_role cannot call the hook');
+select is(has_table_privilege('authenticated', 'core.mfa_verification_attempts', 'select, insert, delete'), false, 'authenticated cannot see or reset the attempt counter');
+
+-- ---------------------------------------------------------------- enrolment is audited
+select is(pg_temp.attempt('owner@example.test', true), 'continue', 'a correct first code is accepted');
+select is(
+  (select count(*)::int from audit.events where action = 'mfa.factor_enrolled' and actor_id = pg_temp.uid('owner@example.test')),
+  6,
+  'enrolment is audited in each of the user''s lanes (owner: six)'
+);
+
+-- ---------------------------------------------------------------- 5 failures, then everything is rejected
+select is(pg_temp.attempt('finance-operator@example.test', false), 'continue', 'failure 1 is passed on (Supabase rejects the code)');
+select is(pg_temp.attempt('finance-operator@example.test', false), 'continue', 'failure 2');
+select is(pg_temp.attempt('finance-operator@example.test', false), 'continue', 'failure 3');
+select is(pg_temp.attempt('finance-operator@example.test', false), 'continue', 'failure 4');
+select is(pg_temp.attempt('finance-operator@example.test', false), 'continue', 'failure 5');
+select is(pg_temp.attempt('finance-operator@example.test', true), 'reject', 'after 5 failures even a correct code is rejected');
+select is(
+  (select count(*)::int from audit.events where action = 'mfa.lockout' and target = 'user:' || pg_temp.uid('finance-operator@example.test')::text),
+  1,
+  'the lockout is audited once, in the user''s lane'
+);
+
+-- ---------------------------------------------------------------- enrolment guard (T-020 review HIGH)
+-- The owner's first factor (verified above) becomes verified; a second new factor is refused.
+update auth.mfa_factors set status = 'verified' where id = '55555555-5555-4555-8555-555555555555';
+insert into auth.mfa_factors (id, user_id, friendly_name, factor_type, status, created_at, updated_at)
+values ('77777777-7777-4777-8777-777777777777', pg_temp.uid('owner@example.test'), 'second', 'totp', 'unverified', now(), now());
+create function pg_temp.attempt_on(p_email text, p_factor uuid, p_valid boolean) returns text language sql security definer as $$
+  select core.mfa_verification_attempt(jsonb_build_object(
+    'user_id', pg_temp.uid(p_email), 'factor_id', p_factor, 'factor_type', 'totp', 'valid', p_valid)) ->> 'decision';
+$$;
+select is(pg_temp.attempt_on('owner@example.test', '77777777-7777-4777-8777-777777777777', true), 'reject',
+  'a second authenticator is refused while one is verified (a stolen session cannot add its own)');
+-- Even after the original is removed, a new one needs an admin-granted reset.
+delete from auth.mfa_factors where id = '55555555-5555-4555-8555-555555555555';
+select is(pg_temp.attempt_on('owner@example.test', '77777777-7777-4777-8777-777777777777', true), 'reject',
+  'after removing the original, a new authenticator is still refused without a reset');
+select is(
+  (select count(*)::int from audit.events where action = 'mfa.enrolment_refused' and actor_id = pg_temp.uid('owner@example.test')),
+  12,
+  'refused enrolments are audited in each lane (owner: six lanes, twice)'
+);
+update core.mfa_enrolment_state set reset_allowed_at = now(), reset_allowed_by = pg_temp.uid('admin-technical@example.test')
+where user_id = pg_temp.uid('owner@example.test');
+select is(pg_temp.attempt_on('owner@example.test', '77777777-7777-4777-8777-777777777777', true), 'continue',
+  'with an admin-granted reset, one new authenticator is accepted');
+select is((select reset_allowed_at from core.mfa_enrolment_state where user_id = pg_temp.uid('owner@example.test')), null,
+  'the reset allowance is consumed');
+
+-- Other users are unaffected; the window expires.
+update core.mfa_verification_attempts set at = now() - interval '16 minutes' where user_id = pg_temp.uid('finance-operator@example.test');
+select is(pg_temp.attempt('finance-operator@example.test', true), 'continue', 'after the window a correct code works again');
+
+select * from finish();
+rollback;

@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-// Generates DB types from the LOCAL core stack into packages/core/src/db/types.ts.
+// Generates DB types (schemas public, core, audit, fin) from the LOCAL core stack into packages/core/src/db/types.ts.
 // Writes to a staged file and moves it into place only on success (no truncated file on failure).
 // Output differs between CLI versions: use Supabase CLI 2.122.0 (same as CI) so --check doesn't flap.
 // Usage: node scripts/gen-db-types.mjs [--check]   (--check fails if the committed file is out of date)
@@ -25,7 +25,7 @@ const fail = (msg) => {
 
 const gen = spawnSync(
   "supabase",
-  ["gen", "types", "typescript", "--local", "--workdir", workdir],
+  ["gen", "types", "typescript", "--local", "--schema", "public,core,audit,fin", "--workdir", workdir],
   { cwd: root, encoding: "utf8", maxBuffer: 64 * 1024 * 1024 },
 );
 if (gen.error) fail(`supabase CLI not runnable: ${gen.error.message}`);

@@ -1,0 +1,251 @@
+/*
+ * Nichols portal theme: design tokens v2, final with the D-20 sign-off (Nov 4, 2026;
+ * docs/design/README.md). Change values here only; components use the semantic names below
+ * (shadcn/ui convention), never raw colours.
+ *
+ * Light and dark: the light set is :root. The dark set applies when the system prefers dark
+ * (unless <html data-theme="light">) or when <html data-theme="dark">. The two dark blocks
+ * must stay identical (tokens.test.ts checks this).
+ *
+ * Contrast rules: raw gold (--gold) is decoration only and never carries text on light
+ * grounds; gold text uses --gold-foreground.
+ *
+ * Import after `@import "tailwindcss";`.
+ */
+
+:root {
+  /* Fonts: the app sets --font-source-serif-4 and --font-inter via next/font (self-hosted). */
+  --heading-font: var(--font-source-serif-4, "Source Serif 4"), Georgia, serif;
+  --body-font: var(--font-inter, "Inter"), system-ui, sans-serif;
+
+  /* Ground, surfaces, lines, text */
+  --background: #F7F4EC;
+  --foreground: #111827;
+  --card: #FFFFFF;
+  --card-foreground: #111827;
+  --popover: #FFFFFF;
+  --popover-foreground: #111827;
+  --border: #E7E1D3;
+  --input: #E7E1D3;
+  --divider: #F1ECE0;
+  --muted: #F1ECE0;
+  --muted-foreground: #4B5563;
+
+  /* Primary (navy) */
+  --primary: #0E2A47;
+  --primary-foreground: #FFFFFF;
+  --primary-hover: #081A2E;
+  --primary-tint: #E4ECF5;
+  --secondary: #E4ECF5;
+  --secondary-foreground: #0E2A47;
+  --accent: #E4ECF5;
+  --accent-foreground: #0E2A47;
+  --accent-italic: #1F4A7A;
+  --ring: #1F4A7A;
+
+  /* Gold: decoration only; text uses --gold-foreground */
+  --gold: #D4AF5A;
+  --gold-foreground: #8A6A1F;
+
+  /* Status */
+  /* --alert on --alert-surface is only 4.42:1: never use it as text there (use --alert-foreground). */
+  --alert: #B45309;
+  --alert-foreground: #92400E;
+  --alert-surface: #FCEFD9;
+  --success: #166534;
+  --success-surface: #DCFCE7;
+  /* No separate error colour in the provisional tokens; errors use the alert palette. */
+  --destructive: #B45309;
+  --destructive-foreground: #FFFFFF;
+
+  /* Side menu (desktop) */
+  --sidebar: #0E2A47;
+  --sidebar-foreground: #D5DEEA;
+  --sidebar-section: #A9B8CC;
+  --sidebar-active: #1F4A7A;
+  --sidebar-active-edge: #D4AF5A;
+  --sidebar-switcher: #143559;
+  --sidebar-switcher-border: #2C4F78;
+
+  /* Charts (Recharts), in series order; every bar also carries a text label */
+  --chart-1: #0E2A47;
+  --chart-2: #3B6EA5;
+  --chart-3: #B45309;
+  --chart-4: #7C2D12;
+
+  color-scheme: light;
+
+  /* Radii and layout */
+  --control-radius: 8px;
+  --card-radius: 12px;
+  --content-max-width: 1200px;
+}
+
+/* Dark set: keep both blocks identical. */
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --background: #0B1626;
+    --foreground: #F3F4F6;
+    --card: #13233A;
+    --card-foreground: #F3F4F6;
+    --popover: #13233A;
+    --popover-foreground: #F3F4F6;
+    --border: #2A3D57;
+    --input: #2A3D57;
+    --divider: #1B2D47;
+    --muted: #1B2D47;
+    --muted-foreground: #A9B8CC;
+    --primary: #D5DEEA;
+    --primary-foreground: #0E2A47;
+    --primary-hover: #E4ECF5;
+    --primary-tint: #1F3A5C;
+    --secondary: #1F3A5C;
+    --secondary-foreground: #D5DEEA;
+    --accent: #1F3A5C;
+    --accent-foreground: #D5DEEA;
+    --accent-italic: #9DB9DC;
+    --ring: #9DB9DC;
+    --gold: #D4AF5A;
+    --gold-foreground: #D4AF5A;
+    --alert: #F0A35E;
+    --alert-foreground: #F5C08A;
+    --alert-surface: #3A2512;
+    --success: #86EFAC;
+    --success-surface: #12321F;
+    --destructive: #F0A35E;
+    --destructive-foreground: #0B1626;
+    --sidebar: #081322;
+    --sidebar-foreground: #D5DEEA;
+    --sidebar-section: #A9B8CC;
+    --sidebar-active: #1F4A7A;
+    --sidebar-active-edge: #D4AF5A;
+    --sidebar-switcher: #10223A;
+    --sidebar-switcher-border: #2C4F78;
+    --chart-1: #9DB9DC;
+    --chart-2: #5B8FCB;
+    --chart-3: #F0A35E;
+    --chart-4: #E8590C;
+    color-scheme: dark;
+  }
+}
+
+:root[data-theme="dark"] {
+  --background: #0B1626;
+  --foreground: #F3F4F6;
+  --card: #13233A;
+  --card-foreground: #F3F4F6;
+  --popover: #13233A;
+  --popover-foreground: #F3F4F6;
+  --border: #2A3D57;
+  --input: #2A3D57;
+  --divider: #1B2D47;
+  --muted: #1B2D47;
+  --muted-foreground: #A9B8CC;
+  --primary: #D5DEEA;
+  --primary-foreground: #0E2A47;
+  --primary-hover: #E4ECF5;
+  --primary-tint: #1F3A5C;
+  --secondary: #1F3A5C;
+  --secondary-foreground: #D5DEEA;
+  --accent: #1F3A5C;
+  --accent-foreground: #D5DEEA;
+  --accent-italic: #9DB9DC;
+  --ring: #9DB9DC;
+  --gold: #D4AF5A;
+  --gold-foreground: #D4AF5A;
+  --alert: #F0A35E;
+  --alert-foreground: #F5C08A;
+  --alert-surface: #3A2512;
+  --success: #86EFAC;
+  --success-surface: #12321F;
+  --destructive: #F0A35E;
+  --destructive-foreground: #0B1626;
+  --sidebar: #081322;
+  --sidebar-foreground: #D5DEEA;
+  --sidebar-section: #A9B8CC;
+  --sidebar-active: #1F4A7A;
+  --sidebar-active-edge: #D4AF5A;
+  --sidebar-switcher: #10223A;
+  --sidebar-switcher-border: #2C4F78;
+  --chart-1: #9DB9DC;
+  --chart-2: #5B8FCB;
+  --chart-3: #F0A35E;
+  --chart-4: #E8590C;
+  color-scheme: dark;
+}
+
+@theme inline {
+  --font-sans: var(--body-font);
+  --font-heading: var(--heading-font);
+
+  --color-background: var(--background);
+  --color-foreground: var(--foreground);
+  --color-card: var(--card);
+  --color-card-foreground: var(--card-foreground);
+  --color-popover: var(--popover);
+  --color-popover-foreground: var(--popover-foreground);
+  --color-border: var(--border);
+  --color-input: var(--input);
+  --color-divider: var(--divider);
+  --color-muted: var(--muted);
+  --color-muted-foreground: var(--muted-foreground);
+  --color-primary: var(--primary);
+  --color-primary-foreground: var(--primary-foreground);
+  --color-primary-hover: var(--primary-hover);
+  --color-primary-tint: var(--primary-tint);
+  --color-secondary: var(--secondary);
+  --color-secondary-foreground: var(--secondary-foreground);
+  --color-accent: var(--accent);
+  --color-accent-foreground: var(--accent-foreground);
+  --color-accent-italic: var(--accent-italic);
+  --color-ring: var(--ring);
+  --color-gold: var(--gold);
+  --color-gold-foreground: var(--gold-foreground);
+  --color-alert: var(--alert);
+  --color-alert-foreground: var(--alert-foreground);
+  --color-alert-surface: var(--alert-surface);
+  --color-success: var(--success);
+  --color-success-surface: var(--success-surface);
+  --color-destructive: var(--destructive);
+  --color-destructive-foreground: var(--destructive-foreground);
+  --color-sidebar: var(--sidebar);
+  --color-sidebar-foreground: var(--sidebar-foreground);
+  --color-sidebar-section: var(--sidebar-section);
+  --color-sidebar-active: var(--sidebar-active);
+  --color-sidebar-active-edge: var(--sidebar-active-edge);
+  --color-sidebar-switcher: var(--sidebar-switcher);
+  --color-sidebar-switcher-border: var(--sidebar-switcher-border);
+  --color-chart-1: var(--chart-1);
+  --color-chart-2: var(--chart-2);
+  --color-chart-3: var(--chart-3);
+  --color-chart-4: var(--chart-4);
+
+  --radius-control: var(--control-radius);
+  --radius-card: var(--card-radius);
+  /* shadcn/ui components added later via the CLI use rounded-md (controls) and rounded-xl (cards). */
+  --radius-sm: calc(var(--control-radius) - 2px);
+  --radius-md: var(--control-radius);
+  --radius-lg: var(--card-radius);
+  --radius-xl: var(--card-radius);
+
+  --container-content: var(--content-max-width);
+}
+
+@layer base {
+  * {
+    border-color: var(--border);
+  }
+
+  body {
+    background-color: var(--background);
+    color: var(--foreground);
+    font-family: var(--body-font);
+  }
+
+  h1,
+  h2,
+  h3,
+  h4 {
+    font-family: var(--heading-font);
+  }
+}

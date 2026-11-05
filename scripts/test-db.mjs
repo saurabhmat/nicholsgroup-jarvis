@@ -37,6 +37,11 @@ if (status.status !== 0) {
 }
 
 if (!noReset) {
+  // The reset applies the committed seed.sql; refuse to test a seed that no longer matches its generator.
+  const seedCheck = spawnSync(process.execPath, [path.join(workdir, "seed", "generate.mjs"), "--check"], { cwd: root, stdio: "inherit" });
+  if (seedCheck.error) fail(seedCheck.error.message);
+  if (seedCheck.status !== 0) fail("seed.sql is out of date. Run `pnpm db:seed`.");
+
   const reset = run(["db", "reset", "--local"], { stdio: "inherit" });
   if (reset.error) fail(reset.error.message);
   if (reset.status !== 0) fail(`db reset exited with status ${reset.status}`);

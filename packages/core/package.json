@@ -6,11 +6,30 @@
   "exports": {
     ".": "./src/index.ts",
     "./lanes": "./src/lanes/index.ts",
-    "./db": "./src/db/index.ts"
+    "./lane-config": "./src/lane-config/index.ts",
+    "./audit": "./src/audit/index.ts",
+    "./secrets": "./src/secrets/index.ts",
+    "./auth": "./src/auth/index.ts",
+    "./lane-router": "./src/lane-router/index.ts",
+    "./inngest": "./src/inngest/index.ts",
+    "./db": "./src/db/index.ts",
+    "./env": "./src/env/index.ts",
+    "./env/client": "./src/env/client.ts",
+    "./env/server": "./src/env/server.ts",
+    "./env/build": "./src/env/build.ts",
+    "./env/secret-patterns": "./src/env/secret-patterns.js",
+    "./env/startup": "./src/env/startup.ts"
   },
   "scripts": {
     "typecheck": "tsc -b",
     "lint": "eslint .",
     "test": "vitest run"
+  },
+  "dependencies": {
+    "@supabase/ssr": "0.12.7",
+    "@supabase/supabase-js": "2.118.0",
+    "inngest": "4.26.2",
+    "server-only": "^0.0.1",
+    "zod": "^4.6.7"
   }
 }

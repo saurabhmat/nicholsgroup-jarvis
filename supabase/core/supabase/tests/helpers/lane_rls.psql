@@ -1,0 +1,68 @@
+-- Shared pgTAP helpers (T-013). Include from a test with `\ir helpers/lane_rls.psql` after `begin;`.
+-- Everything is created in pg_temp and disappears with the test's transaction.
+
+-- Sets the JWT claims for a seeded persona. Call as postgres, then `set local role authenticated`.
+create function pg_temp.claims(p_email text, p_aal text) returns text language sql as $$
+  select set_config('request.jwt.claims',
+    json_build_object('sub', (select id from auth.users where email = p_email), 'role', 'authenticated', 'aal', p_aal)::text, true);
+$$;
+
+-- A persona's user id. Security definer (test-only, owned by postgres) so it also works after `set role
+-- authenticated`, which cannot read auth.users.
+create function pg_temp.uid(p_email text) returns uuid language sql security definer as $$
+  select id from auth.users where email = p_email;
+$$;
+
+-- core.allowed_lanes(uid, view) for a persona asking about itself at the given AAL, called as authenticated.
+create function pg_temp.lanes_for(p_email text, p_view text, p_aal text default 'aal2') returns text[] language plpgsql as $$
+declare
+  v_uid uuid := pg_temp.uid(p_email);
+  v_result text[];
+begin
+  perform pg_temp.claims(p_email, p_aal);
+  set local role authenticated;
+  v_result := core.allowed_lanes(v_uid, p_view);
+  reset role;
+  return v_result;
+end;
+$$;
+
+-- The standard lane policy's USING expression for a view, exactly as Postgres prints it (pg_get_expr). The catalog
+-- test and has_standard_lane_policy compare whole expressions, never fragments (T-013 review H1, M1).
+create function pg_temp.standard_lane_qual(p_view text, p_column text default 'lane_id') returns text language sql immutable as $$
+  select format(
+    '((( SELECT (auth.jwt() ->> ''aal''::text)) = ''aal2''::text) AND (%s = ANY (( SELECT core.allowed_lanes(( SELECT auth.uid() AS uid), %L::text) AS allowed_lanes)::text[])))',
+    p_column, p_view);
+$$;
+
+-- Asserts the standard lane policy (architecture §5.4) on a lane-scoped table: RLS enabled; exactly one permissive
+-- policy, which is SELECT for authenticated only and equals the canonical expression for p_view; no table- or
+-- column-level write grant to authenticated; nothing for anon. Returns one pgTAP line (use with plan()).
+create function pg_temp.has_standard_lane_policy(p_table regclass, p_view text) returns text language plpgsql as $$
+declare
+  v_problems text[] := '{}';
+  v_permissive int;
+  v_ok int;
+begin
+  if not (select relrowsecurity from pg_class where oid = p_table) then
+    v_problems := v_problems || 'RLS disabled';
+  end if;
+  select count(*) into v_permissive from pg_policy p where p.polrelid = p_table and p.polpermissive;
+  select count(*) into v_ok from pg_policy p
+  where p.polrelid = p_table and p.polpermissive and p.polcmd = 'r'
+    and p.polroles = array[(select oid from pg_roles where rolname = 'authenticated')]::oid[]
+    and pg_get_expr(p.polqual, p.polrelid) = pg_temp.standard_lane_qual(p_view);
+  if v_ok <> 1 or v_permissive <> 1 then
+    v_problems := v_problems || format('expected exactly one permissive policy (SELECT, authenticated, standard expression for %L); found %s permissive, %s matching', p_view, v_permissive, v_ok);
+  end if;
+  if has_table_privilege('anon', p_table, 'select, insert, update, delete')
+     or has_any_column_privilege('anon', p_table, 'select, insert, update, references')
+     or has_table_privilege('authenticated', p_table, 'insert, update, delete, truncate')
+     or has_any_column_privilege('authenticated', p_table, 'insert, update') then
+    v_problems := v_problems || 'write or anon grants (table or column level)';
+  end if;
+  return ok(cardinality(v_problems) = 0,
+            format('%s has the standard lane policy (view %L)', p_table, p_view))
+         || case when cardinality(v_problems) > 0 then E'\n# ' || array_to_string(v_problems, E'\n# ') else '' end;
+end;
+$$;

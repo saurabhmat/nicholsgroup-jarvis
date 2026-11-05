@@ -4,7 +4,19 @@
   "private": true,
   "type": "module",
   "exports": {
-    ".": "./src/index.ts"
+    ".": "./src/index.ts",
+    "./testing": "./src/testing/index.ts",
+    "./testing/msw": "./src/testing/msw/index.ts",
+    "./writer": "./src/contract/writer.ts",
+    "./internal": "./src/contract/internal.ts",
+    "./redact": "./src/redact.ts",
+    "./oauth": "./src/oauth/index.ts",
+    "./raw": "./src/raw/index.ts",
+    "./webhooks": "./src/webhooks/index.ts",
+    "./write": "./src/write/index.ts",
+    "./connection-test": "./src/connection-test.ts",
+    "./comms": "./src/comms/index.ts",
+    "./google": "./src/google/index.ts"
   },
   "scripts": {
     "typecheck": "tsc -b",
@@ -12,6 +24,23 @@
     "test": "vitest run"
   },
   "dependencies": {
-    "@nichols/core": "workspace:*"
+    "@nichols/core": "workspace:*",
+    "zod": "4.6.7"
+  },
+  "devDependencies": {
+    "msw": "3.0.3",
+    "vitest": "5.0.5"
+  },
+  "peerDependencies": {
+    "vitest": "5.0.5",
+    "msw": "3.0.3"
+  },
+  "peerDependenciesMeta": {
+    "vitest": {
+      "optional": true
+    },
+    "msw": {
+      "optional": true
+    }
   }
 }

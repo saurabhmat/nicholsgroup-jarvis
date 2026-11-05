@@ -15,6 +15,9 @@ coverage/
 
 # next.js
 .next/
+.next-canary/
+# left by an interrupted client-bundle check (T-050); restored and removed by the script
+next-env.d.ts.canary-backup
 out/
 
 # production
@@ -54,3 +57,11 @@ dist/
 
 # staged files from scripts (e.g. db:types)
 *.tmp
+
+# env-build smoke test scratch file
+*.check-env-backup
+
+# Playwright (T-018)
+test-results/
+playwright-report/
+blob-report/

@@ -3,19 +3,27 @@
   "version": "0.1.0",
   "private": true,
   "scripts": {
-    "dev": "next dev",
+    "dev": "next dev --hostname 127.0.0.1",
     "build": "next build",
     "start": "next start",
     "typecheck": "next typegen && tsc --noEmit",
-    "lint": "eslint"
+    "lint": "eslint",
+    "check:env-build": "node scripts/check-env-build.mjs",
+    "test": "vitest run",
+    "test:bundle": "vitest run --config vitest.bundle.config.ts",
+    "test:e2e": "playwright test"
   },
   "dependencies": {
+    "@nichols/connectors": "workspace:*",
     "@nichols/core": "workspace:*",
+    "@nichols/ui": "workspace:*",
     "next": "16.4.2",
     "react": "19.3.0",
     "react-dom": "19.3.0"
   },
   "devDependencies": {
+    "@nichols/eslint-plugin": "workspace:*",
+    "@playwright/test": "1.64.1",
     "@tailwindcss/turbopack": "^4",
     "@types/node": "^20",
     "@types/react": "^19",
@@ -23,6 +31,8 @@
     "eslint": "^9",
     "eslint-config-next": "16.4.2",
     "tailwindcss": "^4",
-    "typescript": "^5"
+    "typescript": "^5",
+    "typescript-eslint": "8.72.0",
+    "vitest": "5.0.5"
   }
 }

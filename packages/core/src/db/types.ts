@@ -5,17 +5,504 @@ export type Json = string | number | boolean | null | { [key: string]: Json | un
 
 export type Database = {
   
-  "graphql_public": {
+  "audit": {
           Tables: {
-            [_ in never]: never
+            "events": {
+                  Row: {
+                    "action": string,"actor_id": string | null,"actor_kind": string,"at": string,"id": number,"lane_id": string,"metadata": NonNullable<Json>,"target": string | null
+                  }
+                  ComputedFields: never
+                  Insert: {
+                    "action": string,"actor_id"?: string | null,"actor_kind": string,"at"?: string,"id"?: never,"lane_id": string,"metadata"?: NonNullable<Json>,"target"?: string | null
+                  }
+                  Update: {
+                    "action"?: string,"actor_id"?: string | null,"actor_kind"?: string,"at"?: string,"id"?: never,"lane_id"?: string,"metadata"?: NonNullable<Json>,"target"?: string | null
+                  }
+                  Relationships: [
+                    
+                  ]
+                }
           }
           Views: {
             [_ in never]: never
           }
           Functions: {
-            "graphql":
-{ Args: { "extensions"?: Json,"operationName"?: string,"query"?: string,"variables"?: Json }; Returns: Json
+            "log":
+{ Args: { "p_action": string,"p_actor_id": string,"p_actor_kind": string,"p_lane_id": string,"p_metadata"?: Json,"p_target"?: string }; Returns: number
                            }
+          }
+          Enums: {
+            [_ in never]: never
+          }
+          CompositeTypes: {
+            [_ in never]: never
+          }
+        },"core": {
+          Tables: {
+            "connection_secrets": {
+                  Row: {
+                    "connection_id": string,"created_at": string,"lane_id": string,"rotated_at": string | null,"vault_secret_id": string
+                  }
+                  ComputedFields: never
+                  Insert: {
+                    "connection_id": string,"created_at"?: string,"lane_id": string,"rotated_at"?: string | null,"vault_secret_id": string
+                  }
+                  Update: {
+                    "connection_id"?: string,"created_at"?: string,"lane_id"?: string,"rotated_at"?: string | null,"vault_secret_id"?: string
+                  }
+                  Relationships: [
+                    {
+      foreignKeyName: "connection_secrets_connection_id_lane_id_fkey"
+      columns: ["connection_id","lane_id"]
+isOneToOne: false
+      referencedRelation: "connections"
+      referencedColumns: ["id","lane_id"]
+    },{
+      foreignKeyName: "connection_secrets_lane_id_fkey"
+      columns: ["lane_id"]
+isOneToOne: false
+      referencedRelation: "lanes"
+      referencedColumns: ["code"]
+    }
+                  ]
+                },"connections": {
+                  Row: {
+                    "created_at": string,"created_by": string | null,"external_account_id": string,"features": NonNullable<Json>,"features_checked_at": string | null,"id": string,"lane_id": string,"last_error": Json | null,"last_sync_at": string | null,"provider": string,"status": string,"token_expires_at": string | null,"updated_at": string
+                  }
+                  ComputedFields: never
+                  Insert: {
+                    "created_at"?: string,"created_by"?: string | null,"external_account_id": string,"features"?: NonNullable<Json>,"features_checked_at"?: string | null,"id"?: string,"lane_id": string,"last_error"?: Json | null,"last_sync_at"?: string | null,"provider": string,"status"?: string,"token_expires_at"?: string | null,"updated_at"?: string
+                  }
+                  Update: {
+                    "created_at"?: string,"created_by"?: string | null,"external_account_id"?: string,"features"?: NonNullable<Json>,"features_checked_at"?: string | null,"id"?: string,"lane_id"?: string,"last_error"?: Json | null,"last_sync_at"?: string | null,"provider"?: string,"status"?: string,"token_expires_at"?: string | null,"updated_at"?: string
+                  }
+                  Relationships: [
+                    {
+      foreignKeyName: "connections_created_by_fkey"
+      columns: ["created_by"]
+isOneToOne: false
+      referencedRelation: "users"
+      referencedColumns: ["id"]
+    },{
+      foreignKeyName: "connections_lane_id_fkey"
+      columns: ["lane_id"]
+isOneToOne: false
+      referencedRelation: "lanes"
+      referencedColumns: ["code"]
+    }
+                  ]
+                },"lane_config": {
+                  Row: {
+                    "config": NonNullable<Json>,"created_at": string,"created_by": string | null,"lane_id": string,"version": number
+                  }
+                  ComputedFields: never
+                  Insert: {
+                    "config": NonNullable<Json>,"created_at"?: string,"created_by"?: string | null,"lane_id": string,"version": number
+                  }
+                  Update: {
+                    "config"?: NonNullable<Json>,"created_at"?: string,"created_by"?: string | null,"lane_id"?: string,"version"?: number
+                  }
+                  Relationships: [
+                    {
+      foreignKeyName: "lane_config_created_by_fkey"
+      columns: ["created_by"]
+isOneToOne: false
+      referencedRelation: "users"
+      referencedColumns: ["id"]
+    },{
+      foreignKeyName: "lane_config_lane_id_fkey"
+      columns: ["lane_id"]
+isOneToOne: false
+      referencedRelation: "lanes"
+      referencedColumns: ["code"]
+    }
+                  ]
+                },"lane_policies": {
+                  Row: {
+                    "created_at": string,"cross_lane_summary_allowed": string,"indexing_enabled": boolean,"lane_id": string,"llm_allowed_categories": (string)[],"retention_days": number,"store_content_bodies": boolean,"store_outbound_drafts": boolean,"updated_at": string,"write_actions_allowed": (string)[]
+                  }
+                  ComputedFields: never
+                  Insert: {
+                    "created_at"?: string,"cross_lane_summary_allowed"?: string,"indexing_enabled"?: boolean,"lane_id": string,"llm_allowed_categories"?: (string)[],"retention_days"?: number,"store_content_bodies"?: boolean,"store_outbound_drafts"?: boolean,"updated_at"?: string,"write_actions_allowed"?: (string)[]
+                  }
+                  Update: {
+                    "created_at"?: string,"cross_lane_summary_allowed"?: string,"indexing_enabled"?: boolean,"lane_id"?: string,"llm_allowed_categories"?: (string)[],"retention_days"?: number,"store_content_bodies"?: boolean,"store_outbound_drafts"?: boolean,"updated_at"?: string,"write_actions_allowed"?: (string)[]
+                  }
+                  Relationships: [
+                    {
+      foreignKeyName: "lane_policies_lane_id_fkey"
+      columns: ["lane_id"]
+isOneToOne: true
+      referencedRelation: "lanes"
+      referencedColumns: ["code"]
+    }
+                  ]
+                },"lanes": {
+                  Row: {
+                    "code": string,"created_at": string,"data_plane": string,"enabled": boolean,"name": string,"updated_at": string
+                  }
+                  ComputedFields: never
+                  Insert: {
+                    "code": string,"created_at"?: string,"data_plane": string,"enabled"?: boolean,"name": string,"updated_at"?: string
+                  }
+                  Update: {
+                    "code"?: string,"created_at"?: string,"data_plane"?: string,"enabled"?: boolean,"name"?: string,"updated_at"?: string
+                  }
+                  Relationships: [
+                    
+                  ]
+                },"memberships": {
+                  Row: {
+                    "created_at": string,"lane_id": string,"role": string,"updated_at": string,"user_id": string,"views": (string)[]
+                  }
+                  ComputedFields: never
+                  Insert: {
+                    "created_at"?: string,"lane_id": string,"role": string,"updated_at"?: string,"user_id": string,"views"?: (string)[]
+                  }
+                  Update: {
+                    "created_at"?: string,"lane_id"?: string,"role"?: string,"updated_at"?: string,"user_id"?: string,"views"?: (string)[]
+                  }
+                  Relationships: [
+                    {
+      foreignKeyName: "memberships_lane_id_fkey"
+      columns: ["lane_id"]
+isOneToOne: false
+      referencedRelation: "lanes"
+      referencedColumns: ["code"]
+    },{
+      foreignKeyName: "memberships_user_id_fkey"
+      columns: ["user_id"]
+isOneToOne: false
+      referencedRelation: "users"
+      referencedColumns: ["id"]
+    }
+                  ]
+                },"mfa_enrolment_state": {
+                  Row: {
+                    "enrolled_at": string,"reset_allowed_at": string | null,"reset_allowed_by": string | null,"user_id": string
+                  }
+                  ComputedFields: never
+                  Insert: {
+                    "enrolled_at": string,"reset_allowed_at"?: string | null,"reset_allowed_by"?: string | null,"user_id": string
+                  }
+                  Update: {
+                    "enrolled_at"?: string,"reset_allowed_at"?: string | null,"reset_allowed_by"?: string | null,"user_id"?: string
+                  }
+                  Relationships: [
+                    
+                  ]
+                },"mfa_verification_attempts": {
+                  Row: {
+                    "at": string,"factor_id": string,"id": number,"user_id": string
+                  }
+                  ComputedFields: never
+                  Insert: {
+                    "at"?: string,"factor_id": string,"id"?: never,"user_id": string
+                  }
+                  Update: {
+                    "at"?: string,"factor_id"?: string,"id"?: never,"user_id"?: string
+                  }
+                  Relationships: [
+                    
+                  ]
+                },"oauth_states": {
+                  Row: {
+                    "code_verifier": string,"created_at": string,"expires_at": string,"id": string,"lane_id": string,"provider": string,"redirect_uri": string,"state_hash": string,"user_id": string
+                  }
+                  ComputedFields: never
+                  Insert: {
+                    "code_verifier": string,"created_at"?: string,"expires_at"?: string,"id"?: string,"lane_id": string,"provider": string,"redirect_uri": string,"state_hash": string,"user_id": string
+                  }
+                  Update: {
+                    "code_verifier"?: string,"created_at"?: string,"expires_at"?: string,"id"?: string,"lane_id"?: string,"provider"?: string,"redirect_uri"?: string,"state_hash"?: string,"user_id"?: string
+                  }
+                  Relationships: [
+                    {
+      foreignKeyName: "oauth_states_lane_id_fkey"
+      columns: ["lane_id"]
+isOneToOne: false
+      referencedRelation: "lanes"
+      referencedColumns: ["code"]
+    }
+                  ]
+                },"sync_runs": {
+                  Row: {
+                    "connection_id": string,"created_at": string,"error": Json | null,"finished_at": string | null,"id": string,"job_run_id": string | null,"kind": string,"lane_id": string,"records_received": number,"records_written": number,"started_at": string,"status": string,"trigger": string,"updated_at": string
+                  }
+                  ComputedFields: never
+                  Insert: {
+                    "connection_id": string,"created_at"?: string,"error"?: Json | null,"finished_at"?: string | null,"id"?: string,"job_run_id"?: string | null,"kind": string,"lane_id": string,"records_received"?: number,"records_written"?: number,"started_at"?: string,"status"?: string,"trigger": string,"updated_at"?: string
+                  }
+                  Update: {
+                    "connection_id"?: string,"created_at"?: string,"error"?: Json | null,"finished_at"?: string | null,"id"?: string,"job_run_id"?: string | null,"kind"?: string,"lane_id"?: string,"records_received"?: number,"records_written"?: number,"started_at"?: string,"status"?: string,"trigger"?: string,"updated_at"?: string
+                  }
+                  Relationships: [
+                    {
+      foreignKeyName: "sync_runs_connection_id_lane_id_fkey"
+      columns: ["connection_id","lane_id"]
+isOneToOne: false
+      referencedRelation: "connections"
+      referencedColumns: ["id","lane_id"]
+    },{
+      foreignKeyName: "sync_runs_lane_id_fkey"
+      columns: ["lane_id"]
+isOneToOne: false
+      referencedRelation: "lanes"
+      referencedColumns: ["code"]
+    }
+                  ]
+                },"users": {
+                  Row: {
+                    "created_at": string,"display_name": string,"id": string,"updated_at": string
+                  }
+                  ComputedFields: never
+                  Insert: {
+                    "created_at"?: string,"display_name": string,"id": string,"updated_at"?: string
+                  }
+                  Update: {
+                    "created_at"?: string,"display_name"?: string,"id"?: string,"updated_at"?: string
+                  }
+                  Relationships: [
+                    
+                  ]
+                },"webhook_events": {
+                  Row: {
+                    "attempts": number,"connection_id": string,"event_id": string,"event_type": string,"id": string,"lane_id": string,"payload_hash": string,"provider": string,"received_at": string,"status": string,"updated_at": string
+                  }
+                  ComputedFields: never
+                  Insert: {
+                    "attempts"?: number,"connection_id": string,"event_id": string,"event_type": string,"id"?: string,"lane_id": string,"payload_hash": string,"provider": string,"received_at"?: string,"status"?: string,"updated_at"?: string
+                  }
+                  Update: {
+                    "attempts"?: number,"connection_id"?: string,"event_id"?: string,"event_type"?: string,"id"?: string,"lane_id"?: string,"payload_hash"?: string,"provider"?: string,"received_at"?: string,"status"?: string,"updated_at"?: string
+                  }
+                  Relationships: [
+                    {
+      foreignKeyName: "webhook_events_connection_id_lane_id_fkey"
+      columns: ["connection_id","lane_id"]
+isOneToOne: false
+      referencedRelation: "connections"
+      referencedColumns: ["id","lane_id"]
+    },{
+      foreignKeyName: "webhook_events_lane_id_fkey"
+      columns: ["lane_id"]
+isOneToOne: false
+      referencedRelation: "lanes"
+      referencedColumns: ["code"]
+    }
+                  ]
+                }
+          }
+          Views: {
+            "lane_config_current": {
+                  Row: {
+                    "config": NonNullable<Json>,"created_at": string,"created_by": string | null,"lane_id": string,"version": number
+                  }
+                  ComputedFields: never
+                  Relationships: [
+                    {
+      foreignKeyName: "lane_config_created_by_fkey"
+      columns: ["created_by"]
+isOneToOne: false
+      referencedRelation: "users"
+      referencedColumns: ["id"]
+    },{
+      foreignKeyName: "lane_config_lane_id_fkey"
+      columns: ["lane_id"]
+isOneToOne: false
+      referencedRelation: "lanes"
+      referencedColumns: ["code"]
+    }
+                  ]
+                }
+          }
+          Functions: {
+            "allowed_lanes":
+{ Args: { "p_uid": string,"p_view": string }; Returns: (string)[]
+                           },
+"connection_for_token":
+{ Args: { "p_connection_id": string,"p_lane_id": string,"p_lock": boolean }; Returns: string
+                           },
+"connection_token_check_secret":
+{ Args: { "p_secret": string }; Returns: undefined
+                           },
+"connection_token_read":
+{ Args: { "p_connection_id": string,"p_lane_id": string }; Returns: string
+                           },
+"connection_token_revoke":
+{ Args: { "p_actor_id"?: string,"p_connection_id": string,"p_lane_id": string }; Returns: boolean
+                           },
+"connection_token_rotate":
+{ Args: { "p_connection_id": string,"p_expected_hash": string,"p_expires_at": string,"p_lane_id": string,"p_secret": string }; Returns: undefined
+                           },
+"connection_token_store":
+{ Args: { "p_actor_id"?: string,"p_connection_id": string,"p_expires_at": string,"p_lane_id": string,"p_secret": string }; Returns: undefined
+                           },
+"has_lane_role":
+{ Args: { "p_lane": string,"p_roles": (string)[],"p_uid": string }; Returns: boolean
+                           },
+"is_connection_features":
+{ Args: { "p_features": Json }; Returns: boolean
+                           },
+"is_connector_error":
+{ Args: { "p_error": Json }; Returns: boolean
+                           },
+"jsonb_has_secret":
+{ Args: { "p_config": Json }; Returns: boolean
+                           },
+"lane_config_public":
+{ Args: { "p_lane_id": string }; Returns: Json
+                           },
+"may_resolve":
+{ Args: { "p_uid": string }; Returns: boolean
+                           },
+"mfa_verification_attempt":
+{ Args: { "event": Json }; Returns: Json
+                           },
+"oauth_state_consume":
+{ Args: { "p_lane": string,"p_state_hash": string }; Returns: {
+              "code_verifier": string,"provider": string,"redirect_uri": string
+            }[]
+                           },
+"oauth_state_create":
+{ Args: { "p_code_verifier": string,"p_lane": string,"p_provider": string,"p_redirect_uri": string,"p_state_hash": string }; Returns: undefined
+                           },
+"role_views":
+{ Args: { "p_role": string }; Returns: (string)[]
+                           },
+"source_records_upsert":
+{ Args: { "p_connection_id": string,"p_lane": string,"p_records": Json }; Returns: number
+                           },
+"view_names":
+{ Args: Record<PropertyKey, never>; Returns: (string)[]
+                           },
+"viewer_view_names":
+{ Args: Record<PropertyKey, never>; Returns: (string)[]
+                           },
+"webhook_event_claim":
+{ Args: { "p_connection_id": string,"p_event_id": string,"p_event_type": string,"p_lane": string,"p_payload_hash": string,"p_provider": string }; Returns: string
+                           },
+"webhook_event_mark":
+{ Args: { "p_event_id": string,"p_lane": string,"p_provider": string,"p_status": string }; Returns: boolean
+                           },
+"webhook_events_purge":
+{ Args: { "p_keep"?: string,"p_lane": string }; Returns: number
+                           },
+"webhook_resolve_connection":
+{ Args: { "p_account": string,"p_lane": string,"p_provider": string }; Returns: string
+                           }
+          }
+          Enums: {
+            [_ in never]: never
+          }
+          CompositeTypes: {
+            [_ in never]: never
+          }
+        },"fin": {
+          Tables: {
+            "accounts": {
+                  Row: {
+                    "active": boolean,"connection_id": string,"created_at": string,"entity_code": string,"id": string,"is_bank": boolean,"lane_id": string,"name": string,"owner_entity_code": string | null,"provider": string,"raw_record_id": string | null,"source_id": string,"source_updated_at": string | null,"subtype": string | null,"type": string,"updated_at": string
+                  }
+                  ComputedFields: never
+                  Insert: {
+                    "active"?: boolean,"connection_id": string,"created_at"?: string,"entity_code"?: string,"id"?: string,"is_bank"?: boolean,"lane_id": string,"name": string,"owner_entity_code"?: string | null,"provider"?: string,"raw_record_id"?: string | null,"source_id": string,"source_updated_at"?: string | null,"subtype"?: string | null,"type": string,"updated_at"?: string
+                  }
+                  Update: {
+                    "active"?: boolean,"connection_id"?: string,"created_at"?: string,"entity_code"?: string,"id"?: string,"is_bank"?: boolean,"lane_id"?: string,"name"?: string,"owner_entity_code"?: string | null,"provider"?: string,"raw_record_id"?: string | null,"source_id"?: string,"source_updated_at"?: string | null,"subtype"?: string | null,"type"?: string,"updated_at"?: string
+                  }
+                  Relationships: [
+                    
+                  ]
+                },"bills": {
+                  Row: {
+                    "balance": number,"class_id": string | null,"connection_id": string,"created_at": string,"currency_code": string,"deleted": boolean,"due_date": string | null,"entity_code": string,"id": string,"issue_date": string,"lane_id": string,"multi_class": boolean,"provider": string,"raw_record_id": string | null,"source_id": string,"source_updated_at": string | null,"total": number,"updated_at": string,"vendor_id": string | null,"vendor_name": string | null,"voided": boolean
+                  }
+                  ComputedFields: never
+                  Insert: {
+                    "balance": number,"class_id"?: string | null,"connection_id": string,"created_at"?: string,"currency_code"?: string,"deleted"?: boolean,"due_date"?: string | null,"entity_code"?: string,"id"?: string,"issue_date": string,"lane_id": string,"multi_class"?: boolean,"provider"?: string,"raw_record_id"?: string | null,"source_id": string,"source_updated_at"?: string | null,"total": number,"updated_at"?: string,"vendor_id"?: string | null,"vendor_name"?: string | null,"voided"?: boolean
+                  }
+                  Update: {
+                    "balance"?: number,"class_id"?: string | null,"connection_id"?: string,"created_at"?: string,"currency_code"?: string,"deleted"?: boolean,"due_date"?: string | null,"entity_code"?: string,"id"?: string,"issue_date"?: string,"lane_id"?: string,"multi_class"?: boolean,"provider"?: string,"raw_record_id"?: string | null,"source_id"?: string,"source_updated_at"?: string | null,"total"?: number,"updated_at"?: string,"vendor_id"?: string | null,"vendor_name"?: string | null,"voided"?: boolean
+                  }
+                  Relationships: [
+                    
+                  ]
+                },"invoices": {
+                  Row: {
+                    "balance": number,"class_id": string | null,"connection_id": string,"created_at": string,"currency_code": string,"customer_id": string | null,"customer_name": string | null,"deleted": boolean,"due_date": string | null,"entity_code": string,"id": string,"issue_date": string,"lane_id": string,"multi_class": boolean,"provider": string,"raw_record_id": string | null,"source_id": string,"source_updated_at": string | null,"total": number,"updated_at": string,"voided": boolean
+                  }
+                  ComputedFields: never
+                  Insert: {
+                    "balance": number,"class_id"?: string | null,"connection_id": string,"created_at"?: string,"currency_code"?: string,"customer_id"?: string | null,"customer_name"?: string | null,"deleted"?: boolean,"due_date"?: string | null,"entity_code"?: string,"id"?: string,"issue_date": string,"lane_id": string,"multi_class"?: boolean,"provider"?: string,"raw_record_id"?: string | null,"source_id": string,"source_updated_at"?: string | null,"total": number,"updated_at"?: string,"voided"?: boolean
+                  }
+                  Update: {
+                    "balance"?: number,"class_id"?: string | null,"connection_id"?: string,"created_at"?: string,"currency_code"?: string,"customer_id"?: string | null,"customer_name"?: string | null,"deleted"?: boolean,"due_date"?: string | null,"entity_code"?: string,"id"?: string,"issue_date"?: string,"lane_id"?: string,"multi_class"?: boolean,"provider"?: string,"raw_record_id"?: string | null,"source_id"?: string,"source_updated_at"?: string | null,"total"?: number,"updated_at"?: string,"voided"?: boolean
+                  }
+                  Relationships: [
+                    
+                  ]
+                },"payments": {
+                  Row: {
+                    "alloc_no": number,"amount": number,"connection_id": string,"created_at": string,"currency_code": string,"customer_name": string | null,"deleted": boolean,"entity_code": string,"id": string,"invoice_id": string | null,"lane_id": string,"paid_at": string,"provider": string,"raw_record_id": string | null,"source_id": string,"source_updated_at": string | null,"updated_at": string,"voided": boolean
+                  }
+                  ComputedFields: never
+                  Insert: {
+                    "alloc_no"?: number,"amount": number,"connection_id": string,"created_at"?: string,"currency_code"?: string,"customer_name"?: string | null,"deleted"?: boolean,"entity_code"?: string,"id"?: string,"invoice_id"?: string | null,"lane_id": string,"paid_at": string,"provider"?: string,"raw_record_id"?: string | null,"source_id": string,"source_updated_at"?: string | null,"updated_at"?: string,"voided"?: boolean
+                  }
+                  Update: {
+                    "alloc_no"?: number,"amount"?: number,"connection_id"?: string,"created_at"?: string,"currency_code"?: string,"customer_name"?: string | null,"deleted"?: boolean,"entity_code"?: string,"id"?: string,"invoice_id"?: string | null,"lane_id"?: string,"paid_at"?: string,"provider"?: string,"raw_record_id"?: string | null,"source_id"?: string,"source_updated_at"?: string | null,"updated_at"?: string,"voided"?: boolean
+                  }
+                  Relationships: [
+                    {
+      foreignKeyName: "payments_invoice_id_connection_id_fkey"
+      columns: ["invoice_id","connection_id"]
+isOneToOne: false
+      referencedRelation: "invoices"
+      referencedColumns: ["id","connection_id"]
+    }
+                  ]
+                },"report_cache": {
+                  Row: {
+                    "as_of": string,"connection_id": string,"created_at": string,"fetched_at": string,"id": string,"lane_id": string,"params": NonNullable<Json>,"params_hash": string,"payload": NonNullable<Json>,"provider": string,"raw_record_id": string | null,"report": string,"source_updated_at": string | null,"updated_at": string
+                  }
+                  ComputedFields: never
+                  Insert: {
+                    "as_of": string,"connection_id": string,"created_at"?: string,"fetched_at": string,"id"?: string,"lane_id": string,"params"?: NonNullable<Json>,"params_hash"?: string,"payload": NonNullable<Json>,"provider"?: string,"raw_record_id"?: string | null,"report": string,"source_updated_at"?: string | null,"updated_at"?: string
+                  }
+                  Update: {
+                    "as_of"?: string,"connection_id"?: string,"created_at"?: string,"fetched_at"?: string,"id"?: string,"lane_id"?: string,"params"?: NonNullable<Json>,"params_hash"?: string,"payload"?: NonNullable<Json>,"provider"?: string,"raw_record_id"?: string | null,"report"?: string,"source_updated_at"?: string | null,"updated_at"?: string
+                  }
+                  Relationships: [
+                    
+                  ]
+                },"transactions": {
+                  Row: {
+                    "account_id": string | null,"amount": number,"class_id": string | null,"connection_id": string,"created_at": string,"currency_code": string,"deleted": boolean,"entity_code": string,"id": string,"is_uncategorized": boolean,"lane_id": string,"line_no": number,"posted_at": string | null,"provider": string,"raw_record_id": string | null,"source_id": string,"source_updated_at": string | null,"txn_date": string,"txn_type": string,"updated_at": string,"voided": boolean
+                  }
+                  ComputedFields: never
+                  Insert: {
+                    "account_id"?: string | null,"amount": number,"class_id"?: string | null,"connection_id": string,"created_at"?: string,"currency_code"?: string,"deleted"?: boolean,"entity_code"?: string,"id"?: string,"is_uncategorized"?: boolean,"lane_id": string,"line_no"?: number,"posted_at"?: string | null,"provider"?: string,"raw_record_id"?: string | null,"source_id": string,"source_updated_at"?: string | null,"txn_date": string,"txn_type": string,"updated_at"?: string,"voided"?: boolean
+                  }
+                  Update: {
+                    "account_id"?: string | null,"amount"?: number,"class_id"?: string | null,"connection_id"?: string,"created_at"?: string,"currency_code"?: string,"deleted"?: boolean,"entity_code"?: string,"id"?: string,"is_uncategorized"?: boolean,"lane_id"?: string,"line_no"?: number,"posted_at"?: string | null,"provider"?: string,"raw_record_id"?: string | null,"source_id"?: string,"source_updated_at"?: string | null,"txn_date"?: string,"txn_type"?: string,"updated_at"?: string,"voided"?: boolean
+                  }
+                  Relationships: [
+                    {
+      foreignKeyName: "transactions_account_id_connection_id_fkey"
+      columns: ["account_id","connection_id"]
+isOneToOne: false
+      referencedRelation: "accounts"
+      referencedColumns: ["id","connection_id"]
+    }
+                  ]
+                }
+          }
+          Views: {
+            [_ in never]: never
+          }
+          Functions: {
+            [_ in never]: never
           }
           Enums: {
             [_ in never]: never
@@ -148,7 +635,15 @@ export type CompositeTypes<
   : never
 
 export const Constants = {
-  "graphql_public": {
+  "audit": {
+          Enums: {
+            
+          }
+        },"core": {
+          Enums: {
+            
+          }
+        },"fin": {
           Enums: {
             
           }
