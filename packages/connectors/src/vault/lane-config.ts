@@ -15,7 +15,14 @@ export interface LaneConfigReader {
   retentionDays(laneId: LaneId): Promise<number>;
   /** Which Google calendars the lane syncs and how far ahead (`lane_config.calendar`, T-064); safe defaults when unset; throws when malformed (fail closed). */
   calendarSettings(laneId: LaneId): Promise<CalendarSettings>;
+  /** Retention days per table class for the purge job (T-042): comms from the lane policy, the rest from `lane_config.retention` with defaults; throws when malformed (fail closed). */
+  retentionSettings(laneId: LaneId): Promise<RetentionSettings>;
+  /** Only the `lane_config.retention` part of the above (defaults when unset), so a bad config does not hide the policy's comms days (T-042). */
+  retentionConfig(laneId: LaneId): Promise<Omit<RetentionSettings, "commsDays">>;
 }
+
+export type RetentionSettings = { commsDays: number; calendarDays: number; conversationsDays: number; webhookDays: number };
+export const DEFAULT_RETENTION = { calendarDays: 180, conversationsDays: 180, webhookDays: 30 } as const;
 
 export type CalendarSettings = {
   /** Explicit Google calendar ids to sync (raw ids, e.g. `en.usa#holiday@group.v.calendar.google.com`), or null = the default selection. */
@@ -53,27 +60,50 @@ export function createLaneConfigReader(clientFor: JobClientFor): LaneConfigReade
       throw new ConnectorError({ kind: "transient", message: "Lane configuration unavailable" });
     }
   }
+  async function readRetentionDays(laneId: LaneId): Promise<number> {
+    if (typeof laneId !== "string" || !LANE_ID.test(laneId)) throw new ConnectorError({ kind: "invalid_input", message: "A lane is required" });
+    let client: Awaited<ReturnType<JobClientFor>>;
+    try {
+      client = await clientFor(laneId);
+    } catch {
+      throw new ConnectorError({ kind: "connection_unavailable", message: "Lane is not available for policy access" });
+    }
+    let days: unknown;
+    try {
+      const { data, error } = await client.schema("core").from("lane_policies").select("retention_days").eq("lane_id", laneId).maybeSingle();
+      if (error) throw error;
+      days = data?.retention_days;
+    } catch {
+      throw new ConnectorError({ kind: "transient", message: "Lane policy unavailable" });
+    }
+    if (typeof days !== "number" || !Number.isInteger(days) || days < 1 || days > 3650) {
+      throw new ConnectorError({ kind: "connection_unavailable", message: "The lane's retention policy is missing or not valid" });
+    }
+    return days;
+  }
   return {
-    async retentionDays(laneId) {
-      if (typeof laneId !== "string" || !LANE_ID.test(laneId)) throw new ConnectorError({ kind: "invalid_input", message: "A lane is required" });
-      let client: Awaited<ReturnType<JobClientFor>>;
-      try {
-        client = await clientFor(laneId);
-      } catch {
-        throw new ConnectorError({ kind: "connection_unavailable", message: "Lane is not available for policy access" });
-      }
-      let days: unknown;
-      try {
-        const { data, error } = await client.schema("core").from("lane_policies").select("retention_days").eq("lane_id", laneId).maybeSingle();
-        if (error) throw error;
-        days = data?.retention_days;
-      } catch {
-        throw new ConnectorError({ kind: "transient", message: "Lane policy unavailable" });
-      }
-      if (typeof days !== "number" || !Number.isInteger(days) || days < 1 || days > 3650) {
-        throw new ConnectorError({ kind: "connection_unavailable", message: "The lane's retention policy is missing or not valid" });
-      }
-      return days;
+    retentionDays: readRetentionDays,
+    async retentionConfig(laneId) {
+      const config = await readConfig(laneId);
+      const section = config && typeof config === "object" && !Array.isArray(config) ? (config as Record<string, unknown>).retention : undefined;
+      const bad = () => new ConnectorError({ kind: "provider_error", message: "The lane's retention settings are not valid" });
+      if (section !== undefined && section !== null && (typeof section !== "object" || Array.isArray(section))) throw bad();
+      const o = (section ?? {}) as Record<string, unknown>;
+      // Bounds mirror laneConfigSchema.retention in @nichols/core (and the database floors/caps); keep in step.
+      const days = (v: unknown, min: number, max: number, dflt: number): number => {
+        if (v === undefined || v === null) return dflt;
+        if (typeof v !== "number" || !Number.isInteger(v) || v < min || v > max) throw bad();
+        return v;
+      };
+      return {
+        calendarDays: days(o.calendar_days, 30, 180, DEFAULT_RETENTION.calendarDays),
+        conversationsDays: days(o.conversations_days, 1, 3650, DEFAULT_RETENTION.conversationsDays),
+        webhookDays: days(o.webhook_days, 7, 365, DEFAULT_RETENTION.webhookDays),
+      };
+    },
+    async retentionSettings(laneId) {
+      const commsDays = await readRetentionDays(laneId);
+      return { commsDays, ...(await this.retentionConfig(laneId)) };
     },
     async mailboxes(laneId) {
       const config = await readConfig(laneId);

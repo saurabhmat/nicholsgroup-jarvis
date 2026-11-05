@@ -386,7 +386,7 @@ T-010 – T-017 are the serial spine. After T-017: auth/shell (T-018 – T-026) 
 - acceptance: Sentry for server and client; `beforeSend` scrubs tokens, emails, bodies, amounts; test with a canary.
 
 ### T-042 Retention purge job
-- status: approved
+- status: done
 - depends: T-038
 - acceptance: `retention.purge` reads `retention_days` from lane policy per table class (comms 90, calendar 180, conversations 180) and deletes expired rows; tests with time-shifted fixtures. Tables register themselves as they are added. Registered by T-061 (call these per lane, never delete directly; they cap the interval at the lane policy / 180 days): `comms.message_index_purge(lane, keep)` and `cal.event_index_purge(lane, keep)`.
 

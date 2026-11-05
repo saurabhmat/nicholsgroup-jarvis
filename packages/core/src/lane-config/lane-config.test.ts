@@ -51,6 +51,7 @@ describe("lane config schema", () => {
     expect(c.approvals.approvals_live).toBe(false);
     expect(c.approvals.step_up_max_age_s).toBe(300);
     expect(c.approvals.expire_after_hours).toEqual({ "email.draft": 72, "email.send": 72, "monday.item": 168 });
+    expect(c.retention).toEqual({ calendar_days: 180, conversations_days: 180, webhook_days: 30 });
     expect(c.controls).toEqual({ unreconciled_over_days: 30, disconnected_feed_hours: 36, stripe_ghl_mismatch_threshold: 0 });
     expect(c.tieout.tolerance).toBe("0.00");
     expect(c.ghl?.paid_subscriber_rule).toBeNull(); // D-3 pending
@@ -133,5 +134,14 @@ describe("lane config schema", () => {
 
   it("findSecretLikeValues ignores ordinary values", () => {
     expect(findSecretLikeValues(laneConfigSchema.parse(VALID))).toEqual([]);
+  });
+});
+
+describe("retention settings (T-042)", () => {
+  it("accepts values inside the database floors and caps, refuses others and unknown keys", () => {
+    expect(laneConfigSchema.parse({ retention: { calendar_days: 30, webhook_days: 7, conversations_days: 90 } }).retention.calendar_days).toBe(30);
+    for (const retention of [{ calendar_days: 29 }, { calendar_days: 181 }, { webhook_days: 6 }, { conversations_days: 0 }, { comms_days: 90 }]) {
+      expect(laneConfigSchema.safeParse({ retention }).success, JSON.stringify(retention)).toBe(false);
+    }
   });
 });

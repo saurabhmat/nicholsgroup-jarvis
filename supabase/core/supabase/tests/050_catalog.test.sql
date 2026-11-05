@@ -63,6 +63,7 @@ insert into security_definer_ok values
   ('core.webhook_event_claim', 'webhook receiver: records an event once per (lane, provider, event id); service_role only, lane-checked (T-036)'),
   ('core.webhook_event_mark', 'webhook receiver: received -> enqueued | failed, lane-bound; service_role only (T-036)'),
   ('core.webhook_events_purge', 'webhook receipt retention, per lane, minimum 7 days; service_role only (T-036)'),
+  ('core.source_records_purge_bodies', 'retention: deletes a lane''s stored raw bodies when store_content_bodies is off; service_role only, lane-checked (T-042)'),
   ('core.sync_cursor_get', 'reads the private sync cursor table; service_role only, lane-checked (T-063)'),
   ('core.sync_cursor_reset', 'deletes a sync cursor; service_role only, lane-checked (T-063)'),
   ('core.sync_cursor_put', 'compare-and-swap write of a sync cursor; service_role only, lane-checked, usable connections only (T-038)'),

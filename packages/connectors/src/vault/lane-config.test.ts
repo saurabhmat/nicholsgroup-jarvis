@@ -112,3 +112,38 @@ describe("calendarSettings (T-064)", () => {
     expect(await kindOf(createLaneConfigReader(client({ error: { code: "x" } }).clientFor).calendarSettings("PKG"))).toBe("transient");
   });
 });
+
+describe("retentionSettings (T-042)", () => {
+  // The policy read and the config read are two queries on the same client: answer by table.
+  const both = (policy: unknown, config: unknown) => {
+    const c = {
+      schema: () => ({
+        from: (table: string) => {
+          const q = { select: () => q, eq: () => q, maybeSingle: async () => ({ data: table === "lane_policies" ? policy : config, error: null }) };
+          return q;
+        },
+      }),
+    };
+    return vi.fn(async () => c as never);
+  };
+
+  it("comms follows the lane policy; the rest default when lane_config has no retention section", async () => {
+    const r = await createLaneConfigReader(both({ retention_days: 90 }, { config: {} })).retentionSettings("PKG");
+    expect(r).toEqual({ commsDays: 90, calendarDays: 180, conversationsDays: 180, webhookDays: 30 });
+    expect(await createLaneConfigReader(both({ retention_days: 30 }, null)).retentionSettings("NL")).toEqual({ commsDays: 30, calendarDays: 180, conversationsDays: 180, webhookDays: 30 });
+  });
+
+  it("reads lane_config.retention values", async () => {
+    const r = await createLaneConfigReader(both({ retention_days: 90 }, { config: { retention: { calendar_days: 60, conversations_days: 365, webhook_days: 14 } } })).retentionSettings("PKG");
+    expect(r).toEqual({ commsDays: 90, calendarDays: 60, conversationsDays: 365, webhookDays: 14 });
+  });
+
+  it("fails closed on out-of-range or malformed values and on a missing policy", async () => {
+    for (const retention of [{ calendar_days: 181 }, { calendar_days: 29 }, { webhook_days: 6 }, { conversations_days: "x" }, { webhook_days: 1.5 }, "x", []]) {
+      expect(await kindOf(createLaneConfigReader(both({ retention_days: 90 }, { config: { retention } })).retentionSettings("PKG")), JSON.stringify(retention)).toBe("provider_error");
+    }
+    expect(await kindOf(createLaneConfigReader(both(null, { config: {} })).retentionSettings("PKG"))).toBe("connection_unavailable");
+    // the config part alone does not need the policy
+    expect(await createLaneConfigReader(both(null, { config: {} })).retentionConfig("PKG")).toEqual({ calendarDays: 180, conversationsDays: 180, webhookDays: 30 });
+  });
+});

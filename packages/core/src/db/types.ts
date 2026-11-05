@@ -399,8 +399,17 @@ isOneToOne: false
 "oauth_state_create":
 { Args: { "p_code_verifier": string,"p_lane": string,"p_provider": string,"p_redirect_uri": string,"p_state_hash": string }; Returns: undefined
                            },
+"retention_cal_purge":
+{ Args: { "p_keep": string,"p_lane": string }; Returns: number
+                           },
+"retention_comms_purge":
+{ Args: { "p_keep": string,"p_lane": string }; Returns: number
+                           },
 "role_views":
 { Args: { "p_role": string }; Returns: (string)[]
+                           },
+"source_records_purge_bodies":
+{ Args: { "p_lane": string }; Returns: number
                            },
 "source_records_upsert":
 { Args: { "p_connection_id": string,"p_lane": string,"p_records": Json }; Returns: number

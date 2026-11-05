@@ -6,6 +6,7 @@ import { createLaneConfigReader } from "./lane-config";
 import { createConnectionLoader } from "./loader";
 import { createRawRecordStore } from "../raw/store";
 import { createWebhookStore } from "../webhooks/store";
+import { createRetentionStore } from "../retention/store";
 import { getServerEnv } from "@nichols/core/env/server";
 import { createTokenVault } from "./tokens";
 import { createSyncCursorStore, createSyncRunStore } from "../sync/store";
@@ -42,6 +43,9 @@ export const syncCursorStore = createSyncCursorStore(getLaneJobClient);
 
 /** Resolves webhook accounts to lanes, dedupes events and records the hand-off with the lane's job client (T-036). */
 export const webhookStore = createWebhookStore(getLaneJobClient, () => getServerEnv().ENABLED_LANES);
+
+/** Calls the SQL retention purge functions with the lane's job client (T-042). */
+export const retentionStore = createRetentionStore(getLaneJobClient);
 
 export { SecretValue, isSecretValue } from "./secret";
 export type { TokenVault } from "./tokens";

@@ -595,3 +595,29 @@ Logged, not done:
   - **LOW:** the migration closes stray `running` rows and then builds the unique index without an explicit table lock (the migration runner opens no transaction block, so `LOCK TABLE` fails). A run starting in between would only make the index build fail; no sync job runs before this ships.
   - **LOW:** pgTAP checks anon/authenticated execute with `has_function_privilege`, not an attempted call (same as tests 160/170); no concurrency test of the lock.
   - **LOW:** the T-199 local cast for `core.sync_cursors` in `apps/web/lib/google-connection.ts` can now be removed (types regenerated).
+
+## Nov 5, 2026 — T-042
+
+- **T-042 design and review** (retention.purge; `security-reviewer`, `code-reviewer`, `db-engineer` run read-only; no BLOCKER or HIGH). Daily cron 03:00 America/New_York fans out `retention/purge.requested` per enabled lane; the per-lane worker (concurrency key = laneId, 3 retries) calls each registered table's SQL purge function and throws only after every table ran. Retention days: comms = `lane_policies.retention_days` (the SQL function also caps at it), calendar/conversations/webhooks = `lane_config.retention` (defaults 180/180/30, bounds 30-180 / 1-3650 / 7-365). New SQL: `core.retention_comms_purge` / `core.retention_cal_purge` (invoker wrappers: `comms`/`cal` are not exposed to PostgREST) and `core.source_records_purge_bodies` (definer). Fixed after review: a bad `lane_config.retention` or unreadable policy no longer stops the other classes or the body purge (classes without days are reported `settings_unavailable`, the run fails and retries); an unexpected RPC result throws instead of reading as 0; the table-failed log carries the error class name; the untested "fin rows" claim was removed from the pgTAP header and migration comment.
+  - **Registering later tables:** `retentionRegistry.register({ id: "schema.table", class, purge })` from `@nichols/connectors/retention`; `purge` must call a SQL purge function. **T-103 must register the assistant `ai.*` tables as class `conversations`** (180 days; no table exists yet, so the job reports `conversations` in `emptyClasses` and returns ok). Approvals payload purge (`act.purge_content()`, `payload_retention_days`) is registered by T-112 (no `act` schema yet).
+  - **MEDIUM (needs a decision):** `store_content_bodies = true` lets stored bodies in `raw.source_records` live forever; the purge only removes them when the policy is turned off. Decide whether bodies should also age out at `retention_days`.
+  - **MEDIUM:** `raw.source_records` has no time-based retention at all (`deleted = true` rows "stay until retention purges them" per the T-039 comment, and non-content payloads are never aged). Add `core.source_records_purge(lane, keep)` before the table grows; mind the `fin.*` `on delete set null (raw_record_id)` foreign keys.
+  - **MEDIUM:** the body purge deletes whole rows of content providers (including `gohighlevel`) that carry a body-like key, when the policy is off. Fail-closed per the T-039 note, but a GoHighLevel record with a `description`/`notes` key loses the whole record until the next sync (the guard then refuses it again). Decide: delete (now) or redact the keys; the GHL adapter (T-060) must project to an allowlist anyway.
+  - **MEDIUM:** a permanently invalid `lane_config.retention` is retried like a transient fault (3 retries, then Inngest marks the run failed); there is no `onFailure` alert, Sentry hook or audit row for a purge that finally fails, so data could stay past its window unnoticed. Add an alert with T-041/T-045. Deletion counts are logged only (not in the audit log).
+  - **LOW:** the bounds (30-180, 1-3650, 7-365) live in `laneConfigSchema.retention` and again in `LaneConfigReader.retentionConfig`; pin them with a shared constant or test. The reader uses error kind `provider_error` for a bad config (same as calendar/mailboxes).
+  - **LOW:** `core.webhook_events_purge` (T-036) does not check that the lane is enabled (the new wrappers do); the job client only reaches enabled served lanes anyway. The body purge scans every content-provider payload (up to 1 MB each) daily; add a batch limit if the table grows.
+  - **LOW:** the SQL body purge treats a missing policy row as "off" (deletes), while the job reads days from `lane_policies` and reports comms as `settings_unavailable` for a missing row; the body purge still runs. No pgTAP case for a missing policy row. `schedule`'s plan step reads `ENABLED_LANES` from env, same as conn.sync.
+- **T-042 second review** (Nov 5, 2026, `security-reviewer`; no BLOCKER or HIGH). Confirmed:
+  - there is no cross-lane delete on the SQL or the TS path;
+  - the T-061 floors and caps hold through the wrappers;
+  - bad `lane_config` values cannot over-delete, because the database enforces the bounds;
+  - the body purge matches the write trigger exactly.
+
+  Fixed:
+  - **M2:** the registry contract is now written down in `retention/types.ts`. Every registered purge's SQL function must enforce its own floor and cap, filter `lane_id = p_lane`, refuse disabled lanes and be `service_role` only, with a floor test and a cross-lane pgTAP test. **T-103 and T-112 must follow it** when they register the `ai.*` and approvals tables.
+  - **L1:** a unit test for the settings wiring.
+  - **L2:** pgTAP for a missing policy row. Bodies are purged and the comms purge is refused.
+  - **L4:** the note now points at the right file. The pgTAP file was renumbered 190 → 200 so it doesn't clash with T-080's `190_fin_business_calendar`.
+
+  Logged:
+  - **L3:** `core.webhook_events_purge` (T-036) has no enabled-lane check. The worker's served-lane gate covers it; add the check the next time that function changes.

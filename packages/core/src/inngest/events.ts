@@ -42,5 +42,10 @@ export const webhookReceived = eventType("webhook/received", {
   }),
 });
 
+/** Purge one lane's expired rows (T-042). Sent by the daily schedule for each enabled lane, or by hand. Lane id only. */
+export const retentionPurgeRequested = eventType("retention/purge.requested", {
+  schema: z.strictObject({ laneId: laneIdSchema }),
+});
+
 /** Every lane event, for the test that checks they all require laneId. Add new events here. */
-export const LANE_EVENTS = [connSyncRequested, actionApproved, systemHeartbeat, webhookReceived] as const;
+export const LANE_EVENTS = [connSyncRequested, actionApproved, systemHeartbeat, webhookReceived, retentionPurgeRequested] as const;

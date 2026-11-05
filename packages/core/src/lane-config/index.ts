@@ -99,6 +99,15 @@ export const laneConfigSchema = z.strictObject({
       forward_days: z.int().min(7).max(730).default(365),
     })
     .optional(),
+  // Retention of indexed data per table class (T-042). Comms metadata follows the lane policy's `retention_days` (PKG 90) and
+  // is not repeated here. Calendar is capped at 180 days by the database (floor 30), webhook receipts have a 7-day floor.
+  retention: z
+    .strictObject({
+      calendar_days: z.int().min(30).max(180).default(180),
+      conversations_days: z.int().min(1).max(3650).default(180),
+      webhook_days: z.int().min(7).max(365).default(30),
+    })
+    .prefault({}),
   priority_senders: z.array(z.union([email, z.string().regex(/^@[a-z0-9.-]+\.[a-z]{2,}$/)])).max(200).default([]),
   briefing: z.strictObject({ time: hhmm.default("07:00") }).prefault({}),
   finance: z
