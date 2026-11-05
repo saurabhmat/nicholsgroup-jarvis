@@ -30,6 +30,7 @@ Local only for agents: `pnpm db:start`, `pnpm db:reset` (regenerates the seed, t
 
 - **Finance (`fin`, T-055).** Six ledger/report tables on the `finance` view; rows tie to a same-lane QuickBooks connection and
   raw record by composite FKs. Not exposed to PostgREST yet (T-081). See `.agent/pr/T-055.md`.
+- **Comms and calendar index (`comms.message_index`, `cal.event_index`, T-061).** Metadata only: no body, snippet or description column (pgTAP-enforced); `summary` needs an approval marker. Owner-only `comms` view, `calendar` view for `cal`. Same-lane Google/Microsoft connection by composite FK; service_role writes; per-lane retention via `comms.message_index_purge` (lane policy `retention_days`) and `cal.event_index_purge` (180 days). Schemas not exposed to PostgREST yet. See `.agent/pr/T-061.md`.
 
 ## Tests
 

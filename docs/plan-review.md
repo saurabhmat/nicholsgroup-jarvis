@@ -508,3 +508,14 @@ Saurabh approved every point of the batch-1 design review ("approved all points"
 
 Where this lands: backlog D-20, D-21, H-029, H-030, T-023 – T-026 and the screen tasks' `needs`; `docs/design/README.md`.
 
+
+### Nov 5, 2026 — T-061 review findings (MEDIUM and below, logged, not fixed)
+
+- **M1 summary vs lane policy.** `comms.message_index.summary` is gated by an approval marker (who, when) but the database does not check `lane_policies` (`store_content_bodies`, `llm_allowed_categories`). The writer (classifier job, T-064/T-067) must check the policy and use the approvals path before setting it.
+- **M2 free-text metadata.** `subject`, `title`, `location`, display names are stored as provided (length and control-character checked only). They can hold sensitive text; the Release B retention/redaction rules apply, and the AI layer must treat them as untrusted data (rule 9).
+- **L1 approver not lane-checked.** `summary_approved_by` references `core.users`, not a member of the row's lane. Enforced in the approval code path; consider a trigger if summaries become a user-facing write.
+- **L2 direct deletes.** service_role may delete index rows directly (sync deletions); only the purge functions enforce the retention floors. The T-042 job must use the purge functions.
+- **L3 `comms` view is owner-only.** `comms` is not in `viewer_view_names()`, so a viewer cannot be granted message metadata (events: `calendar` is grantable). Decide with the T-120 inbox design.
+- **L4 schemas not exposed / types.** `comms` and `cal` are not in the API exposed schemas (like `fin`), so `packages/core/src/db/types.ts` (core only) is unchanged. When the inbox/calendar UI needs PostgREST access, a human adds the schemas in Supabase settings and the config file in that task.
+- **L5 events age by `end_at`; messages by `received_at`.** A long recurring series master is kept until its last end.
+- **Review additions (T-061 real reviews, no BLOCKER/HIGH):** (a) Graph message ids must be requested with `Prefer: IdType="ImmutableId"` (T-066), or ids change when a message moves folders. (b) T-064 must call events with `singleEvents=true`, store `syncToken`/`historyId` per connection (not per row), and upsert only when `excluded.source_updated_at >= existing`. (c) Free-text metadata (subject, title, location, names) is untrusted when sent to prompts (rule 9). (d) Direct service_role deletes bypass the purge floors; T-042 must call `comms.message_index_purge` and `cal.event_index_purge` (added to its acceptance).
