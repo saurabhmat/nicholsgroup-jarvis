@@ -16,6 +16,8 @@ import { LANE_EVENTS } from "./events";
 
 export { actionApproved, connSyncRequested, LANE_EVENTS, laneIdSchema, systemHeartbeat, webhookReceived } from "./events";
 export { platformFunctions } from "./functions";
+export { CONN_SYNC_CONCURRENCY, CONN_SYNC_RETRIES, connSyncFunction, handleConnSync } from "./conn-sync";
+export type { ConnSyncDeps, ConnSyncResult } from "./conn-sync";
 
 const APP_ID = "nichols-portal";
 let client: Inngest | undefined;

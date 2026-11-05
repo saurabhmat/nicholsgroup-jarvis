@@ -8,6 +8,7 @@ import { createRawRecordStore } from "../raw/store";
 import { createWebhookStore } from "../webhooks/store";
 import { getServerEnv } from "@nichols/core/env/server";
 import { createTokenVault } from "./tokens";
+import { createSyncCursorStore, createSyncRunStore } from "../sync/store";
 import { createCalendarIndexStore } from "../google/cal-store";
 import { createMailIndexStore } from "../google/mail-store";
 
@@ -32,6 +33,12 @@ export const mailIndexStore = createMailIndexStore(getLaneJobClient);
 
 /** Applies Google Calendar sync pages and stores their cursors with the lane's job client (T-064). */
 export const calendarIndexStore = createCalendarIndexStore(getLaneJobClient);
+
+/** Logs conn.sync runs (core.sync_runs) and the connection's last sync with the lane's job client (T-038). */
+export const syncRunStore = createSyncRunStore(getLaneJobClient);
+
+/** The generic sync cursor (core.sync_cursor_get/put) with the lane's job client (T-038). */
+export const syncCursorStore = createSyncCursorStore(getLaneJobClient);
 
 /** Resolves webhook accounts to lanes, dedupes events and records the hand-off with the lane's job client (T-036). */
 export const webhookStore = createWebhookStore(getLaneJobClient, () => getServerEnv().ENABLED_LANES);

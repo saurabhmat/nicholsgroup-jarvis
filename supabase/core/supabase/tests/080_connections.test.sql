@@ -87,7 +87,7 @@ select lives_ok(
   'a run is recorded for a connection in the same lane'
 );
 select lives_ok(
-  $$insert into core.sync_runs (lane_id, connection_id, kind, trigger) values ('APK', '00000000-0000-4000-8000-000000000032', 'full', 'connect')$$,
+  $$insert into core.sync_runs (lane_id, connection_id, kind, trigger, status, finished_at) values ('APK', '00000000-0000-4000-8000-000000000032', 'full', 'connect', 'succeeded', now())$$,
   'a run is recorded in APK'
 );
 select throws_ok(
