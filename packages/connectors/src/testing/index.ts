@@ -5,3 +5,7 @@ export { createMockConnector, mockHarness, MOCK_ACCOUNT_ID, MOCK_AUTH_CODE, MOCK
 export type { MockConnectorOptions, MockFaults, MockSetup } from "./mock-connector";
 export { TEST_PROVIDER, TestProviderSchema, testSchemas } from "./test-provider";
 export type { TestProvider } from "./test-provider";
+export { describeCommsContract, checkGuards, checkNoExecutePath } from "./comms-contract";
+export type { CommsContractFixture, CommsContractHarness } from "./comms-contract";
+export { createMockComms, MOCK_BODY_CANARY, MOCK_MAILBOX } from "./comms-mock";
+export type { MockCommsFaults, MockCommsOptions, MockCommsSetup } from "./comms-mock";

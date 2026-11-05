@@ -529,9 +529,10 @@ Scope: read-only, Accounting API only (no Payments, no Payroll); never create, u
 - acceptance: `comms.message_index` (metadata only, per architecture §6 M5, priority fields, optional approved summary) and `cal.event_index`; pgTAP column check proves no body column exists; RLS + pgTAP; registered with retention purge.
 
 ### T-062 Mail/calendar/docs provider interfaces + mocks
-- status: approved
+- status: done
 - depends: T-030
 - acceptance: `MailProvider`, `CalendarProvider`, `DocumentProvider` (metadata sync, live body fetch, live search, watch/renew, `prepareWrite` on the provider; execution only through a `ConnectorWriter` from `@nichols/connectors/writer`, per the T-030 split); mock implementation; contract tests both real providers must pass.
+- note: `DocumentProvider` is live search and live read only (no sync, no watch), per T-186/T-187. Interfaces live at `@nichols/connectors/comms`; the reusable suite is `describeCommsContract` in `@nichols/connectors/testing`.
 
 ### T-063 Google: OAuth + Gmail metadata sync + live body
 - status: approved

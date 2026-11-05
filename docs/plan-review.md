@@ -509,13 +509,25 @@ Saurabh approved every point of the batch-1 design review ("approved all points"
 Where this lands: backlog D-20, D-21, H-029, H-030, T-023 – T-026 and the screen tasks' `needs`; `docs/design/README.md`.
 
 
-### Nov 5, 2026 — T-061 review findings (MEDIUM and below, logged, not fixed)
+### Nov 5, 2026 — T-061 review findings (MEDIUM and below)
 
-- **M1 summary vs lane policy.** `comms.message_index.summary` is gated by an approval marker (who, when) but the database does not check `lane_policies` (`store_content_bodies`, `llm_allowed_categories`). The writer (classifier job, T-064/T-067) must check the policy and use the approvals path before setting it.
+- **M1 summary vs lane policy. Fixed after review:** trigger `comms.message_summary_guard` rejects a summary unless the lane's `llm_allowed_categories` includes `email`, and requires a new approval time when the summary changes. The writer (classifier job) must still use the approvals path before setting it.
 - **M2 free-text metadata.** `subject`, `title`, `location`, display names are stored as provided (length and control-character checked only). They can hold sensitive text; the Release B retention/redaction rules apply, and the AI layer must treat them as untrusted data (rule 9).
-- **L1 approver not lane-checked.** `summary_approved_by` references `core.users`, not a member of the row's lane. Enforced in the approval code path; consider a trigger if summaries become a user-facing write.
+- **L1 approver not lane-checked. Fixed after review:** the same trigger requires `summary_approved_by` to be a member of the row's lane.
 - **L2 direct deletes.** service_role may delete index rows directly (sync deletions); only the purge functions enforce the retention floors. The T-042 job must use the purge functions.
 - **L3 `comms` view is owner-only.** `comms` is not in `viewer_view_names()`, so a viewer cannot be granted message metadata (events: `calendar` is grantable). Decide with the T-120 inbox design.
 - **L4 schemas not exposed / types.** `comms` and `cal` are not in the API exposed schemas (like `fin`), so `packages/core/src/db/types.ts` (core only) is unchanged. When the inbox/calendar UI needs PostgREST access, a human adds the schemas in Supabase settings and the config file in that task.
 - **L5 events age by `end_at`; messages by `received_at`.** A long recurring series master is kept until its last end.
 - **Review additions (T-061 real reviews, no BLOCKER/HIGH):** (a) Graph message ids must be requested with `Prefer: IdType="ImmutableId"` (T-066), or ids change when a message moves folders. (b) T-064 must call events with `singleEvents=true`, store `syncToken`/`historyId` per connection (not per row), and upsert only when `excluded.source_updated_at >= existing`. (c) Free-text metadata (subject, title, location, names) is untrusted when sent to prompts (rule 9). (d) Direct service_role deletes bypass the purge floors; T-042 must call `comms.message_index_purge` and `cal.event_index_purge` (added to its acceptance).
+
+### Nov 5, 2026 — T-062 review follow-ups (mail/calendar/docs provider interfaces)
+
+Logged, not built in T-062:
+- **`reveal()` call-site lint rule:** allowlist the modules that may call `UntrustedBody.reveal()` (assistant context builder, UI render); follow-up lint task.
+- **Phase-4 `changes` bounds:** `CalendarWriteIntent.changes` and `DocumentWriteIntent.changes` are unbounded JSON records; add size and depth limits before T-117/T-181.
+- **`persistedContentWrites` must be real in real harnesses:** T-063 backs it with a DB-write spy plus log capture, not a constant like the mock.
+- **Decision: `watch`/`renew`/`stop` are acceptable under rule 5** on these conditions: the callback URL/topic comes from server config only; only jobs (T-065, T-068) call them; `renew`/`stop` act only on channels recorded server-side for the same (lane, connection). The channel token (Google) / clientState (Graph) lives in the Vault, never in `WatchInfo`.
+- **Approvals:** also check `lane_config.mailboxes` / `approvals.allowed_mailboxes` at propose time (the provider only checks `fromMailbox` equals the connection's mailbox).
+- **T-063:** set `core.connections.external_account_id` to the verified primary address of the mailbox.
+- **Folder/label/importance mapping** (documented in `comms/schemas.ts`): `folder` = primary container (Gmail INBOX label, Graph parent folder), `labels` = Gmail labels / Graph categories, `is_important` = Gmail IMPORTANT / Graph importance high. Graph needs `Prefer: IdType="ImmutableId"`.
+- **Parameter ids:** call parameters use a conservative id charset (no `/ ? # ..`), so Google holiday calendar ids containing `#` need an encoded form decided in T-064.
