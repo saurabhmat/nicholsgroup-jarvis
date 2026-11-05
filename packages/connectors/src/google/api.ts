@@ -7,7 +7,7 @@ import type { LaneBoundConnection } from "../contract/lane-bound";
 import type { ConnectorResponse, HttpClient, HttpClientOptions } from "../http/client";
 import type { ConnectorLogger } from "../log/index";
 import type { SecretValue } from "../vault/secret";
-import { GMAIL_BASE, GMAIL_RATE_LIMIT } from "./constants";
+import { CALENDAR_BASE, CALENDAR_PATHS, CALENDAR_RATE_LIMIT, GMAIL_BASE, GMAIL_RATE_LIMIT } from "./constants";
 import { assertGoogleConnection } from "./guard";
 import { createGoogleHttp } from "./http";
 import type { GoogleTokenManager } from "./token-manager";
@@ -17,7 +17,7 @@ export type GoogleApiDeps = {
   logger?: ConnectorLogger;
   /** Test hook: extra HTTP client options (fast backoff, injected fetch). */
   httpOptions?: Partial<HttpClientOptions>;
-  httpFor?: (laneId: LaneId, conn: LaneBoundConnection<string>) => HttpClient;
+  httpFor?: (laneId: LaneId, conn: LaneBoundConnection<string>, baseUrl: string) => HttpClient;
   /** Test hook: the pause before retrying a rate-limit 403. */
   sleep?: (ms: number) => Promise<void>;
 };
@@ -29,31 +29,41 @@ const RATE_LIMIT_PAUSE_MS = [1000, 3000];
 export type Query = Record<string, string | number | boolean | null | undefined | readonly string[]>;
 
 export interface GoogleApi {
-  /** GET a path template under the Gmail host, e.g. `/gmail/v1/users/me/messages/{id}` with `params.id`. */
+  /**
+   * GET a path template, e.g. `/gmail/v1/users/me/messages/{id}` with `params.id`. `/gmail/v1/...` goes to the Gmail host;
+   * `/calendar/v3/...` to www.googleapis.com and only when the template is one of CALENDAR_PATHS. Any other path is refused.
+   */
   get<T = unknown>(laneId: LaneId, conn: LaneBoundConnection<string>, path: string, params?: Record<string, string | number>, query?: Query): Promise<ConnectorResponse<T>>;
 }
 
 const RATE_LIMIT_REASONS = new Set(["rateLimitExceeded", "userRateLimitExceeded", "RESOURCE_EXHAUSTED", "quotaExceeded", "dailyLimitExceeded"]);
 
+/** Host and rate-limit bucket for a path template; throws for anything that is not a known Gmail or allowed Calendar path. */
+function target(path: string): { baseUrl: string; bucket: string; limit: typeof GMAIL_RATE_LIMIT | typeof CALENDAR_RATE_LIMIT } {
+  if (path.startsWith("/gmail/v1/")) return { baseUrl: GMAIL_BASE, bucket: "", limit: GMAIL_RATE_LIMIT };
+  if (CALENDAR_PATHS.has(path)) return { baseUrl: CALENDAR_BASE, bucket: ":calendar", limit: CALENDAR_RATE_LIMIT };
+  throw new ConnectorError({ kind: "invalid_input", message: "Path is not an allowed Google API path" });
+}
+
 export function createGoogleApi(deps: GoogleApiDeps): GoogleApi {
   const sleep = deps.sleep ?? ((ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms)));
-  const httpFor =
-    deps.httpFor ??
-    ((laneId: LaneId, conn: LaneBoundConnection<string>) =>
-      createGoogleHttp({
-        baseUrl: GMAIL_BASE,
-        laneId,
-        connectionId: conn.id,
-        rateLimitKey: conn.id,
-        rateLimit: GMAIL_RATE_LIMIT,
-        ...(deps.logger ? { logger: deps.logger } : {}),
-        ...deps.httpOptions,
-      }));
+  const httpFor = (laneId: LaneId, conn: LaneBoundConnection<string>, t: ReturnType<typeof target>): HttpClient =>
+    deps.httpFor
+      ? deps.httpFor(laneId, conn, t.baseUrl)
+      : createGoogleHttp({
+          baseUrl: t.baseUrl,
+          laneId,
+          connectionId: conn.id,
+          rateLimitKey: `${conn.id}${t.bucket}`,
+          rateLimit: t.limit,
+          ...(deps.logger ? { logger: deps.logger } : {}),
+          ...deps.httpOptions,
+        });
 
   return {
     async get<T = unknown>(laneId: LaneId, conn: LaneBoundConnection<string>, path: string, params?: Record<string, string | number>, query?: Query) {
       assertGoogleConnection(conn); // before any request or token read: another provider's token never goes to Google
-      const http = httpFor(laneId, conn);
+      const http = httpFor(laneId, conn, target(path));
       let used: SecretValue | undefined;
       const request = (rejected?: SecretValue) =>
         http.request<T>({

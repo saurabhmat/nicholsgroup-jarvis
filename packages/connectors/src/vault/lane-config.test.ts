@@ -88,3 +88,27 @@ describe("mailboxes (T-063)", () => {
     expect(await kindOf(createLaneConfigReader(client({ data: { config: { mailboxes: ["not an address"] } } }).clientFor).mailboxes("PKG"))).toBe("provider_error");
   });
 });
+
+describe("calendarSettings (T-064)", () => {
+  const read = (data: unknown) => createLaneConfigReader(client({ data }).clientFor).calendarSettings("PKG");
+  it("defaults when the lane has no calendar section: primary and selected owned calendars, 365 days ahead", async () => {
+    const safe = { calendarIds: null, includeReadOnly: false, forwardDays: 365 };
+    expect(await read(null)).toEqual(safe);
+    expect(await read({ config: {} })).toEqual(safe);
+    expect(await read({ config: { calendar: null } })).toEqual(safe);
+    expect(await read({ config: { calendar: {} } })).toEqual(safe);
+  });
+  it("reads an explicit list, include_read_only and forward_days", async () => {
+    expect(await read({ config: { calendar: { calendar_ids: ["en.usa#holiday@group.v.calendar.google.com"], include_read_only: true, forward_days: 90 } } })).toEqual({
+      calendarIds: ["en.usa#holiday@group.v.calendar.google.com"],
+      includeReadOnly: true,
+      forwardDays: 90,
+    });
+  });
+  it("fails closed on anything malformed, never to a default", async () => {
+    for (const calendar of ["x", [], { calendar_ids: [] }, { calendar_ids: "primary" }, { calendar_ids: [1] }, { calendar_ids: ["has space"] }, { calendar_ids: ["a\nb"] }, { calendar_ids: Array.from({ length: 11 }, (_v, i) => `c${String(i)}`) }, { include_read_only: "yes" }, { forward_days: 0 }, { forward_days: 6 }, { forward_days: 731 }, { forward_days: 30.5 }, { forward_days: "30" }]) {
+      expect(await kindOf(read({ config: { calendar } })), JSON.stringify(calendar)).toBe("provider_error");
+    }
+    expect(await kindOf(createLaneConfigReader(client({ error: { code: "x" } }).clientFor).calendarSettings("PKG"))).toBe("transient");
+  });
+});

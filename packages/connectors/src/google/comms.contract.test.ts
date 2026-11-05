@@ -1,4 +1,4 @@
-// The shared mail/calendar/documents contract (T-062 suite) run against the real Gmail provider, over the fake Google
+// The shared mail/calendar/documents contract (T-062 suite) run against the real Gmail and Calendar providers, over the fake Google
 // (MSW) and in-memory twins of the Vault, connection rows, lane config and mail index. Mocks only (rule 10).
 // `persistedContentWrites` is backed by a write spy over every twin store plus log capture (T-062 review), not a constant.
 import { afterEach } from "vitest";
@@ -17,8 +17,8 @@ afterEach(() => {
 });
 
 describeCommsContract({
-  name: "google (gmail)",
-  expect: { mail: true, calendar: false, documents: false },
+  name: "google (gmail + calendar)",
+  expect: { mail: true, calendar: true, documents: false },
   setup: () => {
     return createGoogleHarness({ fake, mailboxes: { PKG: [] } }).contractHarness();
   },

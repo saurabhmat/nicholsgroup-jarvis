@@ -90,6 +90,15 @@ export const laneConfigSchema = z.strictObject({
   // "Temporary: connection test" section on Settings (T-198, until T-045 replaces it). Off unless set to true.
   pilot: z.strictObject({ connection_test_enabled: z.boolean().default(false) }).optional(),
   mailboxes: z.array(email).max(20).default([]),
+  // Google Calendar sync (T-064). Unset = primary plus owned/writable selected calendars, 365 days ahead.
+  // `calendar_ids` are raw Google calendar ids (an explicit list replaces the default selection).
+  calendar: z
+    .strictObject({
+      calendar_ids: z.array(z.string().regex(/^[^\s\u0000-\u001f\u007f-\u009f]{1,200}$/)).min(1).max(10).optional(),
+      include_read_only: z.boolean().default(false),
+      forward_days: z.int().min(7).max(730).default(365),
+    })
+    .optional(),
   priority_senders: z.array(z.union([email, z.string().regex(/^@[a-z0-9.-]+\.[a-z]{2,}$/)])).max(200).default([]),
   briefing: z.strictObject({ time: hhmm.default("07:00") }).prefault({}),
   finance: z

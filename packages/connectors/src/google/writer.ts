@@ -13,7 +13,7 @@ import { computePayloadSha256, type ApprovedActionShape, type ConnectorWriter } 
 import type { HttpClient } from "../http/client";
 import type { SecretValue } from "../vault/secret";
 import type { TokenVault } from "../vault/tokens";
-import { GOOGLE_REVOKE_URL } from "./constants";
+import { GOOGLE_REVOKE_URL, GOOGLE_TOKEN_HOSTS } from "./constants";
 import { assertGoogleConnection } from "./guard";
 import { createGoogleHttp } from "./http";
 import { isAlreadyRevoked, revokeGoogleGrant } from "./revoke";
@@ -61,7 +61,7 @@ function assertTargetIsConnection(action: GoogleApprovedAction, row: LaneBoundCo
 /** The revoke-and-delete operation itself; only `createGoogleWriter` and the test harness build one. */
 export function createGoogleRevoker(deps: GoogleWriterDeps) {
   const now = deps.now ?? Date.now;
-  const http = (laneId: LaneId, baseUrl: string) => (deps.httpFor ? deps.httpFor(laneId, baseUrl) : createGoogleHttp({ baseUrl, laneId }));
+  const http = (laneId: LaneId, baseUrl: string) => (deps.httpFor ? deps.httpFor(laneId, baseUrl) : createGoogleHttp({ baseUrl, laneId }, GOOGLE_TOKEN_HOSTS));
   return {
     async run(laneId: LaneId, conn: LaneBoundConnection<string>, action: GoogleApprovedAction): Promise<ExecResult> {
       assertLaneBound(laneId, conn);

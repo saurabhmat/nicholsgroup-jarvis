@@ -2,7 +2,8 @@
 // from data or config can never move a Google token to another host.
 import type { LaneId } from "@nichols/core";
 import { createHttpClient, type HttpClient, type HttpClientOptions } from "../http/client";
-import { GOOGLE_HOSTS } from "./constants";
+import { ConnectorError } from "../contract/errors";
+import { CALENDAR_PATHS, GOOGLE_HOSTS } from "./constants";
 import { assertGoogleHost } from "./guard";
 
 /**
@@ -21,9 +22,17 @@ export function googleErrorCode(body: unknown): string | undefined {
   return undefined;
 }
 
-export function createGoogleHttp(options: Omit<HttpClientOptions, "provider" | "errorCode">): HttpClient {
-  assertGoogleHost(options.baseUrl, GOOGLE_HOSTS);
-  return createHttpClient({ ...options, provider: "google", errorCode: googleErrorCode });
+export function createGoogleHttp(options: Omit<HttpClientOptions, "provider" | "errorCode">, allowed: ReadonlySet<string> = GOOGLE_HOSTS): HttpClient {
+  assertGoogleHost(options.baseUrl, allowed);
+  const client = createHttpClient({ ...options, provider: "google", errorCode: googleErrorCode });
+  // www.googleapis.com serves every Google API: through this client only the Calendar templates are reachable (T-064).
+  if (new URL(options.baseUrl).hostname !== "www.googleapis.com") return client;
+  return {
+    request(req) {
+      if (!CALENDAR_PATHS.has(req.path)) throw new ConnectorError({ kind: "invalid_input", message: "Path is not an allowed Calendar path" });
+      return client.request(req);
+    },
+  };
 }
 
 export type GoogleHttpFor = (laneId: LaneId, connectionId: string | undefined, baseUrl: string) => HttpClient;

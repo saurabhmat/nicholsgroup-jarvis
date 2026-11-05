@@ -11,15 +11,19 @@
 import { randomUUID } from "node:crypto";
 import type { Audit, AuditEntry } from "@nichols/core/audit";
 import type { CommsContractHarness, CommsFaultKind } from "./comms-contract";
-import type { CommsCursor, MailSyncResult, MessageMeta } from "../comms/schemas";
+import type { CalendarSyncResult, CommsCursor, EventMeta, MailSyncResult, MessageMeta } from "../comms/schemas";
 import { ACCOUNT_IN_USE_MESSAGE, ConnectorError } from "../contract/errors";
 import { assertLaneBound, mintLaneBoundConnection, type LaneBoundConnection } from "../contract/lane-bound";
 import type { Connection } from "../contract/schemas";
 import { createGoogleApi } from "../google/api";
-import { GMAIL_BASE, GOOGLE_SCOPES } from "../google/constants";
+import type { CalendarIndexStore } from "../google/cal-store";
+import { createCalendarSync } from "../google/cal-sync";
+import { createGoogleCalendarProvider } from "../google/calendar";
+import { GOOGLE_SCOPES } from "../google/constants";
 import { createGoogleHttp } from "../google/http";
 import { createGmailProvider } from "../google/mail";
-import type { ApplyCounts, MailIndexStore } from "../google/mail-store";
+import type { ApplyCounts } from "../google/index-rpc";
+import type { MailIndexStore } from "../google/mail-store";
 import { createMailSync } from "../google/mail-sync";
 import { createGoogleOAuthProvider } from "../google/provider";
 import { createGoogleTokenManager } from "../google/token-manager";
@@ -29,6 +33,7 @@ import { createConnectorLogger, type LogEntry } from "../log/index";
 import { createOAuthFlow } from "../oauth/flow";
 import { hashState } from "../oauth/pkce";
 import type { StateStore } from "../oauth/state";
+import { DEFAULT_CALENDAR_SETTINGS, type CalendarSettings } from "../vault/lane-config";
 import { SecretValue } from "../vault/secret";
 import type { TokenVault } from "../vault/tokens";
 import { FAKE_CLIENT_ID, FAKE_CLIENT_SECRET, GOOGLE_ATTACHMENT_CANARY, GOOGLE_BODY_CANARY, GOOGLE_SNIPPET_CANARY, READ_SCOPES, seedMessage, type FakeGoogle } from "./msw/google/handlers";
@@ -38,6 +43,10 @@ export const CONTENT_CANARIES = [GOOGLE_BODY_CANARY, GOOGLE_SNIPPET_CANARY, GOOG
 
 type Row = { -readonly [K in keyof Connection<"google">]: Connection<"google">[K] };
 type IndexRow = MessageMeta & { deleted: boolean; connection_id: string; lane_id: string };
+type EventRow = EventMeta & { connection_id: string; lane_id: string };
+
+/** The harness clock (calendar windows): the synthetic fixtures live in Oct/Nov 2026, so time stands still. */
+export const HARNESS_NOW = Date.parse("2026-11-05T12:00:00.000Z");
 
 export type GoogleHarnessOptions = {
   fake: FakeGoogle;
@@ -45,6 +54,9 @@ export type GoogleHarnessOptions = {
   mailboxes?: Record<string, string[]>;
   /** `core.lane_policies.retention_days` per lane (default 90). */
   retention?: Record<string, number>;
+  /** `lane_config.calendar` per lane (default: the safe defaults); "unreadable" makes the read fail (fail-closed tests). */
+  calendar?: Record<string, CalendarSettings | "unreadable">;
+  now?: () => number;
 };
 
 export function createGoogleHarness(options: GoogleHarnessOptions) {
@@ -148,9 +160,16 @@ export function createGoogleHarness(options: GoogleHarnessOptions) {
   };
 
   const retention: Record<string, number> = { ...options.retention };
+  const calendarConfig: Record<string, CalendarSettings | "unreadable"> = { ...options.calendar };
+  const clock = options.now ?? (() => HARNESS_NOW);
   const laneConfig = {
     async mailboxes(laneId: string) {
       return (mailboxes[laneId] ?? []).map((m) => m.toLowerCase());
+    },
+    async calendarSettings(laneId: string): Promise<CalendarSettings> {
+      const c = calendarConfig[laneId];
+      if (c === "unreadable") throw new ConnectorError({ kind: "transient", message: "Lane configuration unavailable" });
+      return c ? { ...c } : { ...DEFAULT_CALENDAR_SETTINGS };
     },
     async retentionDays(laneId: string) {
       const days = retention[laneId] ?? 90;
@@ -210,6 +229,78 @@ export function createGoogleHarness(options: GoogleHarnessOptions) {
     },
   };
 
+  // ---- Calendar index twin (cal.event_index + the 'calendar' stream via core.cal_events_apply_page).
+  const events = new Map<string, EventRow>();
+  const calCursorKey = (laneId: string, connectionId: string) => `${laneId}\u0000${connectionId}\u0000calendar`;
+  const eventKey = (laneId: string, connectionId: string, calendarId: string, eventId: string) => `${laneId}\u0000${connectionId}\u0000${calendarId}\u0000${eventId}`;
+  const calStats = { applies: 0, resets: 0 };
+  const calStore: CalendarIndexStore = {
+    async getCursor(laneId, conn) {
+      assertLaneBound(laneId, conn);
+      const v = cursors.get(calCursorKey(laneId, conn.id));
+      return v === undefined ? null : { value: v };
+    },
+    async resetCursor(laneId, conn) {
+      assertLaneBound(laneId, conn);
+      calStats.resets += 1;
+      writes.push({ store: "cursors", value: "reset" });
+      cursors.delete(calCursorKey(laneId, conn.id));
+    },
+    async applyPage(laneId, conn, page: CalendarSyncResult, opts): Promise<ApplyCounts> {
+      assertLaneBound(laneId, conn);
+      const row = rowOf(laneId, conn);
+      if (row.provider !== "google" || !["active", "degraded"].includes(row.status)) throw new ConnectorError({ kind: "forbidden", message: "Calendar index access refused" });
+      const stored = cursors.get(calCursorKey(laneId, conn.id)) ?? null;
+      if (stored !== (opts.expected?.value ?? null)) return { removed: 0, written: 0, skipped: 0, conflict: true };
+      if (page.nextCursor === null) throw new ConnectorError({ kind: "invalid_input", message: "A resync answer is not a page" });
+      calStats.applies += 1;
+      writes.push({ store: "event_index", value: { upserts: page.upserts, removals: page.removals } });
+      writes.push({ store: "cursors", value: page.nextCursor.value });
+      // Calendars that left the selection: this lane's rows of this connection go (first, like the SQL).
+      for (const k of [...events.keys()]) {
+        const e = events.get(k);
+        if (e && e.lane_id === laneId && e.connection_id === conn.id && (page.dropCalendars ?? []).includes(e.calendar_id)) events.delete(k);
+      }
+      let removed = 0;
+      for (const r of page.removals) {
+        const hit = events.get(eventKey(laneId, conn.id, r.calendar_id, r.event_id));
+        if (hit && hit.status !== "cancelled") {
+          hit.status = "cancelled";
+          removed += 1;
+        }
+      }
+      const last = new Map(page.upserts.map((e) => [eventKey(laneId, conn.id, e.calendar_id, e.event_id), e]));
+      let written = 0;
+      for (const [k, e] of last) {
+        const hit = events.get(k);
+        if (e.status === "cancelled") {
+          // A stub merges status (and the version when it has one); with no stored row it inserts a stub row.
+          if (!hit) {
+            events.set(k, { ...e, connection_id: conn.id, lane_id: laneId });
+            written += 1;
+          } else if (e.source_updated_at === null || hit.source_updated_at === null || e.source_updated_at >= hit.source_updated_at) {
+            hit.status = "cancelled";
+            hit.source_updated_at = e.source_updated_at ?? hit.source_updated_at;
+            written += 1;
+          }
+          continue;
+        }
+        // A normal event over a cancelled row needs a strictly newer version; otherwise not older.
+        const newer = !hit
+          ? true
+          : hit.status === "cancelled"
+            ? e.source_updated_at !== null && (hit.source_updated_at === null || e.source_updated_at > hit.source_updated_at)
+            : hit.source_updated_at === null || (e.source_updated_at !== null && e.source_updated_at >= hit.source_updated_at);
+        if (!newer) continue;
+        events.set(k, { ...e, connection_id: conn.id, lane_id: laneId });
+        written += 1;
+      }
+      cursors.set(calCursorKey(laneId, conn.id), page.nextCursor.value);
+      if (opts.complete) row.last_sync_at = new Date().toISOString();
+      return { removed, written, skipped: last.size - written, conflict: false };
+    },
+  };
+
   // ---- Wiring (fast HTTP: one retry, tiny backoff so a Retry-After above the cap ends retrying at once).
   const fastHttp = (laneId: string, connectionId: string | undefined, baseUrl: string) =>
     createGoogleHttp({ baseUrl, laneId, ...(connectionId ? { connectionId } : {}), retryBaseMs: 1, retryMaxMs: 5, maxRetries: 1, logger });
@@ -218,9 +309,11 @@ export function createGoogleHarness(options: GoogleHarnessOptions) {
   const newTokenManager = () =>
     createGoogleTokenManager({ vault, client, httpFor: fastHttp, logger, sleep: (ms) => new Promise((resolve) => setTimeout(resolve, Math.min(ms, 5))) });
   const tokens = newTokenManager();
-  const api = createGoogleApi({ tokens, logger, sleep: async () => undefined, httpFor: (laneId, conn) => fastHttp(laneId, conn.id, GMAIL_BASE) });
+  const api = createGoogleApi({ tokens, logger, sleep: async () => undefined, httpFor: (laneId, conn, baseUrl) => fastHttp(laneId, conn.id, baseUrl) });
   const mail = createGmailProvider({ api, connections, laneConfig, logger });
   const sync = createMailSync({ mail, store, logger });
+  const calendar = createGoogleCalendarProvider({ api, connections, laneConfig, logger, now: clock });
+  const calSync = createCalendarSync({ calendar, store: calStore, logger });
   const revoker = createGoogleRevoker({ vault, connections, tokens, httpFor: (laneId, baseUrl) => fastHttp(laneId, undefined, baseUrl) });
 
   // ---- connect state twin
@@ -308,11 +401,9 @@ export function createGoogleHarness(options: GoogleHarnessOptions) {
   /** The T-062 contract harness over this wiring. */
   function contractHarness(): CommsContractHarness {
     const ids = seedMessage(2, "x@example.test");
-    const noCalendar = () => {
-      throw new Error("Gmail has no calendar");
-    };
     return {
       mail,
+      calendar,
       laneId: "PKG",
       otherLaneId: "APK",
       async connect(opts = {}) {
@@ -333,15 +424,23 @@ export function createGoogleHarness(options: GoogleHarnessOptions) {
       },
       addMessage: (conn, id) => fake.addMessage(accountOf(conn), id),
       removeMessage: (conn) => fake.removeMessage(accountOf(conn)),
-      addEvent: noCalendar,
-      removeEvent: noCalendar,
-      cancelEvent: noCalendar,
+      addEvent: (conn) => fake.addEvent(accountOf(conn)),
+      // Google reports a hard delete as a cancelled item, so the removed event comes back as a stub (not a removal).
+      removeEvent: (conn) => {
+        fake.deleteEvent(accountOf(conn), "primary", "evt-remove");
+        return "evt-remove";
+      },
+      removedEventsAreStubs: true,
+      cancelEvent: (conn) => {
+        fake.cancelEvent(accountOf(conn), "primary", "evt-1");
+        return "evt-1";
+      },
       externalWriteCount: () => fake.state.writeRequests.length,
-      externalRequestCount: () => fake.state.gmailRequests.length + fake.state.tokenRequests.length + fake.state.revokeRequests.length,
+      externalRequestCount: () => fake.state.gmailRequests.length + fake.state.calendarRequests.length + fake.state.tokenRequests.length + fake.state.revokeRequests.length,
       tokenReads: () => stats.tokenReads,
       persistedContentWrites: contentWriteCount,
       bodyCanary: GOOGLE_BODY_CANARY,
-      fixtures: { messageId: ids.id, messageSearchTerm: "budget", calendarId: "primary", calendarIds: ["primary"], eventId: "evt-1", documentId: "doc-1", documentSearchTerm: "budget" },
+      fixtures: { messageId: ids.id, messageSearchTerm: "budget", calendarId: "primary", calendarIds: ["primary", "c_exec_team@group.calendar.google.com", "c_ops_board@group.calendar.google.com"], eventId: "evt-1", documentId: "doc-1", documentSearchTerm: "budget" },
     };
   }
 
@@ -381,6 +480,12 @@ export function createGoogleHarness(options: GoogleHarnessOptions) {
     api,
     mail,
     sync,
+    calendar,
+    calSync,
+    calStore,
+    calendarConfig,
+    events,
+    calStats,
     store,
     revoker,
     approvedRevoke,

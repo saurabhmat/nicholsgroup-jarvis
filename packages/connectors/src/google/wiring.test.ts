@@ -65,6 +65,14 @@ describe("wiring", () => {
     expect(googleOAuthProvider.authorizationParams).toEqual({ access_type: "offline", prompt: "consent", include_granted_scopes: "false" });
   });
 
+  it("exposes the Calendar provider and sync next to the Gmail ones, read-only", async () => {
+    const g = await import("./index");
+    expect(g.googleCalendarProvider.provider).toBe("google");
+    expect(g.googleCalendarProvider.capabilities).toEqual({ watch: "polling", prepareWrite: false });
+    expect(typeof g.calSync.run).toBe("function");
+    expect(typeof g.calendarIndexStore.applyPage).toBe("function");
+  });
+
   it("only the approvals-only write subpath exposes the Google writer", () => {
     const root = resolve(__dirname, "../../../..");
     const files: string[] = [];

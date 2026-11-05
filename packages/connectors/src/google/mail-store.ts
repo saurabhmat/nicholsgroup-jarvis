@@ -8,15 +8,11 @@ import { MessageMetaSchema, MessageRemovalSchema, type CommsCursor, type MailSyn
 import { ConnectorError } from "../contract/errors";
 import { assertLaneBound, type LaneBoundConnection } from "../contract/lane-bound";
 import type { JobClientFor } from "../vault/tokens";
+import { APPLY_CHUNK, APPLY_MAX, createIndexRpc, type ApplyCounts } from "./index-rpc";
 
 export const MAIL_STREAM = "mail";
-/** The database accepts 1000 removals and 1000 upserts per call; a page is cut into chunks of this size. */
-export const APPLY_CHUNK = 500;
-/** A page larger than this is refused outright (a provider bug, not a page). */
-export const APPLY_MAX = 20_000;
-
-/** `conflict`: the stored cursor is no longer the one the run started from (another run applied first); nothing was written by the last chunk. */
-export type ApplyCounts = { removed: number; written: number; skipped: number; conflict: boolean };
+export { APPLY_CHUNK, APPLY_MAX };
+export type { ApplyCounts };
 
 export interface MailIndexStore {
   /** The stored cursor of the connection's mail stream, or null (first load). */
@@ -38,39 +34,8 @@ export interface MailIndexStore {
   ): Promise<ApplyCounts>;
 }
 
-/** The SQLSTATE the apply function raises when the stored cursor is not the expected one. */
-const CONFLICT_CODE = "D0409";
-
-/** Data errors (class 22, 23) and refusals are permanent: retrying the same page cannot succeed, so they are not `transient`. */
-function storeError(code: string | undefined): ConnectorError {
-  if (code === "42501") return new ConnectorError({ kind: "forbidden", message: "Mail index access refused" });
-  if (code && /^2[23]/.test(code)) return new ConnectorError({ kind: "invalid_input", message: "A mail sync page or record was refused by the index" });
-  return new ConnectorError({ kind: "transient", message: "Mail index unavailable" });
-}
-
 export function createMailIndexStore(clientFor: JobClientFor): MailIndexStore {
-  type Rpc = (fn: string, args: Record<string, unknown>) => Promise<{ data: unknown; error: { code?: string } | null }>;
-  /** Returns the result, or "conflict" for the cursor compare-and-swap. */
-  async function call(laneId: LaneId, fn: string, args: Record<string, unknown>): Promise<unknown> {
-    let client: Awaited<ReturnType<JobClientFor>>;
-    try {
-      client = await clientFor(laneId);
-    } catch {
-      throw new ConnectorError({ kind: "connection_unavailable", message: "Lane is not available for mail index access" });
-    }
-    let result: Awaited<ReturnType<Rpc>>;
-    try {
-      const rpc = client.schema("core").rpc.bind(client.schema("core")) as unknown as Rpc;
-      result = await rpc(fn, args);
-    } catch {
-      throw new ConnectorError({ kind: "transient", message: "Mail index unavailable" });
-    }
-    if (result.error) {
-      if (result.error.code === CONFLICT_CODE) return "conflict";
-      throw storeError(result.error.code);
-    }
-    return result.data;
-  }
+  const call = createIndexRpc(clientFor, "Mail");
 
   return {
     async getCursor(laneId, conn) {

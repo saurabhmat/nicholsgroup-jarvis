@@ -8,13 +8,24 @@ export const GOOGLE_AUTHORIZATION_URL = "https://accounts.google.com/o/oauth2/v2
 export const GOOGLE_TOKEN_URL = "https://oauth2.googleapis.com/token";
 export const GOOGLE_REVOKE_URL = "https://oauth2.googleapis.com/revoke";
 export const GMAIL_BASE = "https://gmail.googleapis.com";
+/** Google Calendar lives on the shared www.googleapis.com host; only the paths in CALENDAR_PATHS may be called there (T-064). */
+export const CALENDAR_BASE = "https://www.googleapis.com";
+/** The only Calendar API path templates connector code may GET. Everything else on www.googleapis.com is refused before a token is read. */
+export const CALENDAR_PATHS: ReadonlySet<string> = new Set([
+  "/calendar/v3/users/me/calendarList",
+  "/calendar/v3/calendars/{calendarId}/events",
+  "/calendar/v3/calendars/{calendarId}/events/{eventId}",
+]);
 
 /**
  * The only hosts connector code may call for Google: Gmail (also used for the profile that names the mailbox) and the
- * OAuth token/revoke host. accounts.google.com is only the browser consent redirect, never called from the server;
- * T-064 adds www.googleapis.com for Calendar.
+ * OAuth token/revoke host, and www.googleapis.com for Calendar (T-064; the API client restricts it to CALENDAR_PATHS).
+ * accounts.google.com is only the browser consent redirect, never called from the server.
  */
-export const GOOGLE_HOSTS: ReadonlySet<string> = new Set(["gmail.googleapis.com", "oauth2.googleapis.com"]);
+export const GOOGLE_HOSTS: ReadonlySet<string> = new Set(["gmail.googleapis.com", "oauth2.googleapis.com", "www.googleapis.com"]);
+/** Narrower sets for clients that only ever talk to one host: token/revoke (OAuth) and the connect-time Gmail profile. */
+export const GOOGLE_TOKEN_HOSTS: ReadonlySet<string> = new Set(["oauth2.googleapis.com"]);
+export const GOOGLE_GMAIL_HOSTS: ReadonlySet<string> = new Set(["gmail.googleapis.com"]);
 /** history.list event types requested (repeated parameter). */
 export const HISTORY_TYPES = ["messageAdded", "messageDeleted", "labelAdded", "labelRemoved"] as const;
 
@@ -37,3 +48,12 @@ export const METADATA_HEADERS = ["From", "To", "Cc", "Subject", "Date", "Content
 export const DEFAULT_FULL_SYNC_DAYS = 90;
 /** Largest body text returned when the caller gives no maxChars. */
 export const DEFAULT_MAX_BODY_CHARS = 200_000;
+
+/** Calendar quota is per user and per project; stay far below it. Separate bucket from Gmail (key suffix in the API client). */
+export const CALENDAR_RATE_LIMIT = { requests: 10, perMs: 1000 } as const;
+/** Events older than this are purged (cal.event_index_purge maximum); the first load never reaches back further than it or the lane's retention. */
+export const EVENT_RETENTION_DAYS = 180;
+/** Default look-ahead of a calendar load. Overridden by lane_config.calendar.forward_days. */
+export const DEFAULT_FORWARD_DAYS = 365;
+/** At most this many calendars per connection are synced (the composite cursor must stay under 16 KB). */
+export const MAX_CALENDARS = 10;

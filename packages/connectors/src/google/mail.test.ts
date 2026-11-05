@@ -320,9 +320,9 @@ describe("API surface", () => {
   });
 
   it("only Google hosts are accepted for a client", () => {
-    for (const ok of ["https://gmail.googleapis.com", "https://oauth2.googleapis.com"]) expect(() => assertGoogleHost(ok, GOOGLE_HOSTS), ok).not.toThrow();
-    // accounts.google.com is the browser redirect only; www.googleapis.com arrives with Calendar (T-064)
-    for (const bad of ["https://accounts.google.com", "https://www.googleapis.com/calendar/v3", "https://evil.example.test", "https://gmail.googleapis.com.evil.test", "http://gmail.googleapis.com", "https://googleapis.com", "not a url"]) {
+    for (const ok of ["https://gmail.googleapis.com", "https://oauth2.googleapis.com", "https://www.googleapis.com"]) expect(() => assertGoogleHost(ok, GOOGLE_HOSTS), ok).not.toThrow();
+    // accounts.google.com is the browser redirect only; www.googleapis.com is Calendar (T-064; the API client limits it to the Calendar paths)
+    for (const bad of ["https://accounts.google.com", "https://googleapis.com.evil.test", "https://evil.example.test", "https://gmail.googleapis.com.evil.test", "http://gmail.googleapis.com", "https://googleapis.com", "not a url"]) {
       if (bad === "http://gmail.googleapis.com") continue; // scheme is the HTTP client's check (https or loopback only)
       expect(() => assertGoogleHost(bad, GOOGLE_HOSTS), bad).toThrow();
     }

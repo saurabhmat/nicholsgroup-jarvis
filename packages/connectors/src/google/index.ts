@@ -2,9 +2,11 @@
 // Vault, lane router (through the vault module) and connector env. Server-only. Credentials are read from the connector
 // env at call time (`requireConnectorEnv("google")` fails closed naming missing variables, never printing values).
 import { requireConnectorEnv } from "@nichols/core/env/server";
-import { connectionLoader, getToken, laneConfigReader, mailIndexStore, revokeToken, rotateToken, storeToken } from "../vault/index";
+import { calendarIndexStore, connectionLoader, getToken, laneConfigReader, mailIndexStore, revokeToken, rotateToken, storeToken } from "../vault/index";
 import { SecretValue } from "../vault/secret";
 import { createGoogleApi } from "./api";
+import { createCalendarSync } from "./cal-sync";
+import { createGoogleCalendarProvider } from "./calendar";
 import { createGmailProvider } from "./mail";
 import { createMailSync } from "./mail-sync";
 import { createGoogleOAuthProvider, type GoogleClientConfig } from "./provider";
@@ -28,8 +30,13 @@ export const gmailProvider = createGmailProvider({ api, connections, laneConfig:
 /** Runs one connection's mail metadata sync into comms.message_index (the sync job calls this; Inngest wiring: T-038/T-065). */
 export const mailSync = createMailSync({ mail: gmailProvider, store: mailIndexStore });
 
+/** Google Calendar event metadata sync, live description. Polling (calendar push is not built). */
+export const googleCalendarProvider = createGoogleCalendarProvider({ api, connections, laneConfig: laneConfigReader });
+/** Runs one connection's calendar metadata sync into cal.event_index (the sync job calls this; Inngest wiring: T-038). */
+export const calSync = createCalendarSync({ calendar: googleCalendarProvider, store: calendarIndexStore });
+
 /** Revoke-at-Google and delete-Vault-tokens (D-24: approvals only). No route, job or connector method calls it. */
 export const googleWriter = createGoogleWriter({ vault, connections, tokens });
 
-export { mailIndexStore };
+export { mailIndexStore, calendarIndexStore };
 export { GOOGLE_SLUG, GOOGLE_SCOPES } from "./constants";
