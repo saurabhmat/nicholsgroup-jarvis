@@ -81,7 +81,15 @@ insert into authenticated_exec_ok values
   ('core.viewer_view_names', 'pure list'),
   ('core.role_views', 'pure mapping'),
   ('core.oauth_state_create', 'connect start; checks role and aal2 itself (T-035)'),
-  ('core.oauth_state_consume', 'connect callback; own state only (T-035)');
+  ('core.oauth_state_consume', 'connect callback; own state only (T-035)'),
+  ('fin.et_date', 'pure calendar function (T-080)'),
+  ('fin.month_start', 'pure calendar function (T-080)'),
+  ('fin.next_month_start', 'pure calendar function (T-080)'),
+  ('fin.ytd_start', 'pure calendar function (T-080)'),
+  ('fin.business_week', 'pure calendar function (T-080)'),
+  ('fin.month_range', 'pure calendar function (T-080)'),
+  ('fin.ytd_range', 'pure calendar function (T-080)'),
+  ('fin.mtd_range', 'pure calendar function (T-080)');
 
 create temp view app_objects as
   select c.oid, format('%s.%s', n.nspname, c.relname) as name, c.relkind

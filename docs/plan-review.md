@@ -595,3 +595,11 @@ Logged, not done:
   - **LOW:** the migration closes stray `running` rows and then builds the unique index without an explicit table lock (the migration runner opens no transaction block, so `LOCK TABLE` fails). A run starting in between would only make the index build fail; no sync job runs before this ships.
   - **LOW:** pgTAP checks anon/authenticated execute with `has_function_privilege`, not an attempted call (same as tests 160/170); no concurrency test of the lock.
   - **LOW:** the T-199 local cast for `core.sync_cursors` in `apps/web/lib/google-connection.ts` can now be removed (types regenerated).
+
+## Nov 5, 2026 — T-080
+
+Business calendar SQL (migration 20261105170000). db-engineer, security-reviewer and code-reviewer: no BLOCKER or HIGH.
+- Fixed in this change: `mtd_range` now ends at `p_ts` (not the next ET midnight); per-timezone row-count assertion in pgTAP 190; header note "not for use in index or generated-column expressions" (functions are `immutable` like the built-in `timezone(text, timestamptz)`; tzdata is the only input).
+- MEDIUM, logged: `mtd_range`, `ytd_range`, `month_range` are not in spec §5 (spec should list them with their half-open end semantics; `ytd_range` ends at the next month start, callers cap at `now()` for the current month). Parameter names are `p_d` / `p_ts` while the spec text says `p_month`; align the spec when T-081 uses named arguments.
+- MEDIUM, logged: the 97-minute business_week sweep runs only under the last-set session timezone (America/Los_Angeles); fixed cases cover the others.
+- LOW, logged: functions are not `strict` (NULL in gives NULL / one all-null row); infinity dates pass through; no test calls a function as `authenticated`; SQL functions with `set search_path` are not inlined by the planner; the lane rule does not apply (pure helpers, no data).

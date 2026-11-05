@@ -543,7 +543,38 @@ isOneToOne: false
             [_ in never]: never
           }
           Functions: {
-            [_ in never]: never
+            "business_week":
+{ Args: { "p_ts": string }; Returns: {
+              "week_end": string,"week_start": string
+            }[]
+                           },
+"et_date":
+{ Args: { "p_ts": string }; Returns: string
+                           },
+"month_range":
+{ Args: { "p_d": string }; Returns: {
+              "period_end": string,"period_start": string
+            }[]
+                           },
+"month_start":
+{ Args: { "p_d": string }; Returns: string
+                           },
+"mtd_range":
+{ Args: { "p_ts": string }; Returns: {
+              "period_end": string,"period_start": string
+            }[]
+                           },
+"next_month_start":
+{ Args: { "p_d": string }; Returns: string
+                           },
+"ytd_range":
+{ Args: { "p_d": string }; Returns: {
+              "period_end": string,"period_start": string
+            }[]
+                           },
+"ytd_start":
+{ Args: { "p_d": string }; Returns: string
+                           }
           }
           Enums: {
             [_ in never]: never
