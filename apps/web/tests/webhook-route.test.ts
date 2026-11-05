@@ -7,12 +7,12 @@ vi.mock("@nichols/core/lane-router", () => ({ getLaneJobClient: vi.fn(async () =
 vi.mock("@nichols/core/inngest", () => ({ sendLaneEvent: send, inngestAvailable: () => true }));
 vi.mock("@nichols/core/env/server", () => ({ getServerEnv: () => ({ APP_ENV: "local", ENABLED_LANES: ["PKG"] }) }));
 
-const { POST, dynamic, runtime } = await import("../app/api/webhooks/[provider]/route");
+const route: Record<string, unknown> = await import("../app/api/webhooks/[provider]/route");
+const POST = route.POST as (req: Request, ctx: never) => Promise<Response>;
 
 describe("webhook route", () => {
-  it("is dynamic and runs on Node (raw body, no caching)", () => {
-    expect(dynamic).toBe("force-dynamic");
-    expect(runtime).toBe("nodejs");
+  it("exports only POST: no route segment config (a build error with cacheComponents) and no GET", () => {
+    expect(Object.keys(route).sort()).toEqual(["POST"]);
   });
 
   it("answers 404 for a provider nobody registered, and queues nothing", async () => {
