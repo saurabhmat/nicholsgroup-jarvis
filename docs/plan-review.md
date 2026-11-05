@@ -573,3 +573,12 @@ Logged, not done:
 - **Settings are read on every page** (one `lane_config_current` read per `sync` call); needed for the per-page selection check; cache later if it shows in load.
 - **eventType** (outOfOffice, workingLocation, focusTime, birthday) is indexed as an ordinary event, with no self-response or transparency (free/busy) fields; the calendar consumer task (T-114 area) must decide how to show them.
 - The T-064 migration was written without the `db-engineer` subagent but has had security and code review.
+
+### Nov 5, 2026 — T-199 review findings (MEDIUM and below, not fixed)
+- **"Last sync" is the cursor write time** (code M6). `core.sync_cursors.updated_at` moves only when a page is applied, so a healthy sync that finds nothing new looks stale. `core.connections.last_sync_at` is one value per connection, not per stream. Fix: record a per-stream "last successful run" time (T-038 sync runs) that owner/admin_technical can read, and show that instead.
+- **The reconnect banner does not name the mailbox** when a lane has several Google connections (code LOW). The badge on each row shows which one; name it in the banner when multi-mailbox lanes appear.
+- **`core.sync_cursors` is missing from the generated DB types** (code LOW). A narrow local cast is used in `apps/web/lib/google-connection.ts`; remove it after the next `db:types` regeneration.
+- **The e2e SQL helper trusts the Docker context** (sec L1). `apps/web/scripts/e2e-sql.mjs` runs as the `postgres` superuser in the container `supabase_db_nichols-jarvis-core` on whatever daemon `DOCKER_HOST`/`DOCKER_CONTEXT` points to. Callers pass only constant synthetic SQL. Add a refusal when `VERCEL_ENV` or a remote `DOCKER_HOST` is set if the helper is reused.
+- **Timezone formatting** (`America/New_York`, "ET") is checked only in e2e (a November date); add unit tests with summer and winter dates if the formatter is shared (code LOW).
+- `guards()` is called twice in `settings-page.tsx` (code LOW); harmless, tidy up when T-197 adds the QuickBooks section.
+
