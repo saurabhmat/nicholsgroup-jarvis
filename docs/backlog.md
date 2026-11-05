@@ -365,7 +365,7 @@ T-010 – T-017 are the serial spine. After T-017: auth/shell (T-018 – T-026) 
 - acceptance: Inngest client, `/api/inngest` route, typed event schemas where `laneId` is required (type test proves events without it fail to compile); runs against the local dev server.
 
 ### T-038 conn.sync skeleton
-- status: approved
+- status: done
 - depends: T-037, T-031, T-030
 - acceptance: `conn.sync` with concurrency key = connection id, retries, cursor persistence, `sync_runs` start/finish/error logging; tested with a mock provider, including one connection failing without blocking another.
 

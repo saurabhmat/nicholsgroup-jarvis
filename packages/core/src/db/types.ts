@@ -225,6 +225,32 @@ isOneToOne: false
       referencedColumns: ["code"]
     }
                   ]
+                },"sync_cursors": {
+                  Row: {
+                    "connection_id": string,"cursor_value": string,"lane_id": string,"stream": string,"updated_at": string
+                  }
+                  ComputedFields: never
+                  Insert: {
+                    "connection_id": string,"cursor_value": string,"lane_id": string,"stream": string,"updated_at"?: string
+                  }
+                  Update: {
+                    "connection_id"?: string,"cursor_value"?: string,"lane_id"?: string,"stream"?: string,"updated_at"?: string
+                  }
+                  Relationships: [
+                    {
+      foreignKeyName: "sync_cursors_connection_id_lane_id_fkey"
+      columns: ["connection_id","lane_id"]
+isOneToOne: false
+      referencedRelation: "connections"
+      referencedColumns: ["id","lane_id"]
+    },{
+      foreignKeyName: "sync_cursors_lane_id_fkey"
+      columns: ["lane_id"]
+isOneToOne: false
+      referencedRelation: "lanes"
+      referencedColumns: ["code"]
+    }
+                  ]
                 },"sync_runs": {
                   Row: {
                     "connection_id": string,"created_at": string,"error": Json | null,"finished_at": string | null,"id": string,"job_run_id": string | null,"kind": string,"lane_id": string,"records_received": number,"records_written": number,"started_at": string,"status": string,"trigger": string,"updated_at": string
@@ -320,6 +346,12 @@ isOneToOne: false
             "allowed_lanes":
 { Args: { "p_uid": string,"p_view": string }; Returns: (string)[]
                            },
+"cal_events_apply_page":
+{ Args: { "p_complete"?: boolean,"p_connection_id": string,"p_cursor": string,"p_drop_calendars"?: (string)[],"p_expected_cursor": string,"p_lane": string,"p_removals": Json,"p_upserts": Json }; Returns: Json
+                           },
+"comms_mail_apply_page":
+{ Args: { "p_complete"?: boolean,"p_connection_id": string,"p_cursor": string,"p_expected_cursor": string,"p_lane": string,"p_removals": Json,"p_revive"?: boolean,"p_upserts": Json }; Returns: Json
+                           },
 "connection_for_token":
 { Args: { "p_connection_id": string,"p_lane_id": string,"p_lock": boolean }; Returns: string
                            },
@@ -372,6 +404,15 @@ isOneToOne: false
                            },
 "source_records_upsert":
 { Args: { "p_connection_id": string,"p_lane": string,"p_records": Json }; Returns: number
+                           },
+"sync_cursor_get":
+{ Args: { "p_connection_id": string,"p_lane": string,"p_stream": string }; Returns: string
+                           },
+"sync_cursor_put":
+{ Args: { "p_connection_id": string,"p_cursor": string,"p_expected": string,"p_lane": string,"p_stream": string }; Returns: boolean
+                           },
+"sync_cursor_reset":
+{ Args: { "p_connection_id": string,"p_lane": string,"p_stream": string }; Returns: boolean
                            },
 "view_names":
 { Args: Record<PropertyKey, never>; Returns: (string)[]
