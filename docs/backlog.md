@@ -106,7 +106,7 @@ These tasks have all their dependencies done and all their `needs` checked. A hu
 - [x] H-005 Intuit developer app + sandbox company (PL-16). Done Oct 28, 2026: one Intuit app "Jarvis" (QuickBooks Online and Payments, scope `com.intuit.quickbooks.accounting` only) serves every company; each company file connects separately through the in-app OAuth flow (own realmId + tokens per lane). Sandbox keys and `INTUIT_ENVIRONMENT=sandbox`, `INTUIT_REDIRECT_URI=http://localhost:3000/api/connect/qbo/callback` are in `.env.local`; a sandbox company exists. Details in `docs/plan-review.md` §7 (Oct 28)
 - [ ] H-006 Stripe restricted read-only key (test mode first, then live for staging) + webhook signing secret (PL-17)
 - [ ] H-007 GoHighLevel Private Integration token (read-only scopes) + location ID (PL-18)
-- [ ] H-008 Mail/calendar/docs API permissions for pub-k.org (Google, D-1 decided Nov 4, 2026): Google OAuth client (Internal app type) in the pub-k.org Google Cloud project with read-only Gmail, Calendar and Drive scopes; client ID and secret into `.env.local` as `GOOGLE_OAUTH_CLIENT_ID` / `GOOGLE_OAUTH_CLIENT_SECRET` (never in chat) (PL-19)
+- [x] H-008 Done Nov 5, 2026 by Saurabh: Cloud project under the pub-k.org org; Gmail/Calendar/Drive APIs on; Google Auth Platform Internal; scopes `gmail.readonly`, `calendar.readonly`, `drive.readonly`; Web client with redirect `http://localhost:3000/api/connect/google/callback`; app Trusted in Admin → API controls; values in `.env.local` (format checked). A separate production client is added with H-023. Original item: Mail/calendar/docs API permissions for pub-k.org (Google, D-1 decided Nov 4, 2026): Google OAuth client (Internal app type) in the pub-k.org Google Cloud project with read-only Gmail, Calendar and Drive scopes; client ID and secret into `.env.local` as `GOOGLE_OAUTH_CLIENT_ID` / `GOOGLE_OAUTH_CLIENT_SECRET` (never in chat) (PL-19)
 - [ ] H-009 monday.com API token (IT workspace); Notion internal integration shared to the target pages/databases (PL-20)
 - [x] H-010 Vercel project linked to the repo (Oct 24, 2026), with **Root Directory = `apps/web`** and **"Include files outside the root directory"** turned on; production branch `main`; a Preview deployment per PR (no real-data secrets since Oct 28, 2026; see H-023); Production is the only real-data environment since Oct 31, 2026 (no staging); Vercel Authentication on for Preview and Production; env vars set by Saurabh in the dashboard. Production-domain DNS moved to H-021 (PL-10)
 - [ ] H-021 DNS for the production domain once D-5 is decided (split out of H-010)
@@ -534,13 +534,13 @@ Scope: read-only, Accounting API only (no Payments, no Payroll); never create, u
 - acceptance: `MailProvider`, `CalendarProvider`, `DocumentProvider` (metadata sync, live body fetch, live search, watch/renew, `prepareWrite` on the provider; execution only through a `ConnectorWriter` from `@nichols/connectors/writer`, per the T-030 split); mock implementation; contract tests both real providers must pass.
 
 ### T-063 Google: OAuth + Gmail metadata sync + live body
-- status: proposed
+- status: approved
 - depends: T-062, T-061, T-035
 - needs: H-008 (Google), D-1
 - acceptance: Gmail history-API delta into `comms.message_index` (metadata only); `readBody` fetches live and never persists (test spies on DB writes); mailboxes from lane_config.
 
 ### T-064 Google: Calendar sync
-- status: proposed
+- status: approved
 - depends: T-063
 - acceptance: Calendar sync tokens into `cal.event_index`; contract tests. Drive search is T-186 (Release B).
 
