@@ -62,7 +62,8 @@ export type HttpRequest = {
   path: string;
   /** Values for `{name}` placeholders; each fills exactly one segment (URL-encoded; `.`, `..` and "" refused). */
   params?: Record<string, string | number>;
-  query?: Record<string, string | number | boolean | null | undefined>;
+  /** An array value repeats the parameter (`a=1&a=2`), e.g. Gmail `metadataHeaders`. */
+  query?: Record<string, string | number | boolean | null | undefined | readonly string[]>;
   headers?: Record<string, string>;
   /**
    * A string is sent as is with the caller's content-type (e.g. QuickBooks `application/text` queries); URLSearchParams
@@ -203,7 +204,11 @@ export function createHttpClient(options: HttpClientOptions): HttpClient {
     if (url.pathname !== `${basePath}${filled}`) {
       throw new ConnectorError({ kind: "invalid_input", message: "path template produced a different path" });
     }
-    for (const [k, v] of Object.entries(req.query ?? {})) if (v !== null && v !== undefined) url.searchParams.set(k, String(v));
+    for (const [k, v] of Object.entries(req.query ?? {})) {
+      if (v === null || v === undefined) continue;
+      if (Array.isArray(v)) for (const item of v as readonly string[]) url.searchParams.append(k, item);
+      else url.searchParams.set(k, String(v));
+    }
     return url;
   };
 

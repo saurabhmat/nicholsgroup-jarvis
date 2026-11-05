@@ -18,7 +18,8 @@ describe("wiring", () => {
   it("registers QuickBooks under the qbo slug, and no other provider", async () => {
     const { oauthFlow } = await import("../oauth/index");
     expect(oauthFlow.has("qbo")).toBe(true);
-    expect(oauthFlow.has("google")).toBe(false);
+    expect(oauthFlow.has("google")).toBe(true); // T-063
+    expect(oauthFlow.has("gmail")).toBe(false);
     expect(oauthFlow.has("quickbooks")).toBe(false);
   });
 

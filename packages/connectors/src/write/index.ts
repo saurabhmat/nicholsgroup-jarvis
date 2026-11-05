@@ -4,3 +4,5 @@
 // if any other production file imports this subpath or the QuickBooks writer.
 export { quickbooksWriter } from "../quickbooks/index";
 export { QBO_REVOKE_ACTION, type QboApprovedAction } from "../quickbooks/writer";
+export { googleWriter } from "../google/index";
+export { GOOGLE_REVOKE_ACTION, type GoogleApprovedAction } from "../google/writer";

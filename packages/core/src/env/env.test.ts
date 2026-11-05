@@ -439,6 +439,24 @@ describe("real-data environments (Staging environment, Oct 28, 2026)", () => {
     ).toThrow(EnvValidationError);
   });
 
+  it("google: the redirect URI defaults to localhost only in local development; elsewhere it is https on the app's own origin (T-063)", () => {
+    const G = { GOOGLE_OAUTH_CLIENT_ID: "fake-id", GOOGLE_OAUTH_CLIENT_SECRET: "fake-secret" };
+    vi.stubEnv("APP_ENV", "local");
+    expect(requireConnectorEnv("google", G).GOOGLE_REDIRECT_URI).toBe("http://localhost:3000/api/connect/google/callback");
+    expect(requireConnectorEnv("google", { ...G, GOOGLE_REDIRECT_URI: "http://localhost:3001/api/connect/google/callback" }).GOOGLE_REDIRECT_URI).toBe(
+      "http://localhost:3001/api/connect/google/callback",
+    );
+    vi.stubEnv("APP_ENV", "staging");
+    vi.stubEnv("NEXT_PUBLIC_APP_URL", "https://app.example.test");
+    expect(() => requireConnectorEnv("google", G)).toThrow(EnvValidationError);
+    expect(() => requireConnectorEnv("google", { ...G, GOOGLE_REDIRECT_URI: "http://app.example.test/cb" })).toThrow(EnvValidationError);
+    // another origin than the app's is refused (an attacker-chosen host would receive the authorization code)
+    expect(() => requireConnectorEnv("google", { ...G, GOOGLE_REDIRECT_URI: "https://evil.example.test/api/connect/google/callback" })).toThrow(EnvValidationError);
+    expect(requireConnectorEnv("google", { ...G, GOOGLE_REDIRECT_URI: "https://app.example.test/api/connect/google/callback" }).GOOGLE_REDIRECT_URI).toMatch(/^https:/);
+    vi.stubEnv("NEXT_PUBLIC_APP_URL", "");
+    expect(() => requireConnectorEnv("google", { ...G, GOOGLE_REDIRECT_URI: "https://app.example.test/api/connect/google/callback" })).toThrow(EnvValidationError); // no app origin: fail closed
+  });
+
   it("refuses INTUIT_ENVIRONMENT=production when the connector is used outside staging/production", () => {
     const INTUIT_PROD = {
       INTUIT_CLIENT_ID: "fake-id",
@@ -1014,6 +1032,7 @@ function fileUrl(rel: string): string {
 function valueFor(key: string): string {
   if (key === "INTUIT_ENVIRONMENT") return "sandbox";
   if (key === "INTUIT_REDIRECT_URI") return "http://localhost:3000/cb";
+  if (key === "GOOGLE_REDIRECT_URI") return "http://localhost:3000/api/connect/google/callback";
   if (key === "APP_ENV") return "local";
   if (key === "VERCEL_ENV") return "preview";
   if (key === "VAPID_SUBJECT") return "mailto:admin@example.com";

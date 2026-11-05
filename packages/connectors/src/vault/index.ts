@@ -8,6 +8,7 @@ import { createRawRecordStore } from "../raw/store";
 import { createWebhookStore } from "../webhooks/store";
 import { getServerEnv } from "@nichols/core/env/server";
 import { createTokenVault } from "./tokens";
+import { createMailIndexStore } from "../google/mail-store";
 
 const vault = createTokenVault(getLaneJobClient);
 
@@ -24,6 +25,9 @@ export const laneConfigReader = createLaneConfigReader(getLaneJobClient);
 
 /** Upserts raw provider payloads into raw.source_records with the lane's job client (T-039). */
 export const rawRecords = createRawRecordStore(getLaneJobClient);
+
+/** Applies Gmail metadata sync pages and stores their cursors with the lane's job client (T-063). */
+export const mailIndexStore = createMailIndexStore(getLaneJobClient);
 
 /** Resolves webhook accounts to lanes, dedupes events and records the hand-off with the lane's job client (T-036). */
 export const webhookStore = createWebhookStore(getLaneJobClient, () => getServerEnv().ENABLED_LANES);

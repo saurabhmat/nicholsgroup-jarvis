@@ -65,3 +65,26 @@ describe("qboRealmId", () => {
     expect(await kindOf(createLaneConfigReader(client({}).clientFor).qboRealmId("pkg"))).toBe("invalid_input");
   });
 });
+
+describe("retentionDays (T-063)", () => {
+  it("reads the lane policy's retention_days for the lane", async () => {
+    const { calls, clientFor } = client({ data: { retention_days: 90 } });
+    expect(await createLaneConfigReader(clientFor).retentionDays("PKG")).toBe(90);
+    expect(calls).toEqual([{ table: "core.lane_policies", select: "retention_days", filters: [["lane_id", "PKG"]] }]);
+  });
+  it("fails closed: a missing or invalid policy and a database error are errors, never a default", async () => {
+    for (const data of [null, { retention_days: null }, { retention_days: 0 }, { retention_days: "90" }, { retention_days: 99999 }]) {
+      const { clientFor } = client({ data });
+      expect(await kindOf(createLaneConfigReader(clientFor).retentionDays("PKG"))).toBe("connection_unavailable");
+    }
+    expect(await kindOf(createLaneConfigReader(client({ error: { code: "x" } }).clientFor).retentionDays("PKG"))).toBe("transient");
+  });
+});
+
+describe("mailboxes (T-063)", () => {
+  it("returns the lane's mailboxes lower-cased, empty when none, and fails closed on malformed ones", async () => {
+    expect(await createLaneConfigReader(client({ data: { config: { mailboxes: ["Exec@Example.test"] } } }).clientFor).mailboxes("PKG")).toEqual(["exec@example.test"]);
+    expect(await createLaneConfigReader(client({ data: { config: {} } }).clientFor).mailboxes("PKG")).toEqual([]);
+    expect(await kindOf(createLaneConfigReader(client({ data: { config: { mailboxes: ["not an address"] } } }).clientFor).mailboxes("PKG"))).toBe("provider_error");
+  });
+});

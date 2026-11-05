@@ -224,6 +224,9 @@ export const connectorEnvShapes = {
   google: {
     GOOGLE_OAUTH_CLIENT_ID: nonEmpty,
     GOOGLE_OAUTH_CLIENT_SECRET: nonEmpty,
+    // The redirect URI registered with Google (ends with /api/connect/google/callback). Optional only in local dev, where it
+    // defaults to http://localhost:3000/api/connect/google/callback; required (https) everywhere else.
+    GOOGLE_REDIRECT_URI: httpUrl().optional(),
     GOOGLE_CLOUD_PROJECT_ID: nonEmpty.optional(),
     GMAIL_PUBSUB_TOPIC: nonEmpty.optional(),
   },
@@ -260,16 +263,29 @@ export const connectorEnvShapes = {
 } as const;
 
 /** Runtime facts that connector rules need, derived from the REAL process env by server code. */
-export type RuntimeFlags = { production: boolean; local: boolean; realData: boolean };
+export type RuntimeFlags = { production: boolean; local: boolean; realData: boolean; /** Origin of NEXT_PUBLIC_APP_URL, when set and valid. */ appOrigin?: string | undefined };
 export const runtimeFlags = (env: EnvRecord): RuntimeFlags => ({
   production: isProduction(env),
   local: env.APP_ENV === "local",
   realData: isRealDataEnv(env),
+  appOrigin: typeof env.NEXT_PUBLIC_APP_URL === "string" && URL.canParse(env.NEXT_PUBLIC_APP_URL) ? new URL(env.NEXT_PUBLIC_APP_URL).origin : undefined,
 });
 
 /** One schema factory per connector. The returned values contain only the connector's own variables. */
 export const connectorSchemaFactories = {
-  google: () => z.object(connectorEnvShapes.google),
+  google: (flags: RuntimeFlags) =>
+    z
+      .object(connectorEnvShapes.google)
+      .superRefine((v, ctx) => {
+        if (!flags.local && v.GOOGLE_REDIRECT_URI === undefined)
+          ctx.addIssue({ code: "custom", message: "required outside local development", path: ["GOOGLE_REDIRECT_URI"] });
+        else if (!flags.local && v.GOOGLE_REDIRECT_URI !== undefined && !v.GOOGLE_REDIRECT_URI.startsWith("https://"))
+          ctx.addIssue({ code: "custom", message: "https required", path: ["GOOGLE_REDIRECT_URI"] });
+        // Outside local the redirect must land on this app: the app's own origin (NEXT_PUBLIC_APP_URL), or fail closed.
+        else if (!flags.local && v.GOOGLE_REDIRECT_URI !== undefined && new URL(v.GOOGLE_REDIRECT_URI).origin !== flags.appOrigin)
+          ctx.addIssue({ code: "custom", message: "must be on the app's own origin", path: ["GOOGLE_REDIRECT_URI"] });
+      })
+      .transform((v) => ({ ...v, GOOGLE_REDIRECT_URI: v.GOOGLE_REDIRECT_URI ?? "http://localhost:3000/api/connect/google/callback" })),
   graph: () => z.object(connectorEnvShapes.graph),
   intuit: (flags: RuntimeFlags) =>
     z
