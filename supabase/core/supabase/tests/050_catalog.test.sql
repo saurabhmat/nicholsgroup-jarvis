@@ -63,6 +63,7 @@ insert into security_definer_ok values
   ('core.webhook_event_claim', 'webhook receiver: records an event once per (lane, provider, event id); service_role only, lane-checked (T-036)'),
   ('core.webhook_event_mark', 'webhook receiver: received -> enqueued | failed, lane-bound; service_role only (T-036)'),
   ('core.webhook_events_purge', 'webhook receipt retention, per lane, minimum 7 days; service_role only (T-036)'),
+  ('comms.message_summary_guard', 'trigger only: reads lane policy and memberships to validate a summary and its approver (T-061)'),
   ('fin.report_cache_guard', 'trigger only: calls the private raw.payload_scan on a report payload; reads and writes nothing (T-055)');
 
 -- App functions authenticated may execute (callable through the API). Each one is reviewed.

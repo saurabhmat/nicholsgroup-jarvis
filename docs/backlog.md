@@ -385,7 +385,7 @@ T-010 – T-017 are the serial spine. After T-017: auth/shell (T-018 – T-026) 
 ### T-042 Retention purge job
 - status: proposed
 - depends: T-038
-- acceptance: `retention.purge` reads `retention_days` from lane policy per table class (comms 90, calendar 180, conversations 180) and deletes expired rows; tests with time-shifted fixtures. Tables register themselves as they are added.
+- acceptance: `retention.purge` reads `retention_days` from lane policy per table class (comms 90, calendar 180, conversations 180) and deletes expired rows; tests with time-shifted fixtures. Tables register themselves as they are added. Registered by T-061 (call these per lane, never delete directly; they cap the interval at the lane policy / 180 days): `comms.message_index_purge(lane, keep)` and `cal.event_index_purge(lane, keep)`.
 
 ## Phase A4 — Admin and observability (PL-34)
 Joins W1 + W2 (needs T-023 and T-038).
@@ -524,7 +524,7 @@ Scope: read-only, Accounting API only (no Payments, no Payroll); never create, u
 - acceptance: Spec: `docs/specs/finance.md` §4.3, §5. Rule from lane_config (tag / pipeline stage / product, combinable) evaluated into `fin.subscriber_status` and append-only `fin.subscriber_events` (new, cancelled, trial→paid, failed payment; carries `rule_version`) so point-in-time membership and customer churn can be rebuilt; unit tests per rule type; APK/PKI tags/products excluded via the lane_config mapping (D-17); no amounts copied from GHL; documents the backfill depth available from GHL (spec Q-F7); registers its `fin.sync` schedule on the T-090 pattern.
 
 ### T-061 Comms and calendar index tables
-- status: approved
+- status: done
 - depends: T-013
 - acceptance: `comms.message_index` (metadata only, per architecture §6 M5, priority fields, optional approved summary) and `cal.event_index`; pgTAP column check proves no body column exists; RLS + pgTAP; registered with retention purge.
 
