@@ -8,6 +8,7 @@ import { createRawRecordStore } from "../raw/store";
 import { createWebhookStore } from "../webhooks/store";
 import { getServerEnv } from "@nichols/core/env/server";
 import { createTokenVault } from "./tokens";
+import { createTokenHealthStore } from "../health/store";
 import { createSyncCursorStore, createSyncRunStore } from "../sync/store";
 import { createCalendarIndexStore } from "../google/cal-store";
 import { createMailIndexStore } from "../google/mail-store";
@@ -36,6 +37,9 @@ export const calendarIndexStore = createCalendarIndexStore(getLaneJobClient);
 
 /** Logs conn.sync runs (core.sync_runs) and the connection's last sync with the lane's job client (T-038). */
 export const syncRunStore = createSyncRunStore(getLaneJobClient);
+
+/** Lists usable connections and flags health on core.connections with the lane's job client (T-040). */
+export const tokenHealthStore = createTokenHealthStore(getLaneJobClient);
 
 /** The generic sync cursor (core.sync_cursor_get/put) with the lane's job client (T-038). */
 export const syncCursorStore = createSyncCursorStore(getLaneJobClient);

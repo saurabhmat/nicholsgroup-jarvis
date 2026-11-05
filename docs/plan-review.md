@@ -595,3 +595,27 @@ Logged, not done:
   - **LOW:** the migration closes stray `running` rows and then builds the unique index without an explicit table lock (the migration runner opens no transaction block, so `LOCK TABLE` fails). A run starting in between would only make the index build fail; no sync job runs before this ships.
   - **LOW:** pgTAP checks anon/authenticated execute with `has_function_privilege`, not an attempted call (same as tests 160/170); no concurrency test of the lock.
   - **LOW:** the T-199 local cast for `core.sync_cursors` in `apps/web/lib/google-connection.ts` can now be removed (types regenerated).
+
+## Nov 5, 2026 — T-040
+
+- **Stale cross-reference:** T-040's acceptance says the notification event is consumed by T-181, but T-181 is now "Scheduling proposals". The event `conn/attention.needed` (reasons token_expiring, token_expired, health_check_failed, subscription_renewal_failed; ids and enums only) is emitted with no consumer. The backlog line needs a human to name the real notification task (or add one) and to decide who is told (admin_technical / owner).
+- **Built (no SQL):** daily cron `conn-token-health-scan` (11:00 UTC) and twice-daily `conn-subscriptions-renew-scan` fan out per enabled lane and connection; workers keyed by connection id, 2 retries; flags go to `core.connections.last_error` / `status` (active -> degraded) with a status-guarded update.
+- **Question for T-195 (not decided here):** a failed health check reporting `reconnect_required` is flagged and alerted but the status is NOT moved, and sync is not stopped, because T-195 owns that transition. Once T-195 lands, the token-health job should call its transition instead of only `last_error`.
+- **Question:** a pure expiry warning changes no row (no column for "warned"); the alert event is the flag and is deduped per connection, reason and UTC day. If the UI should show "expires in N days" it reads `token_expires_at`.
+- **Question (rule 5):** the renewal job is an interface with an empty registry. Renewing or recreating a push subscription (Gmail watch, Graph subscription) changes provider-side state without moving data. Decide before the first implementation whether this is allowed infrastructure or must go through `packages/modules/approvals`.
+- **Not covered:** a persistently transient health check never flags (inconclusive by design); `core.connections` has no column for subscription expiry, so a successful renewal writes nothing; Google/Stripe/GoHighLevel have no health checker yet (expiry rule only); the scans have no step-level test with the Inngest engine (config, fan-out planner and handlers are unit-tested).
+- **T-040 review** (security + code review Nov 5, 2026; no BLOCKER or HIGH; read-only `claude -p` runs, reports in `.agent/notes/review-T-040-security.md` and `-code.md`). Fixed: a good health check heals only the status and no longer clears `last_error` (it may come from a sync or renewal), a status-guard miss is logged (`superseded`), attention payloads are validated before `step.sendEvent`, `daysLeft` is clamped, scan ids (day/hour) are fixed inside the plan step, and a scan throws after the fan-out when a lane could not be listed. Logged, not fixed:
+  - **MEDIUM:** a failing health check re-alerts every UTC day (event id includes the day) for as long as it fails; the future consumer decides whether to escalate or dedupe on state.
+  - **MEDIUM:** lists are cut at 500 connections per lane and one `sendEvent` carries all targets; fine for the pilot (a handful of connections), chunk and flag truncation before many lanes or connections.
+  - **LOW:** `health/index.ts` casts the connection for QuickBooks `health`; the empty renewer registry is the only guard for rule 5 (no test imports the server-only wiring); no step-level test of the scan ids; a health result with `ok:false` and no `error` is treated as a generic failure.
+- **T-040 second review** (Nov 5, 2026, `security-reviewer`; no BLOCKER or HIGH). Fixed:
+  - **M-A:** after the first round's fix, a QuickBooks health error stayed in `last_error` forever (QuickBooks has no sync to clear it). Health-check errors are now stored with `endpoint = "/health-check"` (`HEALTH_CHECK_ENDPOINT`), and a good check clears `last_error` only while it still carries that marker (guarded update on `last_error->>endpoint`). Errors from syncs or renewals are kept.
+  - **L-1:** the check and renew handlers run inside `step.run`, so the replay after `step.sendEvent` does not call the provider or write again.
+  - **L-2:** both workers have `rateLimit` of one per lane and connection per hour, so forged events cost no extra provider calls.
+  - **L-3:** concurrency and rate keys and the `health:`, `renew:` and `attn:` event ids carry the lane.
+  - **L-4:** scans use `retries: 0`, because the saved plan step made a retry a no-op; the next scheduled run lists again.
+
+  Logged:
+  - **L-5:** a connection can stay `degraded` with `last_error = null` after a sync clears a health error, until the next good check.
+  - **L-5:** a good check and a sync writing a new error can race, because they are separate functions with separate concurrency keys. This is cosmetic; T-195/T-196 own status display and transitions.
+

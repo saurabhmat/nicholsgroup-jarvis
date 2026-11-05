@@ -14,10 +14,33 @@ import { serve } from "inngest/next";
 import { getInngestEnv, getServerEnv, isDevelopmentRuntime } from "../env/server";
 import { LANE_EVENTS } from "./events";
 
-export { actionApproved, connSyncRequested, LANE_EVENTS, laneIdSchema, systemHeartbeat, webhookReceived } from "./events";
+export {
+  actionApproved,
+  CONN_ATTENTION_REASONS,
+  connAttentionNeeded,
+  connHealthCheckRequested,
+  connSubscriptionRenewRequested,
+  connSyncRequested,
+  LANE_EVENTS,
+  laneIdSchema,
+  systemHeartbeat,
+  webhookReceived,
+} from "./events";
 export { platformFunctions } from "./functions";
 export { CONN_SYNC_CONCURRENCY, CONN_SYNC_RETRIES, connSyncFunction, handleConnSync } from "./conn-sync";
 export type { ConnSyncDeps, ConnSyncResult } from "./conn-sync";
+export {
+  CONN_HEALTH_CONCURRENCY,
+  CONN_HEALTH_CRON,
+  CONN_HEALTH_RETRIES,
+  CONN_RENEW_CONCURRENCY,
+  CONN_RENEW_CRON,
+  connHealthFunctions,
+  handleConnHealthCheck,
+  handleConnRenew,
+  planFanOut,
+} from "./conn-health";
+export type { AttentionAlert, ConnHealthDeps, ConnHealthResult, ConnRenewDeps, ConnRenewResult } from "./conn-health";
 
 const APP_ID = "nichols-portal";
 let client: Inngest | undefined;
