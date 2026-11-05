@@ -42,5 +42,43 @@ export const webhookReceived = eventType("webhook/received", {
   }),
 });
 
+/** Check one connection's token expiry and health (T-040). Sent by the daily scan, one per connection. */
+export const connHealthCheckRequested = eventType("conn/health.check.requested", {
+  schema: z.strictObject({ laneId: laneIdSchema, connectionId: z.uuid() }),
+});
+
+/** Renew one connection's push subscription if it is due (T-040). Sent by the renewal scan, one per connection. */
+export const connSubscriptionRenewRequested = eventType("conn/subscription.renew.requested", {
+  schema: z.strictObject({ laneId: laneIdSchema, connectionId: z.uuid() }),
+});
+
+export const CONN_ATTENTION_REASONS = ["token_expiring", "token_expired", "health_check_failed", "subscription_renewal_failed"] as const;
+
+/**
+ * A connection needs a person's attention (T-040): its credential expires within 7 days, a health check failed, or a
+ * subscription could not be renewed. Notification event; no consumer exists yet (the notification module that sends it
+ * to the admin is not built; the backlog's "T-181" reference is stale, see plan-review Nov 5 T-040). Ids and enums
+ * only: never an error message, token or provider text. `errorKind` is a ConnectorErrorKind; `daysLeft` is whole days
+ * until the credential expires (negative once expired).
+ */
+export const connAttentionNeeded = eventType("conn/attention.needed", {
+  schema: z.strictObject({
+    laneId: laneIdSchema,
+    connectionId: z.uuid(),
+    provider: z.string().regex(/^[a-z][a-z0-9_]{1,31}$/),
+    reason: z.enum(CONN_ATTENTION_REASONS),
+    errorKind: z.string().regex(/^[a-z_]{1,32}$/).optional(),
+    daysLeft: z.number().int().min(-3650).max(3650).optional(),
+  }),
+});
+
 /** Every lane event, for the test that checks they all require laneId. Add new events here. */
-export const LANE_EVENTS = [connSyncRequested, actionApproved, systemHeartbeat, webhookReceived] as const;
+export const LANE_EVENTS = [
+  connSyncRequested,
+  actionApproved,
+  systemHeartbeat,
+  webhookReceived,
+  connHealthCheckRequested,
+  connSubscriptionRenewRequested,
+  connAttentionNeeded,
+] as const;

@@ -17,7 +17,8 @@
     "./connection-test": "./src/connection-test.ts",
     "./comms": "./src/comms/index.ts",
     "./google": "./src/google/index.ts",
-    "./sync": "./src/sync/index.ts"
+    "./sync": "./src/sync/index.ts",
+    "./health": "./src/health/index.ts"
   },
   "scripts": {
     "typecheck": "tsc -b",

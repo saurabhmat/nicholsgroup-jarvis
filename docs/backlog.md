@@ -375,7 +375,7 @@ T-010 – T-017 are the serial spine. After T-017: auth/shell (T-018 – T-026) 
 - acceptance: `raw.source_records` (lane_id, provider, object_type, external_id, payload jsonb, payload_hash, synced_at) + RLS + pgTAP; upsert helper; a guard rejects records from comms/docs providers that contain body fields unless lane policy `store_content_bodies` is true (test).
 
 ### T-040 conn.token_health and subscriptions_renew skeleton
-- status: approved
+- status: done
 - depends: T-038
 - acceptance: daily job flags tokens expiring within 7 days and failing health checks; renewal job interface for push subscriptions; both update `core.connections` and emit a notification event (T-181 consumes it).
 
