@@ -14,7 +14,8 @@
     "./raw": "./src/raw/index.ts",
     "./webhooks": "./src/webhooks/index.ts",
     "./write": "./src/write/index.ts",
-    "./connection-test": "./src/connection-test.ts"
+    "./connection-test": "./src/connection-test.ts",
+    "./comms": "./src/comms/index.ts"
   },
   "scripts": {
     "typecheck": "tsc -b",

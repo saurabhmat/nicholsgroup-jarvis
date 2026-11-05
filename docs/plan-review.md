@@ -508,3 +508,15 @@ Saurabh approved every point of the batch-1 design review ("approved all points"
 
 Where this lands: backlog D-20, D-21, H-029, H-030, T-023 – T-026 and the screen tasks' `needs`; `docs/design/README.md`.
 
+
+### Nov 5, 2026 — T-062 review follow-ups (mail/calendar/docs provider interfaces)
+
+Logged, not built in T-062:
+- **`reveal()` call-site lint rule:** allowlist the modules that may call `UntrustedBody.reveal()` (assistant context builder, UI render); follow-up lint task.
+- **Phase-4 `changes` bounds:** `CalendarWriteIntent.changes` and `DocumentWriteIntent.changes` are unbounded JSON records; add size and depth limits before T-117/T-181.
+- **`persistedContentWrites` must be real in real harnesses:** T-063 backs it with a DB-write spy plus log capture, not a constant like the mock.
+- **Decision: `watch`/`renew`/`stop` are acceptable under rule 5** on these conditions: the callback URL/topic comes from server config only; only jobs (T-065, T-068) call them; `renew`/`stop` act only on channels recorded server-side for the same (lane, connection). The channel token (Google) / clientState (Graph) lives in the Vault, never in `WatchInfo`.
+- **Approvals:** also check `lane_config.mailboxes` / `approvals.allowed_mailboxes` at propose time (the provider only checks `fromMailbox` equals the connection's mailbox).
+- **T-063:** set `core.connections.external_account_id` to the verified primary address of the mailbox.
+- **Folder/label/importance mapping** (documented in `comms/schemas.ts`): `folder` = primary container (Gmail INBOX label, Graph parent folder), `labels` = Gmail labels / Graph categories, `is_important` = Gmail IMPORTANT / Graph importance high. Graph needs `Prefer: IdType="ImmutableId"`.
+- **Parameter ids:** call parameters use a conservative id charset (no `/ ? # ..`), so Google holiday calendar ids containing `#` need an encoded form decided in T-064.
