@@ -386,7 +386,7 @@ T-010 – T-017 are the serial spine. After T-017: auth/shell (T-018 – T-026) 
 - acceptance: Sentry for server and client; `beforeSend` scrubs tokens, emails, bodies, amounts; test with a canary.
 
 ### T-042 Retention purge job
-- status: proposed
+- status: approved
 - depends: T-038
 - acceptance: `retention.purge` reads `retention_days` from lane policy per table class (comms 90, calendar 180, conversations 180) and deletes expired rows; tests with time-shifted fixtures. Tables register themselves as they are added. Registered by T-061 (call these per lane, never delete directly; they cap the interval at the lane policy / 180 days): `comms.message_index_purge(lane, keep)` and `cal.event_index_purge(lane, keep)`.
 
@@ -449,12 +449,12 @@ Scope: read-only, Accounting API only (no Payments, no Payroll); never create, u
 - acceptance: Owns QB-2, QB-5, QB-6 (CSRF, expired access token), QB-7, QB-9, QB-17, QB-18. Intuit OAuth on the T-035 framework with scope `com.intuit.quickbooks.accounting` only; authorization, token and revocation endpoints read from Intuit's OpenID discovery document for `INTUIT_ENVIRONMENT` and cached; `state` stored server-side per request and bound to lane + user, mismatch or replay rejected (test); connect allowed only for owner or admin_technical of the lane at AAL2, audited; callback `realmId` must equal the lane_config QBO realm when one is set (mismatch rejected, test); tokens enter the Vault only from the callback (no import path for Playground or offline tokens); proactive refresh before expiry and refresh on 401, rotating refresh token stored atomically on every refresh with the old one discarded (test that a concurrent refresh doesn't lose the token); `intuit_tid` captured from every response into the redacted log; a test that every `INTUIT_*` name is server-only, `INTUIT_CLIENT_SECRET` and `INTUIT_WEBHOOK_VERIFIER_TOKEN` match T-005's secret patterns, and a canary value never reaches the client bundle; health check reads CompanyInfo; contract tests pass.
 
 ### T-051 QuickBooks entity sync (CDC)
-- status: proposed
+- status: approved
 - depends: T-050, T-038, T-039
 - acceptance: Owns QB-10 (detection), QB-12 (CDC cursor), QB-13. Initial load + CDC for Account, Customer, Vendor, Invoice, Payment, Bill, BillPayment, Purchase, Deposit, JournalEntry, Class, plus CompanyInfo and Preferences into `raw.source_records`; last-changed timestamp stored per connection and advanced only after a successful run; a cursor older than Intuit's CDC look-back (30 days) triggers a full reload instead of a gap (test); Preferences read on connect and on every sync, and class tracking, location tracking and multicurrency flags stored on the connection, with a change recorded and audited; nothing depends on multicurrency or sales-tax fields (test with both off); the QuickBooks client exposes read and query calls only (a test fails on any create, update, delete or batch call); MSW fixtures from synthetic data; no bank account numbers stored (field allowlist test).
 
 ### T-052 QuickBooks Reports API
-- status: proposed
+- status: approved
 - depends: T-050, T-039, T-055
 - acceptance: Owns QB-10 (reports). ProfitAndLoss, BalanceSheet, CashFlow, AgedReceivables and AgedPayables fetched with date range, accounting method and class from lane_config; the class filter is used only when the connection's class-tracking flag is on, otherwise the report is fetched unsplit and marked so; stored in `fin.report_cache` (T-055) with params and `as_of`; records whether AgedReceivables/AgedPayables honour a class filter (plan-review §3) and whether reconciliation state is exposed (spec Q-F5). Review additions (T-055 reviews, Nov 4, 2026): cache only the summary reports allowed by the `fin.report_cache` check (`pnl`, `balance_sheet`, `cash_flow`, `ar_aging_summary`, `ap_aging_summary`); project each QuickBooks report to an allowlist with strict Zod (top-level `Header`, `Columns`, `Rows` only; no memo, description or name columns; keep the report flat enough for the 16-level key scan of the DB payload guard); keep the account Id on each row (the cash view matches rows to `fin.accounts.source_id`); put the accounting-method and class markers in `params` (`method`, `class`, unsplit = no `class`); follow the payroll policy (D-25; default: payroll accounts excluded). Value checks in `fin.report_cache_guard` (T-055 final security review M4): refuse any string value containing a letter and a run of 5+ digits; a non-object payload raises instead of falling through to an echoing table check; payroll handled per D-25 with a fixture test; realistic BalanceSheet fixture within the depth limit (rows flattened in the connector); jobs set `statement_timeout`.
 
@@ -610,7 +610,7 @@ Docs only. Can run in its own worktree at any time after T-001.
 T-080 joins W3 early. T-081 – T-097 form **track W12** once W6 – W8 are merged. Keep it to one worktree: the views share `fin.*` migrations.
 
 ### T-080 Business calendar SQL
-- status: proposed
+- status: approved
 - depends: T-013
 - acceptance: Spec: `docs/specs/finance.md` §5. `fin.business_week(ts)` (Sat–Fri, America/New_York, exclusive end), `fin.month_start(d date)`, `fin.next_month_start(d date)` (conversions in ET, independent of session timezone; pgTAP also runs with `timezone = 'UTC'`), `fin.ytd_start`, `fin.et_date`, MTD/YTD/period helpers; start of month = 00:00 America/New_York on the 1st; pgTAP covers DST transitions (Mar 8 and Nov 1, 2026: Nov is a 721-hour month and 00:00 Nov 1 is still EDT), year boundaries and Friday 23:59:59 vs Saturday 00:00 ET.
 
@@ -851,7 +851,7 @@ T-110, T-111 and T-114 are **track W5**, parallel with the connectors. T-112 nee
 
 ## Phase A11 — Calendar and meetings (PL-40)
 ### T-130 cal.ingest_delta
-- status: proposed
+- status: approved
 - depends: T-064
 - acceptance: delta updates to `cal.event_index`; retention 180 days.
 
