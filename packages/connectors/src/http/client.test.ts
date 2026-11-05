@@ -65,6 +65,19 @@ describe("requests", () => {
     expect(seen?.auth).toBe("Bearer synthetic-access-1");
   });
 
+  it("repeats a query parameter for an array value (Gmail metadataHeaders)", async () => {
+    let url = "";
+    server.use(
+      http.get(`${BASE}/messages`, ({ request }) => {
+        url = request.url;
+        return HttpResponse.json({});
+      }),
+    );
+    const { c } = client();
+    await c.request({ method: "GET", path: "/messages", query: { format: "metadata", metadataHeaders: ["From", "To"], skip: undefined } });
+    expect(url).toBe(`${BASE}/messages?format=metadata&metadataHeaders=From&metadataHeaders=To`);
+  });
+
   it("sends JSON and form bodies", async () => {
     const bodies: [string | null, string][] = [];
     server.use(

@@ -21,7 +21,7 @@ export function realmFromCallback(query: URLSearchParams): string {
  * (spec finance §8.1). With `requireConfigured` (production) a lane without a configured realm is refused: fail closed.
  * An outage reading the config is `transient`, not a refusal.
  */
-export async function assertRealmAllowed(config: LaneConfigReader, laneId: LaneId, realm: string, options: { requireConfigured?: boolean } = {}): Promise<void> {
+export async function assertRealmAllowed(config: Pick<LaneConfigReader, "qboRealmId">, laneId: LaneId, realm: string, options: { requireConfigured?: boolean } = {}): Promise<void> {
   if (!REALM.test(realm)) throw new ConnectorError({ kind: "invalid_input", message: "QuickBooks company id is not valid" });
   const configured = await config.qboRealmId(laneId);
   if (configured === null && options.requireConfigured) {

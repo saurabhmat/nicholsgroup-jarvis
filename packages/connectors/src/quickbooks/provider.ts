@@ -24,7 +24,7 @@ export type QboProviderDeps = {
   environment: () => IntuitEnvironment;
   client: () => QboClientConfig;
   discovery: Discovery;
-  laneConfig: LaneConfigReader;
+  laneConfig: Pick<LaneConfigReader, "qboRealmId">;
   /** True in production: a lane with no configured realm refuses to connect (fail closed). */
   requireConfiguredRealm?: () => boolean;
   now?: () => number;
