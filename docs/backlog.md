@@ -480,8 +480,9 @@ Scope: read-only, Accounting API only (no Payments, no Payroll); never create, u
 
 ### T-197 Settings → Connections (functional)
 - status: proposed
-- depends: T-195, T-019, T-022
+- depends: T-195, T-019, T-022, T-063, T-064
 - acceptance: Owns QB-1 (UI and manual checklist), QB-4 (UI), QB-16. Functional page (restyled after D-20, like the sign-in pages) at Settings → Connections listing the lane's connections with status, last sync and the class-tracking flag; Connect, Disconnect (confirm) and Reconnect QuickBooks for owner and admin_technical at AAL2; a `reconnect_required` banner with "Reconnect QuickBooks"; a "Contact support" link (`mailto:it@pub-k.org`) on the page and in the shared QuickBooks error banner component; no figures shown; data fetched over HTTPS only; Playwright test plus the QB-1 manual checklist against the sandbox company in the PR body.
+  **Google (added Nov 5, 2026):** the same page shows the lane's Google connection: the connected mailbox address (from `lane_config.mailboxes`; never tokens or scopes beyond their names), status, and last mail and calendar sync times. "Connect Google" starts the existing T-063 flow (`/api/connect/google/start`); "Reconnect Google" appears with a `reconnect_required` banner when the refresh token is revoked or expired; "Disconnect Google" (confirm) uses the existing T-063 revoke path and its D-24 rules, with no other external write (rule 5). Owner and admin_technical at AAL2 only; other roles get no buttons and the routes return 403, other lanes 404 (tests). No message subjects, senders or event titles on this page. Wording makes clear this connects mail, calendar and Drive (read-only) and is not how anyone signs in to the portal. Playwright test covers connect start, reconnect banner and disconnect confirm with the MSW Google mocks; H-032 is the manual live check.
 
 ### T-054 Stripe connector
 - status: proposed
