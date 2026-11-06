@@ -244,6 +244,11 @@ export const connectorEnvShapes = {
     // the webhook receiver (T-053) fails closed when it is unset.
     INTUIT_WEBHOOK_VERIFIER_TOKEN: nonEmpty.optional(),
   },
+  // The webhook receiver's own shape (T-053, T-050 security L5): it needs only the verifier token, and it is REQUIRED here, so
+  // an unset or empty token makes the receiver answer 503 (fail closed) instead of verifying against nothing.
+  intuit_webhook: {
+    INTUIT_WEBHOOK_VERIFIER_TOKEN: nonEmpty,
+  },
   stripe: {
     STRIPE_RESTRICTED_KEY: nonEmpty,
     STRIPE_WEBHOOK_SECRET: nonEmpty,
@@ -299,6 +304,7 @@ export const connectorSchemaFactories = {
           ctx.addIssue({ code: "custom", message: "only in staging or production", path: ["INTUIT_ENVIRONMENT"] });
       })
       .transform((v) => ({ ...v, INTUIT_ENVIRONMENT: v.INTUIT_ENVIRONMENT ?? ("sandbox" as const) })),
+  intuit_webhook: () => z.object(connectorEnvShapes.intuit_webhook),
   stripe: () => z.object(connectorEnvShapes.stripe),
   ghl: () => z.object(connectorEnvShapes.ghl),
   monday: () => z.object(connectorEnvShapes.monday),

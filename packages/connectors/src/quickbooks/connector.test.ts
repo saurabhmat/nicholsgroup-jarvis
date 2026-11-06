@@ -140,9 +140,9 @@ describe("the QuickBooks client is read-only", () => {
     expect([...src.matchAll(/method:\s*"([A-Z]+)"/g)].map((m) => m[1])).toEqual(["GET"]);
   });
 
-  it("the connector declares no sync, subscribe or write capability", async () => {
+  it("the connector declares sync (T-051) but no subscribe or write capability", async () => {
     const { h } = await setup();
-    expect(h.connector.capabilities).toEqual({ sync: false, subscribe: false, prepareWrite: false });
+    expect(h.connector.capabilities).toEqual({ sync: true, subscribe: false, prepareWrite: false });
     expect("prepareWrite" in h.connector).toBe(false);
     expect("executeWrite" in h.connector).toBe(false);
   });
@@ -171,7 +171,7 @@ describe("revoke-and-delete is an approvals-only write (D-24), not a connector m
     const { h } = await setup();
     expect("disconnect" in h.connector).toBe(false);
     expect("executeWrite" in h.connector).toBe(false);
-    expect(Object.keys(h.connector).sort()).toEqual(["capabilities", "connect", "featureKeys", "health", "provider", "read", "readOps"]);
+    expect(Object.keys(h.connector).sort()).toEqual(["capabilities", "connect", "featureKeys", "health", "provider", "read", "readOps", "sync"]);
   });
 
   it("the revoke operation revokes the refresh token at Intuit's discovered endpoint, deletes the Vault tokens and records the approver", async () => {

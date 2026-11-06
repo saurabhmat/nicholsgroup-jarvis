@@ -370,6 +370,12 @@ isOneToOne: false
 "connection_token_store":
 { Args: { "p_actor_id"?: string,"p_connection_id": string,"p_expires_at": string,"p_lane_id": string,"p_secret": string }; Returns: undefined
                            },
+"fin_qbo_normalize":
+{ Args: { "p_connection_id": string,"p_lane": string }; Returns: Json
+                           },
+"fin_report_cache_put":
+{ Args: { "p_as_of": string,"p_connection_id": string,"p_fetched_at": string,"p_lane": string,"p_params": Json,"p_payload": Json,"p_report": string }; Returns: string
+                           },
 "has_lane_role":
 { Args: { "p_lane": string,"p_roles": (string)[],"p_uid": string }; Returns: boolean
                            },
@@ -399,8 +405,17 @@ isOneToOne: false
 "oauth_state_create":
 { Args: { "p_code_verifier": string,"p_lane": string,"p_provider": string,"p_redirect_uri": string,"p_state_hash": string }; Returns: undefined
                            },
+"retention_cal_purge":
+{ Args: { "p_keep": string,"p_lane": string }; Returns: number
+                           },
+"retention_comms_purge":
+{ Args: { "p_keep": string,"p_lane": string }; Returns: number
+                           },
 "role_views":
 { Args: { "p_role": string }; Returns: (string)[]
+                           },
+"source_records_purge_bodies":
+{ Args: { "p_lane": string }; Returns: number
                            },
 "source_records_upsert":
 { Args: { "p_connection_id": string,"p_lane": string,"p_records": Json }; Returns: number
@@ -443,14 +458,14 @@ isOneToOne: false
           Tables: {
             "accounts": {
                   Row: {
-                    "active": boolean,"connection_id": string,"created_at": string,"entity_code": string,"id": string,"is_bank": boolean,"lane_id": string,"name": string,"owner_entity_code": string | null,"provider": string,"raw_record_id": string | null,"source_id": string,"source_updated_at": string | null,"subtype": string | null,"type": string,"updated_at": string
+                    "active": boolean,"connection_id": string,"created_at": string,"deleted": boolean,"entity_code": string,"id": string,"is_bank": boolean,"lane_id": string,"name": string,"owner_entity_code": string | null,"provider": string,"raw_record_id": string | null,"source_id": string,"source_updated_at": string | null,"subtype": string | null,"type": string,"updated_at": string
                   }
                   ComputedFields: never
                   Insert: {
-                    "active"?: boolean,"connection_id": string,"created_at"?: string,"entity_code"?: string,"id"?: string,"is_bank"?: boolean,"lane_id": string,"name": string,"owner_entity_code"?: string | null,"provider"?: string,"raw_record_id"?: string | null,"source_id": string,"source_updated_at"?: string | null,"subtype"?: string | null,"type": string,"updated_at"?: string
+                    "active"?: boolean,"connection_id": string,"created_at"?: string,"deleted"?: boolean,"entity_code"?: string,"id"?: string,"is_bank"?: boolean,"lane_id": string,"name": string,"owner_entity_code"?: string | null,"provider"?: string,"raw_record_id"?: string | null,"source_id": string,"source_updated_at"?: string | null,"subtype"?: string | null,"type": string,"updated_at"?: string
                   }
                   Update: {
-                    "active"?: boolean,"connection_id"?: string,"created_at"?: string,"entity_code"?: string,"id"?: string,"is_bank"?: boolean,"lane_id"?: string,"name"?: string,"owner_entity_code"?: string | null,"provider"?: string,"raw_record_id"?: string | null,"source_id"?: string,"source_updated_at"?: string | null,"subtype"?: string | null,"type"?: string,"updated_at"?: string
+                    "active"?: boolean,"connection_id"?: string,"created_at"?: string,"deleted"?: boolean,"entity_code"?: string,"id"?: string,"is_bank"?: boolean,"lane_id"?: string,"name"?: string,"owner_entity_code"?: string | null,"provider"?: string,"raw_record_id"?: string | null,"source_id"?: string,"source_updated_at"?: string | null,"subtype"?: string | null,"type"?: string,"updated_at"?: string
                   }
                   Relationships: [
                     
@@ -479,6 +494,20 @@ isOneToOne: false
                   }
                   Update: {
                     "balance"?: number,"class_id"?: string | null,"connection_id"?: string,"created_at"?: string,"currency_code"?: string,"customer_id"?: string | null,"customer_name"?: string | null,"deleted"?: boolean,"due_date"?: string | null,"entity_code"?: string,"id"?: string,"issue_date"?: string,"lane_id"?: string,"multi_class"?: boolean,"provider"?: string,"raw_record_id"?: string | null,"source_id"?: string,"source_updated_at"?: string | null,"total"?: number,"updated_at"?: string,"voided"?: boolean
+                  }
+                  Relationships: [
+                    
+                  ]
+                },"normalize_runs": {
+                  Row: {
+                    "class_fallback": boolean,"class_tracking": boolean,"connection_id": string,"counts": NonNullable<Json>,"created_at": string,"finished_at": string,"id": string,"lane_id": string,"mapping_mode": string | null,"reallocation_count": number,"reallocations": NonNullable<Json>,"started_at": string,"unseen_cutoff": string | null
+                  }
+                  ComputedFields: never
+                  Insert: {
+                    "class_fallback": boolean,"class_tracking": boolean,"connection_id": string,"counts": NonNullable<Json>,"created_at"?: string,"finished_at": string,"id"?: string,"lane_id": string,"mapping_mode"?: string | null,"reallocation_count"?: number,"reallocations"?: NonNullable<Json>,"started_at": string,"unseen_cutoff"?: string | null
+                  }
+                  Update: {
+                    "class_fallback"?: boolean,"class_tracking"?: boolean,"connection_id"?: string,"counts"?: NonNullable<Json>,"created_at"?: string,"finished_at"?: string,"id"?: string,"lane_id"?: string,"mapping_mode"?: string | null,"reallocation_count"?: number,"reallocations"?: NonNullable<Json>,"started_at"?: string,"unseen_cutoff"?: string | null
                   }
                   Relationships: [
                     
@@ -543,7 +572,71 @@ isOneToOne: false
             [_ in never]: never
           }
           Functions: {
-            [_ in never]: never
+            "business_week":
+{ Args: { "p_ts": string }; Returns: {
+              "week_end": string,"week_start": string
+            }[]
+                           },
+"et_date":
+{ Args: { "p_ts": string }; Returns: string
+                           },
+"has_digit_run":
+{ Args: { "p_text": string }; Returns: boolean
+                           },
+"mask_digit_runs":
+{ Args: { "p_text": string }; Returns: string
+                           },
+"month_range":
+{ Args: { "p_d": string }; Returns: {
+              "period_end": string,"period_start": string
+            }[]
+                           },
+"month_start":
+{ Args: { "p_d": string }; Returns: string
+                           },
+"mtd_range":
+{ Args: { "p_ts": string }; Returns: {
+              "period_end": string,"period_start": string
+            }[]
+                           },
+"next_month_start":
+{ Args: { "p_d": string }; Returns: string
+                           },
+"qbo_account_refs":
+{ Args: { "p": Json }; Returns: (string)[]
+                           },
+"qbo_date":
+{ Args: { "p": string }; Returns: string
+                           },
+"qbo_doc_classes":
+{ Args: { "p": Json }; Returns: (string)[]
+                           },
+"qbo_entity_refs":
+{ Args: { "p": Json }; Returns: (string)[]
+                           },
+"qbo_ids_ok":
+{ Args: { "p_ids": (string)[] }; Returns: boolean
+                           },
+"qbo_is_employee":
+{ Args: { "p": Json }; Returns: boolean
+                           },
+"qbo_line_class":
+{ Args: { "p": Json }; Returns: string
+                           },
+"qbo_money":
+{ Args: { "p": Json }; Returns: number
+                           },
+"qbo_resolve_entity":
+{ Args: { "p_class_map": Json,"p_classes": (string)[],"p_customer": string,"p_customer_map": Json,"p_mode": string,"p_own": string,"p_tracking": boolean }; Returns: string
+                           },
+"ytd_range":
+{ Args: { "p_d": string }; Returns: {
+              "period_end": string,"period_start": string
+            }[]
+                           },
+"ytd_start":
+{ Args: { "p_d": string }; Returns: string
+                           }
           }
           Enums: {
             [_ in never]: never

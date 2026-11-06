@@ -73,6 +73,46 @@ async function setup(opts: { failFor?: (connId: string) => ConnectorError | null
   return { mock, a, b, job, runs, cursors, entries, delivered };
 }
 
+describe("targeted runs (T-053)", () => {
+  async function targeted(refuseTargeted = false) {
+    const mock = createMockConnector();
+    const a = await mock.connector.connect("PKG", { kind: "oauth_code", code: MOCK_AUTH_CODE, redirect_uri: "https://portal.example.test/api/connect/mock/callback", external_account_id: "acct-t" });
+    const seen: unknown[] = [];
+    const base = mock.connector;
+    const connector = { ...base, sync: async (...args: Parameters<NonNullable<typeof base.sync>>) => {
+      seen.push(args[4]);
+      // The QuickBooks connector refuses a targeted run with an unusable (too old) cursor before any call, as invalid_input.
+      if (refuseTargeted && args[4]) throw new ConnectorError({ kind: "invalid_input", message: "A targeted sync needs a current cursor" });
+      if (!base.sync) throw new Error("no sync");
+      return base.sync(...args);
+    } };
+    const cursors = memoryCursors();
+    const runner = createConnectorSyncRunner({ connector, cursors: cursors.store, sinkFor: () => async () => {} });
+    const job = createConnSyncJob({ loader: mock.loader, runs: memoryRuns().store, runners: { [base.provider]: runner } });
+    return { a, job, seen };
+  }
+
+  it("falls back to a whole-connection run when the connector refuses a targeted run for an unusable cursor", async () => {
+    const s = await targeted(true);
+    await s.job.run("PKG", s.a.id, { trigger: "schedule" });
+    const out = await s.job.run("PKG", s.a.id, { trigger: "webhook", objectTypes: ["Invoice"] });
+    expect(out).toMatchObject({ ok: true, skipped: null });
+    expect(s.seen.slice(1)).toEqual([{ objectTypes: ["Invoice"] }, undefined]);
+  });
+
+  it("passes the requested object types to the connector once a cursor exists, and a first run stays a full sync", async () => {
+    const s = await targeted();
+    await s.job.run("PKG", s.a.id, { trigger: "webhook", objectTypes: ["Invoice"] });
+    expect(s.seen).toEqual([undefined]); // no cursor yet: the whole connection is loaded
+    await s.job.run("PKG", s.a.id, { trigger: "webhook", objectTypes: ["Invoice", "Bill"] });
+    expect(s.seen.at(-1)).toEqual({ objectTypes: ["Invoice", "Bill"] });
+    await s.job.run("PKG", s.a.id, { trigger: "schedule" });
+    expect(s.seen.at(-1)).toBeUndefined();
+    await s.job.run("PKG", s.a.id, { trigger: "webhook", objectTypes: [] });
+    expect(s.seen.at(-1)).toBeUndefined();
+  });
+});
+
 describe("conn.sync job", () => {
   it("runs a full sync, logs start and finish, stores the cursor after success", async () => {
     const s = await setup();

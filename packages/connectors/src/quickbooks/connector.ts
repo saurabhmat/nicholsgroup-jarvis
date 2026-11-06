@@ -6,8 +6,9 @@
 //  - read: `company_info` for now (T-051 and T-052 add entities and reports).
 //  - no disconnect: revoking the grant at Intuit is an external write (D-24), so it exists only as an approvals-only
 //    `ConnectorWriter` action (./writer.ts, `@nichols/connectors/writer`), not on this object.
+//  - sync (T-051): initial load + Change Data Capture of the finance entities, CompanyInfo and Preferences (./sync.ts).
 // Every method refuses a connection whose provider is not "quickbooks" before any network call or Vault change.
-// No sync, subscribe or prepareWrite: QuickBooks is read-only in the pilot.
+// No subscribe or prepareWrite: QuickBooks is read-only in the pilot (webhooks arrive at T-036/T-053, not as a subscription).
 import type { LaneId } from "@nichols/core";
 import type { Connector } from "../contract/connector";
 import { ConnectorError, toConnectorError } from "../contract/errors";
@@ -15,9 +16,12 @@ import { assertStatusUsable } from "../contract/guards";
 import { assertLaneBound } from "../contract/lane-bound";
 import { LaneIdSchema, ReadOpSchema, type HealthStatus } from "../contract/schemas";
 import type { LaneBoundConnection } from "../contract/lane-bound";
+import type { ConnectorLogger } from "../log/index";
 import type { QboApi } from "./api";
 import { fetchCompanyInfo } from "./company-info";
+import type { QboFeatureRecorder } from "./features";
 import { assertQuickbooksConnection, type QboConnection } from "./guard";
+import { createQboSync, type PayrollSettings } from "./sync";
 
 type QboProvider = "quickbooks";
 export type { QboConnection } from "./guard";
@@ -32,11 +36,17 @@ export type QboConnectorDeps = {
     load(laneId: LaneId, connectionId: string): Promise<LaneBoundConnection<string>>;
   };
   api: QboApi;
+  /** Stores the edition flags Preferences report (and audits a change). Required for `sync`. */
+  features: QboFeatureRecorder;
+  /** `lane_config.finance.payroll` (D-25); a throw fails the sync before any call. */
+  payroll: (laneId: LaneId) => Promise<PayrollSettings>;
   now?: () => number;
+  logger?: ConnectorLogger;
 };
 
 export function createQuickBooksConnector(deps: QboConnectorDeps): Connector<QboProvider> {
   const now = deps.now ?? Date.now;
+  const runSync = createQboSync({ api: deps.api, features: deps.features, payroll: deps.payroll, now, ...(deps.logger ? { logger: deps.logger } : {}) });
 
   /** Brand, lane and provider checks, then the authoritative row (which must also be a QuickBooks row). */
   async function loadRow(laneId: LaneId, conn: unknown): Promise<QboConnection> {
@@ -56,7 +66,7 @@ export function createQuickBooksConnector(deps: QboConnectorDeps): Connector<Qbo
 
   return {
     provider: "quickbooks",
-    capabilities: { sync: false, subscribe: false, prepareWrite: false },
+    capabilities: { sync: true, subscribe: false, prepareWrite: false },
     readOps: QBO_READ_OPS,
     featureKeys: QBO_FEATURE_KEYS,
 
@@ -88,6 +98,11 @@ export function createQuickBooksConnector(deps: QboConnectorDeps): Connector<Qbo
         const err = toConnectorError(e);
         return problem(err, err.info.kind === "reconnect_required" ? "reconnect_required" : "degraded");
       }
+    },
+
+    async sync(laneId, conn, cursor, sink, options) {
+      const row = await useConnection(laneId, conn);
+      return runSync(laneId, row, cursor, sink, options);
     },
 
     async read<T = unknown>(laneId: LaneId, conn: QboConnection, op: Parameters<Connector["read"]>[2]) {

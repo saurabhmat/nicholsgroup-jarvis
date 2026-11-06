@@ -102,6 +102,14 @@ describe("INTUIT_* env (QB-17)", () => {
     expect(() => parseConnectorEnv("intuit", { ...BASE, INTUIT_WEBHOOK_VERIFIER_TOKEN: "" }, LOCAL)).not.toThrow();
   });
 
+  it("the webhook receiver has its own shape: the verifier token alone, required and non-empty (T-053, fails closed)", () => {
+    expect(Object.keys(connectorEnvShapes.intuit_webhook)).toEqual(["INTUIT_WEBHOOK_VERIFIER_TOKEN"]);
+    expect(parseConnectorEnv("intuit_webhook", { INTUIT_WEBHOOK_VERIFIER_TOKEN: "synthetic-verifier-token" }, LOCAL).INTUIT_WEBHOOK_VERIFIER_TOKEN).toBe("synthetic-verifier-token");
+    for (const env of [{}, { INTUIT_WEBHOOK_VERIFIER_TOKEN: "" }]) {
+      expect(() => parseConnectorEnv("intuit_webhook", env, LOCAL)).toThrow(EnvValidationError);
+    }
+  });
+
   it("the Intuit variables are not part of the startup env, so a deployment without them still boots", () => {
     expect(() =>
       parseServerEnv({

@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { z } from "zod";
-import { findSecretLikeValues, laneConfigSchema, parseLaneConfig } from "./index";
+import { findSecretLikeValues, laneConfigSchema, parseLaneConfig, QBO_PAYROLL_SUBTYPES } from "./index";
 
 // Synthetic ids only (CLAUDE.md rule 10).
 const VALID = {
@@ -47,10 +47,11 @@ describe("calendar section (T-064)", () => {
 describe("lane config schema", () => {
   it("accepts a valid config and fills the spec defaults", () => {
     const c = parseLaneConfig(VALID);
-    expect(c.finance).toEqual({ accounting_method: "accrual", weekly_cash_time: "06:00", monthly_close_trigger: "manual" });
+    expect(c.finance).toEqual({ accounting_method: "accrual", weekly_cash_time: "06:00", monthly_close_trigger: "manual", payroll: { account_ids: [], account_subtypes: [...QBO_PAYROLL_SUBTYPES], excluded_entity_ids: [] }, reports: { period: "year_to_date", kinds: ["pnl", "ar_aging_summary", "ap_aging_summary"] }, qbo_sync: { interval_hours: 4 } });
     expect(c.approvals.approvals_live).toBe(false);
     expect(c.approvals.step_up_max_age_s).toBe(300);
     expect(c.approvals.expire_after_hours).toEqual({ "email.draft": 72, "email.send": 72, "monday.item": 168 });
+    expect(c.retention).toEqual({ calendar_days: 180, conversations_days: 180, webhook_days: 30 });
     expect(c.controls).toEqual({ unreconciled_over_days: 30, disconnected_feed_hours: 36, stripe_ghl_mismatch_threshold: 0 });
     expect(c.tieout.tolerance).toBe("0.00");
     expect(c.ghl?.paid_subscriber_rule).toBeNull(); // D-3 pending
@@ -76,6 +77,16 @@ describe("lane config schema", () => {
     expect(() => parseLaneConfig({ stripe: { account_id: "acct_1", livemode: "yes" } })).toThrow(z.ZodError);
     expect(() => parseLaneConfig({ finance: { weekly_cash_time: "25:00" } })).toThrow(z.ZodError);
     expect(() => parseLaneConfig({ finance: { monthly_close_trigger: "day_of_month:31" } })).toThrow(z.ZodError);
+    expect(() => parseLaneConfig({ finance: { reports: { period: "forever" } } })).toThrow(z.ZodError);
+    expect(() => parseLaneConfig({ finance: { reports: { period: "year_to_date", class_id: "1" } } })).toThrow(z.ZodError);
+    expect(parseLaneConfig({ finance: { reports: { period: "trailing_12_months" } } }).finance.reports.period).toBe("trailing_12_months");
+    expect(() => parseLaneConfig({ finance: { reports: { kinds: ["general_ledger"] } } })).toThrow(z.ZodError);
+    expect(parseLaneConfig({ finance: { reports: { kinds: ["pnl", "balance_sheet"] } } }).finance.reports.kinds).toEqual(["pnl", "balance_sheet"]);
+    expect(parseLaneConfig({}).finance.reports.kinds).not.toContain("balance_sheet");
+    expect(parseLaneConfig({ finance: { qbo_sync: { interval_hours: 6 } } }).finance.qbo_sync.interval_hours).toBe(6);
+    for (const bad of [0, 5, 24, 1.5, "4", -4]) expect(() => parseLaneConfig({ finance: { qbo_sync: { interval_hours: bad } } })).toThrow(z.ZodError);
+    expect(() => parseLaneConfig({ finance: { qbo_sync: { interval_hours: 4, extra: 1 } } })).toThrow(z.ZodError);
+    expect(parseLaneConfig({}).finance.reports.kinds).not.toContain("cash_flow");
     expect(() => parseLaneConfig({ entities: { own_entity: "PKG", by_entity: { APK: {} } } })).toThrow(z.ZodError);
     expect(() => parseLaneConfig({ entities: { own_entity: "PKG", by_entity: { pkg: {} } } })).toThrow(z.ZodError);
     expect(() => parseLaneConfig({ approvals: { expire_after_hours: { "qbo.post": 1 } } })).toThrow(z.ZodError);
@@ -133,5 +144,31 @@ describe("lane config schema", () => {
 
   it("findSecretLikeValues ignores ordinary values", () => {
     expect(findSecretLikeValues(laneConfigSchema.parse(VALID))).toEqual([]);
+  });
+});
+
+describe("retention settings (T-042)", () => {
+  it("accepts values inside the database floors and caps, refuses others and unknown keys", () => {
+    expect(laneConfigSchema.parse({ retention: { calendar_days: 30, webhook_days: 7, conversations_days: 90 } }).retention.calendar_days).toBe(30);
+    for (const retention of [{ calendar_days: 29 }, { calendar_days: 181 }, { webhook_days: 6 }, { conversations_days: 0 }, { comms_days: 90 }]) {
+      expect(laneConfigSchema.safeParse({ retention }).success, JSON.stringify(retention)).toBe(false);
+    }
+  });
+});
+
+describe("finance.payroll (D-25, T-051)", () => {
+  it("defaults to Intuit's payroll subtypes, no ids and no excluded entities", () => {
+    const c = laneConfigSchema.parse({});
+    expect(c.finance.payroll.account_ids).toEqual([]);
+    expect(c.finance.payroll.excluded_entity_ids).toEqual([]);
+    expect(c.finance.payroll.account_subtypes).toEqual([...QBO_PAYROLL_SUBTYPES]);
+    expect(c.finance.payroll.account_subtypes).toContain("PayrollExpenses");
+  });
+  it("accepts explicit lists and rejects malformed ones and unknown keys", () => {
+    const ok = laneConfigSchema.parse({ finance: { payroll: { account_ids: ["12"], account_subtypes: ["PayrollClearing"], excluded_entity_ids: ["99"] } } });
+    expect(ok.finance.payroll).toEqual({ account_ids: ["12"], account_subtypes: ["PayrollClearing"], excluded_entity_ids: ["99"] });
+    for (const payroll of [{ account_ids: ["x"] }, { account_subtypes: ["has space"] }, { excluded_entity_ids: [12] }, { other: 1 }]) {
+      expect(laneConfigSchema.safeParse({ finance: { payroll } }).success, JSON.stringify(payroll)).toBe(false);
+    }
   });
 });

@@ -32,17 +32,26 @@ describe("conn.sync function config", () => {
 });
 
 describe("handleConnSync", () => {
-  it("passes lane, connection, trigger (default manual) and the Inngest run id to the job", async () => {
+  it("passes lane, connection, trigger and the Inngest run id to the job", async () => {
     const d = deps(ok);
-    await expect(handleConnSync(d, { laneId: "PKG", connectionId: CONN }, "01HZ")).resolves.toEqual(ok);
-    expect(d.runSync).toHaveBeenCalledWith("PKG", CONN, { trigger: "manual", jobRunId: "01HZ" });
+    await expect(handleConnSync(d, { laneId: "PKG", connectionId: CONN, trigger: "schedule" }, "01HZ")).resolves.toEqual(ok);
+    expect(d.runSync).toHaveBeenCalledWith("PKG", CONN, { trigger: "schedule", jobRunId: "01HZ" });
     await handleConnSync(d, { laneId: "PKG", connectionId: CONN, trigger: "webhook" }, null);
     expect(d.runSync).toHaveBeenLastCalledWith("PKG", CONN, { trigger: "webhook", jobRunId: null });
   });
 
+  it("passes object types from a webhook-triggered event to the job, and accepts only plain names (T-053)", async () => {
+    const d = deps(ok);
+    await handleConnSync(d, { laneId: "PKG", connectionId: CONN, trigger: "webhook", objectTypes: ["Invoice", "Bill"] }, null);
+    expect(d.runSync).toHaveBeenCalledWith("PKG", CONN, { trigger: "webhook", jobRunId: null, objectTypes: ["Invoice", "Bill"] });
+    for (const objectTypes of [[], ["a b"], ["Invoice;"], Array.from({ length: 17 }, () => "Invoice"), "Invoice"]) {
+      await expect(handleConnSync(d, { laneId: "PKG", connectionId: CONN, trigger: "webhook", objectTypes } as never, null)).rejects.toBeInstanceOf(NonRetriableError);
+    }
+  });
+
   it("refuses an event that skipped sendLaneEvent and is malformed, without calling the job", async () => {
     const d = deps(ok);
-    for (const bad of [{ connectionId: CONN }, { laneId: "PKG", connectionId: "not-a-uuid" }, { laneId: "pkg;", connectionId: CONN }, { laneId: "PKG", connectionId: CONN, extra: 1 }]) {
+    for (const bad of [{ connectionId: CONN, trigger: "manual" }, { laneId: "PKG", connectionId: "not-a-uuid", trigger: "manual" }, { laneId: "pkg;", connectionId: CONN, trigger: "manual" }, { laneId: "PKG", connectionId: CONN, trigger: "manual", extra: 1 }, { laneId: "PKG", connectionId: CONN }]) {
       await expect(handleConnSync(d, bad as never, null)).rejects.toBeInstanceOf(NonRetriableError);
     }
     expect(d.runSync).not.toHaveBeenCalled();
@@ -50,35 +59,35 @@ describe("handleConnSync", () => {
 
   it("does nothing for a lane this deployment does not serve", async () => {
     const d = deps(ok, ["PKG"]);
-    await expect(handleConnSync(d, { laneId: "APK", connectionId: CONN }, null)).resolves.toEqual({ ok: true, skipped: "lane_not_served" });
+    await expect(handleConnSync(d, { laneId: "APK", connectionId: CONN, trigger: "manual" }, null)).resolves.toEqual({ ok: true, skipped: "lane_not_served" });
     expect(d.runSync).not.toHaveBeenCalled();
   });
 
   it("returns skips as success", async () => {
-    await expect(handleConnSync(deps({ ok: true, skipped: "already_running" }), { laneId: "PKG", connectionId: CONN }, null)).resolves.toEqual({ ok: true, skipped: "already_running" });
+    await expect(handleConnSync(deps({ ok: true, skipped: "already_running" }), { laneId: "PKG", connectionId: CONN, trigger: "manual" }, null)).resolves.toEqual({ ok: true, skipped: "already_running" });
   });
 
   it("a permanent failure is not retried", async () => {
     const fail: ConnSyncResult = { ok: false, retryable: false, retryAfterSeconds: null, errorKind: "reconnect_required", message: "m" };
-    await expect(handleConnSync(deps(fail), { laneId: "PKG", connectionId: CONN }, null)).rejects.toBeInstanceOf(NonRetriableError);
+    await expect(handleConnSync(deps(fail), { laneId: "PKG", connectionId: CONN, trigger: "manual" }, null)).rejects.toBeInstanceOf(NonRetriableError);
   });
 
   it("a transient failure is retried, honouring a capped retry-after", async () => {
     const plain: ConnSyncResult = { ok: false, retryable: true, retryAfterSeconds: null, errorKind: "transient", message: "m" };
-    const err = await handleConnSync(deps(plain), { laneId: "PKG", connectionId: CONN }, null).catch((e: unknown) => e);
+    const err = await handleConnSync(deps(plain), { laneId: "PKG", connectionId: CONN, trigger: "manual" }, null).catch((e: unknown) => e);
     expect(err).toBeInstanceOf(Error);
     expect(err).not.toBeInstanceOf(NonRetriableError);
     expect(err).not.toBeInstanceOf(RetryAfterError);
-    const limited = await handleConnSync(deps({ ...plain, retryAfterSeconds: 30 }), { laneId: "PKG", connectionId: CONN }, null).catch((e: unknown) => e);
+    const limited = await handleConnSync(deps({ ...plain, retryAfterSeconds: 30 }), { laneId: "PKG", connectionId: CONN, trigger: "manual" }, null).catch((e: unknown) => e);
     expect(limited).toBeInstanceOf(RetryAfterError);
-    const huge = await handleConnSync(deps({ ...plain, retryAfterSeconds: 999_999 }), { laneId: "PKG", connectionId: CONN }, null).catch((e: unknown) => e as RetryAfterError);
+    const huge = await handleConnSync(deps({ ...plain, retryAfterSeconds: 999_999 }), { laneId: "PKG", connectionId: CONN, trigger: "manual" }, null).catch((e: unknown) => e as RetryAfterError);
     expect(String((huge as RetryAfterError).retryAfter)).not.toContain("999999");
   });
 
   it("one connection failing does not affect another (independent calls)", async () => {
     const runSync = vi.fn(async (_l: string, id: string): Promise<ConnSyncResult> => (id === CONN_A ? { ok: false, retryable: true, retryAfterSeconds: null, errorKind: "transient", message: "m" } : ok));
     const d = { runSync, enabledLanes: () => ["PKG"] };
-    const [a, b] = await Promise.allSettled([handleConnSync(d, { laneId: "PKG", connectionId: CONN_A }, null), handleConnSync(d, { laneId: "PKG", connectionId: CONN }, null)]);
+    const [a, b] = await Promise.allSettled([handleConnSync(d, { laneId: "PKG", connectionId: CONN_A, trigger: "manual" }, null), handleConnSync(d, { laneId: "PKG", connectionId: CONN, trigger: "manual" }, null)]);
     expect(a.status).toBe("rejected");
     expect(b).toMatchObject({ status: "fulfilled", value: ok });
   });

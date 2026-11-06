@@ -63,13 +63,15 @@ insert into security_definer_ok values
   ('core.webhook_event_claim', 'webhook receiver: records an event once per (lane, provider, event id); service_role only, lane-checked (T-036)'),
   ('core.webhook_event_mark', 'webhook receiver: received -> enqueued | failed, lane-bound; service_role only (T-036)'),
   ('core.webhook_events_purge', 'webhook receipt retention, per lane, minimum 7 days; service_role only (T-036)'),
+  ('core.source_records_purge_bodies', 'retention: deletes a lane''s stored raw bodies when store_content_bodies is off; service_role only, lane-checked (T-042)'),
   ('core.sync_cursor_get', 'reads the private sync cursor table; service_role only, lane-checked (T-063)'),
   ('core.sync_cursor_reset', 'deletes a sync cursor; service_role only, lane-checked (T-063)'),
   ('core.sync_cursor_put', 'compare-and-swap write of a sync cursor; service_role only, lane-checked, usable connections only (T-038)'),
   ('core.comms_mail_apply_page', 'applies one Gmail metadata page and its cursor atomically; service_role only, lane-checked against a usable Google connection (T-063)'),
   ('core.cal_events_apply_page', 'applies one Google Calendar metadata page and its cursor atomically; service_role only, lane-checked against a usable Google connection (T-064)'),
   ('comms.message_summary_guard', 'trigger only: reads lane policy and memberships to validate a summary and its approver (T-061)'),
-  ('fin.report_cache_guard', 'trigger only: calls the private raw.payload_scan on a report payload; reads and writes nothing (T-055)');
+  ('fin.report_cache_guard', 'trigger only: calls the private raw.payload_scan on a report payload; reads and writes nothing (T-055)'),
+  ('core.fin_qbo_normalize', 'QuickBooks normalizer: reads the private raw.source_records of one connection and writes fin.*; service_role only, lane-checked against a usable QuickBooks connection (T-056)');
 
 -- App functions authenticated may execute (callable through the API). Each one is reviewed.
 create temp table authenticated_exec_ok (name text primary key, why text not null) on commit drop;
@@ -81,7 +83,15 @@ insert into authenticated_exec_ok values
   ('core.viewer_view_names', 'pure list'),
   ('core.role_views', 'pure mapping'),
   ('core.oauth_state_create', 'connect start; checks role and aal2 itself (T-035)'),
-  ('core.oauth_state_consume', 'connect callback; own state only (T-035)');
+  ('core.oauth_state_consume', 'connect callback; own state only (T-035)'),
+  ('fin.et_date', 'pure calendar function (T-080)'),
+  ('fin.month_start', 'pure calendar function (T-080)'),
+  ('fin.next_month_start', 'pure calendar function (T-080)'),
+  ('fin.ytd_start', 'pure calendar function (T-080)'),
+  ('fin.business_week', 'pure calendar function (T-080)'),
+  ('fin.month_range', 'pure calendar function (T-080)'),
+  ('fin.ytd_range', 'pure calendar function (T-080)'),
+  ('fin.mtd_range', 'pure calendar function (T-080)');
 
 create temp view app_objects as
   select c.oid, format('%s.%s', n.nspname, c.relname) as name, c.relkind

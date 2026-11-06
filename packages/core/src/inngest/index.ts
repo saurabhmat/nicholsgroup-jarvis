@@ -21,13 +21,71 @@ export {
   connHealthCheckRequested,
   connSubscriptionRenewRequested,
   connSyncRequested,
+  finQboNormalizeRequested,
+  finQboReportsRequested,
   LANE_EVENTS,
   laneIdSchema,
+  retentionPurgeRequested,
   systemHeartbeat,
   webhookReceived,
 } from "./events";
 export { platformFunctions } from "./functions";
+export { QBO_WEBHOOK_BATCH, QBO_WEBHOOK_RETRIES, handleQboWebhookSync, qboWebhookSyncEventId, qboWebhookSyncFunctions } from "./qbo-webhook-sync";
+export type { QboWebhookSyncDeps, QboWebhookSyncResult } from "./qbo-webhook-sync";
+export {
+  CAL_INGEST_CADENCE_MS,
+  CAL_INGEST_CRON,
+  CAL_INGEST_RETRIES,
+  calIngestEventId,
+  calIngestFunction,
+  calIngestSlot,
+  handleCalIngest,
+  planCalIngest,
+} from "./cal-ingest";
+export type { CalIngestDeps, CalIngestPlan } from "./cal-ingest";
+export {
+  FIN_REPORTS_CONCURRENCY,
+  FIN_REPORTS_CRON,
+  FIN_REPORTS_RETRIES,
+  FIN_REPORTS_SCHEDULE_RETRIES,
+  finQboReportsFunctions,
+  finReportsEventId,
+  handleFinReports,
+  handleFinReportsSchedule,
+  planFinReports,
+} from "./fin-reports";
+export type { FinQboReportsDeps, FinQboReportsResult, FinReportsPlan } from "./fin-reports";
+export {
+  FIN_SYNC_CRON,
+  FIN_SYNC_INTERVALS,
+  FIN_SYNC_RETRIES,
+  finSyncDue,
+  finSyncEventId,
+  finSyncFunction,
+  finSyncHour,
+  handleFinSync,
+  planFinSync,
+} from "./fin-sync";
+export type { FinSyncDeps, FinSyncPlan } from "./fin-sync";
+export {
+  FIN_NORMALIZE_CONCURRENCY,
+  FIN_NORMALIZE_RETRIES,
+  finNormalizeEventId,
+  shouldNormalizeAfterSync,
+  finQboNormalizeFunctions,
+  handleFinNormalize,
+} from "./fin-normalize";
+export type { FinQboNormalizeDeps, FinQboNormalizeResult } from "./fin-normalize";
 export { CONN_SYNC_CONCURRENCY, CONN_SYNC_RETRIES, connSyncFunction, handleConnSync } from "./conn-sync";
+export {
+  RETENTION_CRON,
+  RETENTION_PURGE_CONCURRENCY,
+  RETENTION_PURGE_RETRIES,
+  RETENTION_SCHEDULE_RETRIES,
+  handleRetentionPurge,
+  retentionPurgeFunctions,
+} from "./retention-purge";
+export type { RetentionPurgeDeps, RetentionPurgeResult } from "./retention-purge";
 export type { ConnSyncDeps, ConnSyncResult } from "./conn-sync";
 export {
   CONN_HEALTH_CONCURRENCY,

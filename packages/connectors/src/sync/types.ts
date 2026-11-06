@@ -10,7 +10,7 @@ export type SyncTrigger = (typeof SYNC_TRIGGERS)[number];
 export type SyncRunnerResult = { kind: "full" | "incremental"; received: number; written: number };
 
 /** Runs one connection's sync. Throws ConnectorError for failures (anything else is reduced to a generic provider_error). */
-export type SyncRunner = (laneId: LaneId, conn: LaneBoundConnection<string>) => Promise<SyncRunnerResult>;
+export type SyncRunner = (laneId: LaneId, conn: LaneBoundConnection<string>, options?: { objectTypes?: readonly string[] }) => Promise<SyncRunnerResult>;
 
 export type SyncRunFinish = {
   status: "succeeded" | "failed" | "cancelled";
@@ -43,6 +43,6 @@ export interface SyncCursorStore {
 
 /** The run is not retried by Inngest unless `retryable`; `retryAfterSeconds` is the provider's hint for rate limits. */
 export type ConnSyncOutcome =
-  | { ok: true; skipped: null; runId: string; kind: "full" | "incremental"; received: number; written: number }
+  | { ok: true; skipped: null; runId: string; provider: string; kind: "full" | "incremental"; received: number; written: number }
   | { ok: true; skipped: "already_running" | "connection_not_usable" }
   | { ok: false; retryable: boolean; retryAfterSeconds: number | null; errorKind: string; message: string };

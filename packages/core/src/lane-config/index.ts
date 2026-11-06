@@ -56,6 +56,26 @@ const entityMappingSchema = z.strictObject({
   ghl_products: ids,
 });
 
+/**
+ * Intuit's Account.AccountSubType enum values that denote payroll accounts (Intuit's enum, not company data). Defaults for
+ * `finance.payroll.account_subtypes`; unverified spellings are on the H-034 live-check list.
+ */
+export const QBO_PAYROLL_SUBTYPES = ["PayrollExpenses", "PayrollTaxExpenses", "PayrollClearing", "PayrollTaxPayable", "PayrollWagePayable", "DirectDepositPayable", "CostOfLabor"] as const;
+
+/** The `fin.report_cache` report kinds (T-052). */
+export const REPORT_KINDS = ["pnl", "balance_sheet", "cash_flow", "ar_aging_summary", "ap_aging_summary"] as const;
+/** Cached by default: not balance_sheet or cash_flow until D-27 is decided. */
+export const DEFAULT_REPORT_KINDS = ["pnl", "ar_aging_summary", "ap_aging_summary"] as const;
+
+/** Allowed hours between QuickBooks backup CDC polls (T-090). Divisors of 24, so slots line up with the day; default 4. */
+export const QBO_SYNC_INTERVAL_HOURS = [1, 2, 3, 4, 6, 8, 12] as const;
+export const DEFAULT_QBO_SYNC_INTERVAL_HOURS = 4;
+
+/** `lane_config.finance.qbo_sync`: one definition, also parsed alone by the connectors' reader so unrelated finance settings cannot stop the poll. */
+export const qboSyncSchema = z
+  .strictObject({ interval_hours: z.union([z.literal(1), z.literal(2), z.literal(3), z.literal(4), z.literal(6), z.literal(8), z.literal(12)]).default(DEFAULT_QBO_SYNC_INTERVAL_HOURS) })
+  .prefault({});
+
 export const laneConfigSchema = z.strictObject({
   enabled_modules: z.array(z.enum(MODULES)).default([]),
   kpis: z.array(z.enum(KPI_IDS)).default([]),
@@ -99,6 +119,15 @@ export const laneConfigSchema = z.strictObject({
       forward_days: z.int().min(7).max(730).default(365),
     })
     .optional(),
+  // Retention of indexed data per table class (T-042). Comms metadata follows the lane policy's `retention_days` (PKG 90) and
+  // is not repeated here. Calendar is capped at 180 days by the database (floor 30), webhook receipts have a 7-day floor.
+  retention: z
+    .strictObject({
+      calendar_days: z.int().min(30).max(180).default(180),
+      conversations_days: z.int().min(1).max(3650).default(180),
+      webhook_days: z.int().min(7).max(365).default(30),
+    })
+    .prefault({}),
   priority_senders: z.array(z.union([email, z.string().regex(/^@[a-z0-9.-]+\.[a-z]{2,}$/)])).max(200).default([]),
   briefing: z.strictObject({ time: hhmm.default("07:00") }).prefault({}),
   finance: z
@@ -106,6 +135,30 @@ export const laneConfigSchema = z.strictObject({
       accounting_method: z.enum(["accrual", "cash"]).default("accrual"),
       weekly_cash_time: hhmm.default("06:00"),
       monthly_close_trigger: z.union([z.literal("manual"), z.string().regex(/^day_of_month:([1-9]|1\d|2[0-8])$/)]).default("manual"),
+      // D-25 (default: payroll excluded entirely). QuickBooks transactions posted to these accounts, and accounts of these
+      // subtypes, are never stored; neither are transactions that name an excluded entity (people paid as vendors,
+      // D-25 follow-up for Robert). `account_subtypes` defaults to Intuit's payroll AccountSubType values.
+      payroll: z
+        .strictObject({
+          account_ids: z.array(z.string().regex(/^\d{1,20}$/)).max(200).default([]),
+          account_subtypes: z.array(z.string().regex(/^[A-Za-z][A-Za-z0-9]{0,63}$/)).max(100).default([...QBO_PAYROLL_SUBTYPES]),
+          excluded_entity_ids: z.array(z.string().regex(/^\d{1,20}$/)).max(500).default([]),
+        })
+        .prefault({}),
+      // QuickBooks report pulls (T-052). `period` is the date range of ProfitAndLoss and CashFlow (and the as-of end date
+      // of BalanceSheet and the aging reports): the calendar year to date, or the last 12 months, in America/New_York.
+      // The class filter comes from `entities.by_entity[own_entity].qbo_class_ids`, used only with class tracking on.
+      reports: z
+        .strictObject({
+          period: z.enum(["year_to_date", "trailing_12_months"]).default("year_to_date"),
+          // Which report kinds are fetched and cached. Default fails closed (D-27): `cash_flow` and `balance_sheet` are not
+          // cached until Saurabh/Robert decide how far payroll exclusion goes, because those two let a reader recover the
+          // aggregate payroll amount from the other cached reports.
+          kinds: z.array(z.enum(REPORT_KINDS)).max(5).default([...DEFAULT_REPORT_KINDS]),
+        })
+        .prefault({}),
+      // QuickBooks backup poll (T-090): webhooks are the fast path; this CDC poll catches missed ones. Hours between polls.
+      qbo_sync: qboSyncSchema,
     })
     .prefault({}),
   metrics: z.strictObject({ start_month: z.string().regex(/^\d{4}-(0[1-9]|1[0-2])$/) }).optional(),
