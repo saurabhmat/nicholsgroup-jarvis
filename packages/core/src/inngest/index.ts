@@ -30,6 +30,8 @@ export {
   webhookReceived,
 } from "./events";
 export { platformFunctions } from "./functions";
+export { QBO_WEBHOOK_BATCH, QBO_WEBHOOK_RETRIES, handleQboWebhookSync, qboWebhookSyncEventId, qboWebhookSyncFunctions } from "./qbo-webhook-sync";
+export type { QboWebhookSyncDeps, QboWebhookSyncResult } from "./qbo-webhook-sync";
 export {
   CAL_INGEST_CADENCE_MS,
   CAL_INGEST_CRON,

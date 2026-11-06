@@ -40,6 +40,15 @@ describe("handleConnSync", () => {
     expect(d.runSync).toHaveBeenLastCalledWith("PKG", CONN, { trigger: "webhook", jobRunId: null });
   });
 
+  it("passes object types from a webhook-triggered event to the job, and accepts only plain names (T-053)", async () => {
+    const d = deps(ok);
+    await handleConnSync(d, { laneId: "PKG", connectionId: CONN, trigger: "webhook", objectTypes: ["Invoice", "Bill"] }, null);
+    expect(d.runSync).toHaveBeenCalledWith("PKG", CONN, { trigger: "webhook", jobRunId: null, objectTypes: ["Invoice", "Bill"] });
+    for (const objectTypes of [[], ["a b"], ["Invoice;"], Array.from({ length: 17 }, () => "Invoice"), "Invoice"]) {
+      await expect(handleConnSync(d, { laneId: "PKG", connectionId: CONN, trigger: "webhook", objectTypes } as never, null)).rejects.toBeInstanceOf(NonRetriableError);
+    }
+  });
+
   it("refuses an event that skipped sendLaneEvent and is malformed, without calling the job", async () => {
     const d = deps(ok);
     for (const bad of [{ connectionId: CONN, trigger: "manual" }, { laneId: "PKG", connectionId: "not-a-uuid", trigger: "manual" }, { laneId: "pkg;", connectionId: CONN, trigger: "manual" }, { laneId: "PKG", connectionId: CONN, trigger: "manual", extra: 1 }, { laneId: "PKG", connectionId: CONN }]) {

@@ -6,6 +6,7 @@ import { calSync, mailSync } from "../google/index";
 import { quickbooksConnector } from "../quickbooks/index";
 import { connectionLoader, rawRecords, syncCursorStore, syncRunStore, syncTargetLister } from "../vault/index";
 import { createConnSyncJob } from "./job";
+import { createQuickbooksUsableCheck } from "./usable";
 import { createConnectorSyncRunner, createGoogleSyncRunner } from "./runners";
 
 export const connSyncJob = createConnSyncJob({
@@ -18,9 +19,13 @@ export const connSyncJob = createConnSyncJob({
   },
 });
 
+/** Whether a QuickBooks connection of the lane can be synced now (see ./usable.ts). Used by the webhook follow-up (T-053). */
+export const isQuickbooksConnectionUsable = createQuickbooksUsableCheck(connectionLoader);
+
 export { SYNC_TRIGGERS } from "./types";
 export type { ConnSyncOutcome, SyncTrigger } from "./types";
 
 /** Ids of a lane's usable calendar-capable connections, for the scheduled cal.ingest_delta fan-out (T-130). */
 export const listCalendarConnectionIds = (laneId: LaneId) => syncTargetLister.listCalendarConnectionIds(laneId);
+export { QBO_SYNC_ENTITIES } from "../quickbooks/entities";
 export { CALENDAR_PROVIDERS } from "./targets";

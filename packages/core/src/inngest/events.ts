@@ -13,6 +13,11 @@ export const connSyncRequested = eventType("conn/sync.requested", {
     laneId: laneIdSchema,
     connectionId: z.uuid(),
     trigger: z.enum(["schedule", "manual", "webhook", "connect"]),
+    /**
+     * Limit the run to these object types (a targeted fetch after a webhook, T-053). Names only, never ids or content; the
+     * connector checks them against its own allowlist again and refuses an unknown one. Absent = the whole connection.
+     */
+    objectTypes: z.array(z.string().regex(/^[A-Za-z]{1,40}$/)).min(1).max(16).optional(),
   }),
 });
 

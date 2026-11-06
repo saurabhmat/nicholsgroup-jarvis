@@ -10,7 +10,7 @@ export type SyncTrigger = (typeof SYNC_TRIGGERS)[number];
 export type SyncRunnerResult = { kind: "full" | "incremental"; received: number; written: number };
 
 /** Runs one connection's sync. Throws ConnectorError for failures (anything else is reduced to a generic provider_error). */
-export type SyncRunner = (laneId: LaneId, conn: LaneBoundConnection<string>) => Promise<SyncRunnerResult>;
+export type SyncRunner = (laneId: LaneId, conn: LaneBoundConnection<string>, options?: { objectTypes?: readonly string[] }) => Promise<SyncRunnerResult>;
 
 export type SyncRunFinish = {
   status: "succeeded" | "failed" | "cancelled";

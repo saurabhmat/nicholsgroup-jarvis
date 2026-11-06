@@ -11,11 +11,13 @@ import {
   finQboReportsFunctions,
   inngestRoute,
   platformFunctions,
+  qboWebhookSyncFunctions,
   retentionPurgeFunctions,
   sendLaneEvent,
 } from "@nichols/core/inngest";
+import type { LaneId } from "@nichols/core";
 import { getServerEnv } from "@nichols/core/env/server";
-import { connSyncJob, listCalendarConnectionIds } from "@nichols/connectors/sync";
+import { QBO_SYNC_ENTITIES, connSyncJob, isQuickbooksConnectionUsable, listCalendarConnectionIds } from "@nichols/connectors/sync";
 import { listHealthConnectionIds, listRenewConnectionIds, subscriptionRenewJob, tokenHealthJob } from "@nichols/connectors/health";
 import { retentionPurgeJob } from "@nichols/connectors/retention";
 import { listQuickbooksConnectionIds, qboReportsJob } from "@nichols/connectors/reports";
@@ -34,6 +36,12 @@ export const { GET, POST, PUT } = inngestRoute((inngest) => [
         finQboNormalizeRequested.create({ laneId, connectionId, trigger: "sync" }, { id: finNormalizeEventId(connectionId, runId) }),
       );
     },
+  }),
+  // qbo.webhook_sync (T-053): accepted QuickBooks webhook events -> one targeted conn/sync.requested per connection and batch.
+  ...qboWebhookSyncFunctions(inngest, {
+    isUsable: (laneId, connectionId) => isQuickbooksConnectionUsable(laneId as LaneId, connectionId),
+    enabledLanes: () => getServerEnv().ENABLED_LANES,
+    allowedEntities: QBO_SYNC_ENTITIES,
   }),
   // fin.qbo_normalize (T-056): raw.source_records -> fin.* for one QuickBooks connection, lane-scoped.
   ...finQboNormalizeFunctions(inngest, {

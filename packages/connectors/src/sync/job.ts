@@ -33,7 +33,7 @@ export function createConnSyncJob(deps: ConnSyncJobDeps) {
   });
 
   return {
-    async run(laneId: LaneId, connectionId: string, input: { trigger: SyncTrigger; jobRunId?: string | null }): Promise<ConnSyncOutcome> {
+    async run(laneId: LaneId, connectionId: string, input: { trigger: SyncTrigger; jobRunId?: string | null; objectTypes?: readonly string[] }): Promise<ConnSyncOutcome> {
       const jobRunId = input.jobRunId && RUN_ID.test(input.jobRunId) ? input.jobRunId : null;
       let conn;
       try {
@@ -65,7 +65,7 @@ export function createConnSyncJob(deps: ConnSyncJobDeps) {
       try {
         const runner = deps.runners[conn.provider];
         if (!runner) throw new ConnectorError({ kind: "unsupported_op", message: "No sync is available for this provider" });
-        result = await runner(laneId, conn);
+        result = await runner(laneId, conn, input.objectTypes && input.objectTypes.length > 0 ? { objectTypes: input.objectTypes } : undefined);
       } catch (e) {
         error = toConnectorError(e);
       }

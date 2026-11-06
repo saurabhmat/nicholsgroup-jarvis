@@ -19,7 +19,7 @@ export type ConnSyncResult =
   | { ok: false; retryable: boolean; retryAfterSeconds: number | null; errorKind: string; message: string };
 
 export type ConnSyncDeps = {
-  runSync: (laneId: string, connectionId: string, input: { trigger: SyncTriggerName; jobRunId: string | null }) => Promise<ConnSyncResult>;
+  runSync: (laneId: string, connectionId: string, input: { trigger: SyncTriggerName; jobRunId: string | null; objectTypes?: readonly string[] }) => Promise<ConnSyncResult>;
   enabledLanes: () => readonly string[];
   /**
    * Called after every sync that ran and was logged, whether or not it wrote anything (not for a skipped or failed one), with ids
@@ -38,14 +38,14 @@ const MAX_RETRY_AFTER_SECONDS = 15 * 60;
 /** The function body without Inngest, for tests: throws what Inngest needs to decide about a retry. */
 export async function handleConnSync(
   deps: ConnSyncDeps,
-  data: { laneId: string; connectionId: string; trigger: SyncTriggerName },
+  data: { laneId: string; connectionId: string; trigger: SyncTriggerName; objectTypes?: readonly string[] | undefined },
   runId: string | null,
 ): Promise<(Exclude<ConnSyncResult, { ok: false }> & { followUp?: "sent" | "failed" }) | { ok: true; skipped: "lane_not_served" }> {
   // Events can reach Inngest without passing sendLaneEvent (anyone holding the event key): validate again, echo nothing.
   const parsed = await connSyncRequested.schema["~standard"].validate(data);
   if (parsed.issues) throw new NonRetriableError("conn.sync: invalid event data");
   if (!deps.enabledLanes().includes(data.laneId)) return { ok: true, skipped: "lane_not_served" };
-  const result = await deps.runSync(data.laneId, data.connectionId, { trigger: data.trigger, jobRunId: runId });
+  const result = await deps.runSync(data.laneId, data.connectionId, { trigger: data.trigger, jobRunId: runId, ...(data.objectTypes ? { objectTypes: data.objectTypes } : {}) });
   if (result.ok) {
     if (result.skipped === null && deps.afterSync && typeof result.provider === "string") {
       try {

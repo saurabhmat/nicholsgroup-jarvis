@@ -513,7 +513,7 @@ describe("real-data environments (Staging environment, Oct 28, 2026)", () => {
 describe("connector env", () => {
   it("covers every connector family and requires nothing at startup", () => {
     expect([...CONNECTOR_NAMES].sort()).toEqual(
-      ["ghl", "google", "graph", "intuit", "monday", "notion", "push", "sentry", "stripe"].sort(),
+      ["ghl", "google", "graph", "intuit", "intuit_webhook", "monday", "notion", "push", "sentry", "stripe"].sort(),
     );
     expect(() => parseServerEnv(CORE)).not.toThrow();
   });

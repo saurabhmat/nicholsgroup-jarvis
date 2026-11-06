@@ -19,7 +19,7 @@ export type SinkFor<P extends string> = (laneId: LaneId, conn: LaneBoundConnecti
 export function createConnectorSyncRunner<P extends string>(deps: { connector: Connector<P>; cursors: SyncCursorStore; sinkFor: SinkFor<P>; logger?: ConnectorLogger }): SyncRunner {
   const log = deps.logger ?? connectorLog;
   const { connector } = deps;
-  return async (laneId, conn) => {
+  return async (laneId, conn, runOptions) => {
     assertLaneBound(laneId, conn);
     if (!connector.sync) throw new ConnectorError({ kind: "unsupported_op", message: "This connector does not sync" });
     const typed = conn as LaneBoundConnection<P>;
@@ -30,7 +30,19 @@ export function createConnectorSyncRunner<P extends string>(deps: { connector: C
       await inner(batch);
       received += batch.length;
     };
-    const summary = await connector.sync(laneId, typed, stored === null ? null : { value: stored }, sink);
+    // A targeted run (a webhook named the changed entities) needs a stored cursor to be safe: it never moves the cursor. With none
+    // yet, the connection has not had its first full sync, so do that instead of refusing.
+    const objectTypes = runOptions?.objectTypes && stored !== null ? [...runOptions.objectTypes] : undefined;
+    const cursor = stored === null ? null : { value: stored };
+    let summary;
+    try {
+      summary = await connector.sync(laneId, typed, cursor, sink, objectTypes ? { objectTypes } : undefined);
+    } catch (e) {
+      // A targeted run is refused before any call when the stored cursor is no longer usable (older than Intuit's CDC window, or
+      // in the future): nothing was read or written, so do the whole-connection run instead of leaving the connection in error.
+      if (!objectTypes || !isConnectorError(e) || e.info.kind !== "invalid_input") throw e;
+      summary = await connector.sync(laneId, typed, cursor, sink);
+    }
     const stuck = !(await deps.cursors.put(laneId, conn, stored, summary.cursor.value));
     if (stuck) log.child({ laneId, provider: connector.provider, connectionId: conn.id }).warn("conn.sync.cursor_conflict", {});
     return { kind: summary.mode, received, written: summary.records };
