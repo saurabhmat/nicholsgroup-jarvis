@@ -680,7 +680,7 @@ T-080 joins W3 early. T-081 – T-097 form **track W12** once W6 – W8 are merg
 - acceptance: Spec: `docs/specs/finance.md` §5 Part 3. `fin.snapshots` (weekly/monthly, `version`, payload of figures + source refs + `as_of`, SHA-256) is **insert-only for every role** (update/delete/truncate blocked, pgTAP incl. service role); sign-off is a separate insert-only `fin.snapshot_signoffs` row created only by `fin.sign_off_snapshot(p_lane_id, p_snapshot_id, p_hash_seen)` (finance_operator or owner, AAL2 + fresh TOTP step-up, hash must match, audited; wrong hash / AAL1 / viewer denied); a correction is a new version with `restates_snapshot_id` needing its own sign-off.
 
 ### T-090 fin.sync and fin.qbo_reports schedules
-- status: approved
+- status: done
 - depends: T-051, T-052
 - acceptance: scheduled Inngest functions per enabled lane from lane_config; idempotent; sync_runs logged; QuickBooks first (needed for QB-12 before H-024), Stripe and GoHighLevel schedules are added by T-058 and T-060 on the same pattern; QuickBooks per connection: backup CDC poll every 4 hours and a nightly full report pull (plus the pull before `fin.weekly_cash`), skipped for connections in `reconnect_required` (QB-12).
 

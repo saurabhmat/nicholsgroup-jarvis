@@ -4,7 +4,7 @@
 import type { LaneId } from "@nichols/core";
 import { calSync, mailSync } from "../google/index";
 import { quickbooksConnector } from "../quickbooks/index";
-import { connectionLoader, rawRecords, syncCursorStore, syncRunStore, syncTargetLister } from "../vault/index";
+import { connectionLoader, laneConfigReader, rawRecords, syncCursorStore, syncRunStore, syncTargetLister } from "../vault/index";
 import { createConnSyncJob } from "./job";
 import { createQuickbooksUsableCheck } from "./usable";
 import { createConnectorSyncRunner, createGoogleSyncRunner } from "./runners";
@@ -29,3 +29,8 @@ export type { ConnSyncOutcome, SyncTrigger } from "./types";
 export const listCalendarConnectionIds = (laneId: LaneId) => syncTargetLister.listCalendarConnectionIds(laneId);
 export { QBO_SYNC_ENTITIES } from "../quickbooks/entities";
 export { CALENDAR_PROVIDERS } from "./targets";
+
+/** Ids of a lane's usable QuickBooks connections for the scheduled backup poll (T-090); same list as the nightly report pull. */
+export const listQuickbooksSyncConnectionIds = (laneId: LaneId) => syncTargetLister.listQuickbooksConnectionIds(laneId);
+/** Hours between a lane's QuickBooks backup polls, from lane_config (default 4); throws when the setting is malformed. */
+export const qboSyncIntervalHours = (laneId: LaneId) => laneConfigReader.qboSyncIntervalHours(laneId);

@@ -27,7 +27,7 @@ export type ConnSyncDeps = {
    * start the QuickBooks normalizer (fin.qbo_normalize, T-056). Its failure never fails or repeats the sync (that would redo
    * the work): the result says `followUp: "failed"` and the next sync starts it again.
    */
-  afterSync?: (run: { laneId: string; connectionId: string; provider: string; runId: string }) => Promise<void>;
+  afterSync?: (run: { laneId: string; connectionId: string; provider: string; runId: string; trigger: SyncTriggerName; kind: "full" | "incremental"; written: number }) => Promise<void>;
 };
 
 /** Function options, exported so tests assert them. */
@@ -49,7 +49,7 @@ export async function handleConnSync(
   if (result.ok) {
     if (result.skipped === null && deps.afterSync && typeof result.provider === "string") {
       try {
-        await deps.afterSync({ laneId: data.laneId, connectionId: data.connectionId, provider: result.provider, runId: result.runId });
+        await deps.afterSync({ laneId: data.laneId, connectionId: data.connectionId, provider: result.provider, runId: result.runId, trigger: data.trigger, kind: result.kind, written: result.written });
         return { ...result, followUp: "sent" };
       } catch {
         return { ...result, followUp: "failed" };

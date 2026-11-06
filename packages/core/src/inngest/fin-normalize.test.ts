@@ -92,7 +92,7 @@ describe("conn.sync afterSync hook", () => {
   it("is called with ids only after a sync that ran, and marks the result", async () => {
     const afterSync = vi.fn(async () => undefined);
     const out = await handleConnSync({ ...base(synced), afterSync }, { laneId: "PKG", connectionId: CONN, trigger: "schedule" }, "r1");
-    expect(afterSync).toHaveBeenCalledWith({ laneId: "PKG", connectionId: CONN, provider: "quickbooks", runId: "run-9" });
+    expect(afterSync).toHaveBeenCalledWith({ laneId: "PKG", connectionId: CONN, provider: "quickbooks", runId: "run-9", trigger: "schedule", kind: "full", written: 1 });
     expect(out).toMatchObject({ ok: true, followUp: "sent" });
   });
 

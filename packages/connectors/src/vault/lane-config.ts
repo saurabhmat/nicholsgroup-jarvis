@@ -3,7 +3,7 @@
 // job client (`lane_config_current` is service_role-readable) and takes only the one field it needs; nothing else of
 // the config reaches connector code. A lane without `qbo` has no configured realm; a malformed one fails closed.
 import type { LaneId } from "@nichols/core";
-import { laneConfigSchema } from "@nichols/core/lane-config";
+import { laneConfigSchema, qboSyncSchema } from "@nichols/core/lane-config";
 import { ConnectorError } from "../contract/errors";
 import type { JobClientFor } from "./tokens";
 
@@ -22,6 +22,8 @@ export interface LaneConfigReader {
   payrollSettings(laneId: LaneId): Promise<PayrollSettings>;
   /** `lane_config.finance` report settings (accounting method, period) and the lane's own-entity QuickBooks classes; defaults when unset; throws when malformed (fail closed) (T-052). */
   reportSettings(laneId: LaneId): Promise<ReportSettings>;
+  /** Hours between QuickBooks backup CDC polls (`lane_config.finance.qbo_sync.interval_hours`, default 4); throws when malformed (fail closed) (T-090). */
+  qboSyncIntervalHours(laneId: LaneId): Promise<number>;
   /** Only the `lane_config.retention` part of the above (defaults when unset), so a bad config does not hide the policy's comms days (T-042). */
   retentionConfig(laneId: LaneId): Promise<Omit<RetentionSettings, "commsDays">>;
 }
@@ -166,6 +168,17 @@ export function createLaneConfigReader(clientFor: JobClientFor): LaneConfigReade
       if (qbo && !qbo.success) throw bad();
       if (qbo?.data?.entity_mapping_mode !== "file_class") classIds = [];
       return { method: finance.data.accounting_method, period: finance.data.reports.period, classIds: [...classIds], kinds: [...new Set(finance.data.reports.kinds)] };
+    },
+    async qboSyncIntervalHours(laneId) {
+      const config = await readConfig(laneId);
+      const finance = config && typeof config === "object" && !Array.isArray(config) ? (config as Record<string, unknown>).finance : undefined;
+      if (finance !== undefined && finance !== null && (typeof finance !== "object" || Array.isArray(finance))) {
+        throw new ConnectorError({ kind: "provider_error", message: "The lane's QuickBooks sync settings are not valid" });
+      }
+      // Only this section is parsed, so an unrelated finance setting never stops the backup poll. Same schema as the config itself.
+      const parsed = qboSyncSchema.safeParse((finance as Record<string, unknown> | undefined | null)?.qbo_sync ?? {});
+      if (!parsed.success) throw new ConnectorError({ kind: "provider_error", message: "The lane's QuickBooks sync settings are not valid" });
+      return parsed.data.interval_hours;
     },
     async qboRealmId(laneId) {
       const config = await readConfig(laneId);

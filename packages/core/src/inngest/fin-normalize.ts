@@ -28,6 +28,17 @@ const MAX_RETRY_AFTER_SECONDS = 15 * 60;
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 const RUN_ID = /^[A-Za-z0-9_-]{1,128}$/;
 
+/**
+ * Whether a sync that ran should start the normalizer (T-090 cost note from T-056: every sync used to re-normalize in full).
+ * With a 4-hourly backup poll most runs write nothing, so a scheduled incremental run that wrote nothing is skipped. Everything
+ * else normalizes: a full run, a run that wrote, a webhook/manual/connect run. The "pick up a mapping change or an earlier
+ * failed follow-up" property is kept by a daily normalize that fin.sync sends at 00:00 UTC (fin-sync.ts), decided from the
+ * scheduled hour, not the clock. So a failed follow-up followed by empty polls is repaired within a day.
+ */
+export function shouldNormalizeAfterSync(run: { trigger: string; kind: string; written: number }): boolean {
+  return run.trigger !== "schedule" || run.kind !== "incremental" || run.written > 0;
+}
+
 /** Deterministic Inngest event id for one connection after one sync run. */
 export function finNormalizeEventId(connectionId: string, syncRunId: string): string {
   if (!UUID.test(connectionId) || !RUN_ID.test(syncRunId)) throw new Error("fin.qbo_normalize: invalid event id parts");

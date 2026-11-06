@@ -174,3 +174,20 @@ describe("reportSettings (T-052)", () => {
     expect(await kindOf(createLaneConfigReader(client({ error: { message: "secret db text" } }).clientFor).reportSettings("PKG"))).toBe("transient");
   });
 });
+
+describe("qboSyncIntervalHours (T-090)", () => {
+  const cfg = (config: unknown) => createLaneConfigReader(client({ data: { config } }).clientFor);
+  it("defaults to 4 hours when unset, and reads the lane's setting", async () => {
+    expect(await cfg({}).qboSyncIntervalHours("PKG")).toBe(4);
+    expect(await createLaneConfigReader(client({ data: null }).clientFor).qboSyncIntervalHours("PKG")).toBe(4);
+    expect(await cfg({ finance: { qbo_sync: { interval_hours: 6 } } }).qboSyncIntervalHours("PKG")).toBe(6);
+  });
+  it("fails closed on a value outside the allowed set, an unknown key or an unreadable config", async () => {
+    for (const bad of [{ finance: { qbo_sync: { interval_hours: 5 } } }, { finance: { qbo_sync: { interval_hours: "4" } } }, { finance: { qbo_sync: { interval_hours: 4, x: 1 } } }, { finance: "x" }]) {
+      expect(await kindOf(cfg(bad).qboSyncIntervalHours("PKG")), JSON.stringify(bad)).toBe("provider_error");
+    }
+    expect(await kindOf(createLaneConfigReader(client({ error: { message: "secret db text" } }).clientFor).qboSyncIntervalHours("PKG"))).toBe("transient");
+    expect(await kindOf(cfg({}).qboSyncIntervalHours("pkg" as never))).toBe("invalid_input");
+    expect(await cfg({ finance: { payroll: { account_ids: "bad" }, reports: { kinds: ["x"] } } }).qboSyncIntervalHours("PKG")).toBe(4);
+  });
+});

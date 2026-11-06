@@ -56,9 +56,22 @@ export {
 } from "./fin-reports";
 export type { FinQboReportsDeps, FinQboReportsResult, FinReportsPlan } from "./fin-reports";
 export {
+  FIN_SYNC_CRON,
+  FIN_SYNC_INTERVALS,
+  FIN_SYNC_RETRIES,
+  finSyncDue,
+  finSyncEventId,
+  finSyncFunction,
+  finSyncHour,
+  handleFinSync,
+  planFinSync,
+} from "./fin-sync";
+export type { FinSyncDeps, FinSyncPlan } from "./fin-sync";
+export {
   FIN_NORMALIZE_CONCURRENCY,
   FIN_NORMALIZE_RETRIES,
   finNormalizeEventId,
+  shouldNormalizeAfterSync,
   finQboNormalizeFunctions,
   handleFinNormalize,
 } from "./fin-normalize";

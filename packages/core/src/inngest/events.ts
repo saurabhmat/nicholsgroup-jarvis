@@ -99,7 +99,7 @@ export const finQboNormalizeRequested = eventType("fin/qbo-normalize.requested",
   schema: z.strictObject({
     laneId: laneIdSchema,
     connectionId: z.uuid(),
-    trigger: z.enum(["sync", "manual"]),
+    trigger: z.enum(["sync", "manual", "schedule"]),
   }),
 });
 

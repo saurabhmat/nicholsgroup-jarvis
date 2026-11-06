@@ -67,6 +67,15 @@ export const REPORT_KINDS = ["pnl", "balance_sheet", "cash_flow", "ar_aging_summ
 /** Cached by default: not balance_sheet or cash_flow until D-27 is decided. */
 export const DEFAULT_REPORT_KINDS = ["pnl", "ar_aging_summary", "ap_aging_summary"] as const;
 
+/** Allowed hours between QuickBooks backup CDC polls (T-090). Divisors of 24, so slots line up with the day; default 4. */
+export const QBO_SYNC_INTERVAL_HOURS = [1, 2, 3, 4, 6, 8, 12] as const;
+export const DEFAULT_QBO_SYNC_INTERVAL_HOURS = 4;
+
+/** `lane_config.finance.qbo_sync`: one definition, also parsed alone by the connectors' reader so unrelated finance settings cannot stop the poll. */
+export const qboSyncSchema = z
+  .strictObject({ interval_hours: z.union([z.literal(1), z.literal(2), z.literal(3), z.literal(4), z.literal(6), z.literal(8), z.literal(12)]).default(DEFAULT_QBO_SYNC_INTERVAL_HOURS) })
+  .prefault({});
+
 export const laneConfigSchema = z.strictObject({
   enabled_modules: z.array(z.enum(MODULES)).default([]),
   kpis: z.array(z.enum(KPI_IDS)).default([]),
@@ -148,6 +157,8 @@ export const laneConfigSchema = z.strictObject({
           kinds: z.array(z.enum(REPORT_KINDS)).max(5).default([...DEFAULT_REPORT_KINDS]),
         })
         .prefault({}),
+      // QuickBooks backup poll (T-090): webhooks are the fast path; this CDC poll catches missed ones. Hours between polls.
+      qbo_sync: qboSyncSchema,
     })
     .prefault({}),
   metrics: z.strictObject({ start_month: z.string().regex(/^\d{4}-(0[1-9]|1[0-2])$/) }).optional(),

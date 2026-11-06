@@ -232,7 +232,7 @@ Companies: PKG now; Nichols Law later; Ask Pub K, Pub K Institute and Nichols Ca
 **Sync.**
 - Webhook (`intuit-signature` verified, idempotent) → targeted CDC fetch of the changed entities (T-053).
 - Backup CDC poll every 4 hours per connection, from a stored last-changed timestamp. A cursor older than Intuit's 30-day CDC window triggers a full reload (T-051, T-090).
-- Nightly full report pull, plus one before `fin.weekly_cash` (T-052, T-090).
+- Nightly full report pull, plus one before `fin.weekly_cash` (T-052, T-090). QuickBooks backup CDC poll every `lane_config.finance.qbo_sync.interval_hours` hours (1, 2, 3, 4, 6, 8 or 12; default 4) per usable connection (T-090).
 - No sync for a connection in `reconnect_required`.
 
 **Edition features.** Preferences are read on connect and on every sync. Class tracking, location tracking and multicurrency are stored on the connection. With class tracking off or unavailable, reports are fetched unsplit and the query layer returns unsplit figures with a warning note (never an error). The entity split by customer mapping still applies where configured. Nothing depends on multicurrency or sales tax.

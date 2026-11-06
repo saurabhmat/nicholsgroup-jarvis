@@ -47,7 +47,7 @@ describe("calendar section (T-064)", () => {
 describe("lane config schema", () => {
   it("accepts a valid config and fills the spec defaults", () => {
     const c = parseLaneConfig(VALID);
-    expect(c.finance).toEqual({ accounting_method: "accrual", weekly_cash_time: "06:00", monthly_close_trigger: "manual", payroll: { account_ids: [], account_subtypes: [...QBO_PAYROLL_SUBTYPES], excluded_entity_ids: [] }, reports: { period: "year_to_date", kinds: ["pnl", "ar_aging_summary", "ap_aging_summary"] } });
+    expect(c.finance).toEqual({ accounting_method: "accrual", weekly_cash_time: "06:00", monthly_close_trigger: "manual", payroll: { account_ids: [], account_subtypes: [...QBO_PAYROLL_SUBTYPES], excluded_entity_ids: [] }, reports: { period: "year_to_date", kinds: ["pnl", "ar_aging_summary", "ap_aging_summary"] }, qbo_sync: { interval_hours: 4 } });
     expect(c.approvals.approvals_live).toBe(false);
     expect(c.approvals.step_up_max_age_s).toBe(300);
     expect(c.approvals.expire_after_hours).toEqual({ "email.draft": 72, "email.send": 72, "monday.item": 168 });
@@ -83,6 +83,9 @@ describe("lane config schema", () => {
     expect(() => parseLaneConfig({ finance: { reports: { kinds: ["general_ledger"] } } })).toThrow(z.ZodError);
     expect(parseLaneConfig({ finance: { reports: { kinds: ["pnl", "balance_sheet"] } } }).finance.reports.kinds).toEqual(["pnl", "balance_sheet"]);
     expect(parseLaneConfig({}).finance.reports.kinds).not.toContain("balance_sheet");
+    expect(parseLaneConfig({ finance: { qbo_sync: { interval_hours: 6 } } }).finance.qbo_sync.interval_hours).toBe(6);
+    for (const bad of [0, 5, 24, 1.5, "4", -4]) expect(() => parseLaneConfig({ finance: { qbo_sync: { interval_hours: bad } } })).toThrow(z.ZodError);
+    expect(() => parseLaneConfig({ finance: { qbo_sync: { interval_hours: 4, extra: 1 } } })).toThrow(z.ZodError);
     expect(parseLaneConfig({}).finance.reports.kinds).not.toContain("cash_flow");
     expect(() => parseLaneConfig({ entities: { own_entity: "PKG", by_entity: { APK: {} } } })).toThrow(z.ZodError);
     expect(() => parseLaneConfig({ entities: { own_entity: "PKG", by_entity: { pkg: {} } } })).toThrow(z.ZodError);
