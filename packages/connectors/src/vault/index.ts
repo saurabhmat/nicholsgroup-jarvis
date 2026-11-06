@@ -10,6 +10,7 @@ import { createRetentionStore } from "../retention/store";
 import { getServerEnv } from "@nichols/core/env/server";
 import { createTokenVault } from "./tokens";
 import { createQboFeatureStore } from "../quickbooks/features";
+import { createReportCacheStore } from "../quickbooks/report-store";
 import { createSyncCursorStore, createSyncRunStore } from "../sync/store";
 import { createSyncTargetLister } from "../sync/targets";
 import { createCalendarIndexStore } from "../google/cal-store";
@@ -48,6 +49,9 @@ export const syncCursorStore = createSyncCursorStore(getLaneJobClient);
 
 /** Writes the QuickBooks edition flags onto core.connections with the lane's job client (T-051). */
 export const qboFeatureStore = createQboFeatureStore(getLaneJobClient);
+
+/** Writes QuickBooks reports to fin.report_cache with the lane's job client (T-052). */
+export const reportCacheStore = createReportCacheStore(getLaneJobClient);
 
 /** Resolves webhook accounts to lanes, dedupes events and records the hand-off with the lane's job client (T-036). */
 export const webhookStore = createWebhookStore(getLaneJobClient, () => getServerEnv().ENABLED_LANES);

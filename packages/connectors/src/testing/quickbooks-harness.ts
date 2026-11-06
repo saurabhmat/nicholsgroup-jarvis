@@ -17,6 +17,8 @@ import type { StateStore } from "../oauth/state";
 import { createQboApi } from "../quickbooks/api";
 import { createQboFeatureRecorder, type QboFeatureStore } from "../quickbooks/features";
 import { createQuickBooksConnector } from "../quickbooks/connector";
+import { createQboReportsJob, type ReportCacheEntry, type ReportCacheStore } from "../quickbooks/reports-job";
+import type { ReportSettings } from "../quickbooks/reports";
 import type { QboConnection } from "../quickbooks/guard";
 import { createQuickBooksRevoker, QBO_REVOKE_ACTION } from "../quickbooks/writer";
 import { computePayloadSha256 } from "../contract/writer";
@@ -211,6 +213,59 @@ export function createQboHarness(options: QboHarnessOptions) {
     if (payrollState.fail) throw new ConnectorError({ kind: "transient", message: "Lane configuration unavailable" });
     return payrollState.settings;
   } });
+  // ---- T-052 twins: lane_config report settings and fin.report_cache (with the database guard's rules ported).
+  const reportState: { settings: ReportSettings; failSettings: boolean; stored: ReportCacheEntry[]; failStore: { reports: readonly string[] | "all"; kind: "transient" | "provider_error" } | null } = {
+    settings: { method: "accrual", period: "year_to_date", classIds: [], kinds: ["pnl", "balance_sheet", "cash_flow", "ar_aging_summary", "ap_aging_summary"] },
+    failSettings: false,
+    stored: [],
+    failStore: null,
+  };
+  /** Twin of fin.report_cache_guard: top-level keys, 16-level depth, and a string with a letter and 5+ digits in a row. */
+  const reportGuardProblem = (payload: unknown): string | null => {
+    if (typeof payload !== "object" || payload === null || Array.isArray(payload)) return "not an object";
+    if (Object.keys(payload).some((k) => !["Header", "Columns", "Rows"].includes(k))) return "top-level key";
+    let problem: string | null = null;
+    const walk = (node: unknown, depth: number) => {
+      if (problem) return;
+      if (depth >= 16) { problem = "depth"; return; }
+      if (typeof node === "string") {
+        const t = node.normalize("NFKC");
+        if (/[A-Za-z]|[^\p{ASCII}]/u.test(t) && /[0-9]{5}/.test(t)) problem = "value";
+      } else if (Array.isArray(node)) for (const x of node) walk(x, depth + 1);
+      else if (node && typeof node === "object") for (const x of Object.values(node)) walk(x, depth + 1);
+    };
+    walk(payload, 0);
+    return problem;
+  };
+  const reportStore: ReportCacheStore = {
+    async put(laneId, conn, entry) {
+      assertLaneBound(laneId, conn);
+      const fail = reportState.failStore;
+      if (fail && (fail.reports === "all" || fail.reports.includes(entry.report))) throw new ConnectorError({ kind: fail.kind, message: "Report store unavailable" });
+      const row = rowOf(laneId, conn);
+      if (row.status !== "active" && row.status !== "degraded") throw new ConnectorError({ kind: "connection_unavailable", message: "The connection is not usable for report storage" });
+      if (reportGuardProblem(entry.payload)) throw new ConnectorError({ kind: "provider_error", message: "The report was refused by the report cache" });
+      const same = (e: ReportCacheEntry) => e.report === entry.report && e.asOf === entry.asOf && JSON.stringify(Object.entries(e.params).sort()) === JSON.stringify(Object.entries(entry.params).sort());
+      const at = reportState.stored.findIndex(same);
+      if (at >= 0) reportState.stored[at] = entry;
+      else reportState.stored.push(entry);
+    },
+  };
+  const reportsJob = createQboReportsJob({
+    loader: { loadConnection: (laneId, id) => connections.load(laneId, id) },
+    api,
+    store: reportStore,
+    settings: async () => {
+      if (reportState.failSettings) throw new ConnectorError({ kind: "provider_error", message: "The lane's report settings are not valid" });
+      return reportState.settings;
+    },
+    payroll: async () => {
+      if (payrollState.fail) throw new ConnectorError({ kind: "transient", message: "Lane configuration unavailable" });
+      return payrollState.settings;
+    },
+    now,
+    logger,
+  });
   const revoker = createQuickBooksRevoker({
     provider,
     environment: () => environment,
@@ -279,6 +334,9 @@ export function createQboHarness(options: QboHarnessOptions) {
   return {
     clock,
     payrollState,
+    reportState,
+    reportGuardProblem,
+    reportsJob,
     logs,
     audits,
     rows,

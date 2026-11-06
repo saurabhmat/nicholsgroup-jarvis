@@ -4,7 +4,7 @@
 // The fake's rotation rule: every refresh issues a new access and refresh token; every refresh token it has issued
 // stays usable until it is replaced twice over (Intuit keeps the previous refresh token valid for a grace period).
 import { delay, http, HttpResponse, type RequestHandler } from "msw";
-import { type FakeData, type FakeObject, syntheticPreferences } from "./fixtures";
+import { type FakeData, type FakeObject, type FakeReports, syntheticPreferences, syntheticReports } from "./fixtures";
 
 export const API_SANDBOX = "https://sandbox-quickbooks.api.intuit.com";
 export const API_PRODUCTION = "https://quickbooks.api.intuit.com";
@@ -85,6 +85,9 @@ export type FakeIntuit = {
     queries: string[];
     cdcRequests: { entities: string; changedSince: string }[];
     preferencesRequests: number;
+    /** T-052: report answers by Intuit's report name, and what was asked (query strings as sent). */
+    reports: FakeReports;
+    reportRequests: { name: string; query: Record<string, string> }[];
     /** Any request to the API that is not a GET on a known read path (must stay empty). */
     unexpected: { method: string; path: string }[];
     /** Next N query/CDC/Preferences calls answer this status (429 gets Retry-After: 0). */
@@ -120,6 +123,8 @@ export function createFakeIntuit(options: FakeIntuitOptions = {}): FakeIntuit {
     queries: [],
     cdcRequests: [],
     preferencesRequests: 0,
+    reports: syntheticReports(),
+    reportRequests: [],
     unexpected: [],
     failRead: null,
   };
@@ -199,6 +204,15 @@ export function createFakeIntuit(options: FakeIntuitOptions = {}): FakeIntuit {
         return all.length ? { [entity]: all, startPosition: 1, maxResults: all.length } : {};
       });
       return HttpResponse.json({ CDCResponse: [{ QueryResponse: parts }], time: new Date().toISOString() }, { headers: tidHeader() });
+    }),
+    http.get(`${api}/v3/company/:realm/reports/:name`, ({ request, params }) => {
+      const denied = readGate(request, params);
+      if (denied) return denied;
+      const name = String(params.name);
+      state.reportRequests.push({ name, query: Object.fromEntries(new URL(request.url).searchParams) });
+      const report = state.reports[name];
+      if (!report) return HttpResponse.json({ Fault: { Error: [{ Message: "Invalid report name", code: "4000" }], type: "ValidationFault" } }, { status: 400, headers: tidHeader() });
+      return HttpResponse.json(report, { headers: tidHeader() });
     }),
     // Anything else under the company path that is not the CompanyInfo read must never be called by the sync.
     http.all(`${api}/v3/company/:realm/*`, ({ request }) => {

@@ -20,12 +20,15 @@ export interface LaneConfigReader {
   retentionSettings(laneId: LaneId): Promise<RetentionSettings>;
   /** `lane_config.finance.payroll` (D-25): payroll account ids and subtypes and excluded entity ids; defaults when unset; throws when unreadable or malformed (fail closed) (T-051). */
   payrollSettings(laneId: LaneId): Promise<PayrollSettings>;
+  /** `lane_config.finance` report settings (accounting method, period) and the lane's own-entity QuickBooks classes; defaults when unset; throws when malformed (fail closed) (T-052). */
+  reportSettings(laneId: LaneId): Promise<ReportSettings>;
   /** Only the `lane_config.retention` part of the above (defaults when unset), so a bad config does not hide the policy's comms days (T-042). */
   retentionConfig(laneId: LaneId): Promise<Omit<RetentionSettings, "commsDays">>;
 }
 
 export type { PayrollSettings } from "../quickbooks/sync";
 import type { PayrollSettings } from "../quickbooks/sync";
+import type { ReportSettings } from "../quickbooks/reports";
 
 export type RetentionSettings = { commsDays: number; calendarDays: number; conversationsDays: number; webhookDays: number };
 export const DEFAULT_RETENTION = { calendarDays: 180, conversationsDays: 180, webhookDays: 30 } as const;
@@ -143,6 +146,26 @@ export function createLaneConfigReader(clientFor: JobClientFor): LaneConfigReade
       if (!parsed.success) throw new ConnectorError({ kind: "provider_error", message: "The lane's payroll settings are not valid" });
       const p = parsed.data.payroll;
       return { accountIds: p.account_ids, accountSubtypes: p.account_subtypes, excludedEntityIds: p.excluded_entity_ids };
+    },
+    async reportSettings(laneId) {
+      const config = await readConfig(laneId);
+      const root = config && typeof config === "object" && !Array.isArray(config) ? (config as Record<string, unknown>) : {};
+      const bad = () => new ConnectorError({ kind: "provider_error", message: "The lane's report settings are not valid" });
+      // Same schemas as the config itself (defaults included): one definition of each setting.
+      const finance = laneConfigSchema.shape.finance.safeParse(root.finance ?? {});
+      if (!finance.success) throw bad();
+      let classIds: string[] = [];
+      if (root.entities !== undefined && root.entities !== null) {
+        const entities = laneConfigSchema.shape.entities.safeParse(root.entities);
+        if (!entities.success) throw bad();
+        const own = entities.data?.own_entity;
+        classIds = own !== undefined ? (entities.data?.by_entity[own]?.qbo_class_ids ?? []) : [];
+      }
+      // Classes split entities only in a "file_class" company file; in a "file" lane the file is the entity.
+      const qbo = root.qbo === undefined || root.qbo === null ? undefined : laneConfigSchema.shape.qbo.safeParse(root.qbo);
+      if (qbo && !qbo.success) throw bad();
+      if (qbo?.data?.entity_mapping_mode !== "file_class") classIds = [];
+      return { method: finance.data.accounting_method, period: finance.data.reports.period, classIds: [...classIds], kinds: [...new Set(finance.data.reports.kinds)] };
     },
     async qboRealmId(laneId) {
       const config = await readConfig(laneId);

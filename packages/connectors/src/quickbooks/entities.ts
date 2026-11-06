@@ -231,6 +231,8 @@ export type ExclusionPolicy = {
 const lc = (v: unknown) => (typeof v === "string" ? v.trim().toLowerCase() : "");
 const valueOf = (v: unknown): string | null => (typeof v === "object" && v !== null && typeof (v as { value?: unknown }).value === "string" ? (v as { value: string }).value : null);
 const PAYROLL_NAME = /payroll|salar(?:y|ies)|\bwages?\b|compensation/i;
+/** The name safety net of the payroll classification, for report labels (T-052). */
+export const isPayrollLabel = (text: string): boolean => PAYROLL_NAME.test(text);
 
 /**
  * Accounts that are payroll for this run (D-25: payroll is excluded entirely): the configured ids, every account whose

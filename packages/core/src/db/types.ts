@@ -370,6 +370,9 @@ isOneToOne: false
 "connection_token_store":
 { Args: { "p_actor_id"?: string,"p_connection_id": string,"p_expires_at": string,"p_lane_id": string,"p_secret": string }; Returns: undefined
                            },
+"fin_report_cache_put":
+{ Args: { "p_as_of": string,"p_connection_id": string,"p_fetched_at": string,"p_lane": string,"p_params": Json,"p_payload": Json,"p_report": string }; Returns: string
+                           },
 "has_lane_role":
 { Args: { "p_lane": string,"p_roles": (string)[],"p_uid": string }; Returns: boolean
                            },

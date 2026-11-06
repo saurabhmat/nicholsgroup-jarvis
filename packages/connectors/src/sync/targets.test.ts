@@ -34,3 +34,20 @@ describe("listCalendarConnectionIds", () => {
     await expect(createSyncTargetLister(async () => { throw new Error("no lane"); }).listCalendarConnectionIds("APK")).rejects.toThrow();
   });
 });
+
+describe("listQuickbooksConnectionIds (T-052)", () => {
+  it("selects ids of the lane's active/degraded QuickBooks connections only", async () => {
+    const x = fake({ data: [{ id: A }, { id: "bad" }] });
+    await expect(createSyncTargetLister(x.clientFor).listQuickbooksConnectionIds("PKG")).resolves.toEqual([A]);
+    expect(x.f).toContainEqual(["eq", "lane_id", "PKG"]);
+    expect(x.f).toContainEqual(["in", "provider", ["quickbooks"]]);
+    expect(x.f).toContainEqual(["in", "status", ["active", "degraded"]]);
+  });
+
+  it("fails generically and refuses a bad lane", async () => {
+    const lister = createSyncTargetLister(fake({ error: { message: "relation x leaks" } }).clientFor);
+    const err = (await lister.listQuickbooksConnectionIds("PKG").catch((e: unknown) => e)) as Error;
+    expect(err.message).not.toContain("leaks");
+    await expect(lister.listQuickbooksConnectionIds("pkg" as never)).rejects.toThrow();
+  });
+});

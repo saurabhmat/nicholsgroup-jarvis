@@ -18,7 +18,8 @@
     "./comms": "./src/comms/index.ts",
     "./google": "./src/google/index.ts",
     "./sync": "./src/sync/index.ts",
-    "./retention": "./src/retention/index.ts"
+    "./retention": "./src/retention/index.ts",
+    "./reports": "./src/reports/index.ts"
   },
   "scripts": {
     "typecheck": "tsc -b",

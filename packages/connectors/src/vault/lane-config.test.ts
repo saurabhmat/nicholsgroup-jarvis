@@ -147,3 +147,30 @@ describe("retentionSettings (T-042)", () => {
     expect(await createLaneConfigReader(both(null, { config: {} })).retentionConfig("PKG")).toEqual({ calendarDays: 180, conversationsDays: 180, webhookDays: 30 });
   });
 });
+
+describe("reportSettings (T-052)", () => {
+  const cfg = (config: unknown) => createLaneConfigReader(client({ data: { config } }).clientFor);
+  const entities = { own_entity: "PKG", by_entity: { PKG: { qbo_class_ids: ["12", "3"] }, APK: { qbo_class_ids: ["99"] } } };
+
+  it("defaults: accrual, year to date, no classes", async () => {
+    expect(await cfg({}).reportSettings("PKG")).toEqual({ method: "accrual", period: "year_to_date", classIds: [], kinds: ["pnl", "ar_aging_summary", "ap_aging_summary"] });
+    expect(await createLaneConfigReader(client({ data: null }).clientFor).reportSettings("PKG")).toEqual({ method: "accrual", period: "year_to_date", classIds: [], kinds: ["pnl", "ar_aging_summary", "ap_aging_summary"] });
+  });
+
+  it("reads the method and period, and the lane's OWN entity classes only (never another entity's)", async () => {
+    const r = await cfg({ finance: { accounting_method: "cash", reports: { period: "trailing_12_months", kinds: ["pnl", "balance_sheet", "pnl"] } }, qbo: { realm_id: "1001", entity_mapping_mode: "file_class" }, entities }).reportSettings("PKG");
+    expect(r).toEqual({ method: "cash", period: "trailing_12_months", classIds: ["12", "3"], kinds: ["pnl", "balance_sheet"] });
+  });
+
+  it("classes only count in a file_class lane (in a file lane the file is the entity)", async () => {
+    expect((await cfg({ qbo: { realm_id: "1001", entity_mapping_mode: "file" }, entities }).reportSettings("PKG")).classIds).toEqual([]);
+    expect((await cfg({ entities }).reportSettings("PKG")).classIds).toEqual([]);
+  });
+
+  it("fails closed on a malformed finance, entities or qbo section", async () => {
+    for (const bad of [{ finance: { accounting_method: "weekly" } }, { finance: { reports: { period: "forever" } } }, { finance: { reports: { x: 1 } } }, { finance: { reports: { kinds: ["ledger"] } } }, { finance: "x" }, { entities: { own_entity: "PKG", by_entity: {} } }, { qbo: { realm_id: "abc" } }]) {
+      expect(await kindOf(cfg(bad).reportSettings("PKG")), JSON.stringify(bad)).toBe("provider_error");
+    }
+    expect(await kindOf(createLaneConfigReader(client({ error: { message: "secret db text" } }).clientFor).reportSettings("PKG"))).toBe("transient");
+  });
+});

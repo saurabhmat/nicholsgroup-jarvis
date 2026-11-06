@@ -62,6 +62,11 @@ const entityMappingSchema = z.strictObject({
  */
 export const QBO_PAYROLL_SUBTYPES = ["PayrollExpenses", "PayrollTaxExpenses", "PayrollClearing", "PayrollTaxPayable", "PayrollWagePayable", "DirectDepositPayable", "CostOfLabor"] as const;
 
+/** The `fin.report_cache` report kinds (T-052). */
+export const REPORT_KINDS = ["pnl", "balance_sheet", "cash_flow", "ar_aging_summary", "ap_aging_summary"] as const;
+/** Cached by default: not balance_sheet or cash_flow until D-27 is decided. */
+export const DEFAULT_REPORT_KINDS = ["pnl", "ar_aging_summary", "ap_aging_summary"] as const;
+
 export const laneConfigSchema = z.strictObject({
   enabled_modules: z.array(z.enum(MODULES)).default([]),
   kpis: z.array(z.enum(KPI_IDS)).default([]),
@@ -129,6 +134,18 @@ export const laneConfigSchema = z.strictObject({
           account_ids: z.array(z.string().regex(/^\d{1,20}$/)).max(200).default([]),
           account_subtypes: z.array(z.string().regex(/^[A-Za-z][A-Za-z0-9]{0,63}$/)).max(100).default([...QBO_PAYROLL_SUBTYPES]),
           excluded_entity_ids: z.array(z.string().regex(/^\d{1,20}$/)).max(500).default([]),
+        })
+        .prefault({}),
+      // QuickBooks report pulls (T-052). `period` is the date range of ProfitAndLoss and CashFlow (and the as-of end date
+      // of BalanceSheet and the aging reports): the calendar year to date, or the last 12 months, in America/New_York.
+      // The class filter comes from `entities.by_entity[own_entity].qbo_class_ids`, used only with class tracking on.
+      reports: z
+        .strictObject({
+          period: z.enum(["year_to_date", "trailing_12_months"]).default("year_to_date"),
+          // Which report kinds are fetched and cached. Default fails closed (D-27): `cash_flow` and `balance_sheet` are not
+          // cached until Saurabh/Robert decide how far payroll exclusion goes, because those two let a reader recover the
+          // aggregate payroll amount from the other cached reports.
+          kinds: z.array(z.enum(REPORT_KINDS)).max(5).default([...DEFAULT_REPORT_KINDS]),
         })
         .prefault({}),
     })

@@ -30,10 +30,10 @@ export const CDC_SAFETY_MS = 3_600_000;
 export const CURSOR_OVERLAP_MS = 5 * 60_000;
 /** Intuit's page size for queries and the per-entity cap of a CDC answer. */
 export const PAGE_SIZE = 1000;
-const MAX_PAGES = 2000;
+export const MAX_PAGES = 2000;
 
 // ORDERBY Id: a stable order, so a deletion during the load cannot shift a record from one page to another.
-const Q = (entity: string, start: number) =>
+export const entityQuery = (entity: string, start: number) =>
   `select * from ${entity}${QBO_HAS_ACTIVE_FLAG.has(entity) ? " where Active in (true, false)" : ""} ORDERBY Id STARTPOSITION ${start} MAXRESULTS ${PAGE_SIZE}`;
 
 const ISO_Z = /^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}\.[0-9]{3}Z$/;
@@ -115,7 +115,7 @@ export function createQboSync(deps: QboSyncDeps) {
       const out: unknown[] = [];
       for (let page = 0, start = 1; ; page += 1, start += PAGE_SIZE) {
         if (page >= MAX_PAGES) throw providerError(`${entity} query did not end`, lastTid);
-        const res = await deps.api.get<unknown>(laneId, conn, "/v3/company/{realm}/query", { realm }, { query: Q(entity, start) });
+        const res = await deps.api.get<unknown>(laneId, conn, "/v3/company/{realm}/query", { realm }, { query: entityQuery(entity, start) });
         lastTid = res.providerTid ?? lastTid;
         const parsed = QueryResponse.safeParse(res.data);
         if (!parsed.success) throw providerError("Query response is not valid", res.providerTid);

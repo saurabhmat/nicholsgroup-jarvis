@@ -14,7 +14,7 @@ import { serve } from "inngest/next";
 import { getInngestEnv, getServerEnv, isDevelopmentRuntime } from "../env/server";
 import { LANE_EVENTS } from "./events";
 
-export { actionApproved, connSyncRequested, LANE_EVENTS, laneIdSchema, retentionPurgeRequested, systemHeartbeat, webhookReceived } from "./events";
+export { actionApproved, connSyncRequested, finQboReportsRequested, LANE_EVENTS, laneIdSchema, retentionPurgeRequested, systemHeartbeat, webhookReceived } from "./events";
 export { platformFunctions } from "./functions";
 export {
   CAL_INGEST_CADENCE_MS,
@@ -27,6 +27,18 @@ export {
   planCalIngest,
 } from "./cal-ingest";
 export type { CalIngestDeps, CalIngestPlan } from "./cal-ingest";
+export {
+  FIN_REPORTS_CONCURRENCY,
+  FIN_REPORTS_CRON,
+  FIN_REPORTS_RETRIES,
+  FIN_REPORTS_SCHEDULE_RETRIES,
+  finQboReportsFunctions,
+  finReportsEventId,
+  handleFinReports,
+  handleFinReportsSchedule,
+  planFinReports,
+} from "./fin-reports";
+export type { FinQboReportsDeps, FinQboReportsResult, FinReportsPlan } from "./fin-reports";
 export { CONN_SYNC_CONCURRENCY, CONN_SYNC_RETRIES, connSyncFunction, handleConnSync } from "./conn-sync";
 export {
   RETENTION_CRON,

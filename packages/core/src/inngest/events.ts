@@ -47,5 +47,14 @@ export const retentionPurgeRequested = eventType("retention/purge.requested", {
   schema: z.strictObject({ laneId: laneIdSchema }),
 });
 
+/** Pull a QuickBooks connection's summary reports into fin.report_cache (T-052). Ids only; `trigger` is logged, nothing else reads it. */
+export const finQboReportsRequested = eventType("fin/qbo-reports.requested", {
+  schema: z.strictObject({
+    laneId: laneIdSchema,
+    connectionId: z.uuid(),
+    trigger: z.enum(["schedule", "manual", "weekly_cash"]),
+  }),
+});
+
 /** Every lane event, for the test that checks they all require laneId. Add new events here. */
-export const LANE_EVENTS = [connSyncRequested, actionApproved, systemHeartbeat, webhookReceived, retentionPurgeRequested] as const;
+export const LANE_EVENTS = [connSyncRequested, actionApproved, systemHeartbeat, webhookReceived, retentionPurgeRequested, finQboReportsRequested] as const;
