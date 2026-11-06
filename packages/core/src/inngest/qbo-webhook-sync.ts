@@ -25,7 +25,9 @@ export type QboWebhookSyncDeps = {
 };
 
 /** Function options, exported so tests assert them. */
-export const QBO_WEBHOOK_BATCH = { maxSize: 100, timeout: "10s", key: "event.data.laneId + '/' + event.data.connectionId" } as const;
+// maxSize 5: the Inngest plan in use caps batch size at 5 (sync error, Nov 6, 2026). Each batch gets its own deterministic
+// conn.sync event id, so smaller batches only mean more (deduped, concurrency-limited) sync requests, never lost changes.
+export const QBO_WEBHOOK_BATCH = { maxSize: 5, timeout: "10s", key: "event.data.laneId + '/' + event.data.connectionId" } as const;
 export const QBO_WEBHOOK_RETRIES = 3;
 
 type StepApi = {

@@ -25,6 +25,8 @@ describe("qbo.webhook_sync", () => {
   it("batches by connection and is triggered by the typed webhook/received event", () => {
     expect(QBO_WEBHOOK_BATCH.key).toContain("event.data.laneId");
     expect(QBO_WEBHOOK_BATCH.key).toContain("event.data.connectionId");
+    // the Inngest plan in use refuses a batch larger than 5 at app sync (Nov 6, 2026)
+    expect(QBO_WEBHOOK_BATCH.maxSize).toBeLessThanOrEqual(5);
     const fn = qboWebhookSyncFunctions(new Inngest({ id: "test-app", isDev: true }), setup().deps)[0] as unknown as { opts: Record<string, unknown> };
     const opts = JSON.parse(JSON.stringify(fn.opts)) as { id: string; batchEvents: unknown };
     expect(opts.id).toBe("qbo-webhook-sync");
