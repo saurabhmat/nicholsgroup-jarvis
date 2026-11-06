@@ -379,6 +379,19 @@ isOneToOne: false
 "has_lane_role":
 { Args: { "p_lane": string,"p_roles": (string)[],"p_uid": string }; Returns: boolean
                            },
+"home_calendar_status":
+{ Args: { "p_lane": string }; Returns: string
+                           },
+"home_mail_attention":
+{ Args: { "p_lane": string,"p_since": string }; Returns: {
+              "priority_configured": boolean,"unread_important": number,"unread_priority": number
+            }[]
+                           },
+"home_meetings":
+{ Args: { "p_from": string,"p_lane": string,"p_to": string }; Returns: {
+              "all_day": boolean,"end_at": string,"location": string,"online_meeting_url": string,"source_url": string,"start_at": string,"start_date": string,"title": string
+            }[]
+                           },
 "is_connection_features":
 { Args: { "p_features": Json }; Returns: boolean
                            },
