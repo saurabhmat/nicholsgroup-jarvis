@@ -336,6 +336,8 @@ export function projectPreferences(raw: unknown, realm: string): { record: Proje
 
 export function projectCompanyInfo(raw: unknown, realm: string): ProjectedRecord | null {
   const parsed = CompanyInfoSchema.safeParse(raw);
-  if (!parsed.success || parsed.data.Id !== realm) return null;
-  return { objectType: "CompanyInfo", externalId: realm, payload: { ...parsed.data }, sourceUpdatedAt: sourceUpdatedAt(parsed.data.MetaData), deleted: false };
+  if (!parsed.success) return null;
+  // One object per company, like Preferences: the realm is its id. Intuit's own Id is the record id ("1"), not the
+  // realm, so it is not compared; the realm-scoped URL (403 for a token of another company) is the binding.
+  return { objectType: "CompanyInfo", externalId: realm, payload: { ...parsed.data, Id: realm }, sourceUpdatedAt: sourceUpdatedAt(parsed.data.MetaData), deleted: false };
 }

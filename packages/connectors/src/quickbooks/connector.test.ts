@@ -63,16 +63,16 @@ describe("health reads CompanyInfo", () => {
     expect(JSON.stringify(health)).not.toContain("synthetic failure");
   });
 
-  it("a response for a different company is never trusted", async () => {
+  it("a token not authorized for the realm (403) is never trusted", async () => {
     const { h, conn } = await setup();
     server.use(
       http.get(`${API_SANDBOX}/v3/company/:realm/companyinfo/:id`, () =>
-        HttpResponse.json({ CompanyInfo: { Id: "5555555555", CompanyName: "Someone Else" } }, { headers: { intuit_tid: "synthetic-tid-x" } }),
+        HttpResponse.json({ Fault: { Error: [{ Message: "ApplicationAuthorizationFailed", code: "003100" }], type: "AUTHENTICATION" } }, { status: 403, headers: { intuit_tid: "synthetic-tid-x" } }),
       ),
     );
     const health = await h.connector.health(LANE, conn);
     expect(health).toMatchObject({ ok: false, status: "degraded" });
-    expect(health.error?.kind).toBe("provider_error");
+    expect(health.error?.kind).toBe("forbidden");
   });
 
   it("a connection that is not usable is reported without calling Intuit", async () => {
@@ -89,6 +89,8 @@ describe("read company_info", () => {
   it("returns an allowlisted projection with provenance, and keeps no address or email", async () => {
     const { h, conn } = await setup();
     const res = await h.connector.read<Record<string, unknown>>(LANE, conn, { op: "company_info" });
+    // Real QuickBooks (and the fake) answer CompanyInfo.Id "1": the projection's id is the connection's realm.
+    expect(res.data).toMatchObject({ id: conn.external_account_id });
     expect(res.data).toEqual({
       id: FAKE_REALM,
       company_name: "Synthetic Test Company",

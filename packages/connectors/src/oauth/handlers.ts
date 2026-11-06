@@ -35,7 +35,10 @@ export function createConnectHandlers(flow: Pick<ReturnType<typeof createOAuthFl
       const url = new URL(request.url);
       try {
         const result = await flow.callback(provider, url.searchParams, await authorizer());
-        const home = new URL("/", url.origin);
+        // Back to the lane's Settings page, which shows the result. The lane is parsed from `state` (`[A-Z]{1,8}`, pkce.ts)
+        // and passed `authorize` for this user; it is not necessarily a matched state row, so use it for this redirect only.
+        // Without a lane (garbage state, unknown provider) back to the entry page, which drops the result (accepted).
+        const home = new URL(result.laneId ? `/${encodeURIComponent(result.laneId)}/settings` : "/", url.origin);
         home.searchParams.set("connect", result.ok ? "ok" : result.reason);
         if (result.provider) home.searchParams.set("provider", result.provider);
         // The code was exchanged but nothing was stored: the owner is told to remove the app's access at the provider (D-24).

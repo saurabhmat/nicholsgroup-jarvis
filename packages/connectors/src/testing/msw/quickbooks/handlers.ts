@@ -74,6 +74,10 @@ export type FakeIntuit = {
     failApi: { status: number; times: number } | null;
     /** Access tokens the API accepts. */
     validAccess: Set<string>;
+    /** The company the next authorization code is for (the one the user picks on Intuit's consent screen). */
+    consentRealm: string;
+    /** The company each issued access/refresh token is for: like Intuit, a token works for that company only (403 elsewhere). */
+    tokenRealm: Map<string, string>;
     /** Refresh tokens the token endpoint accepts. */
     validRefresh: Set<string>;
     /** T-051: served entities (mutable), CDC deletions and what was asked. */
@@ -115,6 +119,8 @@ export function createFakeIntuit(options: FakeIntuitOptions = {}): FakeIntuit {
     reject401: 0,
     failApi: null,
     validAccess: new Set(),
+    consentRealm: realm,
+    tokenRealm: new Map(),
     validRefresh: new Set(),
     data: options.data ?? {},
     preferences: options.preferences ?? syntheticPreferences(),
@@ -128,10 +134,12 @@ export function createFakeIntuit(options: FakeIntuitOptions = {}): FakeIntuit {
     unexpected: [],
     failRead: null,
   };
-  const issue = () => {
+  const issue = (forRealm: string) => {
     n += 1;
     const pair = { access: `synthetic-access-token-${String(n).padStart(4, "0")}`, refresh: `synthetic-refresh-token-${String(n).padStart(4, "0")}` };
     state.issued.push(pair);
+    state.tokenRealm.set(pair.access, forRealm);
+    state.tokenRealm.set(pair.refresh, forRealm);
     state.validAccess.add(pair.access);
     state.validRefresh.add(pair.refresh);
     // grace: keep only the two newest refresh tokens usable
@@ -147,6 +155,11 @@ export function createFakeIntuit(options: FakeIntuitOptions = {}): FakeIntuit {
   };
   const api = environment === "sandbox" ? API_SANDBOX : API_PRODUCTION;
   const tidHeader = () => ({ intuit_tid: nextTid() });
+  const forbidden = () =>
+    HttpResponse.json(
+      { Fault: { Error: [{ Message: "ApplicationAuthorizationFailed", code: "003100", Detail: "message=ApplicationAuthorizationFailed" }], type: "AUTHENTICATION" } },
+      { status: 403, headers: tidHeader() },
+    );
 
   /** Auth + injected failures shared by the T-051 read endpoints; null = proceed. */
   const readGate = (request: Request, params: Record<string, string | readonly string[] | undefined>): Response | null => {
@@ -165,6 +178,7 @@ export function createFakeIntuit(options: FakeIntuitOptions = {}): FakeIntuit {
     if (!(params.realm === realm || options.extraRealms?.includes(String(params.realm)))) {
       return HttpResponse.json({ Fault: { Error: [{ Message: "Not found", code: "610" }], type: "ValidationFault" } }, { status: 404, headers: tidHeader() });
     }
+    if (state.tokenRealm.get(token) !== String(params.realm)) return forbidden();
     return null;
   };
   const updatedAt = (o: FakeObject) => Date.parse(String((o.MetaData as { LastUpdatedTime?: string } | undefined)?.LastUpdatedTime ?? ""));
@@ -239,7 +253,7 @@ export function createFakeIntuit(options: FakeIntuitOptions = {}): FakeIntuit {
       }
       if (grant === "authorization_code") {
         if (form.get("code") !== FAKE_CODE) return HttpResponse.json({ error: "invalid_grant" }, { status: 400, headers: tidHeader() });
-        return HttpResponse.json(issue(), { headers: tidHeader() });
+        return HttpResponse.json(issue(state.consentRealm), { headers: tidHeader() });
       }
       if (grant === "refresh_token") {
         const fail = state.failRefresh;
@@ -247,10 +261,11 @@ export function createFakeIntuit(options: FakeIntuitOptions = {}): FakeIntuit {
           if (!fail.always) state.failRefresh = null;
           return HttpResponse.json({ error: fail.error }, { status: fail.status, headers: tidHeader() });
         }
-        if (!state.validRefresh.has(form.get("refresh_token") ?? "")) {
+        const refresh = form.get("refresh_token") ?? "";
+        if (!state.validRefresh.has(refresh)) {
           return HttpResponse.json({ error: "invalid_grant" }, { status: 400, headers: tidHeader() });
         }
-        return HttpResponse.json(issue(), { headers: tidHeader() });
+        return HttpResponse.json(issue(state.tokenRealm.get(refresh) ?? realm), { headers: tidHeader() });
       }
       return HttpResponse.json({ error: "unsupported_grant_type" }, { status: 400, headers: tidHeader() });
     }),
@@ -274,13 +289,17 @@ export function createFakeIntuit(options: FakeIntuitOptions = {}): FakeIntuit {
       if (!state.validAccess.has(token)) {
         return HttpResponse.json({ Fault: { Error: [{ Message: "AuthenticationFailed", code: "003200", Detail: "Token invalid" }], type: "AUTHENTICATION" } }, { status: 401, headers: tidHeader() });
       }
-      if (!(params.realm === realm || options.extraRealms?.includes(String(params.realm))) || params.id !== params.realm) {
+      // Like Intuit: a token used for a company it was not issued for is a 403, never another company's data.
+      if (state.tokenRealm.get(token) !== String(params.realm)) return forbidden();
+      if (params.id !== params.realm) {
         return HttpResponse.json({ Fault: { Error: [{ Message: "Not found", code: "610" }], type: "ValidationFault" } }, { status: 404, headers: tidHeader() });
       }
       return HttpResponse.json(
         {
           CompanyInfo: {
-            Id: String(params.realm),
+            // As in real QuickBooks: the record id inside the company, not the realm (T-050 had the realm here, which
+            // hid that the connector compared Id to the realm and refused every real company).
+            Id: "1",
             CompanyName: "Synthetic Test Company",
             LegalName: "Synthetic Test Company LLC",
             Country: "US",

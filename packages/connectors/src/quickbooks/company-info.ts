@@ -37,11 +37,13 @@ function parseCompanyInfo(res: ConnectorResponse<unknown>, realm: string): { inf
   const parsed = Response.safeParse(res.data);
   if (!parsed.success) throw new ConnectorError({ kind: "provider_error", message: "CompanyInfo response is not valid", http_status: res.status, provider_tid: res.providerTid });
   const c = parsed.data.CompanyInfo;
-  // A response for another company means the token or the connection row is wrong: never use it.
-  if (c.Id !== realm) throw new ConnectorError({ kind: "provider_error", message: "CompanyInfo is for a different company than the connection", provider_tid: res.providerTid });
+  // `CompanyInfo.Id` is the record id inside the company (QuickBooks returns "1"), NOT the realm, so it says nothing
+  // about which company answered. The binding is the URL: the call goes to /v3/company/{realm}/..., and Intuit answers
+  // 401/403 when the token is not authorized for that realm. A 200 here therefore proves the token is for `realm`.
+  // (Comparing Id to the realm refused every real company; the T-050 fake wrongly echoed the realm as Id.)
   return {
     info: {
-      id: c.Id,
+      id: realm,
       company_name: c.CompanyName ?? null,
       legal_name: c.LegalName ?? null,
       country: c.Country ?? null,

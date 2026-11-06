@@ -291,7 +291,7 @@ describe("who may connect (owner or admin_technical of the lane, at aal2)", () =
     const handlers = createConnectHandlers(h.flow, async () => h.as(ADMIN));
     const res = await handlers.callback(new Request(`http://localhost:3000/api/connect/qbo/callback?${query(url)}`), "qbo");
     expect(res.status).toBe(303);
-    expect(res.headers.get("location")).toBe("/?connect=account_refused&provider=quickbooks");
+    expect(res.headers.get("location")).toBe("/PKG/settings?connect=account_refused&provider=quickbooks");
   });
 });
 
@@ -322,10 +322,25 @@ describe("the realm in the redirect URL must be the realm of the token (security
     for (const pair of intuit.state.issued) expect(text).not.toMatch(new RegExp(`${pair.access}|${pair.refresh}`));
   });
 
-  it("a CompanyInfo answer for a different company than the realm is refused the same way", async () => {
+  it("a token for company A with the callback edited to B, where B is the lane's company and Intuit knows both, is refused (no override)", async () => {
+    // Intuit serves both companies; the lane is configured for B; the user consents to A and edits the callback to B.
+    const intuit = createFakeIntuit({ extraRealms: [OTHER_REALM] });
+    server.use(...intuit.handlers);
+    const h = createQboHarness({ intuit, realms: { PKG: OTHER_REALM } });
+    intuit.state.consentRealm = FAKE_REALM;
+    const url = await h.flow.start("qbo", "PKG", h.as(ADMIN));
+    const r = await h.flow.callback("qbo", query(url, { code: FAKE_CODE, realmId: OTHER_REALM }), h.as(ADMIN));
+    expect(r).toMatchObject({ ok: false, reason: "account_refused" });
+    expect(intuit.state.tokenRequests.filter((t) => t.grant === "authorization_code")).toHaveLength(1);
+    expect(h.rows.size).toBe(0);
+    expect(h.secrets.size).toBe(0);
+    expect(intuit.state.revokeRequests).toHaveLength(0);
+  });
+
+  it("a token Intuit did not authorize for the realm (403 on CompanyInfo) is refused the same way", async () => {
     const { intuit, h } = setup();
     server.use(
-      http.get(`${API_SANDBOX}/v3/company/:realm/companyinfo/:id`, () => HttpResponse.json({ CompanyInfo: { Id: "5555555555" } }, { headers: { intuit_tid: "synthetic-tid-x" } })),
+      http.get(`${API_SANDBOX}/v3/company/:realm/companyinfo/:id`, () => HttpResponse.json({ Fault: { Error: [{ Message: "ApplicationAuthorizationFailed", code: "003100" }], type: "AUTHENTICATION" } }, { status: 403, headers: { intuit_tid: "synthetic-tid-x" } })),
     );
     const url = await h.flow.start("qbo", "PKG", h.as(ADMIN));
     expect(await h.flow.callback("qbo", query(url), h.as(ADMIN))).toMatchObject({ ok: false, reason: "account_refused" });
@@ -346,11 +361,11 @@ describe("the realm in the redirect URL must be the realm of the token (security
 
   it("the callback route adds a notice so the owner is told to remove the app's access in Intuit", async () => {
     const { h } = setup();
-    server.use(http.get(`${API_SANDBOX}/v3/company/:realm/companyinfo/:id`, () => HttpResponse.json({ CompanyInfo: { Id: "5555555555" } })));
+    server.use(http.get(`${API_SANDBOX}/v3/company/:realm/companyinfo/:id`, () => HttpResponse.json({ Fault: { Error: [{ Message: "ApplicationAuthorizationFailed", code: "003100" }], type: "AUTHENTICATION" } }, { status: 403, headers: { intuit_tid: "synthetic-tid-x" } })));
     const url = await h.flow.start("qbo", "PKG", h.as(ADMIN));
     const handlers = createConnectHandlers(h.flow, async () => h.as(ADMIN));
     const res = await handlers.callback(new Request(`http://localhost:3000/api/connect/qbo/callback?${query(url)}`), "qbo");
-    expect(res.headers.get("location")).toBe("/?connect=account_refused&provider=quickbooks&notice=remove_app_access");
+    expect(res.headers.get("location")).toBe("/PKG/settings?connect=account_refused&provider=quickbooks&notice=remove_app_access");
   });
 
   it("a refusal before the exchange (wrong configured realm) has no grant and no notice", async () => {
@@ -392,7 +407,7 @@ describe("one provider account per lane (D-23)", () => {
     const url = await h.flow.start("qbo", "APK", h.as(ADMIN));
     const handlers = createConnectHandlers(h.flow, async () => h.as(ADMIN));
     const res = await handlers.callback(new Request(`http://localhost:3000/api/connect/qbo/callback?${query(url)}`), "qbo");
-    expect(res.headers.get("location")).toBe("/?connect=account_refused&provider=quickbooks&notice=remove_app_access");
+    expect(res.headers.get("location")).toBe("/APK/settings?connect=account_refused&provider=quickbooks&notice=remove_app_access");
   });
 
   it("an abandoned pending row does not hold the account (the token store failed once): another lane can connect it, and the pending lane is then refused", async () => {
