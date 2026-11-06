@@ -4,6 +4,7 @@
 // The fake's rotation rule: every refresh issues a new access and refresh token; every refresh token it has issued
 // stays usable until it is replaced twice over (Intuit keeps the previous refresh token valid for a grace period).
 import { delay, http, HttpResponse, type RequestHandler } from "msw";
+import { type FakeData, type FakeObject, type FakeReports, syntheticPreferences, syntheticReports } from "./fixtures";
 
 export const API_SANDBOX = "https://sandbox-quickbooks.api.intuit.com";
 export const API_PRODUCTION = "https://quickbooks.api.intuit.com";
@@ -49,6 +50,10 @@ export type FakeIntuitOptions = {
    * `invalid_grant` (the strictest reading of "the refresh token rotates").
    */
   strictRotation?: boolean;
+  /** Entities the query and CDC endpoints serve (T-051). Default: none. */
+  data?: FakeData;
+  /** The Preferences object the API serves. Default: everything off. */
+  preferences?: FakeObject;
 };
 
 export type FakeIntuit = {
@@ -71,6 +76,22 @@ export type FakeIntuit = {
     validAccess: Set<string>;
     /** Refresh tokens the token endpoint accepts. */
     validRefresh: Set<string>;
+    /** T-051: served entities (mutable), CDC deletions and what was asked. */
+    data: FakeData;
+    preferences: FakeObject;
+    deleted: { entity: string; Id: string; at: string }[];
+    /** Objects per entity a CDC answer holds before it is cut off (Intuit: 1000). */
+    cdcCap: number;
+    queries: string[];
+    cdcRequests: { entities: string; changedSince: string }[];
+    preferencesRequests: number;
+    /** T-052: report answers by Intuit's report name, and what was asked (query strings as sent). */
+    reports: FakeReports;
+    reportRequests: { name: string; query: Record<string, string> }[];
+    /** Any request to the API that is not a GET on a known read path (must stay empty). */
+    unexpected: { method: string; path: string }[];
+    /** Next N query/CDC/Preferences calls answer this status (429 gets Retry-After: 0). */
+    failRead: { status: number; times: number } | null;
   };
   /** Mark an access token expired at the provider (the API answers 401 for it). */
   expireAccess(token: string): void;
@@ -95,6 +116,17 @@ export function createFakeIntuit(options: FakeIntuitOptions = {}): FakeIntuit {
     failApi: null,
     validAccess: new Set(),
     validRefresh: new Set(),
+    data: options.data ?? {},
+    preferences: options.preferences ?? syntheticPreferences(),
+    deleted: [],
+    cdcCap: 1000,
+    queries: [],
+    cdcRequests: [],
+    preferencesRequests: 0,
+    reports: syntheticReports(),
+    reportRequests: [],
+    unexpected: [],
+    failRead: null,
   };
   const issue = () => {
     n += 1;
@@ -116,7 +148,79 @@ export function createFakeIntuit(options: FakeIntuitOptions = {}): FakeIntuit {
   const api = environment === "sandbox" ? API_SANDBOX : API_PRODUCTION;
   const tidHeader = () => ({ intuit_tid: nextTid() });
 
+  /** Auth + injected failures shared by the T-051 read endpoints; null = proceed. */
+  const readGate = (request: Request, params: Record<string, string | readonly string[] | undefined>): Response | null => {
+    const authorization = request.headers.get("authorization");
+    state.apiRequests.push({ realm: String(params.realm), authorization, minorversion: new URL(request.url).searchParams.get("minorversion"), method: request.method });
+    if (state.failRead && state.failRead.times > 0) {
+      state.failRead.times -= 1;
+      const headers: Record<string, string> = { ...tidHeader() };
+      if (state.failRead.status === 429) headers["Retry-After"] = "0";
+      return HttpResponse.json({ Fault: { Error: [{ Message: "synthetic failure", code: "9999" }], type: "SystemFault" } }, { status: state.failRead.status, headers });
+    }
+    const token = authorization?.startsWith("Bearer ") ? authorization.slice(7) : "";
+    if (!state.validAccess.has(token)) {
+      return HttpResponse.json({ Fault: { Error: [{ Message: "AuthenticationFailed", code: "003200", Detail: "Token invalid" }], type: "AUTHENTICATION" } }, { status: 401, headers: tidHeader() });
+    }
+    if (!(params.realm === realm || options.extraRealms?.includes(String(params.realm)))) {
+      return HttpResponse.json({ Fault: { Error: [{ Message: "Not found", code: "610" }], type: "ValidationFault" } }, { status: 404, headers: tidHeader() });
+    }
+    return null;
+  };
+  const updatedAt = (o: FakeObject) => Date.parse(String((o.MetaData as { LastUpdatedTime?: string } | undefined)?.LastUpdatedTime ?? ""));
+
   const handlers: RequestHandler[] = [
+    http.get(`${api}/v3/company/:realm/preferences`, ({ request, params }) => {
+      const denied = readGate(request, params);
+      if (denied) return denied;
+      state.preferencesRequests += 1;
+      return HttpResponse.json({ Preferences: state.preferences, time: new Date().toISOString() }, { headers: tidHeader() });
+    }),
+    http.get(`${api}/v3/company/:realm/query`, ({ request, params }) => {
+      const denied = readGate(request, params);
+      if (denied) return denied;
+      const q = new URL(request.url).searchParams.get("query") ?? "";
+      state.queries.push(q);
+      const m = /^select \* from (\w+)( where Active in \(true, false\))? ORDERBY Id STARTPOSITION (\d+) MAXRESULTS (\d+)$/.exec(q);
+      if (!m) return HttpResponse.json({ Fault: { Error: [{ Message: "QueryParserError", code: "4000" }], type: "ValidationFault" } }, { status: 400, headers: tidHeader() });
+      const [, entity = "", , start = "1", max = "1000"] = m;
+      const all = state.data[entity] ?? [];
+      const page = all.slice(Number(start) - 1, Number(start) - 1 + Number(max));
+      return HttpResponse.json({ QueryResponse: page.length ? { [entity]: page, startPosition: Number(start), maxResults: page.length } : {}, time: new Date().toISOString() }, { headers: tidHeader() });
+    }),
+    http.get(`${api}/v3/company/:realm/cdc`, ({ request, params }) => {
+      const denied = readGate(request, params);
+      if (denied) return denied;
+      const url = new URL(request.url);
+      const entities = url.searchParams.get("entities") ?? "";
+      const changedSince = url.searchParams.get("changedSince") ?? "";
+      state.cdcRequests.push({ entities, changedSince });
+      const since = Date.parse(changedSince);
+      if (Number.isNaN(since)) return HttpResponse.json({ Fault: { Error: [{ Message: "bad changedSince", code: "2030" }], type: "ValidationFault" } }, { status: 400, headers: tidHeader() });
+      const parts = entities.split(",").filter(Boolean).map((entity) => {
+        const changed = (state.data[entity] ?? []).filter((o) => updatedAt(o) > since).slice(0, state.cdcCap);
+        const gone = state.deleted.filter((d) => d.entity === entity && Date.parse(d.at) > since).map((d) => ({ Id: d.Id, domain: "QBO", status: "Deleted", MetaData: { LastUpdatedTime: d.at } }));
+        const all = [...changed, ...gone];
+        return all.length ? { [entity]: all, startPosition: 1, maxResults: all.length } : {};
+      });
+      return HttpResponse.json({ CDCResponse: [{ QueryResponse: parts }], time: new Date().toISOString() }, { headers: tidHeader() });
+    }),
+    http.get(`${api}/v3/company/:realm/reports/:name`, ({ request, params }) => {
+      const denied = readGate(request, params);
+      if (denied) return denied;
+      const name = String(params.name);
+      state.reportRequests.push({ name, query: Object.fromEntries(new URL(request.url).searchParams) });
+      const report = state.reports[name];
+      if (!report) return HttpResponse.json({ Fault: { Error: [{ Message: "Invalid report name", code: "4000" }], type: "ValidationFault" } }, { status: 400, headers: tidHeader() });
+      return HttpResponse.json(report, { headers: tidHeader() });
+    }),
+    // Anything else under the company path that is not the CompanyInfo read must never be called by the sync.
+    http.all(`${api}/v3/company/:realm/*`, ({ request }) => {
+      const p = new URL(request.url).pathname.replace(/\/v3\/company\/[^/]+/, "");
+      if (request.method === "GET" && p.startsWith("/companyinfo/")) return undefined; // handled below
+      state.unexpected.push({ method: request.method, path: p });
+      return HttpResponse.json({ Fault: { Error: [{ Message: "not available", code: "500" }], type: "SystemFault" } }, { status: 500, headers: tidHeader() });
+    }),
     http.get(`${DISCOVERY_ORIGIN}/.well-known/openid_sandbox_configuration`, () => {
       state.discoveryRequests += 1;
       return HttpResponse.json(discoveryDocument("sandbox"), { headers: tidHeader() });

@@ -7,12 +7,12 @@ import { z } from "zod";
 
 export const laneIdSchema = z.string().regex(/^[A-Z]{1,8}$/);
 
-/** Run a connection's sync (T-038). `trigger` says why (default "manual"); it is logged on the run, nothing else reads it. */
+/** Run a connection's sync (T-038). `trigger` says why and is required (T-130): it is logged on the run, nothing else reads it. */
 export const connSyncRequested = eventType("conn/sync.requested", {
   schema: z.strictObject({
     laneId: laneIdSchema,
     connectionId: z.uuid(),
-    trigger: z.enum(["schedule", "manual", "webhook", "connect"]).optional(),
+    trigger: z.enum(["schedule", "manual", "webhook", "connect"]),
   }),
 });
 
@@ -72,6 +72,20 @@ export const connAttentionNeeded = eventType("conn/attention.needed", {
   }),
 });
 
+/** Purge one lane's expired rows (T-042). Sent by the daily schedule for each enabled lane, or by hand. Lane id only. */
+export const retentionPurgeRequested = eventType("retention/purge.requested", {
+  schema: z.strictObject({ laneId: laneIdSchema }),
+});
+
+/** Pull a QuickBooks connection's summary reports into fin.report_cache (T-052). Ids only; `trigger` is logged, nothing else reads it. */
+export const finQboReportsRequested = eventType("fin/qbo-reports.requested", {
+  schema: z.strictObject({
+    laneId: laneIdSchema,
+    connectionId: z.uuid(),
+    trigger: z.enum(["schedule", "manual", "weekly_cash"]),
+  }),
+});
+
 /** Every lane event, for the test that checks they all require laneId. Add new events here. */
 export const LANE_EVENTS = [
   connSyncRequested,
@@ -81,4 +95,6 @@ export const LANE_EVENTS = [
   connHealthCheckRequested,
   connSubscriptionRenewRequested,
   connAttentionNeeded,
+  retentionPurgeRequested,
+  finQboReportsRequested,
 ] as const;

@@ -6,10 +6,15 @@ import { createLaneConfigReader } from "./lane-config";
 import { createConnectionLoader } from "./loader";
 import { createRawRecordStore } from "../raw/store";
 import { createWebhookStore } from "../webhooks/store";
+import { createRetentionStore } from "../retention/store";
 import { getServerEnv } from "@nichols/core/env/server";
 import { createTokenVault } from "./tokens";
 import { createTokenHealthStore } from "../health/store";
+
+import { createQboFeatureStore } from "../quickbooks/features";
+import { createReportCacheStore } from "../quickbooks/report-store";
 import { createSyncCursorStore, createSyncRunStore } from "../sync/store";
+import { createSyncTargetLister } from "../sync/targets";
 import { createCalendarIndexStore } from "../google/cal-store";
 import { createMailIndexStore } from "../google/mail-store";
 
@@ -41,11 +46,23 @@ export const syncRunStore = createSyncRunStore(getLaneJobClient);
 /** Lists usable connections and flags health on core.connections with the lane's job client (T-040). */
 export const tokenHealthStore = createTokenHealthStore(getLaneJobClient);
 
+/** Lists a lane's usable calendar-capable connections for the scheduled calendar sync (T-130). */
+export const syncTargetLister = createSyncTargetLister(getLaneJobClient);
+
 /** The generic sync cursor (core.sync_cursor_get/put) with the lane's job client (T-038). */
 export const syncCursorStore = createSyncCursorStore(getLaneJobClient);
 
+/** Writes the QuickBooks edition flags onto core.connections with the lane's job client (T-051). */
+export const qboFeatureStore = createQboFeatureStore(getLaneJobClient);
+
+/** Writes QuickBooks reports to fin.report_cache with the lane's job client (T-052). */
+export const reportCacheStore = createReportCacheStore(getLaneJobClient);
+
 /** Resolves webhook accounts to lanes, dedupes events and records the hand-off with the lane's job client (T-036). */
 export const webhookStore = createWebhookStore(getLaneJobClient, () => getServerEnv().ENABLED_LANES);
+
+/** Calls the SQL retention purge functions with the lane's job client (T-042). */
+export const retentionStore = createRetentionStore(getLaneJobClient);
 
 export { SecretValue, isSecretValue } from "./secret";
 export type { TokenVault } from "./tokens";

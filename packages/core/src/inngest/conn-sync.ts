@@ -31,14 +31,14 @@ const MAX_RETRY_AFTER_SECONDS = 15 * 60;
 /** The function body without Inngest, for tests: throws what Inngest needs to decide about a retry. */
 export async function handleConnSync(
   deps: ConnSyncDeps,
-  data: { laneId: string; connectionId: string; trigger?: SyncTriggerName | undefined },
+  data: { laneId: string; connectionId: string; trigger: SyncTriggerName },
   runId: string | null,
 ): Promise<Exclude<ConnSyncResult, { ok: false }> | { ok: true; skipped: "lane_not_served" }> {
   // Events can reach Inngest without passing sendLaneEvent (anyone holding the event key): validate again, echo nothing.
   const parsed = await connSyncRequested.schema["~standard"].validate(data);
   if (parsed.issues) throw new NonRetriableError("conn.sync: invalid event data");
   if (!deps.enabledLanes().includes(data.laneId)) return { ok: true, skipped: "lane_not_served" };
-  const result = await deps.runSync(data.laneId, data.connectionId, { trigger: data.trigger ?? "manual", jobRunId: runId });
+  const result = await deps.runSync(data.laneId, data.connectionId, { trigger: data.trigger, jobRunId: runId });
   if (result.ok) return result;
   // Messages are already redacted (ConnectorError); they carry no tokens or record content.
   if (!result.retryable) throw new NonRetriableError(`conn.sync failed: ${result.errorKind}`);
