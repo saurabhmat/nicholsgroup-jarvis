@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { z } from "zod";
-import { findSecretLikeValues, laneConfigSchema, parseLaneConfig } from "./index";
+import { findSecretLikeValues, laneConfigSchema, parseLaneConfig, QBO_PAYROLL_SUBTYPES } from "./index";
 
 // Synthetic ids only (CLAUDE.md rule 10).
 const VALID = {
@@ -47,7 +47,7 @@ describe("calendar section (T-064)", () => {
 describe("lane config schema", () => {
   it("accepts a valid config and fills the spec defaults", () => {
     const c = parseLaneConfig(VALID);
-    expect(c.finance).toEqual({ accounting_method: "accrual", weekly_cash_time: "06:00", monthly_close_trigger: "manual" });
+    expect(c.finance).toEqual({ accounting_method: "accrual", weekly_cash_time: "06:00", monthly_close_trigger: "manual", payroll: { account_ids: [], account_subtypes: [...QBO_PAYROLL_SUBTYPES], excluded_entity_ids: [] } });
     expect(c.approvals.approvals_live).toBe(false);
     expect(c.approvals.step_up_max_age_s).toBe(300);
     expect(c.approvals.expire_after_hours).toEqual({ "email.draft": 72, "email.send": 72, "monday.item": 168 });
@@ -142,6 +142,23 @@ describe("retention settings (T-042)", () => {
     expect(laneConfigSchema.parse({ retention: { calendar_days: 30, webhook_days: 7, conversations_days: 90 } }).retention.calendar_days).toBe(30);
     for (const retention of [{ calendar_days: 29 }, { calendar_days: 181 }, { webhook_days: 6 }, { conversations_days: 0 }, { comms_days: 90 }]) {
       expect(laneConfigSchema.safeParse({ retention }).success, JSON.stringify(retention)).toBe(false);
+    }
+  });
+});
+
+describe("finance.payroll (D-25, T-051)", () => {
+  it("defaults to Intuit's payroll subtypes, no ids and no excluded entities", () => {
+    const c = laneConfigSchema.parse({});
+    expect(c.finance.payroll.account_ids).toEqual([]);
+    expect(c.finance.payroll.excluded_entity_ids).toEqual([]);
+    expect(c.finance.payroll.account_subtypes).toEqual([...QBO_PAYROLL_SUBTYPES]);
+    expect(c.finance.payroll.account_subtypes).toContain("PayrollExpenses");
+  });
+  it("accepts explicit lists and rejects malformed ones and unknown keys", () => {
+    const ok = laneConfigSchema.parse({ finance: { payroll: { account_ids: ["12"], account_subtypes: ["PayrollClearing"], excluded_entity_ids: ["99"] } } });
+    expect(ok.finance.payroll).toEqual({ account_ids: ["12"], account_subtypes: ["PayrollClearing"], excluded_entity_ids: ["99"] });
+    for (const payroll of [{ account_ids: ["x"] }, { account_subtypes: ["has space"] }, { excluded_entity_ids: [12] }, { other: 1 }]) {
+      expect(laneConfigSchema.safeParse({ finance: { payroll } }).success, JSON.stringify(payroll)).toBe(false);
     }
   });
 });

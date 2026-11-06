@@ -56,6 +56,12 @@ const entityMappingSchema = z.strictObject({
   ghl_products: ids,
 });
 
+/**
+ * Intuit's Account.AccountSubType enum values that denote payroll accounts (Intuit's enum, not company data). Defaults for
+ * `finance.payroll.account_subtypes`; unverified spellings are on the H-034 live-check list.
+ */
+export const QBO_PAYROLL_SUBTYPES = ["PayrollExpenses", "PayrollTaxExpenses", "PayrollClearing", "PayrollTaxPayable", "PayrollWagePayable", "DirectDepositPayable", "CostOfLabor"] as const;
+
 export const laneConfigSchema = z.strictObject({
   enabled_modules: z.array(z.enum(MODULES)).default([]),
   kpis: z.array(z.enum(KPI_IDS)).default([]),
@@ -115,6 +121,16 @@ export const laneConfigSchema = z.strictObject({
       accounting_method: z.enum(["accrual", "cash"]).default("accrual"),
       weekly_cash_time: hhmm.default("06:00"),
       monthly_close_trigger: z.union([z.literal("manual"), z.string().regex(/^day_of_month:([1-9]|1\d|2[0-8])$/)]).default("manual"),
+      // D-25 (default: payroll excluded entirely). QuickBooks transactions posted to these accounts, and accounts of these
+      // subtypes, are never stored; neither are transactions that name an excluded entity (people paid as vendors,
+      // D-25 follow-up for Robert). `account_subtypes` defaults to Intuit's payroll AccountSubType values.
+      payroll: z
+        .strictObject({
+          account_ids: z.array(z.string().regex(/^\d{1,20}$/)).max(200).default([]),
+          account_subtypes: z.array(z.string().regex(/^[A-Za-z][A-Za-z0-9]{0,63}$/)).max(100).default([...QBO_PAYROLL_SUBTYPES]),
+          excluded_entity_ids: z.array(z.string().regex(/^\d{1,20}$/)).max(500).default([]),
+        })
+        .prefault({}),
     })
     .prefault({}),
   metrics: z.strictObject({ start_month: z.string().regex(/^\d{4}-(0[1-9]|1[0-2])$/) }).optional(),

@@ -2,10 +2,12 @@
 // (through the vault module), connector env and discovery cache. Server-only. Credentials are read from the connector
 // env at call time (`requireConnectorEnv("intuit")` fails closed naming missing variables, never printing values).
 import { getServerEnv, requireConnectorEnv } from "@nichols/core/env/server";
-import { connectionLoader, getToken, laneConfigReader, revokeToken, rotateToken, storeToken } from "../vault/index";
+import { getAudit } from "@nichols/core/lane-router";
+import { connectionLoader, getToken, qboFeatureStore, laneConfigReader, revokeToken, rotateToken, storeToken } from "../vault/index";
 import { SecretValue } from "../vault/secret";
 import { createQboApi } from "./api";
 import { createQuickBooksConnector } from "./connector";
+import { createQboFeatureRecorder } from "./features";
 import { createQuickBooksWriter } from "./writer";
 import { createDiscovery } from "./discovery";
 import { createQuickBooksOAuthProvider, type QboClientConfig } from "./provider";
@@ -43,7 +45,10 @@ const api = createQboApi({ tokens, environment });
 
 const connections = { load: (laneId: string, id: string) => connectionLoader.loadConnection(laneId, id) };
 
-export const quickbooksConnector = createQuickBooksConnector({ connections, api });
+/** Edition flags from Preferences go to core.connections.features; a change is audited (T-051). */
+const features = createQboFeatureRecorder({ store: qboFeatureStore, audit: getAudit() });
+
+export const quickbooksConnector = createQuickBooksConnector({ connections, api, features, payroll: (laneId) => laneConfigReader.payrollSettings(laneId) });
 
 /**
  * Revoke-at-Intuit and delete-Vault-tokens (D-24: approvals only). Reached through `@nichols/connectors/writer`-side

@@ -3,6 +3,7 @@
 // job client (`lane_config_current` is service_role-readable) and takes only the one field it needs; nothing else of
 // the config reaches connector code. A lane without `qbo` has no configured realm; a malformed one fails closed.
 import type { LaneId } from "@nichols/core";
+import { laneConfigSchema } from "@nichols/core/lane-config";
 import { ConnectorError } from "../contract/errors";
 import type { JobClientFor } from "./tokens";
 
@@ -17,9 +18,14 @@ export interface LaneConfigReader {
   calendarSettings(laneId: LaneId): Promise<CalendarSettings>;
   /** Retention days per table class for the purge job (T-042): comms from the lane policy, the rest from `lane_config.retention` with defaults; throws when malformed (fail closed). */
   retentionSettings(laneId: LaneId): Promise<RetentionSettings>;
+  /** `lane_config.finance.payroll` (D-25): payroll account ids and subtypes and excluded entity ids; defaults when unset; throws when unreadable or malformed (fail closed) (T-051). */
+  payrollSettings(laneId: LaneId): Promise<PayrollSettings>;
   /** Only the `lane_config.retention` part of the above (defaults when unset), so a bad config does not hide the policy's comms days (T-042). */
   retentionConfig(laneId: LaneId): Promise<Omit<RetentionSettings, "commsDays">>;
 }
+
+export type { PayrollSettings } from "../quickbooks/sync";
+import type { PayrollSettings } from "../quickbooks/sync";
 
 export type RetentionSettings = { commsDays: number; calendarDays: number; conversationsDays: number; webhookDays: number };
 export const DEFAULT_RETENTION = { calendarDays: 180, conversationsDays: 180, webhookDays: 30 } as const;
@@ -128,6 +134,15 @@ export function createLaneConfigReader(clientFor: JobClientFor): LaneConfigReade
       const fwd = o.forward_days;
       if (fwd !== undefined && (typeof fwd !== "number" || !Number.isInteger(fwd) || fwd < 7 || fwd > 730)) throw bad();
       return { calendarIds: Array.isArray(ids) ? (ids as string[]) : null, includeReadOnly: ro === true, forwardDays: typeof fwd === "number" ? fwd : DEFAULT_CALENDAR_SETTINGS.forwardDays };
+    },
+    async payrollSettings(laneId) {
+      const config = await readConfig(laneId);
+      const finance = config && typeof config === "object" && !Array.isArray(config) ? (config as Record<string, unknown>).finance : undefined;
+      // Same schema as the config itself (defaults included): one definition of the setting.
+      const parsed = laneConfigSchema.shape.finance.safeParse(finance ?? {});
+      if (!parsed.success) throw new ConnectorError({ kind: "provider_error", message: "The lane's payroll settings are not valid" });
+      const p = parsed.data.payroll;
+      return { accountIds: p.account_ids, accountSubtypes: p.account_subtypes, excludedEntityIds: p.excluded_entity_ids };
     },
     async qboRealmId(laneId) {
       const config = await readConfig(laneId);

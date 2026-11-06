@@ -5,6 +5,7 @@
 // compare-and-swap on the exact stored text (core.connection_token_rotate, 40001).
 import { randomUUID } from "node:crypto";
 import type { Audit, AuditEntry } from "@nichols/core/audit";
+import { QBO_PAYROLL_SUBTYPES } from "@nichols/core/lane-config";
 import { ACCOUNT_IN_USE_MESSAGE, ConnectorError } from "../contract/errors";
 import { assertLaneBound, mintLaneBoundConnection, type LaneBoundConnection } from "../contract/lane-bound";
 import type { Connection } from "../contract/schemas";
@@ -14,6 +15,7 @@ import { createOAuthFlow } from "../oauth/flow";
 import { hashState } from "../oauth/pkce";
 import type { StateStore } from "../oauth/state";
 import { createQboApi } from "../quickbooks/api";
+import { createQboFeatureRecorder, type QboFeatureStore } from "../quickbooks/features";
 import { createQuickBooksConnector } from "../quickbooks/connector";
 import type { QboConnection } from "../quickbooks/guard";
 import { createQuickBooksRevoker, QBO_REVOKE_ACTION } from "../quickbooks/writer";
@@ -53,10 +55,16 @@ export function createQboHarness(options: QboHarnessOptions) {
     },
   };
 
+  /** `lane_config.finance.payroll` twin: defaults are the schema's (Intuit payroll subtypes, no ids). Tests change it. */
+  const payrollState: { settings: { accountIds: string[]; accountSubtypes: string[]; excludedEntityIds: string[] }; fail: boolean } = {
+    settings: { accountIds: [], accountSubtypes: [...QBO_PAYROLL_SUBTYPES], excludedEntityIds: [] },
+    fail: false,
+  };
+
   const rows = new Map<string, Row>();
   const secrets = new Map<string, string>();
   const realms: Record<string, string | null> = { ...options.realms };
-  const stats = { rotations: 0, lostRaces: 0, stores: 0, revokes: 0, revokeActors: [] as (string | undefined)[] };
+  const stats = { featureSaves: 0, rotations: 0, lostRaces: 0, stores: 0, revokes: 0, revokeActors: [] as (string | undefined)[] };
   const bind = (row: Row): QboConnection => mintLaneBoundConnection<"quickbooks">({ ...row, features: { ...row.features } });
 
   const rowOf = (laneId: string, conn: { id: string }): Row => {
@@ -188,7 +196,21 @@ export function createQboHarness(options: QboHarnessOptions) {
     });
   const tokens = newTokenManager();
   const api = createQboApi({ tokens, environment: () => environment, logger, httpOptions: { retryBaseMs: 1, retryMaxMs: 5 } });
-  const connector = createQuickBooksConnector({ connections, api, now });
+  // Twin of the real feature store: merges the flags into the row (service-role update of core.connections).
+  const featureStore: QboFeatureStore = {
+    async save(laneId, conn, features, checkedAt) {
+      assertLaneBound(laneId, conn);
+      const row = rowOf(laneId, conn);
+      row.features = { ...row.features, ...features };
+      row.features_checked_at = checkedAt;
+      stats.featureSaves += 1;
+    },
+  };
+  const features = createQboFeatureRecorder({ store: featureStore, audit });
+  const connector = createQuickBooksConnector({ connections, api, features, now, logger, payroll: async () => {
+    if (payrollState.fail) throw new ConnectorError({ kind: "transient", message: "Lane configuration unavailable" });
+    return payrollState.settings;
+  } });
   const revoker = createQuickBooksRevoker({
     provider,
     environment: () => environment,
@@ -256,6 +278,7 @@ export function createQboHarness(options: QboHarnessOptions) {
 
   return {
     clock,
+    payrollState,
     logs,
     audits,
     rows,
