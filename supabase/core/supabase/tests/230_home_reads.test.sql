@@ -98,8 +98,8 @@ select throws_ok($$select * from core.home_mail_attention('PKG', now() - interva
 
 -- ---------------------------------------------------------------- cross-lane: rows exist in APK, owner is not a member
 select is((select count(*)::int from core.home_meetings('APK', '2026-11-06 05:00Z', '2026-11-07 05:00Z')), 0, 'another lane''s meetings are not returned');
-select is((select unread_important + unread_priority from core.home_mail_attention('APK', now() - interval '24 hours')), 0, 'another lane''s mail is not counted');
-select is((select priority_configured from core.home_mail_attention('APK', now() - interval '24 hours')), false, 'another lane''s config is not read');
+select is((select count(*)::int from core.home_mail_attention('APK', now() - interval '24 hours')), 0, 'another lane''s mail is not counted (no row: no mail view)');
+select is((select count(*)::int from core.home_mail_attention('APK', now() - interval '24 hours')), 0, 'another lane''s config is not read (no row: no mail view)');
 reset role;
 -- The APK fixture is real: without RLS (service_role) the same call sees the list and the message.
 set local role service_role;
@@ -110,7 +110,7 @@ reset role;
 select pg_temp.claims('owner@example.test', 'aal1');
 set local role authenticated;
 select is((select count(*)::int from core.home_meetings('PKG', '2026-11-06 05:00Z', '2026-11-07 05:00Z')), 0, 'AAL1 sees no meetings');
-select is((select unread_important from core.home_mail_attention('PKG', now() - interval '24 hours')), 0, 'AAL1 counts no mail');
+select is((select count(*)::int from core.home_mail_attention('PKG', now() - interval '24 hours')), 0, 'AAL1 counts no mail (no row: no mail view)');
 select is(core.home_calendar_status('PKG'), 'no_access', 'AAL1: calendar status no_access');
 reset role;
 
@@ -118,21 +118,21 @@ reset role;
 select pg_temp.claims('admin-technical@example.test', 'aal2');
 set local role authenticated;
 select is((select count(*)::int from core.home_meetings('PKG', '2026-11-06 05:00Z', '2026-11-07 05:00Z')), 0, 'admin_technical sees no meetings');
-select is((select unread_important + unread_priority from core.home_mail_attention('PKG', now() - interval '24 hours')), 0, 'admin_technical counts no mail');
+select is((select count(*)::int from core.home_mail_attention('PKG', now() - interval '24 hours')), 0, 'admin_technical counts no mail (no row: no mail view)');
 select is(core.home_calendar_status('PKG'), 'no_access', 'admin_technical: calendar status no_access (connections view alone is not enough)');
 reset role;
 
 select pg_temp.claims('viewer@example.test', 'aal2');
 set local role authenticated;
 select is((select count(*)::int from core.home_meetings('PKG', '2026-11-06 05:00Z', '2026-11-07 05:00Z')), 0, 'a finance-only viewer sees no meetings');
-select is((select priority_configured from core.home_mail_attention('PKG', now() - interval '24 hours')), false, 'a viewer without the config view does not read priority senders');
+select is((select count(*)::int from core.home_mail_attention('PKG', now() - interval '24 hours')), 0, 'a viewer without the config view does not read priority senders (no row: no mail view)');
 reset role;
 
 -- ---------------------------------------------------------------- outsider
 select pg_temp.claims('outsider@example.test', 'aal2');
 set local role authenticated;
 select is((select count(*)::int from core.home_meetings('PKG', '2026-11-06 05:00Z', '2026-11-07 05:00Z')), 0, 'an outsider sees no meetings');
-select is((select unread_important + unread_priority from core.home_mail_attention('PKG', now() - interval '24 hours')), 0, 'an outsider counts no mail');
+select is((select count(*)::int from core.home_mail_attention('PKG', now() - interval '24 hours')), 0, 'an outsider counts no mail (no row: no mail view)');
 select is(core.home_calendar_status('PKG'), 'no_access', 'an outsider: calendar status no_access');
 reset role;
 

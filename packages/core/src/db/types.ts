@@ -392,6 +392,16 @@ isOneToOne: false
               "all_day": boolean,"end_at": string,"location": string,"online_meeting_url": string,"source_url": string,"start_at": string,"start_date": string,"title": string
             }[]
                            },
+"inbox_message_ref":
+{ Args: { "p_lane": string,"p_message_id": string }; Returns: {
+              "cc_recipients": Json,"connection_id": string,"from_address": string,"from_name": string,"has_attachments": boolean,"is_important": boolean,"is_read": boolean,"message_id": string,"provider": string,"received_at": string,"source_url": string,"subject": string,"to_recipients": Json
+            }[]
+                           },
+"inbox_messages":
+{ Args: { "p_before"?: string,"p_before_id"?: string,"p_filter": string,"p_lane": string,"p_limit"?: number }; Returns: {
+              "connection_id": string,"from_address": string,"from_name": string,"has_attachments": boolean,"is_important": boolean,"is_read": boolean,"is_starred": boolean,"message_id": string,"received_at": string,"source_url": string,"subject": string,"thread_id": string
+            }[]
+                           },
 "is_connection_features":
 { Args: { "p_features": Json }; Returns: boolean
                            },

@@ -71,7 +71,8 @@ insert into security_definer_ok values
   ('core.cal_events_apply_page', 'applies one Google Calendar metadata page and its cursor atomically; service_role only, lane-checked against a usable Google connection (T-064)'),
   ('comms.message_summary_guard', 'trigger only: reads lane policy and memberships to validate a summary and its approver (T-061)'),
   ('fin.report_cache_guard', 'trigger only: calls the private raw.payload_scan on a report payload; reads and writes nothing (T-055)'),
-  ('core.fin_qbo_normalize', 'QuickBooks normalizer: reads the private raw.source_records of one connection and writes fin.*; service_role only, lane-checked against a usable QuickBooks connection (T-056)');
+  ('core.fin_qbo_normalize', 'QuickBooks normalizer: reads the private raw.source_records of one connection and writes fin.*; service_role only, lane-checked against a usable QuickBooks connection (T-056)'),
+  ('core.home_calendar_status', 'Home: returns only no_access | not_connected | connected; reads core.connections for callers with the calendar view at aal2 (T-200)');
 
 -- App functions authenticated may execute (callable through the API). Each one is reviewed.
 create temp table authenticated_exec_ok (name text primary key, why text not null) on commit drop;
@@ -91,7 +92,12 @@ insert into authenticated_exec_ok values
   ('fin.business_week', 'pure calendar function (T-080)'),
   ('fin.month_range', 'pure calendar function (T-080)'),
   ('fin.ytd_range', 'pure calendar function (T-080)'),
-  ('fin.mtd_range', 'pure calendar function (T-080)');
+  ('fin.mtd_range', 'pure calendar function (T-080)'),
+  ('core.home_calendar_status', 'Home calendar state; definer, aal2 + calendar view checked inside (T-200)'),
+  ('core.home_meetings', 'Home meetings; invoker, RLS on cal applies, window capped (T-200)'),
+  ('core.home_mail_attention', 'Home mail counts; invoker, RLS on comms applies (T-200)'),
+  ('core.inbox_messages', 'Inbox list metadata; invoker, RLS on comms applies (T-202)'),
+  ('core.inbox_message_ref', 'one visible message before the live body read; invoker, RLS on comms applies (T-202)');
 
 create temp view app_objects as
   select c.oid, format('%s.%s', n.nspname, c.relname) as name, c.relkind
