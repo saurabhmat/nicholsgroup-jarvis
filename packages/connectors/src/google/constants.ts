@@ -38,8 +38,11 @@ export const GOOGLE_SCOPES = [GMAIL_READONLY, CALENDAR_READONLY, DRIVE_READONLY]
 /** Extra parameters on the consent URL: a refresh token every time, and never merge earlier grants. */
 export const GOOGLE_AUTHORIZATION_PARAMS = { access_type: "offline", prompt: "consent", include_granted_scopes: "false" } as const;
 
-/** Gmail's per-user quota is 250 units/s and a metadata get costs 5: stay well under it. */
-export const GMAIL_RATE_LIMIT = { requests: 40, perMs: 1000 } as const;
+/**
+ * Gmail's per-user quota is 250 units/s and a metadata get costs 5: stay well under it. 40/s (200 units) hit
+ * rateLimitExceeded on the first live mailbox load (Nov 6, 2026); 20/s is 100 units, under half the quota.
+ */
+export const GMAIL_RATE_LIMIT = { requests: 20, perMs: 1000 } as const;
 /** Refresh the access token when it has less than this left. */
 export const REFRESH_SKEW_MS = 5 * 60_000;
 /** metadataHeaders requested by sync: the five the index needs, plus Content-Type to tell mixed (attachments) mail. */

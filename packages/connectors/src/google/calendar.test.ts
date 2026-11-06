@@ -391,7 +391,7 @@ describe("guards and failure modes (zero requests, zero token reads)", () => {
     expect(quiet(s)).toEqual(before);
   });
 
-  it("Google's rate-limit 403 is retried after a pause; a persistent one stops as rate_limited after three attempts", async () => {
+  it("Google's rate-limit 403 is retried after a pause; a persistent one stops as rate_limited after five attempts", async () => {
     const url = "https://www.googleapis.com/calendar/v3/users/me/calendarList";
     const limited = () => HttpResponse.json({ error: { code: 403, status: "PERMISSION_DENIED", errors: [{ reason: "rateLimitExceeded" }] } }, { status: 403 });
     const a = setup();
@@ -406,7 +406,7 @@ describe("guards and failure modes (zero requests, zero token reads)", () => {
       }),
     );
     await expect(b.h.calendar.sync("PKG", b.conn, null)).rejects.toMatchObject({ info: { kind: "rate_limited" } });
-    expect(hits).toBe(3);
+    expect(hits).toBe(5);
   });
 });
 
