@@ -89,7 +89,7 @@ export function createConnSyncJob(deps: ConnSyncJobDeps) {
         const logged = await guarded(() => deps.runs.finish(laneId, conn, started.runId, { status: "succeeded", kind: done.kind, received: done.received, written: done.written }), "conn.sync.log_failed");
         if (logged) await guarded(() => deps.runs.recordOutcome(laneId, conn, { ok: true }), "conn.sync.outcome_failed");
         child.info("conn.sync.succeeded", { kind: done.kind, received: done.received, written: done.written });
-        outcome = { ok: true, skipped: null, runId: started.runId, ...done };
+        outcome = { ok: true, skipped: null, runId: started.runId, provider: conn.provider, ...done };
       } else {
         const failed = error as ConnectorError;
         const info = failed.toJSON();

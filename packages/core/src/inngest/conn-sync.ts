@@ -14,13 +14,20 @@ export type SyncTriggerName = "schedule" | "manual" | "webhook" | "connect";
 
 /** Mirrors ConnSyncOutcome in @nichols/connectors/sync (structural: core does not import connectors). */
 export type ConnSyncResult =
-  | { ok: true; skipped: null; runId: string; kind: "full" | "incremental"; received: number; written: number }
+  | { ok: true; skipped: null; runId: string; provider?: string; kind: "full" | "incremental"; received: number; written: number }
   | { ok: true; skipped: "already_running" | "connection_not_usable" }
   | { ok: false; retryable: boolean; retryAfterSeconds: number | null; errorKind: string; message: string };
 
 export type ConnSyncDeps = {
   runSync: (laneId: string, connectionId: string, input: { trigger: SyncTriggerName; jobRunId: string | null }) => Promise<ConnSyncResult>;
   enabledLanes: () => readonly string[];
+  /**
+   * Called after every sync that ran and was logged, whether or not it wrote anything (not for a skipped or failed one), with ids
+   * only. Normalizing again is idempotent and picks up a mapping change or an earlier failed follow-up. The route uses it to
+   * start the QuickBooks normalizer (fin.qbo_normalize, T-056). Its failure never fails or repeats the sync (that would redo
+   * the work): the result says `followUp: "failed"` and the next sync starts it again.
+   */
+  afterSync?: (run: { laneId: string; connectionId: string; provider: string; runId: string }) => Promise<void>;
 };
 
 /** Function options, exported so tests assert them. */
@@ -33,13 +40,23 @@ export async function handleConnSync(
   deps: ConnSyncDeps,
   data: { laneId: string; connectionId: string; trigger: SyncTriggerName },
   runId: string | null,
-): Promise<Exclude<ConnSyncResult, { ok: false }> | { ok: true; skipped: "lane_not_served" }> {
+): Promise<(Exclude<ConnSyncResult, { ok: false }> & { followUp?: "sent" | "failed" }) | { ok: true; skipped: "lane_not_served" }> {
   // Events can reach Inngest without passing sendLaneEvent (anyone holding the event key): validate again, echo nothing.
   const parsed = await connSyncRequested.schema["~standard"].validate(data);
   if (parsed.issues) throw new NonRetriableError("conn.sync: invalid event data");
   if (!deps.enabledLanes().includes(data.laneId)) return { ok: true, skipped: "lane_not_served" };
   const result = await deps.runSync(data.laneId, data.connectionId, { trigger: data.trigger, jobRunId: runId });
-  if (result.ok) return result;
+  if (result.ok) {
+    if (result.skipped === null && deps.afterSync && typeof result.provider === "string") {
+      try {
+        await deps.afterSync({ laneId: data.laneId, connectionId: data.connectionId, provider: result.provider, runId: result.runId });
+        return { ...result, followUp: "sent" };
+      } catch {
+        return { ...result, followUp: "failed" };
+      }
+    }
+    return result;
+  }
   // Messages are already redacted (ConnectorError); they carry no tokens or record content.
   if (!result.retryable) throw new NonRetriableError(`conn.sync failed: ${result.errorKind}`);
   if (result.retryAfterSeconds !== null && result.retryAfterSeconds > 0) {

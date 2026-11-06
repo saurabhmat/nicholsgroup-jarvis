@@ -21,6 +21,7 @@ export {
   connHealthCheckRequested,
   connSubscriptionRenewRequested,
   connSyncRequested,
+  finQboNormalizeRequested,
   finQboReportsRequested,
   LANE_EVENTS,
   laneIdSchema,
@@ -52,6 +53,14 @@ export {
   planFinReports,
 } from "./fin-reports";
 export type { FinQboReportsDeps, FinQboReportsResult, FinReportsPlan } from "./fin-reports";
+export {
+  FIN_NORMALIZE_CONCURRENCY,
+  FIN_NORMALIZE_RETRIES,
+  finNormalizeEventId,
+  finQboNormalizeFunctions,
+  handleFinNormalize,
+} from "./fin-normalize";
+export type { FinQboNormalizeDeps, FinQboNormalizeResult } from "./fin-normalize";
 export { CONN_SYNC_CONCURRENCY, CONN_SYNC_RETRIES, connSyncFunction, handleConnSync } from "./conn-sync";
 export {
   RETENTION_CRON,

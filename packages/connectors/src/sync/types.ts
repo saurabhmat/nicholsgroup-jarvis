@@ -43,6 +43,6 @@ export interface SyncCursorStore {
 
 /** The run is not retried by Inngest unless `retryable`; `retryAfterSeconds` is the provider's hint for rate limits. */
 export type ConnSyncOutcome =
-  | { ok: true; skipped: null; runId: string; kind: "full" | "incremental"; received: number; written: number }
+  | { ok: true; skipped: null; runId: string; provider: string; kind: "full" | "incremental"; received: number; written: number }
   | { ok: true; skipped: "already_running" | "connection_not_usable" }
   | { ok: false; retryable: boolean; retryAfterSeconds: number | null; errorKind: string; message: string };

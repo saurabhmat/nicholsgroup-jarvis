@@ -12,6 +12,7 @@ import { createTokenVault } from "./tokens";
 import { createTokenHealthStore } from "../health/store";
 
 import { createQboFeatureStore } from "../quickbooks/features";
+import { createNormalizeStore } from "../quickbooks/normalize-store";
 import { createReportCacheStore } from "../quickbooks/report-store";
 import { createSyncCursorStore, createSyncRunStore } from "../sync/store";
 import { createSyncTargetLister } from "../sync/targets";
@@ -57,6 +58,9 @@ export const qboFeatureStore = createQboFeatureStore(getLaneJobClient);
 
 /** Writes QuickBooks reports to fin.report_cache with the lane's job client (T-052). */
 export const reportCacheStore = createReportCacheStore(getLaneJobClient);
+
+/** Runs the QuickBooks normalizer (raw.source_records -> fin.*) with the lane's job client (T-056). */
+export const normalizeStore = createNormalizeStore(getLaneJobClient);
 
 /** Resolves webhook accounts to lanes, dedupes events and records the hand-off with the lane's job client (T-036). */
 export const webhookStore = createWebhookStore(getLaneJobClient, () => getServerEnv().ENABLED_LANES);

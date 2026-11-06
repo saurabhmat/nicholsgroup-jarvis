@@ -20,7 +20,8 @@
     "./sync": "./src/sync/index.ts",
     "./health": "./src/health/index.ts",
     "./retention": "./src/retention/index.ts",
-    "./reports": "./src/reports/index.ts"
+    "./reports": "./src/reports/index.ts",
+    "./normalize": "./src/normalize/index.ts"
   },
   "scripts": {
     "typecheck": "tsc -b",

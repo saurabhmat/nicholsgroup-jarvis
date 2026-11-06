@@ -86,6 +86,18 @@ export const finQboReportsRequested = eventType("fin/qbo-reports.requested", {
   }),
 });
 
+/**
+ * Normalize a QuickBooks connection's synced raw records into fin.* (T-056). Sent by the route after a successful
+ * QuickBooks conn.sync (`trigger: "sync"`), or by hand. Ids only; `trigger` is logged, nothing else reads it.
+ */
+export const finQboNormalizeRequested = eventType("fin/qbo-normalize.requested", {
+  schema: z.strictObject({
+    laneId: laneIdSchema,
+    connectionId: z.uuid(),
+    trigger: z.enum(["sync", "manual"]),
+  }),
+});
+
 /** Every lane event, for the test that checks they all require laneId. Add new events here. */
 export const LANE_EVENTS = [
   connSyncRequested,
@@ -97,4 +109,5 @@ export const LANE_EVENTS = [
   connAttentionNeeded,
   retentionPurgeRequested,
   finQboReportsRequested,
+  finQboNormalizeRequested,
 ] as const;

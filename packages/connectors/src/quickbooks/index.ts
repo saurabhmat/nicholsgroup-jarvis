@@ -3,11 +3,12 @@
 // env at call time (`requireConnectorEnv("intuit")` fails closed naming missing variables, never printing values).
 import { getServerEnv, requireConnectorEnv } from "@nichols/core/env/server";
 import { getAudit } from "@nichols/core/lane-router";
-import { connectionLoader, getToken, reportCacheStore, qboFeatureStore, laneConfigReader, revokeToken, rotateToken, storeToken } from "../vault/index";
+import { connectionLoader, getToken, normalizeStore, reportCacheStore, qboFeatureStore, laneConfigReader, revokeToken, rotateToken, storeToken } from "../vault/index";
 import { SecretValue } from "../vault/secret";
 import { createQboApi } from "./api";
 import { createQuickBooksConnector } from "./connector";
 import { createQboFeatureRecorder } from "./features";
+import { createQboNormalizeJob } from "./normalize-job";
 import { createQboReportsJob } from "./reports-job";
 import { createQuickBooksWriter } from "./writer";
 import { createDiscovery } from "./discovery";
@@ -59,6 +60,9 @@ export const quickbooksReportsJob = createQboReportsJob({
   settings: (laneId) => laneConfigReader.reportSettings(laneId),
   payroll: (laneId) => laneConfigReader.payrollSettings(laneId),
 });
+
+/** raw.source_records -> fin.* for one connection, after a successful sync (T-056): one SQL function, no provider call. */
+export const quickbooksNormalizeJob = createQboNormalizeJob({ loader: connectionLoader, store: normalizeStore });
 
 /**
  * Revoke-at-Intuit and delete-Vault-tokens (D-24: approvals only). Reached through `@nichols/connectors/writer`-side

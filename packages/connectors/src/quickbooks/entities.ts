@@ -158,6 +158,8 @@ export const ENTITY_SCHEMAS = {
     TxnDate: Str(16).optional(),
     TotalAmt: Money,
     PaymentType: Str(32).optional(),
+    // True for a card credit / refund: the normalizer (T-056) flips the posting signs. Unverified against Intuit (H-034).
+    Credit: z.boolean().optional(),
     AccountRef: Ref,
     EntityRef: EntityTypeRef,
     DepartmentRef: Ref,
