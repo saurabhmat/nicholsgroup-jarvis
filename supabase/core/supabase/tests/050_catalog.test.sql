@@ -34,7 +34,11 @@ create temp table custom_policy_ok (name text primary key, why text not null) on
 insert into custom_policy_ok values
   ('core.memberships', 'own rows, plus lanes with the memberships view'),
   ('core.users', 'own row, plus members of lanes with the memberships view'),
-  ('core.lanes', 'standard expression on code (the lane id) instead of lane_id');
+  ('core.lanes', 'standard expression on code (the lane id) instead of lane_id'),
+  ('brain.documents', 'standard expression AND (kind not about_me/preferences OR owner_user_id = auth.uid()): a user''s About-Me and Preferences are theirs alone (T-210)'),
+  ('brain.document_versions', 'same as brain.documents: kind and owner_user_id are copied onto each version by a trigger (T-210)'),
+  ('brain.imports', 'standard expression AND user_id = auth.uid(): an import is its user''s alone (T-210)'),
+  ('brain.import_candidates', 'standard expression AND user_id = auth.uid() AND created_at within 24 h: candidates are their user''s alone and expire (T-210)');
 
 -- Tables where authenticated may write directly (grants or write policies). Empty: writes go through service code or
 -- reviewed security-definer functions.
@@ -72,7 +76,12 @@ insert into security_definer_ok values
   ('comms.message_summary_guard', 'trigger only: reads lane policy and memberships to validate a summary and its approver (T-061)'),
   ('fin.report_cache_guard', 'trigger only: calls the private raw.payload_scan on a report payload; reads and writes nothing (T-055)'),
   ('core.fin_qbo_normalize', 'QuickBooks normalizer: reads the private raw.source_records of one connection and writes fin.*; service_role only, lane-checked against a usable QuickBooks connection (T-056)'),
-  ('core.home_calendar_status', 'Home: returns only no_access | not_connected | connected; reads core.connections for callers with the calendar view at aal2 (T-200)');
+  ('core.home_calendar_status', 'Home: returns only no_access | not_connected | connected; reads core.connections for callers with the calendar view at aal2 (T-200)'),
+  ('brain.document_save', 'brain page writer: aal2 + owner role + own pages only (addressed by auth.uid()), optimistic version, secret scan, keeps 20 versions (T-210)'),
+  ('brain.employee_save', 'employee profile writer: aal2 + owner role + own profiles only, optimistic version, secret scan (T-210)'),
+  ('brain.skill_save', 'skill writer: aal2 + owner role + own skills only, optimistic version, secret scan (T-210)'),
+  ('brain.import_decide', 'import review: aal2 + owner role + own open import only; finish deletes the candidates (T-210)'),
+  ('core.brain_import_purge', 'retention: deletes a lane''s import candidates older than 23 h and closes stale imports; service_role only, lane-checked (T-210)');
 
 -- App functions authenticated may execute (callable through the API). Each one is reviewed.
 create temp table authenticated_exec_ok (name text primary key, why text not null) on commit drop;
@@ -97,7 +106,21 @@ insert into authenticated_exec_ok values
   ('core.home_meetings', 'Home meetings; invoker, RLS on cal applies, window capped (T-200)'),
   ('core.home_mail_attention', 'Home mail counts; invoker, RLS on comms applies (T-200)'),
   ('core.inbox_messages', 'Inbox list metadata; invoker, RLS on comms applies (T-202)'),
-  ('core.inbox_message_ref', 'one visible message before the live body read; invoker, RLS on comms applies (T-202)');
+  ('core.inbox_message_ref', 'one visible message before the live body read; invoker, RLS on comms applies (T-202)'),
+  ('brain.document_save', 'brain page writer; checks aal2, owner role and ownership itself (T-210)'),
+  ('brain.employee_save', 'employee profile writer; checks aal2, owner role and ownership itself (T-210)'),
+  ('brain.skill_save', 'skill writer; checks aal2, owner role and ownership itself (T-210)'),
+  ('brain.import_decide', 'import review; checks aal2, owner role and ownership itself (T-210)'),
+  ('core.brain_home_lane', 'brain: the lane holding the caller''s About-Me; invoker, RLS applies (T-210)'),
+  ('core.brain_documents_list', 'brain: page metadata; invoker, RLS applies (T-210)'),
+  ('core.brain_document_get', 'brain: one page; invoker, RLS applies (T-210)'),
+  ('core.brain_document_versions', 'brain: own saved versions; invoker, RLS applies (T-210)'),
+  ('core.brain_document_save', 'brain: wrapper over brain.document_save; invoker (T-210)'),
+  ('core.brain_employees_list', 'brain: employee profiles; invoker, RLS applies (T-210)'),
+  ('core.brain_employee_save', 'brain: wrapper over brain.employee_save; invoker (T-210)'),
+  ('core.brain_skills_list', 'brain: skills; invoker, RLS applies (T-210)'),
+  ('core.brain_skill_save', 'brain: wrapper over brain.skill_save; invoker (T-210)'),
+  ('core.brain_import_decide', 'brain: wrapper over brain.import_decide; invoker (T-210)');
 
 create temp view app_objects as
   select c.oid, format('%s.%s', n.nspname, c.relname) as name, c.relkind

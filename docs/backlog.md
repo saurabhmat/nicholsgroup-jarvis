@@ -93,6 +93,7 @@ These tasks have all their dependencies done and all their `needs` checked. A hu
 - T-050, T-055, T-036 (QuickBooks OAuth, finance schema part 1, webhook receiver) — approved by Saurabh Nov 4, 2026 ("yes"); built on `agent/pilot-build`.
 - T-023, T-024 (app shell, navigation) — approved by Saurabh Nov 4, 2026 ("approved all points", D-20 batch 1); built on `agent/pilot-build`.
 - T-003 (imports T-005's secret-pattern list) — approved Oct 24, 2026; in progress in its own worktree.
+- AI Brain (Phase A14): **T-210 approved by Saurabh Nov 7, 2026**; built on `agent/brain`. T-211, T-212 and T-213 follow in order (T-212/T-213 also wait for T-100, T-102 and T-162). T-216 (if time allows) needs T-213. The Composio tasks are Release B (Phase B8); T-219 is blocked on H-039.
 
 ---
 
@@ -163,6 +164,19 @@ These tasks have all their dependencies done and all their `needs` checked. A hu
 - [x] D-22 Brand wordmark (T-023 reviews, rule 2). Decided Nov 4, 2026 by Saurabh: the wordmark is the product name **"Jarvis"** with "Executive Portal" for every company; Pub K is one company of several and its name appears only in the company switcher (from the lane record). Applied in `apps/web/lib/brand.ts`.
 - [x] H-020 Docker access for your user (Oct 24, 2026): user is in the `docker` group; `docker info` works in a fresh login. A process started before the group change (e.g. an old VS Code server / Claude Code session) still gets "permission denied" until it is restarted.
 - [x] H-019 Agents can read `.env.example` (deny rule narrowed Oct 24, 2026; real env files still blocked). Publishable/secret rename and cleanup applied Oct 24 and mirrored in Vercel Preview (see `docs/plan-review.md` §7).
+- [ ] H-039 Composio account for the mail/calendar connector (D-30; AI Brain spec §8). Blocks T-219 live checks and T-221. Do all of these, then check this box:
+  - Create the Composio org/project under a PubK/Nichols admin account, not a personal one. Robert never needs a Composio seat.
+  - From the Composio Trust Center, download and review the SOC 2 report, the DPA and the sub-processor list; sign the DPA if required.
+  - Turn on **Zero Data Retention** for the project. By default Composio keeps tool arguments **and results** (that is, email bodies) in its execution logs, which conflicts with rule 6.
+  - Create the Gmail and Google Calendar auth configs. Choose Composio-managed auth or our own OAuth app, and write down the exact scopes each one requests (read-only is the goal; send and modify are needed only when T-116 sends through Composio). Give the agent the two auth config ids (they are not secrets).
+  - Ask Composio whether `proxyExecute` request/response bodies are logged and whether ZDR covers them; record the answer in `docs/plan-review.md`.
+  - Prefer read-only scopes and read tools on the auth configs. If you want strictly read-only Google scopes, that needs our own External Google OAuth app in a custom auth config (`gmail.readonly` is a restricted scope and needs Google verification); Composio's own app is the quick route.
+  - Put `COMPOSIO_API_KEY` in 1Password ("Executive Portal") and in `.env.local` (section already in `.env.example`); in production only as a Vercel **Production** env var (read through `requireConnectorEnv`). Never in the repo, Preview or prompts. Write a one-paragraph rotation procedure (new key → Vercel Production → redeploy → revoke old) in the same 1Password item.
+- [ ] H-040 (D-33, revised Nov 7, 2026) Separate **test deployment** for the AI Brain real-account test (spec §8a). Blocks T-221. Do all of these, then check this box:
+  - A new Supabase project (not `lxjhaxdkqtmkhloqaffb`, not linked from any agent worktree; link it only from a separate clone as in H-022), with the repo's migrations applied by you, public sign-ups off, TOTP MFA on.
+  - A separate Vercel project (not the Nichols production project) pointing at that Supabase project, with its own `APP_ENV`, `ENABLED_LANES` for your test lanes and its own URLs; no Nichols production secrets in it.
+  - A **separate Composio project** with its own `COMPOSIO_API_KEY` and Zero Data Retention on, so your personal and SimpliAutomated accounts never sit in the Nichols Composio project (H-039).
+  - In that project's `lane_config`: you as `owner` of your own test lanes and their mailboxes. Never Nichols lanes or data.
 
 ### Decisions (details and options in `docs/plan-review.md`)
 - [x] D-1 pub-k.org provider (pilot-scope open decision 1). Decided Nov 4, 2026 by Saurabh: **Google Workspace for Pub K Group**. Release A builds the Google tasks (T-063 – T-065, search T-186); the Microsoft tasks (T-066 – T-068, T-187) move to Release B or later and stay behind the same interface for companies on Microsoft 365. The provider is per lane in `lane_config`, never in code (rule 2). Next human items: H-008 (Google OAuth client) and H-013 (Pub/Sub for Gmail watch).
@@ -186,6 +200,17 @@ These tasks have all their dependencies done and all their `needs` checked. A hu
 - [x] D-17 GoHighLevel subscriber counts exclude APK and PKI via lane_config tag/product mapping
 - [x] D-19 Rule 6 scope for PKG (Oct 24, 2026): (a) outbound email drafts are stored only while pending approval; the body is deleted on any terminal state, and the record keeps hash, recipients, subject and timestamps; (b) rule 6 does not cover the assistant's own conversation text: stored per lane, 180-day retention, user-deletable, with email/document content only as short cited snippets with links. Details in `docs/plan-review.md` §7
 - [x] D-18 Cash book balance shown per account under the legally owning entity, no allocation; shared accounts flagged in controls. P&L/aging split by QBO class, else customer mapping. Stripe payouts at account level; revenue split by product from charges/invoices.
+- [x] D-28 Owner-wide brain content (AI Brain spec §11). Decided Nov 7, 2026 by Saurabh: **yes**: the owner's About-Me and Preferences (lane `P`) may be added to the owner's own calls in every lane. Owner only, those two kinds only; never project or company content across lanes. Until lane `P` is enabled they are seeded in `PKG`.
+- [x] D-29 Employees at launch. Decided Nov 7, 2026 by Saurabh: **Personal Assistant only**. Finance analyst and meeting prep come later.
+- [x] D-30 Mail/calendar provider for the brain. Decided Nov 7, 2026 by Saurabh: **Composio for Gmail + Google Calendar; QuickBooks stays native**. The native Google connector (T-061 – T-065, T-130) is **kept as a fallback** behind the same T-062 interfaces, chosen per lane by the new `lane_config.mail_transport` (`native` | `composio`; spec §8.3). Spec: `docs/specs/brain-and-employees.md` §8.
+- [x] D-31 External web news in briefings. Decided Nov 7, 2026 by Saurabh: **yes, FAR/GovCon updates + AI news**. T-218 is in scope; it adds a `web` category to `lane_policies.llm_allowed_categories` (migration + pgTAP); web content is untrusted (rule 9).
+- [x] D-32 Robert's briefing. Decided Nov 7, 2026 by Saurabh: **06:30 America/New_York, Mon–Fri**. Align the `lane_config.briefing.time` default (currently `07:00`) in T-213.
+- [x] D-33 Where the AI Brain is tested with real accounts. Decided Nov 7, 2026 by Saurabh, **revised the same day**: **not in Nichols production.** Real-account tests run in a **separate test deployment with its own Supabase project** (staging-style, never `lxjhaxdkqtmkhloqaffb`), where Saurabh is owner of his own test lanes. His personal and SimpliAutomated mail must never enter Nichols production. Local and CI keep synthetic data and MSW fakes only (rule 10). Agents never hold that project's keys, link the CLI to it or query it (as for production, H-022); Saurabh runs the test through that deployment's UI. Setup is H-040.
+- [x] D-38 AI Brain design and scope. Decided Nov 7, 2026 by Saurabh, scope revised the same day: (1) Composio tools reach the assistant only through Jarvis's tool registry with full reviewed descriptors; Jarvis's server-side allow-list is the guard, never Composio's filtering; no Composio MCP in the model context; writes only as proposals executed by approvals (spec §8.1, §8.4, §8.5). (2) More toolkits by configuration as defined in spec §8.7 (T-222). (3) Chat-first brain: auto-save only from the user's own typed "remember…", Undo chip, inferred suggestions on a tap and at most one per conversation, Settings stays the full viewer/editor/history and interview fallback (spec §6, §7). (4) Settings → Connections is the only place to connect, test and disconnect; the chat only links to it (spec §8.2). (5) **Nov 25 additions: T-210 – T-213 only, plus T-216 if time allows.** PKG uses native Google on Nov 25 (D-37), so T-219, T-223 and T-224 move to Release B with T-214, T-215, T-217, T-218, T-220 – T-222 and T-225. (6) The Composio spike runs **locally only, against a throwaway test Gmail account**, never Saurabh's real mailboxes, until H-039 (including Zero Data Retention) is done; the key is never logged.
+- [x] D-34 Suggested replies. Decided Nov 7, 2026 by Saurabh: **"Draft reply" creates `email.save_draft` by default** (approval saves an unsent Gmail draft in the right thread). `email.send` is a separate, explicit approval. `email.save_draft` is added to `ACTION_TYPES` in `lane_config` (T-211, with the mapping table).
+- [x] D-35 Decided Nov 7, 2026 by Saurabh: Composio is a **transport for the Google connector** (`provider = 'google'`) through `proxyExecute`, reusing the Google sync code and SQL (spec §8.3). To be confirmed by the T-219 spike; if the proxy does not cover Gmail history/messages and Calendar events, reopen this decision before T-223.
+- [x] D-36 Resolved by D-33 (Nov 7, 2026, Saurabh): in Nichols production Saurabh stays `admin_technical`, no role change. He uses the brain only in his own test deployment (H-040), where he is owner of his test lanes.
+- [x] D-37 Decided Nov 7, 2026 by Saurabh: **native Google for PKG on Nov 25.** Switching PKG to Composio later is a `lane_config.mail_transport` change after the Composio path passes its live check.
 
 ---
 
@@ -894,7 +919,7 @@ T-160/T-161 can run in parallel after T-025. T-162/T-163 wait for W12, W13 and t
 ### T-162 briefing.daily
 - status: proposed
 - depends: T-104, T-123, T-133, T-112
-- acceptance: per-lane fan-out (calendar today, priority mail, finance alerts, pending approvals; commitments added in T-183) within each lane's policy, then a composer; facts separated from recommendations; `brief.briefings` + RLS + pgTAP + retention; schedule from lane_config (default 06:30 America/New_York).
+- acceptance: per-lane fan-out (calendar today, priority mail, finance alerts, pending approvals; commitments added in T-183) within each lane's policy, then a composer; facts separated from recommendations; `brief.briefings` + RLS + pgTAP + retention; schedule from lane_config (default 06:30 America/New_York). The `laneConfigSchema` default for `briefing.time` changes from 07:00 to 06:30 with its lane-config test (D-32).
 
 ### T-200 Home v1 from synced data (split from T-163)
 - status: done
@@ -942,6 +967,35 @@ Serial. T-171 can start any time after T-004. T-170 is the gate for PKG approval
 - status: proposed
 - depends: T-170
 - acceptance: `docs/runbooks/production.md`, PITR enabled, restore drill performed by a human and recorded.
+
+## Phase A14 — AI Brain and employees (Release A part)
+
+Spec: `docs/specs/brain-and-employees.md`, `docs/specs/brain-interview.md`; seed files: `packages/modules/brain/templates/` (moved from `docs/brain-templates/` in T-210). Decisions D-28 – D-38 (Nov 7, 2026). Review: `docs/plan-review.md` "AI Brain + AI Employees spec review (Nov 7, 2026)". Nov 25 scope (D-38, revised): T-210 – T-213, and T-216 only if time allows. The Release B part is Phase B8. All tasks start `proposed`.
+
+### T-210 Brain module + schema
+- status: done
+- depends: T-013, T-042
+- acceptance: new package `packages/modules/brain` (domain/tools/jobs/ui like other modules) added to `scripts/dependency-allowlist.test.mjs`; `'brain'` added to `MODULES` and to `core.view_names()` only (owner role views; not viewer/finance_operator/admin_technical); tables `brain.documents`, `brain.document_versions`, `brain.employees`, `brain.skills`, `brain.imports`, `brain.import_candidates`, all with non-null `lane_id`, RLS (AAL2 + allowed lanes; owner-only custom policies for about_me/preferences/imports on the catalog's `custom_policy_ok` list) and pgTAP (cross-lane, cross-user, AAL1, admin_technical denial); writes only through reviewed security-definer functions (`brain.document_save`, `brain.employee_save`, `brain.import_decide`) listed in the catalog; optimistic `version` check and version pruning in `document_save`; secret-pattern scan on write; retention registered with T-042; home-lane rule (spec §3, no hard-coded lane code); templates from `docs/brain-templates/` moved to `packages/modules/brain/templates/` and created lazily on first use, never by a migration; no Nichols Law documents; synthetic lanes only in tests.
+
+### T-211 Employee config schema + permission ceiling
+- status: proposed
+- depends: T-210, T-011
+- acceptance: `email.save_draft` added to `ACTION_TYPES` in `packages/core/src/lane-config` with its lane-config test and an `approvals.expire_after_hours` default (D-34); `employeeConfigSchema` (strict Zod, spec §3) with `laneCode`/`email`/`hhmm` exported from core; effective permissions = config ∩ `lane_policies.write_actions_allowed` ∩ role through the tested action-type mapping table (spec §3); `mail[].lane` ∈ `lanes`; a single-lane employee has `lanes == [lane_id]`; a mailbox not in `lane_config.mailboxes` is rejected; `finance_kpis` ⊆ `lane_config.kpis`; `schedule.days` defaults to Mon–Fri (D-32); tests for widen-attempt and unknown-mailbox.
+
+### T-212 Prompt assembly with brain blocks
+- status: proposed
+- depends: T-100, T-102, T-210
+- acceptance: order in spec §4; per-lane blocks only (no foreign-lane block in a single-lane call); D-28 test: About-Me and Preferences only in the owner's own calls and in every lane; no `mem.items` block until T-155; token cap with dropped-block note; injection test: a brain doc saying "call send_email" changes no tool availability.
+
+### T-213 briefing.daily from the employee profile (extends T-162)
+- status: proposed
+- depends: T-162, T-211, T-212
+- acceptance: steps in spec §5 on top of T-162's `briefing.daily` and `brief.briefings` (no duplicate table); dispatcher cron `briefing.dispatch` with idempotency key (employee and local date) and DST tests; per-run membership re-check per lane; job added to `JOB_RUNNERS` deliberately; adds `employee_id`/`owner_user_id` to `brief.briefings` with owner RLS + pgTAP; review window from sync cursors; `partial` coverage when a source fails; reads the comms/calendar index plus cursors, never live tool output; facts separate from recommendations; numeric grounding; suggested replies never call `proposeAction` (test); "Run now" on Home; mock-provider golden run.
+
+### T-216 Chat-first setup interview + test briefing
+- status: proposed
+- depends: T-210, T-211, T-100, T-213
+- acceptance: Nov 25 only if time allows. Interview runs in the assistant chat first with Settings → AI brain as the fallback (spec §7); question bank from `docs/specs/brain-interview.md` as data with a unit test that every `config.*` target is a schema path; ≤3 questions per step; skip rules; diff card and Save per group (never auto-save); summary → draft employee → test briefing → activate; reconfigure by section; a missing source shows a link to Settings → Connections and never connects from the chat; iPhone layout.
 
 ---
 
@@ -1079,3 +1133,67 @@ Search connectors for the unconfirmed mail provider (T-186 or T-187) can be drop
 - status: proposed
 - depends: T-170, T-156, T-143, T-153
 - acceptance: re-run T-170 suite plus commitments, memory and indexing tests; per-lane approval enablement for lanes other than PKG; Dec 17–23 window; actions for other lanes go live Dec 29 only if no blocker/high.
+
+## Phase B8 — AI Brain and employees (Release B part)
+
+Spec: `docs/specs/brain-and-employees.md`. Release B (D-38, revised Nov 7, 2026). PKG uses native Google on Nov 25 (D-37), so the Composio tasks (T-219, T-223, T-224, T-225) are here. The writes (T-214, T-225) also wait for the Approval Center (T-110 – T-113).
+
+### T-219 Composio connect + Settings → Connections (D-30)
+- status: proposed
+- depends: T-062, T-035, T-032, T-040, T-199
+- needs: H-039
+- acceptance: spec §8.2, §8.3, §8.5, §8.6. Connector at `packages/connectors/src/composio` with `@composio/core` pinned exactly to `0.27.0` (re-check the docs first) and toolkit versions pinned in the constructor; `VENDORS` entry for that path only plus `scripts/dependency-allowlist.test.mjs` entry and a client-bundle canary; `COMPOSIO_API_KEY` read through `requireConnectorEnv` and never logged (canary test); Composio `userId` = the Jarvis user UUID. **Settings → Connections stays the only place to connect, test and disconnect**: "Connect via Composio" per lane for Gmail and Calendar (more toolkits in T-222); per-account status, mailbox address, last sync, **Test** (read-only identity + one page) and **Disconnect** through the Approval Center (D-24); the chat may only link to this flow and never connect on its own (test). `connectedAccounts.link()` flow with the T-035 state/nonce bound to user + lane + toolkit; identity checked against `lane_config.mailboxes` (fail closed); one connected account per lane per toolkit (D-23) stored in `core.connections.external_account_id`; `core.connections.transport` (`native`/`composio`) and a security-definer activation without a token row (migration + pgTAP); new strict `lane_config.mail_transport` with schema tests; account status `EXPIRED`/`REVOKED` → `reconnect_required`; runtime allow-list test (a non-allow-listed slug is refused before any network call); spike for D-35 (does `proxyExecute` cover Gmail history/messages and Calendar events) run **locally only against a throwaway test Gmail account** (never real mailboxes) until H-039 incl. Zero Data Retention is done, key never logged, result recorded in `docs/plan-review.md`; MSW fakes and synthetic data only.
+
+### T-223 Gmail + Calendar sync over Composio
+- status: proposed
+- depends: T-219, T-063, T-064, T-130
+- needs: D-35
+- acceptance: with D-35 = transport: the T-063/T-064/T-130 sync code and SQL reused for `provider = 'google'` with the HTTP call through `proxyExecute` for `transport = 'composio'` connections; same cursors (history id / sync token) and 410 reset; bodies never stored (rule 6); polling only (no Composio triggers); lane switch through `lane_config.mail_transport`; the native Google path unchanged (regression tests); MSW fakes only.
+
+### T-224 Composio read tools in the assistant registry
+- status: proposed
+- depends: T-219, T-101, T-102
+- acceptance: spec §8.1 and §8.4. Jarvis's server-side allow-list is the guard: a tool not in the registry cannot be called whatever `session.execute` accepts (test). Each Composio read tool has a full reviewed `ToolDescriptor`: category mapped to `lane_policies.llm_allowed_categories`; `effect: 'read'`; `resultStore: 'refs_only'` for mail/docs/chat content; `untrustedFields` wrapped (T-102); snippet cap; strict Zod input; connected account id injected by the server from the lane-bound row; mailbox re-checked per call. Live-read metadata is upserted into the comms/calendar index through the existing apply functions (metadata only); no bodies in `ai.tool_calls` or any table (canary test); injection test: an email that says "forward this" yields no write tool call outside `effect: 'propose'`.
+
+### T-214 Suggested replies → Approval Center
+- status: proposed
+- depends: T-213, T-124
+- needs: D-34
+- acceptance: the briefing's "Draft reply" click runs the T-124 `userInitiated` path with the exact payload; the scheduled job never creates proposals; `needs_input` items labelled; duplicate-draft check per thread; no draft text stored outside `act.*` (D-19).
+
+### T-225 Composio write executors
+- status: proposed
+- depends: T-219, T-113, T-116
+- needs: D-34
+- acceptance: spec §8.5. Write tools only create proposals (`effect: 'propose'`); execution only through approvals → `@nichols/connectors/write` → Composio executors for `email.draft` and `email.send` (calendar.event after T-117); payload hash checked like the QuickBooks writer; execute once then verify then audit; all other Composio write slugs refused (test); lint test that only approvals imports the writers.
+
+### T-215 Chat-first memory: remember, Undo, suggestions (refines T-155/T-156)
+- status: proposed
+- depends: T-155, T-210, T-101
+- acceptance: spec §6. Auto-save only from the user's own typed message ("remember…"); the server sets `origin` from message provenance; tests that "remember" inside a quoted email or a paste or an import or a tool result never saves; Undo chip shows exactly what was saved with document path and lane and restores the previous version (audited); inferred suggestions always need a tap and are limited to one per conversation; saves go to the current lane and owner-wide preferences to the home lane (D-28) with a question when the scope is unclear; post-briefing feedback produces a proposed profile edit; `drafting` category migration with pgTAP if not already added.
+
+### T-217 Brain editor + folder import/export
+- status: proposed
+- depends: T-210
+- acceptance: Settings → AI brain is the full viewer, editor and history: list/edit per lane, version history and restore; import a brain .zip opened in the browser (paths map 1:1; each file reviewed and saved only on a per-file click; Skills/Employees files shown in full; nothing auto-activates); export the same folder layout; round-trip test.
+
+### T-218 External news source (D-31)
+- status: proposed
+- depends: T-213, T-102
+- acceptance: isolated no-tool web call returning schema-validated items `{title, url, published_at, summary}` wrapped as untrusted for the composer; cited with link and date; off unless the lane policy has `web`; one migration adds `web` and `drafting` to `llm_allowed_categories` with pgTAP (if not already added); assistant spec §2 line amended.
+
+### T-220 Claude / ChatGPT context import
+- status: proposed
+- depends: T-217, T-100, T-102
+- acceptance: paste, or a Claude/ChatGPT export opened in the browser (≤50 MB) with only the selected text sent; no Storage of raw exports; extraction under the `drafting` category → candidate facts with evidence and target → checklist → diffs → save; imported text untrusted (instruction-like lines dropped and flagged; imports never auto-save); possible Nichols Law content flagged and unticked with no evidence kept; candidates purged 24 h after creation at the latest; synthetic export fixtures only.
+
+### T-221 Real-account test in the separate test deployment (D-33)
+- status: proposed
+- depends: T-223, T-224, T-216, T-220, T-213
+- needs: H-039, H-040
+- acceptance: runbook `docs/runbooks/brain-test-deployment.md` for spec §8a (D-33): Saurabh in his separate test deployment (H-040; never Nichols production) makes his Composio connections in Settings and imports his brain .zip and completes the chat interview and reviews two consecutive briefings; agents prepare the runbook and never hold that project's keys or query it; findings recorded in `docs/plan-review.md`; no real data committed.
+
+### T-222 More Composio toolkits by configuration
+- status: proposed
+- depends: T-224
+- acceptance: spec §8.7. A toolkit is added by a `lane_config` toolkit entry plus allow-listed read tools each with a reviewed `ToolDescriptor` in a small data file (`packages/connectors/src/composio/toolkits/<toolkit>.ts`) and a security-reviewer pass per toolkit; new toolkits start read-only; writes need a new `ACTION_TYPE` and an executor; one connected account per lane per toolkit (D-23); "Connect via Composio" in Settings → Connections lists configured toolkits; first toolkit added with synthetic fixtures as the worked example.

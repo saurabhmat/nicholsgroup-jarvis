@@ -6,7 +6,7 @@ const nextConfig: NextConfig = {
   // honoured, and never on Vercel: an arbitrary NEXT_DIST_DIR (say `public/x`) would publish server chunks as static files.
   ...(process.env.NEXT_DIST_DIR === ".next-canary" && !process.env.VERCEL ? { distDir: ".next-canary" } : {}),
   // Workspace packages are consumed as TypeScript source.
-  transpilePackages: ["@nichols/connectors", "@nichols/core", "@nichols/ui"],
+  transpilePackages: ["@nichols/brain", "@nichols/connectors", "@nichols/core", "@nichols/ui"],
   experimental: {
     agentFeedback: true,
   },
