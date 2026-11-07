@@ -34,7 +34,7 @@ const ALLOWED = {
     "typescript-eslint",
     "vitest", // T-024: unit tests for lane loading, return paths and the proxy (same version as the workspace)
   ],
-  "packages/ai": CORE_ONLY, // @anthropic-ai/sdk joins this list with T-100
+  "packages/ai": [...CORE_ONLY, "@anthropic-ai/sdk"], // T-100
   // vendor SDKs join this list with their connectors (T-04x...); zod for the contract schemas, vitest for the kit (T-030)
   "packages/connectors": [...CORE_ONLY, "msw", "vitest", "zod"], // msw: provider mocks for tests (T-034)
   // T-016/T-017: Supabase clients, only importable from the lane router and packages/core/src/auth (lint)
