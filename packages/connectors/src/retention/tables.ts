@@ -4,9 +4,8 @@ import type { WebhookStore } from "../webhooks/store";
 import type { RetentionStore } from "./store";
 import type { RetentionTable } from "./types";
 
-// Not here on purpose: brain page version history (last 20, pruned inside the brain save function) and brain import
-// candidates (own hourly purge job, 23 h cut). Neither is a day class, and no connector path writes the brain schema
-// (T-210, plan-review finding 19).
+// The brain tables are not purged here: they are declared (retentionRegistry.declare) by the brain module, wired in the
+// web app's Inngest route — owner-authored pages kept until deleted, imports cleaned by their own hourly job (T-210).
 export function defaultRetentionTables(deps: { store: RetentionStore; webhooks: Pick<WebhookStore, "purge"> }): RetentionTable[] {
   const { store, webhooks } = deps;
   return [

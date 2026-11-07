@@ -20,15 +20,17 @@ import {
 } from "@nichols/core/inngest";
 import type { LaneId } from "@nichols/core";
 import { getLaneJobClient } from "@nichols/core/lane-router";
-import { createImportPurge } from "@nichols/brain/jobs";
+import { BRAIN_RETENTION, createImportPurge } from "@nichols/brain/jobs";
 import { getServerEnv } from "@nichols/core/env/server";
 import { QBO_SYNC_ENTITIES, connSyncJob, isQuickbooksConnectionUsable, listCalendarConnectionIds, listQuickbooksSyncConnectionIds, qboSyncIntervalHours } from "@nichols/connectors/sync";
 import { listHealthConnectionIds, listRenewConnectionIds, subscriptionRenewJob, tokenHealthJob } from "@nichols/connectors/health";
-import { retentionPurgeJob } from "@nichols/connectors/retention";
+import { retentionPurgeJob, retentionRegistry } from "@nichols/connectors/retention";
 import { listQuickbooksConnectionIds, qboReportsJob } from "@nichols/connectors/reports";
 import { qboNormalizeJob } from "@nichols/connectors/normalize";
 
 const importPurge = createImportPurge({ clientFor: (laneId) => getLaneJobClient(laneId) });
+// The brain tables in the retention catalog: kept until deleted, or cleaned by brain-import-purge (never by retention.purge).
+for (const declaration of BRAIN_RETENTION) retentionRegistry.declare(declaration);
 
 export const { GET, POST, PUT } = inngestRoute((inngest) => [
   ...platformFunctions(inngest),

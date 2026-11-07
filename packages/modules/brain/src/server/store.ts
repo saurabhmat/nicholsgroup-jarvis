@@ -13,6 +13,7 @@ import {
   MAX_BODY_BYTES,
   SEED_SKILLS,
   containsSecret,
+  findSensitiveNumber,
   isValidBrainPath,
   utf8Bytes,
   type DocumentKind,
@@ -71,6 +72,13 @@ function checkLane(laneId: LaneId): void {
 function checkText(body: string): void {
   if (typeof body !== "string" || utf8Bytes(body) > MAX_BODY_BYTES) throw new BrainError("invalid");
   if (containsSecret(body)) throw new BrainError("secret");
+  checkSensitive(body);
+}
+
+/** Refuses SSNs, card numbers and labelled bank numbers with a message that says which (decided Nov 7, 2026). */
+function checkSensitive(text: string): void {
+  const kind = findSensitiveNumber(text);
+  if (kind !== null) throw new BrainError(`sensitive_${kind}`);
 }
 
 function checkVersion(ifVersion: number): void {
@@ -157,6 +165,7 @@ export function createBrainStore(deps: BrainStoreDeps) {
      */
     async saveDocument(laneId: LaneId, path: string, body: string, ifVersion: number): Promise<SaveResult> {
       if (!isValidBrainPath(path)) throw new BrainError("invalid");
+      checkSensitive(path);
       checkText(body);
       checkVersion(ifVersion);
       return toSave(await call(laneId, "brain_document_save", { p_lane: laneId, p_path: path, p_body: body, p_if_version: ifVersion }));
@@ -192,6 +201,8 @@ export function createBrainStore(deps: BrainStoreDeps) {
       if (typeof input.config !== "object" || input.config === null || Array.isArray(input.config)) throw new BrainError("invalid");
       checkText(input.instructions);
       if (containsSecret(input.name) || containsSecret(JSON.stringify(input.config))) throw new BrainError("secret");
+      checkSensitive(input.name);
+      checkSensitive(JSON.stringify(input.config));
       checkVersion(ifVersion);
       return toSave(
         await call(laneId, "brain_employee_save", {
@@ -223,6 +234,7 @@ export function createBrainStore(deps: BrainStoreDeps) {
       if (!SKILL_KEY.test(skill.key) || skill.title !== skill.title.trim() || skill.title.length < 1 || skill.title.length > 200) throw new BrainError("invalid");
       checkText(skill.body);
       if (containsSecret(skill.title)) throw new BrainError("secret");
+      checkSensitive(skill.title);
       checkVersion(ifVersion);
       return toSave(
         await call(laneId, "brain_skill_save", { p_lane: laneId, p_key: skill.key, p_title: skill.title, p_body: skill.body, p_if_version: ifVersion }),

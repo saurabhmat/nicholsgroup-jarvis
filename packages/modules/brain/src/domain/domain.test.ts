@@ -13,6 +13,7 @@ import {
   SEED_SKILLS,
   TEMPLATE_FILES,
   containsSecret,
+  findSensitiveNumber,
   documentKindFor,
   isValidBrainPath,
   resolveHomeLane,
@@ -134,6 +135,7 @@ describe("seed templates", () => {
     const all = [...Object.values(TEMPLATE_FILES), BRAIN_RULES_MD, PERSONAL_ASSISTANT_INSTRUCTIONS, PROJECT_TEMPLATES.brief, PROJECT_TEMPLATES.handoff];
     for (const t of all) {
       expect(containsSecret(t)).toBe(false);
+      expect(findSensitiveNumber(t)).toBeNull();
       expect(utf8Bytes(t)).toBeLessThan(32_768);
     }
     expect(Object.keys(TEMPLATE_FILES).filter((f) => /nichols[-_ ]?law|(^|\/)NL(\/|[-.])/i.test(f))).toEqual([]);

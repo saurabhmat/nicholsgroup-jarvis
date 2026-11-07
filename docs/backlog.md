@@ -93,7 +93,7 @@ These tasks have all their dependencies done and all their `needs` checked. A hu
 - T-050, T-055, T-036 (QuickBooks OAuth, finance schema part 1, webhook receiver) — approved by Saurabh Nov 4, 2026 ("yes"); built on `agent/pilot-build`.
 - T-023, T-024 (app shell, navigation) — approved by Saurabh Nov 4, 2026 ("approved all points", D-20 batch 1); built on `agent/pilot-build`.
 - T-003 (imports T-005's secret-pattern list) — approved Oct 24, 2026; in progress in its own worktree.
-- AI Brain (Phase A14): **T-210 approved by Saurabh Nov 7, 2026**; built on `agent/brain`. T-211, T-212 and T-213 follow in order (T-212/T-213 also wait for T-100, T-102 and T-162). T-216 (if time allows) needs T-213. The Composio tasks are Release B (Phase B8); T-219 is blocked on H-039.
+- AI Brain (Phase A14): **T-210 approved by Saurabh Nov 7, 2026**; built on `agent/brain`. T-211, T-100, T-101, T-102 and T-212 approved by Saurabh Nov 7, 2026; build order T-211 → T-100 → T-101 → T-102 → T-212 (T-101 gets a full security + code review: it is the policy gate). T-213 follows (T-212/T-213 also wait for T-100, T-102 and T-162). T-216 (if time allows) needs T-213. The Composio tasks are Release B (Phase B8); T-219 is blocked on H-039.
 
 ---
 
@@ -753,18 +753,18 @@ T-080 joins W3 early. T-081 – T-097 form **track W12** once W6 – W8 are merg
 T-100 – T-103 are **track W4**, parallel with the connectors (after T-017). T-104 – T-106 follow T-081.
 
 ### T-100 LLMProvider interface + Anthropic implementation
-- status: proposed
+- status: approved
 - depends: T-005
 - needs: H-002
 - acceptance: provider interface (analysis + fast model, configured not hard-coded); Anthropic implementation via `packages/ai` only; mock provider for tests; request logging excludes prompt content.
 
 ### T-101 Tool registry + policy gate
-- status: proposed
+- status: approved
 - depends: T-100, T-017, T-015
 - acceptance: Spec: `docs/specs/assistant.md` §4. Modules register tools (`name`, `category`, `effect` read|propose, `requiredView`, strict Zod args with no lane field, `resultStore` full|refs_only, `untrustedFields`); the gate checks, in order, AAL2 session, membership and role, lane enabled, `llm_allowed_categories`, required view, rate limit, then audits every call; a registration test fails if a tool imports a connector write path; tests for denied lane, denied category, forged laneId/extra arguments, viewer and admin_technical.
 
 ### T-102 Untrusted content wrapping + injection suite
-- status: proposed
+- status: approved
 - depends: T-101
 - acceptance: Spec: `docs/specs/assistant.md` §4. Retrieved content (email, documents, web, and external names in QBO/Stripe/GHL results) wrapped as data with provenance and escaped closing tags; system prompt states it has no authority; `pnpm test:injection` runs a fixture corpus (email/doc/web/customer-name/memo injections, nested tags, approve/send and cross-lane requests) against a mock provider scripted to comply and, opt-in, the real model; asserts no tool escalation, no cross-lane calls, no proposals or approvals from injected text, no secrets in output.
 
@@ -978,12 +978,12 @@ Spec: `docs/specs/brain-and-employees.md`, `docs/specs/brain-interview.md`; seed
 - acceptance: new package `packages/modules/brain` (domain/tools/jobs/ui like other modules) added to `scripts/dependency-allowlist.test.mjs`; `'brain'` added to `MODULES` and to `core.view_names()` only (owner role views; not viewer/finance_operator/admin_technical); tables `brain.documents`, `brain.document_versions`, `brain.employees`, `brain.skills`, `brain.imports`, `brain.import_candidates`, all with non-null `lane_id`, RLS (AAL2 + allowed lanes; owner-only custom policies for about_me/preferences/imports on the catalog's `custom_policy_ok` list) and pgTAP (cross-lane, cross-user, AAL1, admin_technical denial); writes only through reviewed security-definer functions (`brain.document_save`, `brain.employee_save`, `brain.import_decide`) listed in the catalog; optimistic `version` check and version pruning in `document_save`; secret-pattern scan on write; retention registered with T-042; home-lane rule (spec §3, no hard-coded lane code); templates from `docs/brain-templates/` moved to `packages/modules/brain/templates/` and created lazily on first use, never by a migration; no Nichols Law documents; synthetic lanes only in tests.
 
 ### T-211 Employee config schema + permission ceiling
-- status: proposed
+- status: approved
 - depends: T-210, T-011
 - acceptance: `email.save_draft` added to `ACTION_TYPES` in `packages/core/src/lane-config` with its lane-config test and an `approvals.expire_after_hours` default (D-34); `employeeConfigSchema` (strict Zod, spec §3) with `laneCode`/`email`/`hhmm` exported from core; effective permissions = config ∩ `lane_policies.write_actions_allowed` ∩ role through the tested action-type mapping table (spec §3); `mail[].lane` ∈ `lanes`; a single-lane employee has `lanes == [lane_id]`; a mailbox not in `lane_config.mailboxes` is rejected; `finance_kpis` ⊆ `lane_config.kpis`; `schedule.days` defaults to Mon–Fri (D-32); tests for widen-attempt and unknown-mailbox.
 
 ### T-212 Prompt assembly with brain blocks
-- status: proposed
+- status: approved
 - depends: T-100, T-102, T-210
 - acceptance: order in spec §4; per-lane blocks only (no foreign-lane block in a single-lane call); D-28 test: About-Me and Preferences only in the owner's own calls and in every lane; no `mem.items` block until T-155; token cap with dropped-block note; injection test: a brain doc saying "call send_email" changes no tool availability.
 

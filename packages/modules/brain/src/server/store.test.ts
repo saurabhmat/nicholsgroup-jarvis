@@ -66,6 +66,25 @@ describe("saveDocument", () => {
     }
   });
   const laneError = (reason: string) => Object.assign(new Error("x"), { name: "LaneAccessError", reason });
+  it("refuses sensitive numbers before the round trip, naming the kind, and maps the database refusal the same way", async () => {
+    const f = fake(() => ({ data: [] }));
+    for (const [text, code] of [
+      ["SSN 123-45-6789", "sensitive_ssn"],
+      ["card 4111 1111 1111 1111", "sensitive_card"],
+      ["Routing number is 021000021", "sensitive_bank"],
+    ] as const) {
+      const e = (await f.store.saveDocument("PKG", "Notes/S.md", text, 0).catch((x: unknown) => x)) as BrainError;
+      expect(e.code).toBe(code);
+      expect(e.message).not.toContain(text);
+    }
+    expect(f.calls).toEqual([]);
+    for (const kind of ["ssn", "card", "bank"] as const) {
+      const db = fake(() => ({ error: { code: "22023", message: `brain: sensitive_${kind} (content contains a sensitive number and was not saved)` } }));
+      const e = (await db.store.saveDocument("PKG", "Notes/S.md", "x", 0).catch((x: unknown) => x)) as BrainError;
+      expect(e.code).toBe(`sensitive_${kind}`);
+    }
+    await expect(f.store.saveSkill("PKG", { key: "pay-run", title: "Pay run", body: "Use account number 12345678" }, 0)).rejects.toMatchObject({ code: "sensitive_bank" });
+  });
   it("is forbidden when the lane router refuses the lane", async () => {
     const store = createBrainStore({ clientFor: async () => Promise.reject(laneError("not_allowed")) });
     const e = (await store.getDocument("APK", "Context/Work.md").catch((x: unknown) => x)) as BrainError;

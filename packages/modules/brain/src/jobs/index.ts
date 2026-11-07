@@ -36,3 +36,5 @@ export function createImportPurge(deps: ImportPurgeDeps) {
     },
   };
 }
+
+export { BRAIN_RETENTION, type BrainRetentionDeclaration } from "./retention";

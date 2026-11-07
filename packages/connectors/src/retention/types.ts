@@ -24,6 +24,21 @@ export type RetentionTable = {
   purge(laneId: LaneId, keepDays: number | null): Promise<number>;
 };
 
+/**
+ * A table the purge job does NOT purge, declared so the retention catalog is complete: `until_deleted` (kept until the
+ * user deletes it, e.g. owner-authored brain pages) or `own_job` (cleaned up by its own job, named in `job`). Catalog only:
+ * the purge job never touches a declared table.
+ */
+export type RetentionDeclaration = {
+  /** `schema.table`, unique across tables and declarations. */
+  id: string;
+  rule: "until_deleted" | "own_job";
+  /** Why, in one sentence (shown in the catalog). */
+  reason: string;
+  /** The job that cleans it up (required for `own_job`). */
+  job?: string;
+};
+
 export type TablePurgeResult = { table: string; class: RetentionClass; deleted: number } | { table: string; class: RetentionClass; error: string };
 export type LanePurgeResult = {
   laneId: LaneId;

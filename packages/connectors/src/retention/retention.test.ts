@@ -34,6 +34,22 @@ describe("registry", () => {
     expect(() => r.register(table("x.y;drop", "comms", async () => 0))).toThrow();
     expect(() => r.register(table("x.y", "nope" as never, async () => 0))).toThrow();
   });
+  it("declares tables that are not purged (catalog only), idempotently, and refuses clashes and incomplete entries", () => {
+    const r = createRetentionRegistry([table("comms.message_index", "comms", async () => 0)]);
+    const keep = { id: "notes.pages", rule: "until_deleted", reason: "Owner-authored." } as const;
+    r.declare(keep);
+    r.declare({ ...keep }); // identical re-declaration (dev module re-evaluation) is a no-op
+    r.declare({ id: "notes.drafts", rule: "own_job", job: "notes-purge", reason: "Own hourly job." });
+    expect(r.declarations().map((d) => d.id)).toEqual(["notes.pages", "notes.drafts"]);
+    expect(r.list().map((t) => t.id)).toEqual(["comms.message_index"]); // the purge job never sees a declaration
+    expect(() => r.declare({ ...keep, reason: "Different." })).toThrow();
+    expect(() => r.declare({ id: "comms.message_index", rule: "until_deleted", reason: "x" })).toThrow();
+    expect(() => r.register(table("notes.pages", "comms", async () => 0))).toThrow();
+    expect(() => r.declare({ id: "bad", rule: "until_deleted", reason: "x" })).toThrow();
+    expect(() => r.declare({ id: "a.b", rule: "until_deleted", reason: " " })).toThrow();
+    expect(() => r.declare({ id: "a.b", rule: "own_job", reason: "x" })).toThrow();
+    expect(() => r.declare({ id: "a.b", rule: "forever" as never, reason: "x" })).toThrow();
+  });
 });
 
 describe("purge job", () => {
