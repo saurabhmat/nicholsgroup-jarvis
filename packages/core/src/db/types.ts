@@ -346,6 +346,57 @@ isOneToOne: false
             "allowed_lanes":
 { Args: { "p_uid": string,"p_view": string }; Returns: (string)[]
                            },
+"brain_document_get":
+{ Args: { "p_lane": string,"p_path": string }; Returns: {
+              "body_md": string,"id": string,"is_mine": boolean,"kind": string,"path": string,"updated_at": string,"version": number
+            }[]
+                           },
+"brain_document_save":
+{ Args: { "p_body": string,"p_if_version": number,"p_lane": string,"p_path": string }; Returns: {
+              "o_id": string,"o_updated_at": string,"o_version": number
+            }[]
+                           },
+"brain_document_versions":
+{ Args: { "p_lane": string,"p_path": string }; Returns: {
+              "body_md": string,"created_at": string,"saved_by": string,"version": number
+            }[]
+                           },
+"brain_documents_list":
+{ Args: { "p_lane": string,"p_prefix"?: string }; Returns: {
+              "is_mine": boolean,"kind": string,"path": string,"updated_at": string,"version": number
+            }[]
+                           },
+"brain_employee_save":
+{ Args: { "p_config": Json,"p_if_version": number,"p_instructions_md": string,"p_lane": string,"p_name": string,"p_role_key": string,"p_status": string }; Returns: {
+              "o_id": string,"o_updated_at": string,"o_version": number
+            }[]
+                           },
+"brain_employees_list":
+{ Args: { "p_lane": string }; Returns: {
+              "config": Json,"id": string,"instructions_md": string,"is_mine": boolean,"name": string,"role_key": string,"status": string,"updated_at": string,"version": number
+            }[]
+                           },
+"brain_home_lane":
+{ Args: Record<PropertyKey, never>; Returns: string
+                           },
+"brain_import_decide":
+{ Args: { "p_decisions": Json,"p_finish"?: boolean,"p_import_id": string,"p_lane": string }; Returns: {
+              "o_candidate_id": string,"o_fact": string,"o_target_lane": string,"o_target_path": string
+            }[]
+                           },
+"brain_import_purge":
+{ Args: { "p_lane": string }; Returns: number
+                           },
+"brain_skill_save":
+{ Args: { "p_body": string,"p_if_version": number,"p_key": string,"p_lane": string,"p_title": string }; Returns: {
+              "o_id": string,"o_updated_at": string,"o_version": number
+            }[]
+                           },
+"brain_skills_list":
+{ Args: { "p_lane": string }; Returns: {
+              "body_md": string,"id": string,"is_mine": boolean,"key": string,"title": string,"updated_at": string,"version": number
+            }[]
+                           },
 "cal_events_apply_page":
 { Args: { "p_complete"?: boolean,"p_connection_id": string,"p_cursor": string,"p_drop_calendars"?: (string)[],"p_expected_cursor": string,"p_lane": string,"p_removals": Json,"p_upserts": Json }; Returns: Json
                            },

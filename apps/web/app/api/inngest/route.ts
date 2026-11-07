@@ -1,7 +1,8 @@
 // Inngest endpoint (T-037): Inngest calls this route to run the app's functions. Signed requests only, except with
 // the local Inngest dev server (APP_ENV=local); 503 when jobs are not configured (see @nichols/core/inngest).
-// conn.sync (T-038), token health (T-040), cal.ingest_delta (T-130), fin.sync QuickBooks (T-090), fin.qbo_reports (T-052), fin.qbo_normalize (T-056) and retention.purge (T-042) are wired here: core cannot import connectors, so the route hands the connector job to the function.
+// conn.sync (T-038), token health (T-040), cal.ingest_delta (T-130), fin.sync QuickBooks (T-090), fin.qbo_reports (T-052), fin.qbo_normalize (T-056) and retention.purge (T-042) and brain.import_purge (T-210) are wired here: core cannot import connectors, so the route hands the connector job to the function.
 import {
+  brainImportPurgeFunction,
   calIngestFunction,
   connHealthFunctions,
   connSyncFunction,
@@ -18,12 +19,16 @@ import {
   shouldNormalizeAfterSync,
 } from "@nichols/core/inngest";
 import type { LaneId } from "@nichols/core";
+import { getLaneJobClient } from "@nichols/core/lane-router";
+import { createImportPurge } from "@nichols/brain/jobs";
 import { getServerEnv } from "@nichols/core/env/server";
 import { QBO_SYNC_ENTITIES, connSyncJob, isQuickbooksConnectionUsable, listCalendarConnectionIds, listQuickbooksSyncConnectionIds, qboSyncIntervalHours } from "@nichols/connectors/sync";
 import { listHealthConnectionIds, listRenewConnectionIds, subscriptionRenewJob, tokenHealthJob } from "@nichols/connectors/health";
 import { retentionPurgeJob } from "@nichols/connectors/retention";
 import { listQuickbooksConnectionIds, qboReportsJob } from "@nichols/connectors/reports";
 import { qboNormalizeJob } from "@nichols/connectors/normalize";
+
+const importPurge = createImportPurge({ clientFor: (laneId) => getLaneJobClient(laneId) });
 
 export const { GET, POST, PUT } = inngestRoute((inngest) => [
   ...platformFunctions(inngest),
@@ -87,6 +92,11 @@ export const { GET, POST, PUT } = inngestRoute((inngest) => [
   // retention.purge (T-042): daily schedule + per-lane worker over the connectors' registry of purge functions.
   ...retentionPurgeFunctions(inngest, {
     purgeLane: (laneId) => retentionPurgeJob.run(laneId),
+    enabledLanes: () => getServerEnv().ENABLED_LANES,
+  }),
+  // brain.import_purge (T-210): hourly, deletes brain import candidates older than 23 h and closes stale imports, per lane.
+  brainImportPurgeFunction(inngest, {
+    purgeLane: (laneId) => importPurge.purgeLane(laneId as LaneId),
     enabledLanes: () => getServerEnv().ENABLED_LANES,
   }),
 ]);

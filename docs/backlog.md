@@ -970,10 +970,10 @@ Serial. T-171 can start any time after T-004. T-170 is the gate for PKG approval
 
 ## Phase A14 — AI Brain and employees (Release A part)
 
-Spec: `docs/specs/brain-and-employees.md`, `docs/specs/brain-interview.md`; seed files: `docs/brain-templates/`. Decisions D-28 – D-38 (Nov 7, 2026). Review: `docs/plan-review.md` "AI Brain + AI Employees spec review (Nov 7, 2026)". Nov 25 scope (D-38, revised): T-210 – T-213, and T-216 only if time allows. The Release B part is Phase B8. All tasks start `proposed`.
+Spec: `docs/specs/brain-and-employees.md`, `docs/specs/brain-interview.md`; seed files: `packages/modules/brain/templates/` (moved from `docs/brain-templates/` in T-210). Decisions D-28 – D-38 (Nov 7, 2026). Review: `docs/plan-review.md` "AI Brain + AI Employees spec review (Nov 7, 2026)". Nov 25 scope (D-38, revised): T-210 – T-213, and T-216 only if time allows. The Release B part is Phase B8. All tasks start `proposed`.
 
 ### T-210 Brain module + schema
-- status: approved
+- status: done
 - depends: T-013, T-042
 - acceptance: new package `packages/modules/brain` (domain/tools/jobs/ui like other modules) added to `scripts/dependency-allowlist.test.mjs`; `'brain'` added to `MODULES` and to `core.view_names()` only (owner role views; not viewer/finance_operator/admin_technical); tables `brain.documents`, `brain.document_versions`, `brain.employees`, `brain.skills`, `brain.imports`, `brain.import_candidates`, all with non-null `lane_id`, RLS (AAL2 + allowed lanes; owner-only custom policies for about_me/preferences/imports on the catalog's `custom_policy_ok` list) and pgTAP (cross-lane, cross-user, AAL1, admin_technical denial); writes only through reviewed security-definer functions (`brain.document_save`, `brain.employee_save`, `brain.import_decide`) listed in the catalog; optimistic `version` check and version pruning in `document_save`; secret-pattern scan on write; retention registered with T-042; home-lane rule (spec §3, no hard-coded lane code); templates from `docs/brain-templates/` moved to `packages/modules/brain/templates/` and created lazily on first use, never by a migration; no Nichols Law documents; synthetic lanes only in tests.
 

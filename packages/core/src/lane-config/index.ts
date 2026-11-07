@@ -43,6 +43,7 @@ export const MODULES = [
   "commitments",
   "memory",
   "notifications",
+  "brain",
 ] as const;
 
 export const ACTION_TYPES = ["email.draft", "email.send", "calendar.event", "monday.item", "notion.page"] as const;

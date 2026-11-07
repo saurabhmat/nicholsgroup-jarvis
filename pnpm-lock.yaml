@@ -193,6 +193,9 @@ importers:
 
   apps/web:
     dependencies:
+      '@nichols/brain':
+        specifier: workspace:*
+        version: link:../../packages/modules/brain
       '@nichols/connectors':
         specifier: workspace:*
         version: link:../../packages/connectors
@@ -312,6 +315,12 @@ importers:
         version: link:../../core
 
   packages/modules/approvals:
+    dependencies:
+      '@nichols/core':
+        specifier: workspace:*
+        version: link:../../core
+
+  packages/modules/brain:
     dependencies:
       '@nichols/core':
         specifier: workspace:*

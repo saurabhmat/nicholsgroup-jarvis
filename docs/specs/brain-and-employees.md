@@ -133,6 +133,14 @@ Overlap with `lane_config`: `mailboxes`, `priority_senders` and `briefing.time` 
 `brain.imports`: `id, lane_id (the home lane), user_id, source ('claude_paste'|'chatgpt_paste'|'claude_export'|'chatgpt_export'|'brain_zip'), status ('extracting'|'review'|'done'|'failed'), created_at, finished_at`. No `storage_path`: the raw upload is not persisted (§7a, review).
 `brain.import_candidates`: `id, import_id, lane_id, user_id, fact text, evidence text (≤300 chars), target_path, target_lane, flags text[] ('possible_nl_content','instruction_dropped'), decision ('pending'|'keep'|'skip')`. Both with RLS (own user only, see RLS above) and pgTAP; candidates are deleted when the import is `done` and at the latest 24 h after creation by a dedicated hourly purge (not a T-042 day class). A candidate flagged `possible_nl_content` stores no `evidence`.
 
+### Implementation notes (T-210, built Nov 7, 2026)
+- Migration `20261107090000_brain_schema.sql`, tests `250_brain.test.sql` (+ catalog entries). Writers: `brain.document_save`, `brain.employee_save`, `brain.skill_save`, `brain.import_decide`; `brain` is not exposed, so the app calls thin SECURITY INVOKER `core.brain_*` wrappers (reads: `brain_documents_list`, `brain_document_get`, `brain_document_versions`, `brain_employees_list`, `brain_skills_list`, `brain_home_lane`).
+- `if_version = 0` means "create". Seed pages are created lazily through `document_save` (so a seed is version 1 and appears in the page history), not as version 0 rows. A save of identical text is a no-op.
+- The page kind follows from the path (`brain.document_kind`), never from the caller. Paths live under `Context/`, `Projects/` or `Notes/`.
+- `employees.config` is stored as jsonb with a minimal shape check (object, 32 KB, no credential keys or values); `employeeConfigSchema` and the permission ceiling are T-211.
+- Import candidates: no writer exists yet (T-214 adds a reviewed one). `core.brain_import_purge(lane)` (service_role only) deletes candidates older than 23 h and closes imports open after 24 h; the Inngest function `brain-import-purge` runs it hourly per enabled lane; the read policy hides candidates older than 24 h even if the job is down.
+- Home lane: `resolveHomeLane` (pure) takes the open lanes, the lane that already holds About-Me (`brain_home_lane`), the Personal lane's code from configuration (not hard-coded) and the lane picked in setup. Where the Personal code is configured is decided with T-211.
+
 ### Memory (T-155) stays as specified
 `mem.items` remains the place for short confirmed facts ("Robert prefers replies under 120 words"). `brain.documents` is for longer owner-edited pages. Both are written only from explicit user statements or user-confirmed suggestions. `mem.items` does not exist yet (T-155, Release B); nothing in T-210 – T-214 may depend on it.
 

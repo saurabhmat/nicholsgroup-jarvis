@@ -14,6 +14,7 @@ const CORE_ONLY = ["@nichols/core"];
 const ALLOWED = {
   ".": ["@nichols/core", "@nichols/eslint-plugin", "@types/node", "eslint", "turbo", "typescript", "typescript-eslint", "vitest"],
   "apps/web": [
+    "@nichols/brain", // T-210: the Inngest route wires the import-candidate purge job (@nichols/brain/jobs)
     "@nichols/connectors", // T-035: the /api/connect routes wrap @nichols/connectors/oauth (no vendor SDKs come with it)
     "@nichols/core",
     "@nichols/eslint-plugin",
@@ -53,7 +54,7 @@ const ALLOWED = {
     "tailwind-merge",
   ],
   ...Object.fromEntries(
-    ["admin", "approvals", "briefing", "calendar", "commitments", "comms", "documents", "finance", "memory", "notifications", "projects"].map((m) => [
+    ["admin", "approvals", "brain", "briefing", "calendar", "commitments", "comms", "documents", "finance", "memory", "notifications", "projects"].map((m) => [
       `packages/modules/${m}`,
       CORE_ONLY,
     ]),
