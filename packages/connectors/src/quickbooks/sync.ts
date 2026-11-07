@@ -135,7 +135,7 @@ export function createQboSync(deps: QboSyncDeps) {
     const prefs = projectPreferences(await singleton("Preferences"), realm);
     if (!prefs) throw providerError("Preferences response is not valid", lastTid);
     const company = projectCompanyInfo(await singleton("CompanyInfo"), realm);
-    if (!company) throw providerError("CompanyInfo is not valid or is for a different company than the connection", lastTid);
+    if (!company) throw providerError("CompanyInfo is not valid", lastTid);
     await deps.features.record(laneId, conn, prefs.features, syncedAt);
 
     await emit([prefs.record, company]);

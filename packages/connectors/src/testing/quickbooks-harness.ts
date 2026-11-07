@@ -326,6 +326,7 @@ export function createQboHarness(options: QboHarnessOptions) {
   async function connectViaCallback(laneId: string, userId = "00000000-0000-4000-8000-0000000000a1", realm = FAKE_REALM, code = "synthetic-code-0001") {
     const url = await flow.start("qbo", laneId, as(userId));
     const state = new URL(url).searchParams.get("state") ?? "";
+    options.intuit.state.consentRealm = realm; // the user picks this company on Intuit's consent screen
     const result = await flow.callback("qbo", new URLSearchParams({ state, code, realmId: realm }), as(userId));
     if (!result.ok) throw new Error(`harness connect failed: ${result.reason}`);
     return connections.load(laneId, result.connectionId);

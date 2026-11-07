@@ -410,7 +410,7 @@ describe("route handlers (createConnectHandlers) over the real flow", () => {
     const { query } = providerRedirect(new URL((await start(h)).headers.get("location") as string).toString());
     const res = await h.callback(new Request(`${ORIGIN}/api/connect/mockqbo/callback?${query}`), "mockqbo");
     expect(res.status).toBe(303);
-    expect(res.headers.get("location")).toBe("/?connect=ok&provider=quickbooks");
+    expect(res.headers.get("location")).toBe("/PKG/settings?connect=ok&provider=quickbooks");
     expect(res.headers.get("cache-control")).toBe("no-store");
     expect(res.headers.get("referrer-policy")).toBe("no-referrer");
   });
@@ -421,8 +421,15 @@ describe("route handlers (createConnectHandlers) over the real flow", () => {
     const h = handlersFor(t);
     const { query } = providerRedirect((await start(h)).headers.get("location") as string);
     const req = () => new Request(`${ORIGIN}/api/connect/mockqbo/callback?${query}`);
-    expect((await h.callback(req(), "mockqbo")).headers.get("location")).toBe("/?connect=ok&provider=quickbooks");
-    expect((await h.callback(req(), "mockqbo")).headers.get("location")).toBe("/?connect=invalid_state&provider=quickbooks");
+    expect((await h.callback(req(), "mockqbo")).headers.get("location")).toBe("/PKG/settings?connect=ok&provider=quickbooks");
+    expect((await h.callback(req(), "mockqbo")).headers.get("location")).toBe("/PKG/settings?connect=invalid_state&provider=quickbooks");
+  });
+
+  it("callback: a state without a lane goes back to the entry page, not a lane's Settings page", async () => {
+    const t = setup();
+    const res = await handlersFor(t).callback(new Request(`${ORIGIN}/api/connect/mockqbo/callback?state=garbage&code=c`), "mockqbo");
+    expect(res.status).toBe(303);
+    expect(res.headers.get("location")).toBe("/?connect=invalid_state&provider=quickbooks");
   });
 
   it("callback: unknown provider 404, no session 401", async () => {

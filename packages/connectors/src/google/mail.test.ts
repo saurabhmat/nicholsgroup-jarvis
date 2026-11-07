@@ -9,7 +9,7 @@ import { MessageMetaSchema, type MailSyncResult, type MessageMeta } from "../com
 import { isConnectorError } from "../contract/errors";
 import { RateLimiter } from "../http/rate-limit";
 import { createGoogleHarness } from "../testing/google-harness";
-import { http, HttpResponse, useMockServer } from "../testing/msw/index";
+import { delay, http, HttpResponse, useMockServer } from "../testing/msw/index";
 import { createFakeGoogle, GOOGLE_ATTACHMENT_CANARY, GOOGLE_BODY_CANARY, GOOGLE_SNIPPET_CANARY, seedMessage } from "../testing/msw/google/handlers";
 import { assertGoogleHost } from "./guard";
 import { GOOGLE_HOSTS } from "./constants";
@@ -434,7 +434,67 @@ describe("rate limits (T-063 review)", () => {
     expect(fake.state.gmailRequests.filter((r) => r.path === "/gmail/v1/users/me/messages")).toHaveLength(1); // the 403 never reached the fake
   });
 
-  it("a persistent rate-limit 403 stops after three attempts as rate_limited", async () => {
+  it("a first load whose message reads are rate-limited four times in a row still completes (Nov 6, 2026 live failure)", async () => {
+    const { h, conn } = setup();
+    // All four 403s go to the same message, so its read needs a fifth attempt (three used to fail the whole run).
+    let limitedLeft = 4;
+    let target: string | undefined;
+    server.use(
+      http.get("https://gmail.googleapis.com/gmail/v1/users/me/messages/:id", ({ params }) => {
+        target ??= String(params.id);
+        if (limitedLeft <= 0 || String(params.id) !== target) return undefined; // fall through to the fake
+        limitedLeft -= 1;
+        return HttpResponse.json({ error: { code: 403, status: "PERMISSION_DENIED", errors: [{ reason: "rateLimitExceeded" }] } }, { status: 403 });
+      }),
+    );
+    const { upserts } = await drain(h, conn, null);
+    expect(limitedLeft).toBe(0);
+    expect(upserts).toHaveLength(5);
+  });
+
+  it("when one message read fails for good, no further message reads start on that page", async () => {
+    const { fake, h, conn } = setup();
+    const acct = fake.accounts.get(EXEC);
+    if (!acct) throw new Error("no fake account");
+    for (let i = 6; i <= 25; i++) {
+      const m = seedMessage(i, EXEC);
+      acct.messages.set(m.id, m);
+    }
+    // The first message read is rate-limited for good (its five attempts are instant in tests); every other read takes
+    // 20 ms, so the page has failed long before the other workers could get through the remaining 24 messages.
+    let target: string | undefined;
+    let others = 0;
+    server.use(
+      http.get("https://gmail.googleapis.com/gmail/v1/users/me/messages/:id", async ({ params }) => {
+        target ??= String(params.id);
+        if (String(params.id) === target) {
+          return HttpResponse.json({ error: { code: 403, status: "PERMISSION_DENIED", errors: [{ reason: "rateLimitExceeded" }] } }, { status: 403 });
+        }
+        others += 1;
+        await delay(20);
+        return undefined;
+      }),
+    );
+    await expect(h.mail.sync("PKG", conn, null, { pageSize: 100 })).rejects.toMatchObject({ info: { kind: "rate_limited" } });
+    await delay(700); // let any worker that kept going show up in the count
+    // Only the reads already in flight when the page failed: far fewer than the 24 other messages on the page.
+    expect(others).toBeLessThan(8);
+  });
+
+  it("a daily quota 403 is not retried in the run", async () => {
+    const { h, conn } = setup();
+    let hits = 0;
+    server.use(
+      http.get(url, () => {
+        hits += 1;
+        return HttpResponse.json({ error: { code: 403, status: "PERMISSION_DENIED", errors: [{ reason: "dailyLimitExceeded" }] } }, { status: 403 });
+      }),
+    );
+    await expect(h.mail.search("PKG", conn, { query: "budget" })).rejects.toMatchObject({ info: { kind: "rate_limited" } });
+    expect(hits).toBe(1);
+  });
+
+  it("a persistent rate-limit 403 stops after five attempts as rate_limited", async () => {
     const { h, conn } = setup();
     let hits = 0;
     server.use(
@@ -444,7 +504,7 @@ describe("rate limits (T-063 review)", () => {
       }),
     );
     await expect(h.mail.search("PKG", conn, { query: "budget" })).rejects.toMatchObject({ info: { kind: "rate_limited" } });
-    expect(hits).toBe(3);
+    expect(hits).toBe(5);
   });
 
   it("a plain 403 (insufficient permission) is not retried", async () => {

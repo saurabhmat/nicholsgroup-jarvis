@@ -665,12 +665,22 @@ describe("throttling, errors, logs and lanes", () => {
     await expect(run(h, conn, null)).rejects.toMatchObject({ info: { kind: "provider_error" } });
   });
 
-  it("CompanyInfo for another company than the connection is refused", async () => {
-    const { intuit, h, conn } = await setup();
+  it("a token Intuit did not authorize for the realm (403 on CompanyInfo) stops the sync", async () => {
+    const { h, conn } = await setup();
     const { http, HttpResponse } = await import("../testing/msw/index");
-    server.use(http.get("https://sandbox-quickbooks.api.intuit.com/v3/company/:realm/companyinfo/:id", () => HttpResponse.json({ CompanyInfo: { Id: "9999" } })));
-    void intuit;
-    await expect(run(h, conn, null)).rejects.toMatchObject({ info: { kind: "provider_error" } });
+    server.use(
+      http.get("https://sandbox-quickbooks.api.intuit.com/v3/company/:realm/companyinfo/:id", () =>
+        HttpResponse.json({ Fault: { Error: [{ Message: "ApplicationAuthorizationFailed", code: "003100" }], type: "AUTHENTICATION" } }, { status: 403 }),
+      ),
+    );
+    await expect(run(h, conn, null)).rejects.toMatchObject({ info: { kind: "forbidden" } });
+  });
+
+  it("CompanyInfo as real QuickBooks returns it (record Id \"1\", not the realm) is stored under the realm", async () => {
+    const { h, conn } = await setup();
+    const company = byType((await run(h, conn, null)).records).CompanyInfo;
+    expect(company).toHaveLength(1);
+    expect(company?.[0]).toMatchObject({ external_id: FAKE_REALM, payload: { Id: FAKE_REALM, CompanyName: "Synthetic Test Company" } });
   });
 
   it("a targeted sync (objectTypes) needs a current cursor, hands the same cursor back and does not touch other entities", async () => {

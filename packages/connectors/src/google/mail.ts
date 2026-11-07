@@ -64,7 +64,7 @@ export type GmailProviderDeps = {
   logger?: ConnectorLogger;
   /** Upper bound on days of mail the first load covers: min(this, the lane policy's retention_days). Default 90. */
   fullSyncDays?: number;
-  /** Parallel metadata fetches per page. Default 8. */
+  /** Parallel metadata fetches per page. Default 4 (8 tripped Gmail's per-user rate limit on a first load). */
   concurrency?: number;
 };
 
@@ -132,11 +132,20 @@ export function quoteGmailQuery(query: string): string {
 async function mapLimit<T, R>(items: readonly T[], limit: number, fn: (item: T) => Promise<R>): Promise<R[]> {
   const out = new Array<R>(items.length);
   let next = 0;
+  // Once one item fails the page fails: the other workers take no new items (reads already in flight finish). Without
+  // this they kept reading, and retrying rate limits, for minutes after the run had failed (Nov 6, 2026 review M1).
+  let failed = false;
   const worker = async () => {
     for (;;) {
+      if (failed) return;
       const i = next++;
       if (i >= items.length) return;
-      out[i] = await fn(items[i] as T);
+      try {
+        out[i] = await fn(items[i] as T);
+      } catch (e) {
+        failed = true;
+        throw e;
+      }
     }
   };
   await Promise.all(Array.from({ length: Math.min(limit, items.length) }, worker));
@@ -147,7 +156,7 @@ export function createGmailProvider(deps: GmailProviderDeps): MailProvider<"goog
   const now = deps.now ?? Date.now;
   const log = deps.logger ?? connectorLog;
   const fullDays = deps.fullSyncDays ?? DEFAULT_FULL_SYNC_DAYS;
-  const concurrency = deps.concurrency ?? 8;
+  const concurrency = deps.concurrency ?? 4;
   const capabilities: MailCapabilities = { watch: "polling", prepareWrite: true };
 
   const guard = createProviderGuard({ connections: deps.connections, laneConfig: deps.laneConfig });

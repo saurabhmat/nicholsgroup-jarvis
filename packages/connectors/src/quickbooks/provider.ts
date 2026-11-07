@@ -1,8 +1,9 @@
 // The QuickBooks provider for the OAuth connect framework (T-035, T-050). Endpoints come from Intuit's discovery
 // document; the client id, secret and redirect URI from the connector env at call time (never at import); the callback's
 // `realmId` must be the lane's configured realm (required in production), and, once the code is exchanged, CompanyInfo
-// read with the new access token must name that same realm: the realm is chosen by the user in the redirect URL, the
-// token is what Intuit issued, and only a match between them is stored. A grant refused after the exchange is dropped
+// must be readable at /v3/company/{realm}/... with the new access token: the realm is chosen by the user in the redirect
+// URL, the token is what Intuit issued, and Intuit answers 401/403 for a token used on a company it was not issued for,
+// so only a token proven to work for that realm is stored. (CompanyInfo.Id is the record id "1", not the realm.) A grant refused after the exchange is dropped
 // from memory and never stored; the flow tells the owner to remove the app's access in Intuit (D-24: revoking is an
 // external write and runs only through approvals).
 import type { LaneId } from "@nichols/core";
@@ -86,8 +87,8 @@ export function createQuickBooksOAuthProvider(deps: QboProviderDeps): OAuthProvi
       const realm = realmFromCallback(callback);
       await assertRealmAllowed(deps.laneConfig, laneId, realm, { requireConfigured: requireConfigured() });
       // The realm came from the redirect URL, which the user can edit. The token is what Intuit issued: it must be
-      // for this company, or it would overwrite another connection's tokens (security M1). A 401/403/404 or another
-      // company's answer refuses; an outage is reported as an outage (the flow tells them apart by error kind).
+      // for this company, or it would overwrite another connection's tokens (security M1). Intuit answers 401/403 for a token of
+      // another company; that, a 404 or an answer that is not a valid CompanyInfo refuses; an outage is reported as an outage (the flow tells them apart by error kind).
       await fetchCompanyInfoWithToken(httpFor(laneId, API_BASE[deps.environment()]), realm, new SecretValue(tokens.access_token));
       return { externalAccountId: realm, expiresAt: refreshExpiry(tokens, now()) };
     },

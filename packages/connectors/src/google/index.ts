@@ -1,7 +1,9 @@
 // Google wiring (T-063): the OAuth provider, token manager, Gmail API client, mail provider and sync over the real
 // Vault, lane router (through the vault module) and connector env. Server-only. Credentials are read from the connector
 // env at call time (`requireConnectorEnv("google")` fails closed naming missing variables, never printing values).
+import type { LaneId } from "@nichols/core";
 import { requireConnectorEnv } from "@nichols/core/env/server";
+import type { LaneBoundConnection } from "../contract/lane-bound";
 import { calendarIndexStore, connectionLoader, getToken, laneConfigReader, mailIndexStore, revokeToken, rotateToken, storeToken } from "../vault/index";
 import { SecretValue } from "../vault/secret";
 import { createGoogleApi } from "./api";
@@ -29,6 +31,19 @@ const connections = { load: (laneId: string, id: string) => connectionLoader.loa
 export const gmailProvider = createGmailProvider({ api, connections, laneConfig: laneConfigReader });
 /** Runs one connection's mail metadata sync into comms.message_index (the sync job calls this; Inngest wiring: T-038/T-065). */
 export const mailSync = createMailSync({ mail: gmailProvider, store: mailIndexStore });
+
+/**
+ * Inbox (T-202): one message's text, read live from Gmail and never stored (rule 6), wrapped as untrusted data (rule 9).
+ * The caller must first have proved, under RLS with the user's own lane client, that the user may see this message in
+ * this lane (core.inbox_message_ref); the provider's guard then re-checks lane, provider, connection status and the
+ * lane's mailbox list before any call to Google. Read-only (gmail.readonly).
+ */
+export async function readGmailBody(laneId: LaneId, connectionId: string, messageId: string): Promise<{ text: string; truncated: boolean }> {
+  const conn = await connectionLoader.loadConnection(laneId, connectionId);
+  const res = await gmailProvider.readBody(laneId, conn as LaneBoundConnection<"google">, messageId);
+  // Revealed here, for display to the signed-in user only: the caller renders it as plain text and must not store or log it.
+  return { text: res.data.reveal(), truncated: res.data.truncated };
+}
 
 /** Google Calendar event metadata sync, live description. Polling (calendar push is not built). */
 export const googleCalendarProvider = createGoogleCalendarProvider({ api, connections, laneConfig: laneConfigReader });

@@ -23,8 +23,10 @@ export type GoogleApiDeps = {
 };
 
 /** Attempts for a call Google answered with a rate-limit 403 (the HTTP client already retries 429 and 5xx with Retry-After). */
-const RATE_LIMIT_ATTEMPTS = 3;
-const RATE_LIMIT_PAUSE_MS = [1000, 3000];
+// Five attempts, about 18 s of pauses in all: a first mailbox load with parallel reads can stay limited for several
+// seconds (Nov 6, 2026: three attempts over 4 s failed the whole run, and every retry hit the same wall).
+const RATE_LIMIT_ATTEMPTS = 5;
+const RATE_LIMIT_PAUSE_MS = [1000, 2000, 5000, 10_000];
 
 export type Query = Record<string, string | number | boolean | null | undefined | readonly string[]>;
 
@@ -37,6 +39,7 @@ export interface GoogleApi {
 }
 
 const RATE_LIMIT_REASONS = new Set(["rateLimitExceeded", "userRateLimitExceeded", "RESOURCE_EXHAUSTED", "quotaExceeded", "dailyLimitExceeded"]);
+const SHORT_RATE_LIMIT_REASONS = new Set(["rateLimitExceeded", "userRateLimitExceeded", "RESOURCE_EXHAUSTED"]);
 
 /** Host and rate-limit bucket for a path template; throws for anything that is not a known Gmail or allowed Calendar path. */
 function target(path: string): { baseUrl: string; bucket: string; limit: typeof GMAIL_RATE_LIMIT | typeof CALENDAR_RATE_LIMIT } {
@@ -99,9 +102,10 @@ export function createGoogleApi(deps: GoogleApiDeps): GoogleApi {
         try {
           return await once();
         } catch (e) {
-          const retriable = isConnectorError(e) && e.info.kind === "rate_limited" && e.info.http_status === 403;
+          // Short-window limits clear in seconds; a daily quota does not, so it is not retried here.
+          const retriable = isConnectorError(e) && e.info.kind === "rate_limited" && e.info.http_status === 403 && SHORT_RATE_LIMIT_REASONS.has(e.info.provider_error_code ?? "");
           if (!retriable || attempt >= RATE_LIMIT_ATTEMPTS) throw e;
-          await sleep(RATE_LIMIT_PAUSE_MS[attempt - 1] ?? 3000);
+          await sleep(RATE_LIMIT_PAUSE_MS[attempt - 1] ?? 10_000);
         }
       }
     },

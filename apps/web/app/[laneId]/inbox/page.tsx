@@ -1,10 +1,10 @@
 import { Suspense } from "react";
-import { ModulePage } from "@/components/module-page";
+import { InboxPage } from "@/components/inbox-page";
 
 export default function Page(props: PageProps<"/[laneId]/inbox">) {
   return (
     <Suspense fallback={null}>
-      <ModulePage module="inbox" params={props.params} />
+      <InboxPage params={props.params} searchParams={props.searchParams} />
     </Suspense>
   );
 }
