@@ -880,3 +880,13 @@ Spec §6, §7, §8 (rewritten as §8.1 – §8.7), §8a, §10 and §11 were rewr
 - **Finding 20 → D-36 (open)**, now also blocking T-221.
 - **Release timing (finding 9).** Saurabh moved T-210 – T-213, T-219, T-223, T-224 (and T-216 if time allows) into Release A; the PKG transport on Nov 25 is D-37 (default: native Google until the Composio live check passes). The Release A capacity risk in §4 grows by these tasks.
 
+### Revision (Nov 7, 2026, Saurabh): D-33 – D-38
+
+- **D-33 revised:** real-account tests do **not** run in Nichols production. They run in a separate test deployment with its own Supabase, Vercel and Composio projects (H-040 restored), where Saurabh is owner of his own test lanes; his personal and SimpliAutomated mail never enters Nichols production. Finding 4 is closed this way.
+- **D-34:** "Draft reply" → `email.save_draft` (unsent Gmail draft in the thread) by default; `email.send` is a separate, explicit approval; `email.save_draft` joins `ACTION_TYPES` (T-211). Finding 2/8 closed.
+- **D-35:** Composio as a transport for the Google connector via `proxyExecute`, confirmed by the T-219 spike.
+- **D-36:** resolved by D-33; Saurabh stays `admin_technical` in production. Finding 20 closed.
+- **D-37:** native Google for PKG on Nov 25.
+- **D-38 scope revised:** Nov 25 additions are T-210 – T-213 (+ T-216 if time allows); T-219, T-223, T-224 move to Release B. The Composio spike runs locally against a throwaway test Gmail account until H-039 (incl. Zero Data Retention) is done; the key is never logged.
+- **T-210 approved** (Saurabh, Nov 7, 2026).
+

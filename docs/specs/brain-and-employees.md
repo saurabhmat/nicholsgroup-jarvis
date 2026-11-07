@@ -1,6 +1,6 @@
 # Spec — AI Brain and AI Employees (Personal Assistant)
 
-Status: proposed (Saurabh, Nov 7, 2026; updated the same day for Composio, the in-app interview, context import, the chat-first brain, Composio tools through the registry and the Nov 25 scope). Adds the "AI Brain" pattern (from the AI Employee Course starter) to Jarvis without changing any rule in `CLAUDE.md`. Refines T-162 (briefing.daily), T-155/T-156 (memory) and T-124 (reply drafts). New tasks are in §10, all `status: proposed`. Decisions are in §11 (D-28 – D-33 decided Nov 7, 2026; D-34 – D-37 open). Reviewed Nov 7, 2026 against the code and the other specs: findings in `docs/plan-review.md` → "AI Brain + AI Employees spec review (Nov 7, 2026)"; edits from that review are marked "(review)".
+Status: proposed (Saurabh, Nov 7, 2026; updated the same day for Composio, the in-app interview, context import, the chat-first brain, Composio tools through the registry, the Nov 25 scope and the revised D-33 – D-38). Adds the "AI Brain" pattern (from the AI Employee Course starter) to Jarvis without changing any rule in `CLAUDE.md`. Refines T-162 (briefing.daily), T-155/T-156 (memory) and T-124 (reply drafts). New tasks are in §10, all `status: proposed`. Decisions are in §11 (D-28 – D-38, all decided Nov 7, 2026). Reviewed Nov 7, 2026 against the code and the other specs: findings in `docs/plan-review.md` → "AI Brain + AI Employees spec review (Nov 7, 2026)"; edits from that review are marked "(review)".
 
 ## 1. Why this fits now
 
@@ -105,7 +105,7 @@ const employeeConfigSchema = z.strictObject({
       .default(["coverage","attention","calendar","deadlines","finance_kpis","approvals","priorities","drafts","clarifications"]), // "coverage" is always rendered, listed or not
   }).prefault({}),
   delivery: z.array(z.enum(["in_app", "push"])).min(1).default(["in_app", "push"]), // email digest is out of the pilot (plan-review §1.3); sending it would be an external write (rule 5)
-  permissions: z.strictObject({ propose: z.array(z.enum(ACTION_TYPES)).default(["email.send"]) }).prefault({}), // never wider than lane_policies; see vocabulary below
+  permissions: z.strictObject({ propose: z.array(z.enum(ACTION_TYPES)).default(["email.save_draft"]) }).prefault({}), // never wider than lane_policies; see vocabulary below
 });
 ```
 
@@ -115,13 +115,14 @@ const employeeConfigSchema = z.strictObject({
 
 | `lane_config` `ACTION_TYPES` (employee config) | `lane_policies.write_actions_allowed` (SQL check) | approvals action type (approvals spec §2) |
 |---|---|---|
-| `email.send` | `email_send` | `email.send` (T-124's "Draft reply" creates this) |
-| `email.draft` | `email_draft` | `email.save_draft` (saves a draft in the mailbox; itself an external write) |
+| `email.save_draft` (new, D-34; T-211 adds it) | `email_draft` | `email.save_draft`: an unsent Gmail draft in the right thread (itself an external write). **Default for "Draft reply" (D-34).** |
+| `email.send` | `email_send` | `email.send`: a separate, explicit approval |
+| `email.draft` (existing; alias of `email.save_draft`, kept until callers move) | `email_draft` | `email.save_draft` |
 | `calendar.event` | `calendar` | `calendar.event.*` (Release B) |
 | `monday.item` | `monday` | `monday.item.*` |
 | `notion.page` | `notion` | `notion.page.*` (Release B) |
 
-Email proposals additionally need `lane_policies.store_outbound_drafts = true` (D-19). The default `["email.send"]` matches T-124; which type the PA's suggested replies use is open (§11, D-34).
+Email proposals additionally need `lane_policies.store_outbound_drafts = true` (D-19). The default is `["email.save_draft"]` (D-34): "Draft reply" saves an unsent draft in the right Gmail thread on approval; sending is a separate `email.send` approval. T-124's proposal type follows D-34.
 
 Overlap with `lane_config`: `mailboxes`, `priority_senders` and `briefing.time` already exist; `mail_transport` does **not** exist yet (T-219 adds it, §8.3). **Rule:** `lane_config` stays the source of truth for what a lane *can* connect and its company priority senders; the employee config only selects from it and adds per-person preferences. `briefing.time` is the default for `schedule.time`. `laneConfigSchema` currently defaults it to `07:00`; pilot scope, T-162 and D-32 say 06:30 America/New_York, so the default changes to `06:30` (T-162 or T-213, with its lane-config test).
 
@@ -193,7 +194,7 @@ Rules (all tested in T-215):
 
 ## 7. Setup interview: in the chat first, Settings as fallback
 
-Decided Nov 7, 2026: the first-run interview runs **inside the assistant chat** ("Let's set up your brain"), with Settings → **AI brain** → "Set up my brain" / "Set up Personal Assistant" as the fallback and as the place to review, edit, version and restore. Each signed-in user with the `brain` view runs it for themself. In production that is Robert (owner); Saurabh is `admin_technical` in PKG (D-4), a role with no content views, so he cannot use the brain there unless D-36 gives him access. The question bank, the order, the skip rules and the file each answer lands in are in `docs/specs/brain-interview.md`; the UI reads that bank as data (`packages/modules/brain/interview/*.ts`), so questions change without code changes elsewhere.
+Decided Nov 7, 2026: the first-run interview runs **inside the assistant chat** ("Let's set up your brain"), with Settings → **AI brain** → "Set up my brain" / "Set up Personal Assistant" as the fallback and as the place to review, edit, version and restore. Each signed-in user with the `brain` view runs it for themself. In production that is Robert (owner); Saurabh stays `admin_technical` in PKG (D-4, D-36), a role with no content views; he uses the brain only in his separate test deployment (§8a). The question bank, the order, the skip rules and the file each answer lands in are in `docs/specs/brain-interview.md`; the UI reads that bank as data (`packages/modules/brain/interview/*.ts`), so questions change without code changes elsewhere.
 
 Flow (same in chat and in Settings):
 1. **Up to three related questions at a time** (brain-setup rule), skipped or pre-filled when the answer is already known from confirmed brain documents, `lane_config`, connected sources (mailbox addresses, calendar working hours) or an earlier answer.
@@ -231,9 +232,9 @@ Rewritten Nov 7, 2026 after the review (plan-review findings 1, 3, 7, 12 – 14,
 
 | Use | What | Task | Release |
 |---|---|---|---|
-| **Sync** | Gmail metadata delta + Calendar delta into the existing `comms.*` / `cal.*` indexes, which the briefing reads with its cursors | T-223 | A |
-| **Live read tools** | Composio read tools exposed to the assistant **through Jarvis's tool registry** (T-101), each with a full reviewed `ToolDescriptor` | T-224 | A |
-| **Writes** | Composio write tools used only by approvals executors (`email.draft`, `email.send`, `calendar.event`) | T-225 | after T-110 – T-113 (Release B for calendar) |
+| **Sync** | Gmail metadata delta + Calendar delta into the existing `comms.*` / `cal.*` indexes, which the briefing reads with its cursors | T-223 | B |
+| **Live read tools** | Composio read tools exposed to the assistant **through Jarvis's tool registry** (T-101), each with a full reviewed `ToolDescriptor` | T-224 | B |
+| **Writes** | Composio write tools used only by approvals executors (`email.save_draft`, `email.send`, `calendar.event`) | T-225 | B (after T-110 – T-113) |
 
 **The guard is Jarvis's server-side allow-list, never Composio's own filtering.** A Composio tool slug that is not in our registry (reads) or in an approvals executor (writes) cannot be called, whatever `session.execute` would accept. Composio-side restrictions (session `toolkits`/`tools` filters, auth-config scopes, §8.6) are configured too, but only as defence in depth; tests prove that a non-allow-listed slug is refused by our code before any network call.
 
@@ -248,9 +249,9 @@ Settings → Connections stays the one place to manage accounts (T-219):
 
 Flow: `composio.connectedAccounts.link(userId, authConfigId, { callbackUrl })` → redirect to Composio-hosted Google consent → `/api/connect/composio/callback` → the server confirms with `connectedAccounts.get(id)` (`ACTIVE`, toolkit slug) and reads the identity (`GMAIL_GET_PROFILE` / `GOOGLECALENDAR_GET_CURRENT_USER`). The T-035 state/nonce (single use, bound to user + lane + toolkit) protects the callback, so a forged callback cannot attach an account to another lane.
 
-### 8.3 Provider model (finding 1; decision D-35)
+### 8.3 Provider model (finding 1; D-35 decided: transport, confirmed by the spike)
 
-The T-062 interfaces and SQL know `provider = 'google'` only (`CommsProviderId`, `PROVIDERS`, eight SQL provider checks, `comms_mail_apply_page`, `cal_events_apply_page`), and a connection becomes `active` only through `connection_token_store`, but Composio holds the Google tokens (§8.6). Composio's SDK has an authenticated proxy (`composio.tools.proxyExecute({ endpoint, method, connectedAccountId, parameters })`; credentials injected server-side; relative endpoints are appended to the toolkit's base URL, e.g. `https://www.googleapis.com/calendar/v3`). So the **default (D-35, open)** is:
+The T-062 interfaces and SQL know `provider = 'google'` only (`CommsProviderId`, `PROVIDERS`, eight SQL provider checks, `comms_mail_apply_page`, `cal_events_apply_page`), and a connection becomes `active` only through `connection_token_store`, but Composio holds the Google tokens (§8.6). Composio's SDK has an authenticated proxy (`composio.tools.proxyExecute({ endpoint, method, connectedAccountId, parameters })`; credentials injected server-side; relative endpoints are appended to the toolkit's base URL, e.g. `https://www.googleapis.com/calendar/v3`). So (**D-35, decided Nov 7, 2026**, to be confirmed by the T-219 spike):
 - **Composio is a transport for `provider = 'google'`**, not a new provider. `core.connections` gets `transport: 'native' | 'composio'` (and the Composio connected account id in `external_account_id`); Gmail/Calendar sync reuses the T-063/T-064/T-130 code and SQL unchanged, with the HTTP call going through `proxyExecute` instead of our token.
 - A connection with `transport = 'composio'` is activated by a new security-definer function (no token row; it records the connected account id after the identity check), and its health comes from the Composio account status (§8.5).
 - `lane_config` gets a new strict field `mail_transport: 'native' | 'composio'` per lane (default `native`; this replaces the earlier name `mail_provider`; `laneConfigSchema` is strict, so T-219 changes the schema and its tests).
@@ -271,7 +272,7 @@ Initial read allow-list: Gmail `GMAIL_FETCH_EMAILS`, `GMAIL_LIST_THREADS`, `GMAI
 
 ### 8.5 Writes and health
 
-- **Writes only create proposals.** The assistant's write tools have `effect: 'propose'` and call `approvals.proposeAction` with the exact payload. Execution: approvals → `@nichols/connectors/write` → Composio executors for `email.draft` (`GMAIL_CREATE_EMAIL_DRAFT`), `email.send` (`GMAIL_SEND_DRAFT` / `GMAIL_REPLY_TO_THREAD` / `GMAIL_SEND_EMAIL`) and `calendar.event` (`GOOGLECALENDAR_CREATE_EVENT` / `PATCH_EVENT` / `DELETE_EVENT`, Release B), with the **payload hash checked** exactly as the QuickBooks writer does (`contract/writer.ts`), executed once, verified and audited. Everything else (trash, delete, labels, filters, forwarding, settings, ACL, watch) is never allowed.
+- **Writes only create proposals.** The assistant's write tools have `effect: 'propose'` and call `approvals.proposeAction` with the exact payload. Execution: approvals → `@nichols/connectors/write` → Composio executors for `email.save_draft` (`GMAIL_CREATE_EMAIL_DRAFT` with the thread id, D-34 default), `email.send` (`GMAIL_SEND_DRAFT` / `GMAIL_REPLY_TO_THREAD` / `GMAIL_SEND_EMAIL`) and `calendar.event` (`GOOGLECALENDAR_CREATE_EVENT` / `PATCH_EVENT` / `DELETE_EVENT`, Release B), with the **payload hash checked** exactly as the QuickBooks writer does (`contract/writer.ts`), executed once, verified and audited. Everything else (trash, delete, labels, filters, forwarding, settings, ACL, watch) is never allowed.
 - **ESLint and packaging (finding 13).** The connector lives at `packages/connectors/src/composio`; `VENDORS` gets `@composio/core` → `["packages/connectors/src/composio/**"]` only; the writers are exported through the existing `@nichols/connectors/write` subpath (`src/write/index.ts`), which `WRITE_SUBPATHS` already restricts to approvals (a `composio/write` folder alone would not be covered); `scripts/dependency-allowlist.test.mjs` gets the new dependency. The SDK uses its own HTTP stack, not our `HttpClient`, so the connector wraps every call with a timeout/`AbortSignal`, our redaction and the connector log (accepted deviation, recorded in plan-review).
 - **Health (findings 27, 28).** Sync is polled on the existing schedules (`comms.ingest_delta`, `cal.ingest_delta`); no Composio triggers or push at first. Account status `EXPIRED`/`REVOKED`/disabled → `reconnect_required` (T-040). `token_expires_at` is unknown for Composio connections, so health cannot warn before expiry; optionally subscribe to the `composio.connected_account.expired` webhook through the T-036 receiver (signature verified) to warn earlier.
 - **Lane binding.** Each connected account id is stored on `core.connections.external_account_id` for exactly one lane (D-23, one account per lane per toolkit), taken only from that row at call time, and its address is checked against the lane's `lane_config.mailboxes` (fail closed).
@@ -286,7 +287,7 @@ Re-check at the start of T-219; Composio changes its API often (the `initiate()`
 - ESM only; Node `>=22.22.3`. Local Node 24.19 and CI `node-version: 22` satisfy it; the Vercel runtime must be Node 22.22.3+ or 24.
 - Transitive dependencies include `openai`, `pusher-js`, `undici`. Server-only: extend the `pnpm test:bundle` canary so no client bundle contains Composio code.
 
-**Credential (finding 14).** `COMPOSIO_API_KEY` is a server env var read through `requireConnectorEnv` (local `.env.local`; production: Vercel Production env only, never Preview), passed explicitly as `new Composio({ apiKey })`. It is the only Composio secret Jarvis holds; never in prompts, logs or `NEXT_PUBLIC_*`. Rotation runbook in H-039.
+**Credential (finding 14).** `COMPOSIO_API_KEY` is a server env var read through `requireConnectorEnv` (local `.env.local`; the test deployment (H-040) has its own key from its own Composio project; production: Vercel Production env only, never Preview), passed explicitly as `new Composio({ apiKey })`. It is the only Composio secret Jarvis holds; never in prompts, logs or `NEXT_PUBLIC_*`. Rotation runbook in H-039.
 
 **Toolkit versions.** Pin in the constructor, `toolkitVersions: { gmail: "<YYYYMMDD_NN>", googlecalendar: "<YYYYMMDD_NN>" }` (latest on Nov 7, 2026: `20261103_00` for both); T-219 pins the then-current version in code. Never `dangerouslySkipVersionCheck`: without a pin the SDK throws `ComposioToolVersionRequiredError` (fail closed).
 
@@ -308,17 +309,23 @@ Sources: docs.composio.dev (quickstart, authentication, configuring-sessions, re
 - a **security-reviewer pass per toolkit** before it is enabled anywhere.
 New toolkits start **read-only**. A write needs a new `ACTION_TYPE`, a lane policy entry and an approvals executor (code, reviewed like T-225).
 
-## 8a. Real-account test (D-33)
+## 8a. Real-account test (D-33, revised Nov 7, 2026)
 
-Decided Nov 7, 2026 (Saurabh): the brain is tested **locally with synthetic data and MSW fakes** (rule 10) and **in production with real accounts**; there is no separate staging project (consistent with "Production only, no staging", Oct 31). H-040 is superseded.
+Decided by Saurabh: the brain is tested **locally with synthetic data and MSW fakes** (rule 10) and with real accounts **only in a separate test deployment, never in Nichols production**. Saurabh's personal and SimpliAutomated mail must never enter Nichols production.
 
-The production test (T-221) is done **by Saurabh through the deployed app**, after his merge and Vercel's production deploy, once H-023 and H-039 are done:
-- his Composio connections made in Settings → Connections (§8.2), not reused from any other Composio user;
-- his brain folder imported (§7a), the interview completed in the chat, two consecutive briefings reviewed;
-- findings recorded in `docs/plan-review.md`.
-Agents never deploy, set production env vars, run migrations against or query production (rule 12); they write the runbook (`docs/runbooks/brain-production-test.md`) and review the findings. Nothing real is committed. **Open (D-36):** Saurabh is `admin_technical` in PKG, which has no content views, so he needs a decision on brain access before he can run this test. Robert's rollout reuses the same steps with his lanes.
+The test deployment (H-040) is staging-style and separate from everything Nichols:
+- its own Supabase project (not `lxjhaxdkqtmkhloqaffb`), migrations applied by Saurabh, never linked from an agent worktree (H-022);
+- its own Vercel project and URLs, with no Nichols production secrets;
+- its own Composio project and `COMPOSIO_API_KEY`, Zero Data Retention on;
+- Saurabh as `owner` of his own test lanes and their mailboxes in that project's `lane_config`. No Nichols lanes or data.
 
-## 9. Example: Robert's PA profile (synthetic values; real ones go in production only)
+In Nichols production Saurabh stays `admin_technical` (D-36 resolved by D-33): no brain there for him.
+
+The test (T-221) is done **by Saurabh through the test deployment's UI**: Composio connections in Settings → Connections (§8.2), his brain folder imported (§7a), the interview completed in the chat, two consecutive briefings reviewed, findings recorded in `docs/plan-review.md`. Agents never hold that project's keys, link the CLI to it or query it; they write the runbook (`docs/runbooks/brain-test-deployment.md`) and review the findings. Nothing real is committed.
+
+**Composio spike (T-219):** local only, against a **throwaway test Gmail account**, never real mailboxes, until H-039 (including Zero Data Retention) is done. The key is never logged.
+
+## 9. Example: Robert's PA profile (synthetic values only)
 
 ```json
 {
@@ -339,53 +346,50 @@ Agents never deploy, set production env vars, run migrations against or query pr
   "output": { "max_attention_items": 5, "max_drafts": 3, "target_words": 400,
               "sections": ["coverage","attention","calendar","finance_kpis","approvals","deadlines","priorities","drafts"] },
   "delivery": ["in_app", "push"],
-  "permissions": { "propose": ["email.draft"] }
+  "permissions": { "propose": ["email.save_draft"] }
 }
 ```
 
-Only `PKG` is enabled in the pilot, so the first live profile has `lanes: ["PKG"]`, lives in the home lane PKG (§3) and has only the PKG mail entry; the others switch on by configuration as lanes are enabled. (`"permissions": {"propose": ["email.draft"]}` above is illustrative; the type depends on D-34.)
+Only `PKG` is enabled in the pilot, so the first live profile has `lanes: ["PKG"]`, lives in the home lane PKG (§3) and has only the PKG mail entry; the others switch on by configuration as lanes are enabled.
 
-## 10. Tasks (all `status: proposed`; backlog: Phase A14 (Release A part) and Phase B8 (Release B part) in `docs/backlog.md`)
+## 10. Tasks (all `status: proposed` unless noted; backlog: Phase A14 (Release A part) and Phase B8 (Release B part) in `docs/backlog.md`)
 
-Scope decided Nov 7, 2026 (Saurabh). T-219 is split per the review into T-219 (connect + Settings), T-223 (sync), T-224 (read tools) and T-225 (writers); T-222 is "more toolkits".
+Scope (D-38, revised Nov 7, 2026): PKG uses native Google on Nov 25 (D-37), so the Composio tasks are Release B. T-219 is split per the review into T-219 (connect + Settings), T-223 (sync), T-224 (read tools) and T-225 (writers); T-222 is "more toolkits".
 
 | Task | Title | Depends | Release |
 |---|---|---|---|
-| T-210 | `brain` module package + schema | T-013, T-042 | **A (Nov 25)** |
-| T-211 | `employeeConfigSchema` + permission ceiling | T-210, T-011 | **A** |
+| T-210 | `brain` module package + schema (**approved Nov 7, 2026**) | T-013, T-042 | **A (Nov 25)** |
+| T-211 | `employeeConfigSchema` + permission ceiling + `email.save_draft` in `ACTION_TYPES` | T-210, T-011 | **A** |
 | T-212 | Prompt assembly with brain blocks | T-100, T-102, T-210 | **A** |
 | T-213 | `briefing.daily` from the employee profile (extends T-162) | T-162, T-211, T-212 | **A** |
-| T-219 | Composio connect + Settings → Connections + lane binding + `mail_transport` switch | T-062, T-035, T-032, T-040, T-199 | **A** |
-| T-223 | Gmail + Calendar sync over Composio (transport for `google`, D-35) | T-219, T-063, T-064, T-130 | **A** |
-| T-224 | Composio read tools in the assistant registry | T-219, T-101, T-102 | **A** |
 | T-216 | Chat-first setup interview (Settings fallback) + test briefing | T-210, T-211, T-100, T-213 | **A if time allows**, else B |
-| T-214 | Suggested replies → T-124 "Draft reply" → Approval Center | T-213, T-124 | after T-110 – T-113 |
-| T-225 | Composio write executors (`email.draft`, `email.send`, `calendar.event`) | T-219, T-113, T-116 | after T-110 – T-113 (calendar: B) |
+| T-219 | Composio connect + Settings → Connections + lane binding + `mail_transport` switch (+ local spike, throwaway account) | T-062, T-035, T-032, T-040, T-199 | B |
+| T-223 | Gmail + Calendar sync over Composio (transport for `google`, D-35) | T-219, T-063, T-064, T-130 | B |
+| T-224 | Composio read tools in the assistant registry | T-219, T-101, T-102 | B |
+| T-214 | Suggested replies → T-124 "Draft reply" (`email.save_draft`) → Approval Center | T-213, T-124 | B (after T-110 – T-113) |
+| T-225 | Composio write executors (`email.save_draft`, `email.send`, `calendar.event`) | T-219, T-113, T-116 | B |
 | T-215 | Chat-first memory: auto-save "remember", Undo, inferred suggestions | T-155, T-210, T-101 | B |
 | T-217 | Brain editor, history, restore + folder import/export (.zip) | T-210 | B |
 | T-218 | External news source (D-31) + `web`/`drafting` categories migration | T-213, T-102 | B |
 | T-220 | Claude / ChatGPT context import | T-217, T-100, T-102 | B |
-| T-221 | Production test with Saurabh's accounts (D-33) | T-223, T-224, T-216, T-220, T-213 | B |
+| T-221 | Real-account test in the separate test deployment (D-33, H-040) | T-223, T-224, T-216, T-220, T-213 | B |
 | T-222 | More Composio toolkits by configuration | T-224 | B |
 
 The `drafting`/`web` category migration is needed by T-215, T-218 and T-220 and by the `suggest_memory` tool; whichever of them lands first adds it.
 
-Release timing: Release A already has more tasks than days (plan-review §4). T-162 stays the Release A briefing and does not wait for brain tasks. Which transport PKG uses on Nov 25 is a `lane_config` switch (D-37): the native Google connection stays until the Composio path has passed its live check.
+Release timing: Release A already has more tasks than days (plan-review §4). T-162 stays the Release A briefing and does not wait for brain tasks; T-213 builds on T-100/T-102/T-162, which are Release A anyway.
 
 ## 11. Decisions
 
-Decided Nov 7, 2026 by Saurabh:
+All decided Nov 7, 2026 by Saurabh:
 - **D-28 — yes.** The owner's own About-Me and Preferences may be added to the owner's own calls in every lane: owner only, those two kinds only; never project or company content across lanes. They live in the home lane (§3): `P` once enabled, the user's chosen enabled lane (PKG) until then.
 - **D-29 — Personal Assistant only at launch.** Later candidates: finance analyst (Sophie's weekly cash) and meeting prep.
 - **D-30 — Composio for Gmail + Calendar; QuickBooks native; native Google connector kept** as a fallback, chosen per lane by `lane_config.mail_transport` (a new field, T-219; §8.3).
 - **D-31 — yes.** Web news in briefings (FAR/GovCon and AI news). T-218 (Release B) adds the `web` category in `lane_policies.llm_allowed_categories` (migration), set per lane by configuration.
 - **D-32 — 06:30 America/New_York, Mon–Fri** for Robert. `lane_config.briefing.time` default changes from `07:00` to `06:30`; `schedule.days` defaults to `[1,2,3,4,5]`.
-- **D-33 — real-account testing in production as well as locally** (§8a); no staging project; H-040 superseded. Agents never touch production.
-- Also decided: Composio tools through the registry with Jarvis's allow-list as the guard (§8.1, §8.4); more toolkits by configuration as defined in §8.7; chat-first brain with the auto-save/Undo/tap rules (§6, §7); Settings → Connections as the only place to connect, test and disconnect (§8.2); Nov 25 scope as in §10.
-
-Open (backlog Needs human; details in `docs/plan-review.md`, "AI Brain + AI Employees spec review (Nov 7, 2026)"):
-- **D-34 (was Q-B1)** Suggested replies: `email.send` proposal (as T-124 does; approval sends it) or `email.save_draft` (approval puts a draft in the mailbox)? Default: click only, `email.send`; the scheduled briefing never creates proposals itself.
-- **D-35 (was Q-B3)** Composio as a transport for `provider = 'google'` through `proxyExecute` (default, §8.3) or as its own provider? Confirm after the T-219 spike shows the proxy covers the Gmail history/messages and Calendar events endpoints.
-- **D-36 (was Q-B4)** Saurabh's brain access in production: an owner membership in some lane, or `admin_technical` gets the `brain` view for his own rows only? Blocks T-216 in production and T-221.
-- **D-37 (was Q-B5)** Which transport PKG uses on Nov 25. Default: native Google (built and tested) until the Composio path passes its live check; then switch by `lane_config`.
-- Q-B2 is closed by D-33.
+- **D-33 (revised) — real-account tests only in a separate test deployment** with its own Supabase, Vercel and Composio projects, never Nichols production (§8a, H-040).
+- **D-34 — "Draft reply" creates `email.save_draft`** (an unsent Gmail draft in the right thread) by default; `email.send` is a separate, explicit approval. `email.save_draft` joins `ACTION_TYPES` (T-211).
+- **D-35 — Composio is a transport for the Google connector** through `proxyExecute` (§8.3); confirmed by the T-219 spike, reopened if the proxy does not cover the endpoints.
+- **D-36 — resolved by D-33.** Saurabh stays `admin_technical` in production; he uses the brain only in his test deployment.
+- **D-37 — native Google for PKG on Nov 25.**
+- **D-38 — design and scope:** Composio tools only through the registry with Jarvis's allow-list as the guard (§8.1, §8.4); more toolkits by configuration (§8.7); chat-first brain (§6, §7); Settings → Connections the only place to connect/test/disconnect (§8.2); Nov 25 additions T-210 – T-213 (+ T-216 if time allows), Composio tasks in Release B; the Composio spike runs locally against a throwaway test Gmail account until H-039 is done.
