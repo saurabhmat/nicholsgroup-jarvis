@@ -4,3 +4,4 @@ export * from "./paths";
 export * from "./secrets";
 export * from "./sensitive";
 export * from "./templates";
+export * from "./employee-config";

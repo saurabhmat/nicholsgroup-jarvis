@@ -13,10 +13,14 @@ import {
   MAX_BODY_BYTES,
   SEED_SKILLS,
   containsSecret,
+  checkEmployeeConfig,
   findSensitiveNumber,
   isValidBrainPath,
   utf8Bytes,
+  type ConfigIssue,
+  type EmployeeConfig,
   type DocumentKind,
+  type LaneSettings,
 } from "../domain/index";
 import { BrainError, toBrainError } from "./errors";
 
@@ -92,7 +96,21 @@ function toSave(data: unknown): SaveResult {
   return { id, version: int(r.o_version), updatedAt: str(r.o_updated_at) };
 }
 
-export type BrainStoreDeps = { clientFor: ClientFor };
+/**
+ * What `lane_config` says one lane can connect (mailboxes, KPIs); null when the lane is not enabled or the user cannot
+ * open it. The caller reads it through the lane router; the store never reaches another lane's data itself.
+ */
+export type LaneSettingsFor = (laneId: LaneId) => Promise<LaneSettings | null>;
+export type BrainStoreDeps = { clientFor: ClientFor; laneSettingsFor: LaneSettingsFor };
+
+/** Thrown by saveEmployee for a config the schema or lane_config refuses; `issues` are codes and paths, never values. */
+export class EmployeeConfigError extends BrainError {
+  readonly issues: ConfigIssue[];
+  constructor(issues: ConfigIssue[]) {
+    super("config_invalid");
+    this.issues = issues;
+  }
+}
 
 // The lane router's refusal (LaneAccessError from @nichols/core/lane-router, matched by name so this file does not pull
 // in that server-only module). A missing data plane is a configuration outage, not a refusal.
@@ -120,6 +138,41 @@ export function createBrainStore(deps: BrainStoreDeps) {
     }
     if (error) throw toBrainError(error);
     return data;
+  };
+
+  // Which lanes the user may open is decided by the lane router (rule 1), not by laneSettingsFor (review M2): a lane the
+  // router refuses, or one without settings, is "not available".
+  const settingsIfOpen = async (lane: string): Promise<LaneSettings | null> => {
+    try {
+      await deps.clientFor(lane);
+    } catch (e) {
+      if (isLaneRefusal(e)) return null;
+      throw new BrainError("unavailable");
+    }
+    try {
+      return await deps.laneSettingsFor(lane);
+    } catch (e) {
+      if (isLaneRefusal(e)) return null;
+      throw new BrainError("unavailable");
+    }
+  };
+
+  const validateConfig = async (laneId: LaneId, raw: unknown): Promise<EmployeeConfig> => {
+    checkLane(laneId);
+    if (typeof raw !== "object" || raw === null || Array.isArray(raw)) throw new EmployeeConfigError([{ code: "schema", path: "" }]);
+    try {
+      await deps.clientFor(laneId); // the employee's own lane first
+    } catch (e) {
+      throw new BrainError(isLaneRefusal(e) ? "forbidden" : "unavailable");
+    }
+    const lanes = (raw as { lanes?: unknown }).lanes;
+    // Fetch settings only for well-formed lane codes; the schema check then rejects anything else.
+    const wanted = Array.isArray(lanes) ? [...new Set(lanes.filter((l): l is string => typeof l === "string" && LANE.test(l)))].slice(0, 10) : [];
+    const known = new Map<string, LaneSettings | null>();
+    for (const lane of wanted) known.set(lane, await settingsIfOpen(lane));
+    const res = checkEmployeeConfig(raw, laneId, (l) => known.get(l) ?? null);
+    if (!res.ok) throw new EmployeeConfigError(res.issues);
+    return res.config;
   };
 
   const store = {
@@ -192,9 +245,21 @@ export function createBrainStore(deps: BrainStoreDeps) {
     },
 
     /**
-     * Saves the caller's employee profile for a role. `config` is only shape-checked by the database (object, size, no
-     * credential-like keys or values); employeeConfigSchema and the permission ceiling are T-211.
+     * Saves the caller's employee profile for a role. `config` is validated with employeeConfigSchema and against
+     * lane_config (lanes, mailboxes, KPIs) before the call, and the normalised config (defaults filled) is sent.
+     * The database only shape-checks it (object, size, no secrets or sensitive numbers): an owner calling the rpc directly
+     * can store anything. So a stored config is NEVER trusted: every run loads it through loadEmployeeConfig (fail closed)
+     * and applies effectivePermissions per lane (security review M1).
      */
+    /**
+     * Re-validates a stored employee config for a run (T-212/T-213 must use this, every run): the schema, the lanes the
+     * user can open now (lane router), mailboxes and KPIs from lane_config. Throws EmployeeConfigError on any issue, so
+     * the employee does not run on a tampered or stale config.
+     */
+    async loadEmployeeConfig(laneId: LaneId, stored: unknown): Promise<EmployeeConfig> {
+      return validateConfig(laneId, stored);
+    },
+
     async saveEmployee(laneId: LaneId, input: EmployeeInput, ifVersion: number): Promise<SaveResult> {
       if (!ROLE_KEY.test(input.roleKey) || input.name !== input.name.trim() || input.name.length < 1 || input.name.length > 100) throw new BrainError("invalid");
       if (!(EMPLOYEE_STATUS as readonly string[]).includes(input.status)) throw new BrainError("invalid");
@@ -204,13 +269,15 @@ export function createBrainStore(deps: BrainStoreDeps) {
       checkSensitive(input.name);
       checkSensitive(JSON.stringify(input.config));
       checkVersion(ifVersion);
+      checkLane(laneId);
+      const config = await validateConfig(laneId, input.config);
       return toSave(
         await call(laneId, "brain_employee_save", {
           p_lane: laneId,
           p_role_key: input.roleKey,
           p_name: input.name,
           p_instructions_md: input.instructions,
-          p_config: input.config,
+          p_config: config,
           p_status: input.status,
           p_if_version: ifVersion,
         }),

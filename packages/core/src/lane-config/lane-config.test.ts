@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { z } from "zod";
-import { findSecretLikeValues, laneConfigSchema, parseLaneConfig, QBO_PAYROLL_SUBTYPES } from "./index";
+import { ACTION_TYPES, email, hhmm, laneCode, findSecretLikeValues, laneConfigSchema, parseLaneConfig, QBO_PAYROLL_SUBTYPES } from "./index";
 
 // Synthetic ids only (CLAUDE.md rule 10).
 const VALID = {
@@ -50,7 +50,7 @@ describe("lane config schema", () => {
     expect(c.finance).toEqual({ accounting_method: "accrual", weekly_cash_time: "06:00", monthly_close_trigger: "manual", payroll: { account_ids: [], account_subtypes: [...QBO_PAYROLL_SUBTYPES], excluded_entity_ids: [] }, reports: { period: "year_to_date", kinds: ["pnl", "ar_aging_summary", "ap_aging_summary"] }, qbo_sync: { interval_hours: 4 } });
     expect(c.approvals.approvals_live).toBe(false);
     expect(c.approvals.step_up_max_age_s).toBe(300);
-    expect(c.approvals.expire_after_hours).toEqual({ "email.draft": 72, "email.send": 72, "monday.item": 168 });
+    expect(c.approvals.expire_after_hours).toEqual({ "email.save_draft": 72, "email.draft": 72, "email.send": 72, "monday.item": 168 });
     expect(c.retention).toEqual({ calendar_days: 180, conversations_days: 180, webhook_days: 30 });
     expect(c.controls).toEqual({ unreconciled_over_days: 30, disconnected_feed_hours: 36, stripe_ghl_mismatch_threshold: 0 });
     expect(c.tieout.tolerance).toBe("0.00");
@@ -170,5 +170,26 @@ describe("finance.payroll (D-25, T-051)", () => {
     for (const payroll of [{ account_ids: ["x"] }, { account_subtypes: ["has space"] }, { excluded_entity_ids: [12] }, { other: 1 }]) {
       expect(laneConfigSchema.safeParse({ finance: { payroll } }).success, JSON.stringify(payroll)).toBe(false);
     }
+  });
+});
+
+describe("action types and shared validators (T-211, D-34)", () => {
+  it("includes email.save_draft with a 72 h expiry default, and keeps email.draft as an alias", () => {
+    expect(ACTION_TYPES).toContain("email.save_draft");
+    expect(ACTION_TYPES).toContain("email.draft");
+    expect(parseLaneConfig({}).approvals.expire_after_hours["email.save_draft"]).toBe(72);
+    expect(parseLaneConfig({ approvals: { expire_after_hours: { "email.save_draft": 24 } } }).approvals.expire_after_hours).toEqual({ "email.save_draft": 24 });
+  });
+  it("copies a legacy email.draft expiry to email.save_draft and refuses two different values (T-211 review)", () => {
+    expect(parseLaneConfig({ approvals: { expire_after_hours: { "email.draft": 48 } } }).approvals.expire_after_hours["email.save_draft"]).toBe(48);
+    expect(() => parseLaneConfig({ approvals: { expire_after_hours: { "email.draft": 48, "email.save_draft": 24 } } })).toThrow(z.ZodError);
+    expect(parseLaneConfig({ approvals: { expire_after_hours: { "email.draft": 24, "email.save_draft": 24 } } }).approvals.expire_after_hours["email.save_draft"]).toBe(24);
+  });
+  it("exports laneCode, email and hhmm for the employee config", () => {
+    expect(laneCode.safeParse("AB").success).toBe(true);
+    expect(laneCode.safeParse("ab").success).toBe(false);
+    expect(email.safeParse("a@example.com").success).toBe(true);
+    expect(hhmm.safeParse("06:30").success).toBe(true);
+    expect(hhmm.safeParse("24:00").success).toBe(false);
   });
 });

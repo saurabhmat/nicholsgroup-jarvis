@@ -1,7 +1,7 @@
 // @nichols/brain/server: server-side store (T-210). Wire `clientFor` to the lane router's getLaneClient(laneId, session).
 export { BRAIN_ERROR_CODES, BrainError, toBrainError } from "./errors";
 export type { BrainErrorCode } from "./errors";
-export { createBrainStore } from "./store";
+export { createBrainStore, EmployeeConfigError } from "./store";
 export type {
   BrainDb,
   BrainDocument,
@@ -16,5 +16,6 @@ export type {
   EmployeeStatus,
   ImportDecision,
   KeptFact,
+  LaneSettingsFor,
   SaveResult,
 } from "./store";

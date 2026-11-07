@@ -1,11 +1,13 @@
 import { describe, expect, it, vi } from "vitest";
 import { BrainError } from "./errors";
-import { createBrainStore, type BrainDb, type ClientFor } from "./store";
+import { createBrainStore, EmployeeConfigError, type BrainDb, type ClientFor } from "./store";
 
 type Call = { fn: string; args: Record<string, unknown> };
 type Reply = { data?: unknown; error?: { code?: string; message?: string } | null };
 
 /** A fake lane client: records every rpc and answers from `reply`. */
+const laneSettingsFor = async (lane: string) => (lane === "PKG" ? { mailboxes: ["boss@example.test"], kpis: ["mrr"] } : null);
+
 function fake(reply: (c: Call) => Reply) {
   const calls: Call[] = [];
   const clientFor = vi.fn(async (lane: string): Promise<BrainDb> => {
@@ -24,7 +26,7 @@ function fake(reply: (c: Call) => Reply) {
     };
     return db as unknown as BrainDb;
   });
-  return { calls, clientFor, store: createBrainStore({ clientFor }) };
+  return { calls, clientFor, store: createBrainStore({ clientFor, laneSettingsFor }) };
 }
 
 const ID = "00000000-0000-4000-8000-000000000001";
@@ -86,7 +88,7 @@ describe("saveDocument", () => {
     await expect(f.store.saveSkill("PKG", { key: "pay-run", title: "Pay run", body: "Use account number 12345678" }, 0)).rejects.toMatchObject({ code: "sensitive_bank" });
   });
   it("is forbidden when the lane router refuses the lane", async () => {
-    const store = createBrainStore({ clientFor: async () => Promise.reject(laneError("not_allowed")) });
+    const store = createBrainStore({ laneSettingsFor, clientFor: async () => Promise.reject(laneError("not_allowed")) });
     const e = (await store.getDocument("APK", "Context/Work.md").catch((x: unknown) => x)) as BrainError;
     expect(e.code).toBe("forbidden");
   });
@@ -97,7 +99,7 @@ describe("saveDocument", () => {
       async () => ({ schema: () => ({ rpc: async () => Promise.reject(new Error("ECONNRESET")) }) }) as unknown as BrainDb,
     ];
     for (const clientFor of cases) {
-      const e = (await createBrainStore({ clientFor }).getDocument("PKG", "Context/Work.md").catch((x: unknown) => x)) as BrainError;
+      const e = (await createBrainStore({ clientFor, laneSettingsFor }).getDocument("PKG", "Context/Work.md").catch((x: unknown) => x)) as BrainError;
       expect(e.code).toBe("unavailable");
     }
   });
@@ -135,13 +137,13 @@ describe("reads", () => {
 });
 
 describe("saveEmployee and saveSkill", () => {
-  const input = { roleKey: "personal_assistant", name: "Jarvis", instructions: "Be brief.", config: { timezone: "America/New_York" }, status: "draft" as const };
+  const input = { roleKey: "personal_assistant", name: "Jarvis", instructions: "Be brief.", config: { lanes: ["PKG"] }, status: "draft" as const };
   it("sends the profile to the wrapper", async () => {
     const f = fake(() => saved);
     await f.store.saveEmployee("PKG", input, 0);
     expect(f.calls[0]).toEqual({
       fn: "brain_employee_save",
-      args: { p_lane: "PKG", p_role_key: "personal_assistant", p_name: "Jarvis", p_instructions_md: "Be brief.", p_config: { timezone: "America/New_York" }, p_status: "draft", p_if_version: 0 },
+      args: { p_lane: "PKG", p_role_key: "personal_assistant", p_name: "Jarvis", p_instructions_md: "Be brief.", p_config: expect.objectContaining({ lanes: ["PKG"], timezone: "America/New_York", schedule: { days: [1, 2, 3, 4, 5] }, permissions: { propose: ["email.save_draft"] } }), p_status: "draft", p_if_version: 0 },
     });
   });
   it("refuses a bad role, status, config or a secret before any call", async () => {
@@ -151,9 +153,70 @@ describe("saveEmployee and saveSkill", () => {
     expect(await code(f.store.saveEmployee("PKG", { ...input, status: "running" as never }, 0))).toBe("invalid");
     expect(await code(f.store.saveEmployee("PKG", { ...input, config: [] as never }, 0))).toBe("invalid");
     expect(await code(f.store.saveEmployee("PKG", { ...input, instructions: "key sk_live_abcdefghijklmnop1234" }, 0))).toBe("secret");
-    expect(await code(f.store.saveEmployee("PKG", { ...input, config: { note: "sk_live_abcdefghijklmnop1234" } }, 0))).toBe("secret");
+    expect(await code(f.store.saveEmployee("PKG", { ...input, config: { lanes: ["PKG"], note: "sk_live_abcdefghijklmnop1234" } }, 0))).toBe("secret");
     expect(await code(f.store.saveSkill("PKG", { key: "Bad Key", title: "T", body: "x" }, 0))).toBe("invalid");
     expect(f.calls).toEqual([]);
+  });
+});
+
+describe("saveEmployee config validation (T-211)", () => {
+  const base = { roleKey: "personal_assistant", name: "Jarvis", instructions: "Be brief.", status: "draft" as const };
+  const issues = async (config: Record<string, unknown>) => {
+    const f = fake(() => saved);
+    const e = (await f.store.saveEmployee("PKG", { ...base, config }, 0).catch((x: unknown) => x)) as EmployeeConfigError;
+    expect(e).toBeInstanceOf(EmployeeConfigError);
+    expect(e.code).toBe("config_invalid");
+    expect(f.calls).toEqual([]); // nothing reached the database
+    return e.issues.map((i) => i.code);
+  };
+  it("accepts a valid config and stores it normalised", async () => {
+    const f = fake(() => saved);
+    await f.store.saveEmployee("PKG", { ...base, config: { lanes: ["PKG"], sources: { mail: [{ lane: "PKG", mailbox: "Boss@example.test", priority: 1 }], finance_kpis: ["mrr"] } } }, 0);
+    const cfg = f.calls[0]?.args.p_config as { sources: { mail: { include: string[] }[] } };
+    expect(cfg.sources.mail[0]?.include).toEqual([]);
+  });
+  it("rejects a mailbox that is not in lane_config.mailboxes", async () => {
+    expect(await issues({ lanes: ["PKG"], sources: { mail: [{ lane: "PKG", mailbox: "other@example.test", priority: 1 }] } })).toEqual(["mailbox_unknown"]);
+  });
+  it("rejects unknown keys, mail lanes outside lanes, KPIs outside lane_config.kpis and single-lane mismatch", async () => {
+    expect(await issues({ lanes: ["PKG"], extra: 1 })).toEqual(["schema"]);
+    expect(await issues({ lanes: ["PKG"], sources: { mail: [{ lane: "OTH", mailbox: "boss@example.test", priority: 1 }] } })).toContain("mail_lane_not_in_lanes");
+    expect(await issues({ lanes: ["PKG"], sources: { finance_kpis: ["ar_total"] } })).toEqual(["kpi_not_in_lane"]);
+    expect(await issues({ lanes: ["OTH"] })).toEqual(expect.arrayContaining(["lanes_mismatch", "lane_not_available"]));
+  });
+});
+
+describe("employee config: the lane router decides lane access, and stored configs are re-checked (T-211 review)", () => {
+  const laneError = (reason: string) => Object.assign(new Error("x"), { name: "LaneAccessError", reason });
+  const base = { roleKey: "personal_assistant", name: "Jarvis", instructions: "Be brief.", status: "draft" as const };
+  it("treats a lane the router refuses as not available, even if laneSettingsFor answers for it", async () => {
+    const calls: string[] = [];
+    const clientFor = async (lane: string): Promise<BrainDb> => {
+      if (lane === "OTH") throw laneError("not_allowed");
+      return { schema: () => ({ rpc: async (fn: string) => (calls.push(fn), { data: saved.data, error: null }) }) } as unknown as BrainDb;
+    };
+    const store = createBrainStore({ clientFor, laneSettingsFor: async () => ({ mailboxes: ["boss@example.test"], kpis: ["mrr"] }) });
+    const e = (await store.saveEmployee("PKG", { ...base, config: { lanes: ["PKG", "OTH"] } }, 0).catch((x: unknown) => x)) as EmployeeConfigError;
+    expect(e.issues.map((i) => i.code)).toEqual(["lane_not_available"]);
+    expect(calls).toEqual([]);
+  });
+  it("is forbidden when the employee's own lane is refused, and unavailable on an outage", async () => {
+    const refused = createBrainStore({ clientFor: async () => Promise.reject(laneError("not_allowed")), laneSettingsFor });
+    expect(((await refused.loadEmployeeConfig("PKG", { lanes: ["PKG"] }).catch((x: unknown) => x)) as BrainError).code).toBe("forbidden");
+    const down = createBrainStore({ clientFor: fake(() => saved).clientFor, laneSettingsFor: async () => Promise.reject(new Error("fetch failed")) });
+    expect(((await down.loadEmployeeConfig("PKG", { lanes: ["PKG"] }).catch((x: unknown) => x)) as BrainError).code).toBe("unavailable");
+  });
+  it("loadEmployeeConfig refuses a tampered stored config (extra lane, unknown mailbox, bad shape)", async () => {
+    const f = fake(() => saved);
+    for (const stored of [
+      { lanes: ["PKG", "OTH"] },
+      { lanes: ["PKG"], sources: { mail: [{ lane: "PKG", mailbox: "attacker@example.test", priority: 1 }] } },
+      { lanes: ["PKG"], permissions: { propose: ["qbo.post"] } },
+      "not an object",
+    ]) {
+      await expect(f.store.loadEmployeeConfig("PKG", stored)).rejects.toBeInstanceOf(EmployeeConfigError);
+    }
+    expect((await f.store.loadEmployeeConfig("PKG", { lanes: ["PKG"] })).permissions.propose).toEqual(["email.save_draft"]);
   });
 });
 

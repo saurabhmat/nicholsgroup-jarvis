@@ -59,6 +59,8 @@ const ALLOWED = {
       CORE_ONLY,
     ]),
   ),
+  // T-211: the employee config schema (strict Zod, spec §3). zod has no network or DB access; same major as core.
+  "packages/modules/brain": [...CORE_ONLY, "zod"],
 };
 
 /** same matching as the lint rule: "name", "name/sub", or "@scope/*" */
