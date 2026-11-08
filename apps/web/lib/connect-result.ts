@@ -8,10 +8,12 @@ import { CONNECT_ROLES } from "@nichols/connectors/oauth";
 
 export type ConnectResultMessage = { tone: "success" | "alert"; title: string; description: string };
 
-const PROVIDERS: Record<string, string | undefined> = { google: "Google", quickbooks: "QuickBooks" };
+const PROVIDERS: Record<string, string | undefined> = { google: "Google", quickbooks: "QuickBooks", composio: "Composio" };
+const TOOLKITS: Record<string, string | undefined> = { gmail: "Gmail", googlecalendar: "Google Calendar" };
 
 const REMOVE_ACCESS: Record<string, string> = {
   Google: "Google still lists the portal as having access: remove it at Google Account → Security → Third-party connections, then try again.",
+  Composio: "The account may still exist in the Composio project: remove it in the Composio dashboard (Connected accounts), and, if you want, the app's access in your Google Account → Security → Third-party connections, then try again.",
   QuickBooks: "QuickBooks still lists the portal as having access: remove it under the company's connected apps in QuickBooks, then try again.",
 };
 
@@ -22,18 +24,24 @@ const one = (v: string | string[] | undefined) => (typeof v === "string" ? v : u
 export function connectResultMessage(params: SearchParams): ConnectResultMessage | null {
   const code = one(params.connect);
   if (!code) return null;
-  const name = PROVIDERS[one(params.provider) ?? ""] ?? "The provider";
+  const baseName = PROVIDERS[one(params.provider) ?? ""] ?? "The provider";
+  const toolkit = baseName === "Composio" ? TOOLKITS[one(params.toolkit) ?? ""] : undefined;
+  // A Composio connect is named by its toolkit ("Gmail via Composio"); the notice text still keys on "Composio".
+  const name = baseName === "Composio" && toolkit ? `${toolkit} via Composio` : baseName;
   // The server sets the notice only when a grant was obtained but not stored (flow.ts: account_refused or unavailable).
-  const removeAccess = one(params.notice) === "remove_app_access" && (code === "account_refused" || code === "unavailable") ? ` ${REMOVE_ACCESS[name] ?? "Remove the portal's access at the provider, then try again."}` : "";
+  const removeAccess = one(params.notice) === "remove_app_access" && (code === "account_refused" || code === "unavailable") ? ` ${REMOVE_ACCESS[baseName] ?? "Remove the portal's access at the provider, then try again."}` : "";
   switch (code) {
     case "ok":
+      if (baseName === "Composio") return { tone: "success", title: `${name} connected`, description: "The account was checked and saved. Mail and calendar keep syncing through the Google connection until this company is switched to Composio." };
       return { tone: "success", title: `${name} connected`, description: "Data syncs in the background. The sync times below update after the first sync." };
     case "account_refused":
       return {
         tone: "alert",
         title: `${name} account not accepted`,
         description:
-          (name === "Google"
+          (baseName === "Composio"
+            ? `The ${toolkit ?? "account"} you chose is not in this company's mailbox list, is for a different service, or is already connected to another company. Nothing was saved in Jarvis. Ask your administrator to add the address to the mailbox list.`
+            : name === "Google"
             ? "The Google account you chose is not in this company's mailbox list, or is already connected to another company. Nothing was saved. Ask your administrator to add the address to the mailbox list."
             : `The ${name} account you chose is not the one set up for this company, or is already connected to another company. Nothing was saved.`) + removeAccess,
       };

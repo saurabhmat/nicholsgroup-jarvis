@@ -74,7 +74,7 @@ describe("loadGoogleSection", () => {
   it("every read is filtered to the lane (and to Google, and to the mail and calendar streams)", async () => {
     const seen: Seen[] = [];
     await loadGoogleSection(fakeClient(connected, seen), "PKG");
-    expect(seen.find((s) => s.table === "connections")?.filters).toEqual(["lane_id=PKG", "provider=google"]);
+    expect(seen.find((s) => s.table === "connections")?.filters).toEqual(["lane_id=PKG", "provider=google", "transport=native"]);
     expect(seen.find((s) => s.table === "sync_cursors")?.filters).toEqual(["lane_id=PKG", `connection_id in ${CID}`, "stream in mail,calendar"]);
     expect(seen.find((s) => s.table === "lane_config_current")?.filters).toEqual(["lane_id=PKG"]);
   });

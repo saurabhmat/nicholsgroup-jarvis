@@ -27,12 +27,12 @@ function fake(result: { data?: unknown; error?: unknown }) {
 }
 
 describe("token health store", () => {
-  it("lists only the lane's usable connections, narrowed by provider", async () => {
+  it("lists only the lane's usable native connections (a Composio one has no token to check, T-219), narrowed by provider", async () => {
     const f = fake({ data: [{ id: "a" }, { id: "b" }] });
     const store = createTokenHealthStore(f.clientFor);
     await expect(store.listUsableConnectionIds("PKG", ["google"])).resolves.toEqual(["a", "b"]);
     expect(f.lanes).toEqual(["PKG"]);
-    expect(f.calls[0]?.filters).toEqual([["eq", "lane_id", "PKG"], ["in", "status", ["active", "degraded"]], ["in", "provider", ["google"]]]);
+    expect(f.calls[0]?.filters).toEqual([["eq", "lane_id", "PKG"], ["eq", "transport", "native"], ["in", "status", ["active", "degraded"]], ["in", "provider", ["google"]]]);
   });
 
   it("an empty provider list means none, without a query", async () => {

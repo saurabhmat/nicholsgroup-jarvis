@@ -61,6 +61,7 @@ insert into security_definer_ok values
   ('core.connection_token_read', 'reads the Vault; service_role only, lane-checked (T-032)'),
   ('core.connection_token_rotate', 'updates the Vault; service_role only, lane-checked (T-032)'),
   ('core.connection_token_revoke', 'deletes from the Vault and disconnects; service_role only, lane-checked (T-032)'),
+  ('core.connection_activate_composio', 'activates a composio connection without a token row; service_role only, lane-checked, identity validated, audited (T-219)'),
   ('core.connections_no_orphan_secret', 'trigger only: reads the private Vault mapping on status changes (T-032)'),
   ('core.oauth_state_create', 'starts a connect; owner/admin_technical of the lane at aal2 only (T-035)'),
   ('core.oauth_state_consume', 'finishes a connect; own unexpired state, same lane, role re-checked (T-035)'),

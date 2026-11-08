@@ -35,6 +35,7 @@ export function createSyncTargetLister(clientFor: JobClientFor): SyncTargetListe
         .from("connections")
         .select("id")
         .eq("lane_id", laneId)
+        .eq("transport", "native") // a Composio connection has no token row; the native sync cannot run on it (T-219)
         .in("provider", [...providers])
         .in("status", [...SYNCABLE_STATUSES])
         .order("id", { ascending: true })

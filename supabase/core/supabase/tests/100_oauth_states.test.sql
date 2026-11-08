@@ -43,7 +43,7 @@ $$;
 select ok(not has_table_privilege('authenticated', 'core.oauth_states', 'select, insert, update, delete'), 'authenticated has no table access');
 select ok(not has_table_privilege('service_role', 'core.oauth_states', 'select, insert, update, delete'), 'not even service_role touches the table directly');
 select ok(not has_table_privilege('anon', 'core.oauth_states', 'select'), 'anon has no table access');
-select ok(not has_function_privilege('anon', 'core.oauth_state_create(text, text, text, text, text)', 'execute')
+select ok(not has_function_privilege('anon', 'core.oauth_state_create(text, text, text, text, text, text, text)', 'execute')
           and not has_function_privilege('anon', 'core.oauth_state_consume(text, text)', 'execute'), 'anon cannot call the functions');
 select ok(not has_function_privilege('service_role', 'core.oauth_state_consume(text, text)', 'execute'), 'service_role cannot consume (it has no user to bind to)');
 select ok(has_function_privilege('authenticated', 'core.oauth_state_consume(text, text)', 'execute'), 'authenticated may call consume');

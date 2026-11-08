@@ -21,12 +21,15 @@ const ALLOWED = {
     "@nichols/eslint-plugin",
     "@nichols/ui", // T-022
     "@playwright/test", // T-018 end-to-end tests
+    "@testing-library/dom", // T-216: component tests (same versions as packages/ui)
+    "@testing-library/react", // T-216
     "@tailwindcss/turbopack",
     "@types/node",
     "@types/react",
     "@types/react-dom",
     "eslint",
     "eslint-config-next",
+    "jsdom", // T-216: component tests
     "next",
     "react",
     "react-dom",
@@ -37,7 +40,7 @@ const ALLOWED = {
   ],
   "packages/ai": [...CORE_ONLY, "@anthropic-ai/sdk", "server-only", "zod"], // T-100; server-only: keeps the SDK out of client bundles; zod: strict tool argument schemas (T-101)
   // vendor SDKs join this list with their connectors (T-04x...); zod for the contract schemas, vitest for the kit (T-030)
-  "packages/connectors": [...CORE_ONLY, "msw", "vitest", "zod"], // msw: provider mocks for tests (T-034)
+  "packages/connectors": [...CORE_ONLY, "@composio/core", "msw", "vitest", "zod"], // msw: provider mocks for tests (T-034); @composio/core: pinned exactly, imported only in src/composio (T-219)
   // T-016/T-017: Supabase clients, only importable from the lane router and packages/core/src/auth (lint)
   "packages/core": ["@supabase/ssr", "@supabase/supabase-js", "inngest", "server-only", "zod"], // inngest: T-037
   "packages/eslint-plugin": ["@eslint-community/eslint-plugin-eslint-comments", "@nichols/core", "eslint", "typescript-eslint"],
@@ -118,4 +121,12 @@ test("@anthropic-ai/sdk is permitted only in packages/ai and nothing else networ
   assert.deepEqual(VENDORS["@anthropic-ai/*"], ["packages/ai"]);
   assert.ok(VENDORS["stripe"]?.includes("packages/connectors"));
   assert.ok(!VENDORS["stripe"]?.includes("packages/ai"));
+});
+
+test("T-219: @composio/core is pinned exactly to 0.27.0, declared only by packages/connectors, importable only in src/composio", () => {
+  assert.deepEqual(VENDORS["@composio/*"], ["packages/connectors/src/composio"]);
+  const owners = DIRS.filter((dir) => declared(dir).includes("@composio/core"));
+  assert.deepEqual(owners, ["packages/connectors"]);
+  const pkg = readJson(join(ROOT, "packages/connectors/package.json"));
+  assert.equal(pkg.dependencies["@composio/core"], "0.27.0", "exact pin: no ^ or ~ (spec §8.6)");
 });

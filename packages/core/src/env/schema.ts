@@ -257,6 +257,13 @@ export const connectorEnvShapes = {
     GHL_PRIVATE_INTEGRATION_TOKEN: nonEmpty,
     GHL_LOCATION_ID: nonEmpty,
   },
+  // Composio (T-219, D-30): the project API key is the only Composio secret. The two auth config ids are Composio project
+  // settings (not secrets); each is optional, and a toolkit without its id shows "Not configured" on Settings.
+  composio: {
+    COMPOSIO_API_KEY: nonEmpty,
+    COMPOSIO_GMAIL_AUTH_CONFIG_ID: nonEmpty.optional(),
+    COMPOSIO_GOOGLECALENDAR_AUTH_CONFIG_ID: nonEmpty.optional(),
+  },
   monday: { MONDAY_API_TOKEN: nonEmpty },
   notion: { NOTION_INTEGRATION_TOKEN: nonEmpty },
   push: {
@@ -307,6 +314,7 @@ export const connectorSchemaFactories = {
   intuit_webhook: () => z.object(connectorEnvShapes.intuit_webhook),
   stripe: () => z.object(connectorEnvShapes.stripe),
   ghl: () => z.object(connectorEnvShapes.ghl),
+  composio: () => z.object(connectorEnvShapes.composio),
   monday: () => z.object(connectorEnvShapes.monday),
   notion: () => z.object(connectorEnvShapes.notion),
   push: () => z.object(connectorEnvShapes.push),

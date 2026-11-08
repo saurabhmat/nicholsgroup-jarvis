@@ -113,6 +113,11 @@ export const laneConfigSchema = z.strictObject({
   // "Temporary: connection test" section on Settings (T-198, until T-045 replaces it). Off unless set to true.
   pilot: z.strictObject({ connection_test_enabled: z.boolean().default(false) }).optional(),
   mailboxes: z.array(email).max(20).default([]),
+  // How the lane's Gmail + Calendar are reached (T-219, D-30, D-37): `native` = our own Google OAuth client and Vault tokens
+  // (the only path that syncs today, and every existing lane); `composio` = Composio holds the Google tokens (D-35). Switching
+  // a lane is this one value, after the Composio path passes its live check. Default `native`: nothing changes for a lane
+  // that does not set it.
+  mail_transport: z.enum(["native", "composio"]).default("native"),
   // Google Calendar sync (T-064). Unset = primary plus owned/writable selected calendars, 365 days ahead.
   // `calendar_ids` are raw Google calendar ids (an explicit list replaces the default selection).
   calendar: z

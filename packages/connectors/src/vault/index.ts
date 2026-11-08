@@ -18,6 +18,7 @@ import { createSyncCursorStore, createSyncRunStore } from "../sync/store";
 import { createSyncTargetLister } from "../sync/targets";
 import { createCalendarIndexStore } from "../google/cal-store";
 import { createMailIndexStore } from "../google/mail-store";
+import { createComposioConnectionStore } from "../composio/store";
 
 const vault = createTokenVault(getLaneJobClient);
 
@@ -28,6 +29,9 @@ export const connectionLoader = createConnectionLoader(getLaneJobClient);
 
 /** Creates (or reuses) the connection row an OAuth callback stores its token on (T-035). */
 export const connectionStore = createConnectionStore(getLaneJobClient);
+
+/** Composio connection rows (pending, activation without a token row, health) with the lane's job client (T-219). */
+export const composioConnectionStore = createComposioConnectionStore(getLaneJobClient);
 
 /** Reads the per-lane provider account settings the connect flow checks against (T-050). */
 export const laneConfigReader = createLaneConfigReader(getLaneJobClient);

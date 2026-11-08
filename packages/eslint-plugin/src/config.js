@@ -140,6 +140,7 @@ export const VENDORS = {
   ...Object.fromEntries(CONNECTOR_ONLY.map((pattern) => [pattern, CONNECTORS])),
   child_process: [...CONNECTORS, ...SCRIPTS],
   "@anthropic-ai/*": AI,
+  "@composio/*": ["packages/connectors/src/composio"], // T-219: the Composio SDK, imported only by the Composio connector folder
   "@nichols/connectors/internal": CONNECTORS, // mint + schema builder: connector implementations and the loader (T-033)
   inngest: INNGEST_CLIENT, // the SDK reads INNGEST_* from process.env itself (T-037 review L1)
   ...DB_DRIVERS,
