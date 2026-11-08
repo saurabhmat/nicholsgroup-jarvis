@@ -47,6 +47,8 @@ const STATIC_PROMPT = [
   "does not provide something. You cannot send, reply, approve, pay, schedule or change anything; you can only read",
   "and explain. Cash figures, if any, are always called \"book balance\". Mention which source an answer came from",
   "(Email, Calendar). Times are New York time; the business week is Saturday to Friday.",
+  "Call the tools you need first and write the answer after them: no text before a tool call.",
+  "Format: plain text, short paragraphs or lines starting with \"- \"; **bold** allowed; no headings, tables or italics.",
 ].join(" ");
 
 const DATE = new Intl.DateTimeFormat("en-US", { timeZone: "America/New_York", weekday: "long", year: "numeric", month: "long", day: "numeric" });
@@ -65,16 +67,24 @@ export function chatSystemPrompt(input: { laneId: LaneId; laneName: string; now:
   ];
 }
 
+// Money amounts and percentages only (counts, times and dates are not checked).
 const FIGURE = /\$\s?\d[\d,]*(?:\.\d+)?|\b\d+(?:\.\d+)?\s?%/g;
-const digits = (s: string) => s.replace(/[^\d.]/g, "").replace(/\.0+$/, "");
+const value = (s: string) => {
+  const n = Number(s.replace(/[^\d.]/g, ""));
+  return Number.isFinite(n) ? String(n) : s;
+};
 
-/** Numeric grounding (rule 7): every money amount or percentage in the answer must appear in this turn's tool data. */
-export function checkGrounding(answer: string, results: ToolLoopResult["results"]): Grounding {
+/**
+ * Numeric grounding (rule 7): every money amount or percentage in the answer must appear, as a money amount or
+ * percentage, in this turn's tool data or in the conversation the user sent (a figure repeated from earlier). Ids,
+ * timestamps and other digit runs never count as support. Flagged only; retry-and-replace is still open (T-105).
+ */
+export function checkGrounding(answer: string, results: ToolLoopResult["results"], history = ""): Grounding {
   const figures = [...new Set(answer.match(FIGURE) ?? [])];
   if (figures.length === 0) return { status: "not_applicable", unverified: [] };
-  const data = JSON.stringify(results.map((r) => r.result.data));
-  const known = new Set((data.match(/\d[\d,]*(?:\.\d+)?/g) ?? []).map(digits));
-  const unverified = figures.filter((f) => !known.has(digits(f)));
+  const sources = `${JSON.stringify(results.map((r) => r.result.data))} ${history}`;
+  const known = new Set((sources.match(FIGURE) ?? []).map((f) => `${f.includes("%") ? "%" : "$"}${value(f)}`));
+  const unverified = figures.filter((f) => !known.has(`${f.includes("%") ? "%" : "$"}${value(f)}`));
   return { status: unverified.length ? "failed" : "passed", unverified };
 }
 
@@ -106,8 +116,11 @@ export async function runChatTurn(input: {
   maxTokens?: number;
 }): Promise<void> {
   const categories = input.categories.filter((c): c is ToolCategory => (TOOL_CATEGORIES as readonly string[]).includes(c));
+  // Defence in depth: the route refuses callers without categories before this; never call the model for them.
+  if (categories.length === 0) throw new Error("no assistant categories for this caller");
   const messages: LLMMessage[] = input.request.messages.map((m) => ({ role: m.role, content: m.text }));
   input.emit({ type: "message.start" });
+  let wrote = false;
   const out = await runToolLoop({
     provider: input.provider,
     gate: input.gate,
@@ -121,12 +134,17 @@ export async function runChatTurn(input: {
     maxSteps: 6,
     ...(input.signal ? { signal: input.signal } : {}),
     hooks: {
-      onText: (text) => input.emit({ type: "text.delta", text }),
+      // Each model step's text is a separate paragraph (a short preamble before a tool call must not run into the answer).
+      onText: (text) => {
+        input.emit({ type: "text.delta", text: wrote ? `\n\n${text}` : text });
+        wrote = true;
+      },
       onToolStart: (c) => input.emit({ type: "tool.start", tool: c.name }),
       onToolResult: (c) => input.emit({ type: "tool.result", tool: c.name, outcome: c.outcome }),
     },
   });
   input.emit({ type: "citations", citations: citationsOf(out.results) });
-  input.emit({ type: "grounding", grounding: checkGrounding(out.text, out.results) });
+  const history = input.request.messages.map((m) => m.text).join("\n");
+  input.emit({ type: "grounding", grounding: checkGrounding(out.text, out.results, history) });
   input.emit({ type: "message.done", stop: out.stop });
 }

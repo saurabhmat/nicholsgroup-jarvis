@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { createMockProvider } from "@nichols/ai/testing";
+import { LLMProviderError } from "@nichols/ai";
 import { AuthError } from "@nichols/core/auth";
 import type { Audit, AuditEntry } from "@nichols/core/audit";
 import { handleChat, type ChatDeps } from "./assistant";
@@ -7,10 +8,10 @@ import { handleChat, type ChatDeps } from "./assistant";
 const USER = "00000000-0000-4000-8000-000000000001";
 const usage = { inputTokens: 1, outputTokens: 1, cacheReadInputTokens: 0, cacheCreationInputTokens: 0 };
 
-function deps(over: Partial<{ requireLane: () => Promise<unknown>; configured: boolean; categories: string[]; replies: Parameters<typeof createMockProvider>[0] }> = {}) {
+function deps(over: Partial<{ requireLane: () => Promise<unknown>; configured: boolean; turn: Record<string, unknown>; replies: Parameters<typeof createMockProvider>[0] }> = {}) {
   const audits: AuditEntry[] = [];
   const rpc = async (fn: string) => {
-    if (fn === "ai_tool_categories") return { data: over.categories ?? ["email", "calendar"], error: null };
+    if (fn === "ai_chat_turn") return { data: over.turn ?? { allowed: true, reason: null, categories: ["email", "calendar"] }, error: null };
     if (fn === "ai_tool_gate") return { data: { allowed: true, reason: null, role: "owner" }, error: null };
     if (fn === "inbox_messages")
       return { data: [{ message_id: "m_1", from_name: "Dana", subject: "Board pack", received_at: "2026-11-10T13:05:00Z", is_read: false, is_important: true }], error: null };
@@ -37,7 +38,14 @@ function deps(over: Partial<{ requireLane: () => Promise<unknown>; configured: b
   return { d, provider, audits };
 }
 
-const req = (body: unknown) => new Request("http://localhost/api/lanes/PKG/assistant", { method: "POST", body: typeof body === "string" ? body : JSON.stringify(body) });
+const req = (body: unknown, headers: Record<string, string> = {}) => {
+  const text = typeof body === "string" ? body : JSON.stringify(body);
+  return new Request("http://localhost/api/lanes/PKG/assistant", {
+    method: "POST",
+    body: text,
+    headers: { "content-type": "application/json", "content-length": String(new TextEncoder().encode(text).length), "sec-fetch-site": "same-origin", ...headers },
+  });
+};
 const good = { messages: [{ role: "user", text: "Anything important?" }] };
 
 describe("assistant chat route", () => {
@@ -49,7 +57,7 @@ describe("assistant chat route", () => {
         return {};
       },
     });
-    for (const body of ["", "not json", { messages: [] }, { messages: [{ role: "user", text: "a" }], laneId: "NL" }, "x".repeat(100_001)]) {
+    for (const body of ["not json", { messages: [] }, { messages: [{ role: "user", text: "a" }], laneId: "NL" }, "x".repeat(100_001)]) {
       expect((await handleChat(req(body), "PKG", d)).status).toBe(400);
     }
     expect(touched).toBe(false);
@@ -78,9 +86,33 @@ describe("assistant chat route", () => {
     expect(audits.map((a) => a.action)).toEqual(["assistant.tool_call.requested", "assistant.tool_call.succeeded"]);
   });
 
-  it("offers no tools when the caller has no categories", async () => {
-    const { d, provider } = deps({ categories: [], replies: [{ status: "completed", stopReason: "end_turn", content: [{ type: "text", text: "I can't read that here." }], usage, model: "m", requestId: null, latencyMs: 0 }] });
-    await (await handleChat(req(good), "PKG", d)).text();
-    expect(provider.calls[0]?.tools).toBeUndefined();
+  it("refuses viewers, admin_technical, lanes without categories and rate-limited callers before any model call", async () => {
+    for (const [turn, status] of [
+      [{ allowed: false, reason: "forbidden", categories: [] }, 403],
+      [{ allowed: false, reason: "mfa_required", categories: [] }, 403],
+      [{ allowed: true, reason: null, categories: [] }, 503],
+      [{ allowed: false, reason: "rate_limited", categories: [] }, 429],
+    ] as const) {
+      const { d, provider } = deps({ turn });
+      expect((await handleChat(req(good), "PKG", d)).status).toBe(status);
+      expect(provider.calls).toHaveLength(0);
+    }
+  });
+
+  it("refuses cross-site, non-JSON, oversized and over-long requests", async () => {
+    const { d, provider } = deps();
+    expect((await handleChat(req(good, { "sec-fetch-site": "cross-site" }), "PKG", d)).status).toBe(403);
+    expect((await handleChat(req(good, { "content-type": "text/plain" }), "PKG", d)).status).toBe(415);
+    expect((await handleChat(req(good, { "content-length": "200000" }), "PKG", d)).status).toBe(400);
+    const long = { messages: Array.from({ length: 7 }, (_, i) => ({ role: i % 2 ? "assistant" : "user", text: "x".repeat(3900) })) };
+    expect((await handleChat(req(long), "PKG", d)).status).toBe(400);
+    expect(provider.calls).toHaveLength(0);
+  });
+
+  it("sends an error event with a code only when the provider fails", async () => {
+    const { d } = deps({ replies: [new LLMProviderError("rate_limited")] });
+    const text = await (await handleChat(req(good), "PKG", d)).text();
+    expect(text).toContain('"type":"error","code":"rate_limited"');
+    expect(text).not.toContain("LLM provider error");
   });
 });

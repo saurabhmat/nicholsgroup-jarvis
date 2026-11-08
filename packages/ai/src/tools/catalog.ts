@@ -22,14 +22,20 @@ export function nyMidnight(at: Date, addDays = 0): Date {
       .formatToParts(at)
       .map((p) => [p.type, p.value]),
   );
-  const guess = Date.UTC(Number(parts.year), Number(parts.month) - 1, Number(parts.day) + addDays, 12);
-  // Offset of New York at that day's noon (handles DST), then midnight local.
+  const midnightUtc = Date.UTC(Number(parts.year), Number(parts.month) - 1, Number(parts.day) + addDays);
+  // Local midnight = UTC midnight minus the offset in force AT that instant. On a DST change day the offset at noon
+  // differs, so re-read it at the candidate and correct once.
+  const first = midnightUtc - offsetMinutes(new Date(midnightUtc + 12 * 3_600_000)) * 60_000;
+  const second = midnightUtc - offsetMinutes(new Date(first)) * 60_000;
+  return new Date(second);
+}
+
+function offsetMinutes(at: Date): number {
   const off = new Intl.DateTimeFormat("en-US", { timeZone: TZ, timeZoneName: "longOffset" })
-    .formatToParts(new Date(guess))
+    .formatToParts(at)
     .find((p) => p.type === "timeZoneName")?.value;
   const m = /GMT([+-])(\d{2}):(\d{2})/.exec(off ?? "");
-  const offsetMin = m ? (m[1] === "-" ? -1 : 1) * (Number(m[2]) * 60 + Number(m[3])) : 0;
-  return new Date(guess - 12 * 3_600_000 - offsetMin * 60_000);
+  return m ? (m[1] === "-" ? -1 : 1) * (Number(m[2]) * 60 + Number(m[3])) : 0;
 }
 
 const str = (v: unknown): string | null => (typeof v === "string" && v.trim() !== "" ? v.slice(0, 300) : null);
@@ -92,11 +98,14 @@ export function meetingsTool(now: () => Date = () => new Date()): ToolDescriptor
     effect: "read",
     requiredView: "calendar",
     args: z.strictObject({ range: z.enum(["today", "tomorrow", "next_7_days"]).default("today") }),
-    resultStore: "full",
+    // Titles and locations are external content: store references only (T-103).
+    resultStore: "refs_only",
     trustedFields: ["range", "meetings[].day", "meetings[].start", "meetings[].end", "meetings[].start_at", "meetings[].end_at"],
     async run(ctx, args) {
       const t = now();
       const from = nyMidnight(t, args.range === "tomorrow" ? 1 : 0);
+      // next_7_days: exactly 7 × 24 h (the RPC caps the window at 7 days), so it can end an hour off local midnight
+      // when a DST change falls inside.
       const to = args.range === "next_7_days" ? new Date(from.getTime() + 7 * DAY_MS) : nyMidnight(t, args.range === "tomorrow" ? 2 : 1);
       const { data, error } = await ctx.client
         .schema("core")
@@ -104,10 +113,26 @@ export function meetingsTool(now: () => Date = () => new Date()): ToolDescriptor
       if (error) throw new Error("calendar unavailable");
       const rows = Array.isArray(data) ? (data as Record<string, unknown>[]) : [];
       const meetings = rows.slice(0, 50).flatMap((r) => {
+        const allDay = r.all_day === true;
         const s = iso(r.start_at);
         const e = iso(r.end_at);
+        // All-day events: the calendar date itself (their instants are midnight in the event's own zone).
+        const date = typeof r.start_date === "string" && /^\d{4}-\d{2}-\d{2}$/.test(r.start_date) ? r.start_date : null;
+        if (allDay && date) {
+          return [
+            {
+              title: str(r.title) ?? "(No title)",
+              day: DAY.format(new Date(`${date}T12:00:00Z`)),
+              start: "all day",
+              end: "all day",
+              start_at: s ?? `${date}T00:00:00.000Z`,
+              end_at: e ?? `${date}T00:00:00.000Z`,
+              all_day: true,
+              location: str(r.location),
+            },
+          ];
+        }
         if (!s || !e) return [];
-        const allDay = r.all_day === true;
         return [
           {
             title: str(r.title) ?? "(No title)",
@@ -123,7 +148,7 @@ export function meetingsTool(now: () => Date = () => new Date()): ToolDescriptor
       });
       return {
         data: { range: args.range, count: meetings.length, meetings },
-        sources: [{ kind: "calendar", id: `calendar_${args.range}`, label: "Google Calendar", url: `/${ctx.laneId}/calendar` }],
+        sources: [{ kind: "calendar", id: `calendar_${args.range}`, label: "Calendar", url: `/${ctx.laneId}/calendar` }],
         asOf: t.toISOString(),
         freshness: "cached",
         notes: [],

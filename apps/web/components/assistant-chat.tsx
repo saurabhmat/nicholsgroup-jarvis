@@ -1,12 +1,12 @@
 "use client";
 // Assistant chat UI (T-106 demo scope). Streams /api/lanes/:laneId/assistant (server-sent events). Answers are shown
-// as plain text (React escapes everything); source chips link only to in-app paths. The conversation lives in this
-// component's state and is gone on reload.
+// as React text with **bold** only (never HTML); source chips link only to in-app paths and are not prefetched. The
+// conversation lives in this component's state and is gone on reload. Pure logic: lib/assistant-client.ts (tested).
 import Link from "next/link";
-import { useRef, useState, type FormEvent } from "react";
-import { Alert, AlertDescription, Badge, Button, cn } from "@nichols/ui";
+import { useEffect, useRef, useState, type FormEvent } from "react";
+import { Alert, AlertDescription, Badge, Button, cn, FreshnessBadge } from "@nichols/ui";
+import { asOfLabel, buildMessages, createSseParser, groupCitations, isInAppPath, type Citation } from "@/lib/assistant-client";
 
-type Citation = { kind: string; label: string; url: string | null; asOf: string; freshness: "live" | "cached" | "stale" };
 type Turn = {
   role: "user" | "assistant";
   text: string;
@@ -20,14 +20,17 @@ type Turn = {
 const TOOL_LABEL: Record<string, string> = { list_recent_mail: "Checking mail", list_meetings: "Checking the calendar" };
 const ERRORS: Record<string, string> = {
   not_configured: "The assistant is not set up yet.",
-  rate_limited: "The assistant is busy. Try again in a moment.",
+  rate_limited: "Too many questions in a minute. Try again shortly.",
+  forbidden: "The assistant is not available for your role here.",
+  session: "Your session has expired. Reload the page and sign in again.",
+  too_long: "This conversation is too long. Start a new chat.",
   aborted: "Stopped.",
+  cut_off: "The answer was cut off. Try again.",
   unavailable: "Something went wrong. Try again.",
   invalid_request: "That message could not be sent.",
 };
 const SUGGESTIONS = ["What needs my attention today?", "What's on my calendar today?", "Any important email I haven't read?"];
 const KIND_LABEL: Record<string, string> = { email: "Email", calendar: "Calendar" };
-const AS_OF = new Intl.DateTimeFormat("en-US", { timeZone: "America/New_York", hour: "numeric", minute: "2-digit" });
 
 /** Plain text with **bold** only: React elements, never HTML, so nothing in the answer can inject markup. */
 function Rich({ text }: { text: string }) {
@@ -47,13 +50,18 @@ function Rich({ text }: { text: string }) {
   );
 }
 
-const inApp = (u: string | null): u is string => typeof u === "string" && /^\/[A-Za-z0-9_][A-Za-z0-9_/-]*$/.test(u);
-
 export function AssistantChat({ laneId, sources }: { laneId: string; sources: string[] }) {
   const [turns, setTurns] = useState<Turn[]>([]);
   const [input, setInput] = useState("");
   const [busy, setBusy] = useState(false);
   const abort = useRef<AbortController | null>(null);
+  const inputRef = useRef<HTMLInputElement | null>(null);
+  const endRef = useRef<HTMLDivElement | null>(null);
+
+  // Keep the newest answer in view while it streams.
+  useEffect(() => {
+    endRef.current?.scrollIntoView({ block: "end", behavior: "smooth" });
+  }, [turns]);
 
   const update = (fn: (t: Turn) => Turn) =>
     setTurns((all) => {
@@ -66,57 +74,57 @@ export function AssistantChat({ laneId, sources }: { laneId: string; sources: st
   async function send(text: string) {
     const question = text.trim();
     if (!question || busy) return;
-    // History sent as plain text only; failed answers are left out so turns keep alternating.
-    const history = turns.filter((t) => !t.error && t.text).map((t) => ({ role: t.role, text: t.text.slice(0, 4000) }));
-    const clean: { role: "user" | "assistant"; text: string }[] = [];
-    for (const t of history) if (clean.length === 0 ? t.role === "user" : clean[clean.length - 1]?.role !== t.role) clean.push(t);
-    if (clean[clean.length - 1]?.role === "user") clean.pop();
-    const messages = [...clean.slice(-18), { role: "user" as const, text: question }];
+    const messages = buildMessages(turns, question);
     setTurns((all) => [...all, { role: "user", text: question }, { role: "assistant", text: "", tools: [], pending: true }]);
     setInput("");
     setBusy(true);
     const ctl = new AbortController();
     abort.current = ctl;
+    let finished = false;
     try {
       const res = await fetch(`/api/lanes/${encodeURIComponent(laneId)}/assistant`, {
         method: "POST",
         headers: { "content-type": "application/json" },
-        body: JSON.stringify({ messages: messages[0]?.role === "user" ? messages : messages.slice(1) }),
+        body: JSON.stringify({ messages }),
         signal: ctl.signal,
       });
       if (!res.ok || !res.body) {
-        const code = ((await res.json().catch(() => ({}))) as { error?: string }).error ?? "unavailable";
-        update((t) => ({ ...t, pending: false, error: ERRORS[code] ?? ERRORS.unavailable }));
+        const code = res.status === 401 ? "session" : ((await res.json().catch(() => ({}))) as { error?: string }).error ?? "unavailable";
+        update((t) => ({ ...t, error: ERRORS[code] ?? ERRORS.unavailable }));
+        finished = true;
         return;
       }
       const reader = res.body.getReader();
       const decoder = new TextDecoder();
-      let buf = "";
+      const parser = createSseParser();
+      const apply = (e: { type: string; [k: string]: unknown }) => {
+        if (e.type === "text.delta") update((t) => ({ ...t, text: t.text + String(e.text) }));
+        else if (e.type === "tool.start") update((t) => ({ ...t, tools: [...(t.tools ?? []), String(e.tool)] }));
+        else if (e.type === "citations") update((t) => ({ ...t, citations: e.citations as Citation[] }));
+        else if (e.type === "grounding") update((t) => ({ ...t, grounding: e.grounding as Turn["grounding"] }));
+        else if (e.type === "error") {
+          finished = true;
+          update((t) => ({ ...t, error: ERRORS[String(e.code)] ?? ERRORS.unavailable }));
+        } else if (e.type === "message.done") {
+          finished = true;
+          update((t) => ({ ...t, pending: false }));
+        }
+      };
       for (;;) {
         const { value, done } = await reader.read();
         if (done) break;
-        buf += decoder.decode(value, { stream: true });
-        let i: number;
-        while ((i = buf.indexOf("\n\n")) >= 0) {
-          const frame = buf.slice(0, i);
-          buf = buf.slice(i + 2);
-          const data = frame.split("\n").find((l) => l.startsWith("data: "));
-          if (!data) continue;
-          const e = JSON.parse(data.slice(6)) as { type: string; [k: string]: unknown };
-          if (e.type === "text.delta") update((t) => ({ ...t, text: t.text + String(e.text) }));
-          else if (e.type === "tool.start") update((t) => ({ ...t, tools: [...(t.tools ?? []), String(e.tool)] }));
-          else if (e.type === "citations") update((t) => ({ ...t, citations: e.citations as Citation[] }));
-          else if (e.type === "grounding") update((t) => ({ ...t, grounding: e.grounding as Turn["grounding"] }));
-          else if (e.type === "error") update((t) => ({ ...t, error: ERRORS[String(e.code)] ?? ERRORS.unavailable }));
-          else if (e.type === "message.done") update((t) => ({ ...t, pending: false }));
-        }
+        parser.push(decoder.decode(value, { stream: true })).forEach(apply);
       }
+      parser.push(decoder.decode()).forEach(apply);
+      parser.end().forEach(apply);
+      if (!finished) update((t) => ({ ...t, error: ERRORS.cut_off }));
     } catch {
-      update((t) => ({ ...t, error: ctl.signal.aborted ? ERRORS.aborted : ERRORS.unavailable }));
+      if (!finished) update((t) => ({ ...t, error: ctl.signal.aborted ? ERRORS.aborted : ERRORS.unavailable }));
     } finally {
       update((t) => ({ ...t, pending: false }));
       setBusy(false);
       abort.current = null;
+      inputRef.current?.focus();
     }
   }
 
@@ -124,12 +132,20 @@ export function AssistantChat({ laneId, sources }: { laneId: string; sources: st
     e.preventDefault();
     void send(input);
   };
+  const now = new Date();
 
   return (
     <div className="flex flex-col gap-4" data-testid="assistant-chat">
-      <p className="text-sm text-muted-foreground">
-        Reads {sources.join(" and ").toLowerCase()} for this company. It can explain and summarise; it cannot send, reply or change anything.
-      </p>
+      <div className="flex items-start justify-between gap-3">
+        <p className="text-sm text-muted-foreground">
+          Reads {sources.join(" and ").toLowerCase()} for this company. It can explain and summarise; it cannot send, reply or change anything.
+        </p>
+        {turns.length > 0 && !busy ? (
+          <Button type="button" variant="ghost" size="sm" onClick={() => setTurns([])}>
+            New chat
+          </Button>
+        ) : null}
+      </div>
       {turns.length === 0 ? (
         <div className="flex flex-wrap gap-2">
           {SUGGESTIONS.map((s) => (
@@ -144,20 +160,20 @@ export function AssistantChat({ laneId, sources }: { laneId: string; sources: st
           ))}
         </div>
       ) : (
-        <ol className="flex flex-col gap-4" aria-live="polite">
+        <ol className="flex flex-col gap-4">
           {turns.map((t, i) => (
             <li key={i} className={cn("flex", t.role === "user" ? "justify-end" : "justify-start")}>
               {t.role === "user" ? (
-                <div className="max-w-[85%] rounded-card bg-primary px-4 py-2 text-sm text-primary-foreground whitespace-pre-wrap">{t.text}</div>
+                <div className="max-w-[85%] whitespace-pre-wrap break-words rounded-card bg-primary px-4 py-2 text-sm text-primary-foreground">{t.text}</div>
               ) : (
-                <div className="flex max-w-[95%] flex-col gap-2 rounded-card border border-border bg-card px-4 py-3 text-sm">
+                <div className="flex w-full max-w-[95%] flex-col gap-2 rounded-card border border-border bg-card px-4 py-3 text-sm">
                   {t.pending && !t.text ? (
-                    <p className="text-muted-foreground" data-testid="assistant-progress">
+                    <p className="text-muted-foreground" data-testid="assistant-progress" aria-live="polite">
                       {t.tools?.length ? `${TOOL_LABEL[t.tools[t.tools.length - 1] ?? ""] ?? "Working"}…` : "Thinking…"}
                     </p>
                   ) : null}
                   {t.text ? (
-                    <div className="whitespace-pre-wrap leading-relaxed text-foreground">
+                    <div className="whitespace-pre-wrap break-words leading-relaxed text-foreground">
                       <Rich text={t.text} />
                     </div>
                   ) : null}
@@ -173,15 +189,30 @@ export function AssistantChat({ laneId, sources }: { laneId: string; sources: st
                   ) : null}
                   {t.citations?.length ? (
                     <ul className="flex flex-wrap gap-1.5" aria-label="Sources">
-                      {t.citations.slice(0, 8).map((c, j) => {
+                      {groupCitations(t.citations).map((c, j) => {
                         const chip = (
-                          <span className="inline-flex max-w-64 items-center gap-1.5 truncate rounded-control border border-border bg-background px-2 py-1 text-xs text-muted-foreground">
+                          <span className="inline-flex max-w-full items-center gap-1.5 rounded-control border border-border bg-background px-2 py-1 text-xs text-muted-foreground">
                             <span className="font-medium text-foreground">{KIND_LABEL[c.kind] ?? c.kind}</span>
-                            <span className="truncate">{c.label}</span>
-                            <span>· {AS_OF.format(new Date(c.asOf))}</span>
+                            <span className="max-w-48 truncate">{c.label}</span>
+                            {c.more ? null : (
+                              <>
+                                <span>· {asOfLabel(c.asOf, now)}</span>
+                                <FreshnessBadge freshness={c.freshness} className="text-[10px]" />
+                              </>
+                            )}
                           </span>
                         );
-                        return <li key={j}>{inApp(c.url) ? <Link href={c.url}>{chip}</Link> : chip}</li>;
+                        return (
+                          <li key={j} className="max-w-full">
+                            {isInAppPath(c.url) ? (
+                              <Link href={c.url} prefetch={false}>
+                                {chip}
+                              </Link>
+                            ) : (
+                              chip
+                            )}
+                          </li>
+                        );
                       })}
                     </ul>
                   ) : null}
@@ -191,18 +222,21 @@ export function AssistantChat({ laneId, sources }: { laneId: string; sources: st
           ))}
         </ol>
       )}
-      <form onSubmit={onSubmit} className="sticky bottom-0 flex gap-2 bg-background py-2">
+      <div ref={endRef} />
+      <form onSubmit={onSubmit} className="sticky bottom-0 flex gap-2 bg-background py-2 pb-[max(0.5rem,env(safe-area-inset-bottom))]">
         <label htmlFor="assistant-input" className="sr-only">
           Ask the assistant
         </label>
         <input
           id="assistant-input"
+          ref={inputRef}
           value={input}
           onChange={(e) => setInput(e.target.value)}
           maxLength={4000}
+          enterKeyHint="send"
           placeholder="Ask about your mail or calendar…"
-          className="min-w-0 flex-1 rounded-control border border-border bg-card px-3 py-2 text-sm text-foreground placeholder:text-muted-foreground focus:outline-none focus:ring-2 focus:ring-ring"
-          disabled={busy}
+          className="min-w-0 flex-1 rounded-control border border-border bg-card px-3 py-2 text-base text-foreground placeholder:text-muted-foreground focus:outline-none focus:ring-2 focus:ring-ring sm:text-sm"
+          readOnly={busy}
         />
         {busy ? (
           <Button type="button" variant="outline" onClick={() => abort.current?.abort()}>
@@ -213,11 +247,6 @@ export function AssistantChat({ laneId, sources }: { laneId: string; sources: st
             Ask
           </Button>
         )}
-        {turns.length > 0 && !busy ? (
-          <Button type="button" variant="ghost" onClick={() => setTurns([])}>
-            New chat
-          </Button>
-        ) : null}
       </form>
     </div>
   );

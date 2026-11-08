@@ -96,6 +96,13 @@ describe("grounding", () => {
     expect(checkGrounding("MRR is $12,345.00 and churn 4.5%.", results)).toEqual({ status: "passed", unverified: [] });
     expect(checkGrounding("MRR is $12,500 (up 3%).", results)).toEqual({ status: "failed", unverified: ["$12,500", "3%"] });
     expect(checkGrounding("You have 3 meetings.", results).status).toBe("not_applicable");
+    expect(checkGrounding("$12,345 exactly", results).status).toBe("passed");
+  });
+  it("does not count ids or timestamps as support, normalises decimals, accepts figures from the conversation", () => {
+    const r = [{ tool: mailTool(), toolUseId: "t", result: { data: { id: "m_5", at: "2026-11-10T11:05:00Z", price: "$1.50" }, sources: [], asOf: "", freshness: "cached" as const, notes: [] } }];
+    expect(checkGrounding("Up 5% to $11.", r)).toEqual({ status: "failed", unverified: ["5%", "$11"] });
+    expect(checkGrounding("It costs $1.5.", r).status).toBe("passed");
+    expect(checkGrounding("As you said, $900 and 7%.", [], "budget is $900, growth 7%").status).toBe("passed");
   });
 });
 
@@ -104,6 +111,11 @@ describe("catalog tools", () => {
     expect(nyMidnight(NOW).toISOString()).toBe("2026-11-10T05:00:00.000Z");
     expect(nyMidnight(new Date("2026-07-01T12:00:00Z")).toISOString()).toBe("2026-07-01T04:00:00.000Z");
     expect(nyMidnight(new Date("2026-11-11T03:00:00Z")).toISOString()).toBe("2026-11-10T05:00:00.000Z");
+    // DST change days: midnight is still in the old offset.
+    expect(nyMidnight(new Date("2026-11-01T12:00:00Z")).toISOString()).toBe("2026-11-01T04:00:00.000Z");
+    expect(nyMidnight(new Date("2027-03-14T12:00:00Z")).toISOString()).toBe("2027-03-14T05:00:00.000Z");
+    expect(nyMidnight(new Date("2026-10-31T15:00:00Z"), 1).toISOString()).toBe("2026-11-01T04:00:00.000Z");
+    expect(nyMidnight(new Date("2026-10-31T15:00:00Z"), 2).toISOString()).toBe("2026-11-02T05:00:00.000Z");
   });
   it("mail reads metadata through the user's client for the lane, drops malformed rows, links sources in-app", async () => {
     const calls: { fn: string; args: Record<string, unknown> }[] = [];
@@ -122,9 +134,32 @@ describe("catalog tools", () => {
     expect(calls[0]?.args).toEqual({ p_lane: "PKG", p_from: "2026-11-11T05:00:00.000Z", p_to: "2026-11-12T05:00:00.000Z" });
     expect((r.data as { meetings: unknown[] }).meetings[0]).toMatchObject({ title: "Leadership sync", start: "2:30 PM", end: "3:00 PM" });
   });
+  it("shows all-day events on their own date", async () => {
+    const client = {
+      schema: () => ({
+        rpc: async () => ({
+          data: [{ title: "Offsite", start_at: "2026-11-11T00:00:00Z", end_at: "2026-11-12T00:00:00Z", start_date: "2026-11-11", all_day: true, location: null }],
+          error: null,
+        }),
+      }),
+    };
+    const ctx = { laneId: "PKG", userId: USER, role: "owner", client } as unknown as ToolContext;
+    const r = await meetingsTool(() => NOW).run(ctx, { range: "tomorrow" });
+    expect((r.data as { meetings: unknown[] }).meetings[0]).toMatchObject({ title: "Offsite", day: "Wed, Nov 11", start: "all day" });
+  });
 });
 
 describe("runChatTurn", () => {
+  it("separates text from different model steps", async () => {
+    const s = setup([
+      { ...toolUse("list_meetings", { range: "today" }), content: [{ type: "text", text: "Let me check your calendar." }, { type: "tool_use", id: "tu_m", name: "list_meetings", input: {} }] },
+      answer("You have one meeting."),
+    ]);
+    const deltas: string[] = [];
+    await runChatTurn({ ...s, laneId: "PKG", laneName: "P", categories: ["calendar"], request: { messages: [{ role: "user", text: "q" }] }, now: NOW, emit: (e) => void (e.type === "text.delta" && deltas.push(e.text)) });
+    expect(deltas.join("")).toBe("Let me check your calendar.\n\nYou have one meeting.");
+  });
+
   it("streams events, calls tools through the gate, wraps mail subjects, cites sources", async () => {
     const s = setup([toolUse("list_recent_mail", {}), toolUse("list_meetings", { range: "today" }), answer("Dana sent the board pack. Leadership sync at 2:30 PM.")]);
     const events: ChatEvent[] = [];
@@ -158,9 +193,11 @@ describe("runChatTurn", () => {
     expect(s.provider.calls[0]?.tools?.map((t) => t.name)).toEqual(["list_recent_mail", "list_meetings"]);
   });
 
-  it("offers no tools when the lane allows no categories", async () => {
-    const s = setup([answer("I can't read your data here.")]);
-    await runChatTurn({ ...s, laneId: "PKG", laneName: "P", categories: [], request: { messages: [{ role: "user", text: "q" }] }, now: NOW, emit: () => undefined });
-    expect(s.provider.calls[0]?.tools).toBeUndefined();
+  it("never calls the model for a caller without categories", async () => {
+    const s = setup([answer("x")]);
+    await expect(
+      runChatTurn({ ...s, laneId: "PKG", laneName: "P", categories: [], request: { messages: [{ role: "user", text: "q" }] }, now: NOW, emit: () => undefined }),
+    ).rejects.toThrow(/categories/);
+    expect(s.provider.calls).toHaveLength(0);
   });
 });

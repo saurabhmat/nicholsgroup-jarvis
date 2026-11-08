@@ -39,7 +39,33 @@ export type Database = {
           }
         },"core": {
           Tables: {
-            "ai_tool_rate": {
+            "ai_chat_rate": {
+                  Row: {
+                    "lane_id": string,"turns": number,"user_id": string,"window_start": string
+                  }
+                  ComputedFields: never
+                  Insert: {
+                    "lane_id": string,"turns"?: number,"user_id": string,"window_start": string
+                  }
+                  Update: {
+                    "lane_id"?: string,"turns"?: number,"user_id"?: string,"window_start"?: string
+                  }
+                  Relationships: [
+                    {
+      foreignKeyName: "ai_chat_rate_lane_id_fkey"
+      columns: ["lane_id"]
+isOneToOne: false
+      referencedRelation: "lanes"
+      referencedColumns: ["code"]
+    },{
+      foreignKeyName: "ai_chat_rate_user_id_fkey"
+      columns: ["user_id"]
+isOneToOne: false
+      referencedRelation: "users"
+      referencedColumns: ["id"]
+    }
+                  ]
+                },"ai_tool_rate": {
                   Row: {
                     "calls": number,"lane_id": string,"user_id": string,"window_start": string
                   }
@@ -369,7 +395,10 @@ isOneToOne: false
                 }
           }
           Functions: {
-            "ai_tool_categories":
+            "ai_chat_turn":
+{ Args: { "p_lane": string }; Returns: Json
+                           },
+"ai_tool_categories":
 { Args: { "p_lane": string }; Returns: (string)[]
                            },
 "ai_tool_gate":

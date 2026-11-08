@@ -1,6 +1,6 @@
 -- core.ai_tool_categories (T-105): the caller's allowed tool categories, or {} (cross-lane, viewer, admin, AAL1).
 begin;
-select plan(9);
+select plan(10);
 \ir helpers/lane_rls.psql
 
 update core.lanes set enabled = true where code = 'APK';
@@ -27,6 +27,7 @@ select is(pg_temp.cats('owner@example.test', 'APK'), '{}'::text[], 'cross-lane: 
 select is(pg_temp.cats('viewer@example.test', 'PKG'), '{}'::text[], 'viewer (no assistant view) gets none');
 select is(pg_temp.cats('admin-technical@example.test', 'PKG'), '{}'::text[], 'admin_technical gets none');
 select is(pg_temp.cats('outsider@example.test', 'PKG'), '{}'::text[], 'outsider gets none');
+select is(pg_temp.cats('owner@example.test', 'NC'), '{}'::text[], 'disabled lane gets none');
 
 select * from finish();
 rollback;
