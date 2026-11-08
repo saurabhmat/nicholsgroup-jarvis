@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import type { GroupView } from "@nichols/brain/interview";
+import { TEMPLATE_FILES } from "@nichols/brain/domain";
+import { buildGroups, setSection, type GroupView } from "@nichols/brain/interview";
 import { activeQuestions, buildAnswers, callInterview, canPreview, initialValues, isInterviewRequest, issueLabel, nextGroupId } from "./brain-interview-client";
 
 const group = (over: Partial<GroupView> = {}): GroupView => ({
@@ -46,12 +47,42 @@ describe("form values", () => {
 });
 
 describe("navigation and labels", () => {
-  const gs = [group({ id: "A-1", done: true }), group({ id: "A-2", done: false }), group({ id: "B-1", done: false })];
-  it("moves to the next group that is not done or skipped, then wraps, then null", () => {
+  const gs = [group({ id: "A-1", done: true }), group({ id: "A-2", done: false }), group({ id: "B-1", part: "B", done: false }), group({ id: "B-2", part: "B", done: false })];
+  it("moves to the next group not yet visited, never wraps, and ends at the summary", () => {
     expect(nextGroupId(gs, null, new Set())).toBe("A-2");
-    expect(nextGroupId(gs, "A-2", new Set())).toBe("B-1");
-    expect(nextGroupId(gs, "B-1", new Set())).toBe("A-2");
-    expect(nextGroupId(gs, "A-2", new Set(["A-2", "B-1"]))).toBeNull();
+    expect(nextGroupId(gs, "A-2", new Set(["A-2"]))).toBe("B-1");
+    expect(nextGroupId(gs, "B-1", new Set(["A-2", "B-1"]))).toBe("B-2");
+    expect(nextGroupId(gs, "B-2", new Set(["A-2", "B-1", "B-2"]))).toBeNull();
+    expect(nextGroupId(gs, "A-2", new Set(["B-1"]))).toBe("B-2");
+  });
+  it("with an existing employee the start skips Part B (summary), but moving on within a session does not", () => {
+    expect(nextGroupId(gs, null, new Set(["A-2"]), true)).toBeNull();
+    expect(nextGroupId(gs, "B-1", new Set(["B-1"]), true)).toBe("B-2");
+  });
+  it("walks the real bank through all ten groups to the summary, from nothing and from a stored employee", () => {
+    const lane = { laneId: "TST", name: "Test Co", mailboxes: ["ops@example.test"], kpis: ["mrr"], connected: [], policy: { write_actions_allowed: ["email_draft"], store_outbound_drafts: true, llm_allowed_categories: ["email"] }, financeView: true };
+    const ctx = { home: "TST", current: "TST", lanes: [lane], timezones: ["UTC"] };
+    const groups = buildGroups({ about_me: null, preferences: null, work: null, pa: null }, null, ctx);
+    const seen: string[] = [];
+    let id = nextGroupId(groups, null, new Set());
+    const visited = new Set<string>();
+    while (id !== null && seen.length < 20) {
+      seen.push(id);
+      visited.add(id);
+      id = nextGroupId(groups, id, visited);
+    }
+    expect(seen).toEqual(["A-1", "A-2", "A-3", "A-4", "B-1", "B-2", "B-3", "B-4", "B-5", "B-6"]);
+    // All Part A sections known: A-groups are not asked again; with no employee Part B still is.
+    const known = "Filled in.";
+    const docs = {
+      about_me: ["Name and how to address me", "Scope of this brain", "Timezone", "Routine and constraints", "First task for Jarvis"].reduce((b, h) => setSection(b, h, known), TEMPLATE_FILES["Context/About-Me.md"] as string),
+      preferences: ["Writing", "Delivery of information", "Always ask me first", "Never do"].reduce((b, h) => setSection(b, h, known), TEMPLATE_FILES["Context/Preferences.md"] as string),
+      work: ["My role here", "What the company does", "Key people"].reduce((b, h) => setSection(b, h, known), TEMPLATE_FILES["Context/Work.md"] as string),
+      pa: null,
+    };
+    const filled = buildGroups(docs, null, ctx);
+    expect(filled.filter((g) => g.part === "A").every((g) => g.done)).toBe(true);
+    expect(nextGroupId(filled, null, new Set())).toBe("B-1");
   });
   it("labels an issue with the question and field", () => {
     expect(issueLabel({ code: "invalid_answer", path: "A1.name" }, group())).toContain("What should Jarvis call you? (Name)");
@@ -59,6 +90,7 @@ describe("navigation and labels", () => {
   it("recognises typed requests to start the setup, and nothing longer or vaguer", () => {
     expect(isInterviewRequest("Set up my brain")).toBe("setup");
     expect(isInterviewRequest("let's reconfigure my personal assistant")).toBe("assistant");
+    expect(isInterviewRequest("change my briefing time to 7")).toBeNull();
     expect(isInterviewRequest("What needs my attention today?")).toBeNull();
     expect(isInterviewRequest(`set up my brain ${"x".repeat(100)}`)).toBeNull();
   });

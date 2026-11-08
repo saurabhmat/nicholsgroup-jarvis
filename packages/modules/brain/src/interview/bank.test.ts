@@ -77,6 +77,13 @@ describe("question bank (docs/specs/brain-interview.md)", () => {
     }
   });
 
+  it("every page target of a Part A group is the same document", () => {
+    for (const g of GROUPS.filter((x) => x.part === "A")) {
+      const docs = new Set(g.questionIds.flatMap((id) => questionById(id)?.targets.map((t) => t.doc) ?? []));
+      expect(docs.size, g.id).toBe(1);
+    }
+  });
+
   it("asks for no passwords, codes, keys or account numbers", () => {
     for (const q of QUESTIONS) expect(`${q.prompt} ${q.fields.map((f) => f.label).join(" ")}`).not.toMatch(/password|passcode|api key|secret|account number|routing number|card number/i);
   });

@@ -58,6 +58,7 @@ export function AssistantChat({ laneId, sources, brainSetup = false }: { laneId:
   const [turns, setTurns] = useState<Turn[]>([]);
   // The setup interview runs in this thread (T-216). It is not a model call: the questions come from the question bank.
   const [interview, setInterview] = useState<"setup" | "assistant" | null>(null);
+  const [interviewKey, setInterviewKey] = useState(0);
   const [input, setInput] = useState("");
   const [busy, setBusy] = useState(false);
   const abort = useRef<AbortController | null>(null);
@@ -84,8 +85,8 @@ export function AssistantChat({ laneId, sources, brainSetup = false }: { laneId:
     if (kind) {
       setTurns((all) => [...all, { role: "user", text: question }, { role: "assistant", text: INTERVIEW_INTRO }]);
       setInput("");
-      setInterview(null);
-      setTimeout(() => setInterview(kind), 0); // remount, so a second request restarts from the saved state
+      setInterview(kind);
+      setInterviewKey((k) => k + 1); // remount, so a second request restarts from the saved state
       return;
     }
     const messages = buildMessages(turns, question);
@@ -248,7 +249,7 @@ export function AssistantChat({ laneId, sources, brainSetup = false }: { laneId:
           ))}
         </ol>
       )}
-      {interview ? <BrainInterview laneId={laneId} mode="chat" startAt={interview} /> : null}
+      {interview ? <BrainInterview key={interviewKey} laneId={laneId} mode="chat" startAt={interview} /> : null}
       <div ref={endRef} />
       <form onSubmit={onSubmit} className="sticky bottom-0 flex gap-2 bg-background py-2 pb-[max(0.5rem,env(safe-area-inset-bottom))]">
         <label htmlFor="assistant-input" className="sr-only">

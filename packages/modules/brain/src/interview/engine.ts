@@ -208,7 +208,8 @@ export function buildGroups(docs: Docs, employeeConfig: EmployeeConfig | null, c
         if (Object.keys(prefill).length > 0) view.prefill = prefill;
         return view;
       });
-    // A group is done when nothing in it still needs an answer. Part B groups count as done once the employee exists.
+    // Part A: done when every section is known. Part B has no per-group marker (no SQL): it counts as done once the
+    // employee exists, for display only. Routing through the groups never uses this for Part B (the UI tracks the session).
     const done = g.part === "A" ? questions.every((qv) => qv.status !== "ask") : employeeConfig !== null;
     return { id: g.id, part: g.part, title: g.title, saves: g.saves, questions, done };
   });

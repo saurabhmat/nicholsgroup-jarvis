@@ -949,3 +949,12 @@ Built without SQL. Reviews pending (run by the parent agent). Decisions and item
 - **L (home lane):** About-Me, Preferences and the employee go to `resolveHomeLane` (existing About-Me lane, else the lane the user is in); the "Personal lane code from configuration" input is not wired yet (same as T-210/T-211 notes).
 - **L (lane facts read per request):** `buildEnv` reads lane_config, lane_policies and the Google connection state for each lane the user has the brain view in (at most 10), on every interview call. Add a short cache if it shows in timings.
 - **L (e2e not run):** `apps/web/e2e/brain-interview.spec.ts` (iPhone-width viewport) was written but not run: Playwright's global setup resets the local database, which would wipe local connections.
+
+### T-216 review follow-ups (Nov 8, 2026)
+Security + code review run; no BLOCKER; the HIGH and the listed MEDIUM/LOW items were fixed (see `.agent/pr/T-216.md`). Logged, not fixed:
+- **Rule 2 exception (deliberate):** the Nichols Law screen is a named constant (`EXCLUDED_ENTITY_PATTERN`) because no `lane_config` or policy field lists excluded entities; the spec and pilot-scope rule 13 require the exclusion. Move it to configuration if such a field is added.
+- **L (code L4):** `isInterviewRequest` is a client-side regex on short messages; a rare phrase may still start the interview instead of asking the model. Tightened (no "change"/"briefing"), not made smarter.
+- **L (code L6):** lane facts are read on every interview call (also logged above).
+- **L (sec L4, T-213):** `roleFor` in the interview is "owner" for every lane the brain view opens in (the view is owner-only); T-213 must read the real role per lane.
+- **L (sec L5, T-210 follow-up):** the SSN/card screen in the store and in SQL does not fold zero-width characters; the interview folds before its own screen, but the store and `brain.document_save` need the same fold (TypeScript and SQL).
+- **L (e2e):** `apps/web/e2e/brain-interview.spec.ts` still not run (global setup resets the local DB).

@@ -101,7 +101,10 @@ export function answerTexts(answers: Answers): string[] {
   const walk = (v: unknown): void => {
     if (typeof v === "string") out.push(v);
     else if (Array.isArray(v)) v.forEach(walk);
-    else if (v !== null && typeof v === "object") Object.values(v).forEach(walk);
+    else if (v !== null && typeof v === "object") for (const [k, x] of Object.entries(v)) {
+      out.push(k);
+      walk(x);
+    }
   };
   walk(answers);
   return out;

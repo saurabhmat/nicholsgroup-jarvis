@@ -92,7 +92,7 @@ export const QUESTIONS: readonly Question[] = [
     fields: [longtext("first_task", "First task", about("First task for Jarvis"))],
     targets: [about("First task for Jarvis")],
     configTargets: [],
-    skip: "none",
+    skip: "known",
   },
   {
     id: "A4",

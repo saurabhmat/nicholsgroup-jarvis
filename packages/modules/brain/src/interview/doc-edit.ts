@@ -10,12 +10,19 @@ export function cleanText(input: string, max: number): string {
     .replace(/\r\n?/g, "\n")
     .replace(CONTROL, "")
     .split("\n")
-    .map((l) => l.replace(/\s+$/, "").replace(/^\s*#{1,6}(\s|$)/, ""))
+    .map((l) => stripHeading(l.replace(/\s+$/, "")))
     .join("\n")
     .replace(/\n{3,}/g, "\n\n")
     .trim()
     .slice(0, max)
     .trim();
+}
+
+/** Removes leading "#" markers (any number, any spacing), so a line can never become a heading. */
+function stripHeading(line: string): string {
+  let out = line;
+  for (let i = 0; i < 50 && /^\s*#/.test(out); i++) out = out.replace(/^\s*#+\s*/, "");
+  return out;
 }
 
 export const oneLine = (s: string): string => s.replace(/\s*\n\s*/g, " ").trim();
@@ -78,9 +85,16 @@ export function setLine(body: string, heading: string, prefix: string, newLine: 
 }
 
 /** Line diff with one line of context. Unchanged runs longer than that collapse to a single "same" gap marker line. */
+/** Largest line-count product the exact diff is computed for (memory and time are quadratic). */
+export const MAX_DIFF_CELLS = 250_000;
+
 export function diffLines(before: string, after: string, context = 1): DiffLine[] {
   const a = before.split("\n");
   const b = after.split("\n");
+  if (a.length * b.length > MAX_DIFF_CELLS) {
+    // Too large for a line diff: show the whole old text removed and the whole new text added.
+    return [...a.map((text) => ({ type: "del" as const, text })), ...b.map((text) => ({ type: "add" as const, text }))];
+  }
   const n = a.length;
   const m = b.length;
   const lcs: number[][] = Array.from({ length: n + 1 }, () => new Array<number>(m + 1).fill(0));

@@ -5,7 +5,7 @@
 // (waits for T-213) -> activate. Connecting an account is never done here: a missing source links to Settings ->
 // Connections. All text is rendered as React text (never HTML). Single column and 44 px targets for the iPhone.
 import Link from "next/link";
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { Alert, AlertDescription, AlertTitle, Badge, Button, cn } from "@nichols/ui";
 import type { FieldView, GroupView, QuestionView } from "@nichols/brain/interview";
 import type { InterviewState, Proposal } from "@nichols/brain/server";
@@ -25,7 +25,7 @@ import {
 type View = { kind: "group"; id: string } | { kind: "review" } | { kind: "sections" };
 
 const control =
-  "w-full min-w-0 rounded-control border border-border bg-card px-3 py-2 text-base text-foreground placeholder:text-muted-foreground focus:outline-none focus:ring-2 focus:ring-ring sm:text-sm";
+  "min-h-11 w-full min-w-0 rounded-control border border-border bg-card px-3 py-2 text-base text-foreground placeholder:text-muted-foreground focus:outline-none focus:ring-2 focus:ring-ring sm:text-sm";
 const tap = "min-h-11 w-full sm:w-auto";
 
 const NOTE_LABEL = { connected: "Connected", not_connected: "Not connected yet", unknown: "Connection unknown" } as const;
@@ -215,6 +215,12 @@ function DiffCard({ proposal }: { proposal: Proposal }) {
           <p className="text-sm font-medium text-foreground">
             {c.kind === "document" ? `${c.path} (${c.lane})` : `${c.name}, Personal Assistant profile (${c.lane}), stays ${c.status}`}
           </p>
+          {c.kind === "employee" && c.resetsInvalid ? (
+            <Alert variant="alert" data-testid="interview-reset-warning">
+              <AlertTitle>The stored assistant profile is not valid</AlertTitle>
+              <AlertDescription>Saving replaces its settings with the ones below, starting from the defaults. Check them before you save.</AlertDescription>
+            </Alert>
+          ) : null}
           <pre className="max-w-full overflow-x-auto whitespace-pre-wrap break-words rounded-control bg-card p-2 text-xs leading-relaxed">
             {c.diff.map((l, j) => (
               <span key={j} className={cn("block", l.type === "add" && "bg-success-surface text-foreground", l.type === "del" && "bg-alert-surface text-alert-foreground line-through")}>
@@ -248,8 +254,28 @@ export function BrainInterview({ laneId, mode, startAt }: { laneId: string; mode
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<ApiErr | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
-  const [skipped, setSkipped] = useState<Set<string>>(new Set());
+  const [visited, setVisited] = useState<Set<string>>(new Set());
   const [confirmed, setConfirmed] = useState(false);
+  const headRef = useRef<HTMLHeadingElement | null>(null);
+  const proposalRef = useRef<HTMLDivElement | null>(null);
+  const first = useRef(true);
+  const viewKey = view ? (view.kind === "group" ? `g:${view.id}` : view.kind) : "";
+
+  // Keyboard and screen-reader users land on the new step; the first render does not steal focus from the page.
+  useEffect(() => {
+    if (!viewKey) return;
+    if (first.current) {
+      first.current = false;
+      return;
+    }
+    headRef.current?.scrollIntoView?.({ block: "nearest" });
+    headRef.current?.focus();
+  }, [viewKey]);
+  useEffect(() => {
+    if (!proposal) return;
+    proposalRef.current?.scrollIntoView?.({ block: "nearest" });
+    proposalRef.current?.focus();
+  }, [proposal]);
 
   const openGroup = useCallback((g: GroupView, asEdit: boolean) => {
     setValues(initialValues(g));
@@ -260,9 +286,9 @@ export function BrainInterview({ laneId, mode, startAt }: { laneId: string; mode
   }, []);
 
   const route = useCallback(
-    (s: InterviewState, after: string | null, skip: Set<string>) => {
-      const hint = after === null ? (startAt === "assistant" ? (s.groups.find((g) => g.part === "B" && !g.done)?.id ?? null) : null) : null;
-      const id = hint ?? nextGroupId(s.groups, after, skip);
+    (s: InterviewState, after: string | null, seen: Set<string>) => {
+      const hint = after === null && startAt === "assistant" ? (s.groups.find((g) => g.part === "B")?.id ?? null) : null;
+      const id = hint ?? nextGroupId(s.groups, after, seen, s.employee !== null);
       const g = id ? s.groups.find((x) => x.id === id) : undefined;
       if (g) openGroup(g, false);
       else setView({ kind: "review" });
@@ -315,15 +341,17 @@ export function BrainInterview({ laneId, mode, startAt }: { laneId: string; mode
       if (r.code === "proposal_changed" || r.code === "version_conflict") setProposal(null);
       return fail(r);
     }
+    const seen = new Set(visited).add(g.id);
+    setVisited(seen);
     setState(r.data.state);
     setNotice(`Saved: ${g.title}.`);
     setConfirmed(false);
-    route(r.data.state, g.id, skipped);
+    route(r.data.state, g.id, seen);
   }
 
   const skip = (g: GroupView) => {
-    const next = new Set(skipped).add(g.id);
-    setSkipped(next);
+    const next = new Set(visited).add(g.id);
+    setVisited(next);
     route(state, g.id, next);
   };
 
@@ -383,7 +411,7 @@ export function BrainInterview({ laneId, mode, startAt }: { laneId: string; mode
       {view.kind === "group" && groupView ? (
         <div className="flex flex-col gap-4" data-testid="interview-group">
           <div className="flex items-center justify-between gap-2">
-            <h3 className="text-sm font-semibold text-foreground">
+            <h3 ref={headRef} tabIndex={-1} className="text-sm font-semibold text-foreground outline-none">
               {groupView.title} <span className="font-normal text-muted-foreground">· saves to {groupView.saves}</span>
             </h3>
             <Button size="sm" variant="ghost" className="min-h-11" onClick={() => setView({ kind: "sections" })}>
@@ -406,6 +434,12 @@ export function BrainInterview({ laneId, mode, startAt }: { laneId: string; mode
                 You can still choose a mailbox now; it is read once it is connected. Connecting is done only in Settings.
               </AlertDescription>
             </Alert>
+          ) : null}
+
+          {groupView.questions.some((q) => q.id === "A5") && state.sources.length > 1 ? (
+            <p className="text-xs text-muted-foreground" data-testid="interview-other-companies">
+              This covers {state.sources.find((s) => s.laneId === state.currentLane)?.laneName ?? "this company"} only. Open the assistant in each other company to answer these for it too.
+            </p>
           ) : null}
 
           {groupView.questions.map((q) => {
@@ -451,7 +485,7 @@ export function BrainInterview({ laneId, mode, startAt }: { laneId: string; mode
           })}
 
           {proposal ? (
-            <div className="flex flex-col gap-3" data-testid="interview-proposal">
+            <div ref={proposalRef} tabIndex={-1} className="flex flex-col gap-3 outline-none" data-testid="interview-proposal">
               <h4 className="text-sm font-semibold text-foreground">Here is the change. Nothing is saved yet.</h4>
               {proposal.changes.length === 0 ? <p className="text-sm text-muted-foreground">Nothing would change.</p> : <DiffCard proposal={proposal} />}
               <div className="flex flex-col gap-2 sm:flex-row">
@@ -460,7 +494,11 @@ export function BrainInterview({ laneId, mode, startAt }: { laneId: string; mode
                     {busy ? "Saving…" : "Save"}
                   </Button>
                 ) : (
-                  <Button className={tap} onClick={() => route(state, groupView.id, skipped)}>
+                  <Button className={tap} onClick={() => {
+                      const seen = new Set(visited).add(groupView.id);
+                      setVisited(seen);
+                      route(state, groupView.id, seen);
+                    }}>
                     Next
                   </Button>
                 )}
@@ -541,6 +579,11 @@ export function BrainInterview({ laneId, mode, startAt }: { laneId: string; mode
               <p className="text-sm text-foreground">
                 {state.employee.name}, your Personal Assistant: <Badge variant={state.employee.status === "active" ? "success" : "muted"}>{state.employee.status}</Badge>
               </p>
+              {state.employee.invalid ? (
+                <Alert variant="alert" data-testid="interview-invalid-profile">
+                  <AlertDescription>The stored profile is not valid, so it cannot be confirmed or activated. Save any Personal Assistant section to review a reset.</AlertDescription>
+                </Alert>
+              ) : null}
               <ul className="flex flex-col gap-1 text-xs text-muted-foreground" aria-label="What it may propose">
                 {state.employee.permissions.map((p) => (
                   <li key={p.lane} className="break-words">

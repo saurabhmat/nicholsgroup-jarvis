@@ -116,10 +116,18 @@ export function canPreview(group: GroupView, values: FormValues, editing: Readon
   );
 }
 
-/** The groups in asking order: the next one after `afterId` that is not done and not already skipped this time. */
-export function nextGroupId(groups: readonly GroupView[], afterId: string | null, skipped: ReadonlySet<string>): string | null {
+/**
+ * The next group to ask, in bank order. `visited` = groups saved or skipped in this session, never asked again. Part A
+ * groups whose sections are all known are skipped. At the start (afterId null) Part B is skipped when the employee
+ * already exists (go to the summary; the user picks sections to change). There is no wrap-around: null = go to the summary.
+ */
+export function nextGroupId(groups: readonly GroupView[], afterId: string | null, visited: ReadonlySet<string>, hasEmployee = false): string | null {
   const start = afterId === null ? 0 : groups.findIndex((g) => g.id === afterId) + 1;
-  return groups.slice(start).find((g) => !g.done && !skipped.has(g.id))?.id ?? groups.find((g) => !g.done && !skipped.has(g.id))?.id ?? null;
+  return (
+    groups
+      .slice(start)
+      .find((g) => !visited.has(g.id) && !(g.part === "A" && g.done) && !(afterId === null && g.part === "B" && hasEmployee))?.id ?? null
+  );
 }
 
 /** "Pick a mailbox" style label for an issue path like `B2.mailboxes.0`. */
@@ -142,7 +150,7 @@ export function issueLabel(issue: { code: string; path: string }, group: GroupVi
 export function isInterviewRequest(text: string): "setup" | "assistant" | null {
   const t = text.trim().toLowerCase();
   if (t.length > 80) return null;
-  if (/\b(set ?up|configure|reconfigure|change)\b.*\b(personal assistant|briefing|pa)\b/.test(t)) return "assistant";
+  if (/\b(set ?up|configure|reconfigure)\b.*\b(personal assistant)\b/.test(t)) return "assistant";
   if (/\b(set ?up|reconfigure|configure|start)\b.*\b(brain|profile)\b/.test(t)) return "setup";
   return null;
 }

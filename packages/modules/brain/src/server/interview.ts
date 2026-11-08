@@ -20,6 +20,7 @@ import {
   LANE_SEED_DOCUMENTS,
   type ActionType,
   type EffectivePermissions,
+  employeeConfigSchema,
   type EmployeeConfig,
 } from "../domain/index";
 import {
@@ -72,15 +73,22 @@ export class InterviewRefusal extends Error {
   }
 }
 
-const NICHOLS_LAW = /\bnichols\s+law\b/i;
+// Nichols Law content is out of scope (pilot-scope rule 13; interview rules). This is a deliberate, named exception to
+// "no company-specific code" (rule 2): no lane_config or policy field lists excluded entities, so the term is one constant.
+export const EXCLUDED_ENTITY_PATTERN = /nichols[\s\-_.&]*law/;
+
+/** Folds a text so spacing, width and invisible-character tricks cannot hide the term: NFKC, no zero-width/soft hyphen, lower case. */
+export function foldForScreen(text: string): string {
+  return text.normalize("NFKC").replace(/[\u200b-\u200f\u2060-\u2064\ufeff\u00ad\u034f\u180e]/g, "").toLowerCase();
+}
 
 /** Screens answer text before anything is planned: credentials, SSN / card / bank numbers (store rules) and Nichols Law content (out of scope). */
 export function screenAnswers(answers: Answers): void {
   for (const t of answerTexts(answers)) {
     if (containsSecret(t)) throw new BrainError("secret");
-    const kind = findSensitiveNumber(t);
+    const kind = findSensitiveNumber(t.normalize("NFKC").replace(/[\u200b-\u200f\u2060-\u2064\ufeff\u00ad]/g, ""));
     if (kind !== null) throw new BrainError(`sensitive_${kind}`);
-    if (NICHOLS_LAW.test(t)) throw new InterviewRefusal("nichols_law");
+    if (EXCLUDED_ENTITY_PATTERN.test(foldForScreen(t))) throw new InterviewRefusal("nichols_law");
   }
 }
 
@@ -92,6 +100,8 @@ type Snapshot = {
   versions: Record<"about_me" | "preferences" | "work", number>;
   employee: BrainEmployee | null;
   config: EmployeeConfig | null;
+  /** The stored employee config fails the schema: never silently replaced by defaults (the diff card says so). */
+  configInvalid: boolean;
 };
 
 const seedBody = (path: string): string => [...HOME_SEED_DOCUMENTS, ...LANE_SEED_DOCUMENTS].find((d) => d.path === path)?.body ?? "";
@@ -115,6 +125,7 @@ async function snapshot(env: InterviewEnv): Promise<Snapshot> {
     versions: { about_me: about.version, preferences: prefs.version, work: work.version },
     employee,
     config: employee ? storedConfig(employee.config, env.ctx) : null,
+    configInvalid: employee ? !employeeConfigSchema.safeParse(employee.config).success : false,
   };
 }
 
@@ -129,7 +140,7 @@ function timezoneFrom(docs: Docs, ctx: InterviewCtx): string | undefined {
 export type SettingChange = { path: string; before: string; after: string };
 export type ChangeView =
   | { kind: "document"; lane: string; path: string; baseVersion: number; diff: DiffLine[] }
-  | { kind: "employee"; lane: string; name: string; status: string; baseVersion: number; diff: DiffLine[]; settings: SettingChange[] };
+  | { kind: "employee"; lane: string; name: string; status: string; baseVersion: number; diff: DiffLine[]; settings: SettingChange[]; resetsInvalid: boolean };
 
 type Write =
   | { kind: "document"; lane: LaneId; path: string; body: string; baseVersion: number }
@@ -159,6 +170,9 @@ export function refreshPaDerived(body: string, config: EmployeeConfig, meta: { d
   out = setSection(out, "6. Output format", `Sections, in order: ${sections}. Target length: ${String(config.output.target_words)} words before drafts. Coverage is always shown.`);
   return out;
 }
+
+/** The "Last updated: <date>" header is left out of the proposal digest, so a proposal made before midnight still saves after it. */
+const stripDate = (body: string): string => body.replace(/^Last updated:.*$/m, "");
 
 async function digestOf(value: unknown): Promise<string> {
   const bytes = new TextEncoder().encode(JSON.stringify(value));
@@ -201,13 +215,36 @@ async function plan(env: InterviewEnv, groupId: string, raw: Record<string, unkn
     for (const [qid, a] of parsed) {
       for (const e of applyAnswers(questionOf(qid), a, config0, env.ctx)) after = applyEdit(after, e);
     }
-    if (after === before) return { views: [], writes: [], digest: await digestOf({ groupId, none: true }) };
-    const baseVersion = snap.versions[docKey];
-    return {
-      views: [{ kind: "document", lane, path, baseVersion, diff: diffLines(before, after) }],
-      writes: [{ kind: "document", lane, path, body: after, baseVersion }],
-      digest: await digestOf({ groupId, lane, path, baseVersion, after }),
-    };
+    const views: ChangeView[] = [];
+    const writes: Write[] = [];
+    if (after !== before) {
+      const baseVersion = snap.versions[docKey];
+      views.push({ kind: "document", lane, path, baseVersion, diff: diffLines(before, after) });
+      writes.push({ kind: "document", lane, path, body: after, baseVersion });
+    }
+    // A4 (timezone) is also config.timezone of an existing employee, so the briefing schedule follows it.
+    const tz = parsed.find(([id]) => id === "A4")?.[1].timezone;
+    const emp = snap.employee;
+    if (typeof tz === "string" && emp !== null && snap.config !== null && !snap.configInvalid && snap.config.timezone !== tz) {
+      const next = structuredClone(snap.config);
+      next.timezone = tz;
+      const checked = await env.store.loadEmployeeConfig(env.ctx.home, next);
+      const date = env.now.toISOString().slice(0, 10);
+      const prose = refreshPaDerived(emp.instructions, checked, { date, version: emp.version + 1, status: emp.status });
+      views.push({
+        kind: "employee",
+        lane: env.ctx.home,
+        name: emp.name,
+        status: emp.status,
+        baseVersion: emp.version,
+        diff: diffLines(emp.instructions, prose),
+        settings: settingChanges(snap.config, checked),
+        resetsInvalid: false,
+      });
+      writes.push({ kind: "employee", lane: env.ctx.home, baseVersion: emp.version, body: { roleKey: emp.roleKey, name: emp.name, instructions: prose, config: checked, status: emp.status } });
+    }
+    if (writes.length === 0) return { views: [], writes: [], digest: await digestOf({ groupId, none: true }) };
+    return { views, writes, digest: await digestOf({ groupId, writes: writes.map((w) => (w.kind === "document" ? { l: w.lane, p: w.path, v: w.baseVersion, b: w.body } : { l: w.lane, v: w.baseVersion, b: stripDate(w.body.instructions), c: w.body.config, s: w.body.status })) }) };
   }
 
   // Part B: the employee profile (prose + config) in the home lane.
@@ -222,14 +259,14 @@ async function plan(env: InterviewEnv, groupId: string, raw: Record<string, unkn
   const checked = await env.store.loadEmployeeConfig(env.ctx.home, config); // schema + lane_config cross-checks; throws EmployeeConfigError
   const date = env.now.toISOString().slice(0, 10);
   prose = refreshPaDerived(prose, checked, { date, version: baseVersion + 1, status });
-  if (snap.employee && prose === snap.employee.instructions && JSON.stringify(checked) === JSON.stringify(snap.config) && status === snap.employee.status) {
+  if (snap.employee && !snap.configInvalid && stripDate(prose) === stripDate(snap.employee.instructions) && JSON.stringify(checked) === JSON.stringify(snap.config) && status === snap.employee.status) {
     return { views: [], writes: [], digest: await digestOf({ groupId, none: true }) };
   }
   const settings = settingChanges(snap.config ?? newConfig(env.ctx, timezoneFrom(snap.docs, env.ctx)), checked);
   return {
-    views: [{ kind: "employee", lane: env.ctx.home, name: PA_NAME, status, baseVersion, diff: diffLines(before, prose), settings }],
+    views: [{ kind: "employee", lane: env.ctx.home, name: PA_NAME, status, baseVersion, diff: diffLines(before, prose), settings, resetsInvalid: snap.configInvalid }],
     writes: [{ kind: "employee", lane: env.ctx.home, baseVersion, body: { roleKey: PA_ROLE_KEY, name: snap.employee?.name ?? PA_NAME, instructions: prose, config: checked, status } }],
-    digest: await digestOf({ groupId, lane: env.ctx.home, baseVersion, prose, checked, status }),
+    digest: await digestOf({ groupId, lane: env.ctx.home, baseVersion, prose: stripDate(prose), checked, status, reset: snap.configInvalid }),
   };
 }
 
@@ -248,6 +285,8 @@ export type EmployeeView = {
   name: string;
   status: string;
   version: number;
+  /** The stored config fails validation: it can only be replaced through a diff card that says so. */
+  invalid: boolean;
   permissions: { lane: string; laneName: string; allowed: string[]; denied: { type: string; reason: string }[] }[];
 };
 
@@ -286,6 +325,7 @@ async function employeeView(env: InterviewEnv, snap: Snapshot): Promise<Employee
     name: emp.name,
     status: emp.status,
     version: emp.version,
+    invalid: snap.configInvalid,
     permissions: Object.entries(perms).map(([lane, p]) => ({ lane, laneName: env.ctx.lanes.find((l) => l.laneId === lane)?.name ?? lane, allowed: p.allowed, denied: p.denied })),
   };
 }

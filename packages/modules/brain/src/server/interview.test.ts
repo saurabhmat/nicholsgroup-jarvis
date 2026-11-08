@@ -227,3 +227,71 @@ describe("the Work page", () => {
     expect(b.calls).toEqual([]);
   });
 });
+
+describe("Nichols Law screen", () => {
+  const forms = ["Nichols Law", "nicholslaw.com", "Nichols-Law", "NICHOLS_LAW", "Nichols & Law", "Nichols.Law", "Nic\u200bhols\u200d Law", "Nichols\u00adLaw", "\uFEFFNichols\u2060 law", "\uFF2E\uFF49chols Law"];
+  it("refuses every spelling in a text answer", async () => {
+    const { env: e, b } = env();
+    for (const f of forms) {
+      await expect(proposeGroup(e, "A-3", { A6: { company: `We act for ${f} matters`, people: "x" } }), f).rejects.toMatchObject({ code: "nichols_law" });
+    }
+    expect(writes(b)).toEqual([]);
+  });
+  it("refuses it in a VIP sender and in a record key too", async () => {
+    const { env: e } = env();
+    await expect(proposeGroup(e, "B-2", { B4: { vip: "ceo@nicholslaw.com" } })).rejects.toMatchObject({ code: "nichols_law" });
+    await expect(proposeGroup(e, "B-1", { B3: { include: { "TST|nichols-law@example.test": "x" } } })).rejects.toMatchObject({ code: "nichols_law" });
+  });
+  it("does not refuse ordinary text", async () => {
+    const { env: e } = env();
+    await expect(proposeGroup(e, "A-3", { A6: { company: "Nick and Nicole work on the law review", people: "x" } })).resolves.toBeDefined();
+  });
+});
+
+describe("timezone follows into the employee", () => {
+  it("A4 on a saved employee also changes config.timezone, in one proposal", async () => {
+    const { env: e, b } = env();
+    const a = { B2: { mailboxes: ["TST|ops@example.test"] } };
+    await saveGroup(e, "B-1", a, (await proposeGroup(e, "B-1", a)).proposalId);
+    const t = { A4: { timezone: "UTC" } };
+    const p = await proposeGroup(e, "A-2", t);
+    expect(p.changes.map((c) => c.kind)).toEqual(["document", "employee"]);
+    const emp = p.changes[1] as { settings: { path: string; before: string; after: string }[] };
+    expect(emp.settings).toEqual([{ path: "timezone", before: "America/New_York", after: "UTC" }]);
+    await saveGroup(e, "A-2", t, p.proposalId);
+    expect((must(b.employee()).config as { timezone: string }).timezone).toBe("UTC");
+    expect(b.docs.get(`TST|${ABOUT_ME_PATH}`)?.body).toContain("## Timezone\nUTC");
+  });
+});
+
+describe("a stored profile that is not valid", () => {
+  it("is never replaced silently: the card says so, and it is shown in the state", async () => {
+    const { env: e, b } = env();
+    const a = { B2: { mailboxes: ["TST|ops@example.test"] } };
+    await saveGroup(e, "B-1", a, (await proposeGroup(e, "B-1", a)).proposalId);
+    (must(b.employee()).config as Record<string, unknown>).surprise = true; // written straight through the rpc
+    expect((await loadInterviewState(e)).employee?.invalid).toBe(true);
+    const n = { B4: { vip: "ceo@example.test" } };
+    const p = await proposeGroup(e, "B-2", n);
+    expect(p.changes[0]).toMatchObject({ kind: "employee", resetsInvalid: true });
+    await saveGroup(e, "B-2", n, p.proposalId);
+    expect((await loadInterviewState(e)).employee?.invalid).toBe(false);
+  });
+  it("an answer equal to the defaults still proposes the reset", async () => {
+    const { env: e, b } = env();
+    const a = { B11: { delivery: ["in_app", "push"] } };
+    await saveGroup(e, "B-4", a, (await proposeGroup(e, "B-4", a)).proposalId);
+    (must(b.employee()).config as Record<string, unknown>).surprise = true;
+    expect((await proposeGroup(e, "B-4", a)).changes).toHaveLength(1);
+  });
+});
+
+describe("proposal digest", () => {
+  it("does not depend on the date, so a proposal made before midnight still saves after it", async () => {
+    const { env: e } = env();
+    const a = { B2: { mailboxes: ["TST|ops@example.test"] } };
+    const p = await proposeGroup(e, "B-1", a);
+    const later = { ...e, now: new Date("2026-11-09T04:30:00Z") };
+    await expect(saveGroup(later, "B-1", a, p.proposalId)).resolves.toEqual({ saved: 1 });
+  });
+});
