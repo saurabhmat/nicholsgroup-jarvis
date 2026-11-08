@@ -12,6 +12,7 @@ export * as quickbooks from "./quickbooks/handlers";
 export * as stripe from "./stripe/handlers";
 export * as gohighlevel from "./gohighlevel/handlers";
 export * as google from "./google/handlers";
+export * as composio from "./composio/handlers";
 export * as microsoft from "./microsoft/handlers";
 export * as monday from "./monday/handlers";
 export * as notion from "./notion/handlers";

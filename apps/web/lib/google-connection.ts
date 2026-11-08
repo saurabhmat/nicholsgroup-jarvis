@@ -59,6 +59,7 @@ export async function loadGoogleSection(client: Db, laneId: string): Promise<Goo
     .select("id, external_account_id, status")
     .eq("lane_id", laneId)
     .eq("provider", "google")
+    .eq("transport", "native") // Composio connections have their own section (T-219)
     .order("created_at", { ascending: true });
   if (conns.error) throw new Error("connections unavailable");
   const rows = (conns.data ?? []).flatMap((r) => {

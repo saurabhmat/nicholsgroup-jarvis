@@ -44,6 +44,23 @@ describe("calendar section (T-064)", () => {
   });
 });
 
+describe("mail_transport (T-219, D-30, D-37)", () => {
+  it("defaults to native, so existing lanes are unchanged", () => {
+    expect(parseLaneConfig(VALID).mail_transport).toBe("native");
+    expect(parseLaneConfig({}).mail_transport).toBe("native");
+  });
+  it("accepts native and composio and nothing else", () => {
+    expect(parseLaneConfig({ ...VALID, mail_transport: "composio" }).mail_transport).toBe("composio");
+    expect(parseLaneConfig({ ...VALID, mail_transport: "native" }).mail_transport).toBe("native");
+    for (const bad of ["google", "Composio", "", "microsoft", 1, null, true]) {
+      expect(() => parseLaneConfig({ ...VALID, mail_transport: bad }), JSON.stringify(bad)).toThrow();
+    }
+  });
+  it("the old name mail_provider is not accepted (strict schema)", () => {
+    expect(() => parseLaneConfig({ ...VALID, mail_provider: "composio" })).toThrow();
+  });
+});
+
 describe("lane config schema", () => {
   it("accepts a valid config and fills the spec defaults", () => {
     const c = parseLaneConfig(VALID);

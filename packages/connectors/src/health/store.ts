@@ -25,7 +25,7 @@ export function createTokenHealthStore(clientFor: JobClientFor): TokenHealthStor
       if (providers && providers.length === 0) return [];
       const db = await client(laneId);
       try {
-        let q = db.schema("core").from("connections").select("id").eq("lane_id", laneId).in("status", USABLE);
+        let q = db.schema("core").from("connections").select("id").eq("lane_id", laneId).eq("transport", "native").in("status", USABLE); // Composio connections have no token to check (T-219)
         if (providers) q = q.in("provider", [...providers]);
         const { data, error } = await q.order("created_at", { ascending: true }).limit(LIST_LIMIT);
         if (error) throw error;

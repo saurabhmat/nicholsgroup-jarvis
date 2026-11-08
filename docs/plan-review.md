@@ -920,3 +920,77 @@ T-210 (Brain module + schema) is built; findings 5, 6, 19, 21, 24, 25 are applie
 ### T-211 build review (Nov 7, 2026, branch `agent/brain`)
 
 Security + code review: no BLOCKER/HIGH; MEDIUMs fixed (see `.agent/pr/T-211.md`). Deferred / noted: `brain.employee_save` does not enforce the config rules in SQL (runtime re-check via `loadEmployeeConfig` instead; add SQL guards if a non-app client ever writes configs); `effectivePermissions` for a cross-company employee must be per lane (T-212/T-213 acceptance updated); spec readings to confirm: owner-only proposing, multi-lane config without its own lane, case-insensitive mailbox match.
+
+### T-212 build review (Nov 8, 2026, branch `agent/T-212`)
+
+Security and code review: no BLOCKER/HIGH; MEDIUMs fixed (see `.agent/pr/T-212.md`). Logged, not fixed:
+- **M (employee block not wired to chat):** `assemblePrompt` and `buildEmployeePrompt` support the `<employee>` block and the `<user_preferences>` message, but no caller passes an employee yet. T-213 must call `store.loadEmployeeConfig` (via `buildEmployeePrompt`) on every run, fail closed, and pass `policyFor`/`roleFor` read per lane.
+- **M (latency):** `loadBrainPromptContext` reads sequentially (home lane, list, up to 12 page bodies) on every chat turn. Add a short per-turn cache or a combined read function if it shows up in timings.
+- **L (shared lane pages):** only the caller's own pages are read (plan-review sec M-1); there is no "explicitly shared page" mechanism, so another owner's Context/Work page in the same lane never reaches the prompt. Revisit when a lane has several owners.
+- **L (brain text is in the system prompt):** brain pages and About-Me are owner-authored and placed in system blocks as spec §4 says, escaped so they cannot form tags, and described to the model as non-authoritative; only the server-side gate decides tools.
+- **L (token estimate):** 3 characters per token, deliberately pessimistic; no tokenizer.
+- **L (ClientFor session-bound):** the chat route builds the store's `clientFor` from `guards.requireLane`, so the RLS-bypassing job client is not used there (closes sec L-3 for this caller; the type is still structural).
+- **L (sec L4, T-213):** the employee summary can name lanes outside the call's `laneIds`; T-213 must pass only lanes in scope.
+- **L (sec L6, T-213):** for background runs `ownerUserId` must come from the database row (`owner_user_id`), not from the caller.
+- **L (page cut):** a page is cut to half the cap, so a single context page is never dropped whole; the last page always stays (cut).
+- **L (code, remaining):** token estimate is a heuristic (3 chars per token); pages are read per turn without a cache.
+
+### T-216 build notes (Nov 8, 2026, branch `agent/T-216`)
+
+Built without SQL. Reviews pending (run by the parent agent). Decisions and items logged for review:
+- **Interview engine is deterministic, no model.** The chat shows the question bank as cards; the proposed edit is composed by code from the user's typed answers (section replace in the page, never free-form). So no model output can reach a save, and the interview costs no tokens. The spec's "model drafts the edit" can be added later as an optional polish step that still ends in the same diff card.
+- **Per-group Save for Part B writes the draft employee row** (status `draft`, or the current status when reconfiguring), so progress survives a reload. "Confirm" is therefore a server-side re-validation (`loadEmployeeConfig`, fail closed) plus the permission summary, not a second write. Activation is its own click and re-validates.
+- **B13 skip rule** uses `email_draft` OR `email_send` in `write_actions_allowed` with `store_outbound_drafts`, because D-34 made `email.save_draft` (`email_draft`) the default; the spec text names only `email_send`.
+- **Group order and "known" for Part B.** Part B groups count as done once the employee row exists; unanswered groups then show the schema defaults in the summary. A separate per-group "answered" marker would need SQL (not added).
+- **A5/A6 are per company** for the lane the chat or Settings page is open in; another company is set up from that company's page.
+- **B3, B4: PA "2. Priority order" is regenerated from the config** when B2-B4 are saved, so a manual edit of that section in a later editor is replaced (the diff card shows it first).
+- **B12 section order** is the canonical order (checkboxes), not a user-chosen order. **B14** is a short voice description (400 chars), not a pasted-replies field, so no email text is stored (rule 6).
+- **Test briefing step (T-213):** `TEST_BRIEFING_AVAILABLE = false`; the review card shows "Your test briefing arrives with the daily briefing (T-213)." with a disabled button, and activation does not require it. When T-213 lands: flip the constant, add the run action and the Part C step 4 feedback question, and make activation require a test run.
+- **L (home lane):** About-Me, Preferences and the employee go to `resolveHomeLane` (existing About-Me lane, else the lane the user is in); the "Personal lane code from configuration" input is not wired yet (same as T-210/T-211 notes).
+- **L (lane facts read per request):** `buildEnv` reads lane_config, lane_policies and the Google connection state for each lane the user has the brain view in (at most 10), on every interview call. Add a short cache if it shows in timings.
+- **L (e2e not run):** `apps/web/e2e/brain-interview.spec.ts` (iPhone-width viewport) was written but not run: Playwright's global setup resets the local database, which would wipe local connections.
+
+### T-216 review follow-ups (Nov 8, 2026)
+Security + code review run; no BLOCKER; the HIGH and the listed MEDIUM/LOW items were fixed (see `.agent/pr/T-216.md`). Logged, not fixed:
+- **Rule 2 exception (deliberate):** the Nichols Law screen is a named constant (`EXCLUDED_ENTITY_PATTERN`) because no `lane_config` or policy field lists excluded entities; the spec and pilot-scope rule 13 require the exclusion. Move it to configuration if such a field is added.
+- **L (code L4):** `isInterviewRequest` is a client-side regex on short messages; a rare phrase may still start the interview instead of asking the model. Tightened (no "change"/"briefing"), not made smarter.
+- **L (code L6):** lane facts are read on every interview call (also logged above).
+- **L (sec L4, T-213):** `roleFor` in the interview is "owner" for every lane the brain view opens in (the view is owner-only); T-213 must read the real role per lane.
+- **L (sec L5, T-210 follow-up):** the SSN/card screen in the store and in SQL does not fold zero-width characters; the interview folds before its own screen, but the store and `brain.document_save` need the same fold (TypeScript and SQL).
+- **L (e2e):** `apps/web/e2e/brain-interview.spec.ts` still not run (global setup resets the local DB).
+
+### T-219 build notes (Nov 8, 2026, branch `agent/T-219`)
+
+Built on MSW fakes only; the real Composio API was never called and `COMPOSIO_API_KEY` was not read. Reviews pending (run by the parent agent). Migration: `20261108120000_composio_transport.sql` (production file `supabase/core/bootstrap/manual-migrations/part-6-T-219.sql`, H-041).
+
+**Pending: the D-35 spike is not run (decision of Nov 8).** It needs a throwaway test Gmail account and Zero Data Retention confirmed (H-039, H-041). Until then D-35 stays "to be confirmed": T-223 must not start. The connect and Test paths use `tools.execute` with allow-listed read slugs, not `proxyExecute`.
+
+Decisions taken in the build:
+- **Where the Composio account id lives.** `external_account_id` holds the `ca_` id (spec §8.3), so the D-23 index on it would never see a second lane using the same mailbox. New columns `toolkit` and `account_identity` (the verified, lower-cased address) carry two partial unique indexes: one account per lane per toolkit, and one address per toolkit across lanes. The activation function also refuses an address that another lane holds through a **native** Google connection. Not covered: connecting the same mailbox natively after it is held by a Composio connection in another lane (the native index does not know `account_identity`); low risk while PKG is the only live lane, logged for T-223.
+- **A reconnect supersedes.** A new connected account for the same lane and toolkit marks the earlier usable row `disconnected` inside the activation function (status only, nothing external), because Disconnect (an approvals write, D-24) does not exist yet and the one-per-lane index would otherwise block every reconnect after EXPIRED/REVOKED. The old account stays in Composio until removed by hand.
+- **State binding.** `oauth_state_create/consume` gained `toolkit` and `account_ref` (the id returned by `link`, kept server-side). The callback uses that id and refuses a different `connected_account_id` in the URL. A Composio state never completes the native Google callback and vice versa. The old five-argument `oauth_state_create` was replaced by one function with two defaulted arguments (existing callers unchanged); pgTAP 100 and the catalog test were adjusted.
+- **Auth config ids are environment, not lane_config.** They are Composio project settings (each project, including the separate test project of H-040, has its own), not company settings (rule 2 concerns company settings). `requireConnectorEnv("composio")`: key required, the two ids optional. Missing id or key = "Not configured".
+- **Native paths exclude composio rows.** The calendar sync target list, the token-health list and the Google section read `transport = 'native'`, so a Composio row (no token) is never picked up by native jobs.
+- **`mail_transport` is stored, not yet read by sync.** The field exists with default `native` and schema tests; the switch is consumed by T-223.
+- **The chat never connects.** A source-scan test fails if any assistant, AI or module file reaches the Composio flow or a connect route, and if anything outside the Composio routes and Settings components calls the flow.
+- **Composio SDK behaviour found in 0.27.0** (worth knowing for T-223/T-224): `connectedAccounts.link` first calls `list` and throws if the user already has an ACTIVE account in that auth config unless `allowMultiple: true` (set, since one Jarvis user can reconnect or connect several lanes); `tools.execute` first fetches the tool schema (an extra GET); the SDK checks npm for a newer version on construction unless `disableVersionCheck: true` (set: no unexpected outbound call); `allowTracking: false`, `baseURL` and `toolkitVersions` are set explicitly so a `COMPOSIO_BASE_URL` in the environment or the CLI's `~/.composio` file cannot redirect or re-key calls. Wire paths are under `/api/v3.1`.
+- **Deviation recorded (spec §8.5):** the SDK uses its own HTTP stack. Every call carries `AbortSignal.timeout(15 s)`, SDK errors are reduced to coarse `ConnectorError`s (SDK messages can echo request data), and the connector logs the slug only, never arguments or results. Redaction of the key is by `SecretValue` registration.
+- **Rule 4 exception stays as written in spec §8.6:** Composio holds the Google tokens; Jarvis stores none for these connections. The only Composio secret Jarvis holds is `COMPOSIO_API_KEY`.
+
+Assumptions the fakes cannot prove (live check, H-041): Composio keeps our `?state=` on the callback URL (otherwise the callback fails closed with `invalid_state`); the consent link host ends in `composio.dev` (otherwise start fails closed); `GMAIL_GET_PROFILE` / `GOOGLECALENDAR_GET_CURRENT_USER` results carry the address under a key `extractIdentity` knows; the Test read arguments (`GMAIL_FETCH_EMAILS` `{max_results:1, include_spam_trash:false, verbose:false}`, `GOOGLECALENDAR_EVENTS_LIST` `{calendarId:'primary', maxResults:1, singleEvents:true}`) are accepted. Scopes of the auth configs are unverified (H-039); the server-side allow-list is the only guard.
+
+Logged, not fixed:
+- **L (client-bundle canary not run):** `pnpm test:bundle` refuses to run while `apps/web/.env.local` exists (by design: Next would load it). The canary set now includes the Composio key and auth config ids and the scanner is unit-tested; the real build scan was not run. Run it once with `.env.local` moved aside.
+- **L (e2e):** no Playwright test for the Composio section (global setup resets the local DB, which would wipe local connections); component tests cover the states.
+- **L (health):** account status is refreshed by Test (and only then). There is no scheduled Composio health job and no `composio.connected_account.expired` webhook yet (spec §8.5 optional); T-223's sync will call the same status check.
+- **L (T-216 leftovers fixed in passing):** `scripts/dependency-allowlist.test.mjs` listed no `@testing-library/*`/`jsdom` for `apps/web` (added by T-216's component tests); added to the allow-list with a comment.
+
+### T-219 review follow-ups (Nov 8, 2026)
+Security + code review run: 0 BLOCKER, 0 HIGH. Fixed in migration `20261108130000_composio_review_fixes.sql` (appended to part-6) and code: sec M1 (`oauth_state_create` back to five arguments; service_role-only `oauth_state_bind`; callback also requires the account's auth config to be the configured one and the account to be in the user's own `connectedAccounts.list`; the state is created before `link`, so role and in-flight cap are checked before Composio is called, closing sec L2), sec M2 (address held via any composio toolkit in another lane refuses; advisory lock per address), sec M3/code M3 (native `connection_token_store` refuses an address a composio row in another lane holds, same lock), sec L1 (Test reads label/calendar lists only, no mail or event content), sec L3/code L (usable rows win over pending; pending older than 10 min ignored and hidden; a refused connect deletes its pending row), sec L4 (`home_calendar_status` and Home's feed count native connections only), code M1 ("Replace account via Composio" with the note that the previous account stays in Composio), and the unrelated `peerDependencies` reorder was reverted.
+Logged, not fixed:
+- **code M2 (prerequisite for T-223 / switching PKG):** account health is refreshed only by the Test button; before any lane is switched to `composio` a passive health check (scheduled `connectedAccounts.get` -> `reconnect_required`) must exist.
+- **sec L5:** after the live check, pin the exact consent host instead of the `composio.dev` suffix.
+- **sec L6:** (as in the review) not changed.
+- **sec L8:** refused or superseded Composio accounts stay in the project until the Approvals cleanup exists (T-110 - T-113).
+- **L (Test route rate limit):** there is no per-user rate-limit pattern for connector routes (ai_chat_rate is chat-only); the Test route is owner/admin_technical at AAL2 only. Add one with the health job.
+- **L (home label):** Home does not mention a Composio connection at all yet; a label comes with T-223.

@@ -513,7 +513,7 @@ describe("real-data environments (Staging environment, Oct 28, 2026)", () => {
 describe("connector env", () => {
   it("covers every connector family and requires nothing at startup", () => {
     expect([...CONNECTOR_NAMES].sort()).toEqual(
-      ["ghl", "google", "graph", "intuit", "intuit_webhook", "monday", "notion", "push", "sentry", "stripe"].sort(),
+      ["composio", "ghl", "google", "graph", "intuit", "intuit_webhook", "monday", "notion", "push", "sentry", "stripe"].sort(),
     );
     expect(() => parseServerEnv(CORE)).not.toThrow();
   });
@@ -607,6 +607,18 @@ describe("connector env", () => {
   it("does not treat prototype names in env as present", () => {
     const err = catchError(() => requireConnectorEnv("monday", {})) as EnvValidationError;
     expect(err.missing).toEqual(["MONDAY_API_TOKEN"]);
+  });
+
+  it("composio (T-219): the key is required, the auth config ids are optional, and the key never prints", () => {
+    const err = catchError(() => requireConnectorEnv("composio", {})) as EnvValidationError;
+    expect(err.missing).toEqual(["COMPOSIO_API_KEY"]);
+    const KEY = "ak_canary_env_key_0123456789abcdef";
+    const env = requireConnectorEnv("composio", { COMPOSIO_API_KEY: KEY, COMPOSIO_GMAIL_AUTH_CONFIG_ID: "ac_gmail_synthetic" });
+    expect(env.COMPOSIO_API_KEY).toBe(KEY);
+    expect(env.COMPOSIO_GOOGLECALENDAR_AUTH_CONFIG_ID).toBeUndefined();
+    expect(JSON.stringify(env)).not.toContain(KEY);
+    expect(inspect(env)).not.toContain(KEY);
+    expect(String(catchError(() => requireConnectorEnv("composio", { COMPOSIO_API_KEY: "" })))).not.toContain(KEY);
   });
 
   it("every connector schema validates when all of its variables are present", () => {

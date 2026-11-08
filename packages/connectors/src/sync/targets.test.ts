@@ -21,6 +21,7 @@ describe("listCalendarConnectionIds", () => {
     expect(x.f).toContainEqual(["lane", "PKG", null]);
     expect(x.f).toContainEqual(["eq", "lane_id", "PKG"]);
     expect(x.f).toContainEqual(["in", "provider", [...CALENDAR_PROVIDERS]]);
+    expect(x.f).toContainEqual(["eq", "transport", "native"]); // a Composio connection has no token row: the native sync never targets it (T-219)
     expect(x.f).toContainEqual(["in", "status", ["active", "degraded"]]);
     expect(x.f).toContainEqual(["limit", String(MAX_SYNC_TARGETS), undefined]);
     expect(CALENDAR_PROVIDERS).toEqual(["google"]);

@@ -36,3 +36,23 @@ describe("canary scanner", () => {
     expect((scanForCanaries(dir) as { hits: unknown[] }).hits).toEqual([]);
   });
 });
+
+describe("canary set (T-219)", () => {
+  it("covers the Composio key and auth config ids, none of them NEXT_PUBLIC_, all distinct and long enough to match nothing else", () => {
+    for (const name of ["COMPOSIO_API_KEY", "COMPOSIO_GMAIL_AUTH_CONFIG_ID", "COMPOSIO_GOOGLECALENDAR_AUTH_CONFIG_ID"]) {
+      expect(typeof (CANARIES as Record<string, string>)[name], name).toBe("string");
+      expect(((CANARIES as Record<string, string>)[name] as string).length, name).toBeGreaterThan(24);
+    }
+    const values = Object.values(CANARIES) as string[];
+    expect(new Set(values).size).toBe(values.length);
+  });
+
+  it("finds a Composio key planted in a client chunk, in any encoding", () => {
+    const dir = path.join(scratch, "composio");
+    mkdirSync(path.join(dir, "static"), { recursive: true });
+    const key = (CANARIES as Record<string, string>).COMPOSIO_API_KEY as string;
+    writeFileSync(path.join(dir, "static", "leak.js"), `var k="${Buffer.from(key).toString("base64")}";`);
+    const { hits } = scanForCanaries(dir) as { hits: { name: string }[] };
+    expect([...new Set(hits.map((h) => h.name))]).toEqual(["COMPOSIO_API_KEY"]);
+  });
+});

@@ -184,7 +184,8 @@ export function createOAuthFlow(deps: OAuthFlowDeps) {
       } catch {
         return { ok: false, reason: "unavailable", provider: p.provider, laneId };
       }
-      if (!stored || stored.provider !== p.provider) return { ok: false, reason: "invalid_state", provider: p.provider, laneId };
+      // A state started by the Composio connect (toolkit set) never completes a native callback.
+      if (!stored || stored.provider !== p.provider || stored.toolkit) return { ok: false, reason: "invalid_state", provider: p.provider, laneId };
 
       const entry = { laneId, actor: { kind: "user" as const, userId }, action: "connection.connect", target: `provider:${p.provider}` };
       // The user cancelled or the provider refused at its consent screen: nothing to exchange.

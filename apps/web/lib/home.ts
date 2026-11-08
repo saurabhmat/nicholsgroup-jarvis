@@ -332,7 +332,7 @@ export async function loadHome(client: Db, laneId: string, now: Date): Promise<H
   const { from, to } = businessDay(now);
   const since = new Date(now.getTime() - DAY_MS);
   const [conns, calendar, meetings, mail, later] = await Promise.all([
-    core.from("connections").select("id, provider, status").eq("lane_id", laneId),
+    core.from("connections").select("id, provider, status").eq("lane_id", laneId).eq("transport", "native"), // a Composio connection has no sync/index yet (T-219)
     core.rpc("home_calendar_status", { p_lane: laneId }),
     core.rpc("home_meetings", {
       p_lane: laneId,

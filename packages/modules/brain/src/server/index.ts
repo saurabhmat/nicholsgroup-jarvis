@@ -19,3 +19,19 @@ export type {
   LaneSettingsFor,
   SaveResult,
 } from "./store";
+export { loadBrainPromptContext, buildEmployeePrompt, MAX_LANE_PAGES } from "./prompt-context";
+export type { BrainPromptContext, EmployeePromptBlock, EmployeePromptDeps, PromptStore } from "./prompt-context";
+export {
+  InterviewRefusal,
+  activateEmployee,
+  confirmSetup,
+  loadInterviewState,
+  proposeGroup,
+  refreshPaDerived,
+  saveGroup,
+  screenAnswers,
+  settingChanges,
+  settingsPathFor,
+  sourcesView,
+} from "./interview";
+export type { ChangeView, EmployeeView, InterviewEnv, InterviewState, InterviewStore, Proposal, SettingChange, SourceView } from "./interview";

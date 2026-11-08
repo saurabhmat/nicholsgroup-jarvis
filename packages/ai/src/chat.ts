@@ -11,7 +11,7 @@ import type { PolicyGate } from "./tools/gate";
 import type { ToolCategory, ToolRegistry } from "./tools/registry";
 import { TOOL_CATEGORIES } from "./tools/registry";
 import type { LLMMessage, LLMProvider, LLMSystemBlock } from "./types";
-import { UNTRUSTED_DATA_RULE } from "./untrusted";
+import { assemblePrompt, withUserContext, type AssembledPrompt, type PromptInput } from "./prompts";
 
 export const MAX_TURNS = 20;
 export const MAX_TURN_CHARS = 4000;
@@ -40,31 +40,32 @@ export type ChatEvent =
   | { type: "message.done"; stop: ToolLoopResult["stop"] }
   | { type: "error"; code: "not_configured" | "unavailable" | "rate_limited" | "aborted" };
 
-const STATIC_PROMPT = [
-  "You are the executive assistant inside the Nichols Group portal. You help the signed-in executive understand",
-  "their company's mail and calendar using the tools provided. Be brief and concrete; lead with what needs attention.",
-  "Rules: Never invent or estimate figures, dates, names or counts: use only what tools return, and say so when a tool",
-  "does not provide something. You cannot send, reply, approve, pay, schedule or change anything; you can only read",
-  "and explain. Cash figures, if any, are always called \"book balance\". Mention which source an answer came from",
-  "(Email, Calendar). Times are New York time; the business week is Saturday to Friday.",
-  "Call the tools you need first and write the answer after them: no text before a tool call.",
-  "Format: plain text, short paragraphs or lines starting with \"- \"; **bold** allowed; no headings, tables or italics.",
-].join(" ");
+/**
+ * System prompt through the shared assembly (T-212): rules, runtime facts, and (when passed) the owner's brain blocks.
+ * Returns the blocks and the `<user_preferences>` text for the first user message (null for the chat today).
+ */
+export type BrainArgs = Pick<PromptInput, "brainUser" | "laneBrain" | "employee" | "brainNotes">;
+/** Brain context is only accepted together with the signed-in user's id (D-28 is checked against it). */
+export type WithBrain = { userId: string; brain?: BrainArgs } | { userId?: string; brain?: undefined };
 
-const DATE = new Intl.DateTimeFormat("en-US", { timeZone: "America/New_York", weekday: "long", year: "numeric", month: "long", day: "numeric" });
+export function chatSystemPrompt(input: {
+  laneId: LaneId;
+  laneName: string;
+  now: Date;
+  categories: readonly ToolCategory[];
+} & WithBrain): LLMSystemBlock[] {
+  return assembleChatPrompt(input).system;
+}
 
-/** System prompt: a cached static part (rules + untrusted-data rule) and a small dynamic part (typed fields only). */
-export function chatSystemPrompt(input: { laneId: LaneId; laneName: string; now: Date; categories: readonly ToolCategory[] }): LLMSystemBlock[] {
-  const name = input.laneName.replace(/[^\p{L}\p{N} .,&'-]/gu, "").slice(0, 80);
-  return [
-    { text: STATIC_PROMPT },
-    { text: UNTRUSTED_DATA_RULE, cache: "1h" },
-    {
-      text: `Company: ${name} (lane ${input.laneId}). Today: ${DATE.format(input.now)}. Tool categories available: ${
-        input.categories.length ? input.categories.join(", ") : "none"
-      }.`,
-    },
-  ];
+export function assembleChatPrompt(input: Parameters<typeof chatSystemPrompt>[0]): AssembledPrompt {
+  return assemblePrompt({
+    laneIds: [input.laneId],
+    laneNames: { [input.laneId]: input.laneName },
+    now: input.now,
+    categories: input.categories,
+    subjectUserId: input.userId ?? "anonymous",
+    ...(input.brain ?? {}),
+  });
 }
 
 // Money amounts and percentages only (counts, times and dates are not checked).
@@ -114,11 +115,24 @@ export async function runChatTurn(input: {
   emit: (e: ChatEvent) => void;
   signal?: AbortSignal;
   maxTokens?: number;
-}): Promise<void> {
+  /** Receives the assembly result (dropped pages etc.) for the run log. */
+  onPrompt?: (p: Pick<AssembledPrompt, "blocks" | "dropped" | "truncated" | "brainTokens">) => void;
+} & WithBrain): Promise<void> {
   const categories = input.categories.filter((c): c is ToolCategory => (TOOL_CATEGORIES as readonly string[]).includes(c));
   // Defence in depth: the route refuses callers without categories before this; never call the model for them.
   if (categories.length === 0) throw new Error("no assistant categories for this caller");
-  const messages: LLMMessage[] = input.request.messages.map((m) => ({ role: m.role, content: m.text }));
+  const prompt = assembleChatPrompt({
+    laneId: input.laneId,
+    laneName: input.laneName,
+    now: input.now,
+    categories,
+    ...(input.brain ? { userId: input.userId, brain: input.brain } : input.userId ? { userId: input.userId } : {}),
+  } as Parameters<typeof assembleChatPrompt>[0]);
+  input.onPrompt?.({ blocks: prompt.blocks, dropped: prompt.dropped, truncated: prompt.truncated, brainTokens: prompt.brainTokens });
+  const messages = withUserContext(
+    input.request.messages.map((m): LLMMessage => ({ role: m.role, content: m.text })),
+    prompt.userContext,
+  );
   input.emit({ type: "message.start" });
   let wrote = false;
   const out = await runToolLoop({
@@ -127,7 +141,7 @@ export async function runChatTurn(input: {
     registry: input.registry,
     laneId: input.laneId,
     tier: "analysis",
-    system: chatSystemPrompt({ laneId: input.laneId, laneName: input.laneName, now: input.now, categories }),
+    system: prompt.system,
     messages,
     categories,
     maxTokens: input.maxTokens ?? 2048,

@@ -15,6 +15,25 @@ describe("connectResultMessage", () => {
     expect(m?.description).toMatch(/Third-party connections/);
   });
 
+  it("names a Composio connect by its toolkit and does not promise sync (T-219)", () => {
+    const ok = connectResultMessage({ connect: "ok", provider: "composio", toolkit: "gmail" });
+    expect(ok).toMatchObject({ tone: "success", title: "Gmail via Composio connected" });
+    expect(ok?.description).not.toMatch(/syncs in the background/);
+    expect(ok?.description).toMatch(/stays in Composio until it is removed by hand/);
+    expect(connectResultMessage({ connect: "ok", provider: "composio", toolkit: "googlecalendar" })?.title).toBe("Google Calendar via Composio connected");
+    // an unknown toolkit is not echoed
+    expect(connectResultMessage({ connect: "ok", provider: "composio", toolkit: "<script>" })?.title).toBe("Composio connected");
+  });
+
+  it("a refused Composio account tells the owner to remove it in the Composio dashboard", () => {
+    const m = connectResultMessage({ connect: "account_refused", provider: "composio", toolkit: "gmail", notice: "remove_app_access" });
+    expect(m?.tone).toBe("alert");
+    expect(m?.title).toBe("Gmail via Composio account not accepted");
+    expect(m?.description).toMatch(/mailbox list/);
+    expect(m?.description).toMatch(/Composio dashboard/);
+    expect(connectResultMessage({ connect: "account_refused", provider: "composio", toolkit: "gmail" })?.description).not.toMatch(/Composio dashboard/);
+  });
+
   it("confirms a successful connect", () => {
     expect(connectResultMessage({ connect: "ok", provider: "google" })).toMatchObject({ tone: "success", title: "Google connected" });
   });

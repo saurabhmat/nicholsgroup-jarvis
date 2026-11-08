@@ -91,7 +91,7 @@ describe("loadHome / homeFor", () => {
   const ok = (data: unknown): Result => ({ data, error: null });
   const fakeClient = (r: { conns: Result; meetings: Result; mail: Result; calendar?: Result; upcoming?: Result }, calls: unknown[] = []) => ({
     schema: () => ({
-      from: () => ({ select: () => ({ eq: (_c: string, lane: string) => (calls.push(["connections", lane]), Promise.resolve(r.conns)) }) }),
+      from: () => ({ select: () => ({ eq: (_c: string, lane: string) => ({ eq: (col: string, v: string) => (calls.push(["connections", lane]), calls.push(["connections", `${col}=${v}`]), Promise.resolve(r.conns)) }) }) }),
       rpc: (fn: string, args: Record<string, unknown>) => {
         calls.push([fn, args]);
         const later = fn === "home_meetings" && args.p_from !== "2026-11-06T05:00:00.000Z";
@@ -109,6 +109,7 @@ describe("loadHome / homeFor", () => {
     const view = await loadHome(client as never, "PKG", now);
     expect(view).toEqual({ calendar: "connected", meetings: [], upcoming: [], feeds: [{ provider: "google", status: "active" }], unreadImportant: 0, attention: [] });
     expect(calls).toContainEqual(["connections", "PKG"]);
+    expect(calls).toContainEqual(["connections", "transport=native"]); // a Composio connection is not a feed yet (T-219)
     expect(calls).toContainEqual(["home_calendar_status", { p_lane: "PKG" }]);
     expect(calls).toContainEqual(["home_meetings", { p_lane: "PKG", p_from: "2026-11-06T05:00:00.000Z", p_to: "2026-11-07T05:00:00.000Z" }]);
     expect(calls).toContainEqual(["home_mail_attention", { p_lane: "PKG", p_since: "2026-11-05T14:00:00.000Z" }]); // last 24 h

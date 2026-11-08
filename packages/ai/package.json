@@ -9,7 +9,8 @@
     "./testing": "./src/testing.ts",
     "./types": "./src/types.ts",
     "./tools": "./src/tools/index.ts",
-    "./chat": "./src/chat.ts"
+    "./chat": "./src/chat.ts",
+    "./prompts": "./src/prompts/index.ts"
   },
   "scripts": {
     "typecheck": "tsc -b",

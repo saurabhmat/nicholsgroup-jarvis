@@ -119,14 +119,14 @@ isOneToOne: false
                   ]
                 },"connections": {
                   Row: {
-                    "created_at": string,"created_by": string | null,"external_account_id": string,"features": NonNullable<Json>,"features_checked_at": string | null,"id": string,"lane_id": string,"last_error": Json | null,"last_sync_at": string | null,"provider": string,"status": string,"token_expires_at": string | null,"updated_at": string
+                    "account_identity": string | null,"created_at": string,"created_by": string | null,"external_account_id": string,"features": NonNullable<Json>,"features_checked_at": string | null,"id": string,"lane_id": string,"last_error": Json | null,"last_sync_at": string | null,"provider": string,"status": string,"token_expires_at": string | null,"toolkit": string | null,"transport": string,"updated_at": string
                   }
                   ComputedFields: never
                   Insert: {
-                    "created_at"?: string,"created_by"?: string | null,"external_account_id": string,"features"?: NonNullable<Json>,"features_checked_at"?: string | null,"id"?: string,"lane_id": string,"last_error"?: Json | null,"last_sync_at"?: string | null,"provider": string,"status"?: string,"token_expires_at"?: string | null,"updated_at"?: string
+                    "account_identity"?: string | null,"created_at"?: string,"created_by"?: string | null,"external_account_id": string,"features"?: NonNullable<Json>,"features_checked_at"?: string | null,"id"?: string,"lane_id": string,"last_error"?: Json | null,"last_sync_at"?: string | null,"provider": string,"status"?: string,"token_expires_at"?: string | null,"toolkit"?: string | null,"transport"?: string,"updated_at"?: string
                   }
                   Update: {
-                    "created_at"?: string,"created_by"?: string | null,"external_account_id"?: string,"features"?: NonNullable<Json>,"features_checked_at"?: string | null,"id"?: string,"lane_id"?: string,"last_error"?: Json | null,"last_sync_at"?: string | null,"provider"?: string,"status"?: string,"token_expires_at"?: string | null,"updated_at"?: string
+                    "account_identity"?: string | null,"created_at"?: string,"created_by"?: string | null,"external_account_id"?: string,"features"?: NonNullable<Json>,"features_checked_at"?: string | null,"id"?: string,"lane_id"?: string,"last_error"?: Json | null,"last_sync_at"?: string | null,"provider"?: string,"status"?: string,"token_expires_at"?: string | null,"toolkit"?: string | null,"transport"?: string,"updated_at"?: string
                   }
                   Relationships: [
                     {
@@ -259,14 +259,14 @@ isOneToOne: false
                   ]
                 },"oauth_states": {
                   Row: {
-                    "code_verifier": string,"created_at": string,"expires_at": string,"id": string,"lane_id": string,"provider": string,"redirect_uri": string,"state_hash": string,"user_id": string
+                    "account_ref": string | null,"code_verifier": string,"created_at": string,"expires_at": string,"id": string,"lane_id": string,"provider": string,"redirect_uri": string,"state_hash": string,"toolkit": string | null,"user_id": string
                   }
                   ComputedFields: never
                   Insert: {
-                    "code_verifier": string,"created_at"?: string,"expires_at"?: string,"id"?: string,"lane_id": string,"provider": string,"redirect_uri": string,"state_hash": string,"user_id": string
+                    "account_ref"?: string | null,"code_verifier": string,"created_at"?: string,"expires_at"?: string,"id"?: string,"lane_id": string,"provider": string,"redirect_uri": string,"state_hash": string,"toolkit"?: string | null,"user_id": string
                   }
                   Update: {
-                    "code_verifier"?: string,"created_at"?: string,"expires_at"?: string,"id"?: string,"lane_id"?: string,"provider"?: string,"redirect_uri"?: string,"state_hash"?: string,"user_id"?: string
+                    "account_ref"?: string | null,"code_verifier"?: string,"created_at"?: string,"expires_at"?: string,"id"?: string,"lane_id"?: string,"provider"?: string,"redirect_uri"?: string,"state_hash"?: string,"toolkit"?: string | null,"user_id"?: string
                   }
                   Relationships: [
                     {
@@ -464,6 +464,9 @@ isOneToOne: false
 "comms_mail_apply_page":
 { Args: { "p_complete"?: boolean,"p_connection_id": string,"p_cursor": string,"p_expected_cursor": string,"p_lane": string,"p_removals": Json,"p_revive"?: boolean,"p_upserts": Json }; Returns: Json
                            },
+"connection_activate_composio":
+{ Args: { "p_actor_id"?: string,"p_connection_id": string,"p_identity": string,"p_lane_id": string }; Returns: undefined
+                           },
 "connection_for_token":
 { Args: { "p_connection_id": string,"p_lane_id": string,"p_lock": boolean }; Returns: string
                            },
@@ -532,9 +535,12 @@ isOneToOne: false
 "mfa_verification_attempt":
 { Args: { "event": Json }; Returns: Json
                            },
+"oauth_state_bind":
+{ Args: { "p_account_ref": string,"p_lane": string,"p_state_hash": string,"p_toolkit": string,"p_user": string }; Returns: undefined
+                           },
 "oauth_state_consume":
 { Args: { "p_lane": string,"p_state_hash": string }; Returns: {
-              "code_verifier": string,"provider": string,"redirect_uri": string
+              "account_ref": string,"code_verifier": string,"provider": string,"redirect_uri": string,"toolkit": string
             }[]
                            },
 "oauth_state_create":

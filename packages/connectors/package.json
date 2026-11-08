@@ -17,6 +17,7 @@
     "./connection-test": "./src/connection-test.ts",
     "./comms": "./src/comms/index.ts",
     "./google": "./src/google/index.ts",
+    "./composio": "./src/composio/index.ts",
     "./sync": "./src/sync/index.ts",
     "./health": "./src/health/index.ts",
     "./retention": "./src/retention/index.ts",
@@ -29,6 +30,7 @@
     "test": "vitest run"
   },
   "dependencies": {
+    "@composio/core": "0.27.0",
     "@nichols/core": "workspace:*",
     "zod": "4.6.7"
   },

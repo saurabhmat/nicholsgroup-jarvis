@@ -16,6 +16,10 @@ export const CANARIES = {
   INTUIT_WEBHOOK_VERIFIER_TOKEN: "canary-intuit-verifier-token-c40a1e77",
   INTUIT_REDIRECT_URI: "http://localhost:3000/api/connect/qbo/canary-redirect-9a6d",
   SUPABASE_SECRET_KEY: "sb_secret_canaryServerKey0123456789",
+  // T-219: the Composio project key and auth config ids are server-only (the connector is imported by server code only).
+  COMPOSIO_API_KEY: "canary-composio-api-key-3e9c51b8",
+  COMPOSIO_GMAIL_AUTH_CONFIG_ID: "canary-composio-gmail-auth-config-a47d20f1",
+  COMPOSIO_GOOGLECALENDAR_AUTH_CONFIG_ID: "canary-composio-calendar-auth-config-6c18e9d3",
 };
 
 /**

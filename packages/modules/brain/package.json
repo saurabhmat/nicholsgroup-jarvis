@@ -9,6 +9,7 @@
     "./tools": "./src/tools/index.ts",
     "./jobs": "./src/jobs/index.ts",
     "./ui": "./src/ui/index.ts",
+    "./interview": "./src/interview/index.ts",
     "./server": "./src/server/index.ts"
   },
   "scripts": {
