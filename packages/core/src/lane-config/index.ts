@@ -5,10 +5,11 @@
 import { z } from "zod";
 import { looksLikeSecretValue } from "../secrets/index";
 
-const laneCode = z.string().regex(/^[A-Z]{1,8}$/);
+/** Shared with the brain module's employee config (exported, not copied). */
+export const laneCode = z.string().regex(/^[A-Z]{1,8}$/);
 const id = z.string().min(1).max(100).regex(/^[A-Za-z0-9_.:-]+$/);
-const hhmm = z.string().regex(/^([01]\d|2[0-3]):[0-5]\d$/); // America/New_York wall-clock time
-const email = z.email().max(254);
+export const hhmm = z.string().regex(/^([01]\d|2[0-3]):[0-5]\d$/); // America/New_York wall-clock time
+export const email = z.email().max(254);
 const ids = z.array(id).max(500).default([]);
 /** Free-text labels (GoHighLevel tags, pipeline stage names): any printable text, no control characters. */
 const tags = z.array(z.string().min(1).max(100).regex(/^[^\u0000-\u001f\u007f]+$/)).max(500).default([]);
@@ -46,7 +47,8 @@ export const MODULES = [
   "brain",
 ] as const;
 
-export const ACTION_TYPES = ["email.draft", "email.send", "calendar.event", "monday.item", "notion.page"] as const;
+/** `email.draft` is an alias of `email.save_draft` (D-34), kept until callers move. */
+export const ACTION_TYPES = ["email.save_draft", "email.draft", "email.send", "calendar.event", "monday.item", "notion.page"] as const;
 
 /** Which source records belong to one entity (D-17, D-18). */
 const entityMappingSchema = z.strictObject({
@@ -178,9 +180,15 @@ export const laneConfigSchema = z.strictObject({
       // Only the owner approves (approvals spec §8 test 4: viewer, finance_operator and admin_technical are denied).
       approver_roles: z.array(z.literal("owner")).min(1).default(["owner"]),
       step_up_max_age_s: z.int().min(30).max(900).default(300),
+      // `email.draft` is an alias of `email.save_draft`: a legacy-only key is copied over, and two different values are
+      // refused, so approvals (which use email.save_draft) always see one expiry (T-211 review M1/L3).
       expire_after_hours: z
         .partialRecord(z.enum(ACTION_TYPES), z.int().min(1).max(24 * 30))
-        .default({ "email.draft": 72, "email.send": 72, "monday.item": 168 }),
+        .refine((r) => r["email.draft"] === undefined || r["email.save_draft"] === undefined || r["email.draft"] === r["email.save_draft"], {
+          message: "email.draft and email.save_draft must have the same expiry",
+        })
+        .transform((r) => (r["email.save_draft"] === undefined && r["email.draft"] !== undefined ? { ...r, "email.save_draft": r["email.draft"] } : r))
+        .default({ "email.save_draft": 72, "email.draft": 72, "email.send": 72, "monday.item": 168 }),
       payload_retention_days: z.int().min(1).max(3650).default(30),
       allowed_mailboxes: z.array(email).max(20).default([]),
       monday_column_allowlist: ids,

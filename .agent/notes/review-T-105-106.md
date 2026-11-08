@@ -1,0 +1,8 @@
+# T-105/T-106 demo scope reviews (Nov 8, 2026) — on d9a3f6e..ba30f4a
+(Saved by the main session: the reviewers could not write files.)
+
+Security (security-reviewer): no BLOCKER. H1 route never checked assistant access (viewer/admin_technical/no-category lanes got model calls). M1 no chat-turn rate/spend limit. M2 grounding false passes (digit runs from timestamps/ids). LOW: body read before size check, chars vs bytes; no content-type/Origin check; ai_tool_categories vs gate roles; page lists unusable categories; meetings resultStore full; client-supplied assistant turns (accepted until T-103); chips prefetch inbox pages; history mis-pairing.
+
+Code (code-reviewer): no BLOCKER. H1 step texts glued together. H2 history builder mis-pairs after failed/stopped answers (+ whitespace-only answer → every later send 400). MEDIUM: nyMidnight wrong on DST change days; all-day events dropped/wrong day; chips list all sources; 401/403 generic message; stream ending without message.done shows nothing, bad frame kills stream; iPhone zoom/auto-scroll/refocus/safe-area; raw markdown; grounding weak (false pass/alarms); no route rate limit. LOW: bytes, `as never` client type, provider-named label, 7×24h window note, aria-live, as-of without date, chip truncation, error logging. Tests: no client tests, fragile frame parsing, missing error/abort/max_steps cases.
+
+Status: fixed in a348d09 except: one in-flight stream per user, grounding from trusted figure fields only (before T-104), chips limited to sources used, `as never` typing, Playwright, server-side history (T-103). Listed in `.agent/pr/T-105-106.md`.

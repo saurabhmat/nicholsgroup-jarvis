@@ -14,6 +14,7 @@ const CORE_ONLY = ["@nichols/core"];
 const ALLOWED = {
   ".": ["@nichols/core", "@nichols/eslint-plugin", "@types/node", "eslint", "turbo", "typescript", "typescript-eslint", "vitest"],
   "apps/web": [
+    "@nichols/ai", // T-105: the assistant chat route (gate, tool loop, provider; the SDK stays inside packages/ai)
     "@nichols/brain", // T-210: the Inngest route wires the import-candidate purge job (@nichols/brain/jobs)
     "@nichols/connectors", // T-035: the /api/connect routes wrap @nichols/connectors/oauth (no vendor SDKs come with it)
     "@nichols/core",
@@ -34,7 +35,7 @@ const ALLOWED = {
     "typescript-eslint",
     "vitest", // T-024: unit tests for lane loading, return paths and the proxy (same version as the workspace)
   ],
-  "packages/ai": CORE_ONLY, // @anthropic-ai/sdk joins this list with T-100
+  "packages/ai": [...CORE_ONLY, "@anthropic-ai/sdk", "server-only", "zod"], // T-100; server-only: keeps the SDK out of client bundles; zod: strict tool argument schemas (T-101)
   // vendor SDKs join this list with their connectors (T-04x...); zod for the contract schemas, vitest for the kit (T-030)
   "packages/connectors": [...CORE_ONLY, "msw", "vitest", "zod"], // msw: provider mocks for tests (T-034)
   // T-016/T-017: Supabase clients, only importable from the lane router and packages/core/src/auth (lint)
@@ -59,6 +60,8 @@ const ALLOWED = {
       CORE_ONLY,
     ]),
   ),
+  // T-211: the employee config schema (strict Zod, spec §3). zod has no network or DB access; same major as core.
+  "packages/modules/brain": [...CORE_ONLY, "zod"],
 };
 
 /** same matching as the lint rule: "name", "name/sub", or "@scope/*" */

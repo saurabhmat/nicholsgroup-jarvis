@@ -16,4 +16,4 @@ export const retentionPurgeJob = createRetentionPurgeJob({
 
 export { createRetentionRegistry } from "./registry";
 export { RETENTION_CLASSES } from "./types";
-export type { LanePurgeResult, RetentionClass, RetentionDays, RetentionTable, TablePurgeResult } from "./types";
+export type { LanePurgeResult, RetentionClass, RetentionDays, RetentionDeclaration, RetentionTable, TablePurgeResult } from "./types";

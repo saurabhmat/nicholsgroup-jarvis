@@ -39,7 +39,59 @@ export type Database = {
           }
         },"core": {
           Tables: {
-            "connection_secrets": {
+            "ai_chat_rate": {
+                  Row: {
+                    "lane_id": string,"turns": number,"user_id": string,"window_start": string
+                  }
+                  ComputedFields: never
+                  Insert: {
+                    "lane_id": string,"turns"?: number,"user_id": string,"window_start": string
+                  }
+                  Update: {
+                    "lane_id"?: string,"turns"?: number,"user_id"?: string,"window_start"?: string
+                  }
+                  Relationships: [
+                    {
+      foreignKeyName: "ai_chat_rate_lane_id_fkey"
+      columns: ["lane_id"]
+isOneToOne: false
+      referencedRelation: "lanes"
+      referencedColumns: ["code"]
+    },{
+      foreignKeyName: "ai_chat_rate_user_id_fkey"
+      columns: ["user_id"]
+isOneToOne: false
+      referencedRelation: "users"
+      referencedColumns: ["id"]
+    }
+                  ]
+                },"ai_tool_rate": {
+                  Row: {
+                    "calls": number,"lane_id": string,"user_id": string,"window_start": string
+                  }
+                  ComputedFields: never
+                  Insert: {
+                    "calls"?: number,"lane_id": string,"user_id": string,"window_start": string
+                  }
+                  Update: {
+                    "calls"?: number,"lane_id"?: string,"user_id"?: string,"window_start"?: string
+                  }
+                  Relationships: [
+                    {
+      foreignKeyName: "ai_tool_rate_lane_id_fkey"
+      columns: ["lane_id"]
+isOneToOne: false
+      referencedRelation: "lanes"
+      referencedColumns: ["code"]
+    },{
+      foreignKeyName: "ai_tool_rate_user_id_fkey"
+      columns: ["user_id"]
+isOneToOne: false
+      referencedRelation: "users"
+      referencedColumns: ["id"]
+    }
+                  ]
+                },"connection_secrets": {
                   Row: {
                     "connection_id": string,"created_at": string,"lane_id": string,"rotated_at": string | null,"vault_secret_id": string
                   }
@@ -343,7 +395,16 @@ isOneToOne: false
                 }
           }
           Functions: {
-            "allowed_lanes":
+            "ai_chat_turn":
+{ Args: { "p_lane": string }; Returns: Json
+                           },
+"ai_tool_categories":
+{ Args: { "p_lane": string }; Returns: (string)[]
+                           },
+"ai_tool_gate":
+{ Args: { "p_category": string,"p_lane": string,"p_view": string }; Returns: Json
+                           },
+"allowed_lanes":
 { Args: { "p_uid": string,"p_view": string }; Returns: (string)[]
                            },
 "brain_document_get":

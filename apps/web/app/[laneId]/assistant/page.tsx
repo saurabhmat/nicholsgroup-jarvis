@@ -1,10 +1,10 @@
 import { Suspense } from "react";
-import { ModulePage } from "@/components/module-page";
+import { AssistantPage } from "@/components/assistant-page";
 
 export default function Page(props: PageProps<"/[laneId]/assistant">) {
   return (
     <Suspense fallback={null}>
-      <ModulePage module="assistant" params={props.params} />
+      <AssistantPage params={props.params} />
     </Suspense>
   );
 }

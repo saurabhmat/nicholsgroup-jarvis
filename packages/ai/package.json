@@ -4,14 +4,23 @@
   "private": true,
   "type": "module",
   "exports": {
-    ".": "./src/index.ts"
+    ".": "./src/index.ts",
+    "./config": "./src/config.ts",
+    "./testing": "./src/testing.ts",
+    "./types": "./src/types.ts",
+    "./tools": "./src/tools/index.ts",
+    "./chat": "./src/chat.ts"
   },
   "scripts": {
     "typecheck": "tsc -b",
     "lint": "eslint .",
-    "test": "vitest run"
+    "test": "vitest run",
+    "test:injection": "vitest run src/injection"
   },
   "dependencies": {
-    "@nichols/core": "workspace:*"
+    "@anthropic-ai/sdk": "1.6.0",
+    "@nichols/core": "workspace:*",
+    "server-only": "^0.0.1",
+    "zod": "4.6.7"
   }
 }
