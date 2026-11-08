@@ -7,7 +7,8 @@
     ".": "./src/index.ts",
     "./config": "./src/config.ts",
     "./testing": "./src/testing.ts",
-    "./types": "./src/types.ts"
+    "./types": "./src/types.ts",
+    "./tools": "./src/tools/index.ts"
   },
   "scripts": {
     "typecheck": "tsc -b",
@@ -16,6 +17,8 @@
   },
   "dependencies": {
     "@anthropic-ai/sdk": "1.6.0",
-    "@nichols/core": "workspace:*"
+    "@nichols/core": "workspace:*",
+    "server-only": "^0.0.1",
+    "zod": "4.6.7"
   }
 }
