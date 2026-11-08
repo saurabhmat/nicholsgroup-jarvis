@@ -9,6 +9,8 @@ import type { ProviderResult } from "@nichols/ai/config";
 import { createPolicyGate, createToolRegistry, registerAssistantTools } from "@nichols/ai/tools";
 import { LLMProviderError } from "@nichols/ai";
 import type { Audit } from "@nichols/core/audit";
+import { createBrainStore, type ClientFor } from "@nichols/brain/server";
+import { loadBrainPromptContext } from "@nichols/brain/server";
 import { authErrorResponse, type Guards } from "@nichols/core/auth";
 
 export const MAX_BODY_BYTES = 100_000;
@@ -81,9 +83,12 @@ export async function handleChat(request: Request, laneId: string, deps: ChatDep
 
   let g: Awaited<ReturnType<ChatDeps["guards"]>>;
   let client: Awaited<ReturnType<Guards["requireLane"]>>["client"];
+  let userId: string;
   try {
     g = await deps.guards();
-    ({ client } = await g.requireLane(laneId));
+    const lane = await g.requireLane(laneId);
+    client = lane.client;
+    userId = lane.session.userId;
   } catch (e) {
     const res = authErrorResponse(e);
     if (res) return res;
@@ -102,6 +107,14 @@ export async function handleChat(request: Request, laneId: string, deps: ChatDep
   const p = deps.provider();
   if (!p.configured) return json(503, { error: "not_configured" });
   const laneName = (await g.listLanes().catch(() => [])).find((l) => l.laneId === laneId)?.name ?? laneId;
+
+  // Brain context (T-212): the caller's own About-Me and Preferences (home lane, D-28) and this lane's own pages, read
+  // through the session-bound lane client. Any failure only means fewer notes, never a failed turn. The employee
+  // block belongs to employee runs (T-213), not to this chat.
+  const g2 = g;
+  const clientFor: ClientFor = async (l) => (await g2.requireLane(l)).client as never;
+  const brainStore = createBrainStore({ clientFor, laneSettingsFor: async () => null });
+  const brain = await loadBrainPromptContext(brainStore, { userId, lanes: [laneId] }).catch(() => null);
 
   const registry = registerAssistantTools(createToolRegistry(), deps.now);
   const gate = createPolicyGate({
@@ -135,6 +148,11 @@ export async function handleChat(request: Request, laneId: string, deps: ChatDep
           now: deps.now(),
           emit,
           signal: request.signal,
+          userId,
+          ...(brain ? { brain: { brainUser: brain.brainUser, laneBrain: brain.laneBrain } } : {}),
+          onPrompt: (p) => {
+            if (p.dropped.length || p.truncated.length) console.info("[assistant] brain blocks trimmed:", p.dropped.length, p.truncated.join(","));
+          },
         });
       } catch (e) {
         console.error("[assistant] turn failed:", e instanceof LLMProviderError ? e.code : e instanceof Error ? e.name : typeof e);

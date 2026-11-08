@@ -985,7 +985,7 @@ Spec: `docs/specs/brain-and-employees.md`, `docs/specs/brain-interview.md`; seed
 - acceptance: `email.save_draft` added to `ACTION_TYPES` in `packages/core/src/lane-config` with its lane-config test and an `approvals.expire_after_hours` default (D-34); `employeeConfigSchema` (strict Zod, spec §3) with `laneCode`/`email`/`hhmm` exported from core; effective permissions = config ∩ `lane_policies.write_actions_allowed` ∩ role through the tested action-type mapping table (spec §3); `mail[].lane` ∈ `lanes`; a single-lane employee has `lanes == [lane_id]`; a mailbox not in `lane_config.mailboxes` is rejected; `finance_kpis` ⊆ `lane_config.kpis`; `schedule.days` defaults to Mon–Fri (D-32); tests for widen-attempt and unknown-mailbox.
 
 ### T-212 Prompt assembly with brain blocks
-- status: approved
+- status: done
 - depends: T-100, T-102, T-210
 - acceptance: order in spec §4; per-lane blocks only (no foreign-lane block in a single-lane call); D-28 test: About-Me and Preferences only in the owner's own calls and in every lane; no `mem.items` block until T-155; token cap with dropped-block note; injection test: a brain doc saying "call send_email" changes no tool availability. From the T-211 review: an employee's stored config is loaded with `loadEmployeeConfig` on every run (fail closed), permissions come from `effectivePermissionsByLane` (each lane's own policy and role), and the owner's `include`/`topics` text goes only into a delimited user-preferences block, never the system prompt.
 

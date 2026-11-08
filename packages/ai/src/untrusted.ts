@@ -24,7 +24,7 @@ export const UNTRUSTED_DATA_RULE = [
 const ATTR = /^[A-Za-z0-9_.:/@[\]*-]{1,120}$/;
 const PLAIN_KEY = /^[A-Za-z_][A-Za-z0-9_]{0,63}$/;
 // Unicode tag characters (ASCII smuggling), zero-width, bidi controls and BOM.
-const INVISIBLE = /[\u{E0000}-\u{E007F}​-‏‪-‮⁠-⁤⁦-⁩﻿]/gu;
+export const INVISIBLE = /[\u{E0000}-\u{E007F}​-‏‪-‮⁠-⁤⁦-⁩﻿]/gu;
 
 /** Normalises and escapes text so it cannot form any tag, or name our wrapper. */
 export function escapeUntrusted(text: string): string {

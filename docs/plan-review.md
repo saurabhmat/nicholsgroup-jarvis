@@ -920,3 +920,13 @@ T-210 (Brain module + schema) is built; findings 5, 6, 19, 21, 24, 25 are applie
 ### T-211 build review (Nov 7, 2026, branch `agent/brain`)
 
 Security + code review: no BLOCKER/HIGH; MEDIUMs fixed (see `.agent/pr/T-211.md`). Deferred / noted: `brain.employee_save` does not enforce the config rules in SQL (runtime re-check via `loadEmployeeConfig` instead; add SQL guards if a non-app client ever writes configs); `effectivePermissions` for a cross-company employee must be per lane (T-212/T-213 acceptance updated); spec readings to confirm: owner-only proposing, multi-lane config without its own lane, case-insensitive mailbox match.
+
+### T-212 build review (Nov 8, 2026, branch `agent/T-212`)
+
+No BLOCKER/HIGH found (the security-reviewer and code-reviewer subagents were not available in this session; a self-review against the checklist below was done, see `.agent/pr/T-212.md`). Logged, MEDIUM and below:
+- **M (employee block not wired to chat):** `assemblePrompt` and `buildEmployeePrompt` support the `<employee>` block and the `<user_preferences>` message, but no caller passes an employee yet. T-213 must call `store.loadEmployeeConfig` (via `buildEmployeePrompt`) on every run, fail closed, and pass `policyFor`/`roleFor` read per lane.
+- **M (latency):** `loadBrainPromptContext` reads sequentially (home lane, list, up to 12 page bodies) on every chat turn. Add a short per-turn cache or a combined read function if it shows up in timings.
+- **L (shared lane pages):** only the caller's own pages are read (plan-review sec M-1); there is no "explicitly shared page" mechanism, so another owner's Context/Work page in the same lane never reaches the prompt. Revisit when a lane has several owners.
+- **L (brain text is in the system prompt):** brain pages and About-Me are owner-authored and placed in system blocks as spec §4 says, escaped so they cannot form tags, and described to the model as non-authoritative; only the server-side gate decides tools.
+- **L (token estimate):** 3 characters per token, deliberately pessimistic; no tokenizer.
+- **L (ClientFor session-bound):** the chat route builds the store's `clientFor` from `guards.requireLane`, so the RLS-bypassing job client is not used there (closes sec L-3 for this caller; the type is still structural).

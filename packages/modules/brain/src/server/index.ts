@@ -19,3 +19,5 @@ export type {
   LaneSettingsFor,
   SaveResult,
 } from "./store";
+export { loadBrainPromptContext, buildEmployeePrompt, MAX_LANE_PAGES } from "./prompt-context";
+export type { BrainPromptContext, EmployeePromptBlock, EmployeePromptDeps, PromptStore } from "./prompt-context";
