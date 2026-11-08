@@ -40,10 +40,19 @@ describe("link", () => {
   });
 });
 
+describe("listAccountIds", () => {
+  it("lists only the user's accounts in the auth config", async () => {
+    fake.accounts.set("ca_mine", { id: "ca_mine", status: "ACTIVE", toolkit: "gmail", userId: USER, authConfigId: "ac_gmail_synthetic" });
+    fake.accounts.set("ca_other_user", { id: "ca_other_user", status: "ACTIVE", toolkit: "gmail", userId: "22222222-2222-4222-8222-222222222222", authConfigId: "ac_gmail_synthetic" });
+    fake.accounts.set("ca_other_cfg", { id: "ca_other_cfg", status: "ACTIVE", toolkit: "gmail", userId: USER, authConfigId: "ac_other" });
+    expect(await port().listAccountIds({ userId: USER, authConfigId: "ac_gmail_synthetic" })).toEqual(["ca_mine"]);
+  });
+});
+
 describe("getAccount", () => {
   it("returns status and toolkit only", async () => {
     fake.accounts.set("ca_a", { id: "ca_a", status: "EXPIRED", toolkit: "gmail" });
-    expect(await port().getAccount("ca_a")).toEqual({ id: "ca_a", status: "EXPIRED", toolkitSlug: "gmail", isDisabled: false });
+    expect(await port().getAccount("ca_a")).toEqual({ id: "ca_a", status: "EXPIRED", toolkitSlug: "gmail", authConfigId: "ac_synthetic", isDisabled: false });
   });
   it("a missing account is not_found and carries no provider text", async () => {
     const err = await port().getAccount("ca_missing").catch((e: unknown) => e);

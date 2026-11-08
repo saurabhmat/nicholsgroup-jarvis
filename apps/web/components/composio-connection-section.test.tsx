@@ -47,7 +47,9 @@ describe("ComposioConnectionSection", () => {
     expect(disconnect.disabled).toBe(true);
     expect(disconnect.title).toBe("Disconnect arrives with Approvals");
     expect(disconnect.closest("form")).toBeNull();
-    expect(screen.getByText(/Disconnect arrives with Approvals/)).toBeTruthy();
+    expect(gmail.getByRole("button", { name: "Replace account via Composio" })).toBeTruthy();
+    expect(gmail.getByText(/previous account stays in Composio until it is removed by hand/)).toBeTruthy();
+    expect(screen.getByText(/Disconnect arrives with Approvals: removing/)).toBeTruthy();
     expect(screen.getByText(/Composio dashboard/)).toBeTruthy();
   });
 

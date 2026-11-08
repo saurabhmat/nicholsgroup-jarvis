@@ -24,6 +24,7 @@ function harness(opts: { mailboxes?: string[]; authConfig?: string | null } = {}
   const tools = new Map<string, { successful: boolean; data: Record<string, unknown> }>();
   let redirectUrl = "https://connect.composio.dev/link/lk1";
   let linkCount = 0;
+  const notMine = new Set<string>();
   const flags = { getAccountError: null as ConnectorError | null };
   const seen: { callbackUrl: string } = { callbackUrl: "" };
   const port: ComposioPort = {
@@ -32,6 +33,10 @@ function harness(opts: { mailboxes?: string[]; authConfig?: string | null } = {}
       seen.callbackUrl = input.callbackUrl;
       linkCount += 1;
       return { accountId: `ca_${String(linkCount)}`, redirectUrl };
+    },
+    async listAccountIds({ authConfigId }) {
+      calls.push(`list ${authConfigId}`);
+      return [...accounts.values()].filter((a) => !notMine.has(a.id) && a.authConfigId === authConfigId).map((a) => a.id);
     },
     async getAccount(id) {
       calls.push(`get ${id}`);
@@ -49,8 +54,9 @@ function harness(opts: { mailboxes?: string[]; authConfig?: string | null } = {}
   };
   const states = new Map<string, StoredState & { lane: string; user: string }>();
   const stateStore: StateStore = {
-    async create(_client, laneId, provider, hash, verifier, redirectUri, binding) {
-      states.set(hash, { provider, codeVerifier: verifier, redirectUri, toolkit: binding?.toolkit ?? null, accountRef: binding?.accountRef ?? null, lane: laneId, user: USER });
+    async create(_client, laneId, provider, hash, verifier, redirectUri) {
+      calls.push("state");
+      states.set(hash, { provider, codeVerifier: verifier, redirectUri, toolkit: null, accountRef: null, lane: laneId, user: USER });
     },
     async consume(_client, laneId, hash) {
       const s = states.get(hash);
@@ -67,6 +73,16 @@ function harness(opts: { mailboxes?: string[]; authConfig?: string | null } = {}
       const row: ComposioConnection = { id: `00000000-0000-4000-8000-00000000000${String(rows.size + 1)}`, laneId, toolkit, accountId, identity: null, status: "pending", createdBy, lastSyncAt: null };
       rows.set(row.id, row);
       return row;
+    },
+    async bindState(_laneId, _userId, hash, toolkit, accountId) {
+      const st = states.get(hash);
+      if (!st || st.toolkit) throw new ConnectorError({ kind: "transient", message: "x" });
+      st.toolkit = toolkit;
+      st.accountRef = accountId;
+    },
+    async discardPending(_laneId, id) {
+      calls.push("discard");
+      if (rows.get(id)?.status === "pending") rows.delete(id);
     },
     async activate(laneId, id, identity) {
       if (otherLaneIdentities.has(identity)) throw new ConnectorError({ kind: "forbidden", message: ACCOUNT_IN_USE_MESSAGE });
@@ -101,7 +117,7 @@ function harness(opts: { mailboxes?: string[]; authConfig?: string | null } = {}
     logger: createConnectorLogger({ sink: () => undefined }),
   });
   const check = createComposioCheck({ composio, connections, laneConfig, now: () => Date.UTC(2026, 10, 8, 12) });
-  return { flags, seen, flow, check, calls, accounts, tools, states, rows, audits, authorize, otherLaneIdentities, setRedirect: (u: string) => (redirectUrl = u) };
+  return { notMine, flags, seen, flow, check, calls, accounts, tools, states, rows, audits, authorize, otherLaneIdentities, setRedirect: (u: string) => (redirectUrl = u) };
 }
 
 
@@ -112,7 +128,7 @@ async function started(h: ReturnType<typeof harness>, toolkit = "gmail") {
   const accountId = `ca_${String(h.calls.filter((c) => c.startsWith("link")).length)}`;
   return { location, state, accountId, query: (extra: Record<string, string> = {}) => new URLSearchParams({ state, ...extra }) };
 }
-const activeAccount = (id: string, toolkit = "gmail"): ComposioAccount => ({ id, status: "ACTIVE", toolkitSlug: toolkit, isDisabled: false });
+const activeAccount = (id: string, toolkit = "gmail"): ComposioAccount => ({ id, status: "ACTIVE", toolkitSlug: toolkit, authConfigId: toolkit === "gmail" ? "ac_gmail_synthetic" : "ac_cal_synthetic", isDisabled: false });
 const profile = (email: string) => ({ successful: true, data: { emailAddress: email } });
 
 describe("start", () => {
@@ -120,7 +136,7 @@ describe("start", () => {
     const h = harness();
     const s = await started(h);
     expect(s.location).toBe("https://connect.composio.dev/link/lk1");
-    expect(h.calls).toEqual([`link ${USER} ac_gmail_synthetic`]);
+    expect(h.calls).toEqual(["state", `link ${USER} ac_gmail_synthetic`]); // the state (role + cap checked by the database) comes before the Composio call
     const callback = new URL(h.seen.callbackUrl);
     expect(callback.origin + callback.pathname).toBe("https://app.example.test/api/connect/composio/callback");
     expect(callback.searchParams.get("state")).toMatch(/^PKG\.[A-Za-z0-9_-]{43}$/);
@@ -133,7 +149,7 @@ describe("start", () => {
   it("uses the calendar auth config for the calendar toolkit", async () => {
     const h = harness();
     await started(h, "googlecalendar");
-    expect(h.calls[0]).toBe(`link ${USER} ac_cal_synthetic`);
+    expect(h.calls[1]).toBe(`link ${USER} ac_cal_synthetic`);
   });
 
   it("when the auth config id is not configured: refuses without any Composio call", async () => {
@@ -146,6 +162,12 @@ describe("start", () => {
     const h = harness({ mailboxes: [] });
     await expect(h.flow.start("gmail", LANE, h.authorize)).rejects.toMatchObject({ info: { kind: "forbidden" } });
     expect(h.calls).toEqual([]);
+  });
+
+  it("a failing state create (role, aal2 or in-flight cap) means Composio is never called: no orphan account", async () => {
+    const h = harness();
+    const flow = createComposioConnect({ composio: guardComposio({ link: async () => { throw new Error("must not be called"); }, getAccount: async () => { throw new Error("no"); }, listAccountIds: async () => [], execute: async () => { throw new Error("no"); } }), states: { create: async () => { throw new ConnectorError({ kind: "rate_limited", message: "Too many connects in progress" }); }, consume: async () => null }, connections: {} as never, laneConfig: { async mailboxes() { return [BOSS]; } }, authConfigId: () => "ac", appOrigin: () => "https://app.example.test", audit: { async log() {} } });
+    await expect(flow.start("gmail", LANE, h.authorize)).rejects.toMatchObject({ info: { kind: "rate_limited" } });
   });
 
   it("an unknown toolkit is refused before authorize or Composio", async () => {
@@ -168,7 +190,7 @@ describe("start", () => {
       const h = harness();
       h.setRedirect(url);
       await expect(h.flow.start("gmail", LANE, h.authorize), url).rejects.toMatchObject({ info: { kind: "provider_error" } });
-      expect(h.states.size, url).toBe(0);
+      expect([...h.states.values()].every((st) => st.toolkit === null && st.accountRef === null), url).toBe(true); // never bound: the callback refuses it
     }
   });
 });
@@ -234,6 +256,37 @@ describe("callback", () => {
     h.tools.set("GMAIL_GET_PROFILE", profile(BOSS));
     await h.flow.callback(s.query(), h.authorize); // no connected_account_id in the URL at all
     expect([...h.rows.values()][0]?.accountId).toBe(s.accountId);
+  });
+
+  it("an account that is not this user's (a state carrying a foreign ca_ id) is refused; the pending row is not left behind", async () => {
+    const h = harness();
+    const s = await started(h);
+    h.accounts.set(s.accountId, activeAccount(s.accountId));
+    h.notMine.add(s.accountId);
+    h.tools.set("GMAIL_GET_PROFILE", profile(BOSS));
+    expect(await h.flow.callback(s.query(), h.authorize)).toMatchObject({ ok: false, reason: "account_refused" });
+    expect(h.rows.size).toBe(0);
+    expect(h.calls.filter((c) => c.startsWith("execute"))).toEqual([]);
+  });
+
+  it("an account from another auth config than the one configured for the toolkit is refused", async () => {
+    const h = harness();
+    const s = await started(h);
+    h.accounts.set(s.accountId, { ...activeAccount(s.accountId), authConfigId: "ac_someone_elses" });
+    h.tools.set("GMAIL_GET_PROFILE", profile(BOSS));
+    expect(await h.flow.callback(s.query(), h.authorize)).toMatchObject({ ok: false, reason: "account_refused" });
+    expect(h.rows.size).toBe(0);
+  });
+
+  it("a refused or in-use account leaves no pending row", async () => {
+    const h = harness();
+    h.otherLaneIdentities.add(BOSS);
+    const s = await started(h);
+    h.accounts.set(s.accountId, activeAccount(s.accountId));
+    h.tools.set("GMAIL_GET_PROFILE", profile(BOSS));
+    await h.flow.callback(s.query(), h.authorize);
+    expect(h.calls).toContain("discard");
+    expect(h.rows.size).toBe(0);
   });
 
   it("denied at the consent screen: nothing is read or stored", async () => {
@@ -302,7 +355,7 @@ describe("callback", () => {
     expect(h.rows.size).toBe(0);
   });
 
-  it("a reconnect supersedes the lane's earlier account for the toolkit", async () => {
+  it("a reconnect supersedes the lane's earlier account for the toolkit (fake store: the SQL itself is proven in pgTAP 270)", async () => {
     const h = harness();
     for (let i = 0; i < 2; i += 1) {
       const s = await started(h);
@@ -320,7 +373,7 @@ describe("Test check", () => {
     h.accounts.set(s.accountId, activeAccount(s.accountId));
     h.tools.set("GMAIL_GET_PROFILE", profile(BOSS));
     await h.flow.callback(s.query(), h.authorize);
-    h.tools.set("GMAIL_FETCH_EMAILS", { successful: true, data: { messages: [{ subject: "board salaries", from: "x@example.test" }] } });
+    h.tools.set("GMAIL_LIST_LABELS", { successful: true, data: { labels: [{ name: "board salaries" }] } });
     h.calls.length = 0;
     return s;
   }
@@ -336,7 +389,7 @@ describe("Test check", () => {
     await connected(h);
     const res = await h.check(LANE, "gmail");
     expect(res).toEqual({ status: "ok", checked_at: "2026-11-08T12:00:00.000Z" });
-    expect(h.calls.filter((c) => c.startsWith("execute"))).toEqual(["execute GMAIL_GET_PROFILE", "execute GMAIL_FETCH_EMAILS"]);
+    expect(h.calls.filter((c) => c.startsWith("execute"))).toEqual(["execute GMAIL_GET_PROFILE", "execute GMAIL_LIST_LABELS"]);
     expect(JSON.stringify(res)).not.toContain("board salaries");
     expect(JSON.stringify(res)).not.toContain(BOSS);
   });
@@ -371,7 +424,7 @@ describe("Test check", () => {
   it("the mailbox is re-checked against lane_config on every call (removed from the list -> refused, nothing read)", async () => {
     const h = harness();
     await connected(h);
-    const stricter = createComposioCheck({ composio: guardComposio({ link: async () => { throw new Error("no"); }, getAccount: async (id) => activeAccount(id), execute: async () => { throw new Error("must not be called"); } }), connections: { find: async () => [...h.rows.values()][0] ?? null } as never, laneConfig: { async mailboxes() { return ["other@example.test"]; } } });
+    const stricter = createComposioCheck({ composio: guardComposio({ link: async () => { throw new Error("no"); }, getAccount: async (id) => activeAccount(id), listAccountIds: async () => [], execute: async () => { throw new Error("must not be called"); } }), connections: { find: async () => [...h.rows.values()][0] ?? null } as never, laneConfig: { async mailboxes() { return ["other@example.test"]; } } });
     expect((await stricter(LANE, "gmail")).status).toBe("mailbox_not_allowed");
   });
 
@@ -385,7 +438,7 @@ describe("Test check", () => {
   it("a failing page read is an error, never an exception", async () => {
     const h = harness();
     await connected(h);
-    h.tools.set("GMAIL_FETCH_EMAILS", { successful: false, data: {} });
+    h.tools.set("GMAIL_LIST_LABELS", { successful: false, data: {} });
     expect((await h.check(LANE, "gmail")).status).toBe("error");
   });
 

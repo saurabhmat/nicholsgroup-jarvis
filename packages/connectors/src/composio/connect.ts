@@ -79,17 +79,18 @@ export function createComposioConnect(deps: ComposioConnectDeps) {
       const origin = deps.appOrigin();
       const state = newState(laneId, deps.random);
       const callbackUrl = `${origin}${COMPOSIO_CALLBACK_PATH}?state=${encodeURIComponent(state)}`;
+      // The state goes first, with the signed-in user's own client: the database checks role, aal2 and the in-flight cap
+      // BEFORE Composio is called, so a refused or capped caller leaves no orphan INITIATED account at Composio.
+      // The PKCE verifier column is mandatory in the shared table; this flow has no code exchange, so it is a fresh random
+      // value that is never used.
+      await deps.states.create(client, laneId, COMPOSIO_PROVIDER, hashState(state), newCodeVerifier(deps.random), `${origin}${COMPOSIO_CALLBACK_PATH}`);
       const { accountId, redirectUrl } = await deps.composio.link({ userId, authConfigId, callbackUrl });
       const link = URL.canParse(redirectUrl) ? new URL(redirectUrl) : null;
       if (!link || link.protocol !== "https:" || !COMPOSIO_LINK_HOST.test(link.hostname)) {
         throw new ConnectorError({ kind: "provider_error", message: "Composio returned a consent link that is not a Composio https address" });
       }
-      // The PKCE verifier column is mandatory in the shared state table; Composio's flow has no code exchange, so it is
-      // a fresh random value that is never used. The binding (toolkit + connected account) is what this flow checks.
-      await deps.states.create(client, laneId, COMPOSIO_PROVIDER, hashState(state), newCodeVerifier(deps.random), `${origin}${COMPOSIO_CALLBACK_PATH}`, {
-        toolkit,
-        accountRef: accountId,
-      });
+      // Server-side bind of the toolkit and the account Composio created (service_role; a caller cannot supply them).
+      await deps.connections.bindState(laneId, userId, hashState(state), toolkit, accountId);
       await deps.audit.log({
         laneId,
         actor: { kind: "user", userId },
@@ -127,6 +128,7 @@ export function createComposioConnect(deps: ComposioConnectDeps) {
         return { ok: false, reason: "denied", laneId, toolkit };
       }
 
+      let pendingId: string | null = null; // the pending row this callback made or reused; discarded when the connect fails
       let accountActive = false; // an ACTIVE account exists at Composio (see COMPOSIO_GRANT_NOT_STORED_MESSAGE)
       try {
         const connectionId = await withAudit(deps.audit, entry, async () => {
@@ -134,12 +136,18 @@ export function createComposioConnect(deps: ComposioConnectDeps) {
           if (healthOf(account) !== "active") throw new ExchangeIncomplete();
           accountActive = true;
           if (account.toolkitSlug !== toolkit) throw new Refused(new ConnectorError({ kind: "forbidden", message: "The Composio account is for a different toolkit" }));
+          // The account must come from the auth config we configured for this toolkit and belong to this Jarvis user.
+          const expectedConfig = deps.authConfigId(toolkit);
+          if (!expectedConfig || account.authConfigId !== expectedConfig) throw new Refused(new ConnectorError({ kind: "forbidden", message: "The Composio account is from a different auth config" }));
+          const owned = await call(() => deps.composio.listAccountIds({ userId, authConfigId: expectedConfig }));
+          if (!owned.includes(accountRef)) throw new Refused(new ConnectorError({ kind: "forbidden", message: "The Composio account does not belong to this user" }));
           const allowed = await refuseOrOutage(() => mailboxes(laneId));
           const res = await call(() => deps.composio.execute(toolkit, TOOLKIT_SPECS[toolkit].identityTool, { userId, accountId: accountRef, arguments: {} }));
           const identity = res.successful ? extractIdentity(res.data) : null;
           if (!identity) throw new Refused(new ConnectorError({ kind: "forbidden", message: "The account address could not be read" }));
           if (!allowed.includes(identity)) throw new Refused(new ConnectorError({ kind: "forbidden", message: "This account is not one of the lane's configured mailboxes" }));
           const row = await refuseInUse(() => deps.connections.ensurePending(laneId, toolkit, accountRef, userId));
+          pendingId = row.id;
           await refuseInUse(() => deps.connections.activate(laneId, row.id, identity, userId));
           return row.id;
         });
@@ -148,6 +156,7 @@ export function createComposioConnect(deps: ComposioConnectDeps) {
         const reason: ConnectFailure = e instanceof Refused ? "account_refused" : e instanceof ExchangeIncomplete ? "exchange_failed" : "unavailable";
         const cause = e instanceof Refused ? e.cause : e;
         log().child({ laneId }).warn("connector.composio_callback_failed", { reason, toolkit, error: isConnectorError(cause) ? cause : { error_name: cause instanceof Error ? cause.name : typeof cause } });
+        if (pendingId) await deps.connections.discardPending(laneId, pendingId).catch(() => undefined);
         if (accountActive) {
           await deps.audit.log({ ...entry, action: "connection.connect.grant_not_stored", metadata: { ...entry.metadata, reason } }).catch(() => undefined);
           const inUse = isConnectorError(cause) && cause.info.message === ACCOUNT_IN_USE_MESSAGE;

@@ -58,7 +58,7 @@ function mailboxList(config: unknown): string[] {
 }
 
 /** The lane's Composio connections as the page shows them. Throws on a database error. */
-export async function loadComposioSection(client: Db, laneId: string, availability: Availability): Promise<ComposioSectionView> {
+export async function loadComposioSection(client: Db, laneId: string, availability: Availability, now: number = Date.now()): Promise<ComposioSectionView> {
   const core = client.schema("core");
   const conns = await core
     .from("connections")
@@ -75,7 +75,9 @@ export async function loadComposioSection(client: Db, laneId: string, availabili
   return {
     toolkits: COMPOSIO_TOOLKITS.map(({ toolkit, label }) => {
       // Newest first; a pending row (abandoned or in flight) never hides a usable one.
-      const mine = rows.filter((r) => r.toolkit === toolkit && typeof r.id === "string" && STATES[String(r.status)]);
+      // A pending row older than the connect state's lifetime (10 minutes) is abandoned and hidden.
+      const stale = (r: { status: unknown; created_at: unknown }) => r.status === "pending" && !(typeof r.created_at === "string" && now - Date.parse(r.created_at) < 10 * 60 * 1000);
+      const mine = rows.filter((r) => r.toolkit === toolkit && typeof r.id === "string" && STATES[String(r.status)] && !stale(r));
       const row = mine.find((r) => r.status !== "pending") ?? mine[0];
       const address = row && typeof row.account_identity === "string" ? row.account_identity : null;
       return {

@@ -5,25 +5,23 @@ import type { LaneClient } from "@nichols/core/lane-router";
 import { ConnectorError } from "../contract/errors";
 import type { Provider } from "../contract/schemas";
 
-/** `toolkit` and `accountRef` are set only for a Composio connect (T-219): the toolkit and the connected account id bound server-side at start. */
+/** `toolkit` and `accountRef` are set only for a Composio connect (T-219): bound server-side by `core.oauth_state_bind` (service_role) after the user's create. */
 export type StoredState = { provider: string; codeVerifier: string; redirectUri: string; toolkit?: string | null; accountRef?: string | null };
-export type StateBinding = { toolkit: string; accountRef: string };
 
 export interface StateStore {
-  create(client: LaneClient, laneId: LaneId, provider: Provider, stateHash: string, codeVerifier: string, redirectUri: string, binding?: StateBinding): Promise<void>;
+  create(client: LaneClient, laneId: LaneId, provider: Provider, stateHash: string, codeVerifier: string, redirectUri: string): Promise<void>;
   /** The caller's own unexpired state for the lane, deleted on read; null for anything else. */
   consume(client: LaneClient, laneId: LaneId, stateHash: string): Promise<StoredState | null>;
 }
 
 export const dbStateStore: StateStore = {
-  async create(client, laneId, provider, stateHash, codeVerifier, redirectUri, binding) {
+  async create(client, laneId, provider, stateHash, codeVerifier, redirectUri) {
     const { error } = await client.schema("core").rpc("oauth_state_create", {
       p_lane: laneId,
       p_provider: provider,
       p_state_hash: stateHash,
       p_code_verifier: codeVerifier,
       p_redirect_uri: redirectUri,
-      ...(binding ? { p_toolkit: binding.toolkit, p_account_ref: binding.accountRef } : {}),
     });
     if (!error) return;
     if (error.code === "42501") throw new ConnectorError({ kind: "forbidden", message: "Connect not allowed" });

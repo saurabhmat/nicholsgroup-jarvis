@@ -30,6 +30,10 @@ export interface ComposioConnectionStore {
   activate(laneId: LaneId, connectionId: string, identity: string, actorUserId: string): Promise<void>;
   /** The lane's newest composio connection for the toolkit that is not disconnected, or null. */
   find(laneId: LaneId, toolkit: Toolkit): Promise<ComposioConnection | null>;
+  /** Binds the toolkit and the connected account id created by `link` to the user's own pending state (`core.oauth_state_bind`, service_role); once. */
+  bindState(laneId: LaneId, userId: string, stateHash: string, toolkit: Toolkit, accountId: string): Promise<void>;
+  /** Deletes a `pending` composio row of the lane (a connect that was refused or failed); never touches any other status. */
+  discardPending(laneId: LaneId, connectionId: string): Promise<void>;
   /** Moves a usable connection to `reconnect_required` (or back to `active`) when Composio's account status says so; true when changed. */
   setHealth(laneId: LaneId, conn: ComposioConnection, to: "active" | "reconnect_required"): Promise<boolean>;
 }
@@ -37,6 +41,8 @@ export interface ComposioConnectionStore {
 const LANE_ID = /^[A-Z]{1,8}$/;
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 const STATUSES = new Set(["pending", "active", "degraded", "reconnect_required", "disconnected"]);
+/** A pending row older than the connect state's lifetime (10 minutes) is abandoned: ignored by `find`. */
+export const PENDING_TTL_MS = 10 * 60 * 1000;
 const COLUMNS = "id, lane_id, toolkit, external_account_id, account_identity, status, created_by, last_sync_at";
 
 function parseRow(row: unknown): ComposioConnection {
@@ -59,7 +65,7 @@ function parseRow(row: unknown): ComposioConnection {
   };
 }
 
-export function createComposioConnectionStore(clientFor: JobClientFor): ComposioConnectionStore {
+export function createComposioConnectionStore(clientFor: JobClientFor, now: () => number = Date.now): ComposioConnectionStore {
   async function client(laneId: LaneId) {
     if (typeof laneId !== "string" || !LANE_ID.test(laneId)) throw new ConnectorError({ kind: "invalid_input", message: "A lane is required" });
     try {
@@ -114,20 +120,41 @@ export function createComposioConnectionStore(clientFor: JobClientFor): Composio
         const { data, error } = await db
           .schema("core")
           .from("connections")
-          .select(COLUMNS)
+          .select(COLUMNS + ", created_at")
           .eq("lane_id", laneId)
           .eq("provider", COMPOSIO_PROVIDER)
           .eq("transport", "composio")
           .eq("toolkit", toolkit)
           .neq("status", "disconnected")
           .order("created_at", { ascending: false })
-          .limit(1)
-          .maybeSingle();
+          .limit(10);
         if (error) throw error;
-        return data ? parseRow(data) : null;
+        const rows = (Array.isArray(data) ? data : []) as unknown as Record<string, unknown>[];
+        // A usable row wins over any pending one; a pending row counts only while its connect could still finish.
+        const fresh = (r: Record<string, unknown>) => r.status !== "pending" || (typeof r.created_at === "string" && now() - Date.parse(r.created_at) < PENDING_TTL_MS);
+        const pick = rows.find((r) => r.status !== "pending") ?? rows.find(fresh);
+        return pick ? parseRow(pick) : null;
       } catch (e) {
         if (e instanceof ConnectorError) throw e;
         throw unavailable();
+      }
+    },
+
+    async bindState(laneId, userId, stateHash, toolkit, accountId) {
+      if (!UUID.test(userId) || !/^[0-9a-f]{64}$/.test(stateHash) || !isToolkit(toolkit) || !CONNECTED_ACCOUNT_ID.test(accountId)) throw new ConnectorError({ kind: "invalid_input", message: "A user, a state, a toolkit and an account id are required" });
+      const db = await client(laneId);
+      const { error } = await db.schema("core").rpc("oauth_state_bind", { p_lane: laneId, p_state_hash: stateHash, p_user: userId, p_toolkit: toolkit, p_account_ref: accountId });
+      if (error) throw unavailable();
+    },
+
+    async discardPending(laneId, connectionId) {
+      if (!UUID.test(connectionId)) return;
+      const db = await client(laneId);
+      try {
+        const { error } = await db.schema("core").from("connections").delete().eq("lane_id", laneId).eq("id", connectionId).eq("transport", "composio").eq("status", "pending");
+        if (error) throw error;
+      } catch {
+        // Best effort: a leftover pending row is ignored after its TTL and never holds an account.
       }
     },
 

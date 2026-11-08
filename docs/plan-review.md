@@ -984,3 +984,13 @@ Logged, not fixed:
 - **L (e2e):** no Playwright test for the Composio section (global setup resets the local DB, which would wipe local connections); component tests cover the states.
 - **L (health):** account status is refreshed by Test (and only then). There is no scheduled Composio health job and no `composio.connected_account.expired` webhook yet (spec §8.5 optional); T-223's sync will call the same status check.
 - **L (T-216 leftovers fixed in passing):** `scripts/dependency-allowlist.test.mjs` listed no `@testing-library/*`/`jsdom` for `apps/web` (added by T-216's component tests); added to the allow-list with a comment.
+
+### T-219 review follow-ups (Nov 8, 2026)
+Security + code review run: 0 BLOCKER, 0 HIGH. Fixed in migration `20261108130000_composio_review_fixes.sql` (appended to part-6) and code: sec M1 (`oauth_state_create` back to five arguments; service_role-only `oauth_state_bind`; callback also requires the account's auth config to be the configured one and the account to be in the user's own `connectedAccounts.list`; the state is created before `link`, so role and in-flight cap are checked before Composio is called, closing sec L2), sec M2 (address held via any composio toolkit in another lane refuses; advisory lock per address), sec M3/code M3 (native `connection_token_store` refuses an address a composio row in another lane holds, same lock), sec L1 (Test reads label/calendar lists only, no mail or event content), sec L3/code L (usable rows win over pending; pending older than 10 min ignored and hidden; a refused connect deletes its pending row), sec L4 (`home_calendar_status` and Home's feed count native connections only), code M1 ("Replace account via Composio" with the note that the previous account stays in Composio), and the unrelated `peerDependencies` reorder was reverted.
+Logged, not fixed:
+- **code M2 (prerequisite for T-223 / switching PKG):** account health is refreshed only by the Test button; before any lane is switched to `composio` a passive health check (scheduled `connectedAccounts.get` -> `reconnect_required`) must exist.
+- **sec L5:** after the live check, pin the exact consent host instead of the `composio.dev` suffix.
+- **sec L6:** (as in the review) not changed.
+- **sec L8:** refused or superseded Composio accounts stay in the project until the Approvals cleanup exists (T-110 - T-113).
+- **L (Test route rate limit):** there is no per-user rate-limit pattern for connector routes (ai_chat_rate is chat-only); the Test route is owner/admin_technical at AAL2 only. Add one with the health job.
+- **L (home label):** Home does not mention a Composio connection at all yet; a label comes with T-223.

@@ -19,6 +19,7 @@ describe("connectResultMessage", () => {
     const ok = connectResultMessage({ connect: "ok", provider: "composio", toolkit: "gmail" });
     expect(ok).toMatchObject({ tone: "success", title: "Gmail via Composio connected" });
     expect(ok?.description).not.toMatch(/syncs in the background/);
+    expect(ok?.description).toMatch(/stays in Composio until it is removed by hand/);
     expect(connectResultMessage({ connect: "ok", provider: "composio", toolkit: "googlecalendar" })?.title).toBe("Google Calendar via Composio connected");
     // an unknown toolkit is not echoed
     expect(connectResultMessage({ connect: "ok", provider: "composio", toolkit: "<script>" })?.title).toBe("Composio connected");

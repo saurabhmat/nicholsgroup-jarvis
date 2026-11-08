@@ -6,7 +6,7 @@
 -- oauth_states toolkit/account_ref binding (create + consume round trip, same user/lane/single use, native states
 -- unchanged); cross-lane denial with a positive control and an aal1 case.
 begin;
-select plan(51);
+select plan(61);
 \ir helpers/lane_rls.psql
 
 update core.lanes set enabled = true where code = 'APK';
@@ -96,16 +96,44 @@ select throws_ok($$update core.connections set account_identity = 'someone-else@
 
 -- disconnecting (status only) frees the account for another lane
 select lives_ok($$update core.connections set status = 'disconnected' where id = '00000000-0000-4000-8000-000000002713'$$, 'disconnect PKG gmail (status only; no token exists)');
+
+-- M2: PKG holds the address through the calendar toolkit; a different toolkit in another lane is still the same account
+insert into core.connections (id, lane_id, provider, external_account_id, transport, toolkit)
+values ('00000000-0000-4000-8000-000000002722', 'APK', 'google', 'ca_gm_apk2', 'composio', 'gmail');
+select throws_ok($$select core.connection_activate_composio('APK', '00000000-0000-4000-8000-000000002722', 'boss@pkg-test.example', null)$$,
+                 'D0023', null, 'M2: gmail in APK is refused while googlecalendar in PKG holds the address (any toolkit)');
+-- M3: the reverse direction: native Google in another lane cannot take an address a composio row in PKG holds
+insert into core.connections (id, lane_id, provider, external_account_id)
+values ('00000000-0000-4000-8000-000000002724', 'APK', 'google', 'Boss@PKG-Test.example');
+select throws_ok($$select core.connection_token_store('APK', '00000000-0000-4000-8000-000000002724', 'synthetic-token-m3', null)$$,
+                 'D0023', null, 'M3: native token store in APK is refused while a composio row in PKG holds the address');
+select lives_ok($$select core.connection_token_store('PKG', (select id from core.connections where external_account_id = 'native-box@x.test' and lane_id = 'PKG'), 'synthetic-token-m3b', null)$$,
+                'M3 control: a native store for an address nobody else holds still works');
+select lives_ok($$update core.connections set status = 'disconnected' where id = '00000000-0000-4000-8000-000000002712'$$, 'M3: PKG calendar composio row disconnected (status only)');
+select lives_ok($$select core.connection_token_store('APK', '00000000-0000-4000-8000-000000002724', 'synthetic-token-m3c', null)$$,
+                'M3: once the composio row is disconnected, the native store for that address works');
 reset role;
 
 -- ---------------------------------------------------------------- oauth_states: toolkit + account ref
 create function pg_temp.h(p text) returns text language sql immutable as $$ select encode(sha256(convert_to(p, 'UTF8')), 'hex') $$;
 create function pg_temp.v(p text) returns text language sql immutable as $$ select rpad('verifier-' || p, 43, 'x') $$;
-create function pg_temp.mk(p_email text, p_aal text, p_lane text, p_state text, p_toolkit text, p_ref text) returns text language plpgsql as $$
+create function pg_temp.mk(p_email text, p_aal text, p_lane text, p_state text) returns text language plpgsql as $$
 begin
   perform pg_temp.claims(p_email, p_aal);
   set local role authenticated;
-  perform core.oauth_state_create(p_lane, 'google', pg_temp.h(p_state), pg_temp.v(p_state), 'http://localhost:3000/api/connect/composio/callback', p_toolkit, p_ref);
+  perform core.oauth_state_create(p_lane, 'google', pg_temp.h(p_state), pg_temp.v(p_state), 'http://localhost:3000/api/connect/composio/callback');
+  reset role;
+  return null;
+exception when others then
+  reset role;
+  return sqlstate;
+end;
+$$;
+-- The connector's server-side bind (service_role), for a user's own state.
+create function pg_temp.bind(p_lane text, p_state text, p_email text, p_toolkit text, p_ref text) returns text language plpgsql as $$
+begin
+  set local role service_role;
+  perform core.oauth_state_bind(p_lane, pg_temp.h(p_state), pg_temp.uid(p_email), p_toolkit, p_ref);
   reset role;
   return null;
 exception when others then
@@ -124,18 +152,29 @@ begin
 end;
 $$;
 
-select is(pg_temp.mk('owner@example.test', 'aal2', 'PKG', 'c-1', 'gmail', 'ca_link1'), null, 'owner at aal2 starts a composio connect (toolkit + account ref stored)');
-select is(pg_temp.mk('owner@example.test', 'aal2', 'PKG', 'c-2', 'gmail', null), '23514', 'a toolkit without an account ref is refused');
-select is(pg_temp.mk('owner@example.test', 'aal2', 'PKG', 'c-3', null, 'ca_x'), '23514', 'an account ref without a toolkit is refused');
-select is(pg_temp.mk('owner@example.test', 'aal2', 'PKG', 'c-4', 'gmail', 'ca bad ref'), '23514', 'an account ref with odd characters is refused');
-select is(pg_temp.mk('viewer@example.test', 'aal2', 'PKG', 'c-5', 'gmail', 'ca_v'), '42501', 'a viewer cannot start it');
-select is(pg_temp.mk('admin-technical@example.test', 'aal2', 'APK', 'c-6', 'gmail', 'ca_w'), '42501', 'cross-lane: a PKG-only admin cannot start it in APK');
+select is(pg_temp.mk('owner@example.test', 'aal2', 'PKG', 'c-1'), null, 'owner at aal2 starts a connect with the original five-argument create');
+select is(pg_temp.mk('viewer@example.test', 'aal2', 'PKG', 'c-5'), '42501', 'a viewer cannot start it');
+select is(pg_temp.mk('admin-technical@example.test', 'aal2', 'APK', 'c-6'), '42501', 'cross-lane: a PKG-only admin cannot start it in APK');
+select throws_ok($$set local role authenticated; select core.oauth_state_create('PKG', 'google', repeat('a', 64), repeat('v', 43), 'http://localhost:3000/x', 'gmail', 'ca_forged')$$,
+                 '42883', null, 'a caller cannot pass a toolkit or account ref to create (no such function)');
+reset role;
+select ok(not has_function_privilege('authenticated', 'core.oauth_state_bind(text, text, uuid, text, text)', 'execute')
+      and not has_function_privilege('anon', 'core.oauth_state_bind(text, text, uuid, text, text)', 'execute')
+      and has_function_privilege('service_role', 'core.oauth_state_bind(text, text, uuid, text, text)', 'execute'), 'only service_role may bind an account to a state');
+select throws_ok($$set local role authenticated; select core.oauth_state_bind('PKG', repeat('a', 64), '00000000-0000-4000-8000-000000000001', 'gmail', 'ca_x')$$,
+                 '42501', null, 'authenticated cannot call bind');
+reset role;
+select is(pg_temp.bind('PKG', 'c-1', 'admin-technical@example.test', 'gmail', 'ca_link1'), 'P0002', 'bind for another user''s state finds nothing');
+select is(pg_temp.bind('APK', 'c-1', 'owner@example.test', 'gmail', 'ca_link1'), 'P0002', 'cross-lane: bind under another lane finds nothing');
+select is(pg_temp.bind('PKG', 'c-1', 'owner@example.test', 'gmail', 'ca bad'), '23514', 'a malformed account ref is refused');
+select is(pg_temp.bind('PKG', 'c-1', 'owner@example.test', 'gmail', 'ca_link1'), null, 'the connector binds the toolkit and account to the user''s own state');
+select is(pg_temp.bind('PKG', 'c-1', 'owner@example.test', 'gmail', 'ca_other'), 'P0002', 'a bound state cannot be re-bound');
 select is(pg_temp.take('admin-technical@example.test', 'aal2', 'PKG', 'c-1'), null, 'another user cannot consume it');
 select is(pg_temp.take('owner@example.test', 'aal2', 'APK', 'c-1'), null, 'cross-lane: it cannot be consumed under another lane');
 select is(pg_temp.take('owner@example.test', 'aal1', 'PKG', 'c-1'), null, 'aal1 cannot consume it');
 select is(pg_temp.take('owner@example.test', 'aal2', 'PKG', 'c-1'), 'gmail:ca_link1', 'the starter gets the toolkit and the account ref back, server-side');
 select is(pg_temp.take('owner@example.test', 'aal2', 'PKG', 'c-1'), null, 'single use');
-select is(pg_temp.mk('owner@example.test', 'aal2', 'PKG', 'n-1', null, null), null, 'a native state (no toolkit) is unchanged');
+select is(pg_temp.mk('owner@example.test', 'aal2', 'PKG', 'n-1'), null, 'a native state (no toolkit) is unchanged');
 select is(pg_temp.take('owner@example.test', 'aal2', 'PKG', 'n-1'), '-:-', 'a native state comes back with no toolkit');
 
 -- ---------------------------------------------------------------- cross-lane denial on connections

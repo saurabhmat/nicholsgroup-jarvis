@@ -10,6 +10,8 @@ export type ComposioAccount = {
   id: string;
   status: ComposioAccountStatus;
   toolkitSlug: string;
+  /** The auth config the account was made from (must be the one we configured for the toolkit). */
+  authConfigId: string;
   isDisabled: boolean;
 };
 
@@ -18,6 +20,8 @@ export interface ComposioPort {
   link(input: { userId: string; authConfigId: string; callbackUrl: string }): Promise<{ accountId: string; redirectUrl: string }>;
   /** `connectedAccounts.get(id)`: status and toolkit only (credentials are never read). */
   getAccount(accountId: string): Promise<ComposioAccount>;
+  /** Ids of the user's connected accounts in one auth config (`connectedAccounts.list({ userIds, authConfigIds })`): proves the account belongs to this Jarvis user. */
+  listAccountIds(input: { userId: string; authConfigId: string }): Promise<string[]>;
   /** `tools.execute`; callers go through `GuardedComposio`, which checks the allow-list first. */
   execute(input: { slug: string; userId: string; accountId: string; arguments: Readonly<Record<string, unknown>> }): Promise<{ successful: boolean; data: Record<string, unknown> }>;
 }
@@ -26,6 +30,7 @@ export interface ComposioPort {
 export interface GuardedComposio {
   link: ComposioPort["link"];
   getAccount: ComposioPort["getAccount"];
+  listAccountIds: ComposioPort["listAccountIds"];
   execute(toolkit: Toolkit, slug: string, input: { userId: string; accountId: string; arguments: Readonly<Record<string, unknown>> }): Promise<{ successful: boolean; data: Record<string, unknown> }>;
 }
 
@@ -49,6 +54,10 @@ export function guardComposio(port: ComposioPort): GuardedComposio {
     async getAccount(accountId) {
       assertAccountId(accountId);
       return port.getAccount(accountId);
+    },
+    async listAccountIds(input) {
+      assertUserId(input.userId);
+      return port.listAccountIds(input);
     },
     async execute(toolkit, slug, input) {
       assertAllowedSlug(toolkit, slug); // before anything else: a refused slug never reaches the SDK

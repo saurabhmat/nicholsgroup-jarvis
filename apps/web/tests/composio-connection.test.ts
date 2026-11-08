@@ -63,6 +63,13 @@ describe("loadComposioSection", () => {
     expect(Object.keys(view.toolkits[0]?.connection ?? {}).sort()).toEqual(["address", "id", "lastSyncAt", "mailboxAllowed", "state"]);
   });
 
+  it("a pending row older than the connect state's lifetime is hidden; a fresh one shows as connecting", async () => {
+    const pending = (created_at: string): Rows => ({ connections: { data: [{ id: "c-p", toolkit: "gmail", account_identity: null, status: "pending", last_sync_at: null, created_at }], error: null }, lane_config_current: { data: null, error: null } });
+    const now = Date.parse("2026-11-08T12:00:00Z");
+    expect((await loadComposioSection(fakeClient(pending("2026-11-08T11:58:00Z")), "PKG", ALL, now)).toolkits[0]?.connection?.state).toBe("connecting");
+    expect((await loadComposioSection(fakeClient(pending("2026-11-08T11:00:00Z")), "PKG", ALL, now)).toolkits[0]?.connection).toBeNull();
+  });
+
   it("flags an address that is not in lane_config.mailboxes", async () => {
     const rows: Rows = { ...connected, lane_config_current: { data: { mailboxes: ["someone@example.test"] }, error: null } };
     const view = await loadComposioSection(fakeClient(rows), "PKG", ALL);

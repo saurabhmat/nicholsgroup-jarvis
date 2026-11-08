@@ -31,7 +31,7 @@ export type ToolkitSpec = {
   authConfigEnv: "COMPOSIO_GMAIL_AUTH_CONFIG_ID" | "COMPOSIO_GOOGLECALENDAR_AUTH_CONFIG_ID";
   /** Read-only tool that returns the account's address. */
   identityTool: string;
-  /** Read-only tool for the "Test" page read: one item, never returned to the browser. */
+  /** Read-only tool for the "Test" page read: a list of ids/names only, never returned to the browser. */
   testTool: string;
   /** Fixed arguments of the test read (small, metadata-leaning). */
   testArguments: Readonly<Record<string, unknown>>;
@@ -42,15 +42,15 @@ export const TOOLKIT_SPECS: Readonly<Record<Toolkit, ToolkitSpec>> = {
     label: "Gmail",
     authConfigEnv: "COMPOSIO_GMAIL_AUTH_CONFIG_ID",
     identityTool: "GMAIL_GET_PROFILE",
-    testTool: "GMAIL_FETCH_EMAILS",
-    testArguments: { max_results: 1, include_spam_trash: false, verbose: false },
+    testTool: "GMAIL_LIST_LABELS", // ids and names of labels only: no message content passes through the Test (security L1)
+    testArguments: {},
   },
   googlecalendar: {
     label: "Google Calendar",
     authConfigEnv: "COMPOSIO_GOOGLECALENDAR_AUTH_CONFIG_ID",
     identityTool: "GOOGLECALENDAR_GET_CURRENT_USER",
-    testTool: "GOOGLECALENDAR_EVENTS_LIST",
-    testArguments: { calendarId: "primary", maxResults: 1, singleEvents: true },
+    testTool: "GOOGLECALENDAR_LIST_CALENDARS", // calendar list only: no event content passes through the Test
+    testArguments: {},
   },
 };
 

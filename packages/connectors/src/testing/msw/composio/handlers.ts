@@ -5,7 +5,7 @@ import { http, HttpResponse, type RequestHandler } from "msw";
 
 export const API = "https://backend.composio.dev";
 
-export type FakeAccount = { id: string; status: string; toolkit: string; isDisabled?: boolean };
+export type FakeAccount = { id: string; status: string; toolkit: string; isDisabled?: boolean; userId?: string; authConfigId?: string };
 export type FakeToolResult = { successful: boolean; data: Record<string, unknown>; error?: string | null };
 
 export type FakeComposio = {
@@ -48,7 +48,7 @@ export function createFakeComposio(): FakeComposio {
   };
   const accountJson = (a: FakeAccount) => ({
     id: a.id,
-    auth_config: { id: "ac_synthetic", auth_scheme: "OAUTH2", is_composio_managed: true, is_disabled: false },
+    auth_config: { id: a.authConfigId ?? "ac_synthetic", auth_scheme: "OAUTH2", is_composio_managed: true, is_disabled: false },
     status: a.status,
     status_reason: null,
     toolkit: { slug: a.toolkit },
@@ -60,7 +60,13 @@ export function createFakeComposio(): FakeComposio {
   f.handlers = [
     http.get(`${API}/api/v3.1/connected_accounts`, ({ request }) => {
       log(request);
-      return HttpResponse.json({ items: [...f.accounts.values()].filter((a) => a.status === "ACTIVE").map(accountJson), next_cursor: null, total_pages: 1, current_page: 1, total_items: f.accounts.size });
+      // Filters as the SDK sends them (`user_ids`, `auth_config_ids`; repeated or bracketed keys); statuses: ACTIVE only unless asked.
+      const q = new URL(request.url).searchParams;
+      const want = (name: string) => [...q.entries()].filter(([k]) => k.replace(/\[\]$/, "") === name).flatMap(([, v]) => v.split(","));
+      const users = want("user_ids");
+      const configs = want("auth_config_ids");
+      const items = [...f.accounts.values()].filter((a) => (users.length === 0 || (a.userId !== undefined && users.includes(a.userId))) && (configs.length === 0 || configs.includes(a.authConfigId ?? "ac_synthetic")));
+      return HttpResponse.json({ items: items.map(accountJson), next_cursor: null, total_pages: 1, current_page: 1, total_items: f.accounts.size });
     }),
     http.post(`${API}/api/v3.1/connected_accounts/link`, async ({ request }) => {
       log(request);

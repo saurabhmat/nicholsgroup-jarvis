@@ -40,7 +40,7 @@ export function ComposioConnectionSection({ laneId, view }: { laneId: string; vi
             const c = t.connection;
             const needsReconnect = c?.state === "reconnect_required";
             const action = `/api/connect/composio/start?lane=${encodeURIComponent(laneId)}&toolkit=${encodeURIComponent(t.toolkit)}`;
-            const connectLabel = needsReconnect ? "Reconnect via Composio" : c ? "Connect another account via Composio" : "Connect via Composio";
+            const connectLabel = needsReconnect ? "Reconnect via Composio" : c ? "Replace account via Composio" : "Connect via Composio";
             return (
               <div key={t.toolkit} data-testid={`composio-${t.toolkit}`} className="flex flex-col gap-3 border-t pt-4 first:border-t-0 first:pt-0">
                 <h3 className="text-base font-medium">{t.label}</h3>
@@ -70,6 +70,9 @@ export function ComposioConnectionSection({ laneId, view }: { laneId: string; vi
                 ) : (
                   <p className="text-sm text-muted-foreground">Not connected.</p>
                 )}
+                {c && c.state !== "connecting" ? (
+                  <p className="text-sm text-muted-foreground">Only one account per service per company is used. Connecting a new one replaces this account here; the previous account stays in Composio until it is removed by hand.</p>
+                ) : null}
                 {view.unavailable ? null : (
                   <div className="flex flex-wrap items-start gap-3">
                     {t.configured ? (

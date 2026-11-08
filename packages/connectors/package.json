@@ -39,8 +39,8 @@
     "vitest": "5.0.5"
   },
   "peerDependencies": {
-    "msw": "3.0.3",
-    "vitest": "5.0.5"
+    "vitest": "5.0.5",
+    "msw": "3.0.3"
   },
   "peerDependenciesMeta": {
     "vitest": {

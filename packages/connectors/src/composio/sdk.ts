@@ -48,7 +48,15 @@ export function createSdkPort(deps: { apiKey: () => SecretValue; logger?: Connec
       try {
         const a = await sdk().connectedAccounts.get(accountId, { signal: signal() });
         if (!STATUSES.includes(a.status)) throw new ConnectorError({ kind: "provider_error", message: "Composio returned an unknown account status" });
-        return { id: a.id, status: a.status as ComposioAccountStatus, toolkitSlug: String(a.toolkit?.slug ?? ""), isDisabled: a.isDisabled === true };
+        return { id: a.id, status: a.status as ComposioAccountStatus, toolkitSlug: String(a.toolkit?.slug ?? ""), authConfigId: String(a.authConfig?.id ?? ""), isDisabled: a.isDisabled === true };
+      } catch (e) {
+        throw mapError(e);
+      }
+    },
+    async listAccountIds({ userId, authConfigId }) {
+      try {
+        const res = await sdk().connectedAccounts.list({ userIds: [userId], authConfigIds: [authConfigId], limit: 100 }, { signal: signal() });
+        return res.items.map((i) => String(i.id));
       } catch (e) {
         throw mapError(e);
       }

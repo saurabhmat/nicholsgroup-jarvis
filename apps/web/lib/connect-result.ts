@@ -32,7 +32,7 @@ export function connectResultMessage(params: SearchParams): ConnectResultMessage
   const removeAccess = one(params.notice) === "remove_app_access" && (code === "account_refused" || code === "unavailable") ? ` ${REMOVE_ACCESS[baseName] ?? "Remove the portal's access at the provider, then try again."}` : "";
   switch (code) {
     case "ok":
-      if (baseName === "Composio") return { tone: "success", title: `${name} connected`, description: "The account was checked and saved. Mail and calendar keep syncing through the Google connection until this company is switched to Composio." };
+      if (baseName === "Composio") return { tone: "success", title: `${name} connected`, description: "The account was checked and saved. If it replaced an earlier account, the earlier one stays in Composio until it is removed by hand. Mail and calendar keep syncing through the Google connection until this company is switched to Composio." };
       return { tone: "success", title: `${name} connected`, description: "Data syncs in the background. The sync times below update after the first sync." };
     case "account_refused":
       return {

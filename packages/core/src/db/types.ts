@@ -535,13 +535,16 @@ isOneToOne: false
 "mfa_verification_attempt":
 { Args: { "event": Json }; Returns: Json
                            },
+"oauth_state_bind":
+{ Args: { "p_account_ref": string,"p_lane": string,"p_state_hash": string,"p_toolkit": string,"p_user": string }; Returns: undefined
+                           },
 "oauth_state_consume":
 { Args: { "p_lane": string,"p_state_hash": string }; Returns: {
               "account_ref": string,"code_verifier": string,"provider": string,"redirect_uri": string,"toolkit": string
             }[]
                            },
 "oauth_state_create":
-{ Args: { "p_account_ref"?: string,"p_code_verifier": string,"p_lane": string,"p_provider": string,"p_redirect_uri": string,"p_state_hash": string,"p_toolkit"?: string }; Returns: undefined
+{ Args: { "p_code_verifier": string,"p_lane": string,"p_provider": string,"p_redirect_uri": string,"p_state_hash": string }; Returns: undefined
                            },
 "retention_cal_purge":
 { Args: { "p_keep": string,"p_lane": string }; Returns: number
