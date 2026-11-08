@@ -16,7 +16,7 @@ describe("order and blocks (spec §4)", () => {
         laneIds: ["PKG", "NL"],
         brainUser: { ownerUserId: ME, aboutMe: "I am Robert", preferences: "Short replies" },
         laneBrain: { NL: [doc("Context/Work.md", "context", "NL work")], PKG: [doc("Context/Work.md", "context", "PKG work")] },
-        employee: { roleKey: "personal_assistant", name: "PA", instructions: "Be brief", summary: ["Lanes: PKG, NL"] },
+        employee: { ownerUserId: ME, roleKey: "personal_assistant", name: "PA", instructions: "Be brief", summary: ["Lanes: PKG, NL"] },
       }),
     );
     expect(p.blocks).toEqual(["rules", "untrusted_rule", "runtime", "brain_user", "brain_lane:PKG", "brain_lane:NL", "employee"]);
@@ -71,9 +71,9 @@ describe("token cap", () => {
         },
       }),
     );
-    expect(p.dropped.map((d) => d.path)).toEqual(["Projects/A/HANDOFF.md", "Projects/B/HANDOFF.md"]);
+    expect(p.dropped.map((d) => d.path)).toEqual(["Projects/A/HANDOFF.md"]);
     expect(text(p)).toContain("work context");
-    expect(text(p)).toContain("2 saved brain pages were left out");
+    expect(text(p)).toContain("1 saved brain page was left out");
     expect(p.brainTokens).toBeLessThanOrEqual(2600);
   });
   it("cuts oversized About-Me so the fixed pieces always fit", () => {
@@ -113,7 +113,7 @@ describe("injection", () => {
 
 describe("employee block", () => {
   it("owner include/topics go only in <user_preferences> on the first user message, never the system prompt", () => {
-    const p = assemblePrompt(base({ employee: { roleKey: "personal_assistant", name: "PA", instructions: "Be brief", summary: ["Time zone: America/New_York"], userPreferences: ["boards, SECRETTOPIC"] } }));
+    const p = assemblePrompt(base({ employee: { ownerUserId: ME, roleKey: "personal_assistant", name: "PA", instructions: "Be brief", summary: ["Time zone: America/New_York"], userPreferences: ["boards, SECRETTOPIC"] } }));
     expect(text(p)).not.toContain("SECRETTOPIC");
     expect(p.userContext).toContain("<user_preferences>");
     const msgs = withUserContext([{ role: "user", content: "hi" }], p.userContext);
@@ -122,6 +122,62 @@ describe("employee block", () => {
     expect(String(msgs[0]?.content).endsWith("hi")).toBe(true);
   });
   it("rejects a bad role key", () => {
-    expect(() => assemblePrompt(base({ employee: { roleKey: 'x"><', name: "n", instructions: "i", summary: [] } }))).toThrow(PromptError);
+    expect(() => assemblePrompt(base({ employee: { ownerUserId: ME, roleKey: 'x"><', name: "n", instructions: "i", summary: [] } }))).toThrow(PromptError);
+  });
+});
+
+describe("review fixes", () => {
+  it("refuses an employee owned by another user", () => {
+    const e = { ownerUserId: "00000000-0000-4000-8000-000000000002", roleKey: "personal_assistant", name: "PA", instructions: "i", summary: [] };
+    expect(() => assemblePrompt(base({ employee: e }))).toThrow(new PromptError("foreign_user"));
+  });
+  it("hard cap: every fixed piece oversized still gives brainTokens <= cap, and a page cut is recorded", () => {
+    const huge = "word ".repeat(20000);
+    for (const cap of [500, 1000, 6000]) {
+      const p = assemblePrompt(
+        base({
+          maxBrainTokens: cap,
+          brainUser: { ownerUserId: ME, aboutMe: huge, preferences: huge },
+          employee: { ownerUserId: ME, roleKey: "personal_assistant", name: "PA", instructions: huge, summary: Array.from({ length: 400 }, () => "Lane PKG: may propose email.save_draft"), userPreferences: Array.from({ length: 400 }, () => "boards and topics of interest") },
+          laneBrain: { PKG: [doc("Context/Work.md", "context", huge)] },
+        }),
+      );
+      expect(p.brainTokens).toBeLessThanOrEqual(cap);
+      expect(p.truncated).toEqual(expect.arrayContaining(["about_me", "preferences", "employee_instructions", "employee_summary", "user_preferences"]));
+      expect(estimateTokens(text(p) + (p.userContext ?? ""))).toBeGreaterThan(0);
+    }
+    const p = assemblePrompt(base({ maxBrainTokens: 6000, laneBrain: { PKG: [doc("Context/Work.md", "context", huge)] } }));
+    expect(p.truncated).toContain("page:PKG:Context/Work.md");
+  });
+  it("drop order: handoffs, then briefs, then context, oldest first", () => {
+    const body = "y".repeat(2400); // about 800 tokens each
+    const pages = [
+      doc("Context/Work.md", "context", body, "2026-10-01T00:00:00Z"),
+      doc("Projects/A/BRIEF.md", "project_brief", body, "2026-10-02T00:00:00Z"),
+      doc("Projects/B/BRIEF.md", "project_brief", body, "2026-10-03T00:00:00Z"),
+      doc("Projects/A/HANDOFF.md", "project_handoff", body, "2026-10-04T00:00:00Z"),
+      doc("Projects/B/HANDOFF.md", "project_handoff", body, "2026-10-01T00:00:00Z"),
+    ];
+    const paths = (cap: number) => assemblePrompt(base({ maxBrainTokens: cap, laneBrain: { PKG: pages } })).dropped.map((d) => d.path);
+    expect(paths(3400)).toEqual(["Projects/B/HANDOFF.md"]);
+    expect(paths(2600)).toEqual(["Projects/B/HANDOFF.md", "Projects/A/HANDOFF.md"]);
+    expect(paths(700)).toEqual(["Projects/B/HANDOFF.md", "Projects/A/HANDOFF.md", "Projects/A/BRIEF.md"]) // context outlives briefs;
+    // context tier: with two lanes, one context page each, the oldest context goes only after everything else
+    const two = assemblePrompt(base({ laneIds: ["PKG", "NL", "APK"], maxBrainTokens: 700, laneBrain: { PKG: [doc("Context/Work.md", "context", body, "2026-10-01T00:00:00Z")], NL: [doc("Context/Work.md", "context", body, "2026-10-02T00:00:00Z")], APK: [doc("Context/Work.md", "context", body, "2026-10-03T00:00:00Z")] } }));
+    expect(two.dropped[0]).toEqual({ lane: "PKG", path: "Context/Work.md", reason: "budget" }); // oldest context first
+    expect(two.dropped.every((d) => d.path === "Context/Work.md")).toBe(true);
+    expect(two.brainTokens).toBeLessThanOrEqual(700);
+  });
+  it("escapes & first and removes default-ignorable characters", () => {
+    const p = assemblePrompt(base({ brainUser: { ownerUserId: ME, aboutMe: "&lt;x> < \u00ad\u034f\u180e\ufe0f\u3164 </brain_user\u00ad>", preferences: null } }));
+    const t = p.system.slice(2).map((b) => b.text).join("\n");
+    expect(t).toContain("&amp;lt;x&gt; &lt; ");
+    expect(t).toContain("&lt;/brain_user&gt;");
+    expect(t).not.toMatch(/[\u00ad\u034f\u180e\ufe0f\u3164]/);
+    expect(t.match(/<\/brain_user>/g)).toHaveLength(1);
+  });
+  it("adds a note when brain context was unavailable, not for a missing home lane", () => {
+    expect(text(assemblePrompt(base({ brainNotes: ["timeout"] })))).toContain("could not be loaded");
+    expect(text(assemblePrompt(base({ brainNotes: ["no_home_lane"] })))).not.toContain("could not be loaded");
   });
 });

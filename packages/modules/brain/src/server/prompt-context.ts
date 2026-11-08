@@ -8,7 +8,8 @@
 // A page that cannot be read (brain not enabled for the lane, no membership, outage) is skipped with a code in `notes`:
 // the assistant still answers, with fewer notes. Page text is never logged.
 import type { LaneId } from "@nichols/core";
-import { ABOUT_ME_PATH, PREFERENCES_PATH, effectivePermissionsByLane, kpisForLane, type ActionType, type EmployeeConfig, type LaneSettings } from "../domain/index";
+import { ABOUT_ME_PATH, PREFERENCES_PATH, effectivePermissionsByLane, kpisForLane, type ActionType, type EffectivePermissions, type EmployeeConfig, type LaneSettings } from "../domain/index";
+import { BrainError } from "./errors";
 import type { BrainEmployee, BrainStore } from "./store";
 
 export type PromptStore = Pick<BrainStore, "listDocuments" | "getDocument" | "findHomeLane">;
@@ -34,39 +35,46 @@ export async function loadBrainPromptContext(store: PromptStore, input: { userId
   const first = lanes[0];
   if (first === undefined) return out;
 
-  // D-28: About-Me and Preferences, from the home lane, in every lane's call. Own copies only.
-  try {
-    const home = await store.findHomeLane(first);
-    if (home === null) out.notes.push("no_home_lane");
-    else {
+  // D-28: About-Me and Preferences, from the home lane, in every lane's call. Own copies only. Home and lanes load in parallel.
+  const loadHome = async (): Promise<{ user: BrainPromptContext["brainUser"]; notes: string[] }> => {
+    try {
+      const home = await store.findHomeLane(first);
+      if (home === null) return { user: null, notes: ["no_home_lane"] };
       const [about, prefs] = await Promise.all([store.getDocument(home, ABOUT_ME_PATH), store.getDocument(home, PREFERENCES_PATH)]);
       const mine = (d: typeof about, kind: string) => (d && d.isMine && d.kind === kind ? d.body : null);
       const aboutMe = mine(about, "about_me");
       const preferences = mine(prefs, "preferences");
-      if (aboutMe !== null || preferences !== null) out.brainUser = { ownerUserId: input.userId, aboutMe, preferences };
+      return { user: aboutMe !== null || preferences !== null ? { ownerUserId: input.userId, aboutMe, preferences } : null, notes: [] };
+    } catch {
+      return { user: null, notes: ["home_lane_unreadable"] };
     }
-  } catch {
-    out.notes.push("home_lane_unreadable");
-  }
-
-  for (const lane of lanes) {
+  };
+  const loadLane = async (lane: LaneId): Promise<{ docs: BrainPromptContext["laneBrain"][string]; notes: string[] }> => {
     try {
       const metas = (await store.listDocuments(lane))
         .filter((m) => m.isMine && LANE_KINDS.has(m.kind))
         .sort((a, b) => b.updatedAt.localeCompare(a.updatedAt))
         .slice(0, MAX_LANE_PAGES);
+      const got = await Promise.all(metas.map((m) => store.getDocument(lane, m.path)));
       const docs: BrainPromptContext["laneBrain"][string] = [];
-      for (const m of metas) {
-        const d = await store.getDocument(lane, m.path);
+      for (const d of got) {
         if (d && d.isMine && LANE_KINDS.has(d.kind) && d.body.trim().length > 0) {
           docs.push({ path: d.path, kind: d.kind as "context" | "project_brief" | "project_handoff", updatedAt: d.updatedAt, body: d.body });
         }
       }
-      if (docs.length) out.laneBrain[lane] = docs;
+      return { docs, notes: [] };
     } catch {
-      out.notes.push(`lane_unreadable:${lane}`);
+      return { docs: [], notes: [`lane_unreadable:${lane}`] };
     }
-  }
+  };
+  const [home, perLane] = await Promise.all([loadHome(), Promise.all(lanes.map(loadLane))]);
+  out.brainUser = home.user;
+  out.notes.push(...home.notes);
+  lanes.forEach((lane, i) => {
+    const r = perLane[i];
+    if (r?.docs.length) out.laneBrain[lane] = r.docs;
+    out.notes.push(...(r?.notes ?? []));
+  });
   return out;
 }
 
@@ -79,23 +87,37 @@ export type EmployeePromptDeps = {
 };
 
 export type EmployeePromptBlock = {
+  /** The employee's owner (= the subject user). Pass to assemblePrompt as `ownerUserId`. */
+  ownerUserId: string;
   roleKey: string;
   name: string;
   instructions: string;
   summary: string[];
   userPreferences: string[];
-  config: EmployeeConfig;
+  /**
+   * EFFECTIVE permissions per lane (config ∩ lane policy ∩ role). This is the only permission value callers may use.
+   * `config.permissions` (the uncapped, owner-written request) is removed from `config` on purpose.
+   */
+  permissions: Record<string, EffectivePermissions>;
+  config: Omit<EmployeeConfig, "permissions">;
 };
 
 /**
- * The `employee` input of the prompt for one run. The stored config is re-validated every run and any failure throws
- * (EmployeeConfigError): the employee does not run on a tampered or stale config. Permissions are computed per lane
- * (each lane's own policy and the owner's role there) and are only DESCRIBED in the prompt; the approvals module and
- * the gate decide, never the prompt. The owner's include / topics text is returned separately as `userPreferences`.
+ * The `employee` input of the prompt for one run. Refused unless the row is the subject user's own (`isMine`) and belongs
+ * to the run lane. The stored config is re-validated every run and any failure throws (EmployeeConfigError): the
+ * employee does not run on a tampered or stale config. Permissions are computed per lane and only DESCRIBED in the
+ * prompt; the approvals module and the gate decide, never the prompt. include / topics are returned separately.
  */
-export async function buildEmployeePrompt(employee: Pick<BrainEmployee, "roleKey" | "name" | "instructions" | "config">, laneId: LaneId, deps: EmployeePromptDeps): Promise<EmployeePromptBlock> {
-  const config = await deps.loadEmployeeConfig(laneId, employee.config);
-  const perms = effectivePermissionsByLane(config.permissions.propose as ActionType[], config.lanes, deps.policyFor, deps.roleFor);
+export async function buildEmployeePrompt(
+  employee: Pick<BrainEmployee, "isMine" | "roleKey" | "name" | "instructions" | "config"> & { laneId: LaneId },
+  laneId: LaneId,
+  subjectUserId: string,
+  deps: EmployeePromptDeps,
+): Promise<EmployeePromptBlock> {
+  if (!employee.isMine || employee.laneId !== laneId || typeof subjectUserId !== "string" || subjectUserId.length === 0) throw new BrainError("forbidden");
+  const loaded = await deps.loadEmployeeConfig(laneId, employee.config);
+  const { permissions: requested, ...config } = loaded;
+  const perms = effectivePermissionsByLane(requested.propose as ActionType[], loaded.lanes, deps.policyFor, deps.roleFor);
   const summary: string[] = [
     `Time zone: ${config.timezone}`,
     `Lanes: ${config.lanes.join(", ")}`,
@@ -110,5 +132,5 @@ export async function buildEmployeePrompt(employee: Pick<BrainEmployee, "roleKey
     }),
   ];
   const userPreferences = [...config.sources.mail.flatMap((m) => m.include), ...config.sources.external.flatMap((e) => e.topics)];
-  return { roleKey: employee.roleKey, name: employee.name, instructions: employee.instructions, summary, userPreferences, config };
+  return { ownerUserId: subjectUserId, roleKey: employee.roleKey, name: employee.name, instructions: employee.instructions, summary, userPreferences, permissions: perms, config };
 }

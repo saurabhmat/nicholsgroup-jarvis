@@ -44,14 +44,16 @@ export type ChatEvent =
  * System prompt through the shared assembly (T-212): rules, runtime facts, and (when passed) the owner's brain blocks.
  * Returns the blocks and the `<user_preferences>` text for the first user message (null for the chat today).
  */
+export type BrainArgs = Pick<PromptInput, "brainUser" | "laneBrain" | "employee" | "brainNotes">;
+/** Brain context is only accepted together with the signed-in user's id (D-28 is checked against it). */
+export type WithBrain = { userId: string; brain?: BrainArgs } | { userId?: string; brain?: undefined };
+
 export function chatSystemPrompt(input: {
   laneId: LaneId;
   laneName: string;
   now: Date;
   categories: readonly ToolCategory[];
-  userId?: string;
-  brain?: Pick<PromptInput, "brainUser" | "laneBrain" | "employee">;
-}): LLMSystemBlock[] {
+} & WithBrain): LLMSystemBlock[] {
   return assembleChatPrompt(input).system;
 }
 
@@ -113,12 +115,9 @@ export async function runChatTurn(input: {
   emit: (e: ChatEvent) => void;
   signal?: AbortSignal;
   maxTokens?: number;
-  /** Signed-in user and their brain context (T-212), loaded by the caller through the lane router. */
-  userId?: string;
-  brain?: Pick<PromptInput, "brainUser" | "laneBrain" | "employee">;
   /** Receives the assembly result (dropped pages etc.) for the run log. */
   onPrompt?: (p: Pick<AssembledPrompt, "blocks" | "dropped" | "truncated" | "brainTokens">) => void;
-}): Promise<void> {
+} & WithBrain): Promise<void> {
   const categories = input.categories.filter((c): c is ToolCategory => (TOOL_CATEGORIES as readonly string[]).includes(c));
   // Defence in depth: the route refuses callers without categories before this; never call the model for them.
   if (categories.length === 0) throw new Error("no assistant categories for this caller");
@@ -127,9 +126,8 @@ export async function runChatTurn(input: {
     laneName: input.laneName,
     now: input.now,
     categories,
-    ...(input.userId ? { userId: input.userId } : {}),
-    ...(input.brain ? { brain: input.brain } : {}),
-  });
+    ...(input.brain ? { userId: input.userId, brain: input.brain } : input.userId ? { userId: input.userId } : {}),
+  } as Parameters<typeof assembleChatPrompt>[0]);
   input.onPrompt?.({ blocks: prompt.blocks, dropped: prompt.dropped, truncated: prompt.truncated, brainTokens: prompt.brainTokens });
   const messages = withUserContext(
     input.request.messages.map((m): LLMMessage => ({ role: m.role, content: m.text })),

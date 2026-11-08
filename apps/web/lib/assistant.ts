@@ -9,8 +9,7 @@ import type { ProviderResult } from "@nichols/ai/config";
 import { createPolicyGate, createToolRegistry, registerAssistantTools } from "@nichols/ai/tools";
 import { LLMProviderError } from "@nichols/ai";
 import type { Audit } from "@nichols/core/audit";
-import { createBrainStore, type ClientFor } from "@nichols/brain/server";
-import { loadBrainPromptContext } from "@nichols/brain/server";
+import { createBrainStore, loadBrainPromptContext, type BrainPromptContext, type ClientFor } from "@nichols/brain/server";
 import { authErrorResponse, type Guards } from "@nichols/core/auth";
 
 export const MAX_BODY_BYTES = 100_000;
@@ -39,6 +38,8 @@ export type ChatDeps = {
   provider: () => ProviderResult;
   audit: () => Audit;
   now: () => Date;
+  /** Overall time allowed for loading brain context before the turn goes on without it (default 1500 ms). */
+  brainTimeoutMs?: number;
 };
 
 const json = (status: number, body: Record<string, unknown>) =>
@@ -60,6 +61,21 @@ function errorCode(e: unknown): Extract<ChatEvent, { type: "error" }>["code"] {
     if (e.code === "rate_limited" || e.code === "overloaded") return "rate_limited";
   }
   return "unavailable";
+}
+
+/** Resolves with the value, or { ok: false } on timeout or any failure (brain context is optional). */
+async function withTimeout<T>(p: Promise<T>, ms: number): Promise<{ ok: true; value: T } | { ok: false; reason: "timeout" | "load_failed" }> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const timeout = new Promise<{ ok: false; reason: "timeout" }>((resolve) => {
+    timer = setTimeout(() => resolve({ ok: false, reason: "timeout" }), ms);
+  });
+  try {
+    return await Promise.race([p.then((value) => ({ ok: true as const, value })), timeout]);
+  } catch {
+    return { ok: false, reason: "load_failed" };
+  } finally {
+    clearTimeout(timer);
+  }
 }
 
 export async function handleChat(request: Request, laneId: string, deps: ChatDeps): Promise<Response> {
@@ -112,9 +128,20 @@ export async function handleChat(request: Request, laneId: string, deps: ChatDep
   // through the session-bound lane client. Any failure only means fewer notes, never a failed turn. The employee
   // block belongs to employee runs (T-213), not to this chat.
   const g2 = g;
-  const clientFor: ClientFor = async (l) => (await g2.requireLane(l)).client as never;
+  const clients = new Map<string, ReturnType<ClientFor>>(); // one requireLane per lane for this turn
+  const clientFor: ClientFor = (l) => {
+    let c = clients.get(l);
+    if (c === undefined) {
+      c = g2.requireLane(l).then((r) => r.client as never);
+      clients.set(l, c);
+    }
+    return c;
+  };
   const brainStore = createBrainStore({ clientFor, laneSettingsFor: async () => null });
-  const brain = await loadBrainPromptContext(brainStore, { userId, lanes: [laneId] }).catch(() => null);
+  const brainCtx = await withTimeout(loadBrainPromptContext(brainStore, { userId, lanes: [laneId] }), deps.brainTimeoutMs ?? 1500);
+  const brain: BrainPromptContext =
+    brainCtx.ok ? brainCtx.value : { brainUser: null, laneBrain: {}, notes: [brainCtx.reason] };
+  if (brain.notes.some((n) => n !== "no_home_lane")) console.info("[assistant] brain context notes:", brain.notes.join(","));
 
   const registry = registerAssistantTools(createToolRegistry(), deps.now);
   const gate = createPolicyGate({
@@ -149,7 +176,7 @@ export async function handleChat(request: Request, laneId: string, deps: ChatDep
           emit,
           signal: request.signal,
           userId,
-          ...(brain ? { brain: { brainUser: brain.brainUser, laneBrain: brain.laneBrain } } : {}),
+          brain: { brainUser: brain.brainUser, laneBrain: brain.laneBrain, brainNotes: brain.notes },
           onPrompt: (p) => {
             if (p.dropped.length || p.truncated.length) console.info("[assistant] brain blocks trimmed:", p.dropped.length, p.truncated.join(","));
           },

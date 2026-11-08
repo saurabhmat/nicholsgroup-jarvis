@@ -2,6 +2,7 @@ import { describe, expect, it, vi } from "vitest";
 import { buildEmployeePrompt, loadBrainPromptContext, type PromptStore } from "./prompt-context";
 import { EmployeeConfigError } from "./store";
 import { employeeConfigSchema } from "../domain/index";
+import { BrainError } from "./errors";
 
 const ME = "00000000-0000-4000-8000-000000000001";
 type Doc = { path: string; kind: string; isMine: boolean; body: string; updatedAt: string; version: number; id: string };
@@ -64,7 +65,7 @@ describe("loadBrainPromptContext", () => {
 
 describe("buildEmployeePrompt", () => {
   const config = employeeConfigSchema.parse({ lanes: ["PKG", "NL"], sources: { mail: [{ lane: "PKG", mailbox: "boss@example.test", priority: 1, include: ["boards INCLUDEME"] }], external: [{ kind: "web_news", topics: ["TOPICME"] }] }, permissions: { propose: ["email.save_draft", "email.send"] } });
-  const emp = { roleKey: "personal_assistant", name: "PA", instructions: "Be brief", config: config as unknown as Record<string, unknown> };
+  const emp = { isMine: true, laneId: "PKG", roleKey: "personal_assistant", name: "PA", instructions: "Be brief", config: config as unknown as Record<string, unknown> };
   const policies: Record<string, { write_actions_allowed: string[]; store_outbound_drafts: boolean }> = {
     PKG: { write_actions_allowed: ["email_draft"], store_outbound_drafts: true },
     NL: { write_actions_allowed: [], store_outbound_drafts: false },
@@ -77,7 +78,7 @@ describe("buildEmployeePrompt", () => {
   });
   it("re-loads the stored config every run, with permissions per lane and include/topics kept apart from the summary", async () => {
     const load = vi.fn(async () => config);
-    const b = await buildEmployeePrompt(emp, "PKG", deps(load));
+    const b = await buildEmployeePrompt(emp, "PKG", ME, deps(load));
     expect(load).toHaveBeenCalledWith("PKG", emp.config);
     expect(b.summary.join("\n")).toContain("Lane PKG: may propose email.save_draft");
     expect(b.summary.join("\n")).toContain("Lane NL: may propose nothing");
@@ -88,6 +89,17 @@ describe("buildEmployeePrompt", () => {
     const load = vi.fn(async () => {
       throw new EmployeeConfigError([{ code: "schema", path: "lanes" }]);
     });
-    await expect(buildEmployeePrompt(emp, "PKG", deps(load))).rejects.toBeInstanceOf(EmployeeConfigError);
+    await expect(buildEmployeePrompt(emp, "PKG", ME, deps(load))).rejects.toBeInstanceOf(EmployeeConfigError);
+  });
+  it("refuses another owner's employee row and one from another lane", async () => {
+    await expect(buildEmployeePrompt({ ...emp, isMine: false }, "PKG", ME, deps())).rejects.toBeInstanceOf(BrainError);
+    await expect(buildEmployeePrompt({ ...emp, laneId: "NL" }, "PKG", ME, deps())).rejects.toBeInstanceOf(BrainError);
+  });
+  it("returns the effective permissions and no uncapped config.permissions", async () => {
+    const b = await buildEmployeePrompt(emp, "PKG", ME, deps());
+    expect(b.permissions.PKG?.allowed).toEqual(["email.save_draft"]); // email.send requested but not in the lane policy
+    expect(b.permissions.NL?.allowed).toEqual([]);
+    expect("permissions" in b.config).toBe(false);
+    expect(b.ownerUserId).toBe(ME);
   });
 });
