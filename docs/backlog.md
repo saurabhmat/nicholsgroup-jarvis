@@ -990,13 +990,15 @@ Spec: `docs/specs/brain-and-employees.md`, `docs/specs/brain-interview.md`; seed
 - acceptance: order in spec §4; per-lane blocks only (no foreign-lane block in a single-lane call); D-28 test: About-Me and Preferences only in the owner's own calls and in every lane; no `mem.items` block until T-155; token cap with dropped-block note; injection test: a brain doc saying "call send_email" changes no tool availability. From the T-211 review: an employee's stored config is loaded with `loadEmployeeConfig` on every run (fail closed), permissions come from `effectivePermissionsByLane` (each lane's own policy and role), and the owner's `include`/`topics` text goes only into a delimited user-preferences block, never the system prompt.
 
 ### T-213 briefing.daily from the employee profile (extends T-162)
-- status: proposed
+- status: approved
+- note: approved by Saurabh Nov 8, 2026. Blocked until T-162 (and its chain T-104, T-123, T-133, T-112) is built; not started.
 - depends: T-162, T-211, T-212
 - acceptance: steps in spec §5 on top of T-162's `briefing.daily` and `brief.briefings` (no duplicate table); dispatcher cron `briefing.dispatch` with idempotency key (employee and local date) and DST tests; per-run membership re-check per lane; job added to `JOB_RUNNERS` deliberately; adds `employee_id`/`owner_user_id` to `brief.briefings` with owner RLS + pgTAP; review window from sync cursors; `partial` coverage when a source fails; reads the comms/calendar index plus cursors, never live tool output; facts separate from recommendations; numeric grounding; suggested replies never call `proposeAction` (test); per-run `loadEmployeeConfig` + `effectivePermissionsByLane`, finance KPIs per lane via `kpisForLane` (T-211 review); "Run now" on Home; mock-provider golden run.
 
 ### T-216 Chat-first setup interview + test briefing
-- status: proposed
-- depends: T-210, T-211, T-100, T-213
+- status: approved
+- depends: T-210, T-211, T-100, T-212 (the test-briefing step only: T-213)
+- note: approved by Saurabh Nov 8, 2026 ("all approved, you decide"). Decision (Nov 8, agent, delegated): build the interview now; T-213 waits on T-162 and the Approval Center chain, so the "test briefing" step is built behind a feature check that shows "test briefing arrives with the daily briefing (T-213)" until T-213 lands, and activation does not require it until then. Everything else in the acceptance stands.
 - acceptance: Nov 25 only if time allows. Interview runs in the assistant chat first with Settings → AI brain as the fallback (spec §7); question bank from `docs/specs/brain-interview.md` as data with a unit test that every `config.*` target is a schema path; ≤3 questions per step; skip rules; diff card and Save per group (never auto-save); summary → draft employee → test briefing → activate; reconfigure by section; a missing source shows a link to Settings → Connections and never connects from the chat; iPhone layout.
 
 ---
