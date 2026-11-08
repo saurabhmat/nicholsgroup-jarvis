@@ -759,7 +759,7 @@ T-100 – T-103 are **track W4**, parallel with the connectors (after T-017). T-
 - acceptance: provider interface (analysis + fast model, configured not hard-coded); Anthropic implementation via `packages/ai` only; mock provider for tests; request logging excludes prompt content.
 
 ### T-101 Tool registry + policy gate
-- status: approved
+- status: done
 - depends: T-100, T-017, T-015
 - acceptance: Spec: `docs/specs/assistant.md` §4. Modules register tools (`name`, `category`, `effect` read|propose, `requiredView`, strict Zod args with no lane field, `resultStore` full|refs_only, `untrustedFields`); the gate checks, in order, AAL2 session, membership and role, lane enabled, `llm_allowed_categories`, required view, rate limit, then audits every call; a registration test fails if a tool imports a connector write path; tests for denied lane, denied category, forged laneId/extra arguments, viewer and admin_technical.
 

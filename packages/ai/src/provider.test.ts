@@ -305,7 +305,10 @@ describe("T-100 review fixes", () => {
       expect(sent[0]?.body).toMatchObject({ model: "claude-sonnet-5-5", max_tokens: 1000 });
       expect(printed.join("\n")).not.toContain("SECRET");
     } finally {
-      process.env = prior;
+      if (prior.ANTHROPIC_BASE_URL === undefined) delete process.env.ANTHROPIC_BASE_URL;
+      else process.env.ANTHROPIC_BASE_URL = prior.ANTHROPIC_BASE_URL;
+      if (prior.ANTHROPIC_LOG === undefined) delete process.env.ANTHROPIC_LOG;
+      else process.env.ANTHROPIC_LOG = prior.ANTHROPIC_LOG;
       vi.unstubAllGlobals();
       spies.forEach((restore) => restore());
     }
@@ -319,9 +322,9 @@ describe("getLLMProvider env refusals", () => {
     ANTHROPIC_MODEL_ANALYSIS: "claude-sonnet-5-5",
     ANTHROPIC_MODEL_FAST: "claude-haiku-5-5",
   };
-  for (const k of ["ANTHROPIC_CUSTOM_HEADERS", "ANTHROPIC_BASE_URL", "ANTHROPIC_LOG", "ANTHROPIC_OPEN_TELEMETRY_TRACES_CONTENT_MODE"]) {
-    it(`refuses ${k}`, () => {
-      expect(() => getLLMProvider({ env: { ...good, [k]: "x" } })).toThrow(/invalid: ANTHROPIC_/);
+  for (const k of ["ANTHROPIC_CUSTOM_HEADERS", "ANTHROPIC_BASE_URL", "ANTHROPIC_LOG", "ANTHROPIC_OPEN_TELEMETRY_TRACES_CONTENT_MODE", "ANTHROPIC_AUTH_TOKEN"]) {
+    it(`refuses ${k} (AI off, not an exception)`, () => {
+      expect(getLLMProvider({ env: { ...good, [k]: "x" } })).toEqual({ configured: false, missing: [], refused: [k] });
     });
   }
 });

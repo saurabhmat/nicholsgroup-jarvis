@@ -370,7 +370,7 @@ isOneToOne: false
           }
           Functions: {
             "ai_tool_gate":
-{ Args: { "p_category": string,"p_lane": string,"p_limit": number,"p_view": string,"p_window_seconds": number }; Returns: Json
+{ Args: { "p_category": string,"p_lane": string,"p_view": string }; Returns: Json
                            },
 "allowed_lanes":
 { Args: { "p_uid": string,"p_view": string }; Returns: (string)[]

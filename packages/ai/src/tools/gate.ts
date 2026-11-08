@@ -1,19 +1,19 @@
 // Policy gate (T-101, docs/specs/assistant.md §3, §4): the only way a tool runs. Order:
-//   1. AAL2 session                    guards.requireLane (no session / mfa required)
-//   2. membership and role             requireLane (member of an enabled, served lane) + core.ai_tool_gate
+//   1. AAL2 session                    guards.requireSession (no session / mfa required), before anything else
+//   2. membership and role             guards.requireLane (member of an enabled, served lane) + core.ai_tool_gate
 //   3. lane enabled                    core.ai_tool_gate
 //   4. llm_allowed_categories          core.ai_tool_gate
 //   5. 'assistant' + required view     core.ai_tool_gate
-//   6. rate limit                      core.ai_tool_gate (atomic, per lane and user)
+//   6. rate limit                      core.ai_tool_gate (atomic, per lane and user; limit from lane_config)
 //   7. strict argument parse           the descriptor's schema (a forged laneId or extra field fails here)
-//   8. run + audit                     withAudit: requested -> succeeded | failed
+//   8. run + audit                     requested -> succeeded | failed; the tool gets the user's lane client
 // laneId comes from the server (the conversation), never from model output. Every call is audited, denied ones with
 // the reason only (no argument values). Denials are returned as a structured outcome for the model; they never throw.
-import { withAudit, type Audit } from "@nichols/core/audit";
+import type { Audit } from "@nichols/core/audit";
 import type { LaneId } from "@nichols/core";
 import { AuthError, type Role } from "@nichols/core/auth";
 import type { LaneClient } from "@nichols/core/lane-router";
-import type { ToolDescriptor, ToolRegistry, ToolResult } from "./registry";
+import { toolResultSchema, type ToolDescriptor, type ToolRegistry, type ToolResult } from "./registry";
 
 export type DenyReason =
   | "unknown_tool"
@@ -45,19 +45,29 @@ export const DENY_MESSAGES: Record<DenyReason, string> = {
   tool_failed: "The tool failed; no data was returned.",
 };
 
-export type GateCall = { laneId: LaneId; toolName: string; toolUseId: string; args: unknown };
+export type GateCall = { laneId: LaneId; toolName: string; toolUseId: string; args: unknown; signal?: AbortSignal };
 
 export type GateOutcome =
-  | { ok: true; tool: ToolDescriptor; result: ToolResult<unknown> }
+  | {
+      ok: true;
+      tool: ToolDescriptor;
+      /** The validated arguments (for ai.tool_calls, T-103). */
+      args: unknown;
+      result: ToolResult<unknown>;
+      durationMs: number;
+      /** The run completed but the final audit write failed (the requested entry exists). */
+      auditIncomplete: boolean;
+    }
   | { ok: false; reason: DenyReason; message: string };
 
 export type GateDeps = {
   registry: ToolRegistry;
+  /** guards.requireSession from @nichols/core/auth (AAL2). */
+  requireSession(): Promise<{ userId: string }>;
   /** guards.requireLane from @nichols/core/auth: AAL2 session + membership of an enabled lane, user client. */
   requireLane(laneId: LaneId): Promise<{ session: { userId: string }; client: LaneClient }>;
   audit: Audit;
-  /** Calls per user and lane per window. Default 30 per 60 s. */
-  rateLimit?: { limit: number; windowSeconds: number };
+  now?: () => number;
 };
 
 export type PolicyGate = { call(input: GateCall): Promise<GateOutcome> };
@@ -67,6 +77,7 @@ const GATE_REASONS = new Set<DenyReason>(["mfa_required", "not_member", "role_de
 // viewer or admin_technical a content tool.
 const ROLES = new Set<Role>(["owner", "finance_operator"]);
 const TOOL_USE_ID = /^[A-Za-z0-9_-]{1,100}$/;
+const LANE_ID = /^[A-Z]{1,8}$/;
 
 function authReason(e: unknown): DenyReason | null {
   if (!(e instanceof AuthError)) return null;
@@ -76,44 +87,51 @@ function authReason(e: unknown): DenyReason | null {
 }
 
 export function createPolicyGate(deps: GateDeps): PolicyGate {
-  const limit = deps.rateLimit?.limit ?? 30;
-  const windowSeconds = deps.rateLimit?.windowSeconds ?? 60;
+  const now = deps.now ?? Date.now;
+  const denyOut = (reason: DenyReason): GateOutcome => ({ ok: false, reason, message: DENY_MESSAGES[reason] });
 
   return {
     async call(input) {
-      const { laneId } = input;
       const toolUseId = typeof input.toolUseId === "string" && TOOL_USE_ID.test(input.toolUseId) ? input.toolUseId : "invalid";
+
+      // 1. Session first, so every later denial is audited against the user who attempted it.
+      let userId: string;
+      try {
+        userId = (await deps.requireSession()).userId;
+      } catch (e) {
+        // No authenticated user: nothing to attribute, and no lane to trust. Not audited (the auth layer logs sign-in).
+        return denyOut(authReason(e) ?? "gate_unavailable");
+      }
+      // A malformed laneId cannot be audited (audit schema) and is never a lane: refuse before anything else.
+      if (typeof input.laneId !== "string" || !LANE_ID.test(input.laneId)) return denyOut("not_member");
+      const laneId = input.laneId;
+
       const tool = typeof input.toolName === "string" ? deps.registry.get(input.toolName) : undefined;
       const target = tool ? `tool:${tool.name}` : "tool:unknown";
-      let userId: string | null = null;
-
       const deny = async (reason: DenyReason): Promise<GateOutcome> => {
         // Audited with the reason only. A failed audit write must not turn a denial into an exception for the UI.
         await deps.audit
           .log({
             laneId,
-            actor: userId ? { kind: "user", userId } : { kind: "system" },
+            actor: { kind: "user", userId },
             action: "assistant.tool_call.denied",
             target,
             metadata: { reason, tool_use_id: toolUseId, ...(tool ? { category: tool.category, effect: tool.effect } : {}) },
           })
           .catch(() => undefined);
-        return { ok: false, reason, message: DENY_MESSAGES[reason] };
+        return denyOut(reason);
       };
 
-      if (!tool) return deny("unknown_tool");
-
-      // 1-2. Session at AAL2 and membership of an enabled lane (the lane router refuses everything else).
+      // 2. Membership of an enabled lane, and the user's own client for it.
       let client: LaneClient;
-      let uid: string;
       try {
         const ctx = await deps.requireLane(laneId);
-        uid = ctx.session.userId;
-        userId = uid;
+        if (ctx.session.userId !== userId) return deny("gate_unavailable");
         client = ctx.client;
       } catch (e) {
         return deny(authReason(e) ?? "gate_unavailable");
       }
+      if (!tool) return deny("unknown_tool");
 
       // 2-6. Role, lane enabled, category, views and rate limit, for this user, in the database.
       let role: Role;
@@ -122,8 +140,6 @@ export function createPolicyGate(deps: GateDeps): PolicyGate {
           p_lane: laneId,
           p_view: tool.requiredView,
           p_category: tool.category,
-          p_limit: limit,
-          p_window_seconds: windowSeconds,
         });
         if (error || !data || typeof data !== "object" || Array.isArray(data)) return deny("gate_unavailable");
         const v = data as { allowed?: unknown; reason?: unknown; role?: unknown };
@@ -137,24 +153,46 @@ export function createPolicyGate(deps: GateDeps): PolicyGate {
         return deny("gate_unavailable");
       }
 
-      // 7. Strict arguments: unknown keys (a forged laneId included) fail.
-      const parsed = tool.args.safeParse(input.args);
-      if (!parsed.success) return deny("invalid_args");
+      // 7. Strict arguments: unknown keys (a forged laneId included) fail. A throwing refinement counts as invalid.
+      let args: unknown;
+      try {
+        const parsed = tool.args.safeParse(input.args);
+        if (!parsed.success) return deny("invalid_args");
+        args = parsed.data;
+      } catch {
+        return deny("invalid_args");
+      }
 
-      // 8. Run, audited before and after; an audit failure before the run means the tool never runs.
+      // 8. Run, audited before and after. No run without the requested entry.
       const entry = {
         laneId,
-        actor: { kind: "user" as const, userId: uid },
-        action: "assistant.tool_call",
+        actor: { kind: "user" as const, userId },
         target,
         metadata: { tool_use_id: toolUseId, category: tool.category, effect: tool.effect },
       };
       try {
-        const result = await withAudit(deps.audit, entry, () => tool.run({ laneId, userId: uid, role }, parsed.data));
-        return { ok: true, tool, result };
+        await deps.audit.log({ ...entry, action: "assistant.tool_call.requested" });
       } catch {
-        return { ok: false, reason: "tool_failed", message: DENY_MESSAGES.tool_failed };
+        return denyOut("tool_failed");
       }
+      const started = now();
+      let result: ToolResult<unknown>;
+      try {
+        const raw = await tool.run({ laneId, userId, role, client, ...(input.signal ? { signal: input.signal } : {}) }, args);
+        // The envelope streams to the UI (sources, asOf, freshness): validate its shape.
+        const env = toolResultSchema.safeParse(raw);
+        if (!env.success) throw new Error("invalid tool result");
+        result = raw;
+      } catch {
+        await deps.audit.log({ ...entry, action: "assistant.tool_call.failed" }).catch(() => undefined);
+        return denyOut("tool_failed");
+      }
+      // The run happened: a failed final audit write must not hide that (a proposal may exist).
+      const auditIncomplete = await deps.audit
+        .log({ ...entry, action: "assistant.tool_call.succeeded" })
+        .then(() => false)
+        .catch(() => true);
+      return { ok: true, tool, args, result, durationMs: now() - started, auditIncomplete };
     },
   };
 }

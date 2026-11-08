@@ -4,6 +4,7 @@
 import { z } from "zod";
 import type { LaneId } from "@nichols/core";
 import type { Role } from "@nichols/core/auth";
+import type { LaneClient } from "@nichols/core/lane-router";
 import type { LLMTool } from "../types";
 
 /** Must match the core.lane_policies.llm_allowed_categories check and core.ai_tool_gate. */
@@ -16,9 +17,33 @@ export type ToolView = (typeof TOOL_VIEWS)[number];
 
 export type ToolEffect = "read" | "propose";
 
-export type ToolContext = { laneId: LaneId; userId: string; role: Role };
+/**
+ * What a tool runs with. `client` is the signed-in user's client for `laneId` (RLS applies); tools must not obtain any
+ * other database client. Every query still filters lane_id = laneId.
+ */
+export type ToolContext = { laneId: LaneId; userId: string; role: Role; client: LaneClient; signal?: AbortSignal };
 
 export type SourceRef = { kind: string; id: string; label?: string; url?: string };
+
+const MAX_SOURCES = 50;
+const MAX_NOTES = 20;
+/** Shape check for what a tool returns (the envelope streams to the UI); `data` is the tool's own. */
+export const toolResultSchema = z.strictObject({
+  data: z.unknown(),
+  sources: z
+    .array(
+      z.strictObject({
+        kind: z.string().max(40),
+        id: z.string().max(200),
+        label: z.string().max(300).optional(),
+        url: z.url({ protocol: /^https?$/ }).max(2000).optional(),
+      }),
+    )
+    .max(MAX_SOURCES),
+  asOf: z.iso.datetime({ offset: true }),
+  freshness: z.enum(["live", "cached", "stale"]),
+  notes: z.array(z.string().max(500)).max(MAX_NOTES),
+});
 
 export type ToolResult<R> = {
   data: R;
@@ -40,7 +65,11 @@ export type ToolDescriptor<A = unknown, R = unknown> = {
   args: z.ZodType<A>;
   /** finance "full"; mail/docs "refs_only" (conversation storage keeps references only). */
   resultStore: "full" | "refs_only";
-  /** Paths in `data` holding external text, wrapped as untrusted data before the model sees them (T-102). */
+  /**
+   * Paths in `data` holding external text, wrapped as untrusted data before the model sees them (T-102). Syntax:
+   * dotted keys, `[]` for every array element, e.g. "customers[].name", "memo". Email and docs tools that declare
+   * none get every string wrapped. Source labels are always wrapped.
+   */
   untrustedFields?: string[];
   run(ctx: ToolContext, args: A): Promise<ToolResult<R>>;
 };
@@ -57,47 +86,47 @@ const LANE_KEY = /lane/i;
 
 type AnyZod = z.ZodType & { _zod: { def: Record<string, unknown> & { type: string } } };
 
-/** Walks a schema and returns the problems that make it unsafe as tool arguments. */
+const LEAVES = new Set(["string", "number", "boolean", "null", "literal", "enum"]);
+const WRAPPERS = new Set(["optional", "nullable", "default", "readonly", "nonoptional"]);
+
+/**
+ * Walks a schema and returns the problems that make it unsafe as tool arguments. Allowlist, fails closed: plain JSON
+ * leaves, strict objects, arrays, tuples, unions and optional-style wrappers only. Anything else (catch, prefault,
+ * pipe/transform, record, map, set, any, unknown, custom, lazy, promise, intersection, …) is refused, because it can
+ * hide a lane field, accept open keys or swallow a forged argument instead of failing the parse.
+ */
 function schemaProblems(schema: AnyZod, path: string, top: boolean): string[] {
   const def = schema._zod.def;
-  const out: string[] = [];
+  const here = path || "args";
+  if (top && def.type !== "object") return ["args must be a strict object schema"];
+  if (LEAVES.has(def.type)) return [];
+  if (WRAPPERS.has(def.type)) return schemaProblems(def.innerType as AnyZod, path, false);
   switch (def.type) {
     case "object": {
       const catchall = def.catchall as AnyZod | undefined;
-      if (catchall?._zod.def.type !== "never") out.push(`${path || "args"} is not strict (use z.strictObject)`);
-      const shape = def.shape as Record<string, AnyZod>;
-      for (const [k, v] of Object.entries(shape)) {
+      const out: string[] = [];
+      if (catchall?._zod.def.type !== "never") out.push(`${here} is not strict (use z.strictObject)`);
+      for (const [k, v] of Object.entries(def.shape as Record<string, AnyZod>)) {
         if (LANE_KEY.test(k)) out.push(`${path ? `${path}.` : ""}${k}: a lane field is not allowed (the server sets laneId)`);
         out.push(...schemaProblems(v, path ? `${path}.${k}` : k, false));
       }
       return out;
     }
-    case "optional":
-    case "nullable":
-    case "default":
-    case "readonly":
-    case "nonoptional":
-      return schemaProblems(def.innerType as AnyZod, path, top);
     case "array":
       return schemaProblems(def.element as AnyZod, `${path}[]`, false);
+    case "tuple":
+      return [
+        ...(def.items as AnyZod[]).flatMap((it, i) => schemaProblems(it, `${path}[${i}]`, false)),
+        ...(def.rest ? schemaProblems(def.rest as AnyZod, `${path}[]`, false) : []),
+      ];
     case "union":
-      return (def.options as AnyZod[]).flatMap((o) => schemaProblems(o, path, top));
-    case "record":
-    case "map":
-    case "any":
-    case "unknown":
-    case "custom":
-    case "lazy":
-    case "pipe":
-    case "transform":
-    case "intersection":
-      // Open-ended shapes could carry a lane field or anything else; refuse them.
-      return [`${path || "args"}: ${def.type} schemas are not allowed`];
+      return (def.options as AnyZod[]).flatMap((o) => schemaProblems(o, path, false));
     default:
-      if (top) return ["args must be an object schema"];
-      return [];
+      return [`${here}: ${def.type} schemas are not allowed`];
   }
 }
+
+const FIELD_PATH = /^[A-Za-z_][A-Za-z0-9_]*(\[\])*(\.[A-Za-z_][A-Za-z0-9_]*(\[\])*)*$/;
 
 export type ToolRegistry = {
   register<A, R>(tool: ToolDescriptor<A, R>): void;
@@ -109,6 +138,7 @@ export type ToolRegistry = {
 
 export function createToolRegistry(): ToolRegistry {
   const tools = new Map<string, ToolDescriptor>();
+  const llm = new Map<string, LLMTool>();
   return {
     register(tool) {
       const name = typeof tool.name === "string" ? tool.name : "?";
@@ -125,18 +155,26 @@ export function createToolRegistry(): ToolRegistry {
       if (!(tool.args instanceof z.ZodType)) throw new ToolRegistrationError(name, "args must be a Zod schema");
       const problems = schemaProblems(tool.args as unknown as AnyZod, "", true);
       if (problems.length > 0) throw new ToolRegistrationError(name, problems.join("; "));
+      if (tool.untrustedFields !== undefined) {
+        if (!Array.isArray(tool.untrustedFields) || tool.untrustedFields.some((f) => typeof f !== "string" || !FIELD_PATH.test(f))) {
+          throw new ToolRegistrationError(name, 'untrustedFields must be paths like "customers[].name"');
+        }
+      }
+      // Built once here: a schema that cannot be expressed for the model fails registration, not every chat turn.
+      let inputSchema: Record<string, unknown>;
+      try {
+        inputSchema = { ...(z.toJSONSchema(tool.args, { io: "input" }) as Record<string, unknown>) };
+        delete inputSchema.$schema;
+      } catch {
+        throw new ToolRegistrationError(name, "args cannot be expressed as JSON Schema");
+      }
       tools.set(name, Object.freeze({ ...tool }) as ToolDescriptor);
+      llm.set(name, Object.freeze({ name, description: tool.description, inputSchema }));
     },
     get: (name) => tools.get(name),
     list: () => [...tools.values()],
     llmTools(categories) {
-      return [...tools.values()]
-        .filter((t) => categories.includes(t.category))
-        .map((t) => {
-          const inputSchema = { ...(z.toJSONSchema(t.args, { io: "input" }) as Record<string, unknown>) };
-          delete inputSchema.$schema;
-          return { name: t.name, description: t.description, inputSchema };
-        });
+      return [...tools.values()].filter((t) => categories.includes(t.category)).flatMap((t) => llm.get(t.name) ?? []);
     },
   };
 }

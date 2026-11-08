@@ -61,7 +61,7 @@ export function getSupabaseSecretKey(): string {
 /**
  * Anthropic SDK variables that could add request headers, redirect traffic or log/trace request bodies. packages/ai
  * pins baseURL, logLevel and tracing in the client constructor, but the SDK still reads ANTHROPIC_CUSTOM_HEADERS, so
- * any of these being set refuses the AI feature loudly instead of being silently honoured (T-100 review M1).
+ * any of these being set switches the AI feature off (configured:false + refused) instead of being honoured (T-100 M1).
  */
 export const REFUSED_ANTHROPIC_SDK_ENV = [
   "ANTHROPIC_CUSTOM_HEADERS",
@@ -74,7 +74,8 @@ export const REFUSED_ANTHROPIC_SDK_ENV = [
 export function getAnthropicEnv(env: EnvRecord = process.env) {
   // The SDK reads the real process env whatever `env` is passed, so check both.
   const refused = REFUSED_ANTHROPIC_SDK_ENV.filter((k) => env[k] || process.env[k]);
-  if (refused.length > 0) throw new EnvValidationError("Anthropic", [], refused);
+  // Not configured (AI off, the page says so) rather than an exception: shells often set ANTHROPIC_BASE_URL.
+  if (refused.length > 0) return { configured: false as const, missing: [] as string[], refused: [...refused] };
   const result = resolveAnthropicEnv(env, isProduction(process.env));
   return result.configured ? withRedaction(result) : result;
 }

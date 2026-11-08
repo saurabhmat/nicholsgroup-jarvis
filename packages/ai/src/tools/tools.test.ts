@@ -29,15 +29,23 @@ function finTool(over: Partial<ToolDescriptor> = {}, runs: unknown[] = []): Tool
 
 type RpcReply = { data: unknown; error: unknown } | Error;
 
-function setup(opts: { rpc?: RpcReply; requireLane?: () => Promise<unknown>; auditFails?: boolean } = {}) {
+function setup(
+  opts: {
+    rpc?: RpcReply;
+    requireLane?: () => Promise<unknown>;
+    requireSession?: () => Promise<{ userId: string }>;
+    auditFails?: boolean | "after_run";
+  } = {},
+) {
   const registry = createToolRegistry();
   const runs: unknown[] = [];
   registry.register(finTool({}, runs));
   const audits: AuditEntry[] = [];
+  const laneAsked: string[] = [];
   const rpcCalls: { fn: string; args: Record<string, unknown> }[] = [];
   const audit: Audit = {
     async log(e) {
-      if (opts.auditFails) throw new Error("audit down");
+      if (opts.auditFails === true || (opts.auditFails === "after_run" && e.action.endsWith(".succeeded"))) throw new Error("audit down");
       audits.push(e);
     },
   };
@@ -54,9 +62,15 @@ function setup(opts: { rpc?: RpcReply; requireLane?: () => Promise<unknown>; aud
   const deps: GateDeps = {
     registry,
     audit,
-    requireLane: (opts.requireLane as GateDeps["requireLane"]) ?? (async () => ({ session: { userId: USER }, client: client as never })),
+    requireSession: opts.requireSession ?? (async () => ({ userId: USER })),
+    requireLane:
+      (opts.requireLane as GateDeps["requireLane"]) ??
+      (async (laneId) => {
+        laneAsked.push(laneId);
+        return { session: { userId: USER }, client: client as never };
+      }),
   };
-  return { gate: createPolicyGate(deps), runs, audits, rpcCalls, registry };
+  return { gate: createPolicyGate(deps), runs, audits, rpcCalls, registry, laneAsked, client };
 }
 
 const call = { laneId: "PKG", toolName: "get_mrr", toolUseId: "toolu_1", args: { month: "2026-11" } };
@@ -79,6 +93,14 @@ describe("tool registry", () => {
     ["a nested non-strict object", { args: z.strictObject({ filter: z.array(z.object({ a: z.string() })) }) }],
     ["a record (open keys)", { args: z.strictObject({ extra: z.record(z.string(), z.string()) }) }],
     ["a passthrough object", { args: z.looseObject({ a: z.string() }) }],
+    ["a loose object in a tuple", { args: z.strictObject({ t: z.tuple([z.looseObject({ a: z.string() })]) }) }],
+    ["a lane field in a tuple rest", { args: z.strictObject({ t: z.tuple([z.string()], z.strictObject({ laneId: z.string() })) }) }],
+    [".catch (swallows forged fields)", { args: z.strictObject({ x: z.strictObject({ a: z.string() }).catch({ a: "" }) }) }],
+    ["prefault", { args: z.strictObject({ x: z.strictObject({ a: z.string() }).prefault({ a: "" }) }) }],
+    ["a set", { args: z.strictObject({ x: z.set(z.string()) }) }],
+    ["a transform", { args: z.strictObject({ x: z.string().transform((v) => v.length) }) }],
+    ["a date (no JSON Schema)", { args: z.strictObject({ d: z.date() }) }],
+    ["bad untrustedFields", { untrustedFields: ["customers[].name", "a..b"] }],
     ["a non-object schema", { args: z.string() }],
     ["an unknown effect", { effect: "write" as never }],
     ["an unknown category", { category: "drafting" as never }],
@@ -101,10 +123,9 @@ describe("policy gate", () => {
     const { gate, runs, audits, rpcCalls } = setup();
     const out = await gate.call(call);
     expect(out.ok).toBe(true);
-    expect(runs).toEqual([{ ctx: { laneId: "PKG", userId: USER, role: "owner" }, args: { month: "2026-11" } }]);
-    expect(rpcCalls).toEqual([
-      { fn: "ai_tool_gate", args: { p_lane: "PKG", p_view: "finance", p_category: "finance", p_limit: 30, p_window_seconds: 60 } },
-    ]);
+    expect(runs).toEqual([{ ctx: { laneId: "PKG", userId: USER, role: "owner", client: expect.anything() }, args: { month: "2026-11" } }]);
+    expect(rpcCalls).toEqual([{ fn: "ai_tool_gate", args: { p_lane: "PKG", p_view: "finance", p_category: "finance" } }]);
+    expect(out).toMatchObject({ args: { month: "2026-11" }, auditIncomplete: false });
     expect(audits.map((a) => a.action)).toEqual(["assistant.tool_call.requested", "assistant.tool_call.succeeded"]);
     expect(audits[0]).toMatchObject({ laneId: "PKG", actor: { kind: "user", userId: USER }, target: "tool:get_mrr" });
   });
@@ -126,14 +147,54 @@ describe("policy gate", () => {
     const out = await gate.call({ ...call, laneId: "NL" });
     expect(out).toMatchObject({ ok: false, reason: "not_member", message: "Not available in this lane." });
     expect(runs).toHaveLength(0);
-    expect(audits[0]).toMatchObject({ laneId: "NL", action: "assistant.tool_call.denied", actor: { kind: "system" } });
+    // The attempt is attributed to the user who made it.
+    expect(audits[0]).toMatchObject({ laneId: "NL", action: "assistant.tool_call.denied", actor: { kind: "user", userId: USER } });
   });
 
-  it("maps AAL1 and missing sessions", async () => {
+  it("checks the session before anything else (AAL1, no session)", async () => {
     for (const [err, reason] of [[new AuthError("mfa_required"), "mfa_required"], [new AuthError("no_session"), "no_session"], [new Error("boom"), "gate_unavailable"]] as const) {
-      const { gate } = setup({ requireLane: async () => Promise.reject(err) });
+      const { gate, rpcCalls, laneAsked, runs } = setup({ requireSession: async () => Promise.reject(err) });
       expect(await gate.call(call)).toMatchObject({ ok: false, reason });
+      expect([rpcCalls.length, laneAsked.length, runs.length]).toEqual([0, 0, 0]);
     }
+  });
+
+  it("asks the lane router for the server's laneId and refuses malformed lanes", async () => {
+    const { gate, laneAsked, audits } = setup();
+    await gate.call(call);
+    expect(laneAsked).toEqual(["PKG"]);
+    for (const laneId of ["pkg", "", "PKG;--"]) expect(await gate.call({ ...call, laneId })).toMatchObject({ ok: false, reason: "not_member" });
+    expect(laneAsked).toEqual(["PKG"]);
+    expect(audits.filter((a) => a.action.endsWith(".denied"))).toHaveLength(0);
+  });
+
+  it("does not parse arguments after a database denial", async () => {
+    let parsed = 0;
+    const { gate, registry } = setup({ rpc: { data: { allowed: false, reason: "category_denied", role: "owner" }, error: null } });
+    registry.register(finTool({ name: "counted", args: z.strictObject({ a: z.string().refine(() => (parsed++, true)) }) }));
+    await gate.call({ ...call, toolName: "counted", args: { a: "x" } });
+    expect(parsed).toBe(0);
+  });
+
+  it("treats a throwing refinement as invalid arguments", async () => {
+    const { gate, registry, runs } = setup();
+    registry.register(finTool({ name: "throws", args: z.strictObject({ a: z.string().refine(() => { throw new Error("x"); }) }) }));
+    expect(await gate.call({ ...call, toolName: "throws", args: { a: "x" } })).toMatchObject({ ok: false, reason: "invalid_args" });
+    expect(runs).toHaveLength(0);
+  });
+
+  it("rejects a malformed result envelope as tool_failed", async () => {
+    const { gate, registry } = setup();
+    for (const [i, bad] of [{ data: 1 }, { data: 1, sources: [], asOf: "yesterday", freshness: "cached", notes: [] }, { data: 1, sources: [{ kind: "x", id: "1", url: "javascript:alert(1)" }], asOf: "2026-11-08T00:00:00Z", freshness: "cached", notes: [] }].entries()) {
+      registry.register(finTool({ name: `bad_${i}`, run: async () => bad as never }));
+      expect(await gate.call({ ...call, toolName: `bad_${i}` })).toMatchObject({ ok: false, reason: "tool_failed" });
+    }
+  });
+
+  it("keeps a completed result when only the final audit write fails", async () => {
+    const { gate, runs } = setup({ auditFails: "after_run" });
+    expect(await gate.call(call)).toMatchObject({ ok: true, auditIncomplete: true });
+    expect(runs).toHaveLength(1);
   });
 
   it.each([
@@ -166,11 +227,11 @@ describe("policy gate", () => {
     }
   });
 
-  it("denies unknown tools without asking the database", async () => {
+  it("denies unknown tools without asking the gate RPC, attributed to the user", async () => {
     const { gate, rpcCalls, audits } = setup();
     expect(await gate.call({ ...call, toolName: "send_email" })).toMatchObject({ ok: false, reason: "unknown_tool" });
     expect(rpcCalls).toHaveLength(0);
-    expect(audits[0]).toMatchObject({ target: "tool:unknown" });
+    expect(audits[0]).toMatchObject({ target: "tool:unknown", actor: { kind: "user", userId: USER } });
   });
 
   it("never runs a tool when the audit write fails, and never throws", async () => {
@@ -186,6 +247,7 @@ describe("policy gate", () => {
     expect(out).toEqual({ ok: false, reason: "tool_failed", message: DENY_MESSAGES.tool_failed });
     expect(audits.map((a) => a.action)).toEqual(["assistant.tool_call.requested", "assistant.tool_call.failed"]);
     expect(JSON.stringify([out, audits])).not.toContain("SECRET");
+    expect(JSON.stringify(audits)).not.toContain("error_class");
   });
 
   it("sanitizes a hostile toolUseId before auditing", async () => {

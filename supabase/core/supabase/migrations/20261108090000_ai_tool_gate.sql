@@ -21,7 +21,7 @@ alter table core.ai_tool_rate enable row level security;
 revoke all on core.ai_tool_rate from public, anon, authenticated, service_role;
 
 -- ---------------------------------------------------------------- gate
-create function core.ai_tool_gate(p_lane text, p_view text, p_category text, p_limit integer, p_window_seconds integer)
+create function core.ai_tool_gate(p_lane text, p_view text, p_category text)
 returns jsonb
 language plpgsql
 volatile
@@ -35,6 +35,10 @@ declare
   v_categories text[];
   v_window timestamptz;
   v_calls integer;
+  -- The limit is not a parameter: a member calling this RPC directly must not be able to pick a window that resets
+  -- the counter (T-101 security review M1). Per-lane override: lane_config.assistant.tool_calls_per_minute (1..1000).
+  v_limit integer := 30;
+  v_raw text;
 begin
   if p_lane is null or p_lane !~ '^[A-Z]{1,8}$' then
     raise exception 'invalid lane' using errcode = '22023';
@@ -44,9 +48,6 @@ begin
   end if;
   if p_category is null or not (p_category = any (array['email', 'calendar', 'docs', 'finance', 'finance_summary', 'tasks']::text[])) then
     raise exception 'invalid category' using errcode = '22023';
-  end if;
-  if p_limit is null or p_limit not between 1 and 1000 or p_window_seconds is null or p_window_seconds not between 1 and 3600 then
-    raise exception 'invalid rate limit' using errcode = '22023';
   end if;
 
   if v_uid is null or coalesce(auth.jwt() ->> 'aal', '') <> 'aal2' then
@@ -77,12 +78,18 @@ begin
     return jsonb_build_object('allowed', false, 'reason', 'view_denied', 'role', v_role);
   end if;
 
-  -- Fixed window; the counter only increments while under the limit, so a denied call does not extend the block.
-  v_window := pg_catalog.to_timestamp(floor(extract(epoch from now()) / p_window_seconds) * p_window_seconds);
+  select c.config -> 'assistant' ->> 'tool_calls_per_minute' into v_raw
+  from core.lane_config c where c.lane_id = p_lane order by c.version desc limit 1;
+  if v_raw ~ '^[0-9]{1,4}$' and v_raw::integer between 1 and 1000 then
+    v_limit := v_raw::integer;
+  end if;
+
+  -- Fixed 60-second window; the counter only increments while under the limit, so a denied call does not extend it.
+  v_window := pg_catalog.date_trunc('minute', now());
   delete from core.ai_tool_rate r where r.lane_id = p_lane and r.user_id = v_uid and r.window_start < v_window;
   insert into core.ai_tool_rate as r (lane_id, user_id, window_start, calls)
   values (p_lane, v_uid, v_window, 1)
-  on conflict (lane_id, user_id, window_start) do update set calls = r.calls + 1 where r.calls < p_limit
+  on conflict (lane_id, user_id, window_start) do update set calls = r.calls + 1 where r.calls < v_limit
   returning r.calls into v_calls;
   if v_calls is null then
     return jsonb_build_object('allowed', false, 'reason', 'rate_limited', 'role', v_role);
@@ -91,7 +98,7 @@ begin
   return jsonb_build_object('allowed', true, 'reason', null, 'role', v_role);
 end;
 $$;
-comment on function core.ai_tool_gate(text, text, text, integer, integer) is
-  'Assistant policy gate (T-101): aal2, membership/role, lane enabled, llm_allowed_categories, assistant + required view, rate limit, for auth.uid() only. Returns {allowed, reason, role}; no data.';
-revoke all on function core.ai_tool_gate(text, text, text, integer, integer) from public, anon, service_role;
-grant execute on function core.ai_tool_gate(text, text, text, integer, integer) to authenticated;
+comment on function core.ai_tool_gate(text, text, text) is
+  'Assistant policy gate (T-101): aal2, membership/role, lane enabled, llm_allowed_categories, assistant + required view, rate limit (30/min or lane_config.assistant.tool_calls_per_minute), for auth.uid() only. Returns {allowed, reason, role}; no data.';
+revoke all on function core.ai_tool_gate(text, text, text) from public, anon, service_role;
+grant execute on function core.ai_tool_gate(text, text, text) to authenticated;

@@ -2,7 +2,10 @@ import { getAnthropicEnv } from "@nichols/core/env/server";
 import { createAnthropicProvider } from "./anthropic";
 import type { LLMLogger, LLMProvider } from "./types";
 
-export type ProviderResult = { configured: true; provider: LLMProvider } | { configured: false; missing: string[] };
+export type ProviderResult =
+  | { configured: true; provider: LLMProvider }
+  /** `refused`: SDK override variables that must be unset (ANTHROPIC_BASE_URL, ANTHROPIC_LOG, …). */
+  | { configured: false; missing: string[]; refused: string[] };
 
 /**
  * Builds the provider from ANTHROPIC_API_KEY / ANTHROPIC_MODEL_ANALYSIS / ANTHROPIC_MODEL_FAST. When the group is not
@@ -13,7 +16,7 @@ export function getLLMProvider(
 ): ProviderResult {
   const { env, logger, maxRetries, timeoutMs } = opts;
   const cfg = env ? getAnthropicEnv(env) : getAnthropicEnv();
-  if (!cfg.configured) return { configured: false, missing: cfg.missing };
+  if (!cfg.configured) return { configured: false, missing: cfg.missing, refused: "refused" in cfg && Array.isArray(cfg.refused) ? cfg.refused.map(String) : [] };
   return {
     configured: true,
     provider: createAnthropicProvider({
