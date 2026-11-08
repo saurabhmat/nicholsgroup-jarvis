@@ -1,0 +1,132 @@
+// Assistant chat turn (T-105, demo scope approved by Saurabh Nov 8, 2026). Framework-free: the route handler in
+// apps/web wires the session, lane client, audit and SSE; this file validates the history, builds the system prompt,
+// runs the reviewed tool loop (runToolLoop: gate, wrapping, proposals off) and turns it into events.
+// Not stored anywhere (T-103 conversations storage is not built): the page keeps the conversation in memory.
+// History comes from the browser as plain text only: earlier tool results are never replayed (T-102 sec L5), and
+// nothing in it can change tools, lanes or roles (the gate decides server-side).
+import { z } from "zod";
+import type { LaneId } from "@nichols/core";
+import { runToolLoop, type ToolLoopResult } from "./tools/loop";
+import type { PolicyGate } from "./tools/gate";
+import type { ToolCategory, ToolRegistry } from "./tools/registry";
+import { TOOL_CATEGORIES } from "./tools/registry";
+import type { LLMMessage, LLMProvider, LLMSystemBlock } from "./types";
+import { UNTRUSTED_DATA_RULE } from "./untrusted";
+
+export const MAX_TURNS = 20;
+export const MAX_TURN_CHARS = 4000;
+
+export const chatRequestSchema = z.strictObject({
+  messages: z
+    .array(z.strictObject({ role: z.enum(["user", "assistant"]), text: z.string().trim().min(1).max(MAX_TURN_CHARS) }))
+    .min(1)
+    .max(MAX_TURNS)
+    .refine((m) => m.every((t, i) => t.role === (i % 2 === 0 ? "user" : "assistant")) && m[m.length - 1]?.role === "user", {
+      message: "turns must alternate, starting and ending with the user",
+    }),
+});
+export type ChatRequest = z.infer<typeof chatRequestSchema>;
+
+export type Citation = { kind: string; label: string; url: string | null; asOf: string; freshness: "live" | "cached" | "stale"; tool: string };
+export type Grounding = { status: "passed" | "failed" | "not_applicable"; unverified: string[] };
+
+export type ChatEvent =
+  | { type: "message.start" }
+  | { type: "text.delta"; text: string }
+  | { type: "tool.start"; tool: string }
+  | { type: "tool.result"; tool: string; outcome: string }
+  | { type: "citations"; citations: Citation[] }
+  | { type: "grounding"; grounding: Grounding }
+  | { type: "message.done"; stop: ToolLoopResult["stop"] }
+  | { type: "error"; code: "not_configured" | "unavailable" | "rate_limited" | "aborted" };
+
+const STATIC_PROMPT = [
+  "You are the executive assistant inside the Nichols Group portal. You help the signed-in executive understand",
+  "their company's mail and calendar using the tools provided. Be brief and concrete; lead with what needs attention.",
+  "Rules: Never invent or estimate figures, dates, names or counts: use only what tools return, and say so when a tool",
+  "does not provide something. You cannot send, reply, approve, pay, schedule or change anything; you can only read",
+  "and explain. Cash figures, if any, are always called \"book balance\". Mention which source an answer came from",
+  "(Email, Calendar). Times are New York time; the business week is Saturday to Friday.",
+].join(" ");
+
+const DATE = new Intl.DateTimeFormat("en-US", { timeZone: "America/New_York", weekday: "long", year: "numeric", month: "long", day: "numeric" });
+
+/** System prompt: a cached static part (rules + untrusted-data rule) and a small dynamic part (typed fields only). */
+export function chatSystemPrompt(input: { laneId: LaneId; laneName: string; now: Date; categories: readonly ToolCategory[] }): LLMSystemBlock[] {
+  const name = input.laneName.replace(/[^\p{L}\p{N} .,&'-]/gu, "").slice(0, 80);
+  return [
+    { text: STATIC_PROMPT },
+    { text: UNTRUSTED_DATA_RULE, cache: "1h" },
+    {
+      text: `Company: ${name} (lane ${input.laneId}). Today: ${DATE.format(input.now)}. Tool categories available: ${
+        input.categories.length ? input.categories.join(", ") : "none"
+      }.`,
+    },
+  ];
+}
+
+const FIGURE = /\$\s?\d[\d,]*(?:\.\d+)?|\b\d+(?:\.\d+)?\s?%/g;
+const digits = (s: string) => s.replace(/[^\d.]/g, "").replace(/\.0+$/, "");
+
+/** Numeric grounding (rule 7): every money amount or percentage in the answer must appear in this turn's tool data. */
+export function checkGrounding(answer: string, results: ToolLoopResult["results"]): Grounding {
+  const figures = [...new Set(answer.match(FIGURE) ?? [])];
+  if (figures.length === 0) return { status: "not_applicable", unverified: [] };
+  const data = JSON.stringify(results.map((r) => r.result.data));
+  const known = new Set((data.match(/\d[\d,]*(?:\.\d+)?/g) ?? []).map(digits));
+  const unverified = figures.filter((f) => !known.has(digits(f)));
+  return { status: unverified.length ? "failed" : "passed", unverified };
+}
+
+export function citationsOf(results: ToolLoopResult["results"]): Citation[] {
+  const out: Citation[] = [];
+  const seen = new Set<string>();
+  for (const r of results) {
+    for (const s of r.result.sources) {
+      const key = `${s.kind}:${s.id}`;
+      if (seen.has(key)) continue;
+      seen.add(key);
+      out.push({ kind: s.kind, label: s.label ?? s.kind, url: s.url ?? null, asOf: r.result.asOf, freshness: r.result.freshness, tool: r.tool.name });
+    }
+  }
+  return out.slice(0, 20);
+}
+
+export async function runChatTurn(input: {
+  provider: LLMProvider;
+  gate: PolicyGate;
+  registry: ToolRegistry;
+  laneId: LaneId;
+  laneName: string;
+  categories: readonly string[];
+  request: ChatRequest;
+  now: Date;
+  emit: (e: ChatEvent) => void;
+  signal?: AbortSignal;
+  maxTokens?: number;
+}): Promise<void> {
+  const categories = input.categories.filter((c): c is ToolCategory => (TOOL_CATEGORIES as readonly string[]).includes(c));
+  const messages: LLMMessage[] = input.request.messages.map((m) => ({ role: m.role, content: m.text }));
+  input.emit({ type: "message.start" });
+  const out = await runToolLoop({
+    provider: input.provider,
+    gate: input.gate,
+    registry: input.registry,
+    laneId: input.laneId,
+    tier: "analysis",
+    system: chatSystemPrompt({ laneId: input.laneId, laneName: input.laneName, now: input.now, categories }),
+    messages,
+    categories,
+    maxTokens: input.maxTokens ?? 2048,
+    maxSteps: 6,
+    ...(input.signal ? { signal: input.signal } : {}),
+    hooks: {
+      onText: (text) => input.emit({ type: "text.delta", text }),
+      onToolStart: (c) => input.emit({ type: "tool.start", tool: c.name }),
+      onToolResult: (c) => input.emit({ type: "tool.result", tool: c.name, outcome: c.outcome }),
+    },
+  });
+  input.emit({ type: "citations", citations: citationsOf(out.results) });
+  input.emit({ type: "grounding", grounding: checkGrounding(out.text, out.results) });
+  input.emit({ type: "message.done", stop: out.stop });
+}

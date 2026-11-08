@@ -369,7 +369,10 @@ isOneToOne: false
                 }
           }
           Functions: {
-            "ai_tool_gate":
+            "ai_tool_categories":
+{ Args: { "p_lane": string }; Returns: (string)[]
+                           },
+"ai_tool_gate":
 { Args: { "p_category": string,"p_lane": string,"p_view": string }; Returns: Json
                            },
 "allowed_lanes":

@@ -779,14 +779,16 @@ T-100 – T-103 are **track W4**, parallel with the connectors (after T-017). T-
 - acceptance: Spec: `docs/specs/assistant.md` §4. `get_cash_position`, `get_ar_aging`, `get_ap_aging`, `get_pnl`, `get_mrr`, `get_subscribers`, `get_controls_status` (`get_ap_aging` added so AP due ≤14 days is answerable) return pre-formatted display strings, SQL-computed totals, sources and `as_of` straight from the query layer; strict args validated against the lane mapping; book-balance labelling and `pending_definition` pass-through tested; Stripe and GHL figures never merged.
 
 ### T-105 Chat route with citations
-- status: proposed
+- status: approved
+- approved: Saurabh, Nov 8, 2026 ("chat screen is also approved") for the Nov 10 demo. Built in demo scope first (see `.agent/pr/T-105-106.md`); the rest of the acceptance stays open.
 - depends: T-104, T-103, T-102
 - acceptance: Spec: `docs/specs/assistant.md` §4. SSE chat route (`message.start`, `text.delta`, `tool.start`, `tool.result`, `citations`, `grounding`, `message.done`, `error`) with bounded tool loop (6 iterations), rate limits, abort on disconnect; answers carry source chips; numeric-grounding check flags any figure in the answer not in this turn's tool results, retries once, then replaces the figure and marks `grounding.status = failed` (test); multi-lane questions use per-lane sub-calls + composer that sees only allowed summaries (inactive while one lane is enabled, unit-tested with two fake lanes).
 
 ### T-106 Assistant UI
-- status: proposed
+- status: approved
+- approved: Saurabh, Nov 8, 2026 ("chat screen is also approved") for the Nov 10 demo. Built in demo scope first (see `.agent/pr/T-105-106.md`); the rest of the acceptance stays open.
 - depends: T-105, T-024
-- needs: D-21 (design sign-off batch 2)
+- needs: [x] D-21 (design sign-off batch 2; Robert approved all designs Nov 6, 2026)
 - acceptance: Spec: `docs/specs/assistant.md` §4. Chat page with lane chip, streaming text, tool-progress line, source chips with freshness, grounding warning chip, conversation list and delete, iPhone layout, disabled state when no categories are allowed; Playwright test.
 
 ### T-194 Assistant golden-question eval set

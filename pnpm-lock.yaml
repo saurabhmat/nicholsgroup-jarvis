@@ -193,6 +193,9 @@ importers:
 
   apps/web:
     dependencies:
+      '@nichols/ai':
+        specifier: workspace:*
+        version: link:../../packages/ai
       '@nichols/brain':
         specifier: workspace:*
         version: link:../../packages/modules/brain

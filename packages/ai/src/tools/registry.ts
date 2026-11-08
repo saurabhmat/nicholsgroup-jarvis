@@ -36,7 +36,8 @@ export const toolResultSchema = z.strictObject({
         kind: z.string().max(40),
         id: z.string().max(200),
         label: z.string().max(300).optional(),
-        url: z.url({ protocol: /^https?$/ }).max(2000).optional(),
+        // https link, or an in-app path ("/PKG/inbox/<id>"); never javascript:, data: or protocol-relative.
+        url: z.union([z.url({ protocol: /^https$/ }).max(2000), z.string().regex(/^\/[A-Za-z0-9_][A-Za-z0-9_/-]{0,300}$/)]).optional(),
       }),
     )
     .max(MAX_SOURCES),
