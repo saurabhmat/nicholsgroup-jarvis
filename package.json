@@ -21,7 +21,7 @@
     "db:reset": "node supabase/core/seed/generate.mjs && supabase db reset --local --workdir supabase/core",
     "db:types": "node scripts/gen-db-types.mjs",
     "db:types:check": "node scripts/gen-db-types.mjs --check",
-    "test:injection": "node -e \"console.log('test:injection: placeholder, real suite arrives in T-102')\""
+    "test:injection": "pnpm --filter @nichols/ai test:injection"
   },
   "devDependencies": {
     "@nichols/core": "workspace:*",
