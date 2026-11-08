@@ -66,11 +66,12 @@ export type ToolDescriptor<A = unknown, R = unknown> = {
   /** finance "full"; mail/docs "refs_only" (conversation storage keeps references only). */
   resultStore: "full" | "refs_only";
   /**
-   * Paths in `data` holding external text, wrapped as untrusted data before the model sees them (T-102). Syntax:
-   * dotted keys, `[]` for every array element, e.g. "customers[].name", "memo". Email and docs tools that declare
-   * none get every string wrapped. Source labels are always wrapped.
+   * Paths in `data` whose strings the tool computed itself (display figures like "$12,345.00", enums, ISO dates):
+   * escaped but not wrapped. Every other string in the result reaches the model wrapped as untrusted data (T-102,
+   * fail closed). Syntax: dotted keys, `[]` for every array element, e.g. "customers[].open_balance_display".
+   * Required; [] when nothing is trusted.
    */
-  untrustedFields?: string[];
+  trustedFields: string[];
   run(ctx: ToolContext, args: A): Promise<ToolResult<R>>;
 };
 
@@ -155,10 +156,8 @@ export function createToolRegistry(): ToolRegistry {
       if (!(tool.args instanceof z.ZodType)) throw new ToolRegistrationError(name, "args must be a Zod schema");
       const problems = schemaProblems(tool.args as unknown as AnyZod, "", true);
       if (problems.length > 0) throw new ToolRegistrationError(name, problems.join("; "));
-      if (tool.untrustedFields !== undefined) {
-        if (!Array.isArray(tool.untrustedFields) || tool.untrustedFields.some((f) => typeof f !== "string" || !FIELD_PATH.test(f))) {
-          throw new ToolRegistrationError(name, 'untrustedFields must be paths like "customers[].name"');
-        }
+      if (!Array.isArray(tool.trustedFields) || tool.trustedFields.some((f) => typeof f !== "string" || !FIELD_PATH.test(f))) {
+        throw new ToolRegistrationError(name, 'trustedFields is required: paths like "customers[].open_balance_display", or [] for none');
       }
       // Built once here: a schema that cannot be expressed for the model fails registration, not every chat turn.
       let inputSchema: Record<string, unknown>;

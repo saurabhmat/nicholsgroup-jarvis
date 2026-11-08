@@ -27,7 +27,8 @@ export type DenyReason =
   | "rate_limited"
   | "invalid_args"
   | "gate_unavailable"
-  | "tool_failed";
+  | "tool_failed"
+  | "propose_not_allowed";
 
 /** The text the model sees for a denial: short, fixed, no internals. */
 export const DENY_MESSAGES: Record<DenyReason, string> = {
@@ -43,9 +44,23 @@ export const DENY_MESSAGES: Record<DenyReason, string> = {
   invalid_args: "The tool arguments were not valid.",
   gate_unavailable: "The tool is temporarily unavailable.",
   tool_failed: "The tool failed; no data was returned.",
+  propose_not_allowed: "Proposals can only be made when the user asks for one directly.",
 };
 
-export type GateCall = { laneId: LaneId; toolName: string; toolUseId: string; args: unknown; signal?: AbortSignal };
+export type GateCall = {
+  laneId: LaneId;
+  toolName: string;
+  toolUseId: string;
+  args: unknown;
+  /**
+   * The one proposal the user's explicit action allows (never from model output): that tool only, and only with
+   * arguments the server-side check accepts (e.g. recipients resolved from the thread the user picked).
+   */
+  proposal?: AllowedProposal;
+  signal?: AbortSignal;
+};
+
+export type AllowedProposal = { toolName: string; check(args: unknown): boolean };
 
 export type GateOutcome =
   | {
@@ -153,6 +168,9 @@ export function createPolicyGate(deps: GateDeps): PolicyGate {
         return deny("gate_unavailable");
       }
 
+      // Propose tools only for the user's explicit action: checked after the rate limit, so refusals count and are audited.
+      if (tool.effect === "propose" && input.proposal?.toolName !== tool.name) return deny("propose_not_allowed");
+
       // 7. Strict arguments: unknown keys (a forged laneId included) fail. A throwing refinement counts as invalid.
       let args: unknown;
       try {
@@ -161,6 +179,15 @@ export function createPolicyGate(deps: GateDeps): PolicyGate {
         args = parsed.data;
       } catch {
         return deny("invalid_args");
+      }
+      if (tool.effect === "propose") {
+        let accepted = false;
+        try {
+          accepted = input.proposal?.check(args) === true;
+        } catch {
+          accepted = false;
+        }
+        if (!accepted) return deny("propose_not_allowed");
       }
 
       // 8. Run, audited before and after. No run without the requested entry.

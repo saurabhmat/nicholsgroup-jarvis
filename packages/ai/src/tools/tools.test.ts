@@ -19,6 +19,7 @@ function finTool(over: Partial<ToolDescriptor> = {}, runs: unknown[] = []): Tool
     requiredView: "finance",
     args: z.strictObject({ month: z.string().regex(/^\d{4}-\d{2}$/) }),
     resultStore: "full",
+    trustedFields: ["display"],
     async run(ctx, args) {
       runs.push({ ctx, args });
       return { data: { display: "$12,345.00" }, sources: [{ kind: "stripe", id: "mrr" }], asOf: "2026-11-08T00:00:00Z", freshness: "cached", notes: [] } satisfies ToolResult<unknown>;
@@ -100,7 +101,8 @@ describe("tool registry", () => {
     ["a set", { args: z.strictObject({ x: z.set(z.string()) }) }],
     ["a transform", { args: z.strictObject({ x: z.string().transform((v) => v.length) }) }],
     ["a date (no JSON Schema)", { args: z.strictObject({ d: z.date() }) }],
-    ["bad untrustedFields", { untrustedFields: ["customers[].name", "a..b"] }],
+    ["bad trustedFields", { trustedFields: ["customers[].display", "a..b"] }],
+    ["missing trustedFields", { trustedFields: undefined as never }],
     ["a non-object schema", { args: z.string() }],
     ["an unknown effect", { effect: "write" as never }],
     ["an unknown category", { category: "drafting" as never }],

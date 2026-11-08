@@ -764,7 +764,7 @@ T-100 – T-103 are **track W4**, parallel with the connectors (after T-017). T-
 - acceptance: Spec: `docs/specs/assistant.md` §4. Modules register tools (`name`, `category`, `effect` read|propose, `requiredView`, strict Zod args with no lane field, `resultStore` full|refs_only, `untrustedFields`); the gate checks, in order, AAL2 session, membership and role, lane enabled, `llm_allowed_categories`, required view, rate limit, then audits every call; a registration test fails if a tool imports a connector write path; tests for denied lane, denied category, forged laneId/extra arguments, viewer and admin_technical.
 
 ### T-102 Untrusted content wrapping + injection suite
-- status: approved
+- status: done
 - depends: T-101
 - acceptance: Spec: `docs/specs/assistant.md` §4. Retrieved content (email, documents, web, and external names in QBO/Stripe/GHL results) wrapped as data with provenance and escaped closing tags; system prompt states it has no authority; `pnpm test:injection` runs a fixture corpus (email/doc/web/customer-name/memo injections, nested tags, approve/send and cross-lane requests) against a mock provider scripted to comply and, opt-in, the real model; asserts no tool escalation, no cross-lane calls, no proposals or approvals from injected text, no secrets in output.
 
