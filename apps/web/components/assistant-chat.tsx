@@ -6,6 +6,8 @@ import Link from "next/link";
 import { useEffect, useRef, useState, type FormEvent } from "react";
 import { Alert, AlertDescription, Badge, Button, cn, FreshnessBadge } from "@nichols/ui";
 import { asOfLabel, buildMessages, createSseParser, groupCitations, isInAppPath, type Citation } from "@/lib/assistant-client";
+import { isInterviewRequest } from "@/lib/brain-interview-client";
+import { BrainInterview } from "@/components/brain-interview";
 
 type Turn = {
   role: "user" | "assistant";
@@ -50,8 +52,12 @@ function Rich({ text }: { text: string }) {
   );
 }
 
-export function AssistantChat({ laneId, sources }: { laneId: string; sources: string[] }) {
+const INTERVIEW_INTRO = "Let's set up your brain. I'll ask a few questions at a time and show you the exact change before anything is saved.";
+
+export function AssistantChat({ laneId, sources, brainSetup = false }: { laneId: string; sources: string[]; brainSetup?: boolean }) {
   const [turns, setTurns] = useState<Turn[]>([]);
+  // The setup interview runs in this thread (T-216). It is not a model call: the questions come from the question bank.
+  const [interview, setInterview] = useState<"setup" | "assistant" | null>(null);
   const [input, setInput] = useState("");
   const [busy, setBusy] = useState(false);
   const abort = useRef<AbortController | null>(null);
@@ -74,6 +80,14 @@ export function AssistantChat({ laneId, sources }: { laneId: string; sources: st
   async function send(text: string) {
     const question = text.trim();
     if (!question || busy) return;
+    const kind = brainSetup ? isInterviewRequest(question) : null;
+    if (kind) {
+      setTurns((all) => [...all, { role: "user", text: question }, { role: "assistant", text: INTERVIEW_INTRO }]);
+      setInput("");
+      setInterview(null);
+      setTimeout(() => setInterview(kind), 0); // remount, so a second request restarts from the saved state
+      return;
+    }
     const messages = buildMessages(turns, question);
     setTurns((all) => [...all, { role: "user", text: question }, { role: "assistant", text: "", tools: [], pending: true }]);
     setInput("");
@@ -140,14 +154,26 @@ export function AssistantChat({ laneId, sources }: { laneId: string; sources: st
         <p className="text-sm text-muted-foreground">
           Reads {sources.join(" and ").toLowerCase()} for this company. It can explain and summarise; it cannot send, reply or change anything.
         </p>
-        {turns.length > 0 && !busy ? (
-          <Button type="button" variant="ghost" size="sm" onClick={() => setTurns([])}>
+        {(turns.length > 0 || interview) && !busy ? (
+          <Button type="button" variant="ghost" size="sm" className="min-h-11" onClick={() => (setTurns([]), setInterview(null))}>
             New chat
           </Button>
         ) : null}
       </div>
-      {turns.length === 0 ? (
+      {turns.length === 0 && !interview ? (
         <div className="flex flex-wrap gap-2">
+          {brainSetup
+            ? (["setup", "assistant"] as const).map((k) => (
+                <button
+                  key={k}
+                  type="button"
+                  onClick={() => void send(k === "setup" ? "Set up my brain" : "Set up my Personal Assistant")}
+                  className="rounded-full border border-primary bg-primary-tint px-4 py-2 text-sm text-foreground transition-colors hover:bg-muted"
+                >
+                  {k === "setup" ? "Set up my brain" : "Set up my Personal Assistant"}
+                </button>
+              ))
+            : null}
           {SUGGESTIONS.map((s) => (
             <button
               key={s}
@@ -222,6 +248,7 @@ export function AssistantChat({ laneId, sources }: { laneId: string; sources: st
           ))}
         </ol>
       )}
+      {interview ? <BrainInterview laneId={laneId} mode="chat" startAt={interview} /> : null}
       <div ref={endRef} />
       <form onSubmit={onSubmit} className="sticky bottom-0 flex gap-2 bg-background py-2 pb-[max(0.5rem,env(safe-area-inset-bottom))]">
         <label htmlFor="assistant-input" className="sr-only">

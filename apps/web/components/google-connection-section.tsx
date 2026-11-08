@@ -19,7 +19,7 @@ export function GoogleConnectionSection({ laneId, view }: { laneId: string; view
   const needsReconnect = view.connections.some((c) => c.state === "reconnect_required");
   const connected = view.connections.length > 0;
   return (
-    <section aria-labelledby="google-connection-title">
+    <section id="connections" aria-labelledby="google-connection-title" className="scroll-mt-4">
       <Card>
         <CardHeader>
           <CardTitle as="h2" id="google-connection-title">

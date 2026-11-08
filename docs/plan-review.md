@@ -934,3 +934,18 @@ Security and code review: no BLOCKER/HIGH; MEDIUMs fixed (see `.agent/pr/T-212.m
 - **L (sec L6, T-213):** for background runs `ownerUserId` must come from the database row (`owner_user_id`), not from the caller.
 - **L (page cut):** a page is cut to half the cap, so a single context page is never dropped whole; the last page always stays (cut).
 - **L (code, remaining):** token estimate is a heuristic (3 chars per token); pages are read per turn without a cache.
+
+### T-216 build notes (Nov 8, 2026, branch `agent/T-216`)
+
+Built without SQL. Reviews pending (run by the parent agent). Decisions and items logged for review:
+- **Interview engine is deterministic, no model.** The chat shows the question bank as cards; the proposed edit is composed by code from the user's typed answers (section replace in the page, never free-form). So no model output can reach a save, and the interview costs no tokens. The spec's "model drafts the edit" can be added later as an optional polish step that still ends in the same diff card.
+- **Per-group Save for Part B writes the draft employee row** (status `draft`, or the current status when reconfiguring), so progress survives a reload. "Confirm" is therefore a server-side re-validation (`loadEmployeeConfig`, fail closed) plus the permission summary, not a second write. Activation is its own click and re-validates.
+- **B13 skip rule** uses `email_draft` OR `email_send` in `write_actions_allowed` with `store_outbound_drafts`, because D-34 made `email.save_draft` (`email_draft`) the default; the spec text names only `email_send`.
+- **Group order and "known" for Part B.** Part B groups count as done once the employee row exists; unanswered groups then show the schema defaults in the summary. A separate per-group "answered" marker would need SQL (not added).
+- **A5/A6 are per company** for the lane the chat or Settings page is open in; another company is set up from that company's page.
+- **B3, B4: PA "2. Priority order" is regenerated from the config** when B2-B4 are saved, so a manual edit of that section in a later editor is replaced (the diff card shows it first).
+- **B12 section order** is the canonical order (checkboxes), not a user-chosen order. **B14** is a short voice description (400 chars), not a pasted-replies field, so no email text is stored (rule 6).
+- **Test briefing step (T-213):** `TEST_BRIEFING_AVAILABLE = false`; the review card shows "Your test briefing arrives with the daily briefing (T-213)." with a disabled button, and activation does not require it. When T-213 lands: flip the constant, add the run action and the Part C step 4 feedback question, and make activation require a test run.
+- **L (home lane):** About-Me, Preferences and the employee go to `resolveHomeLane` (existing About-Me lane, else the lane the user is in); the "Personal lane code from configuration" input is not wired yet (same as T-210/T-211 notes).
+- **L (lane facts read per request):** `buildEnv` reads lane_config, lane_policies and the Google connection state for each lane the user has the brain view in (at most 10), on every interview call. Add a short cache if it shows in timings.
+- **L (e2e not run):** `apps/web/e2e/brain-interview.spec.ts` (iPhone-width viewport) was written but not run: Playwright's global setup resets the local database, which would wipe local connections.

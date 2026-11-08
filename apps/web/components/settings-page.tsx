@@ -8,6 +8,8 @@ import { guards } from "@/lib/guards";
 import { connectionTestVisible } from "@/lib/connection-test";
 import { googleSectionFor } from "@/lib/google-connection";
 import { ConnectionTestSection } from "./connection-test-section";
+import { brainSetupAvailable } from "@/lib/brain-interview";
+import { BrainSection } from "./brain-section";
 import { GoogleConnectionSection } from "./google-connection-section";
 import { ModulePage } from "./module-page";
 
@@ -23,6 +25,7 @@ export async function SettingsPage({
   const result = await connectResultFor(await guards(), lane.laneId, await searchParams);
   const showTest = await connectionTestVisible(await guards(), lane.laneId);
   const google = await googleSectionFor(await guards(), lane.laneId);
+  const brain = await brainSetupAvailable(await guards(), lane.laneId).catch(() => false);
   return (
     <div className="flex flex-col gap-6">
       <ModulePage module="settings" params={params} />
@@ -33,6 +36,7 @@ export async function SettingsPage({
         </Alert>
       ) : null}
       {google ? <GoogleConnectionSection laneId={lane.laneId} view={google} /> : null}
+      {brain ? <BrainSection laneId={lane.laneId} /> : null}
       {showTest ? <ConnectionTestSection laneId={lane.laneId} /> : null}
     </div>
   );
