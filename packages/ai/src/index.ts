@@ -1,8 +1,6 @@
 export const PACKAGE_ID = "ai" as const;
 export * from "./types";
-export { createAnthropicProvider, buildParams, STREAM_ABOVE_MAX_TOKENS } from "./anthropic";
+export { createAnthropicProvider, buildParams, STREAM_ABOVE_MAX_TOKENS, MAX_TOKENS_CEILING, DEFAULT_TIMEOUT_MS } from "./anthropic";
 export type { AnthropicLike, AnthropicProviderOptions } from "./anthropic";
-export { createMockProvider, textResult } from "./mock";
-export type { MockLLMProvider, MockReply } from "./mock";
-export { getLLMProvider } from "./config";
-export type { ProviderResult } from "./config";
+// getLLMProvider: `@nichols/ai/config`. Mock provider: `@nichols/ai/testing` (test files only). Types only, safe for
+// any bundle: `@nichols/ai/types`.

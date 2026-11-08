@@ -1,6 +1,7 @@
 // The only file that talks to the Anthropic SDK. Request shape follows the current API rules:
 // adaptive thinking or none (never `disabled`, never budget_tokens), no sampling parameters, tool_choice auto only,
 // effort via output_config, no assistant prefill.
+import "server-only";
 import Anthropic from "@anthropic-ai/sdk";
 import { LLMProviderError } from "./types";
 import type {
@@ -13,20 +14,29 @@ import type {
   LLMRequest,
   LLMResult,
   LLMUsage,
+  CacheTtl,
   ModelTier,
 } from "./types";
 
 /** Above this, long calls risk HTTP timeouts: stream and take the final message. */
 export const STREAM_ABOVE_MAX_TOKENS = 16_000;
+/** Hard ceiling on maxTokens per call (cost guard). */
+export const MAX_TOKENS_CEILING = 64_000;
+/** Default per-attempt timeout. The SDK default (10 minutes) is far too long for a request path. */
+export const DEFAULT_TIMEOUT_MS = 120_000;
+const MAX_TIMEOUT_MS = 600_000;
+/** Same lane-code format as core (lane-router LANE_ID). */
+const LANE_ID = /^[A-Z]{1,8}$/;
 
 type Params = Anthropic.MessageCreateParamsNonStreaming;
 type Msg = Anthropic.Message;
+type RequestOpts = { signal?: AbortSignal; timeout?: number };
 
 /** The slice of the SDK client that this provider uses; tests pass a fake. */
 export interface AnthropicLike {
   messages: {
-    create(params: Params, options?: { signal?: AbortSignal }): PromiseLike<Msg>;
-    stream(params: Params, options?: { signal?: AbortSignal }): { finalMessage(): Promise<Msg> };
+    create(params: Params, options?: RequestOpts): PromiseLike<Msg>;
+    stream(params: Params, options?: RequestOpts): { finalMessage(): Promise<Msg>; readonly request_id?: string | null | undefined };
   };
 }
 
@@ -35,8 +45,13 @@ export type AnthropicProviderOptions = {
   models: Record<ModelTier, string>;
   logger?: LLMLogger;
   client?: AnthropicLike;
-  /** SDK retries for 429/5xx/connection errors. Default 2. */
+  /**
+   * SDK retries for 429/5xx/connection errors. Default 2. Callers must not add their own retries on top; inside an
+   * Inngest step pass 0 and let the step retry policy own it.
+   */
   maxRetries?: number;
+  /** Default per-attempt timeout (ms). Default DEFAULT_TIMEOUT_MS. */
+  timeoutMs?: number;
 };
 
 const DEFAULT_LOGGER: LLMLogger = (entry) => {
@@ -44,14 +59,24 @@ const DEFAULT_LOGGER: LLMLogger = (entry) => {
   console.info(JSON.stringify({ event: "llm.call", ...entry }));
 };
 
+function cacheControl(ttl: CacheTtl | undefined): { cache_control?: Anthropic.CacheControlEphemeral } {
+  return ttl ? { cache_control: ttl === "1h" ? { type: "ephemeral", ttl: "1h" } : { type: "ephemeral" } } : {};
+}
+
 function toBlock(b: LLMContentBlock): Anthropic.ContentBlockParam {
   switch (b.type) {
     case "text":
-      return { type: "text", text: b.text };
+      return { type: "text", text: b.text, ...cacheControl(b.cache) };
     case "tool_use":
       return { type: "tool_use", id: b.id, name: b.name, input: b.input };
     case "tool_result":
-      return { type: "tool_result", tool_use_id: b.toolUseId, content: b.content, ...(b.isError ? { is_error: true } : {}) };
+      return {
+        type: "tool_result",
+        tool_use_id: b.toolUseId,
+        content: b.content,
+        ...(b.isError ? { is_error: true } : {}),
+        ...cacheControl(b.cache),
+      };
     case "thinking":
       return { type: "thinking", thinking: b.thinking, signature: b.signature };
     case "redacted_thinking":
@@ -63,20 +88,65 @@ function toMessage(m: LLMMessage): Anthropic.MessageParam {
   return { role: m.role, content: typeof m.content === "string" ? m.content : m.content.map(toBlock) };
 }
 
+const blocksOf = (m: LLMMessage | undefined): LLMContentBlock[] => (!m || typeof m.content === "string" ? [] : m.content);
+
+/**
+ * Tool loop shape: each user turn that answers an assistant tool_use starts with exactly one tool_result per tool_use
+ * id (no strays, no duplicates, nothing before them); a user turn with tool_results must follow such an assistant turn.
+ */
+function validateToolRoundTrips(messages: LLMMessage[]): void {
+  messages.forEach((m, i) => {
+    const blocks = blocksOf(m);
+    if (m.role === "assistant") {
+      if (blocks.some((b) => b.type === "tool_result")) throw new LLMProviderError("invalid_request");
+      return;
+    }
+    const prevIds = blocksOf(messages[i - 1])
+      .filter((b) => b.type === "tool_use")
+      .map((b) => (b as { id: string }).id);
+    const resultIdx = blocks.flatMap((b, j) => (b.type === "tool_result" ? [j] : []));
+    if (blocks.some((b) => b.type === "tool_use" || b.type === "thinking" || b.type === "redacted_thinking")) {
+      throw new LLMProviderError("invalid_request");
+    }
+    if (prevIds.length === 0) {
+      if (resultIdx.length > 0) throw new LLMProviderError("invalid_request");
+      return;
+    }
+    // Results first, contiguous, and the id sets match exactly.
+    if (resultIdx.some((j, k) => j !== k)) throw new LLMProviderError("invalid_request");
+    const ids = resultIdx.map((j) => (blocks[j] as { toolUseId: string }).toolUseId);
+    if (ids.length !== prevIds.length || new Set(ids).size !== ids.length || ids.some((id) => !prevIds.includes(id))) {
+      throw new LLMProviderError("invalid_request");
+    }
+  });
+}
+
 /** Pure request builder (exported for tests). Throws invalid_request for combinations the API rejects. */
 export function buildParams(req: LLMRequest, model: string): Params {
+  if (typeof req.laneId !== "string" || !LANE_ID.test(req.laneId)) throw new LLMProviderError("invalid_request");
+  if (!Number.isInteger(req.maxTokens) || req.maxTokens < 1 || req.maxTokens > MAX_TOKENS_CEILING) {
+    throw new LLMProviderError("invalid_request");
+  }
+  if (req.timeoutMs !== undefined && (!Number.isInteger(req.timeoutMs) || req.timeoutMs < 1 || req.timeoutMs > MAX_TIMEOUT_MS)) {
+    throw new LLMProviderError("invalid_request");
+  }
   if (req.messages.length === 0 || req.messages[req.messages.length - 1]?.role !== "user") {
     throw new LLMProviderError("invalid_request"); // assistant prefill is not supported
   }
   if (req.thinking === "off" && (req.effort === "xhigh" || req.effort === "max")) {
     throw new LLMProviderError("invalid_request"); // thinking-off is only valid at effort <= high
   }
+  validateToolRoundTrips(req.messages);
   const params: Params = {
     model,
     max_tokens: req.maxTokens,
     messages: req.messages.map(toMessage),
   };
-  if (req.system) params.system = req.system;
+  if (typeof req.system === "string") {
+    if (req.system) params.system = req.system;
+  } else if (req.system?.length) {
+    params.system = req.system.map((b) => ({ type: "text" as const, text: b.text, ...cacheControl(b.cache) }));
+  }
   if (req.thinking === "adaptive") params.thinking = { type: "adaptive" };
   else if (req.thinking === "off") params.thinking = { type: "between_tools" };
   if (req.effort) params.output_config = { effort: req.effort };
@@ -85,6 +155,7 @@ export function buildParams(req: LLMRequest, model: string): Params {
       name: t.name,
       description: t.description,
       input_schema: { ...t.inputSchema, type: "object" } as Anthropic.Tool.InputSchema,
+      ...cacheControl(t.cache),
     }));
     params.tool_choice = { type: "auto" };
   }
@@ -107,17 +178,18 @@ function mapContent(blocks: Msg["content"]): LLMContentBlock[] {
     else if (b.type === "tool_use") out.push({ type: "tool_use", id: b.id, name: b.name, input: b.input });
     else if (b.type === "thinking") out.push({ type: "thinking", thinking: b.thinking, signature: b.signature });
     else if (b.type === "redacted_thinking") out.push({ type: "redacted_thinking", data: b.data });
-    // Other server-side block kinds are not requested, so they are not surfaced.
+    // Server-side block kinds are never requested (no server tools), so one arriving means drift: fail closed.
+    else throw new LLMProviderError("unknown");
   }
   return out;
 }
 
-export function mapMessage(m: Msg, latencyMs: number): LLMResult {
+export function mapMessage(m: Msg, latencyMs: number, requestId?: string | null): LLMResult {
   const common = {
     content: mapContent(m.content),
     usage: mapUsage(m.usage),
     model: m.model,
-    requestId: (m as { _request_id?: string | null })._request_id ?? null,
+    requestId: requestId ?? (m as { _request_id?: string | null })._request_id ?? null,
     latencyMs,
   };
   switch (m.stop_reason) {
@@ -130,8 +202,12 @@ export function mapMessage(m: Msg, latencyMs: number): LLMResult {
       return { ...common, status: "tool_use", stopReason: "tool_use" };
     case "pause_turn":
       return { ...common, status: "paused", stopReason: "pause_turn" };
+    case "end_turn":
+    case "stop_sequence":
+      return { ...common, status: "completed", stopReason: m.stop_reason };
     default:
-      return { ...common, status: "completed", stopReason: m.stop_reason === "stop_sequence" ? "stop_sequence" : "end_turn" };
+      // Unknown or missing stop reason: never report it as a completed answer.
+      throw new LLMProviderError("unknown");
   }
 }
 
@@ -156,11 +232,24 @@ export function mapError(err: unknown): LLMProviderError {
 
 export function createAnthropicProvider(opts: AnthropicProviderOptions): LLMProvider {
   const logger = opts.logger ?? DEFAULT_LOGGER;
+  const defaultTimeout = opts.timeoutMs ?? DEFAULT_TIMEOUT_MS;
   let client = opts.client;
   const getClient = (): AnthropicLike => {
     if (!client) {
       if (!opts.apiKey) throw new LLMProviderError("unauthorized");
-      client = new Anthropic({ apiKey: opts.apiKey, maxRetries: opts.maxRetries ?? 2 }) as unknown as AnthropicLike;
+      const sdk = new Anthropic({
+        apiKey: opts.apiKey,
+        maxRetries: opts.maxRetries ?? 2,
+        timeout: defaultTimeout,
+        // Pinned so ANTHROPIC_BASE_URL / ANTHROPIC_LOG / ANTHROPIC_OPEN_TELEMETRY_* cannot redirect traffic or log bodies.
+        // ANTHROPIC_CUSTOM_HEADERS has no off switch: getAnthropicEnv (core) refuses it before a provider is built.
+        baseURL: "https://api.anthropic.com",
+        logLevel: "off",
+        openTelemetry: false,
+      });
+      // Typed assignment, no cast: SDK drift in the slice we use fails typecheck.
+      const messages: AnthropicLike["messages"] = sdk.messages;
+      client = { messages };
     }
     return client;
   };
@@ -186,15 +275,20 @@ export function createAnthropicProvider(opts: AnthropicProviderOptions): LLMProv
           ...p,
         });
       try {
-        if (!req.laneId) throw new LLMProviderError("invalid_request");
         const params = buildParams(req, model);
         const c = getClient();
-        const options = req.signal ? { signal: req.signal } : undefined;
-        const message =
-          req.stream || req.maxTokens > STREAM_ABOVE_MAX_TOKENS
-            ? await c.messages.stream(params, options).finalMessage()
-            : await c.messages.create(params, options);
-        const result = mapMessage(message, Date.now() - started);
+        const options: RequestOpts = { timeout: req.timeoutMs ?? defaultTimeout, ...(req.signal ? { signal: req.signal } : {}) };
+        let message: Msg;
+        let streamRequestId: string | null = null;
+        if (req.stream || req.maxTokens > STREAM_ABOVE_MAX_TOKENS) {
+          const s = c.messages.stream(params, options);
+          message = await s.finalMessage();
+          // finalMessage() is a snapshot without _request_id; the stream object carries it.
+          streamRequestId = s.request_id ?? null;
+        } else {
+          message = await c.messages.create(params, options);
+        }
+        const result = mapMessage(message, Date.now() - started, streamRequestId);
         log({ stopReason: result.stopReason, usage: result.usage, requestId: result.requestId, model: result.model });
         return result;
       } catch (err) {

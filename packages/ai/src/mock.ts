@@ -1,4 +1,6 @@
-// Deterministic provider for tests: no network, no key. Records calls (including prompts; it only lives in tests).
+// Deterministic provider for tests: no network, no key. Records calls (including prompts), so it is exported only
+// from `@nichols/ai/testing`, which lint allows in test files only.
+import { buildParams } from "./anthropic";
 import { LLMProviderError } from "./types";
 import type { LLMContentBlock, LLMProvider, LLMRequest, LLMResult, ModelTier } from "./types";
 
@@ -34,8 +36,9 @@ export function createMockProvider(
     calls,
     modelFor: (tier) => models[tier],
     async complete(req) {
-      if (!req.laneId) throw new LLMProviderError("invalid_request");
-      calls.push(req);
+      // Same request validation as the real provider, so tests cannot pass with requests the API would reject.
+      buildParams(req, models[req.tier]);
+      calls.push(structuredClone({ ...req, signal: undefined }));
       const next: MockReply = replies[Math.min(i++, replies.length - 1)] ?? textResult("mock");
       const r = typeof next === "function" ? next(req) : next;
       if (r instanceof LLMProviderError) throw r;

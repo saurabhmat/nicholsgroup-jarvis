@@ -11,10 +11,14 @@ export type Effort = "low" | "medium" | "high" | "xhigh" | "max";
  */
 export type ThinkingMode = "omit" | "adaptive" | "off";
 
+/** Prompt-cache breakpoint. "5m" is the vendor default; "1h" costs more to write but survives longer. */
+export type CacheTtl = "5m" | "1h";
+
 export type LLMContentBlock =
-  | { type: "text"; text: string }
+  | { type: "text"; text: string; cache?: CacheTtl }
   | { type: "tool_use"; id: string; name: string; input: unknown }
-  | { type: "tool_result"; toolUseId: string; content: string; isError?: boolean }
+  /** Must come first in the user turn that follows the assistant tool_use, one per tool_use id. */
+  | { type: "tool_result"; toolUseId: string; content: string; isError?: boolean; cache?: CacheTtl }
   /** Opaque: pass back unchanged and in order when continuing a tool loop. */
   | { type: "thinking"; thinking: string; signature: string }
   | { type: "redacted_thinking"; data: string };
@@ -26,15 +30,23 @@ export type LLMTool = {
   description: string;
   /** JSON Schema object for the tool input. */
   inputSchema: Record<string, unknown>;
+  /** Cache breakpoint after this tool definition (put it on the last tool to cache the whole tool list). */
+  cache?: CacheTtl;
 };
+
+/** System prompt as blocks so a stable prefix can be cached. Untrusted content never goes in the system prompt. */
+export type LLMSystemBlock = { text: string; cache?: CacheTtl };
 
 export type LLMRequest = {
   laneId: LaneId;
   tier: ModelTier;
-  system?: string;
+  system?: string | LLMSystemBlock[];
   /** The last message must be a user message (no assistant prefill). */
   messages: LLMMessage[];
+  /** Integer, 1..MAX_TOKENS_CEILING. */
   maxTokens: number;
+  /** Per-attempt timeout; default from the provider (2 minutes). */
+  timeoutMs?: number;
   effort?: Effort;
   thinking?: ThinkingMode;
   /** Tool choice is always automatic: forced tool use is not supported by the current models. */

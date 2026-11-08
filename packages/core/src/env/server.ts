@@ -58,7 +58,23 @@ export function getSupabaseSecretKey(): string {
  * Anthropic settings, or `{ configured: false, missing }` when not set (outside production also when partly set).
  * Production is always decided from the real process env; `env` only supplies values (injectable for tests).
  */
+/**
+ * Anthropic SDK variables that could add request headers, redirect traffic or log/trace request bodies. packages/ai
+ * pins baseURL, logLevel and tracing in the client constructor, but the SDK still reads ANTHROPIC_CUSTOM_HEADERS, so
+ * any of these being set refuses the AI feature loudly instead of being silently honoured (T-100 review M1).
+ */
+export const REFUSED_ANTHROPIC_SDK_ENV = [
+  "ANTHROPIC_CUSTOM_HEADERS",
+  "ANTHROPIC_BASE_URL",
+  "ANTHROPIC_LOG",
+  "ANTHROPIC_OPEN_TELEMETRY_TRACES_CONTENT_MODE",
+  "ANTHROPIC_AUTH_TOKEN",
+] as const;
+
 export function getAnthropicEnv(env: EnvRecord = process.env) {
+  // The SDK reads the real process env whatever `env` is passed, so check both.
+  const refused = REFUSED_ANTHROPIC_SDK_ENV.filter((k) => env[k] || process.env[k]);
+  if (refused.length > 0) throw new EnvValidationError("Anthropic", [], refused);
   const result = resolveAnthropicEnv(env, isProduction(process.env));
   return result.configured ? withRedaction(result) : result;
 }

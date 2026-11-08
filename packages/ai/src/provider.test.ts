@@ -1,16 +1,16 @@
 import Anthropic from "@anthropic-ai/sdk";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
+import { getLLMProvider } from "./config";
 import {
   buildParams,
   createAnthropicProvider,
-  createMockProvider,
-  getLLMProvider,
   LLMProviderError,
-  textResult,
+  MAX_TOKENS_CEILING,
   type AnthropicLike,
   type LLMCallLog,
   type LLMRequest,
 } from "./index";
+import { createMockProvider, textResult } from "./testing";
 
 const models = { analysis: "claude-sonnet-5-5", fast: "claude-haiku-5-5" };
 const base: LLMRequest = {
@@ -36,21 +36,30 @@ function msg(over: Record<string, unknown> = {}) {
   } as never;
 }
 
-function fake(result: unknown) {
-  const seen: { kind: "create" | "stream"; params: Record<string, unknown> }[] = [];
+function fake(result: unknown, streamRequestId: string | null = "req_stream") {
+  const seen: { kind: "create" | "stream"; params: Record<string, unknown>; options: unknown }[] = [];
   const respond = async () => {
     if (result instanceof Error) throw result;
     return result as never;
   };
   const client: AnthropicLike = {
     messages: {
-      create: (params) => {
-        seen.push({ kind: "create", params: params as never });
+      create: (params, options) => {
+        seen.push({ kind: "create", params: params as never, options });
         return respond();
       },
-      stream: (params) => {
-        seen.push({ kind: "stream", params: params as never });
-        return { finalMessage: respond };
+      stream: (params, options) => {
+        seen.push({ kind: "stream", params: params as never, options });
+        // Like the SDK: the final message snapshot has no _request_id; the stream object carries it.
+        return {
+          finalMessage: async () => {
+            const m = (await respond()) as Record<string, unknown>;
+            const rest = { ...m };
+            delete rest._request_id;
+            return rest as never;
+          },
+          request_id: streamRequestId,
+        };
       },
     },
   };
@@ -149,12 +158,172 @@ describe("anthropic provider", () => {
     for (const s of ["SECRET", "sk-ant"]) expect(all).not.toContain(s);
   });
 
-  it("requires a laneId and a key when no client is injected", async () => {
+  it("requires a valid laneId and a key when no client is injected", async () => {
     const p = createAnthropicProvider({ models, client: fake(msg()).client, logger: () => {} });
-    await expect(p.complete({ ...base, laneId: "" })).rejects.toMatchObject({ code: "invalid_request" });
+    for (const laneId of ["", "pkg", "PKG;DROP", "TOOLONGLANE"]) {
+      await expect(p.complete({ ...base, laneId })).rejects.toMatchObject({ code: "invalid_request" });
+    }
     const nokey = createAnthropicProvider({ models, logger: () => {} });
     await expect(nokey.complete(base)).rejects.toMatchObject({ code: "unauthorized" });
   });
+});
+
+describe("T-100 review fixes", () => {
+  const toolTurn = (ids: string[]): LLMRequest["messages"] => [
+    { role: "user", content: "q" },
+    {
+      role: "assistant",
+      content: [
+        { type: "thinking", thinking: "t", signature: "sig-1" },
+        ...ids.map((id) => ({ type: "tool_use" as const, id, name: "lookup", input: { a: 1 } })),
+      ],
+    },
+  ];
+
+  it("maps system blocks, tools and blocks with cache markers", () => {
+    const p = buildParams(
+      {
+        ...base,
+        system: [{ text: "stable", cache: "1h" }, { text: "per-run" }],
+        tools: [{ name: "t", description: "d", inputSchema: {}, cache: "5m" }],
+        messages: [{ role: "user", content: [{ type: "text", text: "x", cache: "5m" }] }],
+      },
+      "m",
+    ) as unknown as Record<string, unknown>;
+    expect(p.system).toEqual([
+      { type: "text", text: "stable", cache_control: { type: "ephemeral", ttl: "1h" } },
+      { type: "text", text: "per-run" },
+    ]);
+    expect((p.tools as Record<string, unknown>[])[0]?.cache_control).toEqual({ type: "ephemeral" });
+    expect(JSON.stringify(p.messages)).toContain('"cache_control":{"type":"ephemeral"}');
+    expect(buildParams(base, "m")).not.toHaveProperty("system");
+  });
+
+  it("round-trips [thinking, tool_use] -> [tool_result] with signature and order preserved", () => {
+    const messages: LLMRequest["messages"] = [
+      ...toolTurn(["tu_1", "tu_2"]),
+      {
+        role: "user",
+        content: [
+          { type: "tool_result", toolUseId: "tu_2", content: "r2" },
+          { type: "tool_result", toolUseId: "tu_1", content: "r1", isError: true },
+          { type: "text", text: "go on" },
+        ],
+      },
+    ];
+    const p = buildParams({ ...base, messages }, "m");
+    const asst = p.messages[1]?.content as unknown as Record<string, unknown>[];
+    expect(asst.map((b) => b.type)).toEqual(["thinking", "tool_use", "tool_use"]);
+    expect(asst[0]).toMatchObject({ signature: "sig-1" });
+    const user = p.messages[2]?.content as unknown as Record<string, unknown>[];
+    expect(user.map((b) => b.tool_use_id ?? b.type)).toEqual(["tu_2", "tu_1", "text"]);
+    expect(user[1]).toMatchObject({ is_error: true });
+  });
+
+  it("rejects malformed tool loops", () => {
+    const bad: LLMRequest["messages"][] = [
+      // missing a result
+      [...toolTurn(["a", "b"]), { role: "user", content: [{ type: "tool_result", toolUseId: "a", content: "r" }] }],
+      // text before the result
+      [
+        ...toolTurn(["a"]),
+        { role: "user", content: [{ type: "text", text: "x" }, { type: "tool_result", toolUseId: "a", content: "r" }] },
+      ],
+      // id not from the previous assistant turn
+      [...toolTurn(["a"]), { role: "user", content: [{ type: "tool_result", toolUseId: "zzz", content: "r" }] }],
+      // duplicate
+      [
+        ...toolTurn(["a"]),
+        {
+          role: "user",
+          content: [
+            { type: "tool_result", toolUseId: "a", content: "r" },
+            { type: "tool_result", toolUseId: "a", content: "r" },
+          ],
+        },
+      ],
+      // stray result with no tool_use before it
+      [{ role: "user", content: [{ type: "tool_result", toolUseId: "a", content: "r" }] }],
+      // unanswered tool_use
+      [...toolTurn(["a"]), { role: "user", content: "next" }],
+    ];
+    for (const messages of bad) expect(() => buildParams({ ...base, messages }, "m")).toThrow(LLMProviderError);
+  });
+
+  it("validates maxTokens and timeoutMs", () => {
+    for (const maxTokens of [0, -1, 1.5, MAX_TOKENS_CEILING + 1, Number.NaN]) {
+      expect(() => buildParams({ ...base, maxTokens }, "m")).toThrow(LLMProviderError);
+    }
+    for (const timeoutMs of [0, 1.5, 600_001]) expect(() => buildParams({ ...base, timeoutMs }, "m")).toThrow(LLMProviderError);
+    expect(() => buildParams({ ...base, maxTokens: MAX_TOKENS_CEILING, timeoutMs: 5000 }, "m")).not.toThrow();
+  });
+
+  it("keeps the request id on streamed calls and passes the timeout", async () => {
+    const { client, seen } = fake(msg());
+    const p = createAnthropicProvider({ models, client, logger: () => {}, timeoutMs: 30_000 });
+    expect(await p.complete({ ...base, stream: true })).toMatchObject({ requestId: "req_stream" });
+    expect(seen[0]?.options).toMatchObject({ timeout: 30_000 });
+    await p.complete({ ...base, timeoutMs: 5000 });
+    expect(seen[1]?.options).toMatchObject({ timeout: 5000 });
+  });
+
+  it("fails closed on unknown stop reasons and unknown content blocks", async () => {
+    for (const over of [{ stop_reason: "something_new" }, { stop_reason: null }, { content: [{ type: "server_tool_use", id: "x" }] }]) {
+      const p = createAnthropicProvider({ models, logger: () => {}, client: fake(msg(over)).client });
+      await expect(p.complete(base)).rejects.toMatchObject({ code: "unknown" });
+    }
+    const tool = createAnthropicProvider({ models, logger: () => {}, client: fake(msg({ stop_reason: "tool_use" })).client });
+    expect(await tool.complete(base)).toMatchObject({ status: "tool_use" });
+    const paused = createAnthropicProvider({ models, logger: () => {}, client: fake(msg({ stop_reason: "pause_turn" })).client });
+    expect(await paused.complete(base)).toMatchObject({ status: "paused" });
+  });
+
+  it("pins the SDK endpoint and logging against env overrides (real client, wire level)", async () => {
+    const sent: { url: string; body: Record<string, unknown> }[] = [];
+    const fetchSpy = (async (url: string | URL | Request, init?: RequestInit) => {
+      sent.push({ url: String(url), body: JSON.parse(String(init?.body)) as Record<string, unknown> });
+      return new Response(JSON.stringify(msg()), {
+        status: 200,
+        headers: { "content-type": "application/json", "request-id": "req_wire" },
+      });
+    }) as typeof fetch;
+    const prior = { ...process.env };
+    const printed: string[] = [];
+    const spies = (["log", "info", "debug", "warn", "error"] as const).map((k) => {
+      const orig = console[k];
+      console[k] = (...a: unknown[]) => void printed.push(a.map(String).join(" "));
+      return () => (console[k] = orig);
+    });
+    process.env.ANTHROPIC_BASE_URL = "https://evil.example";
+    process.env.ANTHROPIC_LOG = "debug";
+    vi.stubGlobal("fetch", fetchSpy);
+    try {
+      const p = createAnthropicProvider({ models, apiKey: "sk-ant-test", logger: () => {}, maxRetries: 0 });
+      const r = await p.complete({ ...base, system: [{ text: "SECRET-SYSTEM", cache: "5m" }] });
+      expect(r).toMatchObject({ status: "completed", requestId: "req_wire" });
+      expect(sent[0]?.url.startsWith("https://api.anthropic.com/")).toBe(true);
+      expect(sent[0]?.body).toMatchObject({ model: "claude-sonnet-5-5", max_tokens: 1000 });
+      expect(printed.join("\n")).not.toContain("SECRET");
+    } finally {
+      process.env = prior;
+      vi.unstubAllGlobals();
+      spies.forEach((restore) => restore());
+    }
+  });
+});
+
+describe("getLLMProvider env refusals", () => {
+  const good = {
+    NODE_ENV: "test",
+    ANTHROPIC_API_KEY: "sk-ant-api03-fake",
+    ANTHROPIC_MODEL_ANALYSIS: "claude-sonnet-5-5",
+    ANTHROPIC_MODEL_FAST: "claude-haiku-5-5",
+  };
+  for (const k of ["ANTHROPIC_CUSTOM_HEADERS", "ANTHROPIC_BASE_URL", "ANTHROPIC_LOG", "ANTHROPIC_OPEN_TELEMETRY_TRACES_CONTENT_MODE"]) {
+    it(`refuses ${k}`, () => {
+      expect(() => getLLMProvider({ env: { ...good, [k]: "x" } })).toThrow(/invalid: ANTHROPIC_/);
+    });
+  }
 });
 
 describe("mock provider", () => {
@@ -164,6 +333,14 @@ describe("mock provider", () => {
     await expect(m.complete({ ...base, tier: "fast" })).rejects.toMatchObject({ code: "rate_limited" });
     expect(m.calls).toHaveLength(2);
     expect(m.modelFor("fast")).toBe("mock-fast");
+  });
+  it("validates requests like the real provider and records clones", async () => {
+    const m = createMockProvider([(req) => textResult(`echo ${req.tier}`)]);
+    await expect(m.complete({ ...base, maxTokens: 0 })).rejects.toMatchObject({ code: "invalid_request" });
+    const req = { ...base, messages: [{ role: "user" as const, content: "a" }] };
+    expect(await m.complete(req)).toMatchObject({ content: [{ text: "echo analysis" }] });
+    req.messages[0] = { role: "user", content: "mutated" };
+    expect(m.calls[0]?.messages[0]?.content).toBe("a");
   });
 });
 

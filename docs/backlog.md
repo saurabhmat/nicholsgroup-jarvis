@@ -753,7 +753,7 @@ T-080 joins W3 early. T-081 – T-097 form **track W12** once W6 – W8 are merg
 T-100 – T-103 are **track W4**, parallel with the connectors (after T-017). T-104 – T-106 follow T-081.
 
 ### T-100 LLMProvider interface + Anthropic implementation
-- status: approved
+- status: done
 - depends: T-005
 - needs: H-002
 - acceptance: provider interface (analysis + fast model, configured not hard-coded); Anthropic implementation via `packages/ai` only; mock provider for tests; request logging excludes prompt content.

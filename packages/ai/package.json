@@ -4,7 +4,10 @@
   "private": true,
   "type": "module",
   "exports": {
-    ".": "./src/index.ts"
+    ".": "./src/index.ts",
+    "./config": "./src/config.ts",
+    "./testing": "./src/testing.ts",
+    "./types": "./src/types.ts"
   },
   "scripts": {
     "typecheck": "tsc -b",

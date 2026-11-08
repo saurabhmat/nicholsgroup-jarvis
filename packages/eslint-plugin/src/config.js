@@ -76,8 +76,8 @@ export const JOB_RUNNERS = [...INNGEST_CLIENT, ...APPROVALS, ...TOKEN_VAULT];
 export const WRITE_SUBPATHS = ["@nichols/connectors/write"];
 export const WRITE_DIRS = ["packages/connectors/src/write", "packages/connectors/dist/write"];
 /** Test harness modules: test files only (T-034), plus the harness's own sources. */
-export const TEST_ONLY_MODULES = ["msw", "@nichols/connectors/testing"];
-export const TEST_HARNESS = ["packages/connectors/src/testing"];
+export const TEST_ONLY_MODULES = ["msw", "@nichols/connectors/testing", "@nichols/ai/testing"];
+export const TEST_HARNESS = ["packages/connectors/src/testing", "packages/ai/src/testing.ts", "packages/ai/src/mock.ts"];
 /** Files that may read process.env (besides test files and vitest configs). */
 export const PROCESS_ENV_ALLOWED = [
   ...CORE_ENV,
