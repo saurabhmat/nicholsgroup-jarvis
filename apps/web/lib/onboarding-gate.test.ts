@@ -19,7 +19,7 @@ function guards(opts: { role?: Error; lanes?: unknown; rpcError?: unknown; rpcTh
 }
 
 describe("isOnboardingPath", () => {
-  it.each(["/PKG/onboarding", "/PKG/onboarding/", "/PKG/onboarding/x", "/PKG/%6Fnboarding"])("matches %s", (p) => expect(isOnboardingPath(p)).toBe(true));
+  it.each(["/PKG/onboarding", "/PKG/onboarding/", "/PKG/onboarding/x", "/PKG/onboarding/import", "/PKG/%6Fnboarding/import"])("matches %s", (p) => expect(isOnboardingPath(p)).toBe(true));
   it.each(["/PKG", "/PKG/", "/PKG/settings", "/PKG/onboardingx", "/onboarding", "/PKG/%E0%A4%A"])("does not match %s", (p) => expect(isOnboardingPath(p)).toBe(false));
 });
 

@@ -56,4 +56,4 @@ export E2E_SERVER="${E2E_SERVER:-build}"
 
 cd "$web"
 # Not exec: the EXIT trap must run after Playwright finishes.
-pnpm exec playwright test e2e/onboarding.spec.ts e2e/brain-interview.spec.ts e2e/shell.spec.ts "$@"
+pnpm exec playwright test e2e/onboarding.spec.ts e2e/brain-interview.spec.ts e2e/brain-import.spec.ts e2e/shell.spec.ts "$@"

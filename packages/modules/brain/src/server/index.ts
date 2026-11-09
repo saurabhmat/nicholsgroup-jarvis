@@ -14,7 +14,9 @@ export type {
   ClientFor,
   EmployeeInput,
   EmployeeStatus,
+  ImportCandidate,
   ImportDecision,
+  NewImportCandidate,
   KeptFact,
   LaneSettingsFor,
   SaveResult,
@@ -37,3 +39,5 @@ export {
   sourcesView,
 } from "./interview";
 export type { ChangeView, EmployeeView, InterviewEnv, InterviewState, InterviewStore, Proposal, SettingChange, SourceView } from "./interview";
+export { ImportPartialSave, discardImport, extractCandidates, proposeImport, proposePage, saveImport, savePage } from "./import";
+export type { Extractor, ImportCandidateView, ImportEnv, ImportProposal, ImportStore, ExtractResult, PageProposal } from "./import";

@@ -440,6 +440,16 @@ isOneToOne: false
 "brain_home_lane":
 { Args: Record<PropertyKey, never>; Returns: string
                            },
+"brain_import_candidates":
+{ Args: { "p_import_id": string,"p_lane": string }; Returns: {
+              "o_decision": string,"o_evidence": string,"o_fact": string,"o_flags": (string)[],"o_id": string,"o_target_lane": string,"o_target_path": string,"o_target_section": string
+            }[]
+                           },
+"brain_import_create":
+{ Args: { "p_candidates": Json,"p_lane": string,"p_source": string }; Returns: {
+              "o_candidate_id": string,"o_import_id": string
+            }[]
+                           },
 "brain_import_decide":
 { Args: { "p_decisions": Json,"p_finish"?: boolean,"p_import_id": string,"p_lane": string }; Returns: {
               "o_candidate_id": string,"o_fact": string,"o_target_lane": string,"o_target_path": string

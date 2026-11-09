@@ -65,7 +65,7 @@ export type InterviewEnv = {
 
 /** A refusal that is not a store error: the answers name something this brain must not hold. */
 export class InterviewRefusal extends Error {
-  readonly code: "nichols_law" | "no_employee" | "nothing_to_activate" | "proposal_changed" | "unknown_group";
+  readonly code: "nichols_law" | "no_employee" | "nothing_to_activate" | "proposal_changed" | "unknown_group" | "instruction_text" | "profile_invalid" | "import_not_found" | "nothing_to_import";
   constructor(code: InterviewRefusal["code"]) {
     super(code);
     this.name = "InterviewRefusal";
@@ -95,7 +95,7 @@ export function screenAnswers(answers: Answers): void {
 // ---------------------------------------------------------------------------------------------------- reading
 
 type DocRead = { body: string | null; version: number };
-type Snapshot = {
+export type Snapshot = {
   docs: Docs;
   versions: Record<"about_me" | "preferences" | "work", number>;
   employee: BrainEmployee | null;
@@ -104,14 +104,14 @@ type Snapshot = {
   configInvalid: boolean;
 };
 
-const seedBody = (path: string): string => [...HOME_SEED_DOCUMENTS, ...LANE_SEED_DOCUMENTS].find((d) => d.path === path)?.body ?? "";
+export const seedBody = (path: string): string => [...HOME_SEED_DOCUMENTS, ...LANE_SEED_DOCUMENTS].find((d) => d.path === path)?.body ?? "";
 
 async function readDoc(env: InterviewEnv, lane: LaneId, path: string): Promise<DocRead> {
   const d = await env.store.getDocument(lane, path);
   return d !== null && d.isMine ? { body: d.body, version: d.version } : { body: null, version: 0 };
 }
 
-async function snapshot(env: InterviewEnv): Promise<Snapshot> {
+export async function snapshot(env: InterviewEnv): Promise<Snapshot> {
   const { home, current } = env.ctx;
   const [about, prefs, work, employees] = await Promise.all([
     readDoc(env, home, ABOUT_ME_PATH),
@@ -130,7 +130,7 @@ async function snapshot(env: InterviewEnv): Promise<Snapshot> {
 }
 
 /** The timezone for a new employee: the confirmed About-Me one when it is a real IANA zone, else the schema default. */
-function timezoneFrom(docs: Docs, ctx: InterviewCtx): string | undefined {
+export function timezoneFrom(docs: Docs, ctx: InterviewCtx): string | undefined {
   const tz = getSection(docs.about_me ?? "", "Timezone");
   return isProvided(tz) && ctx.timezones.includes(tz as string) ? (tz as string) : undefined;
 }
@@ -142,7 +142,7 @@ export type ChangeView =
   | { kind: "document"; lane: string; path: string; baseVersion: number; diff: DiffLine[] }
   | { kind: "employee"; lane: string; name: string; status: string; baseVersion: number; diff: DiffLine[]; settings: SettingChange[]; resetsInvalid: boolean };
 
-type Write =
+export type Write =
   | { kind: "document"; lane: LaneId; path: string; body: string; baseVersion: number }
   | { kind: "employee"; lane: LaneId; body: Parameters<InterviewStore["saveEmployee"]>[1]; baseVersion: number };
 
@@ -172,9 +172,9 @@ export function refreshPaDerived(body: string, config: EmployeeConfig, meta: { d
 }
 
 /** The "Last updated: <date>" header is left out of the proposal digest, so a proposal made before midnight still saves after it. */
-const stripDate = (body: string): string => body.replace(/^Last updated:.*$/m, "");
+export const stripDate = (body: string): string => body.replace(/^Last updated:.*$/m, "");
 
-async function digestOf(value: unknown): Promise<string> {
+export async function digestOf(value: unknown): Promise<string> {
   const bytes = new TextEncoder().encode(JSON.stringify(value));
   return [...new Uint8Array(await crypto.subtle.digest("SHA-256", bytes))].map((b) => b.toString(16).padStart(2, "0")).join("");
 }
@@ -370,12 +370,12 @@ export async function loadInterviewState(env: InterviewEnv): Promise<InterviewSt
 // Settings) never write; until rows exist they show the derived value. Idempotent in SQL (`on conflict do nothing`), so
 // concurrent loads are safe. An unreadable completion shows nothing complete (fail safe), never a guess.
 
-const logCompletionFailure = (what: string, e: unknown): void => {
+export const logCompletionFailure = (what: string, e: unknown): void => {
   console.error(`[brain-interview] ${what}:`, e instanceof Error ? e.name : typeof e); // class only, no values
 };
 
 /** The caller's stored completion in the home lane, or null when it cannot be read. */
-async function readCompletions(env: InterviewEnv): Promise<string[] | null> {
+export async function readCompletions(env: InterviewEnv): Promise<string[] | null> {
   try {
     return await env.store.listCompletions(env.ctx.home);
   } catch (e) {
@@ -385,7 +385,7 @@ async function readCompletions(env: InterviewEnv): Promise<string[] | null> {
 }
 
 /** The derived-complete sections to record, only while the user has no rows at all. */
-const pendingBackfill = (groups: readonly GroupView[], stored: readonly string[] | null): string[] =>
+export const pendingBackfill = (groups: readonly GroupView[], stored: readonly string[] | null): string[] =>
   stored !== null && stored.length === 0 ? groups.filter((g) => g.derivedComplete).map((g) => g.id) : [];
 
 /** `complete` from the stored rows; with no rows yet, the derived value (what the backfill will record). */

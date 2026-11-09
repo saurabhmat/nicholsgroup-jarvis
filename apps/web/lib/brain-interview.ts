@@ -20,6 +20,7 @@ import {
   loadInterviewState,
   proposeGroup,
   saveGroup,
+  type BrainStore,
   type ClientFor,
   type InterviewEnv,
 } from "@nichols/brain/server";
@@ -94,7 +95,7 @@ export async function readLaneInfo(client: Client, laneId: string, name: string,
   };
 }
 
-type Env = { env: InterviewEnv };
+export type Env = { env: InterviewEnv & { store: BrainStore } };
 
 /** Builds the interview environment: open lanes (router + brain view), the home lane (spec §3), lane facts. */
 export async function buildEnv(g: Awaited<ReturnType<InterviewDeps["guards"]>>, laneId: string, userId: string, now: Date): Promise<Env | { refused: "forbidden" | "home_lane_unavailable" }> {

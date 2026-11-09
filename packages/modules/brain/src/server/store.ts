@@ -57,6 +57,17 @@ export type BrainEmployee = {
 export type BrainSkill = { id: string; isMine: boolean; key: string; title: string; body: string; version: number; updatedAt: string };
 export type EmployeeInput = { roleKey: string; name: string; instructions: string; config: Record<string, unknown>; status: EmployeeStatus };
 export type ImportDecision = { id: string; decision: "keep" | "skip" };
+export type ImportCandidate = {
+  id: string;
+  fact: string;
+  evidence: string | null;
+  targetPath: string;
+  targetSection: string | null;
+  targetLane: string;
+  flags: string[];
+  decision: "pending" | "keep" | "skip";
+};
+export type NewImportCandidate = { fact: string; evidence: string | null; targetPath: string; targetSection: string; targetLane: string; flags: string[] };
 export type KeptFact = { candidateId: string; fact: string; targetPath: string; targetLane: string };
 
 const bad = (): never => {
@@ -337,6 +348,44 @@ export function createBrainStore(deps: BrainStoreDeps) {
       }
       const data = await call(laneId, "brain_import_decide", { p_lane: laneId, p_import_id: importId, p_decisions: decisions, p_finish: finish });
       return rows(data).map((r) => ({ candidateId: str(r.o_candidate_id), fact: str(r.o_fact), targetPath: str(r.o_target_path), targetLane: str(r.o_target_lane) }));
+    },
+
+    /** Opens an import in review with its candidates through the reviewed writer (T-220). Returns the import and candidate ids, in order. */
+    async createImport(laneId: LaneId, source: string, candidates: readonly NewImportCandidate[]): Promise<{ importId: string; candidateIds: string[] }> {
+      if (candidates.length < 1 || candidates.length > 100) throw new BrainError("invalid");
+      for (const c of candidates) {
+        checkText(c.fact);
+        if (c.evidence !== null) checkText(c.evidence);
+      }
+      const data = await call(laneId, "brain_import_create", {
+        p_lane: laneId,
+        p_source: source,
+        p_candidates: candidates.map((c) => ({ fact: c.fact, evidence: c.evidence, target_path: c.targetPath, target_section: c.targetSection, target_lane: c.targetLane, flags: c.flags })),
+      });
+      const r = rows(data);
+      const importId = str(r[0]?.o_import_id ?? bad());
+      if (!UUID.test(importId)) bad();
+      return { importId, candidateIds: r.map((x) => str(x.o_candidate_id)) };
+    },
+
+    /** The caller's candidates of one open import (RLS: own rows, under 24 h); [] once it is finished or purged. */
+    async listImportCandidates(laneId: LaneId, importId: string): Promise<ImportCandidate[]> {
+      if (!UUID.test(importId)) throw new BrainError("invalid");
+      const data = await call(laneId, "brain_import_candidates", { p_lane: laneId, p_import_id: importId });
+      return rows(data).map((r) => {
+        const decision = str(r.o_decision);
+        if (decision !== "pending" && decision !== "keep" && decision !== "skip") bad();
+        return {
+          id: str(r.o_id),
+          fact: str(r.o_fact),
+          evidence: r.o_evidence === null || r.o_evidence === undefined ? null : str(r.o_evidence),
+          targetPath: str(r.o_target_path),
+          targetSection: r.o_target_section === null || r.o_target_section === undefined ? null : str(r.o_target_section),
+          targetLane: str(r.o_target_lane),
+          flags: Array.isArray(r.o_flags) ? r.o_flags.map(str) : [],
+          decision: decision as ImportCandidate["decision"],
+        };
+      });
     },
 
     /**

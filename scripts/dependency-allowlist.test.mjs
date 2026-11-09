@@ -20,6 +20,7 @@ const ALLOWED = {
     "@nichols/core",
     "@nichols/eslint-plugin",
     "@nichols/ui", // T-022
+    "fflate", // T-220: reads a brain-folder .zip in the browser (D-39: never uploaded); pinned exactly, no dependencies
     "@playwright/test", // T-018 end-to-end tests
     "@testing-library/dom", // T-216: component tests (same versions as packages/ui)
     "@testing-library/react", // T-216
