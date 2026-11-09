@@ -189,7 +189,7 @@ export function Field({ f, q, value, set, values, state }: { f: FieldView; q: Qu
   }
 }
 
-export function DiffCard({ proposal }: { proposal: Proposal }) {
+export function DiffCard({ proposal }: { proposal: Pick<Proposal, "changes"> }) {
   return (
     <div className="flex flex-col gap-3" data-testid="interview-diff">
       {proposal.changes.map((c, i) => (

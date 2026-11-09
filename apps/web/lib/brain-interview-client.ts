@@ -1,5 +1,6 @@
 // Pure helpers for the setup interview UI (T-216; no server imports, used by a client component and unit-tested).
 import type { GroupView, QuestionView, FieldView } from "@nichols/brain/interview";
+import { isImportRequest } from "@/lib/brain-import-client";
 
 export const ERROR_TEXT: Record<string, string> = {
   invalid_answers: "Some answers need fixing.",
@@ -159,9 +160,10 @@ export function issueLabel(issue: { code: string; path: string }, group: GroupVi
 }
 
 /** Typed requests that start the interview in the chat instead of going to the model. */
-export function isInterviewRequest(text: string): "setup" | "assistant" | null {
+export function isInterviewRequest(text: string): "setup" | "assistant" | "import" | null {
   const t = text.trim().toLowerCase();
   if (t.length > 80) return null;
+  if (isImportRequest(t)) return "import"; // answered with a link to the import page (T-220); no model
   if (/\b(set ?up|configure|reconfigure)\b.*\b(personal assistant)\b/.test(t)) return "assistant";
   if (/\b(set ?up|reconfigure|configure|start)\b.*\b(brain|profile)\b/.test(t)) return "setup";
   return null;

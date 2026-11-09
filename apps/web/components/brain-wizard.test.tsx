@@ -87,6 +87,18 @@ describe("BrainInterview mode wizard", () => {
     expect(await screen.findByTestId("q-A1")).toBeTruthy();
   });
 
+  it("T-220: the intro offers 'Start faster' with Import (a link to the import page) and Skip (hides the offer, keeps Start); no call is made", async () => {
+    const calls = fakeApi();
+    render(<BrainInterview laneId="TST" mode="wizard" />);
+    const step = await screen.findByTestId("wizard-import-step");
+    expect(step.textContent).toContain("Start faster: import what Claude or ChatGPT already knows");
+    expect(within(step).getByRole("link", { name: "Import" }).getAttribute("href")).toBe("/TST/onboarding/import");
+    fireEvent.click(within(step).getByRole("button", { name: "Skip" }));
+    expect(screen.queryByTestId("wizard-import-step")).toBeNull();
+    expect(screen.getByRole("button", { name: "Start" })).toBeTruthy();
+    expect(calls.map((c) => c.action)).toEqual(["state"]);
+  });
+
   it("shows the rail with all 10 sections (current marked), a progress bar, 'Step 1 of 10' and the bank's prompts", async () => {
     fakeApi();
     render(<BrainInterview laneId="TST" mode="wizard" />);

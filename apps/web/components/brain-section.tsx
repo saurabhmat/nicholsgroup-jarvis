@@ -31,9 +31,12 @@ export function BrainSection({ laneId, view }: { laneId: string; view: Onboardin
               </li>
             ))}
           </ul>
-          <div>
+          <div className="flex flex-col gap-2 sm:flex-row">
             <Link href={base} prefetch={false} className={cn(buttonVariants(), "min-h-11 w-full sm:w-auto")}>
               Continue setup
+            </Link>
+            <Link href={`${base}/import`} prefetch={false} className={cn(buttonVariants({ variant: "outline" }), "min-h-11 w-full sm:w-auto")}>
+              Import memories
             </Link>
           </div>
         </CardContent>

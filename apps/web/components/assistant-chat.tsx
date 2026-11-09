@@ -17,6 +17,8 @@ type Turn = {
   grounding?: { status: string; unverified: string[] };
   error?: string;
   pending?: boolean;
+  /** An in-app link shown under the text (the import request, T-220). */
+  link?: { href: string; label: string };
 };
 
 const TOOL_LABEL: Record<string, string> = { list_recent_mail: "Checking mail", list_meetings: "Checking the calendar" };
@@ -52,6 +54,8 @@ function Rich({ text }: { text: string }) {
   );
 }
 
+const IMPORT_INTRO = "You can bring in what Claude or ChatGPT already knows about you. You choose what to keep, and nothing is saved until you tick it and click Save.";
+
 const INTERVIEW_INTRO = "Let's set up your brain. I'll ask a few questions at a time and show you the exact change before anything is saved.";
 
 export function AssistantChat({ laneId, sources, brainSetup = false }: { laneId: string; sources: string[]; brainSetup?: boolean }) {
@@ -82,6 +86,12 @@ export function AssistantChat({ laneId, sources, brainSetup = false }: { laneId:
     const question = text.trim();
     if (!question || busy) return;
     const kind = brainSetup ? isInterviewRequest(question) : null;
+    if (kind === "import") {
+      // Answered with a link, not a model call (T-220).
+      setTurns((all) => [...all, { role: "user", text: question }, { role: "assistant", text: IMPORT_INTRO, link: { href: `/${encodeURIComponent(laneId)}/onboarding/import`, label: "Import memories" } }]);
+      setInput("");
+      return;
+    }
     if (kind) {
       setTurns((all) => [...all, { role: "user", text: question }, { role: "assistant", text: INTERVIEW_INTRO }]);
       setInput("");
@@ -203,6 +213,11 @@ export function AssistantChat({ laneId, sources, brainSetup = false }: { laneId:
                     <div className="whitespace-pre-wrap break-words leading-relaxed text-foreground">
                       <Rich text={t.text} />
                     </div>
+                  ) : null}
+                  {t.link ? (
+                    <Link href={t.link.href} prefetch={false} className="inline-flex min-h-11 w-fit items-center rounded-control bg-primary px-4 text-sm font-medium text-primary-foreground">
+                      {t.link.label}
+                    </Link>
                   ) : null}
                   {t.error ? (
                     <Alert variant="alert">

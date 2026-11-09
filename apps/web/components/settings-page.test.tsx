@@ -76,6 +76,7 @@ describe("Settings page sections", () => {
     expect(within(rows[3] as HTMLElement).getByText("Not done")).toBeTruthy();
     expect(within(rows[3] as HTMLElement).getByRole("link", { name: /Edit/ }).getAttribute("href")).toBe(`/PKG/onboarding?step=${GROUPS[3]?.id ?? ""}`);
     expect(screen.getByRole("link", { name: "Continue setup" }).getAttribute("href")).toBe("/PKG/onboarding");
+    expect(screen.getByRole("link", { name: "Import memories" }).getAttribute("href")).toBe("/PKG/onboarding/import"); // T-220
     expect(screen.getByText(/3 of 10 sections done/)).toBeTruthy();
     // the full interview is not embedded any more
     expect(screen.queryByTestId("brain-interview")).toBeNull();

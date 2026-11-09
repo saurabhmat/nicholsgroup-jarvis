@@ -28,6 +28,7 @@ export function BrainWizard({ laneId, initialStep, hadStep }: { laneId: string; 
   const [error, setError] = useState<ApiErr | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
   const [confirmed, setConfirmed] = useState(false);
+  const [importSkipped, setImportSkipped] = useState(false);
   const headRef = useRef<HTMLHeadingElement | null>(null);
   const first = useRef(true);
   const stageKey = stage ? (stage.kind === "group" ? `g:${stage.id}` : stage.kind) : "";
@@ -242,6 +243,20 @@ export function BrainWizard({ laneId, initialStep, hadStep }: { laneId: string; 
                 <li>It never stores passwords, account numbers, or client or matter details.</li>
                 <li>Nothing is saved until you approve it. You see the exact change first.</li>
               </ul>
+              {importSkipped ? null : (
+                <div className="flex flex-col gap-3 rounded-control border border-border bg-background p-4" data-testid="wizard-import-step">
+                  <h3 className="text-base font-semibold text-foreground">Start faster: import what Claude or ChatGPT already knows</h3>
+                  <p className="text-sm text-muted-foreground">Bring in the memories you already have. You choose what to keep, and nothing is saved until you tick it and click Save. You can also do this later in Settings.</p>
+                  <div className="flex flex-col gap-2 sm:flex-row">
+                    <Link href={`/${encodeURIComponent(laneId)}/onboarding/import`} prefetch={false} className={cn(buttonVariants(), tap, "inline-flex items-center justify-center")}>
+                      Import
+                    </Link>
+                    <Button variant="outline" className={tap} onClick={() => setImportSkipped(true)}>
+                      Skip
+                    </Button>
+                  </div>
+                </div>
+              )}
               <div>
                 <Button className={tap} onClick={() => go({ kind: "group", id: firstIncomplete(groups) ?? groups[0]?.id ?? "" })}>
                   Start
