@@ -44,10 +44,22 @@ export const isImportSection = (t: ImportTarget, section: unknown): section is s
 export const laneFor = (t: ImportTarget, ctx: { home: string; current: string }): string => (t === "work" ? ctx.current : ctx.home);
 
 /**
- * The setup sections (the bank's group ids) that write this page section: a section the user saved a fact into counts as
- * done, the same rule as a Save in the interview (T-227). Sections the bank does not ask about match none.
+ * The setup sections a Save finishes (T-227 rule, strict): a group counts only when EVERY one of its questions is fully covered by
+ * what was saved, and none of its questions has a target an import cannot write (a checked answer such as Timezone or Scope, a line
+ * of a section, or a setting in the employee config). `touched` is the (target, section) pairs this Save wrote. One fact never
+ * completes a section that asks more than the import can answer.
  */
-export function groupsFor(target: ImportTarget, section: string): string[] {
-  const questionIds = new Set(QUESTIONS.filter((q) => q.targets.some((x) => x.doc === target && x.section === section)).map((q) => q.id));
-  return GROUPS.filter((g) => g.questionIds.some((id) => questionIds.has(id))).map((g) => g.id);
+export function groupsCompleted(touched: readonly (readonly [ImportTarget, string])[]): string[] {
+  const has = (t: ImportTarget, s: string) => touched.some(([tt, ss]) => tt === t && ss === s);
+  return GROUPS.filter((g) =>
+    g.questionIds.every((id) => {
+      const q = QUESTIONS.find((x) => x.id === id);
+      return (
+        q !== undefined &&
+        q.configTargets.length === 0 &&
+        q.targets.length > 0 &&
+        q.targets.every((t) => t.line === undefined && isImportSection(t.doc, t.section) && has(t.doc, t.section))
+      );
+    }),
+  ).map((g) => g.id);
 }

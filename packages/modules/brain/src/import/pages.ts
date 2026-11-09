@@ -2,7 +2,7 @@
 // page. Pure and client-safe. Only the fixed sections of targets.ts are ever touched; every other heading in an imported page
 // is ignored, so an imported file cannot add sections, rules or anything the interview does not write.
 import { cleanText, getSection, isProvided, oneLine, setSection } from "../interview/doc-edit";
-import { isInstructionLike, namesExcludedEntity, screenSensitive, stripInstructions } from "./screen";
+import { anyInstructionLike, namesExcludedEntity, screenSensitive, stripInstructions } from "./screen";
 import { IMPORT_SECTIONS, type ImportTarget } from "./targets";
 
 export type PageEdit =
@@ -69,10 +69,10 @@ export function editsFromPage(target: ImportTarget, text: string): { edits: Page
     for (const line of raw.split("\n")) {
       // Keep the page's own line structure (bullets); drop only the sentences that read like orders.
       if (line.trim() === "") continue;
-      const stripped = stripInstructions(line);
+      const stripped = stripInstructions(line, target === "pa");
       skips.instructions += stripped.dropped;
       if (stripped.dropped === 0) kept.push(line.trimEnd());
-      else if (stripped.text !== "" && !isInstructionLike(stripped.text)) kept.push(/^\s*[-*]\s/.test(line) ? `- ${stripped.text.replace(/\n/g, " ")}` : stripped.text.replace(/\n/g, " "));
+      else if (stripped.text !== "" && !anyInstructionLike(stripped.text, target === "pa")) kept.push(/^\s*[-*]\s/.test(line) ? `- ${stripped.text.replace(/\n/g, " ")}` : stripped.text.replace(/\n/g, " "));
     }
     const cleaned = cleanText(kept.join("\n"), 1500);
     if (cleaned === "" || !isProvided(cleaned)) continue;

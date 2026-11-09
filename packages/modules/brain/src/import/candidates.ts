@@ -2,7 +2,7 @@
 // into candidate rows the user can tick. Nothing in this file writes anything (rules 7 and 9). Pure and client-safe.
 import { z } from "zod";
 import { IMPORT_SECTIONS, IMPORT_TARGETS, isImportSection, laneFor, targetPath, type ImportTarget } from "./targets";
-import { looksLikeLegalMatter, isInstructionLike, screenSensitive, squash } from "./screen";
+import { anyInstructionLike, looksLikeLegalMatter, namesExcludedEntity, screenSensitive, squash } from "./screen";
 
 export const MAX_IMPORT_CHARS = 50_000;
 export const MAX_CANDIDATES = 100;
@@ -89,7 +89,11 @@ export function buildCandidates(
       dropped.other++;
       continue;
     }
-    if (isInstructionLike(fact)) {
+    if (namesExcludedEntity(fact)) {
+      dropped.other++; // Nichols Law content is out of scope (rule 13): not stored
+      continue;
+    }
+    if (anyInstructionLike(fact, item.target === "pa")) {
       dropped.instructions++;
       continue;
     }
@@ -102,7 +106,7 @@ export function buildCandidates(
     let evidence: string | null = null;
     const quote = item.quote == null ? "" : oneLine(item.quote);
     if (quote !== "") {
-      if (isInstructionLike(quote)) flags.push("instruction_dropped");
+      if (anyInstructionLike(quote, item.target === "pa")) flags.push("instruction_dropped");
       else if (screenSensitive(quote).ok && haystack.includes(squash(quote))) evidence = quote.slice(0, MAX_QUOTE_CHARS);
     }
     if (looksLikeLegalMatter(fact) || (evidence !== null && looksLikeLegalMatter(evidence)) || (quote !== "" && looksLikeLegalMatter(quote))) {

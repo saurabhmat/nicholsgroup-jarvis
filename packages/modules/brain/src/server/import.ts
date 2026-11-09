@@ -22,14 +22,15 @@ import {
   applyPageEdit,
   buildCandidates,
   editsFromPage,
-  groupsFor,
+  groupsCompleted,
   isImportSection,
-  isInstructionLike,
+  anyInstructionLike,
   laneFor,
   namesExcludedEntity,
   screenSensitive,
   stripInstructions,
   targetFromPath,
+  targetPath,
   type CandidateFlag,
   type DroppedCounts,
   type ImportSource,
@@ -101,11 +102,11 @@ export async function extractCandidates(env: ImportEnv, source: ImportSource, te
 type TickedItem = { id: string; text: string };
 
 /** Screens text that is about to be written to a page: credentials and sensitive numbers, the Nichols Law name, instruction-like sentences. */
-function screenForPage(text: string): void {
+function screenForPage(text: string, strict = false): void {
   const s = screenSensitive(text);
   if (!s.ok) throw new BrainError(s.reason);
   if (namesExcludedEntity(text)) throw new InterviewRefusal("nichols_law");
-  if (isInstructionLike(text)) throw new InterviewRefusal("instruction_text");
+  if (anyInstructionLike(text, strict)) throw new InterviewRefusal("instruction_text");
 }
 
 /** The ticked candidates as page edits. Every id must be a candidate of the caller's own open import; target and section come from the stored row. */
@@ -123,7 +124,7 @@ async function editsFromTicked(env: ImportEnv, importId: string, items: readonly
     seen.add(item.id);
     const text = item.text.trim();
     if (text === "") throw new InterviewRefusal("import_not_found");
-    screenForPage(text);
+    screenForPage(text, target === "pa");
     const key = `${target}|${c.targetSection}`;
     const g = groups.get(key) ?? { target, section: c.targetSection, lines: [] };
     g.lines.push(text);
@@ -133,22 +134,21 @@ async function editsFromTicked(env: ImportEnv, importId: string, items: readonly
   return { edits, touched: edits.map((e) => [e.target, e.section]) };
 }
 
-const DOC_KEY = { about_me: "about_me", preferences: "preferences", work: "work" } as const;
 
 type Planned = { views: ChangeView[]; writes: Write[]; digest: string };
 
 /** Applies edits to the CURRENT pages and returns the exact diff, the writes and a digest of both. Writes nothing. */
 async function planEdits(env: ImportEnv, edits: readonly PageEdit[], snap: Snapshot): Promise<Planned> {
-  for (const e of edits) screenForPage(e.op === "append" ? e.lines.join("\n") : e.text);
+  for (const e of edits) screenForPage(e.op === "append" ? e.lines.join("\n") : e.text, e.target === "pa");
   const views: ChangeView[] = [];
   const writes: Write[] = [];
   for (const target of IMPORT_TARGETS) {
     const mine = edits.filter((e) => e.target === target);
     if (mine.length === 0) continue;
     if (target !== "pa") {
-      const key = DOC_KEY[target];
+      const key = target;
       const lane = laneFor(target, env.ctx) as LaneId;
-      const path = target === "about_me" ? "Context/About-Me.md" : target === "preferences" ? "Context/Preferences.md" : "Context/Work.md";
+      const path = targetPath(target);
       const before = snap.docs[key] ?? seedBody(path).replace("{{lane_name}}", env.ctx.lanes.find((l) => l.laneId === lane)?.name ?? lane);
       const after = mine.reduce(applyPageEdit, before);
       if (after === before) continue;
@@ -181,35 +181,54 @@ async function planEdits(env: ImportEnv, edits: readonly PageEdit[], snap: Snaps
   }
   const digest = await digestOf({
     imp: true,
-    writes: writes.map((w) => (w.kind === "document" ? { l: w.lane, p: w.path, v: w.baseVersion, b: w.body } : { l: w.lane, v: w.baseVersion, b: stripDate(w.body.instructions), s: w.body.status })),
+    writes: writes.map((w) => (w.kind === "document" ? { l: w.lane, p: w.path, v: w.baseVersion, b: w.body } : { l: w.lane, v: w.baseVersion, b: stripDate(w.body.instructions), c: w.body.config, s: w.body.status })),
   });
   return { views, writes, digest };
 }
 
-async function writeAll(env: ImportEnv, writes: readonly Write[]): Promise<number> {
-  let saved = 0;
-  for (const w of writes) {
-    if (w.kind === "document") await env.store.saveDocument(w.lane, w.path, w.body, w.baseVersion);
-    else await env.store.saveEmployee(w.lane, w.body, w.baseVersion);
-    saved++;
+/** A Save that wrote some pages and then failed on a later one (the writes are separate, not one transaction). */
+export class ImportPartialSave extends Error {
+  readonly saved: string[];
+  override readonly cause: unknown;
+  constructor(saved: string[], cause: unknown) {
+    super("partial_save");
+    this.name = "ImportPartialSave";
+    this.saved = saved;
+    this.cause = cause;
   }
-  return saved;
+}
+
+const labelOf = (w: Write): string => (w.kind === "document" ? w.path : "Personal Assistant profile");
+
+async function writeAll(env: ImportEnv, writes: readonly Write[]): Promise<number> {
+  const done: string[] = [];
+  for (const w of writes) {
+    try {
+      if (w.kind === "document") await env.store.saveDocument(w.lane, w.path, w.body, w.baseVersion);
+      else await env.store.saveEmployee(w.lane, w.body, w.baseVersion);
+    } catch (e) {
+      if (done.length > 0) throw new ImportPartialSave(done, e); // say which pages were saved; the rest can be saved again
+      throw e;
+    }
+    done.push(labelOf(w));
+  }
+  return done.length;
 }
 
 /**
- * The setup sections a Save finishes (T-227): those that write a page section that received something, recorded in the home
+ * The setup sections a Save finishes (T-227, strict rule in groupsCompleted): recorded in the home
  * lane together with the one-time backfill (see interview.ts). If only this step fails the pages ARE saved: reported, not thrown.
  */
-async function recordSections(env: ImportEnv, snap: Snapshot, touched: readonly [ImportTarget, string][]): Promise<boolean> {
-  const ids = [...new Set(touched.flatMap(([t, s]) => groupsFor(t, s)))];
-  if (ids.length === 0) return true;
+async function recordSections(env: ImportEnv, snap: Snapshot, touched: readonly [ImportTarget, string][]): Promise<{ ok: boolean; sections: string[] }> {
+  const ids = groupsCompleted(touched);
+  if (ids.length === 0) return { ok: true, sections: [] };
   try {
     const backfill = pendingBackfill(buildGroups(snap.docs, snap.config, env.ctx), await readCompletions(env as InterviewEnv));
     await env.store.completeSections(env.ctx.home, [...new Set([...backfill, ...ids])]);
-    return true;
+    return { ok: true, sections: ids };
   } catch (e) {
     logCompletionFailure("completion not recorded after an import", e);
-    return false;
+    return { ok: false, sections: [] };
   }
 }
 
@@ -221,7 +240,7 @@ export async function proposeImport(env: ImportEnv, importId: string, items: rea
   return { changes: p.views, proposalId: p.digest };
 }
 
-export async function saveImport(env: ImportEnv, importId: string, items: readonly TickedItem[], proposalId: string): Promise<{ saved: number; completed: boolean; finished: boolean }> {
+export async function saveImport(env: ImportEnv, importId: string, items: readonly TickedItem[], proposalId: string): Promise<{ saved: number; completed: boolean; sections: string[]; finished: boolean }> {
   const { edits, touched } = await editsFromTicked(env, importId, items);
   const snap = await snapshot(env as InterviewEnv);
   const p = await planEdits(env, edits, snap);
@@ -237,7 +256,8 @@ export async function saveImport(env: ImportEnv, importId: string, items: readon
     finished = false; // the hourly purge removes the candidates within 24 h
     logCompletionFailure("import not closed after a save", e);
   }
-  return { saved, completed: await recordSections(env, snap, touched), finished };
+  const rec = await recordSections(env, snap, touched);
+  return { saved, completed: rec.ok, sections: rec.sections, finished };
 }
 
 /** "Discard": the user leaves without saving. Every candidate is skipped and deleted; nothing is written to a page. */
@@ -257,12 +277,13 @@ export async function proposePage(env: ImportEnv, target: ImportTarget, text: st
   return { target, changes: p.views, proposalId: p.digest, sections: edits.map((e) => e.section), skips };
 }
 
-export async function savePage(env: ImportEnv, target: ImportTarget, text: string, proposalId: string): Promise<{ saved: number; completed: boolean }> {
+export async function savePage(env: ImportEnv, target: ImportTarget, text: string, proposalId: string): Promise<{ saved: number; completed: boolean; sections: string[] }> {
   const { edits } = editsFromPage(target, text);
   if (edits.length === 0) throw new InterviewRefusal("nothing_to_import");
   const snap = await snapshot(env as InterviewEnv);
   const p = await planEdits(env, edits, snap);
   if (p.digest !== proposalId) throw new InterviewRefusal("proposal_changed");
   const saved = await writeAll(env, p.writes);
-  return { saved, completed: await recordSections(env, snap, edits.map((e) => [e.target, e.section] as [ImportTarget, string])) };
+  const rec = await recordSections(env, snap, edits.map((e) => [e.target, e.section] as [ImportTarget, string]));
+  return { saved, completed: rec.ok, sections: rec.sections };
 }
