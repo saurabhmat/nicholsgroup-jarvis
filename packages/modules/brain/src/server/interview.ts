@@ -355,6 +355,12 @@ export async function loadInterviewState(env: InterviewEnv): Promise<InterviewSt
   };
 }
 
+/** Section progress only (T-226 menu badge, Home banner, Settings list): the groups' real completion, nothing else. Read-only. */
+export async function loadProgress(env: InterviewEnv): Promise<{ id: string; title: string; complete: boolean }[]> {
+  const snap = await snapshot(env);
+  return buildGroups(snap.docs, snap.config, env.ctx).map((g) => ({ id: g.id, title: g.title, complete: g.complete }));
+}
+
 // ---------------------------------------------------------------------------------------------------- propose / save
 
 export type Proposal = { groupId: string; saves: string; changes: ChangeView[]; proposalId: string };

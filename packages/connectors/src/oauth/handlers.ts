@@ -41,7 +41,7 @@ export function createConnectHandlers(flow: Pick<ReturnType<typeof createOAuthFl
         if (res) return res;
         if (e instanceof EnvValidationError) {
           // Variable NAMES and the rule each broke, never values (the error carries none).
-          console.error(`[api/connect/start] not configured (${provider}): ${describeEnvError(e)}`);
+          console.error(`[api/connect/start] not configured (${provider}, ${e.scope.slice(0, 80)}): ${describeEnvError(e)}`);
           const lane = url.searchParams.get("lane") ?? "";
           if (isFormNavigation(request) && LANE_CODE.test(lane)) {
             const code = ENV_ERROR_CODES[provider] ?? GENERIC_ENV_ERROR_CODE;

@@ -26,6 +26,7 @@ export {
   activateEmployee,
   confirmSetup,
   loadInterviewState,
+  loadProgress,
   proposeGroup,
   refreshPaDerived,
   saveGroup,

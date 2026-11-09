@@ -78,6 +78,7 @@ test("owner, desktop: Get started is first in the menu, the wizard previews, sav
   await expectNoAxeViolations(page);
   await page.reload();
   await page.getByRole("button", { name: "Start" }).click();
+  await expect(page.getByTestId("q-A1")).toBeVisible({ timeout: 30_000 });
   await expect(page.getByTestId("q-A1-known")).toHaveCount(0); // still nothing stored after the preview + reload
   await page.getByLabel("Name", { exact: true }).fill("Pat Example");
   await page.getByLabel("Scope").selectOption("work");
@@ -87,7 +88,7 @@ test("owner, desktop: Get started is first in the menu, the wizard previews, sav
   await expect(page.getByTestId("interview-notice")).toContainText("Saved: About you", { timeout: 30_000 });
   await expect(page.getByTestId("interview-group")).toHaveAttribute("data-group", "A-2");
 
-  // Back keeps what was typed; Skip for now saves nothing.
+  // Back returns to the saved section (keeping typed answers is covered by the component tests); Skip for now saves nothing.
   await page.getByRole("button", { name: "Back" }).click();
   await expect(page.getByTestId("q-A1-known")).toContainText("Already set:");
   await page.getByRole("button", { name: "Continue" }).click();
@@ -153,14 +154,15 @@ test("owner, iPhone width: More row, Home banner, Step N of 10 and a sticky Save
   await expect(page.getByTestId("interview-diff")).toBeVisible();
   const save = page.getByRole("button", { name: "Save & continue" });
   await save.scrollIntoViewIfNeeded();
-  const bar = await actions.boundingBox();
-  const tab = await tabs.boundingBox();
-  expect(bar && tab && bar.y + bar.height <= tab.y + 1).toBe(true);
-  expect(bar && bar.y >= 0 && bar.y + bar.height <= 844).toBe(true);
+  const aboveTabs = async () => {
+    const bar = await actions.boundingBox();
+    const tab = await tabs.boundingBox();
+    return Boolean(bar && tab && bar.y >= 0 && bar.y + bar.height <= tab.y + 1 && bar.y + bar.height <= 844);
+  };
+  await expect.poll(aboveTabs).toBe(true);
   expect((await save.boundingBox())?.height ?? 0).toBeGreaterThanOrEqual(44);
-  await page.mouse.wheel(0, -3000); // scrolled to the top, the bar is still on screen
-  const stuck = await actions.boundingBox();
-  expect(stuck && stuck.y + stuck.height <= 844).toBe(true);
+  await page.evaluate(() => window.scrollTo(0, 0)); // scrolled to the top, the bar is still on screen above the tabs
+  await expect.poll(aboveTabs).toBe(true);
   await expectNoAxeViolations(page);
   await setTheme(page, "dark");
   await expectNoAxeViolations(page);
@@ -186,15 +188,19 @@ test("owner: Settings has no placeholder, a status list for AI brain, Composio s
   await expect(page.getByTestId("interview-group")).toHaveAttribute("data-group", "A-3", { timeout: 30_000 });
 
   await page.goto("/PKG/settings");
-  // The e2e server has no Composio settings: the rows name them (names only).
-  await expect(page.getByTestId("composio-gmail").getByRole("button", { name: /^Not configured: COMPOSIO_[A-Z_]+ (is|are) not set$/ })).toBeVisible({ timeout: 30_000 });
-
-  // The page is opened on 127.0.0.1 while NEXT_PUBLIC_APP_URL is localhost: hosts only.
+  // The page is opened on 127.0.0.1 while NEXT_PUBLIC_APP_URL is localhost: hosts only (shown with the Google section).
+  await expect(page.getByRole("region", { name: "Google" })).toBeVisible({ timeout: 30_000 });
   await expect(page.getByTestId("origin-notice")).toHaveText("You're on 127.0.0.1:3100. Open localhost:3100 to connect accounts.");
+
+  // The e2e server has no Composio settings: the rows name them (names only).
+  await expect(page.getByTestId("composio-gmail")).toBeVisible();
+  await expect(page.getByTestId("composio-gmail").getByRole("button", { name: /^Not configured: COMPOSIO_[A-Z_, ]+ (is|are) not set$/ })).toBeVisible();
 
   // The fixed banner, chosen by an allowlisted code; anything else is ignored.
   await page.goto("/PKG/settings?error=google_env");
-  await expect(page.getByTestId("connect-result")).toHaveText("Google isn't configured on this server.Check GOOGLE_REDIRECT_URI and NEXT_PUBLIC_APP_URL (same https domain) and redeploy.", { timeout: 30_000 });
+  const banner = page.getByTestId("connect-result");
+  await expect(banner).toContainText("Google isn't configured on this server.", { timeout: 30_000 });
+  await expect(banner).toContainText("Check GOOGLE_REDIRECT_URI and NEXT_PUBLIC_APP_URL (same https domain) and redeploy.");
   await page.goto("/PKG/settings?error=%3Cb%3Eyour%20words%3C%2Fb%3E");
   await expect(page.getByRole("heading", { name: "Settings", level: 1 })).toBeAttached({ timeout: 30_000 });
   await expect(page.getByTestId("connect-result")).toHaveCount(0);

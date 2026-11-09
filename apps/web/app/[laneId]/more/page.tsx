@@ -1,7 +1,8 @@
 // iPhone "More" tab: the menu entries that have no tab of their own, and sign-out. A tab page, so no back link.
 import Link from "next/link";
 import { Suspense } from "react";
-import { Badge, Button, laneHref, MORE_ITEMS, navItem, onboardingEntry, PageHeader } from "@nichols/ui";
+import { Button, laneHref, MORE_ITEMS, navItem, PageHeader } from "@nichols/ui";
+import { OnboardingMoreRow } from "@/components/onboarding-entry";
 import { ThemeToggle } from "@/components/theme-toggle";
 import { loadLane } from "@/lib/lane-page";
 import { onboardingFor } from "@/lib/onboarding-progress";
@@ -22,17 +23,13 @@ async function More({ params }: { params: Promise<{ laneId: string }> }) {
     <div className="flex flex-col gap-6">
       <PageHeader eyebrow={lane.name} title="More" />
       <ul className="flex flex-col divide-y divide-divider rounded-card border border-border bg-card">
-        {MORE_ITEMS.filter((key) => key !== "onboarding" || onboarding).map((key) => {
+        <OnboardingMoreRow laneId={lane.laneId} progress={onboarding} />
+        {MORE_ITEMS.filter((key) => key !== "onboarding").map((key) => {
           const item = navItem(key);
-          const entry = key === "onboarding" && onboarding ? onboardingEntry({ done: onboarding.done, total: onboarding.total }) : null;
           return (
             <li key={key}>
-              <Link className="flex items-center justify-between gap-3 px-4 py-3 text-sm" href={laneHref(lane.laneId, item.segment)}>
-                <span className="flex items-center gap-2">
-                  {entry ? entry.label : item.label}
-                  {entry?.complete ? <span aria-label="Setup complete">✓</span> : null}
-                </span>
-                {entry?.badge ? <Badge variant="gold">{entry.badge}</Badge> : null}
+              <Link className="block px-4 py-3 text-sm" href={laneHref(lane.laneId, item.segment)}>
+                {item.label}
               </Link>
             </li>
           );

@@ -27,6 +27,7 @@ describe("connect start with an unconfigured server", () => {
     expect(res.status).toBe(303);
     expect(res.headers.get("location")).toBe("/PKG/settings?error=google_env");
     const out = log.mock.calls.flat().join(" ");
+    expect(out).toContain('(google, connector "google")'); // the fixed scope says which part failed (a core env error is not labelled google)
     expect(out).toContain("GOOGLE_REDIRECT_URI: must be on the app's own origin");
     expect(out).toContain("GOOGLE_OAUTH_CLIENT_ID: is not set");
     expect(out).not.toContain(CANARY);

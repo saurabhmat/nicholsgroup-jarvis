@@ -9,6 +9,7 @@ const group = (over: Partial<GroupView> = {}): GroupView => ({
   title: "About you",
   saves: "Context/About-Me.md",
   done: false,
+  complete: false,
   questions: [
     { id: "A1", prompt: "What should Jarvis call you?", status: "known", known: "Pat", fields: [{ key: "name", label: "Name", kind: "text", required: true }], prefill: { name: "Pat" } },
     { id: "A3", prompt: "First task?", status: "ask", fields: [{ key: "first_task", label: "First task", kind: "longtext" }] },

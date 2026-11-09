@@ -994,3 +994,13 @@ Logged, not fixed:
 - **sec L8:** refused or superseded Composio accounts stay in the project until the Approvals cleanup exists (T-110 - T-113).
 - **L (Test route rate limit):** there is no per-user rate-limit pattern for connector routes (ai_chat_rate is chat-only); the Test route is owner/admin_technical at AAL2 only. Add one with the health job.
 - **L (home label):** Home does not mention a Composio connection at all yet; a label comes with T-223.
+
+### T-226 review follow-ups (Nov 9, 2026)
+Security review: 0 BLOCKER, 0 HIGH. Code review: 0 BLOCKER, 1 HIGH (fixed). Fixed: code H1 (section "done" was fake: every Part B group counted as done once the draft profile existed; now `GroupView.complete` = every REQUIRED question answered from stored state, optional questions never block, an optional-only section needs one answer), code M1 (optional questions do not block), code M2 (jsdom tests for the Home banner and the More row), code M4 (e2e fragilities), sec M1 (the layout uses a lightweight `loadOnboarding`, not the full interview environment), sec L5 (cross-lane unit test), sec L2 (the env-error log line carries the fixed error scope).
+Logged, not fixed:
+- **Part B settings answers cannot be told from defaults.** A Part B settings-backed question (calendar days ahead, finance numbers, schedule days, delivery, length) counts as answered only when its stored value differs from the fresh-profile default; there is no per-group marker (it would need SQL). A user who accepts every default in such a section leaves it "not complete". Fix with a per-group "saved at" marker (new column or a line in the profile page) in a later task; needs a decision.
+- **code M3:** the layout awaits the progress read before it renders (adds the reads to every owner page) and the badge is stale until `router.refresh()` after a Save (done in the wizard) or the next navigation.
+- **code M5:** the wizard does not keep the current step in the URL (a reload resumes at the first incomplete step).
+- **code L1-L6:** minor (naming, duplicate copy of the sticky-bar offset, `GroupView.done` and `complete` both exist: `done` stays for chat routing only, the rail Done chip for a Part B group is per section now).
+- **sec L3:** `X-Forwarded-Host` is trusted for the origin notice; it only changes what the requester sees about their own request, and only plain hosts pass. **sec L4:** the onboarding page answers 404 on a permission-read outage (same as not-owner). Both left as risks.
+- **Progress is computed for the lane the page is open in only** (one lane's facts). In a multi-lane profile the skip rules for B-3/B-4/B-5 could differ from the wizard's full view; pilot has one lane.

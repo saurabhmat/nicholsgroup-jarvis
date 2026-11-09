@@ -50,7 +50,7 @@ export function timezoneList(): string[] {
 }
 
 /** The lanes where the caller has the brain view (core.allowed_lanes, own uid at AAL2). [] on any error: fail closed. */
-async function brainLanes(client: Client, userId: string, view: string): Promise<string[]> {
+export async function brainLanes(client: Client, userId: string, view: string): Promise<string[]> {
   try {
     const { data, error } = await (client as unknown as Rpc).schema("core").rpc("allowed_lanes", { p_uid: userId, p_view: view });
     return !error ? strings(data) : [];
@@ -60,7 +60,7 @@ async function brainLanes(client: Client, userId: string, view: string): Promise
 }
 
 /** Mailboxes and KPIs from lane_config, the policy and the connection state of one lane, read with the user's own lane client. */
-export async function readLaneInfo(client: Client, laneId: string, name: string, financeView: boolean): Promise<LaneInfo | null> {
+export async function readLaneInfo(client: Client, laneId: string, name: string, financeView: boolean, withConnections = true): Promise<LaneInfo | null> {
   const core = client.schema("core");
   const [cfg, pol] = await Promise.all([
     core.from("lane_config_current").select("config").eq("lane_id", laneId).maybeSingle(),
@@ -70,6 +70,7 @@ export async function readLaneInfo(client: Client, laneId: string, name: string,
   const config = (typeof cfg.data.config === "object" && cfg.data.config !== null ? cfg.data.config : {}) as { mailboxes?: unknown; kpis?: unknown };
   let connected: string[] | null = null;
   try {
+    if (!withConnections) throw new Error("connection state not needed"); // progress only: connection state never changes completion
     const g = await loadGoogleSection(client, laneId);
     // An unreadable state is "unknown", never "missing".
     connected = g.unavailable ? null : g.connections.filter((c) => c.state === "connected" || c.state === "degraded").map((c) => c.mailbox.toLowerCase());

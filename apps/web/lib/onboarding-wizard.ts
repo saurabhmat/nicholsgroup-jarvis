@@ -3,7 +3,7 @@
 
 export type Stage = { kind: "intro" } | { kind: "group"; id: string } | { kind: "finish" };
 
-type G = { id: string; done: boolean };
+type G = { id: string; complete: boolean };
 
 /**
  * The screen the wizard opens on. `step` is validated against the bank's sections (`groups`): a valid id opens that step;
@@ -12,8 +12,8 @@ type G = { id: string; done: boolean };
  */
 export function initialStage(groups: readonly G[], step: string | undefined, hadStep: boolean): Stage {
   if (step !== undefined && groups.some((g) => g.id === step)) return { kind: "group", id: step };
-  if (!hadStep && !groups.some((g) => g.done)) return { kind: "intro" };
-  const next = groups.find((g) => !g.done);
+  if (!hadStep && !groups.some((g) => g.complete)) return { kind: "intro" };
+  const next = groups.find((g) => !g.complete);
   return next ? { kind: "group", id: next.id } : { kind: "finish" };
 }
 
@@ -33,5 +33,5 @@ export function stageBefore(groups: readonly G[], id: string): Stage {
 
 /** The first section that is not done (where "Start" and "Continue setup" go), or the first one when all are done. */
 export function firstIncomplete(groups: readonly G[]): string | null {
-  return (groups.find((g) => !g.done) ?? groups[0])?.id ?? null;
+  return (groups.find((g) => !g.complete) ?? groups[0])?.id ?? null;
 }

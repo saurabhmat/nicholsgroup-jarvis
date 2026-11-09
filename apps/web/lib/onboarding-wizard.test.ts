@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { firstIncomplete, initialStage, stageAfter, stageBefore } from "./onboarding-wizard";
 
-const groups = (doneIds: string[]) => ["A-1", "A-2", "A-3", "B-1"].map((id) => ({ id, done: doneIds.includes(id) }));
+const groups = (doneIds: string[]) => ["A-1", "A-2", "A-3", "B-1"].map((id) => ({ id, complete: doneIds.includes(id) }));
 
 describe("wizard stages", () => {
   it("opens the intro on a fresh start", () => {

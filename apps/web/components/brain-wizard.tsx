@@ -68,7 +68,7 @@ export function BrainWizard({ laneId, initialStep, hadStep }: { laneId: string; 
   if (!state || !stage) return <p className="text-sm text-muted-foreground" aria-live="polite">Loading your setup…</p>;
 
   const groups = state.groups;
-  const doneCount = groups.filter((g) => g.done).length;
+  const doneCount = groups.filter((g) => g.complete).length;
   const total = groups.length;
   const currentIndex = stage.kind === "group" ? groups.findIndex((g) => g.id === stage.id) : -1;
   const groupView: GroupView | undefined = stage.kind === "group" ? groups[currentIndex] : undefined;
@@ -181,7 +181,7 @@ export function BrainWizard({ laneId, initialStep, hadStep }: { laneId: string; 
                   >
                     <span className="w-5 shrink-0 text-xs tabular-nums">{i + 1}</span>
                     <span className="min-w-0 flex-1 break-words">{g.title}</span>
-                    <Badge variant={g.done ? "success" : current ? "secondary" : "muted"}>{g.done ? "Done" : current ? "Current" : "To do"}</Badge>
+                    <Badge variant={g.complete ? "success" : current ? "secondary" : "muted"}>{g.complete ? "Done" : current ? "Current" : "To do"}</Badge>
                   </button>
                 </li>
               );

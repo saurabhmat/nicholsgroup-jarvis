@@ -4,8 +4,9 @@
 // the interview route); anyone else gets null, so the entry points are not drawn.
 import type { Guards } from "@nichols/core/auth";
 import { GROUPS } from "@nichols/brain/interview";
-import { loadInterviewState } from "@nichols/brain/server";
-import { buildEnv, type InterviewDeps } from "@/lib/brain-interview";
+import { resolveHomeLane } from "@nichols/brain";
+import { createBrainStore, loadProgress, type ClientFor, type InterviewEnv } from "@nichols/brain/server";
+import { brainLanes, readLaneInfo, timezoneList } from "@/lib/brain-interview";
 
 export type OnboardingSection = { id: string; title: string; done: boolean };
 
@@ -19,27 +20,51 @@ export function sectionIdFrom(raw: string | string[] | undefined): string | unde
   return typeof raw === "string" && GROUPS.some((g) => g.id === raw) ? raw : undefined;
 }
 
+/**
+ * Lightweight progress for the menu badge, the Home banner and Settings (T-226): the owner role and the brain view for THIS
+ * lane only, this lane's facts (settings, policy; no connection state), the stored pages and profile, and the one
+ * completion rule (`GroupView.complete`: every required question answered from stored state; optional ones never block).
+ * Not the full interview environment (that is the wizard's own state call). Fails closed: null hides the entry.
+ */
 export async function loadOnboarding(
   g: Pick<Guards, "requireRole" | "requireLane" | "listLanes">,
   laneId: string,
   now: Date,
 ): Promise<OnboardingView | null> {
   let userId: string;
+  let client: Awaited<ReturnType<Guards["requireLane"]>>["client"];
   try {
-    userId = (await g.requireRole(laneId, ["owner"])).session.userId;
+    const ctx = await g.requireRole(laneId, ["owner"]);
+    userId = ctx.session.userId;
+    client = ctx.client;
   } catch {
     return null; // not an owner, or an outage: the entry is hidden; the page behind it checks again
   }
-  let built: Awaited<ReturnType<typeof buildEnv>>;
+  let env: InterviewEnv;
   try {
-    built = await buildEnv(g as Awaited<ReturnType<InterviewDeps["guards"]>>, laneId, userId, now);
+    const [withBrain, withFinance] = await Promise.all([brainLanes(client, userId, "brain"), brainLanes(client, userId, "finance")]);
+    if (!withBrain.includes(laneId)) return null;
+    const info = await readLaneInfo(client, laneId, laneId, withFinance.includes(laneId), false);
+    if (!info) return null;
+    const clients = new Map<string, ReturnType<ClientFor>>([[laneId, Promise.resolve(client as never)]]);
+    const clientFor: ClientFor = (l) => {
+      let c = clients.get(l);
+      if (c === undefined) {
+        c = g.requireLane(l).then((r) => r.client as never);
+        clients.set(l, c);
+      }
+      return c;
+    };
+    const store = createBrainStore({ clientFor, laneSettingsFor: async (l) => (l === laneId ? { mailboxes: info.mailboxes, kpis: info.kpis } : null) });
+    const existing = await store.findHomeLane(laneId).catch(() => null);
+    const home = resolveHomeLane({ openLanes: withBrain, existingLaneId: existing, pickedLaneId: laneId });
+    if (!home.ok) return null;
+    env = { store, ctx: { home: home.laneId, current: laneId, lanes: [info], timezones: timezoneList() }, now };
   } catch {
     return null;
   }
-  if ("refused" in built) return null;
   try {
-    const state = await loadInterviewState(built.env);
-    const sections = state.groups.map((x) => ({ id: x.id, title: x.title, done: x.done }));
+    const sections = (await loadProgress(env)).map((x) => ({ id: x.id, title: x.title, done: x.complete }));
     return { done: sections.filter((s) => s.done).length, total: sections.length, sections, nextSectionId: sections.find((s) => !s.done)?.id ?? null };
   } catch {
     return { done: null, total: GROUPS.length, sections: bank(), nextSectionId: GROUPS[0]?.id ?? null };
