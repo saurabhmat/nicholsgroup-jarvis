@@ -197,12 +197,13 @@ test("owner: Settings has no placeholder, a status list for AI brain, Composio s
 
   await page.goto("/PKG/settings");
   // The page is opened on 127.0.0.1 while NEXT_PUBLIC_APP_URL is localhost: hosts only (shown with the Google section).
-  await expect(page.getByRole("region", { name: "Google" })).toBeVisible({ timeout: 30_000 });
+  await expect(page.getByRole("region", { name: "Connections" })).toBeVisible({ timeout: 30_000 });
   await expect(page.getByTestId("origin-notice")).toHaveText("You're on 127.0.0.1:3100. Open localhost:3100 to connect accounts.");
 
-  // The e2e server has no Composio settings: the rows name them (names only).
-  await expect(page.getByTestId("composio-gmail")).toBeVisible();
-  await expect(page.getByTestId("composio-gmail").getByRole("button", { name: /^Not configured: COMPOSIO_[A-Z_, ]+ (is|are) not set$/ })).toBeVisible();
+  // The e2e server has no Composio settings at all (no project key): T-230 B shows one line, setting NAME only, instead of per-toolkit rows.
+  await expect(page.getByText("Composio not configured on this server (COMPOSIO_API_KEY not set)")).toBeVisible();
+  await expect(page.getByTestId("composio-gmail")).toHaveCount(0);
+  await expect(page.getByTestId("composio-googlecalendar")).toHaveCount(0);
 
   // The fixed banner, chosen by an allowlisted code; anything else is ignored.
   await page.goto("/PKG/settings?error=google_env");

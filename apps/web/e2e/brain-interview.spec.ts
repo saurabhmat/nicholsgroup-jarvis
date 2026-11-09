@@ -85,8 +85,11 @@ test("owner: Settings -> AI brain lists the sections and opens the wizard, which
   expect(await noHorizontalScroll(page)).toBe(true);
   await page.goto("/PKG/onboarding?step=B-1"); // first Personal Assistant section
   await expect(page.getByTestId("q-B2")).toBeVisible({ timeout: 30_000 });
-  // No connect button anywhere in the interview: only a link to Settings -> Connections.
-  await expect(page.getByTestId("brain-wizard").getByRole("button", { name: /connect/i })).toHaveCount(0);
+  // No connect button anywhere in the interview: only a link to Settings -> Connections. T-230 B: the selector was too broad.
+  // /connect/i also matched the mailbox option buttons ("Add pat@example.test  Not connected yet": the badge is a status, not an
+  // action). A connect ACTION is a button named Connect/Reconnect (or "Connect ..."), so match the start of the name.
+  await expect(page.getByTestId("brain-wizard").getByRole("button", { name: /^(re)?connect\b/i })).toHaveCount(0);
+  await expect(page.getByTestId("brain-wizard").getByRole("button", { name: /^Add .*connected/i }).first()).toBeVisible(); // the mailbox options the old selector tripped on
 });
 
 test("a viewer sees no AI brain section", async ({ page }, info) => {

@@ -1,5 +1,9 @@
 import { clsx, type ClassValue } from "clsx";
-import { twMerge } from "tailwind-merge";
+import { extendTailwindMerge } from "tailwind-merge";
+
+// T-230 B: the type scale in styles/theme.css adds font sizes (text-body, text-secondary, text-card-title, text-page-title).
+// Without this, tailwind-merge would take them for text colours and drop one when it meets the other.
+const twMerge = extendTailwindMerge({ extend: { classGroups: { "font-size": [{ text: ["body", "secondary", "card-title", "page-title"] }] } } });
 
 /** shadcn/ui class helper: conditional classes, later Tailwind classes win. */
 export function cn(...inputs: ClassValue[]): string {

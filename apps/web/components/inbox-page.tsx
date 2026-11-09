@@ -47,7 +47,7 @@ async function InboxList({ laneId, searchParams }: { laneId: string; searchParam
             href={f === "all" ? base : `${base}?filter=${f}`}
             aria-current={view.filter === f ? "page" : undefined}
             className={cn(
-              "rounded-full border px-4 py-1.5 text-sm font-medium transition-colors",
+              "rounded-full border px-4 py-1.5 text-body font-medium transition-colors",
               view.filter === f ? "border-primary bg-primary text-primary-foreground" : "border-border bg-card text-foreground hover:bg-muted",
             )}
           >
@@ -77,7 +77,7 @@ async function InboxList({ laneId, searchParams }: { laneId: string; searchParam
       {view.next ? (
         <div className="flex justify-center">
           <Link
-            className="rounded-control border border-border bg-card px-4 py-2 text-sm font-medium hover:bg-muted"
+            className="rounded-control border border-border bg-card px-4 py-2 text-body font-medium hover:bg-muted"
             href={`${base}?${new URLSearchParams({ ...(view.filter === "all" ? {} : { filter: view.filter }), before: view.next.before, bid: view.next.id }).toString()}`}
           >
             Older messages
@@ -97,14 +97,14 @@ function Row({ row, href, when: time }: { row: InboxRow; href: string; when: str
         <span aria-hidden className={cn("mt-2 size-2 shrink-0 rounded-full", row.isRead ? "bg-transparent" : "bg-primary")} />
         <span className="flex min-w-0 flex-1 flex-col gap-0.5">
           <span className="flex items-baseline justify-between gap-3">
-            <span className={cn("truncate text-sm", row.isRead ? "text-foreground" : "font-semibold text-foreground")}>
+            <span className={cn("truncate text-body", row.isRead ? "text-foreground" : "font-semibold text-foreground")}>
               {sender}
               {row.isRead ? null : <span className="sr-only"> (unread)</span>}
             </span>
-            <span className="shrink-0 text-xs tabular-nums text-muted-foreground">{time}</span>
+            <span className="shrink-0 text-secondary tabular-nums text-muted-foreground">{time}</span>
           </span>
           <span className="flex items-center gap-2">
-            <span className={cn("truncate text-sm", row.isRead ? "text-muted-foreground" : "text-foreground")}>{row.subject ?? "(no subject)"}</span>
+            <span className={cn("truncate text-body", row.isRead ? "text-muted-foreground" : "text-foreground")}>{row.subject ?? "(no subject)"}</span>
             {row.isImportant ? (
               <Badge variant="gold" className="shrink-0">
                 Important

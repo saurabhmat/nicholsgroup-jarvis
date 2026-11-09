@@ -6,6 +6,13 @@ describe("cn", () => {
     expect(cn("px-2 text-sm", "px-4")).toBe("text-sm px-4");
   });
 
+  it("knows the type scale: sizes merge with each other, not with colours", () => {
+    expect(cn("text-body text-card-foreground")).toBe("text-body text-card-foreground");
+    expect(cn("text-card-title text-muted-foreground")).toBe("text-card-title text-muted-foreground");
+    expect(cn("text-body", "text-secondary")).toBe("text-secondary");
+    expect(cn("text-sm", "text-page-title")).toBe("text-page-title");
+  });
+
   it("drops falsy values", () => {
     expect(cn("a", false, undefined, null, "b")).toBe("a b");
   });

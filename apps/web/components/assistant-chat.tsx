@@ -162,7 +162,7 @@ export function AssistantChat({ laneId, sources, brainSetup = false }: { laneId:
   return (
     <div className="flex flex-col gap-4" data-testid="assistant-chat">
       <div className="flex items-start justify-between gap-3">
-        <p className="text-sm text-muted-foreground">
+        <p className="text-body text-muted-foreground">
           Reads {sources.join(" and ").toLowerCase()} for this company. It can explain and summarise; it cannot send, reply or change anything.
         </p>
         {(turns.length > 0 || interview) && !busy ? (
@@ -179,7 +179,7 @@ export function AssistantChat({ laneId, sources, brainSetup = false }: { laneId:
                   key={k}
                   type="button"
                   onClick={() => void send(k === "setup" ? "Set up my brain" : "Set up my Personal Assistant")}
-                  className="rounded-full border border-primary bg-primary-tint px-4 py-2 text-sm text-foreground transition-colors hover:bg-muted"
+                  className="rounded-full border border-primary bg-primary-tint px-4 py-2 text-body text-foreground transition-colors hover:bg-muted"
                 >
                   {k === "setup" ? "Set up my brain" : "Set up my Personal Assistant"}
                 </button>
@@ -190,7 +190,7 @@ export function AssistantChat({ laneId, sources, brainSetup = false }: { laneId:
               key={s}
               type="button"
               onClick={() => void send(s)}
-              className="rounded-full border border-border bg-card px-4 py-2 text-sm text-foreground transition-colors hover:bg-muted"
+              className="rounded-full border border-border bg-card px-4 py-2 text-body text-foreground transition-colors hover:bg-muted"
             >
               {s}
             </button>
@@ -201,9 +201,9 @@ export function AssistantChat({ laneId, sources, brainSetup = false }: { laneId:
           {turns.map((t, i) => (
             <li key={i} className={cn("flex", t.role === "user" ? "justify-end" : "justify-start")}>
               {t.role === "user" ? (
-                <div className="max-w-[85%] whitespace-pre-wrap break-words rounded-card bg-primary px-4 py-2 text-sm text-primary-foreground">{t.text}</div>
+                <div className="max-w-[85%] whitespace-pre-wrap break-words rounded-card bg-primary px-4 py-2 text-body text-primary-foreground">{t.text}</div>
               ) : (
-                <div className="flex w-full max-w-[95%] flex-col gap-2 rounded-card border border-border bg-card px-4 py-3 text-sm">
+                <div className="flex w-full max-w-[95%] flex-col gap-2 rounded-card border border-border bg-card px-4 py-3 text-body">
                   {t.pending && !t.text ? (
                     <p className="text-muted-foreground" data-testid="assistant-progress" aria-live="polite">
                       {t.tools?.length ? `${TOOL_LABEL[t.tools[t.tools.length - 1] ?? ""] ?? "Working"}…` : "Thinking…"}
@@ -215,7 +215,7 @@ export function AssistantChat({ laneId, sources, brainSetup = false }: { laneId:
                     </div>
                   ) : null}
                   {t.link ? (
-                    <Link href={t.link.href} prefetch={false} className="inline-flex min-h-11 w-fit items-center rounded-control bg-primary px-4 text-sm font-medium text-primary-foreground">
+                    <Link href={t.link.href} prefetch={false} className="inline-flex min-h-11 w-fit items-center rounded-control bg-primary px-4 text-body font-medium text-primary-foreground">
                       {t.link.label}
                     </Link>
                   ) : null}
@@ -233,7 +233,7 @@ export function AssistantChat({ laneId, sources, brainSetup = false }: { laneId:
                     <ul className="flex flex-wrap gap-1.5" aria-label="Sources">
                       {groupCitations(t.citations).map((c, j) => {
                         const chip = (
-                          <span className="inline-flex max-w-full items-center gap-1.5 rounded-control border border-border bg-background px-2 py-1 text-xs text-muted-foreground">
+                          <span className="inline-flex max-w-full items-center gap-1.5 rounded-control border border-border bg-background px-2 py-1 text-secondary text-muted-foreground">
                             <span className="font-medium text-foreground">{KIND_LABEL[c.kind] ?? c.kind}</span>
                             <span className="max-w-48 truncate">{c.label}</span>
                             {c.more ? null : (
@@ -278,7 +278,7 @@ export function AssistantChat({ laneId, sources, brainSetup = false }: { laneId:
           maxLength={4000}
           enterKeyHint="send"
           placeholder="Ask about your mail or calendar…"
-          className="min-w-0 flex-1 rounded-control border border-border bg-card px-3 py-2 text-base text-foreground placeholder:text-muted-foreground focus:outline-none focus:ring-2 focus:ring-ring sm:text-sm"
+          className="min-w-0 flex-1 rounded-control border border-border bg-card px-3 py-2 text-body text-foreground placeholder:text-muted-foreground focus:outline-none focus:ring-2 focus:ring-ring sm:text-body"
           readOnly={busy}
         />
         {busy ? (

@@ -29,8 +29,8 @@ const DefaultLink: ShellLink = (props) => <a {...props} />;
 export function LaneSwitcher({ lanes, currentLaneId, segment = "", Link = DefaultLink, className, chip = false }: LaneSwitcherProps) {
   const current = lanes.find((l) => l.laneId === currentLaneId);
   const box = chip
-    ? "inline-block max-w-full rounded-full border border-sidebar-switcher-border bg-sidebar-active px-3 py-1.5 text-left text-sm font-semibold text-primary-foreground"
-    : "w-full rounded-control border border-sidebar-switcher-border bg-sidebar-switcher px-3 py-2 text-left text-sm font-medium text-primary-foreground";
+    ? "inline-block max-w-full rounded-full border border-sidebar-switcher-border bg-sidebar-active min-h-11 px-3 py-2.5 text-left text-sm font-semibold text-sidebar-strong"
+    : "w-full rounded-control border border-sidebar-switcher-border bg-sidebar-switcher px-3 py-2 text-left text-sm font-medium text-sidebar-strong";
   if (lanes.length <= 1) {
     return (
       <div data-slot="lane-switcher" className={cn(box, className)}>

@@ -34,8 +34,9 @@ vi.mock("@/lib/composio-availability", () => ({ availability: () => ({}), missin
 vi.mock("@/lib/composio-connection", () => ({ composioSectionFor: (g: unknown) => loader("composio", () => m.composio)(g) }));
 vi.mock("@/lib/origin-notice-server", () => ({ currentOriginNotice: async () => m.origin }));
 vi.mock("@/lib/onboarding-progress", () => ({ onboardingFor: () => loader("brain", () => m.brain)() }));
-vi.mock("./google-connection-section", () => ({ GoogleConnectionSection: () => <div data-testid="google-section" /> }));
-vi.mock("./composio-connection-section", () => ({ ComposioConnectionSection: () => <div data-testid="composio-section" /> }));
+vi.mock("./connections-section", () => ({
+  ConnectionsSection: ({ google, composio }: { google: unknown; composio: unknown }) => <div data-testid="connections-section" data-google={String(Boolean(google))} data-composio={String(Boolean(composio))} />,
+}));
 vi.mock("./connection-test-section", () => ({ ConnectionTestSection: () => <div data-testid="test-section" /> }));
 // The shared module page is async (a server component); here only whether it is asked to draw the placeholder matters.
 vi.mock("./module-page", () => ({ ModulePage: ({ placeholder }: { placeholder?: boolean }) => <div data-testid="module-page" data-placeholder={String(placeholder)} /> }));
@@ -126,6 +127,39 @@ describe("Settings page sections", () => {
     m.origin = { currentHost: "preview.example.test", appHost: "portal.example.test", appUrl: "https://portal.example.test" };
     await draw();
     expect(screen.queryByTestId("origin-notice")).toBeNull();
+  });
+});
+
+describe("layout (T-230 B)", () => {
+  const navLabels = () => within(screen.getByTestId("settings-nav")).getAllByRole("link").map((a) => `${a.textContent ?? ""}|${a.getAttribute("href") ?? ""}`);
+
+  it("two columns: a sub-nav with anchors to exactly the sections drawn", async () => {
+    m.google = { connections: [] };
+    m.composio = { toolkits: [] };
+    m.brain = view(2);
+    m.test = true;
+    await draw();
+    expect(navLabels()).toEqual(["Connections|#connections", "AI brain|#ai-brain", "Developer tools|#developer-tools"]);
+    // one Connections section carries both providers
+    const c = screen.getByTestId("connections-section");
+    expect(c.getAttribute("data-google")).toBe("true");
+    expect(c.getAttribute("data-composio")).toBe("true");
+    expect(screen.getAllByTestId("connections-section")).toHaveLength(1);
+    expect(screen.getByTestId("settings-nav").parentElement?.className).toMatch(/lg:grid-cols-\[200px_minmax\(0,1fr\)\]/);
+  });
+
+  it("the nav follows the visibility rules: a viewer with nothing gets no nav and no sections", async () => {
+    await draw();
+    expect(screen.queryByTestId("settings-nav")).toBeNull();
+    expect(screen.queryByTestId("connections-section")).toBeNull();
+  });
+
+  it("only Composio visible: Connections is still one entry; no Developer tools entry without the test", async () => {
+    m.composio = { toolkits: [] };
+    await draw();
+    expect(navLabels()).toEqual(["Connections|#connections"]);
+    expect(screen.getByTestId("connections-section").getAttribute("data-google")).toBe("false");
+    expect(screen.queryByTestId("test-section")).toBeNull();
   });
 });
 

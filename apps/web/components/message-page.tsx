@@ -34,12 +34,12 @@ export async function MessagePage({ params }: { params: Promise<{ laneId: string
   const m = view.meta;
   return (
     <div className="flex flex-col gap-6">
-      <Link href={laneHref(lane.laneId, "inbox")} className="text-sm font-medium text-primary hover:underline">
+      <Link href={laneHref(lane.laneId, "inbox")} className="text-body font-medium text-primary hover:underline">
         ← Inbox
       </Link>
       <PageHeader eyebrow={lane.name} title={m.subject ?? "(no subject)"} />
       <article className="flex flex-col gap-4 rounded-card border border-border bg-card p-5 sm:p-6">
-        <dl className="grid grid-cols-[max-content_1fr] gap-x-4 gap-y-1 text-sm">
+        <dl className="grid grid-cols-[max-content_1fr] gap-x-4 gap-y-1 text-body">
           <dt className="text-muted-foreground">From</dt>
           <dd className="min-w-0 break-words">{m.fromName ? `${m.fromName} <${m.fromAddress ?? ""}>` : (m.fromAddress ?? "(unknown sender)")}</dd>
           {m.to.length > 0 ? (
@@ -58,17 +58,17 @@ export async function MessagePage({ params }: { params: Promise<{ laneId: string
           <dd>{WHEN.format(new Date(m.receivedAt))} ET</dd>
         </dl>
         {m.sourceUrl ? (
-          <a href={m.sourceUrl} target="_blank" rel="noopener noreferrer" className="self-start text-sm font-medium text-primary hover:underline">
+          <a href={m.sourceUrl} target="_blank" rel="noopener noreferrer" className="self-start text-body font-medium text-primary hover:underline">
             Open in Gmail
           </a>
         ) : null}
         <hr className="border-border" />
         {view.state === "ok" ? (
           <>
-            <pre data-testid="message-body" className="whitespace-pre-wrap break-words font-sans text-sm leading-relaxed text-foreground">
+            <pre data-testid="message-body" className="whitespace-pre-wrap break-words font-sans text-body leading-relaxed text-foreground">
               {view.text}
             </pre>
-            {view.truncated ? <p className="text-xs text-muted-foreground">This message is long; open it in Gmail to read the rest.</p> : null}
+            {view.truncated ? <p className="text-secondary text-muted-foreground">This message is long; open it in Gmail to read the rest.</p> : null}
           </>
         ) : (
           <Alert variant="alert">

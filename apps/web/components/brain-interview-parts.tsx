@@ -7,7 +7,7 @@ import type { InterviewState, Proposal } from "@nichols/brain/server";
 import type { FormValues } from "@/lib/brain-interview-client";
 
 export const control =
-  "min-h-11 w-full min-w-0 rounded-control border border-border bg-card px-3 py-2 text-base text-foreground placeholder:text-muted-foreground focus:outline-none focus:ring-2 focus:ring-ring sm:text-sm";
+  "min-h-11 w-full min-w-0 rounded-control border border-border bg-card px-3 py-2 text-body text-foreground placeholder:text-muted-foreground focus:outline-none focus:ring-2 focus:ring-ring sm:text-body";
 export const tap = "min-h-11 w-full sm:w-auto";
 
 const NOTE_LABEL = { connected: "Connected", not_connected: "Not connected yet", unknown: "Connection unknown" } as const;
@@ -22,7 +22,7 @@ export const ACTION_TEXT: Record<string, string> = { "email.save_draft": "save a
 export function Field({ f, q, value, set, values, state }: { f: FieldView; q: QuestionView; value: unknown; set: (v: unknown) => void; values: FormValues; state: InterviewState }) {
   const id = `iv-${q.id}-${f.key}`;
   const label = (
-    <label htmlFor={id} className="text-sm font-medium text-foreground">
+    <label htmlFor={id} className="text-body font-medium text-foreground">
       {f.label}
     </label>
   );
@@ -58,7 +58,7 @@ export function Field({ f, q, value, set, values, state }: { f: FieldView; q: Qu
       );
     case "boolean":
       return (
-        <label htmlFor={id} className="flex min-h-11 items-center gap-3 text-sm text-foreground">
+        <label htmlFor={id} className="flex min-h-11 items-center gap-3 text-body text-foreground">
           <input id={id} type="checkbox" className="size-5" checked={value === true} onChange={(e) => set(e.target.checked)} />
           {f.label}
         </label>
@@ -81,15 +81,15 @@ export function Field({ f, q, value, set, values, state }: { f: FieldView; q: Qu
       if (q.id === "B7" && f.key === "kpis" && values[q.id]?.show !== "pick") return null;
       const chosen = new Set(Array.isArray(value) ? (value as string[]) : []);
       const options = f.options ?? [];
-      if (options.length === 0) return <p className="text-sm text-muted-foreground">{f.label}: nothing to pick for this company.</p>;
+      if (options.length === 0) return <p className="text-body text-muted-foreground">{f.label}: nothing to pick for this company.</p>;
       return (
         <fieldset className="flex flex-col gap-1">
-          <legend className="text-sm font-medium text-foreground">{f.label}</legend>
+          <legend className="text-body font-medium text-foreground">{f.label}</legend>
           <div className="flex flex-wrap gap-2">
             {options.map((o) => {
               const on = chosen.has(o.value);
               return (
-                <label key={o.value} className={cn("inline-flex min-h-11 cursor-pointer items-center gap-2 rounded-control border px-3 text-sm", on ? "border-primary bg-primary-tint text-foreground" : "border-border bg-card text-muted-foreground")}>
+                <label key={o.value} className={cn("inline-flex min-h-11 cursor-pointer items-center gap-2 rounded-control border px-3 text-body", on ? "border-primary bg-primary-tint text-foreground" : "border-border bg-card text-muted-foreground")}>
                   <input
                     type="checkbox"
                     className="size-4"
@@ -121,7 +121,7 @@ export function Field({ f, q, value, set, values, state }: { f: FieldView; q: Qu
       const byValue = new Map(options.map((o) => [o.value, o]));
       return (
         <div className="flex flex-col gap-2">
-          <p className="text-sm font-medium text-foreground">{f.label}</p>
+          <p className="text-body font-medium text-foreground">{f.label}</p>
           {options.length === 0 ? (
             <Alert>
               <AlertDescription>
@@ -137,7 +137,7 @@ export function Field({ f, q, value, set, values, state }: { f: FieldView; q: Qu
             {picked.map((v, i) => {
               const o = byValue.get(v);
               return (
-                <li key={v} className="flex flex-wrap items-center gap-2 rounded-control border border-border bg-card px-3 py-2 text-sm">
+                <li key={v} className="flex flex-wrap items-center gap-2 rounded-control border border-border bg-card px-3 py-2 text-body">
                   <span className="font-medium">{i + 1}.</span>
                   <span className="min-w-0 flex-1 break-all">{o?.label ?? v}</span>
                   {o?.note ? <Badge variant={o.note === "connected" ? "success" : "muted"}>{NOTE_LABEL[o.note]}</Badge> : null}
@@ -158,7 +158,7 @@ export function Field({ f, q, value, set, values, state }: { f: FieldView; q: Qu
             {options
               .filter((o) => !picked.includes(o.value))
               .map((o) => (
-                <button key={o.value} type="button" onClick={() => set([...picked, o.value])} className="flex min-h-11 flex-wrap items-center gap-2 rounded-control border border-dashed border-border px-3 py-2 text-left text-sm text-foreground hover:bg-muted">
+                <button key={o.value} type="button" onClick={() => set([...picked, o.value])} className="flex min-h-11 flex-wrap items-center gap-2 rounded-control border border-dashed border-border px-3 py-2 text-left text-body text-foreground hover:bg-muted">
                   <span className="min-w-0 flex-1 break-all">Add {o.label}</span>
                   {o.note ? <Badge variant={o.note === "connected" ? "success" : "muted"}>{NOTE_LABEL[o.note]}</Badge> : null}
                 </button>
@@ -171,13 +171,13 @@ export function Field({ f, q, value, set, values, state }: { f: FieldView; q: Qu
       const b2 = values.B2?.mailboxes;
       const picked = Array.isArray(b2) ? (b2 as string[]) : [];
       const map = (typeof value === "object" && value !== null ? value : {}) as Record<string, string>;
-      if (picked.length === 0) return <p className="text-sm text-muted-foreground">Pick a mailbox above first, then say what counts as important in it.</p>;
+      if (picked.length === 0) return <p className="text-body text-muted-foreground">Pick a mailbox above first, then say what counts as important in it.</p>;
       const byValue = new Map((state.groups.flatMap((g) => g.questions).find((x) => x.id === "B2")?.fields[0]?.options ?? []).map((o) => [o.value, o.label]));
       return (
         <div className="flex flex-col gap-3">
           {picked.map((v) => (
             <div key={v} className="flex flex-col gap-1">
-              <label htmlFor={`${id}-${v}`} className="text-sm font-medium text-foreground break-all">
+              <label htmlFor={`${id}-${v}`} className="text-body font-medium text-foreground break-all">
                 {byValue.get(v) ?? v}
               </label>
               <textarea id={`${id}-${v}`} className={cn(control, "min-h-20")} rows={2} maxLength={2000} value={map[v] ?? ""} onChange={(e) => set({ ...map, [v]: e.target.value })} />
@@ -194,7 +194,7 @@ export function DiffCard({ proposal }: { proposal: Pick<Proposal, "changes"> }) 
     <div className="flex flex-col gap-3" data-testid="interview-diff">
       {proposal.changes.map((c, i) => (
         <div key={i} className="flex flex-col gap-2 rounded-card border border-border bg-background p-3">
-          <p className="text-sm font-medium text-foreground">
+          <p className="text-body font-medium text-foreground">
             {c.kind === "document" ? `${c.path} (${c.lane})` : `${c.name}, Personal Assistant profile (${c.lane}), stays ${c.status}`}
           </p>
           {c.kind === "employee" && c.resetsInvalid ? (
@@ -203,7 +203,7 @@ export function DiffCard({ proposal }: { proposal: Pick<Proposal, "changes"> }) 
               <AlertDescription>Saving replaces its settings with the ones below, starting from the defaults. Check them before you save.</AlertDescription>
             </Alert>
           ) : null}
-          <pre className="max-w-full overflow-x-auto whitespace-pre-wrap break-words rounded-control bg-card p-2 text-xs leading-relaxed">
+          <pre className="max-w-full overflow-x-auto whitespace-pre-wrap break-words rounded-control bg-card p-2 text-secondary leading-relaxed">
             {c.diff.map((l, j) => (
               <span key={j} className={cn("block", l.type === "add" && "bg-success-surface text-foreground", l.type === "del" && "bg-alert-surface text-alert-foreground line-through")}>
                 {l.type === "add" ? "+ " : l.type === "del" ? "- " : "  "}
@@ -212,7 +212,7 @@ export function DiffCard({ proposal }: { proposal: Pick<Proposal, "changes"> }) 
             ))}
           </pre>
           {c.kind === "employee" && c.settings.length > 0 ? (
-            <ul className="flex flex-col gap-1 text-xs text-muted-foreground" aria-label="Settings that change">
+            <ul className="flex flex-col gap-1 text-secondary text-muted-foreground" aria-label="Settings that change">
               {c.settings.map((s) => (
                 <li key={s.path} className="break-words">
                   <span className="font-medium text-foreground">{s.path}</span>: {s.before} → {s.after}
@@ -248,7 +248,7 @@ export function GroupNotices({ group, state }: { group: GroupView; state: Interv
         </Alert>
       ) : null}
       {group.questions.some((q) => q.id === "A5") && state.sources.length > 1 ? (
-        <p className="text-xs text-muted-foreground" data-testid="interview-other-companies">
+        <p className="text-secondary text-muted-foreground" data-testid="interview-other-companies">
           This covers {state.sources.find((s) => s.laneId === state.currentLane)?.laneName ?? "this company"} only. Open the assistant in each other company to answer these for it too.
         </p>
       ) : null}
@@ -274,14 +274,14 @@ export function QuestionBlock({
 }) {
   if (q.status === "skipped")
     return (
-      <p className="text-sm text-muted-foreground" data-testid={`q-${q.id}-skipped`}>
+      <p className="text-body text-muted-foreground" data-testid={`q-${q.id}-skipped`}>
         Skipped: {q.prompt}{" "}
         {q.skipReason === "no_finance" ? "(no finance view in this company)" : q.skipReason === "no_web" ? "(outside news is not allowed here)" : q.skipReason === "no_drafts" ? "(reply drafts are not allowed here)" : ""}
       </p>
     );
   if (q.status === "known" && !editing.has(q.id))
     return (
-      <div className="flex flex-wrap items-center gap-2 rounded-control border border-border bg-background p-3 text-sm" data-testid={`q-${q.id}-known`}>
+      <div className="flex flex-wrap items-center gap-2 rounded-control border border-border bg-background p-3 text-body" data-testid={`q-${q.id}-known`}>
         <span className="min-w-0 flex-1 break-words">
           <span className="block font-medium text-foreground">{q.prompt}</span>
           <span className="text-muted-foreground">Already set: {q.known}</span>
@@ -293,8 +293,8 @@ export function QuestionBlock({
     );
   return (
     <div className="flex flex-col gap-3" data-testid={`q-${q.id}`}>
-      <p className="text-sm font-medium text-foreground">{q.prompt}</p>
-      {q.hint ? <p className="text-xs text-muted-foreground">{q.hint}</p> : null}
+      <p className="text-body font-medium text-foreground">{q.prompt}</p>
+      {q.hint ? <p className="text-secondary text-muted-foreground">{q.hint}</p> : null}
       {q.fields.map((f) => (
         <Field key={f.key} f={f} q={q} state={state} values={values} value={values[q.id]?.[f.key]} set={(v) => onChange(q.id, f.key, v)} />
       ))}

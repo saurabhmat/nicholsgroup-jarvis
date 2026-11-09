@@ -73,9 +73,9 @@ export function AppShell({ brand, lanes, currentLaneId, pathname, approvalsCount
       </a>
 
       {/* Desktop side menu */}
-      <aside data-slot="side-menu" className="hidden w-64 shrink-0 flex-col gap-4 bg-sidebar p-4 text-sidebar-foreground md:flex">
+      <aside data-slot="side-menu" className="hidden w-60 shrink-0 flex-col gap-4 bg-sidebar p-4 text-sidebar-foreground md:flex">
         <div>
-          <p className="flex items-center gap-2 font-heading text-xl font-semibold text-primary-foreground">
+          <p className="flex items-center gap-2 font-heading text-xl font-semibold text-sidebar-strong">
             {brand.wordmark}
             <Star />
           </p>
@@ -93,7 +93,7 @@ export function AppShell({ brand, lanes, currentLaneId, pathname, approvalsCount
                 aria-current={selected ? "page" : undefined}
                 className={cn(
                   "flex items-center gap-2 rounded-control border-l-[3px] px-3 py-2 text-sm hover:bg-sidebar-switcher",
-                  selected ? "border-sidebar-active-edge bg-sidebar-active font-semibold text-primary-foreground" : "border-transparent",
+                  selected ? "border-sidebar-active-edge bg-sidebar-active font-semibold text-sidebar-strong" : "border-transparent",
                 )}
               >
                 {entry ? entry.label : item.label}
@@ -123,7 +123,7 @@ export function AppShell({ brand, lanes, currentLaneId, pathname, approvalsCount
       <header data-slot="mobile-header" className="flex flex-col gap-3 bg-sidebar px-4 pb-4 pt-3 text-sidebar-foreground md:hidden">
         <LaneSwitcher lanes={lanes} currentLaneId={currentLaneId} segment={segment} Link={Link} chip />
         {/* Visual title only: the page's own h1 stays in the accessibility tree. */}
-        <p aria-hidden="true" data-slot="mobile-title" className="font-heading text-2xl font-semibold text-primary-foreground">
+        <p aria-hidden="true" data-slot="mobile-title" className="font-heading text-2xl font-semibold text-sidebar-strong">
           {heading.lead}
           {heading.accent ? (
             <>
@@ -134,7 +134,7 @@ export function AppShell({ brand, lanes, currentLaneId, pathname, approvalsCount
         </p>
       </header>
 
-      <main id="content" className="mx-auto w-full max-w-content flex-1 p-4 pb-24 md:p-8 md:pb-8">
+      <main id="content" className="w-full min-w-0 max-w-content flex-1 p-4 pb-24 md:px-8 md:py-8">
         {children}
       </main>
 
@@ -152,7 +152,7 @@ export function AppShell({ brand, lanes, currentLaneId, pathname, approvalsCount
               href={laneHref(currentLaneId, tab.segment)}
               aria-current={selected ? "page" : undefined}
               className={cn(
-                "relative flex flex-1 flex-col items-center justify-center gap-0.5 border-t-[3px] py-2 text-xs",
+                "relative flex min-h-11 flex-1 flex-col items-center justify-center gap-0.5 border-t-[3px] py-2 text-xs",
                 selected ? "border-gold font-semibold text-primary" : "border-transparent text-muted-foreground",
               )}
             >

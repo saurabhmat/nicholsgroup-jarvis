@@ -40,9 +40,9 @@ test("owner: connect form, connected state and reconnect banner", async ({ page 
 
   // Not connected: the Connect button posts to the existing start route for this lane; no Disconnect anywhere.
   await page.goto("/PKG/settings");
-  const section = page.getByRole("region", { name: "Google" });
+  const section = page.getByRole("region", { name: "Connections" });
   await expect(section.getByText(/not how anyone signs in/i)).toBeVisible({ timeout: 30_000 });
-  const form = section.locator("form");
+  const form = section.getByTestId("google-not-connected").locator("form"); // T-230 B: Connections is one list; Google has its own row
   await expect(form).toHaveAttribute("action", "/api/connect/google/start?lane=PKG");
   await expect(form).toHaveAttribute("method", /post/i);
   await expect(section.getByRole("button", { name: "Connect Google" })).toBeVisible();
@@ -83,7 +83,7 @@ test("a role that may not connect sees no Google controls and no connection deta
   await signIn(page, email);
   await page.goto("/PKG/settings");
   await expect(page.getByRole("heading", { name: "Settings", level: 1 })).toBeAttached({ timeout: 30_000 });
-  await expect(page.getByRole("region", { name: "Google" })).toHaveCount(0);
+  await expect(page.getByRole("region", { name: "Connections" })).toHaveCount(0);
   await expect(page.getByRole("button", { name: /google/i })).toHaveCount(0);
   const body = page.locator("body");
   await expect(body).not.toContainText("ops@example.test");
@@ -96,7 +96,7 @@ test("admin_technical sees the Google section", async ({ page }, info) => {
   seedConnected();
   await signIn(page, personas(info).secondMember);
   await page.goto("/PKG/settings");
-  const section = page.getByRole("region", { name: "Google" });
+  const section = page.getByRole("region", { name: "Connections" });
   await expect(section.getByTestId("google-connection")).toContainText("ops@example.test", { timeout: 30_000 });
   await expect(section.getByRole("button", { name: "Connect another Google account" })).toBeVisible();
 });

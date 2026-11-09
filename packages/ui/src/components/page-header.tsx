@@ -21,8 +21,8 @@ export function PageHeader({ eyebrow, title, accent, actions, className }: PageH
   return (
     <header data-slot="page-header" className={cn("flex flex-wrap items-end justify-between gap-4", className)}>
       <div className="min-w-0">
-        {eyebrow ? <p data-slot="page-eyebrow" className="text-sm text-muted-foreground">{eyebrow}</p> : null}
-        <h1 className="sr-only font-heading text-3xl font-semibold text-foreground md:not-sr-only">
+        {eyebrow ? <p data-slot="page-eyebrow" className="text-secondary text-muted-foreground">{eyebrow}</p> : null}
+        <h1 className="sr-only font-heading text-page-title font-semibold text-foreground md:not-sr-only">
           {title}
           {accent ? (
             <>

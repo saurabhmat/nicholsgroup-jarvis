@@ -23,7 +23,7 @@ async function More({ params }: { params: Promise<{ laneId: string }> }) {
           const item = navItem(key);
           return (
             <li key={key}>
-              <Link className="block px-4 py-3 text-sm" href={laneHref(lane.laneId, item.segment)}>
+              <Link className="block px-4 py-3 text-body" href={laneHref(lane.laneId, item.segment)}>
                 {item.label}
               </Link>
             </li>

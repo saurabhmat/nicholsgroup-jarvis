@@ -19,8 +19,8 @@ export function EmptyState({ title, description, action, className }: EmptyState
         className,
       )}
     >
-      <p className="font-heading text-lg font-semibold text-foreground">{title}</p>
-      {description ? <p className="max-w-prose text-sm text-muted-foreground">{description}</p> : null}
+      <p className="font-heading text-card-title font-semibold text-foreground">{title}</p>
+      {description ? <p className="max-w-prose text-body text-muted-foreground">{description}</p> : null}
       {action ? <div className="mt-2">{action}</div> : null}
     </div>
   );
