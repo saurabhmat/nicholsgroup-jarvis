@@ -9,7 +9,7 @@ const textArray = (items) => (items.length === 0 ? "array[]::text[]" : `array[${
 /** Non-default policy values per lane code; lanes not listed get the column defaults (everything off, 30 days). */
 const POLICIES = {
   PKG: {
-    llm: ["email", "calendar", "docs", "finance", "tasks"],
+    llm: ["email", "calendar", "docs", "finance", "tasks", "brain_import"],
     storeOutboundDrafts: true,
     retentionDays: 90,
     crossLane: "summary",

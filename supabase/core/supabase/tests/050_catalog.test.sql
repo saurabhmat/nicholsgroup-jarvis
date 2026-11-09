@@ -90,6 +90,7 @@ insert into security_definer_ok values
   ('brain.skill_save', 'skill writer: aal2 + owner role + own skills only, optimistic version, secret scan (T-210)'),
   ('brain.import_decide', 'import review: aal2 + owner role + own open import only; finish deletes the candidates (T-210)'),
   ('brain.section_complete', 'setup-interview completion writer: aal2 + owner role + own rows only (auth.uid()), known section ids, idempotent (T-227)'),
+  ('brain.import_create', 'import writer: aal2 + owner role + own rows only (auth.uid()), extraction sources, 1-100 candidates, 20 imports/hour, four interview pages, lanes the caller may open, NL candidates keep no quote (T-220)'),
   ('core.brain_import_purge', 'retention: deletes a lane''s import candidates older than 23 h and closes stale imports; service_role only, lane-checked (T-210)');
 
 -- App functions authenticated may execute (callable through the API). Each one is reviewed.
@@ -134,6 +135,9 @@ insert into authenticated_exec_ok values
   ('core.brain_skill_save', 'brain: wrapper over brain.skill_save; invoker (T-210)'),
   ('core.brain_import_decide', 'brain: wrapper over brain.import_decide; invoker (T-210)'),
   ('brain.section_complete', 'setup-interview completion writer; checks aal2, owner role and ownership itself (T-227)'),
+  ('brain.import_create', 'import writer; checks aal2, owner role and ownership itself (T-220)'),
+  ('core.brain_import_create', 'brain: wrapper over brain.import_create; invoker (T-220)'),
+  ('core.brain_import_candidates', 'brain: the caller''s candidates of one open import; invoker, RLS applies (T-220)'),
   ('core.brain_section_completions', 'brain: the caller''s completed setup sections; invoker, RLS applies (T-227)'),
   ('core.brain_section_complete', 'brain: wrapper over brain.section_complete; invoker (T-227)');
 
