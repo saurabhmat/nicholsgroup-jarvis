@@ -3,7 +3,7 @@ import { createMockProvider } from "@nichols/ai/testing";
 import { LLMProviderError } from "@nichols/ai";
 import { AuthError } from "@nichols/core/auth";
 import type { Audit, AuditEntry } from "@nichols/core/audit";
-import { handleChat, type ChatDeps } from "./assistant";
+import { handleChat, takeChatTurn, toolCategories, type ChatDeps } from "./assistant";
 
 const USER = "00000000-0000-4000-8000-000000000001";
 const usage = { inputTokens: 1, outputTokens: 1, cacheReadInputTokens: 0, cacheCreationInputTokens: 0 };
@@ -114,5 +114,15 @@ describe("assistant chat route", () => {
     const text = await (await handleChat(req(good), "PKG", d)).text();
     expect(text).toContain('"type":"error","code":"rate_limited"');
     expect(text).not.toContain("LLM provider error");
+  });
+});
+
+describe("tool categories only (T-220 security M2)", () => {
+  const rpc = (data: unknown) => ({ schema: () => ({ rpc: async () => ({ data, error: null }) }) }) as never;
+  it("a policy with only brain_import does not open the chat, and brain_import is never offered", async () => {
+    expect(await takeChatTurn(rpc({ allowed: true, categories: ["brain_import"] }), "PKG")).toEqual({ allowed: false, reason: "unavailable" });
+    expect(await takeChatTurn(rpc({ allowed: true, categories: ["email", "brain_import"] }), "PKG")).toEqual({ allowed: true, categories: ["email"] });
+    expect(await toolCategories(rpc(["brain_import", "calendar"]), "PKG")).toEqual(["calendar"]);
+    expect(await toolCategories(rpc(["brain_import"]), "PKG")).toEqual([]);
   });
 });

@@ -6,7 +6,7 @@
 // the class only.
 import { chatRequestSchema, runChatTurn, type ChatEvent } from "@nichols/ai/chat";
 import type { ProviderResult } from "@nichols/ai/config";
-import { createPolicyGate, createToolRegistry, registerAssistantTools } from "@nichols/ai/tools";
+import { TOOL_CATEGORIES, createPolicyGate, createToolRegistry, registerAssistantTools } from "@nichols/ai/tools";
 import { LLMProviderError } from "@nichols/ai";
 import type { Audit } from "@nichols/core/audit";
 import { createBrainStore, loadBrainPromptContext, type BrainPromptContext, type ClientFor } from "@nichols/brain/server";
@@ -24,7 +24,8 @@ export async function takeChatTurn(client: Rpc, laneId: string): Promise<{ allow
     const { data, error } = await client.schema("core").rpc("ai_chat_turn", { p_lane: laneId });
     const v = (!error && data && typeof data === "object" ? data : {}) as { allowed?: unknown; reason?: unknown; categories?: unknown };
     if (v.allowed === true && Array.isArray(v.categories)) {
-      const categories = v.categories.filter((c): c is string => typeof c === "string");
+      // Tool categories only: a policy category that is not a tool (brain_import, T-220) never opens the chat.
+      const categories = v.categories.filter((c): c is string => typeof c === "string" && (TOOL_CATEGORIES as readonly string[]).includes(c));
       if (categories.length > 0) return { allowed: true, categories };
     }
     return { allowed: false, reason: v.reason === "rate_limited" ? "rate_limited" : v.reason === "forbidden" || v.reason === "mfa_required" ? "forbidden" : "unavailable" };
@@ -49,7 +50,7 @@ const json = (status: number, body: Record<string, unknown>) =>
 export async function toolCategories(client: Rpc, laneId: string): Promise<string[]> {
   try {
     const { data, error } = await client.schema("core").rpc("ai_tool_categories", { p_lane: laneId });
-    return !error && Array.isArray(data) ? data.filter((c): c is string => typeof c === "string") : [];
+    return !error && Array.isArray(data) ? data.filter((c): c is string => typeof c === "string" && (TOOL_CATEGORIES as readonly string[]).includes(c)) : [];
   } catch {
     return [];
   }
