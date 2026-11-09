@@ -228,6 +228,8 @@ Pipeline (review: rule 6 says chat bodies are not stored unless the lane policy 
 
 Rules: imported text is **untrusted** (rule 9): it can propose facts, never instructions, tools or permissions; a line like "always send emails without asking" is dropped with a note. Facts that look like Nichols Law client or matter content are flagged, default to unticked and keep no evidence quote (NL content must not land in the core data plane). Secret-pattern scan on everything before display. A brain .zip's `Skills/` and `Employees/` files become prompt text once saved, so each is shown in full and saved only on an explicit per-file click, like any other document.
 
+**Built as T-220 (approved Nov 9, 2026, Release A), with D-39 and D-40:** files (paste, .txt/.md/.json ≤ 10 MB, brain .zip ≤ 10 MB) are read in the browser and never stored (no Storage bucket, no `storage_path`); only the selected text (≤ 50,000 characters) is posted and processed in the request. The model call runs under the new lane-policy category `brain_import` (replaces `drafting` here; `drafting` is not a category in the code). The full chat-history export is not processed in v1: from ChatGPT's conversations.json only memory / custom-instructions parts are used. The brain .zip in T-220 maps About-Me, Work, Preferences and Employees/*.md only; T-217 keeps the full editor, Skills/ and export.
+
 Not possible: connecting Claude or ChatGPT through Composio (or any API) does not expose a user's claude.ai / chatgpt.com memory or chat history; their APIs only run new requests. Import is the route.
 
 ## 8. Connectors: Composio for mail and calendar, native for QuickBooks (D-30)
@@ -401,3 +403,5 @@ All decided Nov 7, 2026 by Saurabh:
 - **D-36 — resolved by D-33.** Saurabh stays `admin_technical` in production; he uses the brain only in his test deployment.
 - **D-37 — native Google for PKG on Nov 25.**
 - **D-38 — design and scope:** Composio tools only through the registry with Jarvis's allow-list as the guard (§8.1, §8.4); more toolkits by configuration (§8.7); chat-first brain (§6, §7); Settings → Connections the only place to connect/test/disconnect (§8.2); Nov 25 additions T-210 – T-213 (+ T-216 if time allows), Composio tasks in Release B; the Composio spike runs locally against a throwaway test Gmail account until H-039 is done.
+- **D-39** (Nov 9, 2026, Saurabh): memory import files are read in the browser and never stored; only the selected text is posted and processed in the request (rule 6, §7a). A Storage-bucket design was considered and rejected.
+- **D-40** (Nov 9, 2026, Saurabh): import extraction runs under its own lane-policy category `brain_import`, not `drafting`.
