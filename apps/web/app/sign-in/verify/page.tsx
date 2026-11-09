@@ -53,7 +53,7 @@ async function VerifyForm({ searchParams }: PageProps<"/sign-in/verify">) {
               />
             </div>
             <Button type="submit">Sign in</Button>
-            <Link href="/sign-in" className="text-center text-sm text-muted-foreground underline-offset-4 hover:underline">
+            <Link href="/sign-in" className="text-center text-small text-muted-foreground underline-offset-4 hover:underline">
               Use a different email or get a new code
             </Link>
           </form>

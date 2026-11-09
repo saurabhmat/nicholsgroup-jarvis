@@ -99,6 +99,23 @@ describe("BrainInterview mode wizard", () => {
     expect(calls.map((c) => c.action)).toEqual(["state"]);
   });
 
+  it("T-230 B: two-column intro and the 280px rail start at xl (1280px), so the panel is never squeezed next to the menu; Start and Import are primary", async () => {
+    fakeApi();
+    render(<BrainInterview laneId="TST" mode="wizard" />);
+    const intro = await screen.findByTestId("wizard-intro");
+    const columns = screen.getByTestId("wizard-learns").parentElement;
+    expect(columns?.className).toContain("xl:grid-cols-2");
+    expect(columns?.className).not.toMatch(/\b(?:md|lg):grid-cols-2\b/);
+    expect(within(intro).getByRole("button", { name: "Start" }).className).toContain("bg-primary");
+    expect(within(intro).getByRole("link", { name: "Import" }).className).toContain("bg-primary");
+    fireEvent.click(within(intro).getByRole("button", { name: "Start" }));
+    const rail = await screen.findByTestId("wizard-rail");
+    expect(rail.className).toContain("hidden xl:block");
+    expect(rail.parentElement?.className).toContain("xl:grid-cols-[280px_minmax(0,1fr)]");
+    expect(rail.parentElement?.className).not.toMatch(/\b(?:md|lg):grid-cols-/);
+    expect(screen.getByTestId("wizard-step-label").className).toContain("xl:hidden");
+  });
+
   it("shows the rail with all 10 sections (current marked), a progress bar, 'Step 1 of 10' and the bank's prompts", async () => {
     fakeApi();
     render(<BrainInterview laneId="TST" mode="wizard" />);

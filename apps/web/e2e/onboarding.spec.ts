@@ -176,6 +176,34 @@ test("owner, iPhone width: More row, Home banner, Step N of 10 and a sticky Save
   await expectNoAxeViolations(page);
 });
 
+// T-230 B review: Home and Settings (the two restyled pages) at 390 px: no horizontal scroll, 44 px buttons and sub-nav
+// chips, and no axe violations in light or dark.
+test("owner, iPhone width: Home and Settings have no horizontal scroll, 44 px targets and pass axe in both themes", async ({ page }, info) => {
+  test.skip(info.project.name !== "desktop", "owner persona is the desktop project's member");
+  test.setTimeout(240_000);
+  await page.setViewportSize({ width: 390, height: 844 });
+  await signIn(page, personas(info).member);
+  const smallTargets = () =>
+    page.evaluate(() =>
+      [...document.querySelectorAll<HTMLElement>("main button, [data-testid=settings-nav] a")]
+        .filter((el) => el.offsetParent !== null)
+        .filter((el) => el.getBoundingClientRect().height < 44)
+        .map((el) => el.textContent?.trim() ?? el.tagName),
+    );
+
+  for (const route of ["/PKG", "/PKG/settings"]) {
+    await page.goto(route);
+    await expect(page.getByTestId("page-skeleton")).toHaveCount(0);
+    if (route.endsWith("settings")) await expect(page.getByTestId("settings-nav")).toBeVisible();
+    expect(await noHorizontalScroll(page), route).toBe(true);
+    expect(await smallTargets(), route).toEqual([]);
+    for (const theme of ["light", "dark"] as const) {
+      await setTheme(page, theme);
+      await expectNoAxeViolations(page);
+    }
+  }
+});
+
 test("owner: Settings has no placeholder, a status list for AI brain, Composio setting names, the fixed error banner and the origin notice", async ({ page }, info) => {
   test.skip(info.project.name !== "desktop", "owner persona is the desktop project's member");
   test.setTimeout(240_000);

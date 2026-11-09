@@ -164,7 +164,7 @@ export function BrainWizard({ laneId, initialStep, hadStep }: { laneId: string; 
     <section aria-label="Guided setup" className="flex flex-col gap-4" data-testid="brain-wizard" data-stage={stageKey}>
       {stage.kind !== "intro" ? (
         <div className="flex flex-col gap-2">
-          <p className="text-body font-medium text-foreground md:hidden" data-testid="wizard-step-label">
+          <p className="text-body font-medium text-foreground xl:hidden" data-testid="wizard-step-label">
             {stage.kind === "group" ? `Step ${String(currentIndex + 1)} of ${String(total)}` : "All steps"}
           </p>
           <div className="flex items-center gap-3">
@@ -186,8 +186,8 @@ export function BrainWizard({ laneId, initialStep, hadStep }: { laneId: string; 
         </div>
       ) : null}
 
-      <div className="grid gap-4 md:grid-cols-[280px_minmax(0,1fr)] md:gap-6">
-        <nav aria-label="Setup sections" className="hidden md:block" data-testid="wizard-rail">
+      <div className="grid gap-4 xl:grid-cols-[280px_minmax(0,1fr)] xl:gap-6">
+        <nav aria-label="Setup sections" className="hidden xl:block" data-testid="wizard-rail">
           <ol className="flex flex-col gap-1">
             {groups.map((g, i) => {
               const current = stage.kind === "group" && stage.id === g.id;
@@ -238,7 +238,7 @@ export function BrainWizard({ laneId, initialStep, hadStep }: { laneId: string; 
               <h2 ref={headRef} tabIndex={-1} className="font-heading text-card-title font-semibold text-foreground outline-none">
                 Before you start
               </h2>
-              <div className={cn("grid gap-4", importSkipped ? "" : "lg:grid-cols-2")}>
+              <div className={cn("grid gap-4", importSkipped ? "" : "xl:grid-cols-2")}>
                 <div className="flex flex-col gap-4" data-testid="wizard-learns">
                   <h3 className="text-card-title font-semibold text-foreground">What Jarvis learns</h3>
                   <ul className="flex list-disc flex-col gap-3 pl-5 text-body text-foreground">
@@ -432,7 +432,7 @@ function GroupScreen({
   return (
     <div className="flex flex-col gap-4" data-testid="interview-group" data-group={group.id}>
       <div>
-        <p className="hidden text-small text-muted-foreground md:block">
+        <p className="hidden text-small text-muted-foreground xl:block">
           Step {index + 1} of {total} · saves to {group.saves}
         </p>
         <h2 ref={headRef} tabIndex={-1} className="font-heading text-card-title font-semibold text-foreground outline-none">
