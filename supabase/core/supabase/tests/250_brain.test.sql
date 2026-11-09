@@ -50,7 +50,7 @@ select ok(not exists (select 1 from information_schema.columns where table_schem
           'brain.imports has no storage_path');
 select ok(not exists (select 1 from information_schema.columns where table_schema = 'brain'
                       and column_name in ('lane_id') and is_nullable = 'YES'), 'every lane_id in brain is not null');
-select is((select count(*)::int from pg_class c where c.relnamespace = 'brain'::regnamespace and c.relkind = 'r'), 6, 'brain has the six tables');
+select is((select count(*)::int from pg_class c where c.relnamespace = 'brain'::regnamespace and c.relkind = 'r'), 7, 'brain has the seven tables');
 select ok((select bool_and(a.atttypid = 'timestamptz'::regtype) from pg_attribute a join pg_class c on c.oid = a.attrelid
            where c.relnamespace = 'brain'::regnamespace and c.relkind = 'r' and a.attname in ('created_at', 'updated_at', 'finished_at') and not a.attisdropped),
           'all brain times are timestamptz');

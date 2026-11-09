@@ -448,6 +448,16 @@ isOneToOne: false
 "brain_import_purge":
 { Args: { "p_lane": string }; Returns: number
                            },
+"brain_section_complete":
+{ Args: { "p_lane": string,"p_sections": (string)[] }; Returns: {
+              "o_completed_at": string,"o_section_id": string
+            }[]
+                           },
+"brain_section_completions":
+{ Args: { "p_lane": string }; Returns: {
+              "completed_at": string,"section_id": string
+            }[]
+                           },
 "brain_skill_save":
 { Args: { "p_body": string,"p_if_version": number,"p_key": string,"p_lane": string,"p_title": string }; Returns: {
               "o_id": string,"o_updated_at": string,"o_version": number
