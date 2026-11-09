@@ -21,7 +21,10 @@ describe("ComposioConnectionSection", () => {
     render(<ComposioConnectionSection laneId="PKG" view={view({}, null, false)} />);
     const gmail = within(screen.getByTestId("composio-gmail"));
     const button = gmail.getByRole("button", { name: "Not configured: COMPOSIO_GMAIL_AUTH_CONFIG_ID is not set" }) as HTMLButtonElement;
-    expect(within(screen.getByTestId("composio-googlecalendar")).getByRole("button", { name: "Not configured: COMPOSIO_API_KEY, COMPOSIO_GOOGLECALENDAR_AUTH_CONFIG_ID are not set" })).toBeTruthy();
+    const calendar = within(screen.getByTestId("composio-googlecalendar")).getByRole("button", { name: "Not configured: COMPOSIO_API_KEY, COMPOSIO_GOOGLECALENDAR_AUTH_CONFIG_ID are not set" });
+    // H-042: the long setting names wrap inside the button instead of widening the page at phone width.
+    for (const cls of ["[overflow-wrap:anywhere]", "whitespace-normal", "max-w-full", "min-w-0", "shrink"]) expect(calendar.className.split(/\s+/)).toContain(cls);
+    for (const cls of ["shrink-0", "whitespace-nowrap"]) expect(calendar.className.split(/\s+/)).not.toContain(cls); // merged away
     expect(button.disabled).toBe(true);
     expect(button.closest("form")).toBeNull();
     expect(gmail.queryByRole("button", { name: "Connect via Composio" })).toBeNull();

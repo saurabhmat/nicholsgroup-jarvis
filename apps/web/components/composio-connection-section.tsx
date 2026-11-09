@@ -2,7 +2,7 @@
 // "Connect via Composio" / "Reconnect via Composio" are same-origin form POSTs to the start route; Test is a read-only
 // check; Disconnect is shown disabled until the Approval Center exists (an external write, D-24). When the toolkit's auth
 // config id is not set on the server the button says "Not configured" and does nothing. The chat only links here.
-import { Alert, AlertDescription, AlertTitle, Badge, Card, CardContent, CardDescription, CardHeader, CardTitle, buttonVariants } from "@nichols/ui";
+import { Alert, AlertDescription, AlertTitle, Badge, Card, CardContent, CardDescription, CardHeader, CardTitle, buttonVariants, cn } from "@nichols/ui";
 import type { ComposioConnectionState, ComposioSectionView } from "@/lib/composio-connection";
 import { ComposioTestButton } from "./composio-test-button";
 
@@ -17,6 +17,10 @@ const TIME = new Intl.DateTimeFormat("en-US", { dateStyle: "medium", timeStyle: 
 const when = (iso: string | null) => (iso ? `${TIME.format(new Date(iso))} ET` : "not synced yet");
 
 /** "Not configured: A is not set" / "Not configured: A, B are not set": setting NAMES only; plain "Not configured" when unknown. */
+// Setting names such as COMPOSIO_GOOGLECALENDAR_AUTH_CONFIG_ID (38 characters, no spaces) are wider than the card at
+// phone width: let the label break inside a name and keep the button within its container (H-042: horizontal scroll).
+export const NOT_CONFIGURED_CLASS = "h-auto min-w-0 max-w-full shrink whitespace-normal text-left [overflow-wrap:anywhere]";
+
 export function notConfigured(missing: readonly string[] | undefined): string {
   const names = missing ?? [];
   return names.length === 0 ? "Not configured" : `Not configured: ${names.join(", ")} ${names.length === 1 ? "is" : "are"} not set`;
@@ -57,9 +61,9 @@ export function ComposioConnectionSection({ laneId, view }: { laneId: string; vi
                   </Alert>
                 ) : null}
                 {c ? (
-                  <dl className="grid grid-cols-[max-content_1fr] gap-x-4 gap-y-1 text-sm">
+                  <dl className="grid grid-cols-[max-content_minmax(0,1fr)] gap-x-4 gap-y-1 text-sm">
                     <dt className="text-muted-foreground">Account</dt>
-                    <dd>{c.address ?? "waiting for the connection to finish"}</dd>
+                    <dd className="min-w-0 [overflow-wrap:anywhere]">{c.address ?? "waiting for the connection to finish"}</dd>
                     <dt className="text-muted-foreground">Status</dt>
                     <dd>
                       <Badge variant={LABEL[c.state].variant}>{LABEL[c.state].text}</Badge>
@@ -88,7 +92,7 @@ export function ComposioConnectionSection({ laneId, view }: { laneId: string; vi
                         </button>
                       </form>
                     ) : (
-                      <button type="button" disabled aria-disabled="true" title="Not configured on this server yet" className={buttonVariants({ variant: "outline", className: "h-auto whitespace-normal text-left" })}>
+                      <button type="button" disabled aria-disabled="true" title="Not configured on this server yet" className={cn(buttonVariants({ variant: "outline" }), NOT_CONFIGURED_CLASS)}>
                         {notConfigured(t.missing)}
                       </button>
                     )}

@@ -9,9 +9,11 @@ import { expect, test, type Page } from "@playwright/test";
 import { completeMfa, expectLaneHome, nextTotpWindow, signInWithEmailCode } from "./helpers";
 import { clearMailbox } from "./mailpit";
 import { personas } from "./personas";
-import { sql } from "../scripts/e2e-sql.mjs";
+import { resetBrain } from "../scripts/e2e-sql.mjs";
 
-const cleanup = () => sql(`delete from brain.documents where lane_id = 'PKG' and path = 'Context/About-Me.md';`);
+// Each test starts with no brain data in PKG (pages, profiles, T-227 section completions): the database is reset only
+// once per run, and saved sections would otherwise show as Done in the next test (H-042).
+const cleanup = () => resetBrain("PKG");
 const AXE = readFileSync(path.resolve(process.cwd(), "node_modules/axe-core/axe.min.js"), "utf8");
 
 async function signIn(page: Page, email: string): Promise<void> {
@@ -222,7 +224,13 @@ test("a role without the brain view sees no Get started, no banner, and the onbo
   await signIn(page, info.project.name === "desktop" ? personas(info).secondMember : personas(info).member);
   await expect(page.getByText("Get started")).toHaveCount(0);
   await expect(page.getByTestId("onboarding-banner")).toHaveCount(0);
+  // H-042: a real 404 status (decided by the proxy before streaming), and nothing of the wizard in the HTML or in the
+  // RSC payload a client-side navigation would fetch.
   const res = await page.goto("/PKG/onboarding");
   expect(res?.status()).toBe(404);
+  expect((await res?.text()) ?? "").not.toMatch(/brain-wizard|wizard-intro|Set up your|About-Me|q-A1/);
   await expect(page.getByTestId("brain-wizard")).toHaveCount(0);
+  const rsc = await page.request.get("/PKG/onboarding?step=A-1", { headers: { RSC: "1" } });
+  expect(rsc.status()).toBe(404);
+  expect(await rsc.text()).not.toMatch(/brain-wizard|wizard-intro|About-Me|q-A1/);
 });

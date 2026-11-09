@@ -227,7 +227,7 @@ function InterviewFlow({ laneId, mode, startAt }: { laneId: string; mode: "chat"
       ) : null}
 
       {view.kind === "group" && groupView ? (
-        <div className="flex flex-col gap-4" data-testid="interview-group">
+        <div className="flex flex-col gap-4" data-testid="interview-group" data-group={groupView.id}>
           <div className="flex items-center justify-between gap-2">
             <h3 ref={headRef} tabIndex={-1} className="text-sm font-semibold text-foreground outline-none">
               {groupView.title} <span className="font-normal text-muted-foreground">· saves to {groupView.saves}</span>
@@ -293,7 +293,7 @@ function InterviewFlow({ laneId, mode, startAt }: { laneId: string; mode: "chat"
           <h3 className="text-sm font-semibold text-foreground">Choose a section to set up or change</h3>
           <ul className="flex flex-col gap-2">
             {state.groups.map((g) => (
-              <li key={g.id} className="flex flex-wrap items-center gap-2 rounded-control border border-border bg-background p-3 text-sm">
+              <li key={g.id} className="flex flex-wrap items-center gap-2 rounded-control border border-border bg-background p-3 text-sm" data-testid={`section-${g.id}`}>
                 <span className="min-w-0 flex-1">
                   <span className="block font-medium text-foreground">{g.title}</span>
                   <span className="text-xs text-muted-foreground">{g.part === "A" ? "Your brain" : "Personal Assistant"}</span>
