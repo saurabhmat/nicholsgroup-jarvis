@@ -21,7 +21,8 @@
     "db:reset": "node supabase/core/seed/generate.mjs && supabase db reset --local --workdir supabase/core",
     "db:types": "node scripts/gen-db-types.mjs",
     "db:types:check": "node scripts/gen-db-types.mjs --check",
-    "test:injection": "pnpm --filter @nichols/ai test:injection"
+    "test:injection": "pnpm --filter @nichols/ai test:injection",
+    "e2e:brain": "bash scripts/e2e-brain.sh"
   },
   "devDependencies": {
     "@nichols/core": "workspace:*",

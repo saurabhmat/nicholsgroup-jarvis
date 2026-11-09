@@ -1,14 +1,14 @@
-// Shared e2e steps: email-code sign-in and the TOTP step. Tests run in one worker (playwright.config.ts), so the
-// authenticator secrets enrolled during a run are remembered here for later sign-ins of the same persona.
+// Shared e2e steps: email-code sign-in and the TOTP step. The authenticator secrets enrolled during a run are kept in
+// a git-ignored file (scripts/e2e-secrets.mjs) so a worker that Playwright restarts after a failure still knows them; the
+// global setup deletes the file whenever it resets the database. Synthetic local personas only.
 import { expect, type Page } from "@playwright/test";
 import { latestSignInEmail } from "./mailpit";
+import { readSecrets, writeSecret } from "../scripts/e2e-secrets.mjs";
 import { totp } from "./totp";
 
-const SECRETS = new Map<string, string>();
-
 /** The authenticator secret enrolled for `email` earlier in this run, if any (used by the HTTP-level specs). */
-export const knownAuthenticator = (email: string): string | undefined => SECRETS.get(email);
-export const rememberAuthenticator = (email: string, key: string): void => void SECRETS.set(email, key);
+export const knownAuthenticator = (email: string): string | undefined => readSecrets()[email];
+export const rememberAuthenticator = (email: string, key: string): void => writeSecret(email, key);
 
 /** After sign-in the browser lands on the lane home (T-023): its heading is the "signed in" signal on every viewport. */
 export async function expectLaneHome(page: Page, lane = "PKG"): Promise<void> {
@@ -48,7 +48,7 @@ export async function enrollTotp(page: Page, email: string): Promise<string> {
   const secret = await page.getByTestId("totp-secret").inputValue();
   await page.getByLabel("Authenticator code").fill(totp(secret));
   await page.getByRole("button", { name: "Verify" }).click();
-  SECRETS.set(email, secret);
+  rememberAuthenticator(email, secret);
   return secret;
 }
 
@@ -57,7 +57,7 @@ export async function completeMfa(page: Page, email: string): Promise<string> {
   const heading = page.getByRole("heading", { name: /Set up two-factor authentication|Enter your authenticator code/ });
   await expect(heading).toBeVisible();
   if ((await heading.textContent())?.startsWith("Set up")) return enrollTotp(page, email);
-  const secret = SECRETS.get(email);
+  const secret = knownAuthenticator(email);
   if (!secret) throw new Error(`${email} was enrolled outside this run; reset the database (global setup does)`);
   await page.getByLabel("Authenticator code").fill(totp(secret));
   await page.getByRole("button", { name: "Verify" }).click();
