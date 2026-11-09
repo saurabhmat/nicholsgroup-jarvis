@@ -46,11 +46,13 @@ export async function proxy(request: NextRequest) {
     // other than a definite refusal (outage, expired session) is passed through to them.
     const segment = laneSegment(pathname);
     // T-230 A: the session refreshSession just verified is reused (no second cookie read and verification). The status
-    // code only matters for a document request: a client-side navigation or prefetch (the `rsc` request header, which a
-    // user can set on their own request too, and which changes nothing but the status of THEIR response) is answered by
-    // the page's own lane check, so the proxy skips its duplicate lane query for it.
-    const isRsc = request.headers.get("rsc") === "1";
-    const guards = segment && signedIn && !isRsc ? createGuards(async () => session) : null;
+    // code only matters for a document load. A client-side navigation or prefetch is a script fetch (`Sec-Fetch-Dest:
+    // empty`; a browser sets it and page script cannot change it; Next strips its own `rsc` header before the proxy runs, so
+    // that one cannot be used), and the page's own lane check answers it, so the proxy skips its duplicate lane query.
+    // Anything else, including a request with no such header (curl, tests), is checked as before. A client that lies about
+    // it only changes the status code of its own response: the layout and page still verify the lane.
+    const isFetch = request.headers.get("sec-fetch-dest") === "empty";
+    const guards = segment && signedIn && !isFetch ? createGuards(async () => session) : null;
     // H-042: the onboarding page is only for an owner with the brain view. Its own notFound() runs inside a Suspense
     // boundary after the shell has streamed (status 200), so the status is decided here, before streaming. Its check
     // (requireRole) includes the lane check, so onboarding paths skip the separate lane verdict (one set of round trips).

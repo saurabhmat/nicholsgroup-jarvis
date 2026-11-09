@@ -116,14 +116,16 @@ describe("proxy reuse and timing (T-230 A)", () => {
     expect(await guardsArg.read()).toBe(session);
   });
 
-  it("skips the status-only lane check for client navigations and prefetches (rsc: 1); the page still checks", async () => {
-    const res = await proxy(new NextRequest(new URL("/PKG/finance", "http://127.0.0.1:3100"), { headers: { rsc: "1" } }));
+  it("skips the status-only lane check for script fetches (client navigations and prefetches: Sec-Fetch-Dest empty); the page still checks", async () => {
+    const res = await proxy(new NextRequest(new URL("/PKG/finance", "http://127.0.0.1:3100"), { headers: { "sec-fetch-dest": "empty" } }));
     expect(res.status).toBe(200);
     expect(laneVerdict).not.toHaveBeenCalled();
-    // A document request (no rsc header) is still checked, and a denied lane is still a 404 there.
+    // A document load, and a request with no Sec-Fetch headers at all, are still checked: a denied lane is still a 404.
     laneVerdict.mockResolvedValue("denied");
     expect((await get("/PKG/finance")).status).toBe(404);
-    const onboarding = await proxy(new NextRequest(new URL("/PKG/onboarding", "http://127.0.0.1:3100"), { headers: { rsc: "1" } }));
+    const doc = await proxy(new NextRequest(new URL("/PKG/finance", "http://127.0.0.1:3100"), { headers: { "sec-fetch-dest": "document" } }));
+    expect(doc.status).toBe(404);
+    const onboarding = await proxy(new NextRequest(new URL("/PKG/onboarding", "http://127.0.0.1:3100"), { headers: { "sec-fetch-dest": "empty" } }));
     expect(onboarding.status).toBe(200);
     expect(onboardingVerdict).not.toHaveBeenCalled();
   });
