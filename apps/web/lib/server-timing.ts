@@ -21,6 +21,7 @@ export function safeName(name: string): string {
 }
 
 export type Timings = {
+  /** Random group id of this request's log lines; created on the first span (Next forbids random values before request data when prerendering). */
   readonly id: string;
   /** Runs `fn`, recording its duration under `name` when timing is on; otherwise just runs it. Errors pass through unchanged. */
   time<T>(name: string, fn: () => Promise<T> | T): Promise<T>;
@@ -30,20 +31,25 @@ export type Timings = {
 };
 
 export function createTimings(log: ((line: string) => void) | null = (line) => console.info(line), enabled: () => boolean = timingEnabled): Timings {
-  const t0 = performance.now();
-  const id = randomUUID().slice(0, 8);
+  // No clock or random value is read until a span actually runs (and a span only runs when timing is on): under Cache
+  // Components, Next refuses those reads while a route is being prerendered, and this must never be the reason a build fails.
+  let t0: number | undefined;
+  let rid: string | undefined;
   const list: TimingEntry[] = [];
   return {
-    id,
+    get id() {
+      return (rid ??= randomUUID().slice(0, 8));
+    },
     async time(name, fn) {
       if (!enabled()) return fn();
       const start = performance.now();
+      t0 ??= start;
       try {
         return await fn();
       } finally {
         const entry = { name: safeName(name), start: round(start - t0), ms: round(performance.now() - start) };
         list.push(entry);
-        log?.(`[timing] ${JSON.stringify({ req: id, ...entry, at: Date.now() })}`);
+        log?.(`[timing] ${JSON.stringify({ req: this.id, ...entry, at: Date.now() })}`);
       }
     },
     entries: () => [...list],

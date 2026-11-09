@@ -22,7 +22,7 @@ const ROUTES = [
 ] as const;
 const RUNS = Number(process.env.PERF_RUNS ?? 7);
 
-type Soft = { route: string; run: number; startEpoch: number; endEpoch: number; skeletonMs: number | null; contentMs: number | null; serverTiming: string[] };
+type Soft = { route: string; run: number; startEpoch: number; endEpoch: number; skeletonMs: number | null; contentMs: number | null; rscSendMs: number | null; rscFirstByteMs: number | null; rscEndMs: number | null; serverTiming: string[] };
 type Hard = { route: string; run: number; startEpoch: number; endEpoch: number; ttfbMs: number; fcpMs: number | null; endMs: number; serverTiming: string };
 
 async function armSoft(page: Page, heading: RegExp): Promise<void> {
@@ -56,7 +56,7 @@ test("measure route timings", async ({ page }, info) => {
   const soft: Soft[] = [];
   let jwtAlg: string | null = null;
   const cookies = await page.context().cookies();
-  const auth = cookies.filter((c) => c.name.startsWith("sb-")).sort((a, b) => a.name.localeCompare(b.name)).map((c) => c.value).join("");
+  const auth = cookies.filter((c) => /^sb-.*-auth-token(\.\d+)?$/.test(c.name)).sort((a, b) => a.name.localeCompare(b.name)).map((c) => c.value).join("");
   try {
     const joined = auth.startsWith("base64-") ? Buffer.from(auth.slice(7), "base64url").toString() : decodeURIComponent(auth);
     const token = (JSON.parse(joined) as { access_token: string }).access_token; // read here only to report the header's alg; never printed
@@ -96,11 +96,21 @@ test("measure route timings", async ({ page }, info) => {
     for (const r of [ROUTES[1], ROUTES[2], ROUTES[3], ROUTES[4], ROUTES[0]]) {
       await page.waitForTimeout(1200); // idle: let prefetches and the previous page settle
       serverTiming.length = 0;
+      await page.evaluate(() => performance.clearResourceTimings());
       await armSoft(page, r.heading);
       const startEpoch = Date.now();
       await menu.getByRole("link", { name: r.link }).click();
       await page.waitForFunction(() => (window as unknown as { __nav: { content: number | null } }).__nav.content !== null, undefined, { timeout: 30_000 });
-      const n = await page.evaluate(() => (window as unknown as { __nav: { click: number; skel: number | null; content: number } }).__nav);
+      const n = await page.evaluate((path) => {
+        const w = window as unknown as { __nav: { click: number; skel: number | null; content: number } };
+        // The page's own RSC request for this navigation (not a prefetch): when it was sent, first byte, and fully received.
+        const rsc = performance
+          .getEntriesByType("resource")
+          .filter((e) => e.name.includes("_rsc=") && new URL(e.name).pathname === path && e.startTime >= w.__nav.click - 5)
+          .map((e) => e as PerformanceResourceTiming)
+          .sort((a, b) => b.responseEnd - a.responseEnd)[0];
+        return { ...w.__nav, rsc: rsc ? { send: rsc.requestStart - w.__nav.click, ttfb: rsc.responseStart - w.__nav.click, end: rsc.responseEnd - w.__nav.click } : null };
+      }, r.path);
       soft.push({
         route: r.key,
         run,
@@ -108,6 +118,9 @@ test("measure route timings", async ({ page }, info) => {
         endEpoch: Date.now(),
         skeletonMs: n.skel === null ? null : n.skel - n.click,
         contentMs: n.content - n.click,
+        rscSendMs: n.rsc?.send ?? null,
+        rscFirstByteMs: n.rsc?.ttfb ?? null,
+        rscEndMs: n.rsc?.end ?? null,
         serverTiming: [...serverTiming],
       });
     }
