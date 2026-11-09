@@ -1,14 +1,14 @@
 // Shared e2e steps: email-code sign-in and the TOTP step. The authenticator secrets enrolled during a run are kept in
-// a git-ignored file (scripts/e2e-secrets.mjs) so a worker that Playwright restarts after a failure still knows them; the
+// a git-ignored file in Playwright's output folder (e2e/secrets.ts) so a worker that Playwright restarts after a failure still knows them; the
 // global setup deletes the file whenever it resets the database. Synthetic local personas only.
-import { expect, type Page } from "@playwright/test";
+import { expect, test, type Page } from "@playwright/test";
 import { latestSignInEmail } from "./mailpit";
-import { readSecrets, writeSecret } from "../scripts/e2e-secrets.mjs";
+import { readSecrets, writeSecret } from "./secrets";
 import { totp } from "./totp";
 
 /** The authenticator secret enrolled for `email` earlier in this run, if any (used by the HTTP-level specs). */
-export const knownAuthenticator = (email: string): string | undefined => readSecrets()[email];
-export const rememberAuthenticator = (email: string, key: string): void => writeSecret(email, key);
+export const knownAuthenticator = (email: string): string | undefined => readSecrets(test.info().project.outputDir)[email];
+export const rememberAuthenticator = (email: string, key: string): void => writeSecret(test.info().project.outputDir, email, key);
 
 /** After sign-in the browser lands on the lane home (T-023): its heading is the "signed in" signal on every viewport. */
 export async function expectLaneHome(page: Page, lane = "PKG"): Promise<void> {
