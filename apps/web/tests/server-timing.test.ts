@@ -55,3 +55,27 @@ describe("createTimings", () => {
     expect(safeName("x".repeat(200))).toHaveLength(48);
   });
 });
+
+describe("timed() (request-scoped wrapper)", () => {
+  it("passes straight through when timing is off, and records one span when it is on", async () => {
+    vi.resetModules();
+    vi.doMock("next/server", () => ({ connection: async () => undefined }));
+    vi.doMock("react", async (orig) => ({ ...(await orig<typeof import("react")>()), cache: <A extends unknown[], R>(fn: (...a: A) => R) => { let v: R | undefined; return (...a: A) => (v ??= fn(...a)); } }));
+    const info = vi.spyOn(console, "info").mockImplementation(() => undefined);
+    vi.stubEnv("NODE_ENV", "production");
+    vi.stubEnv("SERVER_TIMING", "");
+    const { timed, requestTimings } = await import("@/lib/timed");
+    expect(await timed("x.off", async () => "v")).toBe("v");
+    expect(requestTimings().entries()).toEqual([]);
+    expect(info).not.toHaveBeenCalled();
+    vi.stubEnv("SERVER_TIMING", "1");
+    expect(await timed("x.on", async () => "w")).toBe("w");
+    expect(requestTimings().entries().map((e) => e.name)).toEqual(["x.on"]);
+    expect(info).toHaveBeenCalledTimes(1);
+    expect(String(info.mock.calls[0]?.[0])).not.toContain("w\"");
+    vi.unstubAllEnvs();
+    vi.doUnmock("next/server");
+    vi.doUnmock("react");
+    info.mockRestore();
+  });
+});

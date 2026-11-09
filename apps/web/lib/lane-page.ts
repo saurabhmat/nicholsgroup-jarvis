@@ -17,6 +17,7 @@ export const loadLane = cache(async (laneParam: string): Promise<LoadedLane> => 
   await connection(); // per request, never prerendered
   const g = await guards();
   try {
+    // (A refused lane now costs one extra read: the list is fetched in parallel and its result is unused.)
     // The lane check and the lane list are independent (both read the one session): run them together. If both fail, the
     // lane check's error wins, as when they ran in sequence.
     const [check, list] = await Promise.allSettled([timed("lane.check", () => g.requireLane(laneParam)), timed("lane.list", () => g.listLanes())]);

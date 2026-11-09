@@ -92,6 +92,10 @@ test("a user in no lane is not shown PKG and its URL is a 404", async ({ page },
 test("a sidebar click shows the skeleton within 300 ms while the page is still loading", async ({ page, isMobile }, info) => {
   test.skip(isMobile, "the side menu is desktop; the tab bar uses the same links and loading boundaries");
   const { member } = personas(info);
+  let prefetched = false; // the menu link's prefetch of the Calendar loading boundary has been answered
+  page.on("response", (r) => {
+    if (/\/PKG\/calendar/.test(r.url()) && r.request().headers()["next-router-prefetch"]) prefetched = true;
+  });
   await clearMailbox();
   await signInWithEmailCode(page, member);
   await nextTotpWindow(page);
@@ -99,7 +103,7 @@ test("a sidebar click shows the skeleton within 300 ms while the page is still l
   await expectLaneHome(page);
   const menu = page.getByRole("navigation", { name: "Main" });
   await expect(menu.getByRole("link", { name: "Calendar" })).toBeVisible();
-  await page.waitForTimeout(1500); // let the menu links prefetch their loading boundary
+  await expect.poll(() => prefetched, { timeout: 15_000 }).toBe(true);
 
   // Hold the page's own (non-prefetch) request for 1.5 s: what shows meanwhile is the loading boundary, not the old page.
   await page.route(/\/PKG\/calendar/, async (route) => {

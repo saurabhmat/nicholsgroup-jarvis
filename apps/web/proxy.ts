@@ -20,8 +20,12 @@ const NOT_FOUND_HTML =
 export async function proxy(request: NextRequest) {
   // T-230 A: names and durations only, on the response, and only in dev or with SERVER_TIMING=1 on the server.
   const timings = createTimings(null);
-  const stamp = <R extends NextResponse>(r: R): R => {
-    if (timingEnabled()) r.headers.set("server-timing", timings.header());
+  // SERVER_TIMING=1 is for local or Preview measurement only (it publishes these timings to every caller). The lane-gate
+  // span is left off a 404 so the header never shows how long a refused lane took compared with an allowed one.
+  const stamp = <R extends NextResponse>(r: R, omit?: string): R => {
+    if (timingEnabled()) {
+      r.headers.set("server-timing", timings.entries().filter((e) => e.name !== omit).map((e) => `${e.name};dur=${String(e.ms)}`).join(", "));
+    }
     return r;
   };
   let response = NextResponse.next({ request });
@@ -66,7 +70,7 @@ export async function proxy(request: NextRequest) {
       // Per user and never stored, whether or not the session was refreshed on this request.
       hidden.headers.set("cache-control", "private, no-store");
       hidden.headers.set("vary", "cookie");
-      return stamp(hidden);
+      return stamp(hidden, "proxy.lane");
     }
     return stamp(response);
   }

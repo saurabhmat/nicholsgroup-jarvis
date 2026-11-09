@@ -34,6 +34,10 @@ async function cookieStore(): Promise<CookieStore> {
 // the layout, the page and its loaders all ask the same questions. Every check still runs (once); a rejection is memoised
 // too, so an AuthError or an outage gives the same answer to every caller in the render. Outside a render (route handlers,
 // server actions) cache() does not memoise and each call builds its own guards, as before.
+// Verified (T-230 A review, `next dev` with SERVER_TIMING=1): the route handlers GET /api/lanes/PKG and POST
+// /api/lanes/PKG/brain/interview answer 200 with timing on (so `connection()` in timed() does not throw there), and their
+// spans carry a different request id each, i.e. React cache() did not memoise anything outside a render. No server action
+// calls guards() (sign-in and MFA actions use auth()/mfa(), which are not cached).
 const guardsFor = cache(async (authCookies: string): Promise<Guards> => {
   void authCookies; // only the cache key: see above
   const read = cookieSessionReader(await cookieStore());
@@ -56,7 +60,7 @@ const guardsFor = cache(async (authCookies: string): Promise<Guards> => {
   return {
     ...g,
     requireRole: (laneId, wanted) => {
-      const key = `${laneId}|${[...wanted].sort().join(",")}`;
+      const key = JSON.stringify([laneId, [...wanted].sort()]);
       let r = roles.get(key);
       if (r === undefined) {
         r = timed("guards.role", () => g.requireRole(laneId, wanted));

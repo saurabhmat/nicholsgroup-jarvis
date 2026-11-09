@@ -267,8 +267,9 @@ export function authActions(cookies: CookieStore): AuthActions {
 
 /**
  * For proxy.ts: refreshes the session cookie when needed (writes go through cookies.setAll) and reports whether
- * the request carries a valid session and at which AAL. Never throws for a missing or invalid session (nor for an
- * Auth outage: that reads as signed out here, and the page decides). `session` is the same verified session, so the
+ * the request carries a valid session and at which AAL. Never throws for a missing or invalid session, nor for an
+ * Auth outage: that reads as signed out here, so the proxy redirects to /sign-in as it always did (the page itself still
+ * treats an outage as an error, never as access). `session` is the same verified session, so the
  * proxy's lane check does not read and verify the cookie a second time.
  */
 export async function refreshSession(cookies: CookieStore): Promise<{ signedIn: boolean; aal: Aal | null; session: VerifiedSession | null }> {

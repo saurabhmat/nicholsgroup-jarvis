@@ -391,6 +391,8 @@ nichols-portal/
 | Staging | `staging` | Staging projects | M365 dev tenant, Google test account, QBO sandbox, Stripe test | Synthetic + sandbox |
 | Production | `main` | Prod Core + Prod NL (PITR) | Real accounts | Real |
 
+**Server timing (T-230).** The optional server env var `SERVER_TIMING=1` switches on request timings (names and durations only, never ids or data): a `Server-Timing` response header from the proxy (`proxy.auth`, `proxy.lane`) and one `[timing]` log line per page span (guards, lane check, page loaders). Always on in `next dev`; off everywhere else unless the operator sets the variable. It is for local or Preview measurement only: leave it unset in Production, because the header is visible to every caller. No request header or query can enable it. See `apps/web/lib/server-timing.ts`.
+
 ---
 
 ## 12. Delivery phases

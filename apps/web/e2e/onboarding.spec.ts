@@ -233,4 +233,14 @@ test("a role without the brain view sees no Get started, no banner, and the onbo
   const rsc = await page.request.get("/PKG/onboarding?step=A-1", { headers: { RSC: "1" } });
   expect(rsc.status()).toBe(404);
   expect(await rsc.text()).not.toMatch(/brain-wizard|wizard-intro|About-Me|q-A1/);
+
+  // T-230 A review: a client-side navigation or prefetch (script fetch, Sec-Fetch-Dest: empty) skips the proxy's status check,
+  // so the page's own check is what refuses it. Whatever the status, the payload carries nothing of the wizard or the import.
+  for (const path of ["/PKG/onboarding", "/PKG/onboarding?step=A-1", "/PKG/onboarding/import"]) {
+    for (const prefetch of [false, true]) {
+      const res = await page.request.get(path, { headers: { RSC: "1", "Sec-Fetch-Dest": "empty", ...(prefetch ? { "Next-Router-Prefetch": "1" } : {}) } });
+      const body = await res.text();
+      expect(body, `${path} prefetch=${String(prefetch)}`).not.toMatch(/brain-wizard|wizard-intro|Set up your|About-Me|q-A1|brain-import|Import memories|Find facts|import-steps|Step \d+ of/);
+    }
+  }
 });

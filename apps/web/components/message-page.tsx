@@ -7,6 +7,7 @@ import type { LaneId } from "@nichols/core";
 import { readGmailBody } from "@nichols/connectors/google";
 import { Alert, AlertDescription, AlertTitle, laneHref, PageHeader } from "@nichols/ui";
 import { guards } from "@/lib/guards";
+import { timed } from "@/lib/timed";
 import { messageFor, type ReadBody } from "@/lib/inbox";
 import { loadLane } from "@/lib/lane-page";
 
@@ -28,7 +29,7 @@ export async function MessagePage({ params }: { params: Promise<{ laneId: string
   } catch {
     notFound();
   }
-  const view = await messageFor(await guards(), lane.laneId, id, readBody);
+  const view = await timed("load.message", async () => messageFor(await guards(), lane.laneId, id, readBody));
   if (view.state === "not_found") notFound();
   const m = view.meta;
   return (
