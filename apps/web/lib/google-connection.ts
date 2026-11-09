@@ -72,17 +72,20 @@ export async function loadGoogleSection(client: Db, laneId: string): Promise<Goo
   // core.sync_cursors is not in the generated database types yet (T-063 added it); the shape is fixed by its column grants.
   type CursorRow = { connection_id: string; stream: string; updated_at: string };
   type CursorQuery = { select(c: string): { eq(c: string, v: string): { in(c: string, v: string[]): { in(c: string, v: string[]): PromiseLike<{ data: CursorRow[] | null; error: unknown }> } } } };
-  const cursors = await (core as unknown as { from(t: string): CursorQuery })
-    .from("sync_cursors")
-    .select("connection_id, stream, updated_at") // never cursor_value
-    .eq("lane_id", laneId)
-    .in("connection_id", ids)
-    .in("stream", ["mail", "calendar"]);
+  // The sync times and the lane's allowed mailboxes are independent reads: together (T-230 A).
+  const [cursors, cfg] = await Promise.all([
+    (core as unknown as { from(t: string): CursorQuery })
+      .from("sync_cursors")
+      .select("connection_id, stream, updated_at") // never cursor_value
+      .eq("lane_id", laneId)
+      .in("connection_id", ids)
+      .in("stream", ["mail", "calendar"]),
+    core.from("lane_config_current").select("mailboxes:config->mailboxes").eq("lane_id", laneId).maybeSingle(),
+  ]);
   if (cursors.error) throw new Error("sync state unavailable");
   const at = new Map<string, string | null>();
   for (const c of cursors.data ?? []) at.set(`${String(c.connection_id)}:${String(c.stream)}`, iso(c.updated_at));
 
-  const cfg = await core.from("lane_config_current").select("mailboxes:config->mailboxes").eq("lane_id", laneId).maybeSingle();
   if (cfg.error) throw new Error("lane settings unavailable");
   const allowed = mailboxList(cfg.data);
 

@@ -12,7 +12,7 @@ export function OnboardingBanner({ laneId, progress }: { laneId: string; progres
     <Link
       href={laneHref(laneId, "onboarding")}
       data-testid="onboarding-banner"
-      className="flex items-center justify-between gap-3 rounded-card border border-border border-l-[3px] border-l-gold bg-card px-4 py-3 text-sm font-medium text-foreground hover:bg-muted md:hidden"
+      className="flex items-center justify-between gap-3 rounded-card border border-border border-l-[3px] border-l-gold bg-card h-[3.25rem] px-4 text-body font-medium text-foreground hover:bg-muted md:hidden"
     >
       <span>
         Finish setting up Jarvis ({progress.done} of {progress.total}) <span aria-hidden>→</span>
@@ -27,7 +27,7 @@ export function OnboardingMoreRow({ laneId, progress }: { laneId: string; progre
   const entry = onboardingEntry(progress);
   return (
     <li>
-      <Link className="flex items-center justify-between gap-3 px-4 py-3 text-sm" href={laneHref(laneId, "onboarding")}>
+      <Link className="flex items-center justify-between gap-3 px-4 py-3 text-body" href={laneHref(laneId, "onboarding")}>
         <span className="flex items-center gap-2">
           {entry.label}
           {entry.complete ? <span role="img" aria-label="Setup complete">✓</span> : null}

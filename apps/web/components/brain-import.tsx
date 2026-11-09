@@ -37,8 +37,8 @@ function CopyPrompt({ label, prompt }: { label: string; prompt: string }) {
   const [copied, setCopied] = useState(false);
   return (
     <div className="flex flex-col gap-2 rounded-control border border-border bg-background p-3">
-      <p className="text-xs font-medium text-muted-foreground">{label}</p>
-      <p className="break-words text-sm text-foreground" data-testid="import-prompt">
+      <p className="text-small font-medium text-muted-foreground">{label}</p>
+      <p className="break-words text-body text-foreground" data-testid="import-prompt">
         {prompt}
       </p>
       <div className="flex items-center gap-3">
@@ -55,7 +55,7 @@ function CopyPrompt({ label, prompt }: { label: string; prompt: string }) {
         >
           Copy<span className="sr-only"> prompt: {label}</span>
         </Button>
-        <span className="text-xs text-muted-foreground" role="status" aria-live="polite">
+        <span className="text-small text-muted-foreground" role="status" aria-live="polite">
           {copied ? "Copied" : ""}
         </span>
       </div>
@@ -66,7 +66,7 @@ function CopyPrompt({ label, prompt }: { label: string; prompt: string }) {
 function Steps({ tab }: { tab: ImportTab }) {
   if (tab === "claude") {
     return (
-      <ol className="flex list-decimal flex-col gap-3 pl-5 text-sm text-foreground" data-testid="import-steps-claude">
+      <ol className="flex list-decimal flex-col gap-3 pl-5 text-body text-foreground" data-testid="import-steps-claude">
         <li>Open claude.ai and start a new chat.</li>
         <li className="flex flex-col gap-2">
           Send Claude this message:
@@ -81,7 +81,7 @@ function Steps({ tab }: { tab: ImportTab }) {
   }
   if (tab === "chatgpt") {
     return (
-      <ol className="flex list-decimal flex-col gap-3 pl-5 text-sm text-foreground" data-testid="import-steps-chatgpt">
+      <ol className="flex list-decimal flex-col gap-3 pl-5 text-body text-foreground" data-testid="import-steps-chatgpt">
         <li>Open ChatGPT and go to Settings → Personalization → Memory.</li>
         <li>Copy the list of memories and paste it into the box below.</li>
         <li className="flex flex-col gap-2">
@@ -95,7 +95,7 @@ function Steps({ tab }: { tab: ImportTab }) {
     );
   }
   return (
-    <ol className="flex list-decimal flex-col gap-3 pl-5 text-sm text-foreground" data-testid="import-steps-folder">
+    <ol className="flex list-decimal flex-col gap-3 pl-5 text-body text-foreground" data-testid="import-steps-folder">
       <li>Zip your AI Brain folder. It can hold Context, Employees and Projects folders.</li>
       <li>Choose the .zip below. Jarvis reads About-Me, Preferences and Work from Context, and the Personal Assistant file from Employees.</li>
       <li>Preview each page as a change and save the ones you want. Nothing is saved without your click.</li>
@@ -246,7 +246,7 @@ export function BrainImport({ laneId, aiConfigured }: { laneId: string; aiConfig
   return (
     <section aria-label="Import memories" className="flex flex-col gap-4" data-testid="brain-import">
       <div className="flex flex-wrap items-center gap-3">
-        <Link href={base} prefetch={false} className="inline-flex min-h-11 items-center text-sm text-primary underline underline-offset-2">
+        <Link href={base} prefetch={false} className="inline-flex min-h-11 items-center text-body text-primary underline underline-offset-2">
           Back to setup
         </Link>
       </div>
@@ -258,11 +258,11 @@ export function BrainImport({ laneId, aiConfigured }: { laneId: string; aiConfig
       ) : null}
 
       {done ? (
-        <div className="flex flex-col gap-4 rounded-card border border-border bg-card p-4 md:p-6" data-testid="import-done">
-          <h2 ref={headRef} tabIndex={-1} className="font-heading text-xl font-semibold text-foreground outline-none">
+        <div className="flex flex-col gap-4 rounded-card border border-border bg-card p-5 shadow-card md:p-6" data-testid="import-done">
+          <h2 ref={headRef} tabIndex={-1} className="font-heading text-card-title font-semibold text-foreground outline-none">
             Saved
           </h2>
-          <p className="text-sm text-foreground" role="status" data-testid="import-saved-message">
+          <p className="text-body text-foreground" role="status" data-testid="import-saved-message">
             {savedMessage(done.saved, done.completed, done.sections.map((id) => GROUPS.find((g) => g.id === id)?.title ?? id))} The facts you did not keep were deleted.
           </p>
           <div className="flex flex-col gap-2 sm:flex-row">
@@ -275,19 +275,19 @@ export function BrainImport({ laneId, aiConfigured }: { laneId: string; aiConfig
           </div>
         </div>
       ) : reviewing ? (
-        <div className="flex flex-col gap-4 rounded-card border border-border bg-card p-4 md:p-6" data-testid="import-review">
+        <div className="flex flex-col gap-4 rounded-card border border-border bg-card p-5 shadow-card md:p-6" data-testid="import-review">
           <div className="flex flex-col gap-1">
-            <h2 ref={headRef} tabIndex={-1} className="font-heading text-xl font-semibold text-foreground outline-none">
+            <h2 ref={headRef} tabIndex={-1} className="font-heading text-card-title font-semibold text-foreground outline-none">
               Choose what to keep
             </h2>
-            <p className="text-sm text-muted-foreground">Nothing is ticked. Tick what is right, edit the wording if you like, then preview the change.</p>
-            {droppedNote(review.dropped) ? <p className="text-sm text-muted-foreground" data-testid="import-dropped">{droppedNote(review.dropped)}</p> : null}
+            <p className="text-body text-muted-foreground">Nothing is ticked. Tick what is right, edit the wording if you like, then preview the change.</p>
+            {droppedNote(review.dropped) ? <p className="text-body text-muted-foreground" data-testid="import-dropped">{droppedNote(review.dropped)}</p> : null}
           </div>
 
           {proposal ? (
             <div className="flex flex-col gap-3" data-testid="import-proposal">
-              <h3 className="text-sm font-semibold text-foreground">Here is the change. Nothing is saved yet.</h3>
-              {proposal.changes.length === 0 ? <p className="text-sm text-muted-foreground">These facts are already in your pages. Saving records the matching sections as done.</p> : <DiffCard proposal={proposal} />}
+              <h3 className="text-body font-semibold text-foreground">Here is the change. Nothing is saved yet.</h3>
+              {proposal.changes.length === 0 ? <p className="text-body text-muted-foreground">These facts are already in your pages. Saving records the matching sections as done.</p> : <DiffCard proposal={proposal} />}
               <div className="flex flex-col gap-2 sm:flex-row">
                 <Button className={tap} disabled={busy} onClick={() => void save()}>
                   {busy ? "Saving…" : "Save"}
@@ -301,7 +301,7 @@ export function BrainImport({ laneId, aiConfigured }: { laneId: string; aiConfig
             <>
               {groupByTarget(review.candidates).map((g) => (
                 <fieldset key={g.target} className="flex min-w-0 flex-col gap-2" data-testid={`import-group-${g.target}`}>
-                  <legend className="text-sm font-semibold text-foreground">{g.label}</legend>
+                  <legend className="text-body font-semibold text-foreground">{g.label}</legend>
                   <ul className="flex flex-col gap-2">
                     {g.items.map((c) => {
                       const flagged = c.flags.includes("possible_nl_content");
@@ -320,7 +320,7 @@ export function BrainImport({ laneId, aiConfigured }: { laneId: string; aiConfig
                               }}
                             />
                             <div className="flex min-w-0 flex-1 flex-col gap-2">
-                              <label htmlFor={boxId} className="flex min-h-6 flex-wrap items-center gap-2 text-xs text-muted-foreground">
+                              <label htmlFor={boxId} className="flex min-h-6 flex-wrap items-center gap-2 text-small text-muted-foreground">
                                 <span>
                                   Keep under <span className="font-medium text-foreground">{c.section}</span>
                                 </span>
@@ -335,8 +335,8 @@ export function BrainImport({ laneId, aiConfigured }: { laneId: string; aiConfig
                                 value={edits[c.id] ?? c.fact}
                                 onChange={(e) => setEdits((m) => ({ ...m, [c.id]: e.target.value }))}
                               />
-                              {c.target === "pa" ? <p className="text-xs font-medium text-foreground" data-testid="import-pa-note">This becomes instructions for your Personal Assistant.</p> : null}
-                              {c.evidence ? <p className="break-words text-xs text-muted-foreground">From your text: &ldquo;{c.evidence}&rdquo;</p> : null}
+                              {c.target === "pa" ? <p className="text-small font-medium text-foreground" data-testid="import-pa-note">This becomes instructions for your Personal Assistant.</p> : null}
+                              {c.evidence ? <p className="break-words text-small text-muted-foreground">From your text: &ldquo;{c.evidence}&rdquo;</p> : null}
                             </div>
                           </div>
                         </li>
@@ -357,7 +357,7 @@ export function BrainImport({ laneId, aiConfigured }: { laneId: string; aiConfig
           )}
         </div>
       ) : (
-        <div className="flex flex-col gap-4 rounded-card border border-border bg-card p-4 md:p-6">
+        <div className="flex flex-col gap-4 rounded-card border border-border bg-card p-5 shadow-card md:p-6">
           <div role="tablist" aria-label="Where to import from" className="flex flex-wrap gap-2">
             {TABS.map((t) => (
               <button
@@ -373,7 +373,7 @@ export function BrainImport({ laneId, aiConfigured }: { laneId: string; aiConfig
                   setEmpty(null);
                 }}
                 className={cn(
-                  "min-h-11 rounded-control border px-4 text-sm font-medium",
+                  "min-h-11 rounded-control border px-4 text-body font-medium",
                   tab === t.id ? "border-gold bg-primary-tint text-foreground" : "border-border bg-card text-muted-foreground hover:bg-muted",
                 )}
               >
@@ -387,12 +387,12 @@ export function BrainImport({ laneId, aiConfigured }: { laneId: string; aiConfig
 
             {tab === "folder" ? (
               <div className="flex flex-col gap-3">
-                <label className="flex flex-col gap-1 text-sm font-medium text-foreground">
+                <label className="flex flex-col gap-1 text-body font-medium text-foreground">
                   Choose the .zip
                   <input type="file" accept=".zip,application/zip" className={control} onChange={(e) => e.target.files?.[0] && void onZip(e.target.files[0])} />
                 </label>
                 {zipNotes.map((n) => (
-                  <p key={n} className="text-xs text-muted-foreground">
+                  <p key={n} className="text-small text-muted-foreground">
                     {n}
                   </p>
                 ))}
@@ -400,7 +400,7 @@ export function BrainImport({ laneId, aiConfigured }: { laneId: string; aiConfig
                   const st = pageState[p.path];
                   return (
                     <div key={p.path} className="flex flex-col gap-3 rounded-control border border-border bg-background p-3" data-testid="import-page">
-                      <p className="break-words text-sm font-medium text-foreground">
+                      <p className="break-words text-body font-medium text-foreground">
                         {p.path} <span className="font-normal text-muted-foreground">→ {TARGET_LABEL[p.target]}</span>
                       </p>
                       {st?.error ? (
@@ -409,17 +409,17 @@ export function BrainImport({ laneId, aiConfigured }: { laneId: string; aiConfig
                         </Alert>
                       ) : null}
                       {st?.saved ? (
-                        <p className="text-sm text-foreground" role="status">
+                        <p className="text-body text-foreground" role="status">
                           Saved.
                         </p>
                       ) : st?.proposal ? (
                         <div className="flex flex-col gap-3">
                           {st.proposal.skips.instructions + st.proposal.skips.sensitive + st.proposal.skips.nicholsLaw > 0 ? (
-                            <p className="text-xs text-muted-foreground">
+                            <p className="text-small text-muted-foreground">
                               Left out: {String(st.proposal.skips.instructions)} line(s) that read like instructions, {String(st.proposal.skips.sensitive)} section(s) with passwords or account numbers, {String(st.proposal.skips.nicholsLaw)} section(s) naming Nichols Law.
                             </p>
                           ) : null}
-                          {st.proposal.changes.length === 0 ? <p className="text-sm text-muted-foreground">Nothing would change.</p> : <DiffCard proposal={st.proposal} />}
+                          {st.proposal.changes.length === 0 ? <p className="text-body text-muted-foreground">Nothing would change.</p> : <DiffCard proposal={st.proposal} />}
                           <Button className={tap} disabled={st.busy} onClick={() => void savePage(p)}>
                             {st.busy ? "Saving…" : `Save ${p.path}`}
                           </Button>
@@ -442,7 +442,7 @@ export function BrainImport({ laneId, aiConfigured }: { laneId: string; aiConfig
                   </Alert>
                 )}
                 <div className="flex flex-col gap-1">
-                  <label htmlFor="import-text" className="text-sm font-medium text-foreground">
+                  <label htmlFor="import-text" className="text-body font-medium text-foreground">
                     Paste the text here
                   </label>
                   <textarea
@@ -457,16 +457,16 @@ export function BrainImport({ laneId, aiConfigured }: { laneId: string; aiConfig
                       setEmpty(null);
                     }}
                   />
-                  <p className="text-xs text-muted-foreground" aria-live="polite">
+                  <p className="text-small text-muted-foreground" aria-live="polite">
                     {text.length.toLocaleString("en-US")} of {MAX_PASTE_CHARS.toLocaleString("en-US")} characters
                   </p>
                 </div>
-                <label className="flex flex-col gap-1 text-sm font-medium text-foreground">
+                <label className="flex flex-col gap-1 text-body font-medium text-foreground">
                   Or choose a file (.txt, .md or .json, up to 10 MB)
                   <input type="file" accept=".txt,.md,.json,text/plain,text/markdown,application/json" className={control} onChange={(e) => e.target.files?.[0] && void onTextFile(e.target.files[0])} />
                 </label>
                 {fileNote ? (
-                  <p className="text-xs text-muted-foreground" role="status">
+                  <p className="text-small text-muted-foreground" role="status">
                     {fileNote}
                   </p>
                 ) : null}
@@ -484,10 +484,10 @@ export function BrainImport({ laneId, aiConfigured }: { laneId: string; aiConfig
             )}
           </div>
 
-          <p className="text-sm font-medium text-foreground" data-testid="import-warning">
+          <p className="text-body font-medium text-foreground" data-testid="import-warning">
             {WARNING_LINE}
           </p>
-          <p className="text-xs text-muted-foreground">{LOCAL_READ_NOTE}</p>
+          <p className="text-small text-muted-foreground">{LOCAL_READ_NOTE}</p>
         </div>
       )}
     </section>

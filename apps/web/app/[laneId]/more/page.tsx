@@ -1,6 +1,5 @@
 // iPhone "More" tab: the menu entries that have no tab of their own, and sign-out. A tab page, so no back link.
 import Link from "next/link";
-import { Suspense } from "react";
 import { Button, laneHref, MORE_ITEMS, navItem, PageHeader } from "@nichols/ui";
 import { OnboardingMoreRow } from "@/components/onboarding-entry";
 import { ThemeToggle } from "@/components/theme-toggle";
@@ -9,11 +8,7 @@ import { onboardingFor } from "@/lib/onboarding-progress";
 import { signOut } from "../../sign-in/actions";
 
 export default function Page(props: PageProps<"/[laneId]/more">) {
-  return (
-    <Suspense fallback={null}>
-      <More params={props.params} />
-    </Suspense>
-  );
+  return <More params={props.params} />;
 }
 
 async function More({ params }: { params: Promise<{ laneId: string }> }) {
@@ -28,7 +23,7 @@ async function More({ params }: { params: Promise<{ laneId: string }> }) {
           const item = navItem(key);
           return (
             <li key={key}>
-              <Link className="block px-4 py-3 text-sm" href={laneHref(lane.laneId, item.segment)}>
+              <Link className="block px-4 py-3 text-body" href={laneHref(lane.laneId, item.segment)}>
                 {item.label}
               </Link>
             </li>

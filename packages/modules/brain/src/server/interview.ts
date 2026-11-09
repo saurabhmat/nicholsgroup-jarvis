@@ -410,8 +410,9 @@ async function withCompletion(env: InterviewEnv, groups: GroupView[]): Promise<G
 
 /** Section progress only (menu badge, Home banner, More, Settings). READ-ONLY: never writes, even to backfill. */
 export async function loadProgress(env: InterviewEnv): Promise<{ id: string; title: string; complete: boolean }[]> {
-  const snap = await snapshot(env);
-  const groups = applyCompletion(buildGroups(snap.docs, snap.config, env.ctx), await readCompletions(env));
+  // The pages/settings snapshot and the stored completions are independent reads (T-230 A): together, not one after the other.
+  const [snap, stored] = await Promise.all([snapshot(env), readCompletions(env)]);
+  const groups = applyCompletion(buildGroups(snap.docs, snap.config, env.ctx), stored);
   return groups.map((g) => ({ id: g.id, title: g.title, complete: g.complete }));
 }
 

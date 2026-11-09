@@ -2,8 +2,9 @@
 // requests go to /sign-in and AAL1 (email code only) page requests go to /mfa. API routes are not redirected: their
 // guards answer 401/403 (T-017), and RLS refuses AAL1 anyway.
 import { NextResponse, type NextRequest } from "next/server";
-import { cookieSessionReader, createGuards, laneSegment, laneVerdict, refreshSession, safeNextPath, type CookieStore } from "@nichols/core/auth";
+import { createGuards, laneSegment, laneVerdict, refreshSession, safeNextPath, type CookieStore } from "@nichols/core/auth";
 import { isOnboardingPath, onboardingVerdict } from "@/lib/onboarding-gate";
+import { createTimings, timingEnabled } from "@/lib/server-timing";
 
 const PUBLIC_PATHS = ["/sign-in", "/auth/confirm"];
 const MFA_PATH = "/mfa";
@@ -17,6 +18,16 @@ const NOT_FOUND_HTML =
   '<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="robots" content="noindex"><meta name="color-scheme" content="light dark"><title>Page not found</title></head><body><h1>Page not found</h1><p>This page does not exist, or you do not have access to it.</p><p><a href="/">Go to your home page</a></p></body></html>';
 
 export async function proxy(request: NextRequest) {
+  // T-230 A: names and durations only, on the response, and only in dev or with SERVER_TIMING=1 on the server.
+  const timings = createTimings(null);
+  // SERVER_TIMING=1 is for local or Preview measurement only (it publishes these timings to every caller). The lane-gate
+  // span is left off a 404 so the header never shows how long a refused lane took compared with an allowed one.
+  const stamp = <R extends NextResponse>(r: R, omit?: string): R => {
+    if (timingEnabled()) {
+      r.headers.set("server-timing", timings.entries().filter((e) => e.name !== omit).map((e) => `${e.name};dur=${String(e.ms)}`).join(", "));
+    }
+    return r;
+  };
   let response = NextResponse.next({ request });
   const cookieStore: CookieStore = {
     getAll: () => request.cookies.getAll(),
@@ -27,10 +38,10 @@ export async function proxy(request: NextRequest) {
       for (const [k, v] of Object.entries(headers ?? {})) response.headers.set(k, v);
     },
   };
-  const { signedIn, aal } = await refreshSession(cookieStore);
+  const { signedIn, aal, session } = await timings.time("proxy.auth", () => refreshSession(cookieStore));
 
   const { pathname, search } = request.nextUrl;
-  if (pathname.startsWith("/api/") || PUBLIC_PATHS.some((p) => under(pathname, p))) return response;
+  if (pathname.startsWith("/api/") || PUBLIC_PATHS.some((p) => under(pathname, p))) return stamp(response);
 
   const target = !signedIn ? "/sign-in" : aal !== "aal2" && !under(pathname, MFA_PATH) ? MFA_PATH : null;
   if (!target) {
@@ -38,23 +49,30 @@ export async function proxy(request: NextRequest) {
     // is only about the status code: the layout and every page verify the lane again (lib/lane-page.ts), and anything
     // other than a definite refusal (outage, expired session) is passed through to them.
     const segment = laneSegment(pathname);
-    const guards = segment && signedIn ? createGuards(cookieSessionReader(cookieStore)) : null;
+    // T-230 A: the session refreshSession just verified is reused (no second cookie read and verification). The status
+    // code only matters for a document load. A client-side navigation or prefetch is a script fetch (`Sec-Fetch-Dest:
+    // empty`; a browser sets it and page script cannot change it; Next strips its own `rsc` header before the proxy runs, so
+    // that one cannot be used), and the page's own lane check answers it, so the proxy skips its duplicate lane query.
+    // Anything else, including a request with no such header (curl, tests), is checked as before. A client that lies about
+    // it only changes the status code of its own response: the layout and page still verify the lane.
+    const isFetch = request.headers.get("sec-fetch-dest") === "empty";
+    const guards = segment && signedIn && !isFetch ? createGuards(async () => session) : null;
     // H-042: the onboarding page is only for an owner with the brain view. Its own notFound() runs inside a Suspense
     // boundary after the shell has streamed (status 200), so the status is decided here, before streaming. Its check
     // (requireRole) includes the lane check, so onboarding paths skip the separate lane verdict (one set of round trips).
     const denied =
       guards !== null &&
       segment !== null &&
-      (await (isOnboardingPath(pathname) ? onboardingVerdict(guards, segment) : laneVerdict(guards, segment))) === "denied";
+      (await timings.time("proxy.lane", () => (isOnboardingPath(pathname) ? onboardingVerdict(guards, segment) : laneVerdict(guards, segment)))) === "denied";
     if (denied) {
       const hidden = new NextResponse(NOT_FOUND_HTML, { status: 404, headers: { "content-type": "text/html; charset=utf-8" } });
       for (const c of response.cookies.getAll()) hidden.cookies.set(c);
       // Per user and never stored, whether or not the session was refreshed on this request.
       hidden.headers.set("cache-control", "private, no-store");
       hidden.headers.set("vary", "cookie");
-      return hidden;
+      return stamp(hidden, "proxy.lane");
     }
-    return response;
+    return stamp(response);
   }
   const url = request.nextUrl.clone();
   url.pathname = target;
@@ -65,7 +83,7 @@ export async function proxy(request: NextRequest) {
   for (const c of response.cookies.getAll()) redirect.cookies.set(c);
   const cacheControl = response.headers.get("cache-control");
   if (cacheControl) redirect.headers.set("cache-control", cacheControl);
-  return redirect;
+  return stamp(redirect);
 }
 
 export const config = {

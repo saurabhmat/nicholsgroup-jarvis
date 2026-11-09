@@ -31,7 +31,7 @@ export function PeriodToggle({ defaultPeriod = "mtd", onChange }: PeriodTogglePr
             onChange?.(p.key);
           }}
           className={cn(
-            "px-3 py-2 text-sm",
+            "px-3 py-2 text-body",
             period === p.key ? "bg-primary font-semibold text-primary-foreground" : "text-foreground hover:bg-accent",
           )}
         >

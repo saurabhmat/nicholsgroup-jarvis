@@ -56,6 +56,7 @@ const env = {
     Object.entries(process.env).filter(([k]) => /^(PATH|HOME|USER|SHELL|LANG|LC_[A-Z]+|TERM|TMPDIR|TEMP|TMP|NODE_[A-Z_]+|npm_[a-z_]+|PNPM_[A-Z_]+|COREPACK_[A-Z_]+|XDG_[A-Z_]+)$/.test(k)),
   ),
   APP_ENV: "local",
+  ...(process.env.SERVER_TIMING === "1" ? { SERVER_TIMING: "1" } : {}), // T-230 A: server timing for the measurement spec only
   ENABLED_LANES: "PKG",
   NEXT_PUBLIC_APP_URL: `http://localhost:${E2E_PORT}`,
   NEXT_PUBLIC_SUPABASE_URL: local.API_URL,

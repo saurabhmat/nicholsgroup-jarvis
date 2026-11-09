@@ -14,7 +14,7 @@ export function LaneChip({ code, name, className }: LaneChipProps) {
     <span
       data-slot="lane-chip"
       className={cn(
-        "inline-flex w-fit items-center rounded-control border border-primary bg-primary-tint px-2 py-0.5 text-xs font-semibold tracking-wide text-primary",
+        "inline-flex w-fit items-center rounded-control border border-primary bg-primary-tint px-2 py-0.5 text-small font-semibold tracking-wide text-primary",
         className,
       )}
     >

@@ -8,7 +8,7 @@ import type { OnboardingView } from "@/lib/onboarding";
 export function BrainSection({ laneId, view }: { laneId: string; view: OnboardingView }) {
   const base = `/${encodeURIComponent(laneId)}/onboarding`;
   return (
-    <section id="ai-brain" aria-labelledby="ai-brain-title" className="scroll-mt-4">
+    <section id="ai-brain" aria-labelledby="ai-brain-title" className="scroll-mt-8">
       <Card>
         <CardHeader>
           <CardTitle as="h2" id="ai-brain-title">
@@ -20,9 +20,9 @@ export function BrainSection({ laneId, view }: { laneId: string; view: Onboardin
           </CardDescription>
         </CardHeader>
         <CardContent className="flex flex-col gap-4">
-          <ul className="flex flex-col divide-y divide-border rounded-card border border-border" data-testid="brain-status-list">
+          <ul className="grid gap-2 xl:grid-cols-2" data-testid="brain-status-list">
             {view.sections.map((s) => (
-              <li key={s.id} className="flex flex-wrap items-center gap-3 px-3 py-2 text-sm">
+              <li key={s.id} className="flex flex-wrap items-center gap-3 rounded-control border border-border px-3 py-1 text-body">
                 <span className="min-w-0 flex-1 break-words font-medium text-foreground">{s.title}</span>
                 {view.done === null ? null : <Badge variant={s.done ? "success" : "muted"}>{s.done ? "Done" : "Not done"}</Badge>}
                 <Link href={`${base}?step=${encodeURIComponent(s.id)}`} prefetch={false} className="inline-flex min-h-11 items-center px-2 text-primary underline underline-offset-2">

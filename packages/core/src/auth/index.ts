@@ -56,23 +56,32 @@ export class AuthError extends Error {
   }
 }
 
+/**
+ * The session in the cookies, verified once: the access token is checked with `auth.getClaims(token)` (local JWT check
+ * when the project signs with an asymmetric key; supabase-js asks the Auth server otherwise) and identity and AAL come
+ * from those verified claims only, never from the cookie's user object. "unavailable" is an Auth outage (not "no session").
+ */
+async function verifiedSession(supabase: ReturnType<typeof authClient>): Promise<VerifiedSession | null | "unavailable"> {
+  const { data: sessionData } = await supabase.auth.getSession();
+  const token = sessionData.session?.access_token;
+  if (!token) return null;
+  const { data, error } = await supabase.auth.getClaims(token);
+  if (error?.name === "AuthRetryableFetchError") return "unavailable";
+  const claims = data?.claims;
+  if (error || !claims || typeof claims.sub !== "string" || claims.sub === "") return null;
+  return {
+    userId: claims.sub,
+    accessToken: token,
+    aal: claims.aal === "aal2" ? "aal2" : "aal1",
+    mfaVerifiedAt: totpVerifiedAt(claims.amr),
+  };
+}
+
 export function cookieSessionReader(cookies: CookieStore): SessionReader {
   return async () => {
-    const supabase = authClient(cookies);
-    const { data: sessionData } = await supabase.auth.getSession();
-    const token = sessionData.session?.access_token;
-    if (!token) return null;
-    // Verify THIS token and take identity and AAL from its verified claims only, never from the cookie's user object.
-    const { data, error } = await supabase.auth.getClaims(token);
-    if (error?.name === "AuthRetryableFetchError") throw new Error("auth service unavailable");
-    const claims = data?.claims;
-    if (error || !claims || typeof claims.sub !== "string" || claims.sub === "") return null;
-    return {
-      userId: claims.sub,
-      accessToken: token,
-      aal: claims.aal === "aal2" ? "aal2" : "aal1",
-      mfaVerifiedAt: totpVerifiedAt(claims.amr),
-    };
+    const session = await verifiedSession(authClient(cookies));
+    if (session === "unavailable") throw new Error("auth service unavailable");
+    return session;
   };
 }
 
@@ -258,13 +267,15 @@ export function authActions(cookies: CookieStore): AuthActions {
 
 /**
  * For proxy.ts: refreshes the session cookie when needed (writes go through cookies.setAll) and reports whether
- * the request carries a valid session and at which AAL. Never throws for a missing or invalid session.
+ * the request carries a valid session and at which AAL. Never throws for a missing or invalid session, nor for an
+ * Auth outage: that reads as signed out here, so the proxy redirects to /sign-in as it always did (the page itself still
+ * treats an outage as an error, never as access). `session` is the same verified session, so the
+ * proxy's lane check does not read and verify the cookie a second time.
  */
-export async function refreshSession(cookies: CookieStore): Promise<{ signedIn: boolean; aal: Aal | null }> {
-  const { data, error } = await authClient(cookies).auth.getClaims();
-  const claims = data?.claims;
-  if (error || !claims || typeof claims.sub !== "string" || claims.sub === "") return { signedIn: false, aal: null };
-  return { signedIn: true, aal: claims.aal === "aal2" ? "aal2" : "aal1" };
+export async function refreshSession(cookies: CookieStore): Promise<{ signedIn: boolean; aal: Aal | null; session: VerifiedSession | null }> {
+  const session = await verifiedSession(authClient(cookies));
+  if (session === null || session === "unavailable") return { signedIn: false, aal: null, session: null };
+  return { signedIn: true, aal: session.aal, session };
 }
 
 /**

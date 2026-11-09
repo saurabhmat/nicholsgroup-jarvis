@@ -39,7 +39,7 @@ export function ErrorBanner({
         <div className="mt-2 flex flex-wrap items-center gap-3 sm:mt-0">
           {action}
           {supportHref ? (
-            <a href={supportHref} className="text-sm font-medium underline underline-offset-4">
+            <a href={supportHref} className="text-body font-medium underline underline-offset-4">
               {supportLabel}
             </a>
           ) : null}

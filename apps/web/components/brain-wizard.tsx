@@ -66,7 +66,7 @@ export function BrainWizard({ laneId, initialStep, hadStep }: { laneId: string; 
       </Alert>
     );
   }
-  if (!state || !stage) return <p className="text-sm text-muted-foreground" aria-live="polite">Loading your setup…</p>;
+  if (!state || !stage) return <p className="text-body text-muted-foreground" aria-live="polite">Loading your setup…</p>;
 
   const groups = state.groups;
   const doneCount = groups.filter((g) => g.complete).length;
@@ -164,7 +164,7 @@ export function BrainWizard({ laneId, initialStep, hadStep }: { laneId: string; 
     <section aria-label="Guided setup" className="flex flex-col gap-4" data-testid="brain-wizard" data-stage={stageKey}>
       {stage.kind !== "intro" ? (
         <div className="flex flex-col gap-2">
-          <p className="text-sm font-medium text-foreground md:hidden" data-testid="wizard-step-label">
+          <p className="text-body font-medium text-foreground xl:hidden" data-testid="wizard-step-label">
             {stage.kind === "group" ? `Step ${String(currentIndex + 1)} of ${String(total)}` : "All steps"}
           </p>
           <div className="flex items-center gap-3">
@@ -179,15 +179,15 @@ export function BrainWizard({ laneId, initialStep, hadStep }: { laneId: string; 
             >
               <div className="h-full bg-primary transition-[width]" style={{ width: `${String(Math.round((doneCount / Math.max(total, 1)) * 100))}%` }} />
             </div>
-            <span className="text-xs text-muted-foreground" data-testid="wizard-progress-text">
+            <span className="text-small text-muted-foreground" data-testid="wizard-progress-text">
               {doneCount} of {total} saved
             </span>
           </div>
         </div>
       ) : null}
 
-      <div className="grid gap-6 md:grid-cols-[16rem_minmax(0,1fr)]">
-        <nav aria-label="Setup sections" className="hidden md:block" data-testid="wizard-rail">
+      <div className="grid gap-4 xl:grid-cols-[280px_minmax(0,1fr)] xl:gap-6">
+        <nav aria-label="Setup sections" className="hidden xl:block" data-testid="wizard-rail">
           <ol className="flex flex-col gap-1">
             {groups.map((g, i) => {
               const current = stage.kind === "group" && stage.id === g.id;
@@ -198,11 +198,11 @@ export function BrainWizard({ laneId, initialStep, hadStep }: { laneId: string; 
                     aria-current={current ? "step" : undefined}
                     onClick={() => go({ kind: "group", id: g.id })}
                     className={cn(
-                      "flex min-h-11 w-full items-center gap-2 rounded-control border-l-[3px] px-3 py-2 text-left text-sm hover:bg-muted",
+                      "flex min-h-11 w-full items-center gap-2 rounded-control border-l-[3px] px-3 py-2 text-left text-body hover:bg-muted",
                       current ? "border-gold bg-primary-tint font-semibold text-foreground" : "border-transparent text-muted-foreground",
                     )}
                   >
-                    <span className="w-5 shrink-0 text-xs tabular-nums">{i + 1}</span>
+                    <span className="w-5 shrink-0 text-small tabular-nums">{i + 1}</span>
                     <span className="min-w-0 flex-1 break-words">{g.title}</span>
                     <Badge variant={g.complete ? "success" : current ? "secondary" : "muted"}>{g.complete ? "Done" : current ? "Current" : "To do"}</Badge>
                   </button>
@@ -212,7 +212,7 @@ export function BrainWizard({ laneId, initialStep, hadStep }: { laneId: string; 
           </ol>
         </nav>
 
-        <div className="flex min-w-0 flex-col gap-4 rounded-card border border-border bg-card p-4 md:p-6">
+        <div className="flex min-w-0 flex-col gap-4 rounded-card border border-border bg-card p-5 shadow-card md:p-6">
           {notice ? (
             <Alert variant="success" role="status" data-testid="interview-notice">
               <AlertDescription>{notice}</AlertDescription>
@@ -235,32 +235,37 @@ export function BrainWizard({ laneId, initialStep, hadStep }: { laneId: string; 
 
           {stage.kind === "intro" ? (
             <div className="flex flex-col gap-4" data-testid="wizard-intro">
-              <h2 ref={headRef} tabIndex={-1} className="font-heading text-xl font-semibold text-foreground outline-none">
+              <h2 ref={headRef} tabIndex={-1} className="font-heading text-card-title font-semibold text-foreground outline-none">
                 Before you start
               </h2>
-              <ul className="flex flex-col gap-3 text-base text-foreground">
-                <li>Jarvis will learn how you work: who you are, how you spend your time, your companies, and how you want your briefing and mail handled.</li>
-                <li>It never stores passwords, account numbers, or client or matter details.</li>
-                <li>Nothing is saved until you approve it. You see the exact change first.</li>
-              </ul>
-              {importSkipped ? null : (
-                <div className="flex flex-col gap-3 rounded-control border border-border bg-background p-4" data-testid="wizard-import-step">
-                  <h3 className="text-base font-semibold text-foreground">Start faster: import what Claude or ChatGPT already knows</h3>
-                  <p className="text-sm text-muted-foreground">Bring in the memories you already have. You choose what to keep, and nothing is saved until you tick it and click Save. You can also do this later in Settings.</p>
-                  <div className="flex flex-col gap-2 sm:flex-row">
-                    <Link href={`/${encodeURIComponent(laneId)}/onboarding/import`} prefetch={false} className={cn(buttonVariants(), tap, "inline-flex items-center justify-center")}>
-                      Import
-                    </Link>
-                    <Button variant="outline" className={tap} onClick={() => setImportSkipped(true)}>
-                      Skip
+              <div className={cn("grid gap-4", importSkipped ? "" : "xl:grid-cols-2")}>
+                <div className="flex flex-col gap-4" data-testid="wizard-learns">
+                  <h3 className="text-card-title font-semibold text-foreground">What Jarvis learns</h3>
+                  <ul className="flex list-disc flex-col gap-3 pl-5 text-body text-foreground">
+                    <li>Jarvis will learn how you work: who you are, how you spend your time, your companies, and how you want your briefing and mail handled.</li>
+                    <li>It never stores passwords, account numbers, or client or matter details.</li>
+                    <li>Nothing is saved until you approve it. You see the exact change first.</li>
+                  </ul>
+                  <div>
+                    <Button className={tap} onClick={() => go({ kind: "group", id: firstIncomplete(groups) ?? groups[0]?.id ?? "" })}>
+                      Start
                     </Button>
                   </div>
                 </div>
-              )}
-              <div>
-                <Button className={tap} onClick={() => go({ kind: "group", id: firstIncomplete(groups) ?? groups[0]?.id ?? "" })}>
-                  Start
-                </Button>
+                {importSkipped ? null : (
+                  <div className="flex flex-col gap-3 rounded-card border border-border bg-background p-5" data-testid="wizard-import-step">
+                    <h3 className="text-card-title font-semibold text-foreground">Start faster: import what Claude or ChatGPT already knows</h3>
+                    <p className="text-body text-muted-foreground">Bring in the memories you already have. You choose what to keep, and nothing is saved until you tick it and click Save. You can also do this later in Settings.</p>
+                    <div className="flex flex-col gap-2 sm:flex-row">
+                      <Link href={`/${encodeURIComponent(laneId)}/onboarding/import`} prefetch={false} className={cn(buttonVariants(), tap, "inline-flex items-center justify-center")}>
+                        Import
+                      </Link>
+                      <Button variant="outline" className={tap} onClick={() => setImportSkipped(true)}>
+                        Skip
+                      </Button>
+                    </div>
+                  </div>
+                )}
               </div>
             </div>
           ) : null}
@@ -290,12 +295,12 @@ export function BrainWizard({ laneId, initialStep, hadStep }: { laneId: string; 
 
           {stage.kind === "finish" ? (
             <div className="flex flex-col gap-4" data-testid="wizard-finish">
-              <h2 ref={headRef} tabIndex={-1} className="font-heading text-xl font-semibold text-foreground outline-none">
+              <h2 ref={headRef} tabIndex={-1} className="font-heading text-card-title font-semibold text-foreground outline-none">
                 Your setup so far
               </h2>
               <ul className="flex flex-col gap-2">
                 {groups.map((g) => (
-                  <li key={g.id} className="flex flex-col gap-1 rounded-control border border-border bg-background p-3 text-sm" data-testid={`finish-${g.id}`}>
+                  <li key={g.id} className="flex flex-col gap-1 rounded-control border border-border bg-background p-3 text-body" data-testid={`finish-${g.id}`}>
                     <div className="flex items-center justify-between gap-2">
                       <span className="font-medium text-foreground">{g.title}</span>
                       <Link
@@ -333,7 +338,7 @@ export function BrainWizard({ laneId, initialStep, hadStep }: { laneId: string; 
                 </Alert>
               ) : (
                 <div className="flex flex-col gap-3" data-testid="interview-employee">
-                  <p className="text-sm text-foreground">
+                  <p className="text-body text-foreground">
                     {state.employee.name}, your Personal Assistant: <Badge variant={state.employee.status === "active" ? "success" : "muted"}>{state.employee.status}</Badge>
                   </p>
                   {state.employee.invalid ? (
@@ -341,7 +346,7 @@ export function BrainWizard({ laneId, initialStep, hadStep }: { laneId: string; 
                       <AlertDescription>The stored profile is not valid, so it cannot be confirmed or activated. Save any Personal Assistant section to review a reset.</AlertDescription>
                     </Alert>
                   ) : null}
-                  <ul className="flex flex-col gap-1 text-xs text-muted-foreground" aria-label="What it may propose">
+                  <ul className="flex flex-col gap-1 text-small text-muted-foreground" aria-label="What it may propose">
                     {state.employee.permissions.map((p) => (
                       <li key={p.lane} className="break-words">
                         {p.laneName}: {p.allowed.length ? `may propose to ${p.allowed.map((a) => ACTION_TEXT[a] ?? a).join(", ")}` : "proposes nothing"}
@@ -350,7 +355,7 @@ export function BrainWizard({ laneId, initialStep, hadStep }: { laneId: string; 
                     ))}
                   </ul>
                   {state.employee.status === "active" ? (
-                    <p className="text-sm text-foreground">Your assistant is active. Change any section above, and save it the same way.</p>
+                    <p className="text-body text-foreground">Your assistant is active. Change any section above, and save it the same way.</p>
                   ) : confirmed ? (
                     <Button className={tap} disabled={busy} onClick={() => void activate()}>
                       {busy ? "Activating…" : "Activate my assistant"}
@@ -364,7 +369,7 @@ export function BrainWizard({ laneId, initialStep, hadStep }: { laneId: string; 
               )}
 
               {/* Test briefing waits for the daily briefing (T-213): disabled, with the reason. */}
-              <div className="flex flex-wrap items-center gap-2 rounded-control border border-border bg-background p-3 text-sm" data-testid="interview-test-briefing">
+              <div className="flex flex-wrap items-center gap-2 rounded-control border border-border bg-background p-3 text-body" data-testid="interview-test-briefing">
                 <span className="min-w-0 flex-1 text-muted-foreground">Arrives with the daily briefing</span>
                 <Button size="sm" variant="outline" className="min-h-11" disabled>
                   Run test briefing
@@ -427,10 +432,10 @@ function GroupScreen({
   return (
     <div className="flex flex-col gap-4" data-testid="interview-group" data-group={group.id}>
       <div>
-        <p className="hidden text-xs text-muted-foreground md:block">
+        <p className="hidden text-small text-muted-foreground xl:block">
           Step {index + 1} of {total} · saves to {group.saves}
         </p>
-        <h2 ref={headRef} tabIndex={-1} className="font-heading text-xl font-semibold text-foreground outline-none">
+        <h2 ref={headRef} tabIndex={-1} className="font-heading text-card-title font-semibold text-foreground outline-none">
           {group.title}
         </h2>
       </div>
@@ -443,8 +448,8 @@ function GroupScreen({
 
       {proposal ? (
         <div className="flex flex-col gap-3" data-testid="interview-proposal">
-          <h3 className="text-sm font-semibold text-foreground">Here is the change. Nothing is saved yet.</h3>
-          {changes === 0 ? <p className="text-sm text-muted-foreground">Nothing would change. Saving records this section as done.</p> : <DiffCard proposal={proposal} />}
+          <h3 className="text-body font-semibold text-foreground">Here is the change. Nothing is saved yet.</h3>
+          {changes === 0 ? <p className="text-body text-muted-foreground">Nothing would change. Saving records this section as done.</p> : <DiffCard proposal={proposal} />}
         </div>
       ) : null}
 
@@ -477,13 +482,13 @@ function GroupScreen({
               Nothing to add
             </Button>
             {unsaved ? (
-              <span id="nothing-to-add-hint" className="w-full text-xs text-muted-foreground">
+              <span id="nothing-to-add-hint" className="w-full text-small text-muted-foreground">
                 {SAVE_FIRST_HINT}
               </span>
             ) : null}
           </>
         )}
-        <span className="sr-only md:not-sr-only md:ml-auto md:text-xs md:text-muted-foreground">Skipped answers stay &quot;Not provided&quot;.</span>
+        <span className="sr-only md:not-sr-only md:ml-auto md:text-small md:text-muted-foreground">Skipped answers stay &quot;Not provided&quot;.</span>
       </div>
     </div>
   );

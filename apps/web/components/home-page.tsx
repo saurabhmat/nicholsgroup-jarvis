@@ -3,23 +3,27 @@
 // tiles (no figures until the finance tasks and D-8: each says why), and "Coming up" when today is clear. No approvals
 // yet (T-115). Mail appears as counts only: no subject, sender or body on Home.
 import Link from "next/link";
+import { Suspense } from "react";
 import { Alert, AlertDescription, AlertTitle, Badge, buttonVariants, EmptyState, homeHeading, KpiCard, laneHref, PageHeader, PageSection } from "@nichols/ui";
 import { eyebrowDate } from "@/lib/format-date";
 import { guards } from "@/lib/guards";
 import { composeBriefing, formatDay, formatTime, homeFor, homeKpis, timedLeft, type AttentionItem, type CalendarState, type HomeMeeting } from "@/lib/home";
 import { loadLane } from "@/lib/lane-page";
 import { OnboardingBanner } from "./onboarding-entry";
+import { HomeSkeleton } from "./page-skeleton";
 import { onboardingFor } from "@/lib/onboarding-progress";
+import { timed } from "@/lib/timed";
 
 export async function HomePage({ params }: { params: Promise<{ laneId: string }> }) {
   const lane = await loadLane((await params).laneId);
   const now = new Date();
-  const view = await homeFor(await guards(), lane.laneId, now);
-  const onboarding = await onboardingFor(lane.laneId);
   const heading = homeHeading(); // no first name in the session yet: "Good morning"
+  // T-230 A: the header renders as soon as the lane is verified; the data sections and the setup banner stream in behind it
+  // (each in its own boundary, so the slow setup lookup never holds back today's figures, and neither holds the header).
   return (
-    <div className="flex flex-col gap-6">
+    <div className="flex flex-col gap-4">
       <PageHeader
+        className="mb-2"
         eyebrow={`${eyebrowDate(now)} · ${lane.name}`}
         title={heading.lead}
         accent={heading.accent}
@@ -29,7 +33,28 @@ export async function HomePage({ params }: { params: Promise<{ laneId: string }>
           </Link>
         }
       />
-      <OnboardingBanner laneId={lane.laneId} progress={onboarding} />
+      {/* The setup banner is phone-only (md:hidden). Its slot has the banner's own height while it loads, so it never pushes the cards down. */}
+      <Suspense fallback={<div aria-hidden data-testid="setup-banner-slot" className={`${BANNER_SLOT} md:hidden`} />}>
+        <SetupBanner laneId={lane.laneId} />
+      </Suspense>
+      <Suspense fallback={<HomeSkeleton />}>
+        <HomeSections laneId={lane.laneId} now={now} />
+      </Suspense>
+    </div>
+  );
+}
+
+/** Height of the phone banner (one line plus padding); the Suspense slot above reserves exactly this. */
+const BANNER_SLOT = "h-[3.25rem]";
+
+async function SetupBanner({ laneId }: { laneId: string }) {
+  return <OnboardingBanner laneId={laneId} progress={await onboardingFor(laneId)} />;
+}
+
+async function HomeSections({ laneId, now }: { laneId: string; now: Date }) {
+  const view = await timed("load.home", async () => homeFor(await guards(), laneId, now));
+  return (
+    <>
       {view.unavailable ? (
         <Alert variant="alert">
           <AlertTitle>Some of today&apos;s information could not be loaded</AlertTitle>
@@ -37,36 +62,46 @@ export async function HomePage({ params }: { params: Promise<{ laneId: string }>
         </Alert>
       ) : null}
       <Briefing lines={view.unavailable ? [] : composeBriefing(view, now)} />
-      <section aria-label="Key figures" className="grid grid-cols-2 gap-4 lg:grid-cols-4">
+      <section aria-label="Key figures" data-testid="home-kpis" className="grid grid-cols-2 gap-4 lg:grid-cols-4">
         {homeKpis(view.feeds).map((k) => (
           <KpiCard key={k.key} label={k.label} bookBalance={k.bookBalance} status="no_data" statusText={k.statusText} />
         ))}
       </section>
-      <div className="grid gap-6 lg:grid-cols-2">
-        <PageSection title="Needs your attention">{view.unavailable ? undefined : <AttentionList laneId={lane.laneId} items={view.attention} />}</PageSection>
+      <div data-testid="home-main-grid" className="grid gap-4 lg:grid-cols-3">
+        <PageSection title="Needs your attention" className="lg:col-span-2">{view.unavailable ? undefined : <AttentionList laneId={laneId} items={view.attention} />}</PageSection>
         <PageSection title="Today's meetings" note={view.meetings.length > 0 || view.upcoming.length > 0 ? "Google Calendar" : undefined}>
           {view.unavailable ? undefined : <Meetings calendar={view.calendar} meetings={view.meetings} upcoming={view.upcoming} now={now} />}
         </PageSection>
       </div>
-      <PageSection title="Projects at a glance" emptyTitle="No project board connected" emptyDescription="Project status appears here, read-only, once the project board is connected." />
-    </div>
+      <ProjectsNotice />
+    </>
+  );
+}
+
+/** "Projects at a glance" is one line while no project board is connected (the board arrives with the Projects task). */
+function ProjectsNotice() {
+  return (
+    <section aria-label="Projects at a glance" data-testid="projects-notice" className="flex flex-wrap items-baseline gap-x-3 gap-y-1 rounded-card border border-border bg-card px-5 py-3 text-card-foreground shadow-card">
+      <h2 className="font-heading text-card-title font-semibold text-foreground">Projects at a glance</h2>
+      <p className="text-small text-muted-foreground">No project board connected. Status appears here, read-only, once the board is connected.</p>
+    </section>
   );
 }
 
 function Briefing({ lines }: { lines: string[] }) {
   return (
-    <section aria-label="Today's briefing" className="relative overflow-hidden rounded-card border border-border bg-card p-5 text-card-foreground sm:p-6">
+    <section aria-label="Today's briefing" className="relative overflow-hidden rounded-card border border-border bg-card p-5 text-card-foreground shadow-card sm:p-6">
       <span aria-hidden className="absolute inset-x-0 top-0 h-1 bg-gold" />
       <div className="flex flex-wrap items-baseline justify-between gap-2">
-        <h2 className="font-heading text-xl font-semibold text-foreground">Today&apos;s briefing</h2>
-        <p className="text-xs text-muted-foreground">From your connected sources</p>
+        <h2 className="font-heading text-card-title font-semibold text-foreground">Today&apos;s briefing</h2>
+        <p className="text-small text-muted-foreground">From your connected sources</p>
       </div>
       {lines.length > 0 ? (
-        <p data-testid="briefing" className="mt-3 max-w-3xl text-base leading-relaxed text-foreground">
+        <p data-testid="briefing" className="mt-3 max-w-4xl text-body leading-relaxed text-foreground">
           {lines.join(" ")}
         </p>
       ) : (
-        <p className="mt-3 text-sm text-muted-foreground">Your briefing appears here once this company&apos;s sources are connected.</p>
+        <p className="mt-3 text-body text-muted-foreground">Your briefing appears here once this company&apos;s sources are connected.</p>
       )}
     </section>
   );
@@ -80,7 +115,7 @@ function AttentionList({ laneId, items }: { laneId: string; items: AttentionItem
     <ul data-testid="attention-list" className="flex flex-col divide-y divide-border">
       {items.map((item) => (
         <li key={item.key}>
-          <Link href={laneHref(laneId, item.segment)} className="flex items-center justify-between gap-3 py-3 text-sm hover:underline">
+          <Link href={laneHref(laneId, item.segment)} className="flex items-center justify-between gap-3 py-3 text-body hover:underline">
             <span className="min-w-0 truncate font-medium text-foreground">{item.label}</span>
             {item.count !== undefined ? (
               <Badge variant="alert" aria-label={`${item.count} ${item.source}`}>
@@ -108,7 +143,7 @@ function Meetings({ calendar, meetings, upcoming, now }: { calendar: CalendarSta
   const shown = anyLeft ? meetings : meetings.filter((m) => m.allDay);
   const clear = anyLeft ? null : (
     <div className="flex flex-col gap-3">
-      <p className="text-sm text-muted-foreground">{meetings.length === 0 ? "Nothing scheduled today." : meetings.some((m) => !m.allDay) ? "No more meetings today." : "No meetings today."}</p>
+      <p className="text-body text-muted-foreground">{meetings.length === 0 ? "Nothing scheduled today." : meetings.some((m) => !m.allDay) ? "No more meetings today." : "No meetings today."}</p>
       {upcoming.length > 0 ? <ComingUp meetings={upcoming} /> : null}
     </div>
   );
@@ -119,7 +154,7 @@ function Meetings({ calendar, meetings, upcoming, now }: { calendar: CalendarSta
         {shown.map((m, i) => {
           const past = !m.allDay && Date.parse(m.endAt) <= now.getTime();
           return (
-            <li key={`${String(i)}:${m.startAt}`} className={`flex gap-4 py-3 text-sm ${past ? "opacity-60" : ""}`}>
+            <li key={`${String(i)}:${m.startAt}`} className={`flex gap-4 py-3 text-body ${past ? "opacity-60" : ""}`}>
               <span className="w-32 shrink-0 tabular-nums text-muted-foreground">{m.allDay ? "All day" : `${formatTime(m.startAt)} – ${formatTime(m.endAt)}`}</span>
               <span className="flex min-w-0 flex-col gap-1">
                 <span className="truncate font-medium text-foreground">{m.title}</span>
@@ -151,10 +186,10 @@ function Meetings({ calendar, meetings, upcoming, now }: { calendar: CalendarSta
 function ComingUp({ meetings }: { meetings: HomeMeeting[] }) {
   return (
     <div>
-      <h3 className="mb-1 text-xs font-semibold uppercase tracking-wider text-muted-foreground">Coming up</h3>
+      <h3 className="mb-1 text-small font-semibold uppercase tracking-wider text-muted-foreground">Coming up</h3>
       <ul data-testid="upcoming-list" className="flex flex-col divide-y divide-border">
         {meetings.map((m, i) => (
-          <li key={`${String(i)}:${m.startAt}`} className="flex gap-4 py-3 text-sm">
+          <li key={`${String(i)}:${m.startAt}`} className="flex gap-4 py-3 text-body">
             <span className="w-32 shrink-0 tabular-nums text-muted-foreground">
               {formatDay(m.startAt)}
               <br />

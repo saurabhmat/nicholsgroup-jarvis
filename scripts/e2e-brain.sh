@@ -11,6 +11,7 @@
 # WARNING: the run RESETS THE LOCAL DATABASE (Playwright global setup): local connections, Vault tokens and brain pages
 # are wiped. Never touches a linked or production project.
 #
+# E2E_SPECS="a.spec.ts b.spec.ts" runs those specs instead.
 # Defaults: E2E_SERVER=build (next build + next start; faster than next dev on a slow filesystem). Override with
 # E2E_SERVER=dev; E2E_SKIP_BUILD=1 reuses the last build. Extra arguments go to Playwright (for example --project=desktop).
 set -euo pipefail
@@ -56,4 +57,6 @@ export E2E_SERVER="${E2E_SERVER:-build}"
 
 cd "$web"
 # Not exec: the EXIT trap must run after Playwright finishes.
-pnpm exec playwright test e2e/onboarding.spec.ts e2e/brain-interview.spec.ts e2e/brain-import.spec.ts e2e/shell.spec.ts "$@"
+# E2E_SPECS overrides the spec list (space-separated), for example the T-230 measurement spec.
+read -r -a specs <<<"${E2E_SPECS:-e2e/onboarding.spec.ts e2e/brain-interview.spec.ts e2e/brain-import.spec.ts e2e/shell.spec.ts}"
+pnpm exec playwright test "${specs[@]}" "$@"

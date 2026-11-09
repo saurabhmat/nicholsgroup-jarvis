@@ -15,8 +15,12 @@ export async function OnboardingPage({
   params: Promise<{ laneId: string }>;
   searchParams: Promise<Record<string, string | string[] | undefined>>;
 }) {
-  const lane = await loadLane((await params).laneId);
-  if (!(await onboardingFor(lane.laneId))) notFound();
+  const laneId = (await params).laneId;
+  // The lane gate and the owner's brain view are independent reads: run together (T-230 A). The page still needs both: a
+  // refused lane ends in loadLane's 404 or redirect, and anything but the owner with the brain view gets the same 404.
+  const [lane, progress] = await Promise.all([loadLane(laneId), onboardingFor(laneId).catch(() => null)]);
+  // null (not the owner with the brain view, a failed lookup, anything else) is never "allowed": it is the same 404.
+  if (!progress) notFound();
   const query = await searchParams;
   return (
     <div className="flex flex-col gap-6">

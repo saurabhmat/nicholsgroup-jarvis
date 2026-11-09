@@ -21,7 +21,7 @@ export function BrainSetupEntry({ laneId }: { laneId: string }) {
             key={e.kind}
             type="button"
             onClick={() => setStart((s) => ({ kind: e.kind, key: (s?.key ?? 0) + 1 }))}
-            className="min-h-11 rounded-full border border-primary bg-primary-tint px-4 py-2 text-sm text-foreground transition-colors hover:bg-muted"
+            className="min-h-11 rounded-full border border-primary bg-primary-tint px-4 py-2 text-body text-foreground transition-colors hover:bg-muted"
             aria-pressed={start?.kind === e.kind}
           >
             {e.label}

@@ -9,8 +9,7 @@ vi.mock("@nichols/core/auth", async (importActual) => {
     ...actual, // the real laneSegment and safeNextPath
     refreshSession: (...args: unknown[]) => refreshSession(...args),
     laneVerdict: (...args: unknown[]) => laneVerdict(...args),
-    createGuards: () => ({}),
-    cookieSessionReader: () => async () => null,
+    createGuards: (read: () => Promise<unknown>) => ({ read }),
   };
 });
 
@@ -105,6 +104,42 @@ describe("proxy onboarding check (H-042: a real 404 before streaming)", () => {
     refreshSession.mockResolvedValue({ signedIn: true, aal: "aal1" });
     expect((await get("/PKG/onboarding")).status).toBe(307);
     expect(onboardingVerdict).not.toHaveBeenCalled();
+  });
+});
+
+describe("proxy reuse and timing (T-230 A)", () => {
+  it("builds the guards from the session refreshSession verified (no second read)", async () => {
+    const session = { userId: "u1", accessToken: "tok", aal: "aal2", mfaVerifiedAt: null };
+    refreshSession.mockResolvedValue({ signedIn: true, aal: "aal2", session });
+    await get("/PKG/finance");
+    const guardsArg = laneVerdict.mock.calls[0]?.[0] as { read: () => Promise<unknown> };
+    expect(await guardsArg.read()).toBe(session);
+  });
+
+  it("skips the status-only lane check for script fetches (client navigations and prefetches: Sec-Fetch-Dest empty); the page still checks", async () => {
+    const res = await proxy(new NextRequest(new URL("/PKG/finance", "http://127.0.0.1:3100"), { headers: { "sec-fetch-dest": "empty" } }));
+    expect(res.status).toBe(200);
+    expect(laneVerdict).not.toHaveBeenCalled();
+    // A document load, and a request with no Sec-Fetch headers at all, are still checked: a denied lane is still a 404.
+    laneVerdict.mockResolvedValue("denied");
+    expect((await get("/PKG/finance")).status).toBe(404);
+    const doc = await proxy(new NextRequest(new URL("/PKG/finance", "http://127.0.0.1:3100"), { headers: { "sec-fetch-dest": "document" } }));
+    expect(doc.status).toBe(404);
+    const onboarding = await proxy(new NextRequest(new URL("/PKG/onboarding", "http://127.0.0.1:3100"), { headers: { "sec-fetch-dest": "empty" } }));
+    expect(onboarding.status).toBe(200);
+    expect(onboardingVerdict).not.toHaveBeenCalled();
+  });
+
+  it("sets Server-Timing (names and durations only) when enabled, and never when it is not", async () => {
+    vi.stubEnv("NODE_ENV", "production");
+    vi.stubEnv("SERVER_TIMING", "");
+    expect((await get("/PKG")).headers.get("server-timing")).toBeNull();
+    vi.stubEnv("SERVER_TIMING", "1");
+    const header = (await get("/PKG")).headers.get("server-timing");
+    expect(header).toMatch(/^proxy\.auth;dur=[\d.]+, proxy\.lane;dur=[\d.]+$/);
+    laneVerdict.mockResolvedValue("denied");
+    expect((await get("/APK")).headers.get("server-timing")).toMatch(/^proxy\.auth;dur=/);
+    vi.unstubAllEnvs();
   });
 });
 

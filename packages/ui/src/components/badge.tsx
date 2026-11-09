@@ -4,7 +4,7 @@ import { cn } from "../lib/utils";
 
 // shadcn/ui Badge. Every variant pairs a text and ground token checked for 4.5:1 contrast.
 export const badgeVariants = cva(
-  "inline-flex w-fit shrink-0 items-center gap-1 whitespace-nowrap rounded-control border px-2 py-0.5 text-xs font-medium",
+  "inline-flex w-fit shrink-0 items-center gap-1 whitespace-nowrap rounded-control border px-2 py-0.5 text-small font-medium",
   {
     variants: {
       variant: {

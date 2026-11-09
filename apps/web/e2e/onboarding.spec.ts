@@ -176,6 +176,34 @@ test("owner, iPhone width: More row, Home banner, Step N of 10 and a sticky Save
   await expectNoAxeViolations(page);
 });
 
+// T-230 B review: Home and Settings (the two restyled pages) at 390 px: no horizontal scroll, 44 px buttons and sub-nav
+// chips, and no axe violations in light or dark.
+test("owner, iPhone width: Home and Settings have no horizontal scroll, 44 px targets and pass axe in both themes", async ({ page }, info) => {
+  test.skip(info.project.name !== "desktop", "owner persona is the desktop project's member");
+  test.setTimeout(240_000);
+  await page.setViewportSize({ width: 390, height: 844 });
+  await signIn(page, personas(info).member);
+  const smallTargets = () =>
+    page.evaluate(() =>
+      [...document.querySelectorAll<HTMLElement>("main button, [data-testid=settings-nav] a")]
+        .filter((el) => el.offsetParent !== null)
+        .filter((el) => el.getBoundingClientRect().height < 44)
+        .map((el) => el.textContent?.trim() ?? el.tagName),
+    );
+
+  for (const route of ["/PKG", "/PKG/settings"]) {
+    await page.goto(route);
+    await expect(page.getByTestId("page-skeleton")).toHaveCount(0);
+    if (route.endsWith("settings")) await expect(page.getByTestId("settings-nav")).toBeVisible();
+    expect(await noHorizontalScroll(page), route).toBe(true);
+    expect(await smallTargets(), route).toEqual([]);
+    for (const theme of ["light", "dark"] as const) {
+      await setTheme(page, theme);
+      await expectNoAxeViolations(page);
+    }
+  }
+});
+
 test("owner: Settings has no placeholder, a status list for AI brain, Composio setting names, the fixed error banner and the origin notice", async ({ page }, info) => {
   test.skip(info.project.name !== "desktop", "owner persona is the desktop project's member");
   test.setTimeout(240_000);
@@ -197,12 +225,13 @@ test("owner: Settings has no placeholder, a status list for AI brain, Composio s
 
   await page.goto("/PKG/settings");
   // The page is opened on 127.0.0.1 while NEXT_PUBLIC_APP_URL is localhost: hosts only (shown with the Google section).
-  await expect(page.getByRole("region", { name: "Google" })).toBeVisible({ timeout: 30_000 });
+  await expect(page.getByRole("region", { name: "Connections" })).toBeVisible({ timeout: 30_000 });
   await expect(page.getByTestId("origin-notice")).toHaveText("You're on 127.0.0.1:3100. Open localhost:3100 to connect accounts.");
 
-  // The e2e server has no Composio settings: the rows name them (names only).
-  await expect(page.getByTestId("composio-gmail")).toBeVisible();
-  await expect(page.getByTestId("composio-gmail").getByRole("button", { name: /^Not configured: COMPOSIO_[A-Z_, ]+ (is|are) not set$/ })).toBeVisible();
+  // The e2e server has no Composio settings at all (no project key): T-230 B shows one line, setting NAME only, instead of per-toolkit rows.
+  await expect(page.getByText("Composio not configured on this server (COMPOSIO_API_KEY not set)")).toBeVisible();
+  await expect(page.getByTestId("composio-gmail")).toHaveCount(0);
+  await expect(page.getByTestId("composio-googlecalendar")).toHaveCount(0);
 
   // The fixed banner, chosen by an allowlisted code; anything else is ignored.
   await page.goto("/PKG/settings?error=google_env");
@@ -233,4 +262,14 @@ test("a role without the brain view sees no Get started, no banner, and the onbo
   const rsc = await page.request.get("/PKG/onboarding?step=A-1", { headers: { RSC: "1" } });
   expect(rsc.status()).toBe(404);
   expect(await rsc.text()).not.toMatch(/brain-wizard|wizard-intro|About-Me|q-A1/);
+
+  // T-230 A review: a client-side navigation or prefetch (script fetch, Sec-Fetch-Dest: empty) skips the proxy's status check,
+  // so the page's own check is what refuses it. Whatever the status, the payload carries nothing of the wizard or the import.
+  for (const path of ["/PKG/onboarding", "/PKG/onboarding?step=A-1", "/PKG/onboarding/import"]) {
+    for (const prefetch of [false, true]) {
+      const res = await page.request.get(path, { headers: { RSC: "1", "Sec-Fetch-Dest": "empty", ...(prefetch ? { "Next-Router-Prefetch": "1" } : {}) } });
+      const body = await res.text();
+      expect(body, `${path} prefetch=${String(prefetch)}`).not.toMatch(/brain-wizard|wizard-intro|Set up your|About-Me|q-A1|brain-import|Import memories|Find facts|import-steps|Step \d+ of/);
+    }
+  }
 });

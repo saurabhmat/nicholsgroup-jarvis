@@ -17,8 +17,10 @@ export default function LaneLayout({ children, params }: LayoutProps<"/[laneId]"
 }
 
 async function LaneShell({ children, params }: { children: ReactNode; params: Promise<{ laneId: string }> }) {
-  const lane = await loadLane((await params).laneId);
-  const onboarding = await onboardingFor(lane.laneId); // null unless the owner has the brain view here
+  const laneId = (await params).laneId;
+  // The badge's setup progress does its own owner/brain checks (null unless the owner has the brain view here), so it
+  // does not wait for the lane check: both run at once. A failed setup lookup is "no entry" (null), so it can never win over the lane check's 404 or redirect. A refused lane still ends in the lane check's 404 or redirect.
+  const [lane, onboarding] = await Promise.all([loadLane(laneId), onboardingFor(laneId).catch(() => null)]);
   return (
     <Shell brand={BRAND} lanes={lane.lanes} currentLaneId={lane.laneId} onboarding={onboarding ? { done: onboarding.done, total: onboarding.total } : null} signOut={signOut}>
       {children}

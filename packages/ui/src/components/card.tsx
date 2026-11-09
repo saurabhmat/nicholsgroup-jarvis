@@ -8,7 +8,7 @@ export function Card({ className, ...props }: ComponentProps<"div">) {
     <div
       data-slot="card"
       className={cn(
-        "flex flex-col gap-4 rounded-card border border-border bg-card p-5 text-card-foreground",
+        "flex flex-col gap-4 rounded-card border border-border bg-card p-5 text-body text-card-foreground shadow-card sm:p-6",
         className,
       )}
       {...props}
@@ -27,12 +27,12 @@ export type CardTitleProps = ComponentProps<"h3"> & {
 
 export function CardTitle({ as: Heading = "h3", className, ...props }: CardTitleProps) {
   return (
-    <Heading data-slot="card-title" className={cn("text-base font-semibold leading-tight", className)} {...props} />
+    <Heading data-slot="card-title" className={cn("font-heading text-card-title font-semibold", className)} {...props} />
   );
 }
 
 export function CardDescription({ className, ...props }: ComponentProps<"p">) {
-  return <p data-slot="card-description" className={cn("text-sm text-muted-foreground", className)} {...props} />;
+  return <p data-slot="card-description" className={cn("text-small text-muted-foreground", className)} {...props} />;
 }
 
 export function CardContent({ className, ...props }: ComponentProps<"div">) {

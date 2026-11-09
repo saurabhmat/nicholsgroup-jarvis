@@ -111,7 +111,7 @@ function InterviewFlow({ laneId, mode, startAt }: { laneId: string; mode: "chat"
       </Alert>
     );
   }
-  if (!state || !view) return <p className="text-sm text-muted-foreground" aria-live="polite">Loading your setup…</p>;
+  if (!state || !view) return <p className="text-body text-muted-foreground" aria-live="polite">Loading your setup…</p>;
 
   const fail = (r: ApiErr) => setError(r);
   const groupView = view.kind === "group" ? state.groups.find((g) => g.id === view.id) : undefined;
@@ -197,8 +197,8 @@ function InterviewFlow({ laneId, mode, startAt }: { laneId: string; mode: "chat"
   return (
     <section className="flex flex-col gap-4 rounded-card border border-border bg-card p-4" aria-label="Brain setup" data-testid="brain-interview" data-mode={mode}>
       <header className="flex flex-col gap-1">
-        <h2 className="text-base font-semibold text-foreground">{mode === "chat" ? "Let's set up your brain" : "Set up your AI brain"}</h2>
-        <p className="text-sm text-muted-foreground">
+        <h2 className="text-body font-semibold text-foreground">{mode === "chat" ? "Let's set up your brain" : "Set up your AI brain"}</h2>
+        <p className="text-body text-muted-foreground">
           A few questions at a time. Nothing is saved until you tap Save, and you see the exact change first.{" "}
           <Link href={setupLink.href} prefetch={false} className="underline">
             {setupLink.text}
@@ -229,7 +229,7 @@ function InterviewFlow({ laneId, mode, startAt }: { laneId: string; mode: "chat"
       {view.kind === "group" && groupView ? (
         <div className="flex flex-col gap-4" data-testid="interview-group" data-group={groupView.id}>
           <div className="flex items-center justify-between gap-2">
-            <h3 ref={headRef} tabIndex={-1} className="text-sm font-semibold text-foreground outline-none">
+            <h3 ref={headRef} tabIndex={-1} className="text-body font-semibold text-foreground outline-none">
               {groupView.title} <span className="font-normal text-muted-foreground">· saves to {groupView.saves}</span>
             </h3>
             <Button size="sm" variant="ghost" className="min-h-11" onClick={() => setView({ kind: "sections" })}>
@@ -256,8 +256,8 @@ function InterviewFlow({ laneId, mode, startAt }: { laneId: string; mode: "chat"
 
           {proposal ? (
             <div ref={proposalRef} tabIndex={-1} className="flex flex-col gap-3 outline-none" data-testid="interview-proposal">
-              <h4 className="text-sm font-semibold text-foreground">Here is the change. Nothing is saved yet.</h4>
-              {proposal.changes.length === 0 ? <p className="text-sm text-muted-foreground">Nothing would change. Saving records this section as done.</p> : <DiffCard proposal={proposal} />}
+              <h4 className="text-body font-semibold text-foreground">Here is the change. Nothing is saved yet.</h4>
+              {proposal.changes.length === 0 ? <p className="text-body text-muted-foreground">Nothing would change. Saving records this section as done.</p> : <DiffCard proposal={proposal} />}
               <div className="flex flex-col gap-2 sm:flex-row">
                 <Button className={tap} disabled={busy} onClick={() => void save(groupView, proposal)}>
                   {busy ? "Saving…" : "Save"}
@@ -279,7 +279,7 @@ function InterviewFlow({ laneId, mode, startAt }: { laneId: string; mode: "chat"
                 Nothing to add
               </Button>
               {hasUnsavedAnswers(groupView, values, editing) ? (
-                <span id="nothing-to-add-hint" className="text-xs text-muted-foreground">
+                <span id="nothing-to-add-hint" className="text-small text-muted-foreground">
                   {SAVE_FIRST_HINT}
                 </span>
               ) : null}
@@ -290,13 +290,13 @@ function InterviewFlow({ laneId, mode, startAt }: { laneId: string; mode: "chat"
 
       {view.kind === "sections" ? (
         <div className="flex flex-col gap-3" data-testid="interview-sections">
-          <h3 className="text-sm font-semibold text-foreground">Choose a section to set up or change</h3>
+          <h3 className="text-body font-semibold text-foreground">Choose a section to set up or change</h3>
           <ul className="flex flex-col gap-2">
             {state.groups.map((g) => (
-              <li key={g.id} className="flex flex-wrap items-center gap-2 rounded-control border border-border bg-background p-3 text-sm" data-testid={`section-${g.id}`}>
+              <li key={g.id} className="flex flex-wrap items-center gap-2 rounded-control border border-border bg-background p-3 text-body" data-testid={`section-${g.id}`}>
                 <span className="min-w-0 flex-1">
                   <span className="block font-medium text-foreground">{g.title}</span>
-                  <span className="text-xs text-muted-foreground">{g.part === "A" ? "Your brain" : "Personal Assistant"}</span>
+                  <span className="text-small text-muted-foreground">{g.part === "A" ? "Your brain" : "Personal Assistant"}</span>
                 </span>
                 <Badge variant={g.complete ? "success" : "muted"}>{g.complete ? "Done" : "Not done"}</Badge>
                 <Button size="sm" variant="outline" className="min-h-11" onClick={() => openGroup(g, true)}>
@@ -313,10 +313,10 @@ function InterviewFlow({ laneId, mode, startAt }: { laneId: string; mode: "chat"
 
       {view.kind === "review" ? (
         <div className="flex flex-col gap-4" data-testid="interview-review">
-          <h3 className="text-sm font-semibold text-foreground">Summary</h3>
+          <h3 className="text-body font-semibold text-foreground">Summary</h3>
           <ul className="flex flex-col gap-2">
             {state.groups.map((g) => (
-              <li key={g.id} className="flex flex-col gap-1 rounded-control border border-border bg-background p-3 text-sm">
+              <li key={g.id} className="flex flex-col gap-1 rounded-control border border-border bg-background p-3 text-body">
                 <div className="flex items-center justify-between gap-2">
                   <span className="font-medium text-foreground">{g.title}</span>
                   <Button size="sm" variant="outline" className="min-h-11" onClick={() => openGroup(g, true)}>
@@ -344,7 +344,7 @@ function InterviewFlow({ laneId, mode, startAt }: { laneId: string; mode: "chat"
             </Alert>
           ) : (
             <div className="flex flex-col gap-3" data-testid="interview-employee">
-              <p className="text-sm text-foreground">
+              <p className="text-body text-foreground">
                 {state.employee.name}, your Personal Assistant: <Badge variant={state.employee.status === "active" ? "success" : "muted"}>{state.employee.status}</Badge>
               </p>
               {state.employee.invalid ? (
@@ -352,7 +352,7 @@ function InterviewFlow({ laneId, mode, startAt }: { laneId: string; mode: "chat"
                   <AlertDescription>The stored profile is not valid, so it cannot be confirmed or activated. Save any Personal Assistant section to review a reset.</AlertDescription>
                 </Alert>
               ) : null}
-              <ul className="flex flex-col gap-1 text-xs text-muted-foreground" aria-label="What it may propose">
+              <ul className="flex flex-col gap-1 text-small text-muted-foreground" aria-label="What it may propose">
                 {state.employee.permissions.map((p) => (
                   <li key={p.lane} className="break-words">
                     {p.laneName}: {p.allowed.length ? `may propose to ${p.allowed.map((a) => ACTION_TEXT[a] ?? a).join(", ")}` : "proposes nothing"}
@@ -361,14 +361,14 @@ function InterviewFlow({ laneId, mode, startAt }: { laneId: string; mode: "chat"
                 ))}
               </ul>
               {/* Test briefing (spec Part C step 3): needs the daily briefing, T-213. The check shows why it is not here. */}
-              <div className="flex flex-wrap items-center gap-2 rounded-control border border-border bg-background p-3 text-sm" data-testid="interview-test-briefing">
+              <div className="flex flex-wrap items-center gap-2 rounded-control border border-border bg-background p-3 text-body" data-testid="interview-test-briefing">
                 <span className="min-w-0 flex-1 text-muted-foreground">{state.testBriefing.available ? "Run a test briefing on the last 48 hours." : state.testBriefing.message}</span>
                 <Button size="sm" variant="outline" className="min-h-11" disabled>
                   Run test briefing
                 </Button>
               </div>
               {state.employee.status === "active" ? (
-                <p className="text-sm text-foreground">Your assistant is active. Change any section above, and save it the same way.</p>
+                <p className="text-body text-foreground">Your assistant is active. Change any section above, and save it the same way.</p>
               ) : confirmed ? (
                 <Button className={tap} disabled={busy} onClick={() => void activate()}>
                   {busy ? "Activating…" : "Activate my assistant"}

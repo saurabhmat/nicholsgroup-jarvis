@@ -71,6 +71,9 @@ describe("light design tokens (docs/plan-review.md §7, v2; final with D-20)", (
     ["--sidebar-active", "#1F4A7A"],
     ["--sidebar-switcher", "#143559"],
     ["--sidebar-switcher-border", "#2C4F78"],
+    ["--sidebar-strong", "#FFFFFF"],
+    ["--content-max-width", "1440px"],
+    ["--sidebar-width", "240px"],
     ["--control-radius", "8px"],
     ["--card-radius", "12px"],
   ])("%s = %s", (name, value) => {
@@ -98,6 +101,9 @@ describe("light design tokens (docs/plan-review.md §7, v2; final with D-20)", (
     ["--sidebar-foreground", "--sidebar"],
     ["--sidebar-section", "--sidebar"],
     ["--sidebar-foreground", "--sidebar-active"],
+    ["--sidebar-strong", "--sidebar"],
+    ["--sidebar-strong", "--sidebar-active"],
+    ["--sidebar-strong", "--sidebar-switcher"],
     ["--gold", "--sidebar"],
     ["--muted-foreground", "--muted"],
     ["--destructive-foreground", "--destructive"],
@@ -186,6 +192,9 @@ describe("dark design tokens (docs/design/README.md, Nov 4, 2026)", () => {
     ["--sidebar-foreground", "--sidebar"],
     ["--sidebar-section", "--sidebar"],
     ["--sidebar-foreground", "--sidebar-active"],
+    ["--sidebar-strong", "--sidebar"],
+    ["--sidebar-strong", "--sidebar-active"],
+    ["--sidebar-strong", "--sidebar-switcher"],
     ["--gold", "--sidebar"],
     ["--destructive-foreground", "--destructive"],
   ])("dark text %s on %s meets WCAG AA (4.5:1)", (fg, bg) => {
@@ -212,6 +221,27 @@ describe("components use tokens only", () => {
   it.each(sources())("%s never uses raw gold for text", (file, source) => {
     const uses = source.match(/\btext-gold(?!-foreground)\b/g) ?? [];
     expect(uses.length).toBe(String(file).endsWith("app-shell.tsx") ? 1 : 0);
+  });
+
+  // T-230 B: primary-foreground is navy in dark mode, so it must never carry text on the navy side menu / header band.
+  it.each(sources())("%s keeps text-primary-foreground off the navy surfaces", (file, source) => {
+    const f = String(file);
+    if (!/app-shell\.tsx$|lane-switcher\.tsx$/.test(f)) return;
+    const uses = source.match(/\btext-primary-foreground\b/g) ?? [];
+    expect(uses.length).toBe(0);
+  });
+
+  it("defines the type scale once (15 / 13 / 18 / 32 px)", () => {
+    expect(themeCss).toMatch(/--text-body:\s*0\.9375rem/);
+    expect(themeCss).toMatch(/--text-small:\s*0\.8125rem/);
+    expect(themeCss).toMatch(/--text-card-title:\s*1\.125rem/);
+    expect(themeCss).toMatch(/--text-page-title:\s*2rem/);
+  });
+
+  it("no type-scale name is also a colour name (text-<name> would pick the colour: found with text-secondary)", () => {
+    for (const name of ["body", "small", "card-title", "page-title"]) {
+      expect(themeCss).not.toMatch(new RegExp(`--color-${name}\\s*:`));
+    }
   });
 
   it.each(sources())("%s does not inject HTML", (_file, source) => {

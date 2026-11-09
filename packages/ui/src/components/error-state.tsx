@@ -22,8 +22,8 @@ export function ErrorState({ title, description, action, role = "alert", classNa
         className,
       )}
     >
-      <p className="font-heading text-lg font-semibold">{title}</p>
-      {description ? <p className="max-w-prose text-sm">{description}</p> : null}
+      <p className="font-heading text-card-title font-semibold">{title}</p>
+      {description ? <p className="max-w-prose text-body">{description}</p> : null}
       {action ? <div className="mt-2">{action}</div> : null}
     </div>
   );

@@ -8,18 +8,19 @@ import { brainSetupAvailable } from "@/lib/brain-interview";
 import { toolCategories } from "@/lib/assistant";
 import { guards } from "@/lib/guards";
 import { loadLane } from "@/lib/lane-page";
+import { timed } from "@/lib/timed";
 
 const CATEGORY_LABEL: Record<string, string> = { email: "Email", calendar: "Calendar" };
 
 export async function AssistantPage({ params }: { params: Promise<{ laneId: string }> }) {
   const lane = await loadLane((await params).laneId);
   const { client } = await (await guards()).requireLane(lane.laneId);
-  const categories = await toolCategories(client as never, lane.laneId);
+  const categories = await timed("load.assistant_tools", () => toolCategories(client as never, lane.laneId));
   // Only the categories this demo has tools for.
   const usable = categories.filter((c) => c in CATEGORY_LABEL).map((c) => CATEGORY_LABEL[c] as string);
   const configured = getLLMProvider().configured;
   // The setup interview needs no model: it is offered to an owner with the brain view even when the chat is not set up.
-  const brainSetup = await brainSetupAvailable(await guards(), lane.laneId).catch(() => false);
+  const brainSetup = await timed("load.assistant_brain", async () => brainSetupAvailable(await guards(), lane.laneId).catch(() => false));
   return (
     <div className="flex flex-col gap-6">
       <PageHeader eyebrow={lane.name} title="Assistant" accent="ask about your day" />

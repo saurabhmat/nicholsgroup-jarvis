@@ -88,6 +88,14 @@ export function getInngestEnv(env: EnvRecord = process.env) {
   return result.configured ? withRedaction(result) : result;
 }
 
+/**
+ * T-230 A: whether request timings (names and durations only) are recorded and published: always in `next dev`, in a
+ * production build only when the operator sets the SERVER_TIMING env var to exactly "1". Never decided by a request.
+ */
+export function serverTimingEnabled(env: EnvRecord = process.env): boolean {
+  return env.NODE_ENV === "development" || env.SERVER_TIMING === "1";
+}
+
 /** True when this process runs a development build (`next dev`, tests), never a production build (`next start`). */
 export function isDevelopmentRuntime(): boolean {
   return process.env.NODE_ENV !== "production";

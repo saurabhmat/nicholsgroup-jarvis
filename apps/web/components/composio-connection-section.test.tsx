@@ -1,17 +1,30 @@
 // @vitest-environment jsdom
-// T-219: the Composio section as the owner sees it: "Not configured" does nothing, Connect is a same-origin form POST
+// T-219 / T-230 B: the Composio rows as the owner sees them: "Not configured" does nothing, Connect is a same-origin form POST
 // to the start route, Test appears only for a connected account, Disconnect is disabled with the Approvals note.
 import { afterEach, describe, expect, it } from "vitest";
 import { cleanup, render, screen, within } from "@testing-library/react";
 import type { ComposioSectionView } from "@/lib/composio-connection";
-import { ComposioConnectionSection } from "./composio-connection-section";
+import { ComposioNotes, ComposioNotices, ComposioRows, NOT_CONFIGURED_ON_SERVER } from "./composio-connection-section";
+
+// The rows as Settings draws them: inside the Connections list, with the provider notes under it.
+function ComposioConnectionSection({ laneId, view }: { laneId: string; view: ComposioSectionView }) {
+  return (
+    <section>
+      <ComposioNotices view={view} />
+      <ul>
+        <ComposioRows laneId={laneId} view={view} />
+      </ul>
+      <ComposioNotes view={view} />
+    </section>
+  );
+}
 
 afterEach(cleanup);
 
 const view = (over: Partial<ComposioSectionView> = {}, gmail: ComposioSectionView["toolkits"][number]["connection"] = null, configured = true): ComposioSectionView => ({
   toolkits: [
     { toolkit: "gmail", label: "Gmail", configured, ...(configured ? {} : { missing: ["COMPOSIO_GMAIL_AUTH_CONFIG_ID"] }), connection: gmail },
-    { toolkit: "googlecalendar", label: "Google Calendar", configured, ...(configured ? {} : { missing: ["COMPOSIO_API_KEY", "COMPOSIO_GOOGLECALENDAR_AUTH_CONFIG_ID"] }), connection: null },
+    { toolkit: "googlecalendar", label: "Google Calendar", configured, ...(configured ? {} : { missing: ["COMPOSIO_GOOGLECALENDAR_AUTH_CONFIG_ID", "COMPOSIO_OTHER_SETTING"] }), connection: null },
   ],
   ...over,
 });
@@ -21,13 +34,49 @@ describe("ComposioConnectionSection", () => {
     render(<ComposioConnectionSection laneId="PKG" view={view({}, null, false)} />);
     const gmail = within(screen.getByTestId("composio-gmail"));
     const button = gmail.getByRole("button", { name: "Not configured: COMPOSIO_GMAIL_AUTH_CONFIG_ID is not set" }) as HTMLButtonElement;
-    const calendar = within(screen.getByTestId("composio-googlecalendar")).getByRole("button", { name: "Not configured: COMPOSIO_API_KEY, COMPOSIO_GOOGLECALENDAR_AUTH_CONFIG_ID are not set" });
+    const calendar = within(screen.getByTestId("composio-googlecalendar")).getByRole("button", { name: "Not configured: COMPOSIO_GOOGLECALENDAR_AUTH_CONFIG_ID, COMPOSIO_OTHER_SETTING are not set" });
     // H-042: the long setting names wrap inside the button instead of widening the page at phone width.
     for (const cls of ["[overflow-wrap:anywhere]", "whitespace-normal", "max-w-full", "min-w-0", "shrink"]) expect(calendar.className.split(/\s+/)).toContain(cls);
     for (const cls of ["shrink-0", "whitespace-nowrap"]) expect(calendar.className.split(/\s+/)).not.toContain(cls); // merged away
     expect(button.disabled).toBe(true);
     expect(button.closest("form")).toBeNull();
     expect(gmail.queryByRole("button", { name: "Connect via Composio" })).toBeNull();
+  });
+
+  it("the key is set but a toolkit's id is not: the per-toolkit 'Not configured: X is not set' stays and there is no single line", () => {
+    render(<ComposioConnectionSection laneId="PKG" view={view({}, null, false)} />);
+    expect(screen.queryByText(NOT_CONFIGURED_ON_SERVER)).toBeNull();
+    expect(screen.getByTestId("composio-gmail")).toBeTruthy();
+    expect(screen.getByTestId("composio-googlecalendar")).toBeTruthy();
+  });
+
+  it("nothing configured because COMPOSIO_API_KEY is not set: ONE line, no per-toolkit rows, no buttons, no notes (names only)", () => {
+    const keyless: ComposioSectionView = {
+      toolkits: [
+        { toolkit: "gmail", label: "Gmail", configured: false, missing: ["COMPOSIO_API_KEY"], connection: null },
+        { toolkit: "googlecalendar", label: "Google Calendar", configured: false, missing: ["COMPOSIO_API_KEY"], connection: null },
+      ],
+    };
+    const { container } = render(<ComposioConnectionSection laneId="PKG" view={keyless} />);
+    expect(screen.getByText("Composio not configured on this server (COMPOSIO_API_KEY not set)")).toBeTruthy();
+    expect(screen.queryByTestId("composio-gmail")).toBeNull();
+    expect(screen.queryByTestId("composio-googlecalendar")).toBeNull();
+    expect(screen.queryByRole("button")).toBeNull();
+    expect(container.querySelectorAll("li").length).toBe(1);
+    expect(container.textContent).not.toMatch(/Disconnect arrives/);
+  });
+
+  it("an existing connection keeps its rows even when the key is missing now", () => {
+    const c = { id: "c1", state: "connected" as const, address: "boss@example.test", mailboxAllowed: true, lastSyncAt: null };
+    const view2: ComposioSectionView = {
+      toolkits: [
+        { toolkit: "gmail", label: "Gmail", configured: false, missing: ["COMPOSIO_API_KEY"], connection: c },
+        { toolkit: "googlecalendar", label: "Google Calendar", configured: false, missing: ["COMPOSIO_API_KEY"], connection: null },
+      ],
+    };
+    render(<ComposioConnectionSection laneId="PKG" view={view2} />);
+    expect(screen.queryByText(NOT_CONFIGURED_ON_SERVER)).toBeNull();
+    expect(within(screen.getByTestId("composio-gmail")).getByText("boss@example.test")).toBeTruthy();
   });
 
   it("configured: Connect via Composio is a POST form to the start route for the lane and toolkit", () => {
@@ -52,7 +101,7 @@ describe("ComposioConnectionSection", () => {
     expect(disconnect.title).toBe("Disconnect arrives with Approvals");
     expect(disconnect.closest("form")).toBeNull();
     expect(gmail.getByRole("button", { name: "Replace account via Composio" })).toBeTruthy();
-    expect(gmail.getByText(/previous account stays in Composio until it is removed by hand/)).toBeTruthy();
+    expect(screen.getByText(/previous account stays in Composio until it is removed by hand/)).toBeTruthy();
     expect(screen.getByText(/Disconnect arrives with Approvals: removing/)).toBeTruthy();
     expect(screen.getByText(/Composio dashboard/)).toBeTruthy();
   });

@@ -9,7 +9,7 @@ const subscribe = (cb: () => void) => (listeners.add(cb), () => void listeners.d
 export function ThemeToggle() {
   const theme = useSyncExternalStore<Theme>(subscribe, readTheme, () => "system");
   return (
-    <div role="group" aria-label="Theme" className="flex gap-1 text-xs">
+    <div role="group" aria-label="Theme" className="flex gap-1 text-small">
       {THEMES.map((t) => (
         <button
           key={t}
@@ -19,7 +19,7 @@ export function ThemeToggle() {
             applyTheme(t);
             listeners.forEach((l) => l());
           }}
-          className="flex-1 rounded-control border border-sidebar-switcher-border px-2 py-1 capitalize hover:bg-sidebar-switcher aria-pressed:bg-sidebar-active aria-pressed:font-semibold aria-pressed:text-primary-foreground"
+          className="flex-1 rounded-control border border-sidebar-switcher-border min-h-11 px-2 py-1 capitalize hover:bg-sidebar-switcher aria-pressed:bg-sidebar-active aria-pressed:font-semibold aria-pressed:text-sidebar-strong"
         >
           {t}
         </button>
