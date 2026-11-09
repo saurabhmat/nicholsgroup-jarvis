@@ -25,13 +25,18 @@ export async function SettingsPage({
   params: Promise<{ laneId: string }>;
   searchParams: Promise<Record<string, string | string[] | undefined>>;
 }) {
-  const lane = await loadLane((await params).laneId);
-  // The result of a connect the OAuth callback sent back here (fixed, allowlisted text; connect roles only).
-  const result = await timed("load.connect_result", async () => connectResultFor(await guards(), lane.laneId, await searchParams));
-  const showTest = await timed("load.connection_test", async () => connectionTestVisible(await guards(), lane.laneId));
-  const google = await timed("load.google", async () => googleSectionFor(await guards(), lane.laneId));
-  const composio = await timed("load.composio", async () => composioSectionFor(await guards(), lane.laneId, availability, undefined, missingSettings));
-  const brain = await onboardingFor(lane.laneId); // null unless the owner has the brain view here
+  const lane = await loadLane((await params).laneId); // the lane gate first, as on every page
+  const g = await guards(); // one per request (lib/guards.ts): the loaders below share its session, lane and role answers
+  const query = await searchParams;
+  // Independent reads, run together (T-230 A). Each keeps its own role check; the guards memoise the shared ones.
+  const [result, showTest, google, composio, brain] = await Promise.all([
+    // The result of a connect the OAuth callback sent back here (fixed, allowlisted text; connect roles only).
+    timed("load.connect_result", () => connectResultFor(g, lane.laneId, query)),
+    timed("load.connection_test", () => connectionTestVisible(g, lane.laneId)),
+    timed("load.google", () => googleSectionFor(g, lane.laneId)),
+    timed("load.composio", () => composioSectionFor(g, lane.laneId, availability, undefined, missingSettings)),
+    onboardingFor(lane.laneId), // null unless the owner has the brain view here
+  ]);
   // On another host than NEXT_PUBLIC_APP_URL a connect cannot finish (hosts only in the notice); only users who can connect see it.
   const origin = google || composio ? await currentOriginNotice() : null;
   // The "not set up yet" card only stands in for a page with nothing real on it.

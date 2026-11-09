@@ -58,11 +58,11 @@ test("measure route timings", async ({ page }, info) => {
   const cookies = await page.context().cookies();
   const auth = cookies.filter((c) => c.name.startsWith("sb-")).sort((a, b) => a.name.localeCompare(b.name)).map((c) => c.value).join("");
   try {
-    const raw = auth.startsWith("base64-") ? Buffer.from(auth.slice(7), "base64url").toString() : decodeURIComponent(auth);
-    const token = (JSON.parse(raw) as { access_token: string }).access_token; // read here only to report the header's alg; never printed
+    const joined = auth.startsWith("base64-") ? Buffer.from(auth.slice(7), "base64url").toString() : decodeURIComponent(auth);
+    const token = (JSON.parse(joined) as { access_token: string }).access_token; // read here only to report the header's alg; never printed
     jwtAlg = (JSON.parse(Buffer.from(token.split(".")[0]!, "base64url").toString()) as { alg: string }).alg;
-  } catch {
-    jwtAlg = "unreadable";
+  } catch (e) {
+    jwtAlg = `unreadable (${(e as Error).name}; cookies: ${cookies.map((c) => c.name).join(",")}; prefix: ${auth.slice(0, 7)})`;
   }
 
   const serverTiming: string[] = [];

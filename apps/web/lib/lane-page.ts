@@ -17,8 +17,12 @@ export const loadLane = cache(async (laneParam: string): Promise<LoadedLane> => 
   await connection(); // per request, never prerendered
   const g = await guards();
   try {
-    await timed("lane.check", () => g.requireLane(laneParam));
-    const lanes = await timed("lane.list", () => g.listLanes());
+    // The lane check and the lane list are independent (both read the one session): run them together. If both fail, the
+    // lane check's error wins, as when they ran in sequence.
+    const [check, list] = await Promise.allSettled([timed("lane.check", () => g.requireLane(laneParam)), timed("lane.list", () => g.listLanes())]);
+    if (check.status === "rejected") throw check.reason;
+    if (list.status === "rejected") throw list.reason;
+    const lanes = list.value;
     const lane = lanes.find((l) => l.laneId === laneParam);
     if (!lane) notFound();
     return { laneId: lane.laneId, name: lane.name, lanes };

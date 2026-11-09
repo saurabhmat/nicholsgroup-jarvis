@@ -2,7 +2,7 @@
 // requests go to /sign-in and AAL1 (email code only) page requests go to /mfa. API routes are not redirected: their
 // guards answer 401/403 (T-017), and RLS refuses AAL1 anyway.
 import { NextResponse, type NextRequest } from "next/server";
-import { cookieSessionReader, createGuards, laneSegment, laneVerdict, refreshSession, safeNextPath, type CookieStore } from "@nichols/core/auth";
+import { createGuards, laneSegment, laneVerdict, refreshSession, safeNextPath, type CookieStore } from "@nichols/core/auth";
 import { isOnboardingPath, onboardingVerdict } from "@/lib/onboarding-gate";
 import { createTimings, timingEnabled } from "@/lib/server-timing";
 
@@ -34,7 +34,7 @@ export async function proxy(request: NextRequest) {
       for (const [k, v] of Object.entries(headers ?? {})) response.headers.set(k, v);
     },
   };
-  const { signedIn, aal } = await timings.time("proxy.auth", () => refreshSession(cookieStore));
+  const { signedIn, aal, session } = await timings.time("proxy.auth", () => refreshSession(cookieStore));
 
   const { pathname, search } = request.nextUrl;
   if (pathname.startsWith("/api/") || PUBLIC_PATHS.some((p) => under(pathname, p))) return stamp(response);
@@ -45,7 +45,12 @@ export async function proxy(request: NextRequest) {
     // is only about the status code: the layout and every page verify the lane again (lib/lane-page.ts), and anything
     // other than a definite refusal (outage, expired session) is passed through to them.
     const segment = laneSegment(pathname);
-    const guards = segment && signedIn ? createGuards(cookieSessionReader(cookieStore)) : null;
+    // T-230 A: the session refreshSession just verified is reused (no second cookie read and verification). The status
+    // code only matters for a document request: a client-side navigation or prefetch (the `rsc` request header, which a
+    // user can set on their own request too, and which changes nothing but the status of THEIR response) is answered by
+    // the page's own lane check, so the proxy skips its duplicate lane query for it.
+    const isRsc = request.headers.get("rsc") === "1";
+    const guards = segment && signedIn && !isRsc ? createGuards(async () => session) : null;
     // H-042: the onboarding page is only for an owner with the brain view. Its own notFound() runs inside a Suspense
     // boundary after the shell has streamed (status 200), so the status is decided here, before streaming. Its check
     // (requireRole) includes the lane check, so onboarding paths skip the separate lane verdict (one set of round trips).

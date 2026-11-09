@@ -12,17 +12,28 @@ const m = vi.hoisted(() => ({
   test: false,
   brain: null as unknown,
   origin: null as unknown,
+  // T-230 A: records when each loader starts, the guards it got, and lets a test hold every loader open.
+  started: [] as string[],
+  seenGuards: [] as unknown[],
+  gate: null as Promise<void> | null,
+  sharedGuards: {},
 }));
+const loader = <T,>(name: string, value: () => T) => async (g?: unknown) => {
+  m.started.push(name);
+  m.seenGuards.push(g);
+  await m.gate;
+  return value();
+};
 
 vi.mock("@/lib/lane-page", () => ({ loadLane: async () => ({ laneId: "PKG", name: "Pub K Group", lanes: [] }) }));
-vi.mock("@/lib/guards", () => ({ guards: async () => ({}) }));
-vi.mock("@/lib/connect-result", () => ({ connectResultFor: async () => m.result }));
-vi.mock("@/lib/connection-test", () => ({ connectionTestVisible: async () => m.test }));
-vi.mock("@/lib/google-connection", () => ({ googleSectionFor: async () => m.google }));
+vi.mock("@/lib/guards", () => ({ guards: async () => m.sharedGuards }));
+vi.mock("@/lib/connect-result", () => ({ connectResultFor: (g: unknown) => loader("result", () => m.result)(g) }));
+vi.mock("@/lib/connection-test", () => ({ connectionTestVisible: (g: unknown) => loader("test", () => m.test)(g) }));
+vi.mock("@/lib/google-connection", () => ({ googleSectionFor: (g: unknown) => loader("google", () => m.google)(g) }));
 vi.mock("@/lib/composio-availability", () => ({ availability: () => ({}), missingSettings: () => ({}) }));
-vi.mock("@/lib/composio-connection", () => ({ composioSectionFor: async () => m.composio }));
+vi.mock("@/lib/composio-connection", () => ({ composioSectionFor: (g: unknown) => loader("composio", () => m.composio)(g) }));
 vi.mock("@/lib/origin-notice-server", () => ({ currentOriginNotice: async () => m.origin }));
-vi.mock("@/lib/onboarding-progress", () => ({ onboardingFor: async () => m.brain }));
+vi.mock("@/lib/onboarding-progress", () => ({ onboardingFor: () => loader("brain", () => m.brain)() }));
 vi.mock("./google-connection-section", () => ({ GoogleConnectionSection: () => <div data-testid="google-section" /> }));
 vi.mock("./composio-connection-section", () => ({ ComposioConnectionSection: () => <div data-testid="composio-section" /> }));
 vi.mock("./connection-test-section", () => ({ ConnectionTestSection: () => <div data-testid="test-section" /> }));
@@ -42,6 +53,9 @@ const view = (done: number) => ({
 beforeEach(() => {
   m.result = m.google = m.composio = m.brain = m.origin = null;
   m.test = false;
+  m.started = [];
+  m.seenGuards = [];
+  m.gate = null;
 });
 afterEach(cleanup);
 
@@ -112,5 +126,27 @@ describe("Settings page sections", () => {
     m.origin = { currentHost: "preview.example.test", appHost: "portal.example.test", appUrl: "https://portal.example.test" };
     await draw();
     expect(screen.queryByTestId("origin-notice")).toBeNull();
+  });
+});
+
+describe("loading (T-230 A)", () => {
+  it("starts every independent loader at once, with the one guards object, instead of one after the other", async () => {
+    let release = () => {};
+    m.gate = new Promise<void>((r) => (release = r));
+    m.test = true;
+    const drawing = SettingsPage(props);
+    await new Promise((r) => setTimeout(r, 10));
+    expect(m.started.sort()).toEqual(["brain", "composio", "google", "result", "test"]); // all five under way before any answers
+    expect(m.seenGuards.filter((g) => g !== undefined).every((g) => g === m.sharedGuards)).toBe(true);
+    release();
+    render(await drawing);
+    expect(screen.getByTestId("test-section")).toBeTruthy();
+  });
+
+  it("an outage in one loader is still an error, never a half-drawn page", async () => {
+    vi.spyOn(console, "error").mockImplementation(() => undefined);
+    m.gate = Promise.reject(new Error("outage"));
+    m.gate.catch(() => undefined);
+    await expect(SettingsPage(props)).rejects.toThrow("outage");
   });
 });

@@ -67,15 +67,18 @@ function mailboxList(config: unknown): string[] {
 /** The lane's Composio connections as the page shows them. Throws on a database error. */
 export async function loadComposioSection(client: Db, laneId: string, availability: Availability, now: number = Date.now(), missing?: MissingSettings): Promise<ComposioSectionView> {
   const core = client.schema("core");
-  const conns = await core
-    .from("connections")
-    .select("id, toolkit, account_identity, status, last_sync_at, created_at")
-    .eq("lane_id", laneId)
-    .eq("transport", "composio")
-    .neq("status", "disconnected")
-    .order("created_at", { ascending: false });
+  // The connections and the lane's allowed mailboxes are independent reads: together (T-230 A).
+  const [conns, cfg] = await Promise.all([
+    core
+      .from("connections")
+      .select("id, toolkit, account_identity, status, last_sync_at, created_at")
+      .eq("lane_id", laneId)
+      .eq("transport", "composio")
+      .neq("status", "disconnected")
+      .order("created_at", { ascending: false }),
+    core.from("lane_config_current").select("mailboxes:config->mailboxes").eq("lane_id", laneId).maybeSingle(),
+  ]);
   if (conns.error) throw new Error("connections unavailable");
-  const cfg = await core.from("lane_config_current").select("mailboxes:config->mailboxes").eq("lane_id", laneId).maybeSingle();
   if (cfg.error) throw new Error("lane settings unavailable");
   const allowed = mailboxList(cfg.data);
   const rows = conns.data ?? [];

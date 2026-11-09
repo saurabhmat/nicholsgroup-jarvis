@@ -87,3 +87,42 @@ test("a user in no lane is not shown PKG and its URL is a 404", async ({ page },
   expect(res?.status()).toBe(404);
   await expect(page.getByText("Pub K Group")).toHaveCount(0);
 });
+
+// T-230 A: a menu click shows the page skeleton at once (the layout and menu stay), even when the server is slow.
+test("a sidebar click shows the skeleton within 300 ms while the page is still loading", async ({ page, isMobile }, info) => {
+  test.skip(isMobile, "the side menu is desktop; the tab bar uses the same links and loading boundaries");
+  const { member } = personas(info);
+  await clearMailbox();
+  await signInWithEmailCode(page, member);
+  await nextTotpWindow(page);
+  await completeMfa(page, member);
+  await expectLaneHome(page);
+  const menu = page.getByRole("navigation", { name: "Main" });
+  await expect(menu.getByRole("link", { name: "Calendar" })).toBeVisible();
+  await page.waitForTimeout(1500); // let the menu links prefetch their loading boundary
+
+  // Hold the page's own (non-prefetch) request for 1.5 s: what shows meanwhile is the loading boundary, not the old page.
+  await page.route(/\/PKG\/calendar/, async (route) => {
+    const h = route.request().headers();
+    if (h["rsc"] && !h["next-router-prefetch"]) await new Promise((r) => setTimeout(r, 1500));
+    await route.continue();
+  });
+  await page.evaluate(() => {
+    const w = window as unknown as { __skel: { click: number | null; skel: number | null } };
+    w.__skel = { click: null, skel: null };
+    document.addEventListener("click", () => (w.__skel.click = performance.now()), { capture: true, once: true });
+    const tick = () => {
+      if (w.__skel.skel === null && w.__skel.click !== null && document.querySelector("[data-testid=page-skeleton]")) w.__skel.skel = performance.now();
+      if (w.__skel.skel === null) requestAnimationFrame(tick);
+    };
+    tick();
+  });
+  await menu.getByRole("link", { name: "Calendar" }).click();
+  await page.waitForFunction(() => (window as unknown as { __skel: { skel: number | null } }).__skel.skel !== null, undefined, { timeout: 5_000 });
+  const { click, skel } = await page.evaluate(() => (window as unknown as { __skel: { click: number; skel: number } }).__skel);
+  expect(skel - click).toBeLessThan(300);
+  await expect(page.getByTestId("page-skeleton")).toBeVisible(); // still loading: the menu is still there
+  await expect(menu).toBeVisible();
+  await expect(page.getByRole("heading", { name: "Calendar", level: 1 })).toBeVisible({ timeout: 10_000 });
+  await expect(page.getByTestId("page-skeleton")).toHaveCount(0);
+});

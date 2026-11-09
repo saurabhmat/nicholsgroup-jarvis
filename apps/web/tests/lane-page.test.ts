@@ -44,8 +44,35 @@ describe("loadLane", () => {
 
   it("is a 404 for a forbidden lane, the same as for an unknown one", async () => {
     requireLane.mockRejectedValue(new AuthError("forbidden"));
+    listLanes.mockResolvedValue(LANES); // T-230 A: asked at the same time as the lane check; a refused lane is a 404 whatever the list says
     await expect(loadLane("APK")).rejects.toThrow("NOT_FOUND");
-    expect(listLanes).not.toHaveBeenCalled();
+  });
+
+  it("asks for the lane check and the lane list at the same time (T-230 A)", async () => {
+    const started: string[] = [];
+    const release: (() => void)[] = [];
+    const gate = () => new Promise<void>((r) => release.push(r));
+    requireLane.mockImplementation(async () => {
+      started.push("check");
+      await gate();
+      return {};
+    });
+    listLanes.mockImplementation(async () => {
+      started.push("list");
+      await gate();
+      return LANES;
+    });
+    const loading = loadLane("PKG");
+    await new Promise((r) => setTimeout(r, 5));
+    expect(started).toEqual(["check", "list"]); // both under way before either has answered
+    release.forEach((r) => r());
+    await loading;
+  });
+
+  it("when both fail, the lane check's error decides (as when they ran one after the other)", async () => {
+    requireLane.mockRejectedValue(new AuthError("forbidden"));
+    listLanes.mockRejectedValue(new Error("lanes query failed"));
+    await expect(loadLane("APK")).rejects.toThrow("NOT_FOUND");
   });
 
   it("sends a signed-out user to sign-in", async () => {

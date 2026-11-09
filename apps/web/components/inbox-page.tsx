@@ -1,10 +1,12 @@
 // Inbox (T-202): the lane's synced mail, metadata only, newest first, with All / Unread / Important and paging. A row
 // opens the message, whose text is read live from Gmail (message-page.tsx). Nothing is changed in Gmail (read-only).
 import Link from "next/link";
+import { Suspense } from "react";
 import { Alert, AlertDescription, AlertTitle, Badge, cn, EmptyState, laneHref, PageHeader } from "@nichols/ui";
 import { guards } from "@/lib/guards";
 import { inboxFor, INBOX_FILTERS, type InboxFilter, type InboxRow } from "@/lib/inbox";
 import { loadLane } from "@/lib/lane-page";
+import { CardSkeleton } from "./page-skeleton";
 import { timed } from "@/lib/timed";
 
 const FILTER_LABEL: Record<InboxFilter, string> = { all: "All", unread: "Unread", important: "Important" };
@@ -21,12 +23,23 @@ function when(iso: string, now: Date): string {
 
 export async function InboxPage({ params, searchParams }: { params: Promise<{ laneId: string }>; searchParams: Promise<Record<string, string | string[] | undefined>> }) {
   const lane = await loadLane((await params).laneId);
-  const view = await timed("load.inbox", async () => inboxFor(await guards(), lane.laneId, await searchParams));
-  const now = new Date();
-  const base = laneHref(lane.laneId, "inbox");
+  // T-230 A: the header shows as soon as the lane is verified; the mail list streams in behind it.
   return (
     <div className="flex flex-col gap-6">
       <PageHeader eyebrow={lane.name} title="Inbox" />
+      <Suspense fallback={<CardSkeleton />}>
+        <InboxList laneId={lane.laneId} searchParams={searchParams} />
+      </Suspense>
+    </div>
+  );
+}
+
+async function InboxList({ laneId, searchParams }: { laneId: string; searchParams: Promise<Record<string, string | string[] | undefined>> }) {
+  const view = await timed("load.inbox", async () => inboxFor(await guards(), laneId, await searchParams));
+  const now = new Date();
+  const base = laneHref(laneId, "inbox");
+  return (
+    <>
       <nav aria-label="Filter mail" className="flex flex-wrap gap-2">
         {INBOX_FILTERS.map((f) => (
           <Link
@@ -71,7 +84,7 @@ export async function InboxPage({ params, searchParams }: { params: Promise<{ la
           </Link>
         </div>
       ) : null}
-    </div>
+    </>
   );
 }
 

@@ -7,7 +7,7 @@ const results = new Map<string, { data: unknown; error: { name: string } | null 
 vi.mock("@supabase/ssr", () => ({
   createServerClient: () => ({
     auth: Object.fromEntries(
-      ["signInWithOtp", "verifyOtp", "signOut", "getClaims"].map((m) => [
+      ["signInWithOtp", "verifyOtp", "signOut", "getClaims", "getSession"].map((m) => [
         m,
         async (args?: unknown) => {
           calls.push({ method: m, args });
@@ -87,16 +87,35 @@ describe("verifySignInCode / verifyEmailLink", () => {
 });
 
 describe("refreshSession", () => {
-  it("reports signed-in and the AAL from verified claims", async () => {
-    results.set("getClaims", { data: { claims: { sub: "u1", aal: "aal2" } }, error: null });
-    expect(await refreshSession({ getAll: () => [] })).toEqual({ signedIn: true, aal: "aal2" });
-    results.set("getClaims", { data: { claims: { sub: "u1", aal: "aal1" } }, error: null });
-    expect(await refreshSession({ getAll: () => [] })).toEqual({ signedIn: true, aal: "aal1" });
+  const signedInWith = (claims: object) => {
+    results.set("getSession", { data: { session: { access_token: "tok" } }, error: null });
+    results.set("getClaims", { data: { claims }, error: null });
+  };
+
+  it("reports signed-in and the AAL from verified claims, and hands back the verified session (one verification)", async () => {
+    signedInWith({ sub: "u1", aal: "aal2" });
+    expect(await refreshSession({ getAll: () => [] })).toEqual({
+      signedIn: true,
+      aal: "aal2",
+      session: { userId: "u1", accessToken: "tok", aal: "aal2", mfaVerifiedAt: null },
+    });
+    expect(calls.filter((c) => c.method === "getClaims")).toEqual([{ method: "getClaims", args: "tok" }]); // THIS token is verified
+    signedInWith({ sub: "u1", aal: "aal1" });
+    expect(await refreshSession({ getAll: () => [] })).toMatchObject({ signedIn: true, aal: "aal1" });
   });
 
   it("an invalid or missing session is signed out", async () => {
+    results.set("getSession", { data: { session: { access_token: "tok" } }, error: null });
     results.set("getClaims", { data: null, error: { name: "AuthInvalidJwtError" } });
-    expect(await refreshSession({ getAll: () => [] })).toEqual({ signedIn: false, aal: null });
+    expect(await refreshSession({ getAll: () => [] })).toEqual({ signedIn: false, aal: null, session: null });
+    results.set("getSession", { data: { session: null }, error: null });
+    expect(await refreshSession({ getAll: () => [] })).toEqual({ signedIn: false, aal: null, session: null });
+  });
+
+  it("an Auth outage is not a session: signed out here, and the page decides", async () => {
+    results.set("getSession", { data: { session: { access_token: "tok" } }, error: null });
+    results.set("getClaims", { data: null, error: { name: "AuthRetryableFetchError" } });
+    expect(await refreshSession({ getAll: () => [] })).toEqual({ signedIn: false, aal: null, session: null });
   });
 });
 

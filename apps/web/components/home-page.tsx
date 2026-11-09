@@ -3,21 +3,23 @@
 // tiles (no figures until the finance tasks and D-8: each says why), and "Coming up" when today is clear. No approvals
 // yet (T-115). Mail appears as counts only: no subject, sender or body on Home.
 import Link from "next/link";
+import { Suspense } from "react";
 import { Alert, AlertDescription, AlertTitle, Badge, buttonVariants, EmptyState, homeHeading, KpiCard, laneHref, PageHeader, PageSection } from "@nichols/ui";
 import { eyebrowDate } from "@/lib/format-date";
 import { guards } from "@/lib/guards";
 import { composeBriefing, formatDay, formatTime, homeFor, homeKpis, timedLeft, type AttentionItem, type CalendarState, type HomeMeeting } from "@/lib/home";
 import { loadLane } from "@/lib/lane-page";
 import { OnboardingBanner } from "./onboarding-entry";
+import { CardSkeleton } from "./page-skeleton";
 import { onboardingFor } from "@/lib/onboarding-progress";
 import { timed } from "@/lib/timed";
 
 export async function HomePage({ params }: { params: Promise<{ laneId: string }> }) {
   const lane = await loadLane((await params).laneId);
   const now = new Date();
-  const view = await timed("load.home", async () => homeFor(await guards(), lane.laneId, now));
-  const onboarding = await onboardingFor(lane.laneId);
   const heading = homeHeading(); // no first name in the session yet: "Good morning"
+  // T-230 A: the header renders as soon as the lane is verified; the data sections and the setup banner stream in behind it
+  // (each in its own boundary, so the slow setup lookup never holds back today's figures, and neither holds the header).
   return (
     <div className="flex flex-col gap-6">
       <PageHeader
@@ -30,7 +32,25 @@ export async function HomePage({ params }: { params: Promise<{ laneId: string }>
           </Link>
         }
       />
-      <OnboardingBanner laneId={lane.laneId} progress={onboarding} />
+      <Suspense fallback={null}>
+        <SetupBanner laneId={lane.laneId} />
+      </Suspense>
+      <Suspense fallback={<CardSkeleton />}>
+        <HomeSections laneId={lane.laneId} now={now} />
+      </Suspense>
+      <PageSection title="Projects at a glance" emptyTitle="No project board connected" emptyDescription="Project status appears here, read-only, once the project board is connected." />
+    </div>
+  );
+}
+
+async function SetupBanner({ laneId }: { laneId: string }) {
+  return <OnboardingBanner laneId={laneId} progress={await onboardingFor(laneId)} />;
+}
+
+async function HomeSections({ laneId, now }: { laneId: string; now: Date }) {
+  const view = await timed("load.home", async () => homeFor(await guards(), laneId, now));
+  return (
+    <>
       {view.unavailable ? (
         <Alert variant="alert">
           <AlertTitle>Some of today&apos;s information could not be loaded</AlertTitle>
@@ -44,13 +64,12 @@ export async function HomePage({ params }: { params: Promise<{ laneId: string }>
         ))}
       </section>
       <div className="grid gap-6 lg:grid-cols-2">
-        <PageSection title="Needs your attention">{view.unavailable ? undefined : <AttentionList laneId={lane.laneId} items={view.attention} />}</PageSection>
+        <PageSection title="Needs your attention">{view.unavailable ? undefined : <AttentionList laneId={laneId} items={view.attention} />}</PageSection>
         <PageSection title="Today's meetings" note={view.meetings.length > 0 || view.upcoming.length > 0 ? "Google Calendar" : undefined}>
           {view.unavailable ? undefined : <Meetings calendar={view.calendar} meetings={view.meetings} upcoming={view.upcoming} now={now} />}
         </PageSection>
       </div>
-      <PageSection title="Projects at a glance" emptyTitle="No project board connected" emptyDescription="Project status appears here, read-only, once the project board is connected." />
-    </div>
+    </>
   );
 }
 
