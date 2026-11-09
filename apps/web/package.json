@@ -19,6 +19,7 @@
     "@nichols/connectors": "workspace:*",
     "@nichols/core": "workspace:*",
     "@nichols/ui": "workspace:*",
+    "fflate": "0.8.2",
     "next": "16.4.2",
     "react": "19.3.0",
     "react-dom": "19.3.0"

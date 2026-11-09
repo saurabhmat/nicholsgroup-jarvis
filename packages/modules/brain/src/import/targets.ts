@@ -9,6 +9,9 @@ import { GROUPS, PA_SECTIONS, QUESTIONS } from "../interview/bank";
 export const IMPORT_TARGETS = ["about_me", "preferences", "work", "pa"] as const;
 export type ImportTarget = (typeof IMPORT_TARGETS)[number];
 
+/** The lane-policy category the import's model call runs under (D-40). */
+export const IMPORT_POLICY_CATEGORY = "brain_import";
+
 export const PA_PATH = "Employees/Personal-Assistant.md";
 
 export const IMPORT_SECTIONS: Readonly<Record<ImportTarget, readonly string[]>> = {
