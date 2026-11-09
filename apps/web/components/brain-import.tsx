@@ -9,6 +9,7 @@
 import Link from "next/link";
 import { useRef, useState } from "react";
 import { Alert, AlertDescription, AlertTitle, Badge, Button, buttonVariants, cn } from "@nichols/ui";
+import { GROUPS } from "@nichols/brain/interview";
 import { TARGET_LABEL } from "@nichols/brain/import";
 import type { ExtractResult, ImportCandidateView, ImportProposal, PageProposal } from "@nichols/brain/server";
 import {
@@ -21,6 +22,8 @@ import {
   callImport,
   droppedNote,
   groupByTarget,
+  partialMessage,
+  savedMessage,
   tickedItems,
   type ImportTab,
 } from "@/lib/brain-import-client";
@@ -112,13 +115,13 @@ export function BrainImport({ laneId, aiConfigured }: { laneId: string; aiConfig
   const [ticks, setTicks] = useState<Record<string, boolean>>({});
   const [edits, setEdits] = useState<Record<string, string>>({});
   const [proposal, setProposal] = useState<ImportProposal | null>(null);
-  const [done, setDone] = useState<{ saved: number; completed: boolean } | null>(null);
+  const [done, setDone] = useState<{ saved: number; completed: boolean; sections: string[] } | null>(null);
   const [empty, setEmpty] = useState<string | null>(null);
   const [pages, setPages] = useState<ZipPage[] | null>(null);
   const [zipNotes, setZipNotes] = useState<string[]>([]);
   const [pageState, setPageState] = useState<Record<string, PageState>>({});
   const headRef = useRef<HTMLHeadingElement | null>(null);
-  const fail = (code: string) => setError(IMPORT_ERROR_TEXT[code] ?? IMPORT_ERROR_TEXT.unavailable ?? "");
+  const fail = (code: string, saved?: string[]) => setError(code === "partial_save" && saved?.length ? partialMessage(saved) : (IMPORT_ERROR_TEXT[code] ?? IMPORT_ERROR_TEXT.unavailable ?? ""));
   const source = tab === "chatgpt" ? (exported ? "chatgpt_export" : "chatgpt_paste") : exported ? "claude_export" : "claude_paste";
   const ticked = review ? tickedItems(review.candidates, ticks, edits) : [];
 
@@ -138,12 +141,13 @@ export function BrainImport({ laneId, aiConfigured }: { laneId: string; aiConfig
   async function onTextFile(file: File) {
     setError(null);
     setFileNote(null);
-    if (file.size > MAX_FILE_BYTES) return setError("That file is larger than 10 MB. Paste the part you want instead.");
+    if (file.size > MAX_FILE_BYTES) return setError("This export is too large. Paste your ChatGPT memory list instead (Settings → Personalization → Memory).");
     const kind = fileKind(file.name);
     if (kind === null || kind === "zip") return setError("Choose a .txt, .md or .json file, or paste the text.");
     const raw = await file.text(); // read here, in the browser: the file itself is never sent
     if (kind === "json") {
       const m = memoryFromJsonFile(raw);
+      if (!m.found && "invalid" in m) return setError("That file is not valid JSON. Choose conversations.json from the export, or paste your memory list instead.");
       if (!m.found) return setError("No memory or custom instructions were found in that file. Paste your memory list instead.");
       if (m.text.length > MAX_PASTE_CHARS) return setError("The memory text in that file is longer than 50,000 characters. Paste the part you want instead.");
       setText(m.text);
@@ -188,13 +192,13 @@ export function BrainImport({ laneId, aiConfigured }: { laneId: string; aiConfig
     if (!review || !proposal) return;
     setBusy(true);
     setError(null);
-    const r = await callImport<{ saved: number; completed: boolean }>(laneId, { action: "save", importId: review.importId, items: ticked, proposalId: proposal.proposalId });
+    const r = await callImport<{ saved: number; completed: boolean; sections: string[] }>(laneId, { action: "save", importId: review.importId, items: ticked, proposalId: proposal.proposalId });
     setBusy(false);
     if (!r.ok) {
-      if (r.code === "proposal_changed" || r.code === "version_conflict") setProposal(null);
-      return fail(r.code);
+      if (r.code === "proposal_changed" || r.code === "version_conflict" || r.code === "partial_save") setProposal(null);
+      return fail(r.code, r.saved);
     }
-    setDone({ saved: r.data.saved, completed: r.data.completed });
+    setDone({ saved: r.data.saved, completed: r.data.completed, sections: r.data.sections ?? [] });
     setReview(null);
     setProposal(null);
   }
@@ -258,9 +262,8 @@ export function BrainImport({ laneId, aiConfigured }: { laneId: string; aiConfig
           <h2 ref={headRef} tabIndex={-1} className="font-heading text-xl font-semibold text-foreground outline-none">
             Saved
           </h2>
-          <p className="text-sm text-foreground" role="status">
-            {done.saved === 0 ? "Those facts were already in your pages, so nothing changed." : `Saved ${String(done.saved)} page${done.saved === 1 ? "" : "s"}.`}{" "}
-            {done.completed ? "The matching setup sections are marked done." : "Your pages are saved, but the setup sections could not be marked done just now."} The facts you did not keep were deleted.
+          <p className="text-sm text-foreground" role="status" data-testid="import-saved-message">
+            {savedMessage(done.saved, done.completed, done.sections.map((id) => GROUPS.find((g) => g.id === id)?.title ?? id))} The facts you did not keep were deleted.
           </p>
           <div className="flex flex-col gap-2 sm:flex-row">
             <Link href={base} prefetch={false} className={cn(buttonVariants(), tap, "inline-flex items-center justify-center")}>
@@ -332,6 +335,7 @@ export function BrainImport({ laneId, aiConfigured }: { laneId: string; aiConfig
                                 value={edits[c.id] ?? c.fact}
                                 onChange={(e) => setEdits((m) => ({ ...m, [c.id]: e.target.value }))}
                               />
+                              {c.target === "pa" ? <p className="text-xs font-medium text-foreground" data-testid="import-pa-note">This becomes instructions for your Personal Assistant.</p> : null}
                               {c.evidence ? <p className="break-words text-xs text-muted-foreground">From your text: &ldquo;{c.evidence}&rdquo;</p> : null}
                             </div>
                           </div>

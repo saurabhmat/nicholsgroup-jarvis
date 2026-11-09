@@ -243,11 +243,11 @@ describe("tick, propose, Save", () => {
     expect(writes(lc)).toEqual([]);
     const res = await handleImport(req({ action: "save", importId, items, proposalId: prop.proposal.proposalId }), "TST", d);
     expect(res.status).toBe(200);
-    expect(await res.json()).toMatchObject({ ok: true, saved: 1, completed: true, finished: true });
+    expect(await res.json()).toMatchObject({ ok: true, saved: 1, completed: true, sections: [], finished: true });
     expect(writes(lc)).toHaveLength(1);
     expect(lc.docs.get("TST|Context/Preferences.md")?.body).toContain("## Writing\n- Prefers short, direct replies");
     expect(lc.imports.get(importId)).toMatchObject({ status: "done", cands: [] });
-    expect([...lc.completed]).toEqual(["A-4"]);
+    expect([...lc.completed]).toEqual([]); // one Writing fact does not cover the whole section (strict rule)
   });
   it("save with another text than the proposal is 409; unknown or foreign ids are 404; both write nothing", async () => {
     const { d, lc, importId, ids } = await extracted();
@@ -273,6 +273,33 @@ describe("tick, propose, Save", () => {
     expect(lc.imports.get(importId)).toMatchObject({ status: "done", cands: [] });
     expect(writes(lc)).toEqual([]);
     expect((await handleImport(req({ action: "discard", importId }), "TST", d)).status).toBe(404);
+  });
+});
+
+describe("review fixes", () => {
+  it("a signed-in non-owner is refused before the body is read, even with a bad body (L5)", async () => {
+    const { d } = setup({ role: "viewer" });
+    expect((await handleImport(req("{nope"), "TST", d)).status).toBe(403);
+  });
+  it("a Save that fails on a later page says which pages were saved (409 partial_save) and keeps the import open", async () => {
+    const lc = laneClient();
+    const { d } = setup({ lc, replies: [textResult(JSON.stringify({ items: [{ fact: "Prefers short replies", target: "preferences", section: "Writing" }, { fact: "Wants the ops digest first", target: "pa", section: "2. Priority order" }] }))] });
+    const j = (await (await handleImport(req(extract()), "TST", d)).json()) as Json;
+    const items = j.candidates.map((c: Json) => ({ id: c.id, text: c.fact }));
+    const p = (await (await handleImport(req({ action: "propose", importId: j.importId, items }), "TST", d)).json()) as Json;
+    const orig = lc.client.schema;
+    lc.client.schema = () => {
+      const base = orig();
+      return { ...base, rpc: async (fn: string, a: Record<string, unknown>) => (fn === "brain_employee_save" ? { data: null, error: { code: "XX000", message: "down" } } : base.rpc(fn, a)) } as never;
+    };
+    const res = await handleImport(req({ action: "save", importId: j.importId, items, proposalId: p.proposal.proposalId }), "TST", d);
+    expect(res.status).toBe(409);
+    expect(await res.json()).toEqual({ error: "partial_save", saved: ["Context/Preferences.md"] });
+    expect(lc.imports.get(j.importId)?.status).toBe("review");
+  });
+  it("the model is told restrictions are facts for the 'Always ask me first' and 'Never do' sections", () => {
+    expect(IMPORT_SYSTEM_PROMPT).toContain("Always ask me first");
+    expect(IMPORT_SYSTEM_PROMPT).toMatch(/restriction/i);
   });
 });
 

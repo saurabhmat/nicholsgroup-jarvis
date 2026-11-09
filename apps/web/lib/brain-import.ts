@@ -14,6 +14,7 @@ import { IMPORT_POLICY_CATEGORY, importRequestSchema } from "@nichols/brain/impo
 import {
   BrainError,
   EmployeeConfigError,
+  ImportPartialSave,
   InterviewRefusal,
   discardImport,
   extractCandidates,
@@ -56,6 +57,7 @@ export async function importGate(client: unknown, homeLane: string): Promise<"al
 const BRAIN_STATUS: Record<string, number> = { forbidden: 403, version_conflict: 409, rate_limited: 429, unavailable: 503 };
 
 function errorResponse(e: unknown): Response {
+  if (e instanceof ImportPartialSave) return json(409, { error: "partial_save", saved: e.saved });
   if (e instanceof ImportModelError) return json(e.code === "timeout" ? 504 : 502, { error: e.code });
   if (e instanceof EmployeeConfigError) return json(422, { error: "config_invalid" });
   if (e instanceof InterviewRefusal) {
@@ -73,18 +75,6 @@ export async function handleImport(request: Request, laneId: string, deps: Impor
   if (!(request.headers.get("content-type") ?? "").toLowerCase().startsWith("application/json")) return json(415, { error: "invalid_request" });
   const declared = Number(request.headers.get("content-length") ?? "NaN");
   if (!Number.isFinite(declared) || declared <= 0 || declared > MAX_BODY_BYTES) return json(400, { error: "invalid_request" });
-  const raw = await request.text().catch(() => "");
-  if (raw.length === 0 || new TextEncoder().encode(raw).length > MAX_BODY_BYTES) return json(400, { error: "invalid_request" });
-  let body: unknown;
-  try {
-    body = JSON.parse(raw);
-  } catch {
-    return json(400, { error: "invalid_request" });
-  }
-  const parsed = importRequestSchema.safeParse(body);
-  if (!parsed.success) return json(400, { error: "invalid_request" });
-  const req = parsed.data;
-
   let g: Awaited<ReturnType<ImportDeps["guards"]>>;
   let userId: string;
   try {
@@ -97,6 +87,19 @@ export async function handleImport(request: Request, laneId: string, deps: Impor
     console.error("[brain-import] unavailable:", e instanceof Error ? e.name : typeof e);
     return json(503, { error: "unavailable" });
   }
+
+  // Authenticated before the body is read (T-220 security L5): a signed-out caller cannot make the server buffer 400 KB.
+  const raw = await request.text().catch(() => "");
+  if (raw.length === 0 || new TextEncoder().encode(raw).length > MAX_BODY_BYTES) return json(400, { error: "invalid_request" });
+  let body: unknown;
+  try {
+    body = JSON.parse(raw);
+  } catch {
+    return json(400, { error: "invalid_request" });
+  }
+  const parsed = importRequestSchema.safeParse(body);
+  if (!parsed.success) return json(400, { error: "invalid_request" });
+  const req = parsed.data;
 
   try {
     const built = await buildEnv(g, laneId, userId, deps.now());

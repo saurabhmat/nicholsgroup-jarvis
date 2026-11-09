@@ -38,19 +38,21 @@ export const IMPORT_ERROR_TEXT: Record<string, string> = {
   invalid: "That could not be saved.",
   session: "Your session has expired. Reload the page and sign in again.",
   home_lane_unavailable: "Your brain lives in a company you can no longer open. Ask an administrator.",
+  partial_save: "Some pages were saved and a later one failed.",
   unavailable: "Something went wrong. Try again.",
 };
 
 export type ImportApiOk<T> = { ok: true; data: T };
-export type ImportApiErr = { ok: false; code: string };
+export type ImportApiErr = { ok: false; code: string; saved?: string[] };
 
 /** One call to the import route. Never throws: a network failure is `unavailable`. */
 export async function callImport<T>(laneId: string, body: Record<string, unknown>): Promise<ImportApiOk<T> | ImportApiErr> {
   try {
     const res = await fetch(`/api/lanes/${encodeURIComponent(laneId)}/brain/import`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(body) });
-    const j = (await res.json().catch(() => ({}))) as { ok?: boolean; error?: string };
+    const j = (await res.json().catch(() => ({}))) as { ok?: boolean; error?: string; saved?: unknown };
     if (res.ok && j.ok) return { ok: true, data: j as T };
-    return { ok: false, code: res.status === 401 ? "session" : (j.error ?? "unavailable") };
+    const saved = Array.isArray(j.saved) ? j.saved.filter((x): x is string => typeof x === "string").slice(0, 10) : undefined;
+    return { ok: false, code: res.status === 401 ? "session" : (j.error ?? "unavailable"), ...(saved ? { saved } : {}) };
   } catch {
     return { ok: false, code: "unavailable" };
   }
@@ -81,4 +83,17 @@ export function isImportRequest(text: string): boolean {
   const t = text.trim().toLowerCase();
   if (t.length > 80) return false;
   return /\b(import|bring in|bring over|move|transfer|copy)\b.*\b(memor(y|ies)|chatgpt|claude)\b/.test(t) || /\b(memor(y|ies))\b.*\b(import)\b/.test(t);
+}
+
+/** The message after a Save: names the setup sections it marked done, or says none were. */
+export function savedMessage(saved: number, completed: boolean, sectionTitles: readonly string[]): string {
+  const pages = saved === 0 ? "Those facts were already in your pages, so nothing changed." : `Saved ${String(saved)} page${saved === 1 ? "" : "s"}.`;
+  if (!completed) return `${pages} The setup sections could not be updated just now.`;
+  const marks = sectionTitles.length > 0 ? `Marked as done: ${sectionTitles.join(", ")}.` : "No setup section was marked done: finish the rest in setup.";
+  return `${pages} ${marks}`;
+}
+
+/** After a Save that stopped part way: which pages were written, and that the rest can be saved again. */
+export function partialMessage(saved: readonly string[]): string {
+  return `Saved: ${saved.join(", ")}. A later page could not be saved, so the rest was not. Preview again and save to finish; pages already saved are not repeated.`;
 }

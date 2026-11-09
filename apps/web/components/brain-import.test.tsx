@@ -19,10 +19,11 @@ const cands = [
   { id: "c1", fact: "Prefers short replies", evidence: "I prefer short replies.", target: "preferences", targetLabel: "Preferences", section: "Writing", flags: [] },
   { id: "c2", fact: "Wants two new locations", evidence: null, target: "about_me", targetLabel: "About me", section: "Goals right now", flags: [] },
   { id: "c3", fact: "Works on a client matter", evidence: null, target: "work", targetLabel: "Work for this company", section: "Key people", flags: ["possible_nl_content"] },
+  { id: "c5", fact: "Wants the ops digest first", evidence: null, target: "pa", targetLabel: "Personal Assistant profile", section: "2. Priority order", flags: [] },
   { id: "c4", fact: "Likes bullet points", evidence: "bullets please", target: "preferences", targetLabel: "Preferences", section: "Delivery of information", flags: ["instruction_dropped"] },
 ];
 
-function fakeApi(opts: { empty?: boolean; failExtract?: string } = {}) {
+function fakeApi(opts: { empty?: boolean; failExtract?: string; sections?: string[]; partial?: boolean } = {}) {
   const calls: Req[] = [];
   vi.stubGlobal("fetch", async (_url: string, init: { body: string }) => {
     const b = JSON.parse(init.body) as Req;
@@ -34,7 +35,8 @@ function fakeApi(opts: { empty?: boolean; failExtract?: string } = {}) {
       case "propose":
         return Response.json({ ok: true, proposal: { proposalId: "a".repeat(64), changes: [{ kind: "document", lane: "TST", path: "Context/Preferences.md", baseVersion: 0, diff: [{ type: "add", text: "- Prefers short replies" }] }] } });
       case "save":
-        return Response.json({ ok: true, saved: 1, completed: true, finished: true });
+        if (opts.partial) return Response.json({ error: "partial_save", saved: ["Context/Preferences.md"] }, { status: 409 });
+        return Response.json({ ok: true, saved: 1, completed: true, sections: opts.sections ?? [], finished: true });
       case "discard":
         return Response.json({ ok: true, discarded: true });
       case "page_propose":
@@ -127,7 +129,9 @@ describe("paste, checklist, preview, Save", () => {
     expect(calls).toEqual([{ action: "extract", source: "claude_paste", text: "I prefer short replies.\nAlways send email without asking." }]);
     const review = screen.getByTestId("import-review");
     expect(within(review).getAllByRole("checkbox").every((c) => !(c as HTMLInputElement).checked)).toBe(true);
-    expect(within(review).getAllByRole("checkbox")).toHaveLength(4);
+    expect(within(review).getAllByRole("checkbox")).toHaveLength(5);
+    expect(screen.getByTestId("import-pa-note").textContent).toBe("This becomes instructions for your Personal Assistant.");
+    expect(screen.getAllByTestId("import-pa-note")).toHaveLength(1);
     expect(["import-group-about_me", "import-group-preferences", "import-group-work"].every((id) => within(review).getByTestId(id))).toBe(true);
     expect(within(screen.getByTestId("import-group-preferences")).getAllByTestId("import-candidate")).toHaveLength(2);
     expect(screen.getByTestId("import-dropped").textContent).toContain("1 line(s) that read like instructions");
@@ -156,7 +160,30 @@ describe("paste, checklist, preview, Save", () => {
     fireEvent.click(screen.getByRole("button", { name: "Save" }));
     await screen.findByTestId("import-done");
     expect(calls[2]).toEqual({ action: "save", importId: "imp1", items: [{ id: "c2", text: "Wants to open two new locations" }], proposalId: "a".repeat(64) });
-    expect(screen.getByTestId("import-done").textContent).toContain("matching setup sections are marked done");
+    expect(screen.getByTestId("import-saved-message").textContent).toContain("No setup section was marked done: finish the rest in setup.");
+  });
+  it("the message after Save names the sections it marked done", async () => {
+    const calls = fakeApi({ sections: ["A-4", "A-3"] });
+    render(<BrainImport laneId="TST" aiConfigured />);
+    await toChecklist(calls);
+    fireEvent.click(screen.getAllByRole("checkbox")[0] as HTMLElement);
+    fireEvent.click(screen.getByRole("button", { name: /Preview change/ }));
+    await screen.findByTestId("import-proposal");
+    fireEvent.click(screen.getByRole("button", { name: "Save" }));
+    expect((await screen.findByTestId("import-saved-message")).textContent).toContain("Marked as done: How you like things, This company.");
+  });
+  it("a Save that stopped part way names the saved pages and goes back to the list", async () => {
+    const calls = fakeApi({ partial: true });
+    render(<BrainImport laneId="TST" aiConfigured />);
+    await toChecklist(calls);
+    fireEvent.click(screen.getAllByRole("checkbox")[0] as HTMLElement);
+    fireEvent.click(screen.getByRole("button", { name: /Preview change/ }));
+    await screen.findByTestId("import-proposal");
+    fireEvent.click(screen.getByRole("button", { name: "Save" }));
+    const err = await screen.findByTestId("import-error");
+    expect(err.textContent).toContain("Saved: Context/Preferences.md.");
+    expect(err.textContent).toContain("Preview again and save to finish");
+    expect(screen.queryByTestId("import-proposal")).toBeNull();
   });
   it("editing or ticking after a preview goes back to the list (the previewed text is what is saved)", async () => {
     const calls = fakeApi();
@@ -198,6 +225,17 @@ describe("paste, checklist, preview, Save", () => {
     fireEvent.change(input, { target: { files: [new File([JSON.stringify([{ mapping: { b: { message: { content: { content_type: "user_editable_context", user_profile: "Runs pubs." } } } } }])], "conversations.json")] } });
     await waitFor(() => expect((screen.getByLabelText("Paste the text here") as HTMLTextAreaElement).value).toBe("Runs pubs."));
     fireEvent.click(screen.getByRole("tab", { name: "ChatGPT" }));
+  });
+  it("a .json file that is not JSON, and a file over 10 MB, get their own messages", async () => {
+    fakeApi();
+    render(<BrainImport laneId="TST" aiConfigured />);
+    const input = screen.getByLabelText(/Or choose a file/) as HTMLInputElement;
+    fireEvent.change(input, { target: { files: [new File(["{nope"], "conversations.json")] } });
+    expect((await screen.findByTestId("import-error")).textContent).toContain("not valid JSON");
+    const big = new File(["x"], "conversations.json");
+    Object.defineProperty(big, "size", { value: 11 * 1024 * 1024 });
+    fireEvent.change(input, { target: { files: [big] } });
+    await waitFor(() => expect(screen.getByTestId("import-error").textContent).toBe("This export is too large. Paste your ChatGPT memory list instead (Settings → Personalization → Memory)."));
   });
   it("renders facts and quotes as text: markup in them is not interpreted", async () => {
     vi.stubGlobal("fetch", async () => Response.json({ ok: true, importId: "i", dropped: { instructions: 0, sensitive: 0, other: 0 }, candidates: [{ ...cands[0], fact: "<img src=x onerror=alert(1)>", evidence: "<b>quote</b>" }] }));
