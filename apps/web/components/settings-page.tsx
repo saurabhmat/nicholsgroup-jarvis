@@ -11,6 +11,7 @@ import { availability, missingSettings } from "@/lib/composio-availability";
 import { composioSectionFor } from "@/lib/composio-connection";
 import { ComposioConnectionSection } from "./composio-connection-section";
 import { ConnectionTestSection } from "./connection-test-section";
+import { currentOriginNotice } from "@/lib/origin-notice-server";
 import { onboardingFor } from "@/lib/onboarding-progress";
 import { BrainSection } from "./brain-section";
 import { GoogleConnectionSection } from "./google-connection-section";
@@ -30,6 +31,8 @@ export async function SettingsPage({
   const google = await googleSectionFor(await guards(), lane.laneId);
   const composio = await composioSectionFor(await guards(), lane.laneId, availability, undefined, missingSettings);
   const brain = await onboardingFor(lane.laneId); // null unless the owner has the brain view here
+  // On another host than NEXT_PUBLIC_APP_URL a connect cannot finish (hosts only in the notice); only users who can connect see it.
+  const origin = google || composio ? await currentOriginNotice() : null;
   // The "not set up yet" card only stands in for a page with nothing real on it.
   const anySection = Boolean(result || google || composio || brain || showTest);
   return (
@@ -39,6 +42,17 @@ export async function SettingsPage({
         <Alert variant={result.tone} data-testid="connect-result">
           <AlertTitle>{result.title}</AlertTitle>
           <AlertDescription>{result.description}</AlertDescription>
+        </Alert>
+      ) : null}
+      {origin ? (
+        <Alert data-testid="origin-notice">
+          <AlertDescription>
+            You&apos;re on {origin.currentHost}. Open{" "}
+            <a href={origin.appUrl} className="font-medium underline">
+              {origin.appHost}
+            </a>{" "}
+            to connect accounts.
+          </AlertDescription>
         </Alert>
       ) : null}
       {google ? <GoogleConnectionSection laneId={lane.laneId} view={google} /> : null}

@@ -3,6 +3,20 @@ import { AuthError } from "@nichols/core/auth";
 import { connectResultFor, connectResultMessage } from "./connect-result";
 
 describe("connectResultMessage", () => {
+  it("shows the fixed 'not configured' banner for the allowlisted error codes and nothing else", () => {
+    const m = connectResultMessage({ error: "google_env" });
+    expect(m).toEqual({
+      tone: "alert",
+      title: "Google isn't configured on this server.",
+      description: "Check GOOGLE_REDIRECT_URI and NEXT_PUBLIC_APP_URL (same https domain) and redeploy.",
+    });
+    expect(connectResultMessage({ error: "connect_env" })?.tone).toBe("alert");
+    for (const bad of ["<b>x</b>", "constructor", "__proto__", "toString", "GOOGLE_REDIRECT_URI=https://evil.test", "google_env ", ""]) expect(connectResultMessage({ error: bad })).toBeNull();
+    expect(connectResultMessage({ error: ["google_env"] })).toBeNull();
+    // a crafted text never appears in the banner
+    expect(JSON.stringify(connectResultMessage({ error: "google_env", text: "canary-words-77", message: "canary-words-77" }))).not.toContain("canary-words-77");
+  });
+
   it("shows nothing without a connect code", () => {
     expect(connectResultMessage({})).toBeNull();
   });
@@ -75,5 +89,14 @@ describe("connectResultFor", () => {
   it("rethrows outages", async () => {
     const g = { requireRole: async () => { throw new Error("db down"); } };
     await expect(connectResultFor(g, "PKG", params)).rejects.toThrow("db down");
+  });
+});
+
+describe("connectResultFor with an error code", () => {
+  it("is shown only to the roles that can connect (a crafted link shows nobody else a banner)", async () => {
+    const ok = { requireRole: async () => ({}) } as never;
+    const denied = { requireRole: async () => { throw new AuthError("forbidden"); } } as never;
+    expect((await connectResultFor(ok, "PKG", { error: "google_env" }))?.title).toMatch(/Google/);
+    expect(await connectResultFor(denied, "PKG", { error: "google_env" })).toBeNull();
   });
 });

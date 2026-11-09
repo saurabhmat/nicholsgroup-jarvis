@@ -18,7 +18,7 @@ import {
 } from "./schema";
 
 export type { ConnectorEnv, ConnectorName, GroupResult, ServerEnv } from "./schema";
-export { EnvValidationError, requireSupabasePublicEnv } from "./schema";
+export { EnvValidationError, describeEnvError, requireSupabasePublicEnv } from "./schema";
 
 type Loaded = { env: ServerEnv; supabaseSecretKey: string | undefined };
 let cached: Loaded | undefined;

@@ -11,6 +11,7 @@ const m = vi.hoisted(() => ({
   composio: null as unknown,
   test: false,
   brain: null as unknown,
+  origin: null as unknown,
 }));
 
 vi.mock("@/lib/lane-page", () => ({ loadLane: async () => ({ laneId: "PKG", name: "Pub K Group", lanes: [] }) }));
@@ -20,6 +21,7 @@ vi.mock("@/lib/connection-test", () => ({ connectionTestVisible: async () => m.t
 vi.mock("@/lib/google-connection", () => ({ googleSectionFor: async () => m.google }));
 vi.mock("@/lib/composio-availability", () => ({ availability: () => ({}), missingSettings: () => ({}) }));
 vi.mock("@/lib/composio-connection", () => ({ composioSectionFor: async () => m.composio }));
+vi.mock("@/lib/origin-notice-server", () => ({ currentOriginNotice: async () => m.origin }));
 vi.mock("@/lib/onboarding-progress", () => ({ onboardingFor: async () => m.brain }));
 vi.mock("./google-connection-section", () => ({ GoogleConnectionSection: () => <div data-testid="google-section" /> }));
 vi.mock("./composio-connection-section", () => ({ ComposioConnectionSection: () => <div data-testid="composio-section" /> }));
@@ -38,7 +40,7 @@ const view = (done: number) => ({
 });
 
 beforeEach(() => {
-  m.result = m.google = m.composio = m.brain = null;
+  m.result = m.google = m.composio = m.brain = m.origin = null;
   m.test = false;
 });
 afterEach(cleanup);
@@ -84,5 +86,30 @@ describe("Settings page sections", () => {
     await draw();
     expect(screen.queryByText("Not done")).toBeNull();
     expect(screen.getByText(/could not be read/)).toBeTruthy();
+  });
+
+  it("shows the fixed 'not configured' banner from the connect result, once, with the names written on the page", async () => {
+    m.result = { tone: "alert", title: "Google isn't configured on this server.", description: "Check GOOGLE_REDIRECT_URI and NEXT_PUBLIC_APP_URL (same https domain) and redeploy." };
+    await draw();
+    expect(screen.getByTestId("connect-result").textContent).toBe("Google isn't configured on this server.Check GOOGLE_REDIRECT_URI and NEXT_PUBLIC_APP_URL (same https domain) and redeploy.");
+  });
+
+  it("shows the origin notice (hosts only) to users who can connect, and nothing when the hosts match", async () => {
+    m.google = { connections: [] };
+    m.origin = { currentHost: "preview.example.test", appHost: "portal.example.test", appUrl: "https://portal.example.test" };
+    await draw();
+    const n = screen.getByTestId("origin-notice");
+    expect(n.textContent).toBe("You're on preview.example.test. Open portal.example.test to connect accounts.");
+    expect(within(n).getByRole("link").getAttribute("href")).toBe("https://portal.example.test");
+    cleanup();
+    m.origin = null;
+    await draw();
+    expect(screen.queryByTestId("origin-notice")).toBeNull();
+  });
+
+  it("does not look at the origin for users who cannot connect (no Google or Composio section)", async () => {
+    m.origin = { currentHost: "preview.example.test", appHost: "portal.example.test", appUrl: "https://portal.example.test" };
+    await draw();
+    expect(screen.queryByTestId("origin-notice")).toBeNull();
   });
 });

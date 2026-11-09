@@ -21,9 +21,29 @@ type SearchParams = Record<string, string | string[] | undefined>;
 
 const one = (v: string | string[] | undefined) => (typeof v === "string" ? v : undefined);
 
+/**
+ * Banners for a connect that could not start because the server is not configured (`?error=<code>`, set by the start route).
+ * Fixed text chosen by an allowlisted code; the variable names in it are written here, not read from the request or the error.
+ */
+const SERVER_NOT_CONFIGURED: Record<string, ConnectResultMessage | undefined> = {
+  google_env: {
+    tone: "alert",
+    title: "Google isn't configured on this server.",
+    description: "Check GOOGLE_REDIRECT_URI and NEXT_PUBLIC_APP_URL (same https domain) and redeploy.",
+  },
+  connect_env: {
+    tone: "alert",
+    title: "This connection isn't configured on this server.",
+    description: "Ask your administrator to check the server's connection settings and redeploy.",
+  },
+};
+
 export function connectResultMessage(params: SearchParams): ConnectResultMessage | null {
   const code = one(params.connect);
-  if (!code) return null;
+  if (!code) {
+    const err = one(params.error);
+    return err !== undefined && Object.hasOwn(SERVER_NOT_CONFIGURED, err) ? (SERVER_NOT_CONFIGURED[err] ?? null) : null;
+  }
   const baseName = PROVIDERS[one(params.provider) ?? ""] ?? "The provider";
   const toolkit = baseName === "Composio" ? TOOLKITS[one(params.toolkit) ?? ""] : undefined;
   // A Composio connect is named by its toolkit ("Gmail via Composio"); the notice text still keys on "Composio".

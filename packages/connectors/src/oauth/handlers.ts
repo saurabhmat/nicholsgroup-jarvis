@@ -4,11 +4,28 @@
 // start:    POST same-origin only (it creates server state) → 303 to the provider's consent page.
 // callback: GET from the provider → 303 to a fixed path with a coarse result code; provider text never reaches the page.
 import { authErrorResponse } from "@nichols/core/auth";
+import { EnvValidationError, describeEnvError } from "@nichols/core/env/server";
 import { isConnectorError } from "../contract/errors";
 import type { AuthorizeFn, createOAuthFlow } from "./flow";
 
 const NO_STORE = { "cache-control": "no-store" } as const;
 const json = (error: string, status: number) => Response.json({ error }, { status, headers: NO_STORE });
+
+/** The lane codes the lane router issues (also the pattern of the lane in a state, pkce.ts). */
+const LANE_CODE = /^[A-Z]{1,8}$/;
+
+/**
+ * Codes for the fixed banners Settings draws after a connect could not start because the server is not configured.
+ * The page maps the code to text written there; nothing from the request or the error ever reaches the page.
+ */
+const ENV_ERROR_CODES: Readonly<Record<string, string>> = { google: "google_env" };
+const GENERIC_ENV_ERROR_CODE = "connect_env";
+
+/** A connect button is a plain form POST (the browser navigates); a script or API client is not. */
+function isFormNavigation(request: Request): boolean {
+  const type = (request.headers.get("content-type") ?? "").toLowerCase();
+  return type.startsWith("application/x-www-form-urlencoded") || type.startsWith("multipart/form-data") || request.headers.get("sec-fetch-mode") === "navigate";
+}
 
 export function createConnectHandlers(flow: Pick<ReturnType<typeof createOAuthFlow>, "has" | "start" | "callback">, authorizer: () => Promise<AuthorizeFn>) {
   return {
@@ -22,6 +39,16 @@ export function createConnectHandlers(flow: Pick<ReturnType<typeof createOAuthFl
       } catch (e) {
         const res = authErrorResponse(e);
         if (res) return res;
+        if (e instanceof EnvValidationError) {
+          // Variable NAMES and the rule each broke, never values (the error carries none).
+          console.error(`[api/connect/start] not configured (${provider}): ${describeEnvError(e)}`);
+          const lane = url.searchParams.get("lane") ?? "";
+          if (isFormNavigation(request) && LANE_CODE.test(lane)) {
+            const code = ENV_ERROR_CODES[provider] ?? GENERIC_ENV_ERROR_CODE;
+            return new Response(null, { status: 303, headers: { ...NO_STORE, location: `/${lane}/settings?error=${code}` } });
+          }
+          return json("unavailable", 503);
+        }
         const kind = isConnectorError(e) ? e.info.kind : undefined;
         if (kind === "forbidden") return json("forbidden", 403);
         if (kind === "rate_limited") return json("too_many_connects", 429);
