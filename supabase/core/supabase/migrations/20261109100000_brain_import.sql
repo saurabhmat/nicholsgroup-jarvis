@@ -102,6 +102,64 @@ comment on function core.ai_tool_gate(text, text, text) is
 revoke all on function core.ai_tool_gate(text, text, text) from public, anon, service_role;
 grant execute on function core.ai_tool_gate(text, text, text) to authenticated;
 
+-- T-220 review M2: the chat gate counts tool categories only. A copy of 20261108110000_ai_chat_turn.sql with brain_import filtered out.
+create or replace function core.ai_chat_turn(p_lane text)
+returns jsonb
+language plpgsql
+volatile
+security definer
+set search_path = ''
+as $$
+declare
+  v_uid uuid := auth.uid();
+  v_role text;
+  v_categories text[];
+  v_limit integer := 6;
+  v_raw text;
+  v_window timestamptz := pg_catalog.date_trunc('minute', now());
+  v_turns integer;
+begin
+  if p_lane is null or p_lane !~ '^[A-Z]{1,8}$' then
+    raise exception 'invalid lane' using errcode = '22023';
+  end if;
+  if v_uid is null or coalesce(auth.jwt() ->> 'aal', '') <> 'aal2' then
+    return jsonb_build_object('allowed', false, 'reason', 'mfa_required', 'categories', '[]'::jsonb);
+  end if;
+  select m.role into v_role
+  from core.memberships m join core.lanes l on l.code = m.lane_id
+  where m.user_id = v_uid and m.lane_id = p_lane and l.enabled;
+  if not found or v_role not in ('owner', 'finance_operator') or not (p_lane = any (core.allowed_lanes(v_uid, 'assistant'))) then
+    return jsonb_build_object('allowed', false, 'reason', 'forbidden', 'categories', '[]'::jsonb);
+  end if;
+  -- T-220 review M2: 'brain_import' is not an assistant tool category, so it neither opens the chat nor is offered to it.
+  select coalesce(array(select c from pg_catalog.unnest(lp.llm_allowed_categories) c where c <> 'brain_import'), '{}') into v_categories
+  from core.lane_policies lp where lp.lane_id = p_lane;
+  if coalesce(cardinality(v_categories), 0) = 0 then
+    return jsonb_build_object('allowed', false, 'reason', 'forbidden', 'categories', '[]'::jsonb);
+  end if;
+
+  select c.config -> 'assistant' ->> 'turns_per_minute' into v_raw
+  from core.lane_config c where c.lane_id = p_lane order by c.version desc limit 1;
+  if v_raw ~ '^[0-9]{1,2}$' and v_raw::integer between 1 and 60 then
+    v_limit := v_raw::integer;
+  end if;
+  delete from core.ai_chat_rate r where r.lane_id = p_lane and r.user_id = v_uid and r.window_start < v_window;
+  insert into core.ai_chat_rate as r (lane_id, user_id, window_start, turns)
+  values (p_lane, v_uid, v_window, 1)
+  on conflict (lane_id, user_id, window_start) do update set turns = r.turns + 1 where r.turns < v_limit
+  returning r.turns into v_turns;
+  if v_turns is null then
+    return jsonb_build_object('allowed', false, 'reason', 'rate_limited', 'categories', '[]'::jsonb);
+  end if;
+  return jsonb_build_object('allowed', true, 'reason', null, 'categories', to_jsonb(v_categories));
+end;
+$$;
+comment on function core.ai_chat_turn(text) is
+  'Assistant chat route gate (T-105): aal2, owner/finance_operator with the assistant view in an enabled lane, non-empty tool categories (brain_import does not count), per-minute turn limit. Returns {allowed, reason, categories}.';
+revoke all on function core.ai_chat_turn(text) from public, anon, service_role;
+grant execute on function core.ai_chat_turn(text) to authenticated;
+
+
 -- ---------------------------------------------------------------- candidates: target section, PA profile target
 alter table brain.import_candidates add column target_section text
   check (target_section is null or target_section ~ '^[0-9A-Za-z][0-9A-Za-z .,&''-]{0,79}$');
@@ -138,6 +196,8 @@ begin
      or pg_catalog.jsonb_array_length(p_candidates) not between 1 and 100 then
     raise exception 'brain: candidates must be an array of 1 to 100' using errcode = '22023';
   end if;
+  -- Serialise the caller's imports so concurrent calls cannot all pass the hourly count (T-220 review L2).
+  perform pg_advisory_xact_lock(pg_catalog.hashtext('brain_import:' || v_uid::text));
   if (select count(*) from brain.imports i where i.user_id = v_uid and i.created_at > now() - interval '1 hour') >= 20 then
     raise exception 'brain: too many imports' using errcode = '54000';
   end if;
@@ -160,7 +220,14 @@ begin
     if pg_catalog.length(v_fact) not between 1 and 1000 or (v_evidence is not null and pg_catalog.length(v_evidence) > 300)
        or not (v_flags <@ array['possible_nl_content', 'instruction_dropped']::text[])
        or v_path not in ('Context/About-Me.md', 'Context/Preferences.md', 'Context/Work.md', 'Employees/Personal-Assistant.md')
-       or not (v_target_lane = any (v_open)) or p_lane <> any (v_open) then
+       or not (v_target_lane = any (v_open)) or not (p_lane = any (v_open)) then
+      raise exception 'brain: invalid candidate' using errcode = '22023';
+    end if;
+    if not ((v_el ->> 'target_section') = any (case v_path
+         when 'Context/About-Me.md' then array['Name and how to address me', 'Routine and constraints', 'Goals right now', 'First task for Jarvis']
+         when 'Context/Preferences.md' then array['Writing', 'Delivery of information', 'Always ask me first', 'Never do']
+         when 'Context/Work.md' then array['What the company does', 'My role here', 'Key people', 'Priority senders and topics', 'Products, clients and current focus', 'Terms and conventions']
+         else array['1. Role and objective', '2. Priority order', '3. What to leave out', '4. Calendar'] end)) then
       raise exception 'brain: invalid candidate' using errcode = '22023';
     end if;
     -- A possible Nichols Law candidate keeps no quote (spec §7a), whatever the caller sent.

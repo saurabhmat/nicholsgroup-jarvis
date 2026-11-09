@@ -4,7 +4,7 @@
 -- (source, counts, path, lane, flags, lengths, secrets, sensitive numbers, rate), NL candidates keep no quote, and denial by
 -- another user (second PKG owner), another lane (cross-lane both ways), AAL1, admin_technical, finance_operator, anon, service_role.
 begin;
-select plan(61);
+select plan(68);
 \ir helpers/lane_rls.psql
 
 update core.lanes set enabled = true where code = 'APK';
@@ -94,7 +94,10 @@ select throws_ok($$select * from core.brain_import_create('PKG', 'claude_paste',
 select throws_ok($$select * from core.brain_import_create('PKG', 'claude_paste', '[{"fact":"","target_path":"Context/Work.md","target_section":"Key people","target_lane":"PKG"}]')$$, '22023', 'brain: invalid candidate', 'an empty fact refused');
 select throws_ok($$select * from core.brain_import_create('PKG', 'claude_paste', jsonb_build_array(jsonb_build_object('fact', repeat('a', 1001), 'target_path', 'Context/Work.md', 'target_section', 'Key people', 'target_lane', 'PKG')))$$, '22023', 'brain: invalid candidate', 'a fact over 1000 characters refused');
 select throws_ok($$select * from core.brain_import_create('PKG', 'claude_paste', jsonb_build_array(jsonb_build_object('fact', 'f', 'evidence', repeat('e', 301), 'target_path', 'Context/Work.md', 'target_section', 'Key people', 'target_lane', 'PKG')))$$, '22023', 'brain: invalid candidate', 'a quote over 300 characters refused');
-select throws_ok($$select * from core.brain_import_create('PKG', 'claude_paste', '[{"fact":"x","target_path":"Context/Work.md","target_section":"Bad\nHeading","target_lane":"PKG"}]')$$, '23514', null, 'a section with a newline refused');
+select throws_ok($$select * from core.brain_import_create('PKG', 'claude_paste', '[{"fact":"x","target_path":"Context/Work.md","target_section":"Bad\nHeading","target_lane":"PKG"}]')$$, '22023', 'brain: invalid candidate', 'a section with a newline refused');
+select throws_ok($$select * from core.brain_import_create('PKG', 'claude_paste', '[{"fact":"x","target_path":"Context/Work.md","target_section":"Rules","target_lane":"PKG"}]')$$, '22023', 'brain: invalid candidate', 'a section that is not importable for the page is refused');
+select throws_ok($$select * from core.brain_import_create('PKG', 'claude_paste', '[{"fact":"x","target_path":"Employees/Personal-Assistant.md","target_section":"7. Rules","target_lane":"PKG"}]')$$, '22023', 'brain: invalid candidate', 'the Personal Assistant Rules section is refused');
+select throws_ok($$select * from core.brain_import_create('PKG', 'claude_paste', '[{"fact":"x","target_path":"Employees/Personal-Assistant.md","target_section":"5. Drafting rules","target_lane":"PKG"}]')$$, '22023', 'brain: invalid candidate', 'the Personal Assistant Drafting rules section is refused');
 select throws_ok($$select * from core.brain_import_create('PKG', 'claude_paste', '[{"fact":"key sk_live_abcdefghijklmnop1234","target_path":"Context/Work.md","target_section":"Key people","target_lane":"PKG"}]')$$, '23514', null, 'a credential in a fact refused');
 select throws_ok($$select * from core.brain_import_create('PKG', 'claude_paste', '[{"fact":"SSN 123-45-6789","target_path":"Context/Work.md","target_section":"Key people","target_lane":"PKG"}]')$$, '22023', null, 'an SSN in a fact refused');
 select throws_ok($$select * from core.brain_import_create('PKG', 'claude_paste', '[{"fact":"ok","evidence":"card 4111 1111 1111 1111","target_path":"Context/Work.md","target_section":"Key people","target_lane":"PKG"}]')$$, '22023', null, 'a card number in a quote refused');
@@ -157,6 +160,28 @@ select throws_ok($$select * from core.brain_import_create('PKG', 'claude_paste',
 reset role;
 set local role service_role;
 select throws_ok($$select * from brain.import_create('PKG', 'claude_paste', '[]')$$, '42501', null, 'service_role: cannot call the writer');
+reset role;
+
+-- ---------------------------------------------------------------- an owner with two brain lanes (T-220 security M1)
+insert into core.memberships (user_id, lane_id, role) values (pg_temp.uid('owner@example.test'), 'APK', 'owner');
+select pg_temp.claims('owner@example.test', 'aal2');
+set local role authenticated;
+select is((select count(*)::int from core.brain_import_create('PKG', 'claude_paste', '[{"fact":"Two lanes","target_path":"Context/Work.md","target_section":"Key people","target_lane":"APK"},{"fact":"Home","target_path":"Context/About-Me.md","target_section":"Goals right now","target_lane":"PKG"}]')), 2,
+          'an owner with two brain lanes imports into PKG with a Work candidate for the second lane');
+reset role;
+delete from core.memberships where lane_id = 'APK' and user_id = pg_temp.uid('owner@example.test');
+
+-- ---------------------------------------------------------------- the chat gate counts tool categories only (T-220 security M2)
+update core.lane_policies set llm_allowed_categories = array['brain_import'] where lane_id = 'PKG';
+select pg_temp.claims('owner@example.test', 'aal2');
+set local role authenticated;
+select is((core.ai_chat_turn('PKG') ->> 'allowed')::boolean, false, 'a policy with only brain_import does not open the chat');
+reset role;
+update core.lane_policies set llm_allowed_categories = array['email', 'brain_import'] where lane_id = 'PKG';
+select pg_temp.claims('owner@example.test', 'aal2');
+set local role authenticated;
+select is(core.ai_chat_turn('PKG') -> 'categories', '["email"]'::jsonb, 'brain_import is not offered to the chat as a category');
+select is((select count(*)::int from core.brain_import_create('PKG', 'claude_paste', '[{"fact":"x","target_path":"Context/Work.md","target_section":"Key people","target_lane":"PKG"}]')), 1, 'the import is unaffected');
 reset role;
 
 -- ---------------------------------------------------------------- purge still reaches the new rows
