@@ -1,7 +1,6 @@
 // T-230 A: the timing helper writes names and durations only, and is off in production unless the operator opts in.
 import { describe, expect, it, vi } from "vitest";
 import { createTimings, safeName, timingEnabled } from "@/lib/server-timing";
-import { spanNameFor } from "@/lib/server-timing-fetch";
 
 describe("timingEnabled", () => {
   it("is on in next dev", () => expect(timingEnabled({ NODE_ENV: "development" })).toBe(true));
@@ -27,7 +26,7 @@ describe("createTimings", () => {
     // The log line holds the request group id, the name and numbers: nothing from the function's result.
     expect(lines).toHaveLength(2);
     expect(lines[0]).not.toContain("secret-value");
-    expect(JSON.parse(lines[0]!.replace("[timing] ", ""))).toEqual({ req: t.id, name: "guards.session", start: expect.any(Number), ms: expect.any(Number), at: expect.any(Number) });
+    expect(JSON.parse((lines[0] ?? "").replace("[timing] ", ""))).toEqual({ req: t.id, name: "guards.session", start: expect.any(Number), ms: expect.any(Number), at: expect.any(Number) });
   });
 
   it("when off it only runs the function: nothing recorded, nothing logged, nothing in the header", async () => {
@@ -54,19 +53,5 @@ describe("createTimings", () => {
     expect(safeName("Guards.Session")).toBe("guards.session");
     expect(safeName("")).toBe("span");
     expect(safeName("x".repeat(200))).toHaveLength(48);
-  });
-});
-
-describe("spanNameFor (Supabase round-trip counting)", () => {
-  const base = "http://127.0.0.1:54321";
-  it("names the table, function or auth endpoint and nothing else", () => {
-    expect(spanNameFor(`${base}/rest/v1/lanes?select=code&code=eq.PKG&token=abc`, base)).toBe("net.rest.lanes");
-    expect(spanNameFor(`${base}/rest/v1/rpc/has_lane_role`, base)).toBe("net.rest.rpc.has_lane_role");
-    expect(spanNameFor(`${base}/auth/v1/user`, base)).toBe("net.auth.user");
-    expect(spanNameFor(`${base}/storage/v1/object/x`, base)).toBe("net.other");
-  });
-  it("ignores every other host", () => {
-    expect(spanNameFor("https://api.example.test/rest/v1/lanes", base)).toBeNull();
-    expect(spanNameFor(`${base}/rest/v1/lanes`, "")).toBeNull();
   });
 });

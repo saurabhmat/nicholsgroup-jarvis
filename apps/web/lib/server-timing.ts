@@ -7,13 +7,12 @@
 // Off by default in production; on in `next dev` or with the server env var SERVER_TIMING=1 (set by the operator, never by a
 // request: no header or query can switch it on, so a user cannot learn more than the operator chose to publish).
 import { randomUUID } from "node:crypto";
+import { serverTimingEnabled } from "@nichols/core/env/server";
 
 export type TimingEntry = { name: string; start: number; ms: number };
 
-/** True in `next dev`, or when the server's SERVER_TIMING env var is exactly "1". Read per call so tests can flip it. */
-export function timingEnabled(env: Record<string, string | undefined> = process.env): boolean {
-  return env.NODE_ENV === "development" || env.SERVER_TIMING === "1";
-}
+/** True in `next dev`, or when the server's SERVER_TIMING env var is exactly "1" (decided in @nichols/core/env/server; read per call so tests can flip it). */
+export const timingEnabled = serverTimingEnabled;
 
 /** Metric names are fixed literals chosen in code; anything outside [a-z0-9._-] is replaced so a header can never be split. */
 export function safeName(name: string): string {

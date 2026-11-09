@@ -34,7 +34,8 @@ async function cookieStore(): Promise<CookieStore> {
 // the layout, the page and its loaders all ask the same questions. Every check still runs (once); a rejection is memoised
 // too, so an AuthError or an outage gives the same answer to every caller in the render. Outside a render (route handlers,
 // server actions) cache() does not memoise and each call builds its own guards, as before.
-const guardsFor = cache(async (_authCookies: string): Promise<Guards> => {
+const guardsFor = cache(async (authCookies: string): Promise<Guards> => {
+  void authCookies; // only the cache key: see above
   const read = cookieSessionReader(await cookieStore());
   let session: ReturnType<typeof read> | undefined;
   const readOnce = () => (session ??= timed("guards.session", read));

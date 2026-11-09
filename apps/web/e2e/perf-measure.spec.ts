@@ -2,7 +2,10 @@
 // - hard load (page.goto): TTFB, first contentful paint, end of the response stream;
 // - soft navigation (sidebar click): click -> skeleton visible, click -> page heading visible;
 // - the Server-Timing header and the epoch window of each navigation (server `[timing]` log lines carry epoch `at`).
-// Run: PERF_MEASURE=1 SERVER_TIMING=1 E2E_SPECS=e2e/perf-measure.spec.ts pnpm e2e:brain --project=desktop   (writes PERF_OUT).
+// Run: PERF_MEASURE=1 SERVER_TIMING=1 PERF_OUT=/some/file.json E2E_SPECS=e2e/perf-measure.spec.ts pnpm e2e:brain --project=desktop
+// The server's page spans are logged as `[timing] {...}` lines in the run output (and proxy spans come back in Server-Timing).
+// The Supabase round-trip counts in the T-230 PR came from a throw-away preload that wraps fetch; it is not committed
+// (the no-external-fetch rule), so a re-measurement counts the page spans instead.
 // LOCAL stack only, synthetic persona.
 import { writeFileSync } from "node:fs";
 import { expect, test, type Page } from "@playwright/test";
@@ -60,7 +63,7 @@ test("measure route timings", async ({ page }, info) => {
   try {
     const joined = auth.startsWith("base64-") ? Buffer.from(auth.slice(7), "base64url").toString() : decodeURIComponent(auth);
     const token = (JSON.parse(joined) as { access_token: string }).access_token; // read here only to report the header's alg; never printed
-    jwtAlg = (JSON.parse(Buffer.from(token.split(".")[0]!, "base64url").toString()) as { alg: string }).alg;
+    jwtAlg = (JSON.parse(Buffer.from(token.split(".")[0] ?? "", "base64url").toString()) as { alg: string }).alg;
   } catch (e) {
     jwtAlg = `unreadable (${(e as Error).name}; cookies: ${cookies.map((c) => c.name).join(",")}; prefix: ${auth.slice(0, 7)})`;
   }

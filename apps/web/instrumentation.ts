@@ -9,7 +9,5 @@ export async function register() {
     const { warnUnconfiguredFeatures } = await import("@nichols/core/env/startup");
     assertBuildEnv(process.env);
     warnUnconfiguredFeatures(process.env);
-    const { installFetchTiming } = await import("./lib/server-timing-fetch");
-    installFetchTiming(); // T-230 A: only in dev or with SERVER_TIMING=1; counts Supabase round trips by name
   }
 }
