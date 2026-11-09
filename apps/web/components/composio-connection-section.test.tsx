@@ -10,17 +10,18 @@ afterEach(cleanup);
 
 const view = (over: Partial<ComposioSectionView> = {}, gmail: ComposioSectionView["toolkits"][number]["connection"] = null, configured = true): ComposioSectionView => ({
   toolkits: [
-    { toolkit: "gmail", label: "Gmail", configured, connection: gmail },
-    { toolkit: "googlecalendar", label: "Google Calendar", configured, connection: null },
+    { toolkit: "gmail", label: "Gmail", configured, ...(configured ? {} : { missing: ["COMPOSIO_GMAIL_AUTH_CONFIG_ID"] }), connection: gmail },
+    { toolkit: "googlecalendar", label: "Google Calendar", configured, ...(configured ? {} : { missing: ["COMPOSIO_API_KEY", "COMPOSIO_GOOGLECALENDAR_AUTH_CONFIG_ID"] }), connection: null },
   ],
   ...over,
 });
 
 describe("ComposioConnectionSection", () => {
-  it("not configured: the button says so, is disabled and is not a form (does nothing)", () => {
+  it("not configured: the button names the missing settings (names only), is disabled and is not a form", () => {
     render(<ComposioConnectionSection laneId="PKG" view={view({}, null, false)} />);
     const gmail = within(screen.getByTestId("composio-gmail"));
-    const button = gmail.getByRole("button", { name: "Not configured" }) as HTMLButtonElement;
+    const button = gmail.getByRole("button", { name: "Not configured: COMPOSIO_GMAIL_AUTH_CONFIG_ID is not set" }) as HTMLButtonElement;
+    expect(within(screen.getByTestId("composio-googlecalendar")).getByRole("button", { name: "Not configured: COMPOSIO_API_KEY, COMPOSIO_GOOGLECALENDAR_AUTH_CONFIG_ID are not set" })).toBeTruthy();
     expect(button.disabled).toBe(true);
     expect(button.closest("form")).toBeNull();
     expect(gmail.queryByRole("button", { name: "Connect via Composio" })).toBeNull();

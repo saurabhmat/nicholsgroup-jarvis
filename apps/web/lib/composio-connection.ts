@@ -20,6 +20,8 @@ export type ComposioToolkitView = {
   label: string;
   /** False when the auth config id (or the project key) is not set on the server: the button says "Not configured". */
   configured: boolean;
+  /** When not configured: the NAMES of the settings that are not set (never values). Empty = unknown. */
+  missing?: string[];
   /** Null = not connected. */
   connection: null | {
     id: string;
@@ -38,6 +40,11 @@ export type ComposioSectionView = { toolkits: ComposioToolkitView[]; unavailable
 type Db = Pick<LaneClient, "schema">;
 type RoleGuards = Pick<Guards, "requireRole">;
 export type Availability = Record<ComposioToolkitId, boolean>;
+export type MissingSettings = Record<ComposioToolkitId, readonly string[]>;
+
+/** Setting names that may be shown: upper-case identifiers only, so nothing but a variable name can reach the page. */
+const SETTING_NAME = /^[A-Z][A-Z0-9_]{0,63}$/;
+const namesOnly = (names: readonly string[] | undefined): string[] => (names ?? []).filter((n) => SETTING_NAME.test(n)).slice(0, 4);
 
 const STATES: Record<string, ComposioConnectionState | undefined> = {
   active: "connected",
@@ -58,7 +65,7 @@ function mailboxList(config: unknown): string[] {
 }
 
 /** The lane's Composio connections as the page shows them. Throws on a database error. */
-export async function loadComposioSection(client: Db, laneId: string, availability: Availability, now: number = Date.now()): Promise<ComposioSectionView> {
+export async function loadComposioSection(client: Db, laneId: string, availability: Availability, now: number = Date.now(), missing?: MissingSettings): Promise<ComposioSectionView> {
   const core = client.schema("core");
   const conns = await core
     .from("connections")
@@ -84,6 +91,7 @@ export async function loadComposioSection(client: Db, laneId: string, availabili
         toolkit,
         label,
         configured: availability[toolkit],
+        ...(availability[toolkit] ? {} : { missing: namesOnly(missing?.[toolkit]) }),
         connection: row
           ? {
               id: String(row.id),
@@ -104,6 +112,7 @@ export async function composioSectionFor(
   laneId: string,
   availability: () => Availability,
   load: typeof loadComposioSection = loadComposioSection,
+  missing?: () => MissingSettings,
 ): Promise<ComposioSectionView | null> {
   let client: Db;
   try {
@@ -113,9 +122,10 @@ export async function composioSectionFor(
     throw e;
   }
   const avail = availability();
+  const names = avail.gmail && avail.googlecalendar ? undefined : missing?.();
   try {
-    return await load(client, laneId, avail);
+    return await load(client, laneId, avail, undefined, names);
   } catch {
-    return { toolkits: COMPOSIO_TOOLKITS.map(({ toolkit, label }) => ({ toolkit, label, configured: avail[toolkit], connection: null })), unavailable: true };
+    return { toolkits: COMPOSIO_TOOLKITS.map(({ toolkit, label }) => ({ toolkit, label, configured: avail[toolkit], ...(avail[toolkit] ? {} : { missing: namesOnly(names?.[toolkit]) }), connection: null })), unavailable: true };
   }
 }

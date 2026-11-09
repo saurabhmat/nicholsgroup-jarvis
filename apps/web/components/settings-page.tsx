@@ -7,11 +7,11 @@ import { loadLane } from "@/lib/lane-page";
 import { guards } from "@/lib/guards";
 import { connectionTestVisible } from "@/lib/connection-test";
 import { googleSectionFor } from "@/lib/google-connection";
-import { availability } from "@/lib/composio-availability";
+import { availability, missingSettings } from "@/lib/composio-availability";
 import { composioSectionFor } from "@/lib/composio-connection";
 import { ComposioConnectionSection } from "./composio-connection-section";
 import { ConnectionTestSection } from "./connection-test-section";
-import { brainSetupAvailable } from "@/lib/brain-interview";
+import { onboardingFor } from "@/lib/onboarding-progress";
 import { BrainSection } from "./brain-section";
 import { GoogleConnectionSection } from "./google-connection-section";
 import { ModulePage } from "./module-page";
@@ -28,11 +28,13 @@ export async function SettingsPage({
   const result = await connectResultFor(await guards(), lane.laneId, await searchParams);
   const showTest = await connectionTestVisible(await guards(), lane.laneId);
   const google = await googleSectionFor(await guards(), lane.laneId);
-  const composio = await composioSectionFor(await guards(), lane.laneId, availability);
-  const brain = await brainSetupAvailable(await guards(), lane.laneId).catch(() => false);
+  const composio = await composioSectionFor(await guards(), lane.laneId, availability, undefined, missingSettings);
+  const brain = await onboardingFor(lane.laneId); // null unless the owner has the brain view here
+  // The "not set up yet" card only stands in for a page with nothing real on it.
+  const anySection = Boolean(result || google || composio || brain || showTest);
   return (
     <div className="flex flex-col gap-6">
-      <ModulePage module="settings" params={params} />
+      <ModulePage module="settings" params={params} placeholder={!anySection} />
       {result ? (
         <Alert variant={result.tone} data-testid="connect-result">
           <AlertTitle>{result.title}</AlertTitle>
@@ -41,7 +43,7 @@ export async function SettingsPage({
       ) : null}
       {google ? <GoogleConnectionSection laneId={lane.laneId} view={google} /> : null}
       {composio ? <ComposioConnectionSection laneId={lane.laneId} view={composio} /> : null}
-      {brain ? <BrainSection laneId={lane.laneId} /> : null}
+      {brain ? <BrainSection laneId={lane.laneId} view={brain} /> : null}
       {showTest ? <ConnectionTestSection laneId={lane.laneId} /> : null}
     </div>
   );

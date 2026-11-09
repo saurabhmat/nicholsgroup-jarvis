@@ -120,3 +120,25 @@ describe("check view", () => {
     }
   });
 });
+
+describe("missing setting names (T-226)", () => {
+  const ok = { requireRole: async () => ({ client: fakeClient(connected) }) } as never;
+  const NOT_GMAIL: Availability = { gmail: false, googlecalendar: true };
+
+  it("an unconfigured toolkit carries the setting NAMES; a configured one carries none", async () => {
+    const view = await composioSectionFor(ok, "PKG", () => NOT_GMAIL, undefined, () => ({ gmail: ["COMPOSIO_GMAIL_AUTH_CONFIG_ID"], googlecalendar: [] }));
+    expect(view?.toolkits.map((t) => [t.toolkit, t.missing])).toEqual([["gmail", ["COMPOSIO_GMAIL_AUTH_CONFIG_ID"]], ["googlecalendar", undefined]]);
+  });
+
+  it("only upper-case variable names pass: a value or any other text is dropped (canary)", async () => {
+    const CANARY = "canary-value-0d41-secret";
+    const view = await composioSectionFor(ok, "PKG", () => NOT_GMAIL, undefined, () => ({ gmail: ["COMPOSIO_API_KEY", CANARY, `KEY=${CANARY}`], googlecalendar: [] }));
+    expect(view?.toolkits[0]?.missing).toEqual(["COMPOSIO_API_KEY"]);
+    expect(JSON.stringify(view)).not.toContain(CANARY);
+  });
+
+  it("an outage keeps the names too", async () => {
+    const view = await composioSectionFor(ok, "PKG", () => NOT_GMAIL, async () => { throw new Error("db down"); }, () => ({ gmail: ["COMPOSIO_GMAIL_AUTH_CONFIG_ID"], googlecalendar: [] }));
+    expect(view?.toolkits[0]?.missing).toEqual(["COMPOSIO_GMAIL_AUTH_CONFIG_ID"]);
+  });
+});

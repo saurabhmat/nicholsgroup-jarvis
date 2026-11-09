@@ -16,6 +16,12 @@ const LABEL: Record<ComposioConnectionState, { text: string; variant: "success" 
 const TIME = new Intl.DateTimeFormat("en-US", { dateStyle: "medium", timeStyle: "short", timeZone: "America/New_York" });
 const when = (iso: string | null) => (iso ? `${TIME.format(new Date(iso))} ET` : "not synced yet");
 
+/** "Not configured: A is not set" / "Not configured: A, B are not set": setting NAMES only; plain "Not configured" when unknown. */
+export function notConfigured(missing: readonly string[] | undefined): string {
+  const names = missing ?? [];
+  return names.length === 0 ? "Not configured" : `Not configured: ${names.join(", ")} ${names.length === 1 ? "is" : "are"} not set`;
+}
+
 export function ComposioConnectionSection({ laneId, view }: { laneId: string; view: ComposioSectionView }) {
   return (
     <section id="composio-connections" aria-labelledby="composio-connection-title" className="scroll-mt-4">
@@ -82,8 +88,8 @@ export function ComposioConnectionSection({ laneId, view }: { laneId: string; vi
                         </button>
                       </form>
                     ) : (
-                      <button type="button" disabled aria-disabled="true" title="Not configured on this server yet" className={buttonVariants({ variant: "outline" })}>
-                        Not configured
+                      <button type="button" disabled aria-disabled="true" title="Not configured on this server yet" className={buttonVariants({ variant: "outline", className: "h-auto whitespace-normal text-left" })}>
+                        {notConfigured(t.missing)}
                       </button>
                     )}
                     {c && c.state !== "connecting" ? <ComposioTestButton laneId={laneId} toolkit={t.toolkit} /> : null}
