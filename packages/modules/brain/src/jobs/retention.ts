@@ -21,6 +21,7 @@ export const BRAIN_RETENTION: readonly BrainRetentionDeclaration[] = [
   },
   { id: "brain.employees", rule: "until_deleted", reason: OWNER_AUTHORED },
   { id: "brain.skills", rule: "until_deleted", reason: OWNER_AUTHORED },
+  { id: "brain.section_completions", rule: "until_deleted", reason: "Which setup sections the owner finished (section id and time, no content): kept until the owner's account is deleted (cascade)." },
   {
     id: "brain.imports",
     rule: "until_deleted",

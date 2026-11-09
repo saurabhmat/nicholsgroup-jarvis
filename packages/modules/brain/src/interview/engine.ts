@@ -23,7 +23,19 @@ export type QuestionView = {
   known?: string;
   prefill?: Record<string, unknown>;
 };
-export type GroupView = { id: string; part: "A" | "B"; title: string; saves: string; questions: QuestionView[]; done: boolean };
+export type GroupView = {
+  id: string;
+  part: "A" | "B";
+  title: string;
+  saves: string;
+  questions: QuestionView[];
+  /** Chat routing only (Part A: nothing left to ask; Part B: the draft employee exists). NOT progress: use `complete`. */
+  done: boolean;
+  /** The user finished this section: the STORED completion (T-227). The engine never sets it (false); the server fills it in. */
+  complete: boolean;
+  /** What T-226's rule derives from the saved answers (every required question answered; optional ones never block). Only the one-time backfill reads it. */
+  derivedComplete: boolean;
+};
 
 const docBody = (docs: Docs, t: DocTarget): string | null => docs[t.doc];
 
@@ -174,6 +186,28 @@ export function describeAnswers(q: Question, prefill: Record<string, unknown>, c
   return parts.length > 0 ? parts.join(" · ") : null;
 }
 
+/** A question that must be answered for its section to count as complete: it has at least one required field. Optional ones never block. */
+export const isRequiredQuestion = (q: Question): boolean => q.fields.some((f) => f.required === true);
+
+/**
+ * Whether a question's answer is stored (T-226 progress). Per field: a page-backed or free-text field is answered when its
+ * text is provided; a settings-backed field when its stored value differs from the default a fresh profile starts with (no
+ * per-group marker; T-227 adds one). The question is known when EVERY required field is answered, or, when it has none,
+ * when ANY field is. Without a stored profile no settings field is answered. (Fields that other questions also write, such
+ * as the output sections, only count together with the question's own required fields.)
+ */
+export function questionKnown(q: Question, docs: Docs, stored: EmployeeConfig | null, defaults: EmployeeConfig): boolean {
+  const own = prefillFor(q, docs, q.part === "B" ? stored : null);
+  const base = stored === null ? {} : prefillFor(q, docs, defaults);
+  const answered = (f: Field): boolean => {
+    if (f.into !== undefined || f.kind === "text" || f.kind === "longtext") return typeof own[f.key] === "string" && (own[f.key] as string).trim() !== "";
+    if (q.part === "A" || stored === null) return false;
+    return JSON.stringify(own[f.key]) !== JSON.stringify(base[f.key]);
+  };
+  const required = q.fields.filter((f) => f.required === true);
+  return required.length > 0 ? required.every(answered) : q.fields.some(answered);
+}
+
 export function storedConfig(raw: unknown, ctx: InterviewCtx): EmployeeConfig | null {
   if (raw === null || raw === undefined) return null;
   const parsed = employeeConfigSchema.safeParse(raw);
@@ -210,8 +244,17 @@ export function buildGroups(docs: Docs, employeeConfig: EmployeeConfig | null, c
       });
     // Part A: done when every section is known. Part B has no per-group marker (no SQL): it counts as done once the
     // employee exists, for display only. Routing through the groups never uses this for Part B (the UI tracks the session).
+    const defaults = newConfig(ctx);
+    const asked = questionsOf(g)
+      .slice(0, MAX_QUESTIONS_PER_GROUP)
+      .map((q, i) => ({ q, view: questions[i] as QuestionView }))
+      .filter((x) => x.view.status !== "skipped");
+    const known = asked.filter((x) => (x.view.status === "known" ? true : questionKnown(x.q, docs, employeeConfig, defaults)));
+    const required = asked.filter((x) => isRequiredQuestion(x.q));
+    // A section with only optional questions needs at least one answer (an untouched section is never "complete").
+    const derivedComplete = required.every((x) => known.includes(x)) && (required.length > 0 || known.length > 0);
     const done = g.part === "A" ? questions.every((qv) => qv.status !== "ask") : employeeConfig !== null;
-    return { id: g.id, part: g.part, title: g.title, saves: g.saves, questions, done };
+    return { id: g.id, part: g.part, title: g.title, saves: g.saves, questions, done, complete: false, derivedComplete };
   });
 }
 

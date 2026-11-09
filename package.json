@@ -11,7 +11,7 @@
     "build": "turbo run build",
     "typecheck": "turbo run typecheck",
     "lint": "turbo run lint && eslint --no-error-on-unmatched-pattern scripts supabase/functions eslint.config.mjs",
-    "test": "turbo run test && node --test scripts/next-task.test.mjs scripts/tsconfig-strict.test.mjs scripts/eslint-enforcement.test.mjs scripts/dependency-allowlist.test.mjs scripts/no-lint-bypass.test.mjs scripts/supabase-config.test.mjs supabase/core/seed/*.test.mjs",
+    "test": "turbo run test && node --test scripts/next-task.test.mjs scripts/tsconfig-strict.test.mjs scripts/eslint-enforcement.test.mjs scripts/dependency-allowlist.test.mjs scripts/no-lint-bypass.test.mjs scripts/supabase-config.test.mjs scripts/e2e-env-guard.test.mjs supabase/core/seed/*.test.mjs",
     "test:bundle": "turbo run test:bundle",
     "test:db": "node scripts/test-db.mjs",
     "db:start": "supabase start --workdir supabase/core",
@@ -21,7 +21,8 @@
     "db:reset": "node supabase/core/seed/generate.mjs && supabase db reset --local --workdir supabase/core",
     "db:types": "node scripts/gen-db-types.mjs",
     "db:types:check": "node scripts/gen-db-types.mjs --check",
-    "test:injection": "pnpm --filter @nichols/ai test:injection"
+    "test:injection": "pnpm --filter @nichols/ai test:injection",
+    "e2e:brain": "bash scripts/e2e-brain.sh"
   },
   "devDependencies": {
     "@nichols/core": "workspace:*",

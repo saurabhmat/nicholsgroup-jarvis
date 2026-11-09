@@ -7,6 +7,7 @@ export {
   CLIENT_ENV_NAMES,
   CONNECTOR_NAMES,
   EnvValidationError,
+  describeEnvError,
   SERVER_ONLY_ENV_NAMES,
   clientEnvSchema,
   connectorSchemaFactories,

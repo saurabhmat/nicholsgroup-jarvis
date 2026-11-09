@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 import { TEMPLATE_FILES } from "../domain/templates";
 import { applyAnswers, newConfig, parseAnswers, AnswerError, splitList, type InterviewCtx, type LaneInfo } from "./answers";
 import { questionById } from "./bank";
-import { setSection } from "./doc-edit";
+import { setLine, setSection } from "./doc-edit";
 import { buildGroups, skipReason, type Docs } from "./engine";
 
 const lane = (over: Partial<LaneInfo> = {}): LaneInfo => ({
@@ -117,5 +117,116 @@ describe("answers", () => {
   });
   it("splitList splits on commas, semicolons and new lines and dedupes", () => {
     expect(splitList("a, b;c\nb")).toEqual(["a", "b", "c"]);
+  });
+});
+
+describe("section progress (T-226): complete = every required question answered from stored state", () => {
+  const about = TEMPLATE_FILES["Context/About-Me.md"] as string;
+  const pa = TEMPLATE_FILES["Employees/Personal-Assistant.md"] as string;
+  const complete = (groups: ReturnType<typeof buildGroups>) => groups.filter((g) => g.derivedComplete).map((g) => g.id);
+  const withConfig = (mut: (c: ReturnType<typeof newConfig>) => void) => {
+    const c = newConfig(ctx());
+    mut(c);
+    return c;
+  };
+
+  it("an untouched brain has no complete section, and a saved draft profile alone completes nothing", () => {
+    expect(complete(buildGroups(empty, null, ctx()))).toEqual([]);
+    expect(complete(buildGroups({ ...empty, pa }, newConfig(ctx()), ctx()))).toEqual([]);
+  });
+
+  it("saving only B-1 completes only B-1 (the draft profile existing does not complete B-2..B-6)", () => {
+    const config = withConfig((c) => {
+      c.sources.mail = [{ lane: "TST", mailbox: "ops@example.test", priority: 1, include: ["board"] }];
+    });
+    const groups = buildGroups({ ...empty, pa }, config, ctx());
+    expect(complete(groups)).toEqual(["B-1"]);
+    // the chat routing flag keeps its old meaning (profile exists), so routing is unchanged
+    expect(groups.filter((g) => g.part === "B").every((g) => g.done)).toBe(true);
+  });
+
+  it("a required question missing blocks the section; a skipped optional one does not", () => {
+    const name = setSection(about, "Name and how to address me", "Pat");
+    const noScope = buildGroups({ ...empty, about_me: name }, null, ctx());
+    expect(complete(noScope)).not.toContain("A-1");
+    const both = setSection(name, "Scope of this brain", "Work");
+    const groups = buildGroups({ ...empty, about_me: both }, null, ctx());
+    expect(view(groups, "A3").status).toBe("ask"); // optional, left blank: still shows as not provided
+    expect(complete(groups)).toContain("A-1");
+  });
+
+  it("a section of optional questions only needs one answer; untouched it is not complete", () => {
+    expect(complete(buildGroups(empty, null, ctx()))).not.toContain("A-4");
+    const prefs = setSection(TEMPLATE_FILES["Context/Preferences.md"] as string, "Writing", "Short and plain");
+    expect(complete(buildGroups({ ...empty, preferences: prefs }, null, ctx()))).toContain("A-4");
+  });
+
+  it("settings answers count only when they differ from the fresh-profile default; a skipped-by-policy question never blocks", () => {
+    const days3 = withConfig((c) => {
+      c.sources.calendar.days_ahead = 3;
+    });
+    expect(complete(buildGroups({ ...empty, pa }, days3, ctx()))).not.toContain("B-3"); // B7 (finance numbers) still at its default
+    const noFinance = ctx([lane({ financeView: false })]);
+    const days3b = withConfig((c) => {
+      c.sources.calendar.days_ahead = 3;
+    });
+    const g = buildGroups({ ...empty, pa }, { ...days3b, lanes: ["TST"] }, noFinance);
+    expect(complete(g)).toContain("B-3");
+  });
+
+  it("all ten complete once every required answer is stored", () => {
+    let docs: Docs = {
+      about_me: ["Name and how to address me", "Scope of this brain", "Timezone"].reduce((b, h) => setSection(b, h, "Filled in."), about),
+      preferences: setSection(TEMPLATE_FILES["Context/Preferences.md"] as string, "Writing", "Short"),
+      work: setSection(TEMPLATE_FILES["Context/Work.md"] as string, "My role here", "Owner"),
+      pa,
+    };
+    const c = ctx([lane({ policy: { write_actions_allowed: ["email_draft"], store_outbound_drafts: true, llm_allowed_categories: ["email", "web"] } })]);
+    const cfg = withConfig(() => undefined);
+    cfg.sources.mail = [{ lane: "TST", mailbox: "ops@example.test", priority: 1, include: ["board"] }];
+    cfg.sources.vip_senders = ["ceo@example.test"];
+    cfg.sources.calendar.days_ahead = 3;
+    cfg.sources.finance_alerts = false;
+    cfg.schedule.days = [1, 2];
+    cfg.delivery = ["in_app"];
+    cfg.output.target_words = 250;
+    cfg.output.max_attention_items = 3;
+    cfg.output.max_drafts = 1;
+    docs = { ...docs, pa: setLine(setSection(pa, "1. Role and objective", "Watch the board mail"), "7. Rules", "- Additional rules:", "- Additional rules: never reply to press") };
+    const groups = buildGroups(docs, cfg, c);
+    expect(groups.filter((g) => !g.derivedComplete).map((g) => g.id)).toEqual([]);
+  });
+
+  it("a field another question also writes does not make a question known (approvals off + a news topic leave B-5 incomplete)", () => {
+    const noDrafts = ctx([lane({ policy: { write_actions_allowed: [], store_outbound_drafts: false, llm_allowed_categories: ["email", "web"] } })]); // B13 skipped by policy
+    const cfg = withConfig((c) => {
+      c.sources.approvals_pending = false;
+      c.sources.external = [{ kind: "web", topics: ["regulation"] } as never];
+      c.output.sections = ["coverage", "attention"];
+    });
+    const groups = buildGroups({ ...empty, pa }, cfg, noDrafts);
+    expect(view(groups, "B13").status).toBe("skipped");
+    expect(complete(groups)).not.toContain("B-5");
+    expect(complete(groups)).not.toContain("B-4"); // B10 days and B11 delivery are still at their defaults
+  });
+
+  it("B12 with only its length changed is not known (the items limit is required too)", () => {
+    const only = withConfig((c) => {
+      c.output.target_words = 250;
+    });
+    const groups = buildGroups({ ...empty, pa }, only, ctx());
+    expect(complete(groups)).not.toContain("B-5");
+    const both = withConfig((c) => {
+      c.output.target_words = 250;
+      c.output.max_attention_items = 3;
+      c.output.max_drafts = 1;
+    });
+    expect(complete(buildGroups({ ...empty, pa }, both, ctx()))).toContain("B-5");
+  });
+
+  it("B6 needs its required days-ahead, not just the optional prep text", () => {
+    const cfg = withConfig(() => undefined);
+    const body = setLine(pa, "4. Calendar", "Meetings that need prep:", "Meetings that need prep: board calls");
+    expect(complete(buildGroups({ ...empty, pa: body }, cfg, ctx()))).not.toContain("B-3");
   });
 });

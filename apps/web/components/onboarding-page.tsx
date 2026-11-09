@@ -1,0 +1,27 @@
+// Guided onboarding page (T-226): the lane gate first (loadLane), then the owner's brain view (same gate as the interview
+// route and the menu entry; anyone else gets the same 404 as an unknown page, so it does not reveal the page exists), then
+// the wizard. `?step=` is checked against the bank's section ids before it reaches the client; anything else is dropped.
+import { notFound } from "next/navigation";
+import { PageHeader } from "@nichols/ui";
+import { loadLane } from "@/lib/lane-page";
+import { onboardingFor } from "@/lib/onboarding-progress";
+import { sectionIdFrom } from "@/lib/onboarding";
+import { BrainInterview } from "./brain-interview";
+
+export async function OnboardingPage({
+  params,
+  searchParams,
+}: {
+  params: Promise<{ laneId: string }>;
+  searchParams: Promise<Record<string, string | string[] | undefined>>;
+}) {
+  const lane = await loadLane((await params).laneId);
+  if (!(await onboardingFor(lane.laneId))) notFound();
+  const query = await searchParams;
+  return (
+    <div className="flex flex-col gap-6">
+      <PageHeader eyebrow={lane.name} title="Set up your" accent="brain" />
+      <BrainInterview laneId={lane.laneId} mode="wizard" initialStep={sectionIdFrom(query.step)} hadStep={query.step !== undefined} />
+    </div>
+  );
+}

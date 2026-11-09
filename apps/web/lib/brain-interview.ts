@@ -14,6 +14,7 @@ import {
   EmployeeConfigError,
   InterviewRefusal,
   activateEmployee,
+  completeGroup,
   confirmSetup,
   createBrainStore,
   loadInterviewState,
@@ -50,7 +51,7 @@ export function timezoneList(): string[] {
 }
 
 /** The lanes where the caller has the brain view (core.allowed_lanes, own uid at AAL2). [] on any error: fail closed. */
-async function brainLanes(client: Client, userId: string, view: string): Promise<string[]> {
+export async function brainLanes(client: Client, userId: string, view: string): Promise<string[]> {
   try {
     const { data, error } = await (client as unknown as Rpc).schema("core").rpc("allowed_lanes", { p_uid: userId, p_view: view });
     return !error ? strings(data) : [];
@@ -60,7 +61,7 @@ async function brainLanes(client: Client, userId: string, view: string): Promise
 }
 
 /** Mailboxes and KPIs from lane_config, the policy and the connection state of one lane, read with the user's own lane client. */
-export async function readLaneInfo(client: Client, laneId: string, name: string, financeView: boolean): Promise<LaneInfo | null> {
+export async function readLaneInfo(client: Client, laneId: string, name: string, financeView: boolean, withConnections = true): Promise<LaneInfo | null> {
   const core = client.schema("core");
   const [cfg, pol] = await Promise.all([
     core.from("lane_config_current").select("config").eq("lane_id", laneId).maybeSingle(),
@@ -68,13 +69,15 @@ export async function readLaneInfo(client: Client, laneId: string, name: string,
   ]);
   if (cfg.error || pol.error || !cfg.data || !pol.data) return null;
   const config = (typeof cfg.data.config === "object" && cfg.data.config !== null ? cfg.data.config : {}) as { mailboxes?: unknown; kpis?: unknown };
+  // An unreadable state is "unknown", never "missing". Progress callers skip the lookup (connection state never changes completion).
   let connected: string[] | null = null;
-  try {
-    const g = await loadGoogleSection(client, laneId);
-    // An unreadable state is "unknown", never "missing".
-    connected = g.unavailable ? null : g.connections.filter((c) => c.state === "connected" || c.state === "degraded").map((c) => c.mailbox.toLowerCase());
-  } catch {
-    connected = null;
+  if (withConnections) {
+    try {
+      const g = await loadGoogleSection(client, laneId);
+      connected = g.unavailable ? null : g.connections.filter((c) => c.state === "connected" || c.state === "degraded").map((c) => c.mailbox.toLowerCase());
+    } catch {
+      connected = null;
+    }
   }
   return {
     laneId,
@@ -202,7 +205,11 @@ export async function handleInterview(request: Request, laneId: string, deps: In
       case "propose":
         return json(200, { ok: true, proposal: await proposeGroup(env, req.group, req.answers) });
       case "save": {
-        await saveGroup(env, req.group, req.answers, req.proposalId);
+        const saved = await saveGroup(env, req.group, req.answers, req.proposalId);
+        return json(200, { ok: true, completed: saved.completed, state: await loadInterviewState(env) });
+      }
+      case "complete": {
+        await completeGroup(env, req.group);
         return json(200, { ok: true, state: await loadInterviewState(env) });
       }
       case "confirm":

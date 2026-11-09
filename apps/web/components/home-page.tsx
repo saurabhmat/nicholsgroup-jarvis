@@ -8,11 +8,14 @@ import { eyebrowDate } from "@/lib/format-date";
 import { guards } from "@/lib/guards";
 import { composeBriefing, formatDay, formatTime, homeFor, homeKpis, timedLeft, type AttentionItem, type CalendarState, type HomeMeeting } from "@/lib/home";
 import { loadLane } from "@/lib/lane-page";
+import { OnboardingBanner } from "./onboarding-entry";
+import { onboardingFor } from "@/lib/onboarding-progress";
 
 export async function HomePage({ params }: { params: Promise<{ laneId: string }> }) {
   const lane = await loadLane((await params).laneId);
   const now = new Date();
   const view = await homeFor(await guards(), lane.laneId, now);
+  const onboarding = await onboardingFor(lane.laneId);
   const heading = homeHeading(); // no first name in the session yet: "Good morning"
   return (
     <div className="flex flex-col gap-6">
@@ -26,6 +29,7 @@ export async function HomePage({ params }: { params: Promise<{ laneId: string }>
           </Link>
         }
       />
+      <OnboardingBanner laneId={lane.laneId} progress={onboarding} />
       {view.unavailable ? (
         <Alert variant="alert">
           <AlertTitle>Some of today&apos;s information could not be loaded</AlertTitle>

@@ -27,7 +27,7 @@ test("a member sees the shell, a switcher with only the allowed lane, and a 404 
     await tabs.getByRole("link", { name: "Inbox" }).click();
   } else {
     const menu = page.getByRole("navigation", { name: "Main" });
-    await expect(menu.getByRole("link")).toHaveText(["Home", "Finance", "Inbox", "Calendar", "Approvals", "Assistant", "Projects", "Settings"]);
+    await expect(menu.getByRole("link")).toHaveText([/^Get started\d+ of \d+$/, "Home", "Finance", "Inbox", "Calendar", "Approvals", "Assistant", "Projects", "Settings"]); // the desktop persona is the owner (brain view): Get started first (T-226)
     await menu.getByRole("link", { name: "Inbox" }).click();
   }
   await expect(page).toHaveURL(/\/PKG\/inbox$/, { timeout: 30_000 }); // first visit compiles the route in next dev

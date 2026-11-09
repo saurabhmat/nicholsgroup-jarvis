@@ -58,3 +58,7 @@ Targets: `Context/About-Me.md`, `Context/Work.md` (one per enabled core-plane la
 
 ## Mapping of Saurabh's current brain (for the production test, §8a, D-33)
 His existing `Employees/My-AI-Personal-Assistant.md` already answers B1 – B15 for his own use (Skool and AI news are his personal sources). Import it with the brain .zip (T-217); the interview should then skip everything except anything the app needs that the file doesn't say.
+
+## Section completion (T-227)
+Completion per section is stored (`brain.section_completions`; Save, even with every value a kept default, or "Nothing to add"). The section ids are the bank's group ids and `brain.valid_section` in SQL lists them: **adding, renaming or removing a bank group needs a new migration that replaces `brain.valid_section`** (a unit test, `bank.test.ts`, compares the list with the migration file of T-227 and must be pointed at the newest one).
+

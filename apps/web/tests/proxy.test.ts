@@ -14,6 +14,12 @@ vi.mock("@nichols/core/auth", async (importActual) => {
   };
 });
 
+const onboardingVerdict = vi.fn();
+vi.mock("@/lib/onboarding-gate", async (importActual) => {
+  const actual = await importActual<typeof import("@/lib/onboarding-gate")>();
+  return { ...actual, onboardingVerdict: (...args: unknown[]) => onboardingVerdict(...args) }; // the real isOnboardingPath
+});
+
 const { proxy, config } = await import("../proxy");
 
 const get = (path: string) => proxy(new NextRequest(new URL(path, "http://127.0.0.1:3100")));
@@ -21,6 +27,7 @@ const get = (path: string) => proxy(new NextRequest(new URL(path, "http://127.0.
 beforeEach(() => {
   refreshSession.mockReset().mockResolvedValue({ signedIn: true, aal: "aal2" });
   laneVerdict.mockReset().mockResolvedValue("allowed");
+  onboardingVerdict.mockReset().mockResolvedValue("allowed");
 });
 
 describe("proxy lane check", () => {
@@ -57,6 +64,47 @@ describe("proxy lane check", () => {
     refreshSession.mockResolvedValue({ signedIn: true, aal: "aal1" });
     expect((await get("/PKG/inbox")).headers.get("location")).toContain("/mfa?next=%2FPKG%2Finbox");
     expect(laneVerdict).not.toHaveBeenCalled();
+  });
+});
+
+describe("proxy onboarding check (H-042: a real 404 before streaming)", () => {
+  it.each(["/PKG/onboarding", "/PKG/onboarding?step=A-1", "/PKG/onboarding/", "/PKG/%6Fnboarding"])("answers 404 for %s when the user lacks the owner role or brain view", async (path) => {
+    onboardingVerdict.mockResolvedValue("denied");
+    const res = await get(path);
+    expect(res.status).toBe(404);
+    expect(onboardingVerdict).toHaveBeenCalledWith(expect.anything(), "PKG");
+    expect(res.headers.get("cache-control")).toBe("private, no-store");
+    expect(res.headers.get("vary")).toBe("cookie");
+    const body = await res.text();
+    expect(body).toContain("Page not found");
+    expect(body).not.toMatch(/onboarding|brain|wizard/i); // the same body as any refused page
+  });
+
+  it("passes an owner with the brain view through", async () => {
+    expect((await get("/PKG/onboarding")).status).toBe(200);
+  });
+
+  it("passes an unknown verdict (outage) through: the page decides and renders nothing for a non-owner", async () => {
+    onboardingVerdict.mockResolvedValue("unknown");
+    expect((await get("/PKG/onboarding")).status).toBe(200);
+  });
+
+  it("asks only for onboarding paths; there it replaces the lane verdict (its role check includes the lane)", async () => {
+    for (const path of ["/PKG", "/PKG/settings", "/PKG/assistant", "/PKG/onboardingx", "/onboarding"]) await get(path);
+    expect(onboardingVerdict).not.toHaveBeenCalled();
+    laneVerdict.mockClear();
+    onboardingVerdict.mockResolvedValue("denied"); // a lane the user cannot open is "forbidden" from requireRole too
+    expect((await get("/APK/onboarding")).status).toBe(404);
+    expect(onboardingVerdict).toHaveBeenCalledWith(expect.anything(), "APK");
+    expect(laneVerdict).not.toHaveBeenCalled();
+  });
+
+  it("does not check signed-out or AAL1 requests (they are redirected first)", async () => {
+    refreshSession.mockResolvedValue({ signedIn: false, aal: null });
+    expect((await get("/PKG/onboarding")).status).toBe(307);
+    refreshSession.mockResolvedValue({ signedIn: true, aal: "aal1" });
+    expect((await get("/PKG/onboarding")).status).toBe(307);
+    expect(onboardingVerdict).not.toHaveBeenCalled();
   });
 });
 

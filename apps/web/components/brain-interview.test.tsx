@@ -34,7 +34,7 @@ function state(withEmployee: boolean) {
   return {
     homeLane: "TST",
     currentLane: "TST",
-    groups: buildGroups(docs, config, ctx),
+    groups: buildGroups(docs, config, ctx).map((g) => ({ ...g, complete: g.derivedComplete })), // the server fills the stored completion in
     employee: withEmployee ? { name: "Jarvis", status: "draft", version: 1, invalid: false, permissions: [{ lane: "TST", laneName: "Test Co", allowed: ["email.save_draft"], denied: [] }] } : null,
     sources: [{ laneId: "TST", laneName: "Test Co", settingsPath: "/TST/settings#connections", noMailboxes: false, mailboxes: [{ address: "ops@example.test", state: "not_connected" }] }],
     testBriefing: { available: false, message: "Your test briefing arrives with the daily briefing (T-213)." },
@@ -129,4 +129,18 @@ describe("BrainInterview", () => {
     fireEvent.click(screen.getByRole("button", { name: "Save" }));
     await waitFor(() => expect(bodies.map((b) => b.action)).toEqual(["state", "propose", "save"]));
   });
+
+  it("Nothing to add is disabled with a hint while unsaved answers are typed (chat and page form)", async () => {
+    stub(state(false));
+    render(<BrainInterview laneId="TST" mode="page" />);
+    await screen.findByTestId("interview-group");
+    const group = screen.getByTestId("interview-group");
+    expect((within(group).getByRole("button", { name: "Nothing to add" }) as HTMLButtonElement).disabled).toBe(false);
+    const field = within(group).queryAllByRole("textbox")[0];
+    expect(field).toBeDefined();
+    fireEvent.change(field as HTMLElement, { target: { value: "typed" } });
+    expect((within(group).getByRole("button", { name: "Nothing to add" }) as HTMLButtonElement).disabled).toBe(true);
+    expect(screen.getByText("Save or clear your answers first")).toBeTruthy();
+  });
 });
+

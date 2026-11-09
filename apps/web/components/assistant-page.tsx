@@ -3,7 +3,7 @@
 import { Alert, AlertDescription, AlertTitle, PageHeader } from "@nichols/ui";
 import { getLLMProvider } from "@nichols/ai/config";
 import { AssistantChat } from "@/components/assistant-chat";
-import { BrainInterview } from "@/components/brain-interview";
+import { BrainSetupEntry } from "@/components/brain-setup-entry";
 import { brainSetupAvailable } from "@/lib/brain-interview";
 import { toolCategories } from "@/lib/assistant";
 import { guards } from "@/lib/guards";
@@ -36,7 +36,9 @@ export async function AssistantPage({ params }: { params: Promise<{ laneId: stri
       ) : (
         <AssistantChat laneId={lane.laneId} sources={usable} brainSetup={brainSetup} />
       )}
-      {(!configured || usable.length === 0) && brainSetup ? <BrainInterview laneId={lane.laneId} mode="chat" /> : null}
+      {/* No model: the bank-driven interview still runs, behind the same entry buttons the chat shows (H-042). */}
+      {/* Model set up but nothing to read: the chat above already shows the same entry buttons (brainSetup). */}
+      {!configured && brainSetup ? <BrainSetupEntry laneId={lane.laneId} /> : null}
     </div>
   );
 }

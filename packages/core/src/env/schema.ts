@@ -327,12 +327,32 @@ export const CONNECTOR_NAMES = Object.keys(connectorSchemaFactories) as Connecto
 
 // ---------------------------------------------------------------- validation (names only, never values)
 
+/**
+ * The rule texts the schema's own checks use (written in this file, never built from a value). Only these reach an
+ * EnvValidationError's `rules`; any other issue is reported as the generic rule. A test keeps this list in step with the
+ * `message:` literals in this file.
+ */
+export const ENV_RULE_TEXTS: ReadonlySet<string> = new Set([
+  "surrounding whitespace",
+  "value looks like a secret and cannot be public",
+  "required",
+  "invalid combination",
+  "required outside local development",
+  "https required",
+  "must be on the app's own origin",
+  "must be explicit in production",
+  "only in staging or production",
+]);
+export const GENERIC_ENV_RULE = "is missing or not valid";
+
 export class EnvValidationError extends Error {
   readonly scope: string;
   readonly missing: readonly string[];
   readonly invalid: readonly string[];
+  /** Variable name -> the rule it broke (fixed text from ENV_RULE_TEXTS; never a value). */
+  readonly rules: Readonly<Record<string, string>>;
 
-  constructor(scope: string, missing: readonly string[], invalid: readonly string[]) {
+  constructor(scope: string, missing: readonly string[], invalid: readonly string[], rules: Readonly<Record<string, string>> = {}) {
     const parts: string[] = [];
     if (missing.length > 0) parts.push(`missing: ${missing.join(", ")}`);
     if (invalid.length > 0) parts.push(`invalid: ${invalid.join(", ")}`);
@@ -341,7 +361,25 @@ export class EnvValidationError extends Error {
     this.scope = scope;
     this.missing = missing;
     this.invalid = invalid;
+    this.rules = rules;
   }
+}
+
+const VARIABLE_NAME = /^[A-Z][A-Z0-9_]{0,63}$/;
+
+/**
+ * Names and rules for a log line, e.g. "GOOGLE_REDIRECT_URI: must be on the app's own origin; X: is not set".
+ * Names must look like variable names and rules come from the fixed list, so no value can be carried through here.
+ */
+export function describeEnvError(e: EnvValidationError): string {
+  const parts: string[] = [];
+  for (const n of e.missing) if (VARIABLE_NAME.test(n)) parts.push(`${n}: is not set`);
+  for (const n of e.invalid) {
+    if (!VARIABLE_NAME.test(n)) continue;
+    const rule = e.rules[n];
+    parts.push(`${n}: ${rule !== undefined && ENV_RULE_TEXTS.has(rule) ? rule : GENERIC_ENV_RULE}`);
+  }
+  return parts.join("; ");
 }
 
 /** Empty strings count as unset, so a blank `NAME=` line in `.env.local` behaves like an absent variable. */
@@ -360,13 +398,16 @@ export function parseEnv<S extends z.ZodType>(scope: string, schema: S, env: Env
   if (result.success) return result.data;
   const missing = new Set<string>();
   const invalid = new Set<string>();
+  const rules: Record<string, string> = {};
   for (const issue of result.error.issues) {
-    // Only issue PATHS are read; issue messages and inputs are dropped on purpose.
+    // Issue PATHS are read, and an issue message only when it is one of the schema's own fixed rule texts (an input never is).
     const name = typeof issue.path[0] === "string" ? issue.path[0] : "(root)";
-    if (Object.hasOwn(clean, name)) invalid.add(name);
-    else missing.add(name);
+    if (Object.hasOwn(clean, name)) {
+      invalid.add(name);
+      if (issue.code === "custom" && ENV_RULE_TEXTS.has(issue.message)) rules[name] ??= issue.message;
+    } else missing.add(name);
   }
-  throw new EnvValidationError(scope, [...missing].sort(), [...invalid].sort());
+  throw new EnvValidationError(scope, [...missing].sort(), [...invalid].sort(), rules);
 }
 
 /** Core variables; in production Anthropic and Inngest are all-or-none; on a PR Preview the database is optional. */

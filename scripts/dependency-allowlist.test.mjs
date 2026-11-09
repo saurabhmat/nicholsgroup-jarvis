@@ -23,6 +23,7 @@ const ALLOWED = {
     "@playwright/test", // T-018 end-to-end tests
     "@testing-library/dom", // T-216: component tests (same versions as packages/ui)
     "@testing-library/react", // T-216
+    "axe-core", // T-226: accessibility check in the Playwright specs (dev only)
     "@tailwindcss/turbopack",
     "@types/node",
     "@types/react",

@@ -6,7 +6,7 @@
 // never values), registered for redaction, passed explicitly to the SDK. The auth config ids are read from the same
 // environment (not secrets, not hard-coded, not per company).
 import { getAudit } from "@nichols/core/lane-router";
-import { getServerEnv, requireConnectorEnv } from "@nichols/core/env/server";
+import { EnvValidationError, getServerEnv, requireConnectorEnv } from "@nichols/core/env/server";
 import { ConnectorError } from "../contract/errors";
 import { dbStateStore } from "../oauth/state";
 import { composioConnectionStore, laneConfigReader } from "../vault/index";
@@ -38,6 +38,30 @@ function authConfigId(toolkit: Toolkit): string | null {
 /** Which toolkits can be connected here (booleans only). Not configured = the button says so and does nothing. */
 export function composioAvailability(): ComposioAvailability {
   return Object.fromEntries(TOOLKITS.map((t) => [t, authConfigId(t) !== null])) as ComposioAvailability;
+}
+
+const SETTING_NAME = /^[A-Z][A-Z0-9_]{0,63}$/;
+
+/**
+ * Per toolkit, the NAMES of the settings that stop it being connected (empty = configured). Names only, never values:
+ * the project key when it is missing or invalid, else the toolkit's auth config id when it is not set.
+ */
+export function composioMissingSettings(): Record<Toolkit, string[]> {
+  let keyProblems: string[] = [];
+  let e: ReturnType<typeof env> | null = null;
+  try {
+    e = env();
+  } catch (err) {
+    keyProblems = err instanceof EnvValidationError ? [...err.missing, ...err.invalid].filter((n) => SETTING_NAME.test(n)) : ["COMPOSIO_API_KEY"];
+  }
+  const names = Object.fromEntries(
+    TOOLKITS.map((t) => {
+      const name = TOOLKIT_SPECS[t].authConfigEnv;
+      // Without a usable project key nothing can be connected: that is the setting to fix first.
+      return [t, e === null ? (keyProblems.length > 0 ? keyProblems : ["COMPOSIO_API_KEY"]) : e[name] ? [] : [name]];
+    }),
+  );
+  return names as Record<Toolkit, string[]>;
 }
 
 function appOrigin(): string {

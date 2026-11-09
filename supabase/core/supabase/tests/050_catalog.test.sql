@@ -40,7 +40,8 @@ insert into custom_policy_ok values
   ('brain.documents', 'standard expression AND (kind not about_me/preferences OR owner_user_id = auth.uid()): a user''s About-Me and Preferences are theirs alone (T-210)'),
   ('brain.document_versions', 'same as brain.documents: kind and owner_user_id are copied onto each version by a trigger (T-210)'),
   ('brain.imports', 'standard expression AND user_id = auth.uid(): an import is its user''s alone (T-210)'),
-  ('brain.import_candidates', 'standard expression AND user_id = auth.uid() AND created_at within 24 h: candidates are their user''s alone and expire (T-210)');
+  ('brain.import_candidates', 'standard expression AND user_id = auth.uid() AND created_at within 24 h: candidates are their user''s alone and expire (T-210)'),
+  ('brain.section_completions', 'standard expression AND user_id = auth.uid(): completion is its user''s alone (T-227)');
 
 -- Tables where authenticated may write directly (grants or write policies). Empty: writes go through service code or
 -- reviewed security-definer functions.
@@ -88,6 +89,7 @@ insert into security_definer_ok values
   ('brain.employee_save', 'employee profile writer: aal2 + owner role + own profiles only, optimistic version, secret scan (T-210)'),
   ('brain.skill_save', 'skill writer: aal2 + owner role + own skills only, optimistic version, secret scan (T-210)'),
   ('brain.import_decide', 'import review: aal2 + owner role + own open import only; finish deletes the candidates (T-210)'),
+  ('brain.section_complete', 'setup-interview completion writer: aal2 + owner role + own rows only (auth.uid()), known section ids, idempotent (T-227)'),
   ('core.brain_import_purge', 'retention: deletes a lane''s import candidates older than 23 h and closes stale imports; service_role only, lane-checked (T-210)');
 
 -- App functions authenticated may execute (callable through the API). Each one is reviewed.
@@ -130,7 +132,10 @@ insert into authenticated_exec_ok values
   ('core.brain_employee_save', 'brain: wrapper over brain.employee_save; invoker (T-210)'),
   ('core.brain_skills_list', 'brain: skills; invoker, RLS applies (T-210)'),
   ('core.brain_skill_save', 'brain: wrapper over brain.skill_save; invoker (T-210)'),
-  ('core.brain_import_decide', 'brain: wrapper over brain.import_decide; invoker (T-210)');
+  ('core.brain_import_decide', 'brain: wrapper over brain.import_decide; invoker (T-210)'),
+  ('brain.section_complete', 'setup-interview completion writer; checks aal2, owner role and ownership itself (T-227)'),
+  ('core.brain_section_completions', 'brain: the caller''s completed setup sections; invoker, RLS applies (T-227)'),
+  ('core.brain_section_complete', 'brain: wrapper over brain.section_complete; invoker (T-227)');
 
 create temp view app_objects as
   select c.oid, format('%s.%s', n.nspname, c.relname) as name, c.relkind

@@ -99,3 +99,15 @@ describe("question bank (docs/specs/brain-interview.md)", () => {
     expect(questionById("B13")?.skip).toBe("no_drafts");
   });
 });
+
+describe("section ids match the database (T-227)", () => {
+  it("brain.valid_section lists exactly the bank's group ids", async () => {
+    const { readFileSync } = await import("node:fs");
+    const path = await import("node:path");
+    const { fileURLToPath } = await import("node:url");
+    const file = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..", "..", "..", "..", "..", "supabase", "core", "supabase", "migrations", "20261109090000_brain_section_completion.sql");
+    const sql = readFileSync(file, "utf8");
+    const listed = [...(/array\[([^\]]+)\]/.exec(sql)?.[1] ?? "").matchAll(/'([A-Z]-\d+)'/g)].map((m) => m[1]);
+    expect(listed).toEqual(GROUPS.map((g) => g.id));
+  });
+});

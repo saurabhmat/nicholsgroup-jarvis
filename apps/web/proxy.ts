@@ -3,6 +3,7 @@
 // guards answer 401/403 (T-017), and RLS refuses AAL1 anyway.
 import { NextResponse, type NextRequest } from "next/server";
 import { cookieSessionReader, createGuards, laneSegment, laneVerdict, refreshSession, safeNextPath, type CookieStore } from "@nichols/core/auth";
+import { isOnboardingPath, onboardingVerdict } from "@/lib/onboarding-gate";
 
 const PUBLIC_PATHS = ["/sign-in", "/auth/confirm"];
 const MFA_PATH = "/mfa";
@@ -37,7 +38,15 @@ export async function proxy(request: NextRequest) {
     // is only about the status code: the layout and every page verify the lane again (lib/lane-page.ts), and anything
     // other than a definite refusal (outage, expired session) is passed through to them.
     const segment = laneSegment(pathname);
-    if (segment && signedIn && (await laneVerdict(createGuards(cookieSessionReader(cookieStore)), segment)) === "denied") {
+    const guards = segment && signedIn ? createGuards(cookieSessionReader(cookieStore)) : null;
+    // H-042: the onboarding page is only for an owner with the brain view. Its own notFound() runs inside a Suspense
+    // boundary after the shell has streamed (status 200), so the status is decided here, before streaming. Its check
+    // (requireRole) includes the lane check, so onboarding paths skip the separate lane verdict (one set of round trips).
+    const denied =
+      guards !== null &&
+      segment !== null &&
+      (await (isOnboardingPath(pathname) ? onboardingVerdict(guards, segment) : laneVerdict(guards, segment))) === "denied";
+    if (denied) {
       const hidden = new NextResponse(NOT_FOUND_HTML, { status: 404, headers: { "content-type": "text/html; charset=utf-8" } });
       for (const c of response.cookies.getAll()) hidden.cookies.set(c);
       // Per user and never stored, whether or not the session was refreshed on this request.

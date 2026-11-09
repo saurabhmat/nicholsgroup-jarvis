@@ -13,6 +13,7 @@ type Rec = { fn: string; args: Record<string, unknown> };
 function laneClient(opts: { brainLanes?: string[]; financeLanes?: string[]; state?: { doc?: { body: string; version: number } | null } } = {}) {
   const calls: Rec[] = [];
   const docs = new Map<string, { body: string; version: number }>();
+  const completed = new Set<string>();
   const rpc = async (fn: string, args: Record<string, unknown>) => {
     calls.push({ fn, args });
     switch (fn) {
@@ -30,6 +31,11 @@ function laneClient(opts: { brainLanes?: string[]; financeLanes?: string[]; stat
         docs.set(k, { body: String(args.p_body), version: v });
         return { data: [{ o_id: ID, o_version: v, o_updated_at: "2026-11-08T00:00:00Z" }], error: null };
       }
+      case "brain_section_completions":
+        return { data: [...completed].map((section_id) => ({ section_id })), error: null };
+      case "brain_section_complete":
+        for (const id of args.p_sections as string[]) completed.add(id);
+        return { data: (args.p_sections as string[]).map((o_section_id) => ({ o_section_id })), error: null };
       case "brain_employees_list":
         return { data: [], error: null };
       default:
@@ -50,7 +56,7 @@ function laneClient(opts: { brainLanes?: string[]; financeLanes?: string[]; stat
     return b;
   };
   const client = { schema: () => ({ rpc, from: table }) };
-  return { client, calls, docs };
+  return { client, calls, docs, completed };
 }
 
 function deps(over: { role?: "owner" | "viewer" | "none"; lc?: ReturnType<typeof laneClient> } = {}): { d: InterviewDeps; lc: ReturnType<typeof laneClient> } {
@@ -93,8 +99,8 @@ describe("request checks", () => {
     expect((await handleInterview(req({ action: "save", group: "A-1", answers: {}, proposalId: "nothex" }), "TST", d)).status).toBe(400);
     expect(lc.calls).toEqual([]);
   });
-  it("the schema accepts the five actions", () => {
-    for (const body of [{ action: "state" }, { action: "confirm" }, { action: "activate" }, { action: "propose", group: "A-1", answers: {} }, { action: "save", group: "A-1", answers: {}, proposalId: "a".repeat(64) }]) {
+  it("the schema accepts the six actions", () => {
+    for (const body of [{ action: "state" }, { action: "confirm" }, { action: "activate" }, { action: "complete", group: "B-3" }, { action: "propose", group: "A-1", answers: {} }, { action: "save", group: "A-1", answers: {}, proposalId: "a".repeat(64) }]) {
       expect(interviewRequestSchema.safeParse(body).success).toBe(true);
     }
   });
@@ -179,3 +185,29 @@ describe("the model has no way to save", () => {
     }
   });
 });
+
+describe("Nothing to add (complete)", () => {
+  it("records the section for the owner and writes no page or profile", async () => {
+    const { d, lc } = deps();
+    const res = await handleInterview(req({ action: "complete", group: "B-3" }), "TST", d);
+    expect(res.status).toBe(200);
+    expect([...lc.completed]).toEqual(["B-3"]);
+    expect(saves(lc)).toEqual([]);
+    const body = (await res.json()) as { state: { groups: { id: string; complete: boolean }[] } };
+    expect(body.state.groups.filter((g) => g.complete).map((g) => g.id)).toEqual(["B-3"]);
+  });
+  it("an unknown section is 422 and records nothing; extra fields are refused", async () => {
+    const { d, lc } = deps();
+    expect((await handleInterview(req({ action: "complete", group: "Z-9" }), "TST", d)).status).toBe(422);
+    expect((await handleInterview(req({ action: "complete", group: "B-3", answers: {} }), "TST", d)).status).toBe(400);
+    expect(lc.completed.size).toBe(0);
+  });
+  it("a non-owner and a lane without the brain view are refused and record nothing (cross-lane denial)", async () => {
+    const viewer = deps({ role: "viewer" });
+    expect((await handleInterview(req({ action: "complete", group: "A-1" }), "TST", viewer.d)).status).toBe(403);
+    const other = deps({ lc: laneClient({ brainLanes: ["TST"] }) });
+    expect((await handleInterview(req({ action: "complete", group: "A-1" }), "OTH", other.d)).status).toBe(403);
+    expect(viewer.lc.completed.size + other.lc.completed.size).toBe(0);
+  });
+});
+
