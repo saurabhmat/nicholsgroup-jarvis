@@ -103,6 +103,12 @@ test("owner, desktop: Get started is first in the menu, the wizard previews, sav
   await expect(page.getByTestId("interview-group")).toHaveAttribute("data-group", "A-2", { timeout: 30_000 });
   await expect(menu.getByRole("link").first()).toHaveText(/^Get started1 of 10$/);
 
+  // Nothing to add: marks a section done without writing anything (T-227).
+  await page.goto("/PKG/onboarding?step=B-3");
+  await page.getByRole("button", { name: "Nothing to add" }).click();
+  await expect(page.getByTestId("interview-notice")).toContainText("Marked as done: Calendar, finance and approvals", { timeout: 30_000 });
+  await expect(page.getByTestId("wizard-progress-text")).toHaveText("2 of 10 saved");
+
   // Finish screen: skip to the end.
   await page.goto("/PKG/onboarding?step=B-6");
   await page.getByRole("button", { name: "Skip for now" }).click();

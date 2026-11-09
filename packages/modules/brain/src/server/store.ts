@@ -22,6 +22,7 @@ import {
   type DocumentKind,
   type LaneSettings,
 } from "../domain/index";
+import { GROUPS } from "../interview/bank";
 import { BrainError, toBrainError } from "./errors";
 
 /** The part of the lane client the store uses; tests pass a fake. */
@@ -314,6 +315,19 @@ export function createBrainStore(deps: BrainStoreDeps) {
       if (data === null || data === undefined) return null;
       const lane = str(data);
       return LANE.test(lane) ? lane : null;
+    },
+
+    /** The setup-interview sections the caller has completed in a lane (T-227), as the bank's section ids. */
+    async listCompletions(laneId: LaneId): Promise<string[]> {
+      const data = await call(laneId, "brain_section_completions", { p_lane: laneId });
+      return rows(data).map((r) => str(r.section_id)).filter((id) => GROUPS.some((g) => g.id === id));
+    },
+
+    /** Marks sections complete for the caller (idempotent: the first time is kept). Unknown section ids are refused here and in SQL. */
+    async completeSections(laneId: LaneId, sections: readonly string[]): Promise<string[]> {
+      if (sections.length < 1 || sections.length > 20 || sections.some((id) => !GROUPS.some((g) => g.id === id))) throw new BrainError("invalid");
+      const data = await call(laneId, "brain_section_complete", { p_lane: laneId, p_sections: [...new Set(sections)] });
+      return rows(data).map((r) => str(r.o_section_id));
     },
 
     /** Records keep/skip decisions on an open import and returns the kept facts; `finish` closes it and deletes its candidates. */

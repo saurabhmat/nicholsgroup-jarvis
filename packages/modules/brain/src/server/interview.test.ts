@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 import { ABOUT_ME_PATH, WORK_PATH } from "../domain/index";
 import type { InterviewCtx, LaneInfo } from "../interview/index";
 import { BrainError } from "./errors";
-import { InterviewRefusal, activateEmployee, confirmSetup, loadInterviewState, proposeGroup, saveGroup, type InterviewEnv } from "./interview";
+import { InterviewRefusal, activateEmployee, completeGroup, confirmSetup, loadInterviewState, loadProgress, proposeGroup, saveGroup, type InterviewEnv } from "./interview";
 import { createBrainStore, EmployeeConfigError, type BrainDb } from "./store";
 
 // A stateful fake of the core.brain_* wrappers. Every rpc is recorded, so a test can prove what was (not) written.
@@ -10,6 +10,8 @@ type Row = Record<string, unknown>;
 function backend() {
   const docs = new Map<string, { id: string; body: string; version: number }>();
   let employee: Row | null = null;
+  const completed = new Set<string>();
+  const fail = { completions: false };
   const calls: { fn: string; args: Record<string, unknown> }[] = [];
   const kindOf = (p: string) => (p === ABOUT_ME_PATH ? "about_me" : p === "Context/Preferences.md" ? "preferences" : "context");
   const rpc = async (fn: string, a: Record<string, unknown>) => {
@@ -27,6 +29,12 @@ function backend() {
         docs.set(key, next);
         return { data: [{ o_id: next.id, o_version: next.version, o_updated_at: "2026-11-08T00:00:00Z" }], error: null };
       }
+      case "brain_section_completions":
+        if (fail.completions) return { data: null, error: { code: "XX000", message: "down" } };
+        return { data: [...completed].map((section_id) => ({ section_id, completed_at: "2026-11-09T00:00:00Z" })), error: null };
+      case "brain_section_complete":
+        for (const id of a.p_sections as string[]) completed.add(id);
+        return { data: (a.p_sections as string[]).map((o_section_id) => ({ o_section_id, o_completed_at: "2026-11-09T00:00:00Z" })), error: null };
       case "brain_employees_list":
         return { data: employee ? [employee] : [], error: null };
       case "brain_employee_save": {
@@ -39,7 +47,7 @@ function backend() {
     }
   };
   const db = { schema: () => ({ rpc }) } as unknown as BrainDb;
-  return { docs, calls, employee: () => employee, db };
+  return { docs, calls, completed, fail, employee: () => employee, db };
 }
 
 const lane: LaneInfo = {
@@ -293,5 +301,93 @@ describe("proposal digest", () => {
     const p = await proposeGroup(e, "B-1", a);
     const later = { ...e, now: new Date("2026-11-09T04:30:00Z") };
     await expect(saveGroup(later, "B-1", a, p.proposalId)).resolves.toEqual({ saved: 1 });
+  });
+});
+
+describe("stored section completion (T-227)", () => {
+  const completeCalls = (b: ReturnType<typeof backend>) => b.calls.filter((c) => c.fn === "brain_section_complete");
+  const doneIds = async (e: InterviewEnv) => (await loadInterviewState(e)).groups.filter((g) => g.complete).map((g) => g.id);
+
+  it("an untouched brain has no complete section, and reading state records nothing", async () => {
+    const { env: e, b } = env();
+    expect(await doneIds(e)).toEqual([]);
+    expect((await loadProgress(e)).every((g) => !g.complete)).toBe(true);
+    expect(completeCalls(b)).toEqual([]);
+  });
+
+  it("Save completes exactly that section", async () => {
+    const { env: e, b } = env();
+    const answers = { A1: { name: "Pat" }, A2: { scope: "work" } };
+    const p = await proposeGroup(e, "A-1", answers);
+    expect(b.completed.size).toBe(0); // the preview records nothing
+    await saveGroup(e, "A-1", answers, p.proposalId);
+    expect([...b.completed]).toEqual(["A-1"]);
+    expect(await doneIds(e)).toEqual(["A-1"]);
+  });
+
+  it("keeping every default and clicking Save still completes the section and writes no brain change", async () => {
+    const { env: e, b } = env();
+    const answers = { A8: { writing: "Short and warm" } };
+    const first = await proposeGroup(e, "A-4", answers);
+    await saveGroup(e, "A-4", answers, first.proposalId);
+    b.completed.clear();
+    const docWrites = writes(b).length;
+    const again = await proposeGroup(e, "A-4", answers);
+    expect(again.changes).toEqual([]); // nothing would change
+    await saveGroup(e, "A-4", answers, again.proposalId);
+    expect(writes(b).length).toBe(docWrites); // no new brain write
+    expect(await doneIds(e)).toEqual(["A-4"]);
+  });
+
+  it("Nothing to add completes the section, writes no page or profile, and leaves its questions unanswered", async () => {
+    const { env: e, b } = env();
+    await completeGroup(e, "B-3");
+    expect(writes(b)).toEqual([]);
+    expect(b.docs.size).toBe(0);
+    expect(b.employee()).toBeNull();
+    const state = await loadInterviewState(e);
+    expect(state.groups.filter((g) => g.complete).map((g) => g.id)).toEqual(["B-3"]);
+    const b3 = state.groups.find((g) => g.id === "B-3");
+    expect(b3?.questions.every((q) => q.status !== "known" || q.known === undefined)).toBe(true);
+    expect(b3?.questions.find((q) => q.id === "B6")?.known).toBeUndefined(); // still "Not provided"
+  });
+
+  it("refuses a section that is not in the bank, before any call", async () => {
+    const { env: e, b } = env();
+    await expect(completeGroup(e, "Z-9")).rejects.toMatchObject({ code: "unknown_group" });
+    await expect(e.store.completeSections("TST", ["A-1", "nope"])).rejects.toBeInstanceOf(BrainError);
+    expect(completeCalls(b)).toEqual([]);
+  });
+
+  it("backfills answers saved before completion existed, once, idempotently", async () => {
+    const { env: e, b } = env();
+    // A page as the pre-T-227 interview left it: A-1's questions answered, no completion rows.
+    const answers = { A1: { name: "Pat" }, A2: { scope: "work" }, A3: { first_task: "Tidy my week" } };
+    const p = await proposeGroup(e, "A-1", answers);
+    await saveGroup(e, "A-1", answers, p.proposalId);
+    b.completed.clear(); // as if the rows never existed
+    b.calls.length = 0;
+    expect(await doneIds(e)).toEqual(["A-1"]); // backfilled from the derived rule
+    expect(completeCalls(b)).toHaveLength(1);
+    expect(await doneIds(e)).toEqual(["A-1"]);
+    expect(completeCalls(b)).toHaveLength(1); // second load: rows exist, no second write
+  });
+
+  it("does not backfill once the user has completion rows (the stored fact is the only rule)", async () => {
+    const { env: e, b } = env();
+    const answers = { A1: { name: "Pat" }, A2: { scope: "work" }, A3: { first_task: "x" } };
+    const p = await proposeGroup(e, "A-1", answers);
+    await saveGroup(e, "A-1", answers, p.proposalId);
+    b.completed.clear();
+    b.completed.add("B-6");
+    expect(await doneIds(e)).toEqual(["B-6"]);
+  });
+
+  it("a completion that cannot be read shows nothing complete (fail safe)", async () => {
+    const { env: e, b } = env();
+    b.completed.add("A-1");
+    b.fail.completions = true;
+    expect(await doneIds(e)).toEqual([]);
+    expect((await loadProgress(e)).every((g) => !g.complete)).toBe(true);
   });
 });

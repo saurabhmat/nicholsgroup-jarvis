@@ -116,6 +116,20 @@ export function BrainWizard({ laneId, initialStep, hadStep }: { laneId: string; 
     router.refresh(); // the menu badge and the Home banner count the saved section
   }
 
+  /** "Nothing to add" (or Continue on a section with nothing to ask): the section is done; no brain page is written. */
+  async function nothingToAdd(g: GroupView) {
+    setBusy(true);
+    setError(null);
+    const r = await callInterview<{ state: InterviewState }>(laneId, { action: "complete", group: g.id });
+    setBusy(false);
+    if (!r.ok) return setError(r);
+    setState(r.data.state);
+    setProposal(null);
+    setStage(stageAfter(r.data.state.groups, g.id));
+    setNotice(`Marked as done: ${g.title}.`);
+    router.refresh();
+  }
+
   async function confirm() {
     setBusy(true);
     setError(null);
@@ -245,6 +259,7 @@ export function BrainWizard({ laneId, initialStep, hadStep }: { laneId: string; 
               }}
               onPreview={() => void preview(groupView)}
               onSave={() => proposal && void save(groupView, proposal)}
+              onNothingToAdd={() => void nothingToAdd(groupView)}
               onNext={() => go(stageAfter(groups, groupView.id))}
               onBack={() => go(stageBefore(groups, groupView.id))}
             />
@@ -362,6 +377,7 @@ function GroupScreen({
   onChange,
   onPreview,
   onSave,
+  onNothingToAdd,
   onNext,
   onBack,
 }: {
@@ -377,6 +393,7 @@ function GroupScreen({
   onChange: (qid: string, key: string, v: unknown) => void;
   onPreview: () => void;
   onSave: () => void;
+  onNothingToAdd: () => void;
   onNext: () => void;
   onBack: () => void;
 }) {
@@ -403,7 +420,7 @@ function GroupScreen({
       {proposal ? (
         <div className="flex flex-col gap-3" data-testid="interview-proposal">
           <h3 className="text-sm font-semibold text-foreground">Here is the change. Nothing is saved yet.</h3>
-          {changes === 0 ? <p className="text-sm text-muted-foreground">Nothing would change.</p> : <DiffCard proposal={proposal} />}
+          {changes === 0 ? <p className="text-sm text-muted-foreground">Nothing would change. Saving records this section as done.</p> : <DiffCard proposal={proposal} />}
         </div>
       ) : null}
 
@@ -411,12 +428,12 @@ function GroupScreen({
         className="sticky bottom-[calc(3.75rem+env(safe-area-inset-bottom))] z-[5] -mx-4 flex flex-wrap items-center gap-2 border-t border-border bg-card px-4 py-3 md:static md:mx-0 md:border-0 md:bg-transparent md:p-0"
         data-testid="wizard-actions"
       >
-        {proposal && changes > 0 ? (
+        {proposal ? (
           <Button className={cn(tap, "order-first w-full md:order-last md:w-auto")} disabled={busy} onClick={onSave}>
             {busy ? "Saving…" : last ? "Save & finish" : "Save & continue"}
           </Button>
-        ) : proposal || nothingToAsk ? (
-          <Button className={cn(tap, "order-first w-full md:order-last md:w-auto")} disabled={busy} onClick={onNext}>
+        ) : nothingToAsk ? (
+          <Button className={cn(tap, "order-first w-full md:order-last md:w-auto")} disabled={busy} onClick={group.complete ? onNext : onNothingToAdd}>
             {last ? "Finish" : "Continue"}
           </Button>
         ) : (
@@ -430,6 +447,11 @@ function GroupScreen({
         <Button variant="ghost" className="min-h-11 flex-1 md:flex-none" disabled={busy} onClick={onNext}>
           Skip for now
         </Button>
+        {group.complete ? null : (
+          <Button variant="ghost" className="min-h-11 flex-1 md:flex-none" disabled={busy} onClick={onNothingToAdd}>
+            Nothing to add
+          </Button>
+        )}
         <span className="sr-only md:not-sr-only md:ml-auto md:text-xs md:text-muted-foreground">Skipped answers stay &quot;Not provided&quot;.</span>
       </div>
     </div>

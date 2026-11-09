@@ -54,7 +54,7 @@ import {
 import { BrainError } from "./errors";
 import type { BrainEmployee, BrainStore } from "./store";
 
-export type InterviewStore = Pick<BrainStore, "getDocument" | "saveDocument" | "listEmployees" | "saveEmployee" | "loadEmployeeConfig">;
+export type InterviewStore = Pick<BrainStore, "getDocument" | "saveDocument" | "listEmployees" | "saveEmployee" | "loadEmployeeConfig" | "listCompletions" | "completeSections">;
 export type InterviewEnv = {
   store: InterviewStore;
   ctx: InterviewCtx;
@@ -343,7 +343,7 @@ export function sourcesView(ctx: InterviewCtx): SourceView[] {
 /** Read-only. Nothing is created or saved here (seed pages are only the base of a diff until the user saves). */
 export async function loadInterviewState(env: InterviewEnv): Promise<InterviewState> {
   const snap = await snapshot(env);
-  const groups = buildGroups(snap.docs, snap.config, env.ctx);
+  const groups = await withCompletion(env, buildGroups(snap.docs, snap.config, env.ctx));
   return {
     homeLane: env.ctx.home,
     currentLane: env.ctx.current,
@@ -355,10 +355,40 @@ export async function loadInterviewState(env: InterviewEnv): Promise<InterviewSt
   };
 }
 
-/** Section progress only (T-226 menu badge, Home banner, Settings list): the groups' real completion, nothing else. Read-only. */
+/**
+ * Completion is stored (T-227): a section is complete when the user clicked Save on it (even with every value a kept default)
+ * or "Nothing to add". This replaces `GroupView.complete` (derived by T-226) with the stored fact. One-time backfill: when
+ * the user has no completion rows in the home lane yet, the sections the derived rule counts complete are recorded through
+ * the same writer (idempotent: existing rows keep their time, nothing is ever removed), so answers saved before T-227 stay
+ * done. The derivation lives in the interview engine, not in SQL, hence the app-side backfill. A failed read or backfill
+ * write shows nothing complete (fail safe), never a guess.
+ */
+async function withCompletion(env: InterviewEnv, groups: GroupView[]): Promise<GroupView[]> {
+  let stored: string[];
+  try {
+    stored = await env.store.listCompletions(env.ctx.home);
+  } catch {
+    return groups.map((g) => ({ ...g, complete: false }));
+  }
+  if (stored.length === 0) {
+    const derived = groups.filter((g) => g.complete).map((g) => g.id);
+    if (derived.length > 0) {
+      try {
+        stored = await env.store.completeSections(env.ctx.home, derived);
+      } catch {
+        stored = [];
+      }
+    }
+  }
+  const done = new Set(stored);
+  return groups.map((g) => ({ ...g, complete: done.has(g.id) }));
+}
+
+/** Section progress only (T-226 menu badge, Home banner, Settings list): the stored completion of each section. */
 export async function loadProgress(env: InterviewEnv): Promise<{ id: string; title: string; complete: boolean }[]> {
   const snap = await snapshot(env);
-  return buildGroups(snap.docs, snap.config, env.ctx).map((g) => ({ id: g.id, title: g.title, complete: g.complete }));
+  const groups = await withCompletion(env, buildGroups(snap.docs, snap.config, env.ctx));
+  return groups.map((g) => ({ id: g.id, title: g.title, complete: g.complete }));
 }
 
 // ---------------------------------------------------------------------------------------------------- propose / save
@@ -386,7 +416,16 @@ export async function saveGroup(env: InterviewEnv, groupId: string, answers: Rec
     else await env.store.saveEmployee(w.lane, w.body, w.baseVersion);
     saved++;
   }
+  // The click on Save is what completes the section, even when nothing changed (every value a kept default).
+  await env.store.completeSections(env.ctx.home, [groupId]);
   return { saved };
+}
+
+/** "Nothing to add": marks the section done and writes no brain page. Its answers stay "Not provided"; nothing is guessed. */
+export async function completeGroup(env: InterviewEnv, groupId: string): Promise<{ completed: string }> {
+  if (groupById(groupId) === undefined) throw new InterviewRefusal("unknown_group");
+  await env.store.completeSections(env.ctx.home, [groupId]);
+  return { completed: groupId };
 }
 
 // ---------------------------------------------------------------------------------------------------- review and activate

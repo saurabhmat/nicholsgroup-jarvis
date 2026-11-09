@@ -140,6 +140,20 @@ function InterviewFlow({ laneId, mode, startAt }: { laneId: string; mode: "chat"
     route(r.data.state, g.id, seen);
   }
 
+  /** "Nothing to add": the section is done, nothing is written to the brain and its answers stay "Not provided". */
+  async function nothingToAdd(g: GroupView) {
+    setBusy(true);
+    setError(null);
+    const r = await callInterview<{ state: InterviewState }>(laneId, { action: "complete", group: g.id });
+    setBusy(false);
+    if (!r.ok) return fail(r);
+    const seen = new Set(visited).add(g.id);
+    setVisited(seen);
+    setState(r.data.state);
+    setNotice(`Marked as done: ${g.title}.`);
+    route(r.data.state, g.id, seen);
+  }
+
   const skip = (g: GroupView) => {
     const next = new Set(visited).add(g.id);
     setVisited(next);
@@ -229,21 +243,11 @@ function InterviewFlow({ laneId, mode, startAt }: { laneId: string; mode: "chat"
           {proposal ? (
             <div ref={proposalRef} tabIndex={-1} className="flex flex-col gap-3 outline-none" data-testid="interview-proposal">
               <h4 className="text-sm font-semibold text-foreground">Here is the change. Nothing is saved yet.</h4>
-              {proposal.changes.length === 0 ? <p className="text-sm text-muted-foreground">Nothing would change.</p> : <DiffCard proposal={proposal} />}
+              {proposal.changes.length === 0 ? <p className="text-sm text-muted-foreground">Nothing would change. Saving records this section as done.</p> : <DiffCard proposal={proposal} />}
               <div className="flex flex-col gap-2 sm:flex-row">
-                {proposal.changes.length > 0 ? (
-                  <Button className={tap} disabled={busy} onClick={() => void save(groupView, proposal)}>
-                    {busy ? "Saving…" : "Save"}
-                  </Button>
-                ) : (
-                  <Button className={tap} onClick={() => {
-                      const seen = new Set(visited).add(groupView.id);
-                      setVisited(seen);
-                      route(state, groupView.id, seen);
-                    }}>
-                    Next
-                  </Button>
-                )}
+                <Button className={tap} disabled={busy} onClick={() => void save(groupView, proposal)}>
+                  {busy ? "Saving…" : "Save"}
+                </Button>
                 <Button variant="outline" className={tap} disabled={busy} onClick={() => setProposal(null)}>
                   Change my answers
                 </Button>
@@ -256,6 +260,9 @@ function InterviewFlow({ laneId, mode, startAt }: { laneId: string; mode: "chat"
               </Button>
               <Button variant="outline" className={tap} disabled={busy} onClick={() => skip(groupView)}>
                 Skip for now
+              </Button>
+              <Button variant="ghost" className={tap} disabled={busy} onClick={() => void nothingToAdd(groupView)}>
+                Nothing to add
               </Button>
             </div>
           )}

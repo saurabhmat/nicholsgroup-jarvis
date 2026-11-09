@@ -25,6 +25,7 @@ export {
   InterviewRefusal,
   activateEmployee,
   confirmSetup,
+  completeGroup,
   loadInterviewState,
   loadProgress,
   proposeGroup,

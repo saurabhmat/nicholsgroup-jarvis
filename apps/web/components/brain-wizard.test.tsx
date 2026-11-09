@@ -36,10 +36,12 @@ type Req = { action: string; group?: string; proposalId?: string; answers?: Reco
 function fakeApi(opts: { allKnown?: boolean } = {}) {
   const calls: Req[] = [];
   let aboutMe = opts.allKnown ? fill(TEMPLATE_FILES["Context/About-Me.md"] as string, ABOUT_ME) : (TEMPLATE_FILES["Context/About-Me.md"] as string);
+  const completed = new Set<string>();
+  let noChanges = false;
   const state = () => ({
     homeLane: "TST",
     currentLane: "TST",
-    groups: buildGroups({ about_me: aboutMe, preferences: TEMPLATE_FILES["Context/Preferences.md"] as string, work: TEMPLATE_FILES["Context/Work.md"] as string, pa: TEMPLATE_FILES["Employees/Personal-Assistant.md"] as string }, null, ctx),
+    groups: buildGroups({ about_me: aboutMe, preferences: TEMPLATE_FILES["Context/Preferences.md"] as string, work: TEMPLATE_FILES["Context/Work.md"] as string, pa: TEMPLATE_FILES["Employees/Personal-Assistant.md"] as string }, null, ctx).map((g) => ({ ...g, complete: completed.has(g.id) })),
     employee: null,
     sources: [{ laneId: "TST", laneName: "Test Co", settingsPath: "/TST/settings#connections", noMailboxes: false, mailboxes: [{ address: "ops@example.test", state: "connected" }] }],
     testBriefing: { available: false, message: "Your test briefing arrives with the daily briefing (T-213)." },
@@ -50,14 +52,19 @@ function fakeApi(opts: { allKnown?: boolean } = {}) {
     calls.push(b);
     if (b.action === "state") return Response.json({ ok: true, state: state() });
     if (b.action === "propose")
-      return Response.json({ ok: true, proposal: { groupId: b.group, saves: "Context/About-Me.md", proposalId: "a".repeat(64), changes: [{ kind: "document", lane: "TST", path: "Context/About-Me.md", baseVersion: 1, diff: [{ type: "add", text: "Pat Example" }] }] } });
+      return Response.json({ ok: true, proposal: { groupId: b.group, saves: "Context/About-Me.md", proposalId: "a".repeat(64), changes: noChanges ? [] : [{ kind: "document", lane: "TST", path: "Context/About-Me.md", baseVersion: 1, diff: [{ type: "add", text: "Pat Example" }] }] } });
     if (b.action === "save") {
-      aboutMe = fill(aboutMe, ABOUT_ME);
+      if (!noChanges) aboutMe = fill(aboutMe, ABOUT_ME);
+      completed.add(String(b.group));
+      return Response.json({ ok: true, state: state() });
+    }
+    if (b.action === "complete") {
+      completed.add(String(b.group));
       return Response.json({ ok: true, state: state() });
     }
     return Response.json({ ok: false, error: "invalid_request" }, { status: 400 });
   });
-  return calls;
+  return Object.assign(calls, { keepDefaults: () => (noChanges = true) });
 }
 
 const saves = (calls: Req[]) => calls.filter((c) => c.action === "save");
@@ -183,6 +190,50 @@ describe("BrainInterview mode wizard", () => {
     const err = await screen.findByTestId("interview-error");
     expect(err.textContent).not.toContain("secret-canary");
     expect(err.textContent).not.toContain("boom");
+  });
+
+  it("keeping every default then Save: the Save button is there with 'nothing would change' and it records the section", async () => {
+    const calls = fakeApi();
+    calls.keepDefaults();
+    render(<BrainInterview laneId="TST" mode="wizard" initialStep="A-1" hadStep />);
+    await screen.findByTestId("q-A1");
+    fireEvent.change(screen.getByLabelText("Name", { exact: true }), { target: { value: "Pat Example" } });
+    fireEvent.change(screen.getByLabelText("Scope"), { target: { value: "work" } });
+    fireEvent.click(screen.getByRole("button", { name: "Preview change" }));
+    expect((await screen.findByTestId("interview-proposal")).textContent).toContain("Nothing would change");
+    fireEvent.click(screen.getByRole("button", { name: "Save & continue" }));
+    await waitFor(() => expect(saves(calls)).toHaveLength(1));
+    await waitFor(() => expect(screen.getByTestId("interview-group").getAttribute("data-group")).toBe("A-2"));
+    expect(screen.getByTestId("wizard-progress-text").textContent).toBe("1 of 10 saved");
+  });
+
+  it("Nothing to add marks the section done without a preview or a save, and the finish screen still says Not provided", async () => {
+    const calls = fakeApi();
+    render(<BrainInterview laneId="TST" mode="wizard" initialStep="A-1" hadStep />);
+    await screen.findByTestId("q-A1");
+    fireEvent.click(screen.getByRole("button", { name: "Nothing to add" }));
+    await waitFor(() => expect(screen.getByTestId("interview-group").getAttribute("data-group")).toBe("A-2"));
+    expect(calls.filter((c) => c.action === "complete")).toEqual([{ action: "complete", group: "A-1" }]);
+    expect(calls.some((c) => c.action === "propose" || c.action === "save")).toBe(false);
+    expect(screen.getByTestId("wizard-progress-text").textContent).toBe("1 of 10 saved");
+    expect(screen.getByTestId("interview-notice").textContent).toContain("Marked as done: About you");
+    // the rest is skipped: A-1's fields are still "Not provided" on the finish screen
+    for (let i = 0; i < GROUPS.length - 1; i++) {
+      await screen.findByTestId("interview-group");
+      fireEvent.click(screen.getByRole("button", { name: "Skip for now" }));
+    }
+    const a1 = await screen.findByTestId("finish-A-1");
+    expect(a1.textContent).toContain("Not provided");
+  });
+
+  it("an untouched section is not done: the progress starts at 0 and Skip for now does not complete anything", async () => {
+    const calls = fakeApi();
+    render(<BrainInterview laneId="TST" mode="wizard" initialStep="A-1" hadStep />);
+    await screen.findByTestId("q-A1");
+    expect(screen.getByTestId("wizard-progress-text").textContent).toBe("0 of 10 saved");
+    fireEvent.click(screen.getByRole("button", { name: "Skip for now" }));
+    await waitFor(() => expect(screen.getByTestId("interview-group").getAttribute("data-group")).toBe("A-2"));
+    expect(calls.some((c) => c.action === "complete" || c.action === "save")).toBe(false);
   });
 
   // jsdom has no layout or colours, so contrast is covered by the Playwright axe check; structure and names are checked here.
