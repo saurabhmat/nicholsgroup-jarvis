@@ -11,6 +11,8 @@ import {
   type Guards,
   type MfaActions,
 } from "@nichols/core/auth";
+import { getLaneClient, listLanes } from "@nichols/core/lane-router";
+import { timed } from "./timed";
 
 async function cookieStore(): Promise<CookieStore> {
   const store = await cookies();
@@ -25,7 +27,12 @@ async function cookieStore(): Promise<CookieStore> {
 }
 
 export async function guards(): Promise<Guards> {
-  return createGuards(cookieSessionReader(await cookieStore()));
+  const read = cookieSessionReader(await cookieStore());
+  const g = createGuards(() => timed("guards.session", read), {
+    getLaneClient: (laneId, session) => timed("guards.lane", () => getLaneClient(laneId, session)),
+    listLanes: (session) => timed("guards.lanes", () => listLanes(session)),
+  });
+  return { ...g, requireRole: (laneId, roles) => timed("guards.role", () => g.requireRole(laneId, roles)) };
 }
 
 export async function auth(): Promise<AuthActions> {

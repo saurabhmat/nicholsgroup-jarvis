@@ -10,11 +10,12 @@ import { composeBriefing, formatDay, formatTime, homeFor, homeKpis, timedLeft, t
 import { loadLane } from "@/lib/lane-page";
 import { OnboardingBanner } from "./onboarding-entry";
 import { onboardingFor } from "@/lib/onboarding-progress";
+import { timed } from "@/lib/timed";
 
 export async function HomePage({ params }: { params: Promise<{ laneId: string }> }) {
   const lane = await loadLane((await params).laneId);
   const now = new Date();
-  const view = await homeFor(await guards(), lane.laneId, now);
+  const view = await timed("load.home", async () => homeFor(await guards(), lane.laneId, now));
   const onboarding = await onboardingFor(lane.laneId);
   const heading = homeHeading(); // no first name in the session yet: "Good morning"
   return (

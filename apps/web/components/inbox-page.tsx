@@ -5,6 +5,7 @@ import { Alert, AlertDescription, AlertTitle, Badge, cn, EmptyState, laneHref, P
 import { guards } from "@/lib/guards";
 import { inboxFor, INBOX_FILTERS, type InboxFilter, type InboxRow } from "@/lib/inbox";
 import { loadLane } from "@/lib/lane-page";
+import { timed } from "@/lib/timed";
 
 const FILTER_LABEL: Record<InboxFilter, string> = { all: "All", unread: "Unread", important: "Important" };
 const TZ = "America/New_York";
@@ -20,7 +21,7 @@ function when(iso: string, now: Date): string {
 
 export async function InboxPage({ params, searchParams }: { params: Promise<{ laneId: string }>; searchParams: Promise<Record<string, string | string[] | undefined>> }) {
   const lane = await loadLane((await params).laneId);
-  const view = await inboxFor(await guards(), lane.laneId, await searchParams);
+  const view = await timed("load.inbox", async () => inboxFor(await guards(), lane.laneId, await searchParams));
   const now = new Date();
   const base = laneHref(lane.laneId, "inbox");
   return (

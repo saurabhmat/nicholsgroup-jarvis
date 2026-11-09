@@ -9,6 +9,7 @@ import { connection } from "next/server";
 import { AuthError } from "@nichols/core/auth";
 import type { LaneSummary } from "@nichols/core/lanes";
 import { guards } from "./guards";
+import { timed } from "./timed";
 
 export type LoadedLane = { laneId: string; name: string; lanes: LaneSummary[] };
 
@@ -16,8 +17,8 @@ export const loadLane = cache(async (laneParam: string): Promise<LoadedLane> => 
   await connection(); // per request, never prerendered
   const g = await guards();
   try {
-    await g.requireLane(laneParam);
-    const lanes = await g.listLanes();
+    await timed("lane.check", () => g.requireLane(laneParam));
+    const lanes = await timed("lane.list", () => g.listLanes());
     const lane = lanes.find((l) => l.laneId === laneParam);
     if (!lane) notFound();
     return { laneId: lane.laneId, name: lane.name, lanes };

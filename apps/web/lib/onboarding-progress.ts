@@ -2,5 +2,6 @@
 import { cache } from "react";
 import { guards } from "@/lib/guards";
 import { loadOnboarding } from "@/lib/onboarding";
+import { timed } from "@/lib/timed";
 
-export const onboardingFor = cache(async (laneId: string) => loadOnboarding(await guards(), laneId, new Date()));
+export const onboardingFor = cache(async (laneId: string) => timed("load.onboarding", async () => loadOnboarding(await guards(), laneId, new Date())));

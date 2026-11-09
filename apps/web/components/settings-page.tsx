@@ -13,6 +13,7 @@ import { ComposioConnectionSection } from "./composio-connection-section";
 import { ConnectionTestSection } from "./connection-test-section";
 import { currentOriginNotice } from "@/lib/origin-notice-server";
 import { onboardingFor } from "@/lib/onboarding-progress";
+import { timed } from "@/lib/timed";
 import { BrainSection } from "./brain-section";
 import { GoogleConnectionSection } from "./google-connection-section";
 import { ModulePage } from "./module-page";
@@ -26,10 +27,10 @@ export async function SettingsPage({
 }) {
   const lane = await loadLane((await params).laneId);
   // The result of a connect the OAuth callback sent back here (fixed, allowlisted text; connect roles only).
-  const result = await connectResultFor(await guards(), lane.laneId, await searchParams);
-  const showTest = await connectionTestVisible(await guards(), lane.laneId);
-  const google = await googleSectionFor(await guards(), lane.laneId);
-  const composio = await composioSectionFor(await guards(), lane.laneId, availability, undefined, missingSettings);
+  const result = await timed("load.connect_result", async () => connectResultFor(await guards(), lane.laneId, await searchParams));
+  const showTest = await timed("load.connection_test", async () => connectionTestVisible(await guards(), lane.laneId));
+  const google = await timed("load.google", async () => googleSectionFor(await guards(), lane.laneId));
+  const composio = await timed("load.composio", async () => composioSectionFor(await guards(), lane.laneId, availability, undefined, missingSettings));
   const brain = await onboardingFor(lane.laneId); // null unless the owner has the brain view here
   // On another host than NEXT_PUBLIC_APP_URL a connect cannot finish (hosts only in the notice); only users who can connect see it.
   const origin = google || composio ? await currentOriginNotice() : null;

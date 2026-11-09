@@ -4,6 +4,7 @@
 import { NextResponse, type NextRequest } from "next/server";
 import { cookieSessionReader, createGuards, laneSegment, laneVerdict, refreshSession, safeNextPath, type CookieStore } from "@nichols/core/auth";
 import { isOnboardingPath, onboardingVerdict } from "@/lib/onboarding-gate";
+import { createTimings, timingEnabled } from "@/lib/server-timing";
 
 const PUBLIC_PATHS = ["/sign-in", "/auth/confirm"];
 const MFA_PATH = "/mfa";
@@ -17,6 +18,12 @@ const NOT_FOUND_HTML =
   '<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="robots" content="noindex"><meta name="color-scheme" content="light dark"><title>Page not found</title></head><body><h1>Page not found</h1><p>This page does not exist, or you do not have access to it.</p><p><a href="/">Go to your home page</a></p></body></html>';
 
 export async function proxy(request: NextRequest) {
+  // T-230 A: names and durations only, on the response, and only in dev or with SERVER_TIMING=1 on the server.
+  const timings = createTimings(null);
+  const stamp = <R extends NextResponse>(r: R): R => {
+    if (timingEnabled()) r.headers.set("server-timing", timings.header());
+    return r;
+  };
   let response = NextResponse.next({ request });
   const cookieStore: CookieStore = {
     getAll: () => request.cookies.getAll(),
@@ -27,10 +34,10 @@ export async function proxy(request: NextRequest) {
       for (const [k, v] of Object.entries(headers ?? {})) response.headers.set(k, v);
     },
   };
-  const { signedIn, aal } = await refreshSession(cookieStore);
+  const { signedIn, aal } = await timings.time("proxy.auth", () => refreshSession(cookieStore));
 
   const { pathname, search } = request.nextUrl;
-  if (pathname.startsWith("/api/") || PUBLIC_PATHS.some((p) => under(pathname, p))) return response;
+  if (pathname.startsWith("/api/") || PUBLIC_PATHS.some((p) => under(pathname, p))) return stamp(response);
 
   const target = !signedIn ? "/sign-in" : aal !== "aal2" && !under(pathname, MFA_PATH) ? MFA_PATH : null;
   if (!target) {
@@ -45,16 +52,16 @@ export async function proxy(request: NextRequest) {
     const denied =
       guards !== null &&
       segment !== null &&
-      (await (isOnboardingPath(pathname) ? onboardingVerdict(guards, segment) : laneVerdict(guards, segment))) === "denied";
+      (await timings.time("proxy.lane", () => (isOnboardingPath(pathname) ? onboardingVerdict(guards, segment) : laneVerdict(guards, segment)))) === "denied";
     if (denied) {
       const hidden = new NextResponse(NOT_FOUND_HTML, { status: 404, headers: { "content-type": "text/html; charset=utf-8" } });
       for (const c of response.cookies.getAll()) hidden.cookies.set(c);
       // Per user and never stored, whether or not the session was refreshed on this request.
       hidden.headers.set("cache-control", "private, no-store");
       hidden.headers.set("vary", "cookie");
-      return hidden;
+      return stamp(hidden);
     }
-    return response;
+    return stamp(response);
   }
   const url = request.nextUrl.clone();
   url.pathname = target;
@@ -65,7 +72,7 @@ export async function proxy(request: NextRequest) {
   for (const c of response.cookies.getAll()) redirect.cookies.set(c);
   const cacheControl = response.headers.get("cache-control");
   if (cacheControl) redirect.headers.set("cache-control", cacheControl);
-  return redirect;
+  return stamp(redirect);
 }
 
 export const config = {
