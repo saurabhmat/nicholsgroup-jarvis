@@ -188,17 +188,22 @@ export function describeAnswers(q: Question, prefill: Record<string, unknown>, c
 export const isRequiredQuestion = (q: Question): boolean => q.fields.some((f) => f.required === true);
 
 /**
- * Whether a question's answer is stored (T-226 progress). Part A: its page sections are provided. Part B: a page-backed or
- * free-text answer is provided, or a settings-backed answer differs from the default a fresh profile starts with (a field
- * still at its default is not known; there is no per-group marker). Without a stored profile no settings answer is known.
+ * Whether a question's answer is stored (T-226 progress). Per field: a page-backed or free-text field is answered when its
+ * text is provided; a settings-backed field when its stored value differs from the default a fresh profile starts with (no
+ * per-group marker; T-227 adds one). The question is known when EVERY required field is answered, or, when it has none,
+ * when ANY field is. Without a stored profile no settings field is answered. (Fields that other questions also write, such
+ * as the output sections, only count together with the question's own required fields.)
  */
 export function questionKnown(q: Question, docs: Docs, stored: EmployeeConfig | null, defaults: EmployeeConfig): boolean {
   const own = prefillFor(q, docs, q.part === "B" ? stored : null);
-  const text = (k: string): boolean => typeof own[k] === "string" && (own[k] as string).trim() !== "";
-  if (q.fields.some((f) => (f.into !== undefined || f.kind === "text" || f.kind === "longtext") && text(f.key))) return true;
-  if (q.part === "A" || stored === null) return false;
-  const base = prefillFor(q, docs, defaults);
-  return q.fields.filter((f) => f.into === undefined).some((f) => JSON.stringify(own[f.key]) !== JSON.stringify(base[f.key]));
+  const base = stored === null ? {} : prefillFor(q, docs, defaults);
+  const answered = (f: Field): boolean => {
+    if (f.into !== undefined || f.kind === "text" || f.kind === "longtext") return typeof own[f.key] === "string" && (own[f.key] as string).trim() !== "";
+    if (q.part === "A" || stored === null) return false;
+    return JSON.stringify(own[f.key]) !== JSON.stringify(base[f.key]);
+  };
+  const required = q.fields.filter((f) => f.required === true);
+  return required.length > 0 ? required.every(answered) : q.fields.some(answered);
 }
 
 export function storedConfig(raw: unknown, ctx: InterviewCtx): EmployeeConfig | null {

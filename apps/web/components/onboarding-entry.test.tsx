@@ -37,6 +37,13 @@ describe("More row", () => {
     expect(first.textContent).toBe("Get started3 of 10");
     expect(first.querySelector("a")?.getAttribute("href")).toBe("/PKG/onboarding");
   });
+  it("shows the badge for 0 of 10 and no badge when the count is unreadable", () => {
+    const { unmount } = row({ done: 0, total: 10 });
+    expect((screen.getAllByRole("listitem")[0] as HTMLElement).textContent).toBe("Get started0 of 10");
+    unmount();
+    row({ done: null, total: 10 });
+    expect((screen.getAllByRole("listitem")[0] as HTMLElement).textContent).toBe("Get started");
+  });
   it("says AI brain with a check when everything is done", () => {
     row({ done: 10, total: 10 });
     const first = screen.getAllByRole("listitem")[0] as HTMLElement;

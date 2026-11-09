@@ -68,14 +68,15 @@ export async function readLaneInfo(client: Client, laneId: string, name: string,
   ]);
   if (cfg.error || pol.error || !cfg.data || !pol.data) return null;
   const config = (typeof cfg.data.config === "object" && cfg.data.config !== null ? cfg.data.config : {}) as { mailboxes?: unknown; kpis?: unknown };
+  // An unreadable state is "unknown", never "missing". Progress callers skip the lookup (connection state never changes completion).
   let connected: string[] | null = null;
-  try {
-    if (!withConnections) throw new Error("connection state not needed"); // progress only: connection state never changes completion
-    const g = await loadGoogleSection(client, laneId);
-    // An unreadable state is "unknown", never "missing".
-    connected = g.unavailable ? null : g.connections.filter((c) => c.state === "connected" || c.state === "degraded").map((c) => c.mailbox.toLowerCase());
-  } catch {
-    connected = null;
+  if (withConnections) {
+    try {
+      const g = await loadGoogleSection(client, laneId);
+      connected = g.unavailable ? null : g.connections.filter((c) => c.state === "connected" || c.state === "degraded").map((c) => c.mailbox.toLowerCase());
+    } catch {
+      connected = null;
+    }
   }
   return {
     laneId,

@@ -1,16 +1,25 @@
-import { describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import { AuthError } from "@nichols/core/auth";
 import { GROUPS } from "@nichols/brain/interview";
 
-const state = vi.hoisted(() => ({ groups: [] as { id: string; title: string; complete: boolean }[], brainLanes: ["PKG"] as string[], info: true, progressThrows: false }));
+const state = vi.hoisted(() => ({ groups: [] as { id: string; title: string; complete: boolean }[], brainLanes: ["PKG"] as string[], info: true, progressThrows: false, home: null as string | null, homeThrows: false, clientFor: null as null | ((l: string) => Promise<unknown>) }));
 vi.mock("@/lib/brain-interview", () => ({
   brainLanes: async (_c: unknown, _u: string, view: string) => (view === "brain" ? state.brainLanes : []),
   readLaneInfo: async (_c: unknown, laneId: string) => (state.info ? { laneId, name: laneId, mailboxes: [], kpis: [], connected: null, policy: { write_actions_allowed: [], store_outbound_drafts: false, llm_allowed_categories: [] }, financeView: false } : null),
   timezoneList: () => ["UTC"],
 }));
 vi.mock("@nichols/brain/server", () => ({
-  createBrainStore: () => ({ findHomeLane: async () => null }),
-  loadProgress: async () => {
+  createBrainStore: (deps: { clientFor: (l: string) => Promise<unknown> }) => {
+    state.clientFor = deps.clientFor;
+    return {
+      findHomeLane: async () => {
+        if (state.homeThrows) throw new Error("db down");
+        return state.home;
+      },
+    };
+  },
+  loadProgress: async (env: { ctx: { home: string } }) => {
+    await state.clientFor?.(env.ctx.home); // reading the home lane's pages opens that lane through the router
     if (state.progressThrows) throw new Error("db down");
     return state.groups;
   },
@@ -23,6 +32,14 @@ const viewer = { requireRole: async () => { throw new AuthError("forbidden"); },
 const now = new Date("2026-11-09T12:00:00Z");
 
 describe("setup progress (T-226)", () => {
+  beforeEach(() => {
+    state.home = null;
+    state.homeThrows = false;
+    state.progressThrows = false;
+    state.info = true;
+    state.brainLanes = ["PKG"];
+  });
+
   it("counts completed sections out of the bank's section count", async () => {
     state.groups = GROUPS.map((g, i) => ({ id: g.id, title: g.title, complete: i < 3 }));
     const v = await loadOnboarding(owner, "PKG", now);
@@ -68,6 +85,42 @@ describe("setup progress (T-226)", () => {
     expect(await loadOnboarding(guard, "BBB", now)).toBeNull();
     expect(asked).toEqual(["role:BBB"]);
     expect((await loadOnboarding(guard, "AAA", now))?.done).toBe(GROUPS.length);
+  });
+
+  const lanes = (allowed: string[], asked: string[]) =>
+    ({
+      requireRole: async (l: string) => ({ session: { userId: "u1" }, client: {}, laneId: l }),
+      requireLane: async (l: string) => {
+        asked.push(`lane:${l}`);
+        if (!allowed.includes(l)) throw new AuthError("forbidden");
+        return { client: {} };
+      },
+      listLanes: async () => [],
+    }) as never;
+
+  it("a home lane the user cannot open with the brain view gives nothing and is never opened", async () => {
+    state.progressThrows = false;
+    state.brainLanes = ["AAA"];
+    state.home = "ZZZ";
+    state.groups = GROUPS.map((g) => ({ id: g.id, title: g.title, complete: true }));
+    const asked: string[] = [];
+    expect(await loadOnboarding(lanes(["AAA"], asked), "AAA", now)).toBeNull();
+    expect(asked).not.toContain("lane:ZZZ");
+  });
+
+  it("a home lane in the brain list that the router refuses gives the degraded view (no count)", async () => {
+    state.brainLanes = ["AAA", "AAA2"];
+    state.home = "AAA2";
+    const v = await loadOnboarding(lanes(["AAA"], []), "AAA", now);
+    expect(v?.done).toBeNull();
+  });
+
+  it("an unreadable home-lane lookup gives the degraded view, not a guess at the current lane", async () => {
+    state.brainLanes = ["AAA"];
+    state.home = null;
+    state.homeThrows = true;
+    expect((await loadOnboarding(owner, "AAA", now))?.done).toBeNull();
+    state.homeThrows = false;
   });
 
   it("accepts only the bank's section ids from the URL", () => {

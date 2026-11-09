@@ -189,11 +189,44 @@ describe("section progress (T-226): complete = every required question answered 
     cfg.sources.finance_alerts = false;
     cfg.schedule.days = [1, 2];
     cfg.delivery = ["in_app"];
-    cfg.output.target_words = 300;
+    cfg.output.target_words = 250;
     cfg.output.max_attention_items = 3;
     cfg.output.max_drafts = 1;
     docs = { ...docs, pa: setLine(setSection(pa, "1. Role and objective", "Watch the board mail"), "7. Rules", "- Additional rules:", "- Additional rules: never reply to press") };
     const groups = buildGroups(docs, cfg, c);
     expect(groups.filter((g) => !g.complete).map((g) => g.id)).toEqual([]);
+  });
+
+  it("a field another question also writes does not make a question known (approvals off + a news topic leave B-5 incomplete)", () => {
+    const noDrafts = ctx([lane({ policy: { write_actions_allowed: [], store_outbound_drafts: false, llm_allowed_categories: ["email", "web"] } })]); // B13 skipped by policy
+    const cfg = withConfig((c) => {
+      c.sources.approvals_pending = false;
+      c.sources.external = [{ kind: "web", topics: ["regulation"] } as never];
+      c.output.sections = ["coverage", "attention"];
+    });
+    const groups = buildGroups({ ...empty, pa }, cfg, noDrafts);
+    expect(view(groups, "B13").status).toBe("skipped");
+    expect(complete(groups)).not.toContain("B-5");
+    expect(complete(groups)).not.toContain("B-4"); // B10 days and B11 delivery are still at their defaults
+  });
+
+  it("B12 with only its length changed is not known (the items limit is required too)", () => {
+    const only = withConfig((c) => {
+      c.output.target_words = 250;
+    });
+    const groups = buildGroups({ ...empty, pa }, only, ctx());
+    expect(complete(groups)).not.toContain("B-5");
+    const both = withConfig((c) => {
+      c.output.target_words = 250;
+      c.output.max_attention_items = 3;
+      c.output.max_drafts = 1;
+    });
+    expect(complete(buildGroups({ ...empty, pa }, both, ctx()))).toContain("B-5");
+  });
+
+  it("B6 needs its required days-ahead, not just the optional prep text", () => {
+    const cfg = withConfig(() => undefined);
+    const body = setLine(pa, "4. Calendar", "Meetings that need prep:", "Meetings that need prep: board calls");
+    expect(complete(buildGroups({ ...empty, pa: body }, cfg, ctx()))).not.toContain("B-3");
   });
 });

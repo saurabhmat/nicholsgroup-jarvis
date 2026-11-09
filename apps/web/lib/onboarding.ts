@@ -56,7 +56,14 @@ export async function loadOnboarding(
       return c;
     };
     const store = createBrainStore({ clientFor, laneSettingsFor: async (l) => (l === laneId ? { mailboxes: info.mailboxes, kpis: info.kpis } : null) });
-    const existing = await store.findHomeLane(laneId).catch(() => null);
+    // The home-lane lookup reads only the caller's own rows (D-28: a user's brain is theirs). If it cannot be read the view is
+    // degraded (no count), never a guess at the current lane.
+    let existing: string | null;
+    try {
+      existing = await store.findHomeLane(laneId);
+    } catch {
+      return { done: null, total: GROUPS.length, sections: bank(), nextSectionId: GROUPS[0]?.id ?? null };
+    }
     const home = resolveHomeLane({ openLanes: withBrain, existingLaneId: existing, pickedLaneId: laneId });
     if (!home.ok) return null;
     env = { store, ctx: { home: home.laneId, current: laneId, lanes: [info], timezones: timezoneList() }, now };

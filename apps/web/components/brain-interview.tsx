@@ -272,9 +272,9 @@ function InterviewFlow({ laneId, mode, startAt }: { laneId: string; mode: "chat"
                   <span className="block font-medium text-foreground">{g.title}</span>
                   <span className="text-xs text-muted-foreground">{g.part === "A" ? "Your brain" : "Personal Assistant"}</span>
                 </span>
-                <Badge variant={g.done ? "success" : "muted"}>{g.done ? "Done" : "Not done"}</Badge>
+                <Badge variant={g.complete ? "success" : "muted"}>{g.complete ? "Done" : "Not done"}</Badge>
                 <Button size="sm" variant="outline" className="min-h-11" onClick={() => openGroup(g, true)}>
-                  {g.done ? "Change" : "Set up"}
+                  {g.complete ? "Change" : "Set up"}
                 </Button>
               </li>
             ))}
