@@ -1,6 +1,6 @@
 import type { ReactNode } from "react";
 import { cn } from "../lib/utils";
-import { activeKey, laneHref, MOBILE_TABS, NAV_ITEMS, pageHeading } from "../lib/nav";
+import { activeKey, laneHref, MOBILE_TABS, NAV_ITEMS, onboardingEntry, pageHeading, type OnboardingProgress } from "../lib/nav";
 import { Badge } from "./badge";
 import { TabIcon } from "./tab-icon";
 import { LaneSwitcher, type ShellLane, type ShellLink } from "./lane-switcher";
@@ -15,6 +15,8 @@ export type AppShellProps = {
   pathname: string;
   /** Pending approvals in the SELECTED lane only; the badge is hidden at 0 or when unknown. */
   approvalsCount?: number;
+  /** Setup progress for the "Get started" entry; omitted (null) for users without the brain view: the entry is not drawn. */
+  onboarding?: OnboardingProgress | null;
   /** First name for the Home title on the iPhone header band; omitted when unknown. */
   firstName?: string;
   /** Form action that signs the user out. */
@@ -35,6 +37,14 @@ function Star({ className }: { className?: string }) {
   );
 }
 
+function Check() {
+  return (
+    <svg aria-label="Setup complete" role="img" viewBox="0 0 24 24" className="size-4 fill-none stroke-gold stroke-2">
+      <path d="M5 12.5l4.5 4.5L19 7.5" strokeLinecap="round" strokeLinejoin="round" />
+    </svg>
+  );
+}
+
 function CountBadge({ count, className }: { count?: number; className?: string }) {
   if (!count || count < 1) return null;
   return (
@@ -49,7 +59,7 @@ function CountBadge({ count, className }: { count?: number; className?: string }
  * bottom tabs on iPhone. Presentational only: the app decides what the user may see and passes the lanes in.
  * Light theme, colours from the T-022 tokens only.
  */
-export function AppShell({ brand, lanes, currentLaneId, pathname, approvalsCount, firstName, signOut, menuExtra, Link = DefaultLink, children }: AppShellProps) {
+export function AppShell({ brand, lanes, currentLaneId, pathname, approvalsCount, onboarding, firstName, signOut, menuExtra, Link = DefaultLink, children }: AppShellProps) {
   const active = activeKey(currentLaneId, pathname);
   const heading = pageHeading(active, firstName);
   const segment = NAV_ITEMS.find((i) => i.key === active)?.segment ?? "";
@@ -73,8 +83,9 @@ export function AppShell({ brand, lanes, currentLaneId, pathname, approvalsCount
         </div>
         <LaneSwitcher lanes={lanes} currentLaneId={currentLaneId} segment={segment} Link={Link} />
         <nav aria-label="Main" className="flex flex-1 flex-col gap-1">
-          {NAV_ITEMS.map((item) => {
+          {NAV_ITEMS.filter((item) => item.key !== "onboarding" || onboarding).map((item) => {
             const selected = item.key === active;
+            const entry = item.key === "onboarding" && onboarding ? onboardingEntry(onboarding) : null;
             return (
               <Link
                 key={item.key}
@@ -85,7 +96,13 @@ export function AppShell({ brand, lanes, currentLaneId, pathname, approvalsCount
                   selected ? "border-sidebar-active-edge bg-sidebar-active font-semibold text-primary-foreground" : "border-transparent",
                 )}
               >
-                {item.label}
+                {entry ? entry.label : item.label}
+                {entry?.complete ? <Check /> : null}
+                {entry?.badge ? (
+                  <Badge variant="gold" className="ml-auto" data-testid="onboarding-badge">
+                    {entry.badge}
+                  </Badge>
+                ) : null}
                 {item.key === "approvals" ? <CountBadge count={approvalsCount} /> : null}
               </Link>
             );

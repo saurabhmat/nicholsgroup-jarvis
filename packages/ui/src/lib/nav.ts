@@ -2,7 +2,7 @@
 // Signed-off structure: docs/design/README.md "Navigation", plus Projects (Release A, read-only from monday.com;
 // Saurabh, Nov 4). Search and Commitments stay hidden in the pilot, so they have no entry here and no route.
 
-export type NavKey = "home" | "finance" | "inbox" | "calendar" | "approvals" | "assistant" | "projects" | "settings";
+export type NavKey = "onboarding" | "home" | "finance" | "inbox" | "calendar" | "approvals" | "assistant" | "projects" | "settings";
 
 export type NavItem = {
   key: NavKey;
@@ -15,8 +15,9 @@ export type NavItem = {
   heading: { lead: string; accent?: string };
 };
 
-/** Desktop side menu, in order. */
+/** Desktop side menu, in order. "Get started" is first and drawn only for users with the brain view (the app passes `onboarding`). */
 export const NAV_ITEMS: readonly NavItem[] = [
+  { key: "onboarding", label: "Get started", segment: "onboarding", placeholder: { title: "Setup is not available", description: "The guided setup is for the owner of this company." }, heading: { lead: "Set up your", accent: "brain" } },
   { key: "home", label: "Home", segment: "", placeholder: { title: "Home is not set up yet", description: "Your daily briefing will appear here once the company is connected." }, heading: { lead: "Good morning" } },
   { key: "finance", label: "Finance", segment: "finance", placeholder: { title: "Finance is not set up yet", description: "Figures appear here once the accounting, payments and subscriber sources are connected." }, heading: { lead: "Finance", accent: "at a glance" } },
   { key: "inbox", label: "Inbox", segment: "inbox", placeholder: { title: "Inbox is not set up yet", description: "Priority mail appears here once a mailbox is connected." }, heading: { lead: "Inbox" } },
@@ -28,7 +29,7 @@ export const NAV_ITEMS: readonly NavItem[] = [
 ];
 
 /** Menu entries listed on the iPhone "More" page (everything that has no tab of its own). */
-export const MORE_ITEMS: readonly NavKey[] = ["finance", "calendar", "projects", "settings"];
+export const MORE_ITEMS: readonly NavKey[] = ["onboarding", "finance", "calendar", "projects", "settings"];
 
 export type TabIconName = "home" | "check" | "mail" | "chat" | "more";
 
@@ -42,6 +43,16 @@ export const MOBILE_TABS: readonly MobileTab[] = [
   { key: "assistant", label: "Ask", segment: "assistant", icon: "chat", covers: ["assistant"] },
   { key: "more", label: "More", segment: "more", icon: "more", covers: MORE_ITEMS },
 ];
+
+/** Setup progress shown on the "Get started" entry: completed sections out of the bank's section count (`done` null = could not be read). */
+export type OnboardingProgress = { done: number | null; total: number };
+
+/** What the "Get started" entry shows: "3 of 10" badge until every section is done, then "AI brain" with a check. */
+export function onboardingEntry(progress: OnboardingProgress): { label: string; badge?: string; complete: boolean } {
+  const complete = progress.done !== null && progress.total > 0 && progress.done >= progress.total;
+  if (complete) return { label: "AI brain", complete: true };
+  return progress.done === null ? { label: "Get started", complete: false } : { label: "Get started", badge: `${String(progress.done)} of ${String(progress.total)}`, complete: false };
+}
 
 /** Home page title. The name is optional: without one the title is just "Good morning". */
 export function homeHeading(firstName?: string): { lead: string; accent?: string } {

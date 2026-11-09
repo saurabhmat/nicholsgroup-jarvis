@@ -25,6 +25,28 @@ describe("AppShell", () => {
     expect(links.map((l) => l.getAttribute("href"))).toEqual(["/PKG", "/PKG/finance", "/PKG/inbox", "/PKG/calendar", "/PKG/approvals", "/PKG/assistant", "/PKG/projects", "/PKG/settings"]);
   });
 
+  it("draws Get started first, with the live count, only when the app passes setup progress (brain view)", () => {
+    const { unmount } = shell();
+    expect(within(screen.getByRole("navigation", { name: "Main" })).queryByRole("link", { name: /Get started|AI brain/ })).toBeNull();
+    unmount();
+    shell({ onboarding: { done: 3, total: 10 }, pathname: "/PKG/onboarding" });
+    const links = within(screen.getByRole("navigation", { name: "Main" })).getAllByRole("link");
+    expect(links.map((l) => l.getAttribute("href"))[0]).toBe("/PKG/onboarding");
+    expect(links[0]?.textContent).toBe("Get started3 of 10");
+    expect(links[0]?.getAttribute("aria-current")).toBe("page");
+    expect(links[1]?.textContent).toBe("Home");
+    // no new iPhone tab
+    expect(within(screen.getByRole("navigation", { name: "Tabs" })).getAllByRole("link")).toHaveLength(5);
+  });
+
+  it("changes to AI brain with a check, still first, once every section is done", () => {
+    shell({ onboarding: { done: 10, total: 10 } });
+    const first = within(screen.getByRole("navigation", { name: "Main" })).getAllByRole("link")[0];
+    expect(first?.textContent).toBe("AI brain");
+    expect(first?.querySelector("svg[aria-label='Setup complete']")).not.toBeNull();
+    expect(first?.querySelector("[data-testid=onboarding-badge]")).toBeNull();
+  });
+
   it("has no Search, Commitments or All companies entry anywhere", () => {
     const { container } = shell({ lanes: TWO });
     const text = container.textContent ?? "";
