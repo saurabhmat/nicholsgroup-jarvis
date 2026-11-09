@@ -233,7 +233,7 @@ export function AssistantChat({ laneId, sources, brainSetup = false }: { laneId:
                     <ul className="flex flex-wrap gap-1.5" aria-label="Sources">
                       {groupCitations(t.citations).map((c, j) => {
                         const chip = (
-                          <span className="inline-flex max-w-full items-center gap-1.5 rounded-control border border-border bg-background px-2 py-1 text-secondary text-muted-foreground">
+                          <span className="inline-flex max-w-full items-center gap-1.5 rounded-control border border-border bg-background px-2 py-1 text-small text-muted-foreground">
                             <span className="font-medium text-foreground">{KIND_LABEL[c.kind] ?? c.kind}</span>
                             <span className="max-w-48 truncate">{c.label}</span>
                             {c.more ? null : (

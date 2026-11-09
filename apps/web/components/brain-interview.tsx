@@ -279,7 +279,7 @@ function InterviewFlow({ laneId, mode, startAt }: { laneId: string; mode: "chat"
                 Nothing to add
               </Button>
               {hasUnsavedAnswers(groupView, values, editing) ? (
-                <span id="nothing-to-add-hint" className="text-secondary text-muted-foreground">
+                <span id="nothing-to-add-hint" className="text-small text-muted-foreground">
                   {SAVE_FIRST_HINT}
                 </span>
               ) : null}
@@ -296,7 +296,7 @@ function InterviewFlow({ laneId, mode, startAt }: { laneId: string; mode: "chat"
               <li key={g.id} className="flex flex-wrap items-center gap-2 rounded-control border border-border bg-background p-3 text-body" data-testid={`section-${g.id}`}>
                 <span className="min-w-0 flex-1">
                   <span className="block font-medium text-foreground">{g.title}</span>
-                  <span className="text-secondary text-muted-foreground">{g.part === "A" ? "Your brain" : "Personal Assistant"}</span>
+                  <span className="text-small text-muted-foreground">{g.part === "A" ? "Your brain" : "Personal Assistant"}</span>
                 </span>
                 <Badge variant={g.complete ? "success" : "muted"}>{g.complete ? "Done" : "Not done"}</Badge>
                 <Button size="sm" variant="outline" className="min-h-11" onClick={() => openGroup(g, true)}>
@@ -352,7 +352,7 @@ function InterviewFlow({ laneId, mode, startAt }: { laneId: string; mode: "chat"
                   <AlertDescription>The stored profile is not valid, so it cannot be confirmed or activated. Save any Personal Assistant section to review a reset.</AlertDescription>
                 </Alert>
               ) : null}
-              <ul className="flex flex-col gap-1 text-secondary text-muted-foreground" aria-label="What it may propose">
+              <ul className="flex flex-col gap-1 text-small text-muted-foreground" aria-label="What it may propose">
                 {state.employee.permissions.map((p) => (
                   <li key={p.lane} className="break-words">
                     {p.laneName}: {p.allowed.length ? `may propose to ${p.allowed.map((a) => ACTION_TEXT[a] ?? a).join(", ")}` : "proposes nothing"}

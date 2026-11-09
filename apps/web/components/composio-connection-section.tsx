@@ -113,7 +113,7 @@ export function ComposioRows({ laneId, view }: { laneId: string; view: ComposioS
 export function ComposioNotes({ view }: { view: ComposioSectionView }) {
   if (composioNotConfigured(view)) return null;
   return (
-    <div className="flex flex-col gap-1 text-secondary text-muted-foreground">
+    <div className="flex flex-col gap-1 text-small text-muted-foreground">
       <p>
         Composio connects a Gmail mailbox and a Google Calendar and holds the Google access. Only addresses in this company&apos;s mailbox list are accepted. Until this company is switched to Composio, mail and calendar keep syncing through the Google
         connection; connecting here does not change that. Only one account per service per company is used: connecting a new one replaces the account here, and the previous account stays in Composio until it is removed by hand.

@@ -179,7 +179,7 @@ export function BrainWizard({ laneId, initialStep, hadStep }: { laneId: string; 
             >
               <div className="h-full bg-primary transition-[width]" style={{ width: `${String(Math.round((doneCount / Math.max(total, 1)) * 100))}%` }} />
             </div>
-            <span className="text-secondary text-muted-foreground" data-testid="wizard-progress-text">
+            <span className="text-small text-muted-foreground" data-testid="wizard-progress-text">
               {doneCount} of {total} saved
             </span>
           </div>
@@ -202,7 +202,7 @@ export function BrainWizard({ laneId, initialStep, hadStep }: { laneId: string; 
                       current ? "border-gold bg-primary-tint font-semibold text-foreground" : "border-transparent text-muted-foreground",
                     )}
                   >
-                    <span className="w-5 shrink-0 text-secondary tabular-nums">{i + 1}</span>
+                    <span className="w-5 shrink-0 text-small tabular-nums">{i + 1}</span>
                     <span className="min-w-0 flex-1 break-words">{g.title}</span>
                     <Badge variant={g.complete ? "success" : current ? "secondary" : "muted"}>{g.complete ? "Done" : current ? "Current" : "To do"}</Badge>
                   </button>
@@ -346,7 +346,7 @@ export function BrainWizard({ laneId, initialStep, hadStep }: { laneId: string; 
                       <AlertDescription>The stored profile is not valid, so it cannot be confirmed or activated. Save any Personal Assistant section to review a reset.</AlertDescription>
                     </Alert>
                   ) : null}
-                  <ul className="flex flex-col gap-1 text-secondary text-muted-foreground" aria-label="What it may propose">
+                  <ul className="flex flex-col gap-1 text-small text-muted-foreground" aria-label="What it may propose">
                     {state.employee.permissions.map((p) => (
                       <li key={p.lane} className="break-words">
                         {p.laneName}: {p.allowed.length ? `may propose to ${p.allowed.map((a) => ACTION_TEXT[a] ?? a).join(", ")}` : "proposes nothing"}
@@ -432,7 +432,7 @@ function GroupScreen({
   return (
     <div className="flex flex-col gap-4" data-testid="interview-group" data-group={group.id}>
       <div>
-        <p className="hidden text-secondary text-muted-foreground md:block">
+        <p className="hidden text-small text-muted-foreground md:block">
           Step {index + 1} of {total} · saves to {group.saves}
         </p>
         <h2 ref={headRef} tabIndex={-1} className="font-heading text-card-title font-semibold text-foreground outline-none">
@@ -482,13 +482,13 @@ function GroupScreen({
               Nothing to add
             </Button>
             {unsaved ? (
-              <span id="nothing-to-add-hint" className="w-full text-secondary text-muted-foreground">
+              <span id="nothing-to-add-hint" className="w-full text-small text-muted-foreground">
                 {SAVE_FIRST_HINT}
               </span>
             ) : null}
           </>
         )}
-        <span className="sr-only md:not-sr-only md:ml-auto md:text-secondary md:text-muted-foreground">Skipped answers stay &quot;Not provided&quot;.</span>
+        <span className="sr-only md:not-sr-only md:ml-auto md:text-small md:text-muted-foreground">Skipped answers stay &quot;Not provided&quot;.</span>
       </div>
     </div>
   );

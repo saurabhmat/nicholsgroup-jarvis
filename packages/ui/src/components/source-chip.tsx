@@ -37,7 +37,7 @@ export function SourceChip({ source, freshness, asOf, asOfDateTime, className }:
       data-slot="source-chip"
       data-freshness={freshness}
       className={cn(
-        "inline-flex flex-wrap items-center gap-1.5 rounded-control border border-border bg-card px-2 py-1 text-secondary text-muted-foreground",
+        "inline-flex flex-wrap items-center gap-1.5 rounded-control border border-border bg-card px-2 py-1 text-small text-muted-foreground",
         className,
       )}
     >

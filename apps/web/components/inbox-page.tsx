@@ -101,7 +101,7 @@ function Row({ row, href, when: time }: { row: InboxRow; href: string; when: str
               {sender}
               {row.isRead ? null : <span className="sr-only"> (unread)</span>}
             </span>
-            <span className="shrink-0 text-secondary tabular-nums text-muted-foreground">{time}</span>
+            <span className="shrink-0 text-small tabular-nums text-muted-foreground">{time}</span>
           </span>
           <span className="flex items-center gap-2">
             <span className={cn("truncate text-body", row.isRead ? "text-muted-foreground" : "text-foreground")}>{row.subject ?? "(no subject)"}</span>

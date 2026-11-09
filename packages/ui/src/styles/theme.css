@@ -242,14 +242,14 @@
   --shadow-card: var(--card-shadow);
 
   /*
-   * Type scale (T-230 B), defined once: text-body 15px, text-secondary 13px, text-card-title 18px (serif, headings get the
+   * Type scale (T-230 B), defined once: text-body 15px, text-small 13px, text-card-title 18px (serif, headings get the
    * serif face from the base layer), text-page-title 32px (serif). The side menu keeps Tailwind's text-sm (14px) labels.
    * Use these classes; no ad hoc text-xs / text-sm / text-xl for page content.
    */
   --text-body: 0.9375rem;
   --text-body--line-height: 1.5;
-  --text-secondary: 0.8125rem;
-  --text-secondary--line-height: 1.45;
+  --text-small: 0.8125rem;
+  --text-small--line-height: 1.45;
   --text-card-title: 1.125rem;
   --text-card-title--line-height: 1.3;
   --text-page-title: 2rem;

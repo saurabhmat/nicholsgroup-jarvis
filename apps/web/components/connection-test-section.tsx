@@ -13,12 +13,12 @@ export function ConnectionTestSection({ laneId }: { laneId: string }) {
           <h2 id="developer-tools-title" className="font-heading text-card-title font-semibold">
             Developer tools
           </h2>
-          <p className="text-secondary text-muted-foreground">For checking connections before the real connection page exists. Collapsed by default.</p>
+          <p className="text-small text-muted-foreground">For checking connections before the real connection page exists. Collapsed by default.</p>
         </div>
         <details data-testid="connection-test" className="rounded-control border border-border bg-background">
           <summary className="flex min-h-11 cursor-pointer items-center px-4 font-medium text-foreground">Temporary: connection test</summary>
           <div className="flex flex-col gap-4 border-t border-border p-4">
-            <p className="text-secondary text-muted-foreground">For testing the QuickBooks connection before the real connection page exists. Nothing is changed in QuickBooks.</p>
+            <p className="text-small text-muted-foreground">For testing the QuickBooks connection before the real connection page exists. Nothing is changed in QuickBooks.</p>
             {/* A same-origin form POST: the route checks the origin, the role and AAL2, then sends you to Intuit. */}
             <div className="flex flex-wrap items-start gap-3">
               <form method="post" action={`/api/connect/qbo/start?lane=${encodeURIComponent(laneId)}`}>

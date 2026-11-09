@@ -68,7 +68,7 @@ export async function MessagePage({ params }: { params: Promise<{ laneId: string
             <pre data-testid="message-body" className="whitespace-pre-wrap break-words font-sans text-body leading-relaxed text-foreground">
               {view.text}
             </pre>
-            {view.truncated ? <p className="text-secondary text-muted-foreground">This message is long; open it in Gmail to read the rest.</p> : null}
+            {view.truncated ? <p className="text-small text-muted-foreground">This message is long; open it in Gmail to read the rest.</p> : null}
           </>
         ) : (
           <Alert variant="alert">

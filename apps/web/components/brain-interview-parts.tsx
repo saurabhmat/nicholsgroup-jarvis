@@ -203,7 +203,7 @@ export function DiffCard({ proposal }: { proposal: Pick<Proposal, "changes"> }) 
               <AlertDescription>Saving replaces its settings with the ones below, starting from the defaults. Check them before you save.</AlertDescription>
             </Alert>
           ) : null}
-          <pre className="max-w-full overflow-x-auto whitespace-pre-wrap break-words rounded-control bg-card p-2 text-secondary leading-relaxed">
+          <pre className="max-w-full overflow-x-auto whitespace-pre-wrap break-words rounded-control bg-card p-2 text-small leading-relaxed">
             {c.diff.map((l, j) => (
               <span key={j} className={cn("block", l.type === "add" && "bg-success-surface text-foreground", l.type === "del" && "bg-alert-surface text-alert-foreground line-through")}>
                 {l.type === "add" ? "+ " : l.type === "del" ? "- " : "  "}
@@ -212,7 +212,7 @@ export function DiffCard({ proposal }: { proposal: Pick<Proposal, "changes"> }) 
             ))}
           </pre>
           {c.kind === "employee" && c.settings.length > 0 ? (
-            <ul className="flex flex-col gap-1 text-secondary text-muted-foreground" aria-label="Settings that change">
+            <ul className="flex flex-col gap-1 text-small text-muted-foreground" aria-label="Settings that change">
               {c.settings.map((s) => (
                 <li key={s.path} className="break-words">
                   <span className="font-medium text-foreground">{s.path}</span>: {s.before} → {s.after}
@@ -248,7 +248,7 @@ export function GroupNotices({ group, state }: { group: GroupView; state: Interv
         </Alert>
       ) : null}
       {group.questions.some((q) => q.id === "A5") && state.sources.length > 1 ? (
-        <p className="text-secondary text-muted-foreground" data-testid="interview-other-companies">
+        <p className="text-small text-muted-foreground" data-testid="interview-other-companies">
           This covers {state.sources.find((s) => s.laneId === state.currentLane)?.laneName ?? "this company"} only. Open the assistant in each other company to answer these for it too.
         </p>
       ) : null}
@@ -294,7 +294,7 @@ export function QuestionBlock({
   return (
     <div className="flex flex-col gap-3" data-testid={`q-${q.id}`}>
       <p className="text-body font-medium text-foreground">{q.prompt}</p>
-      {q.hint ? <p className="text-secondary text-muted-foreground">{q.hint}</p> : null}
+      {q.hint ? <p className="text-small text-muted-foreground">{q.hint}</p> : null}
       {q.fields.map((f) => (
         <Field key={f.key} f={f} q={q} state={state} values={values} value={values[q.id]?.[f.key]} set={(v) => onChange(q.id, f.key, v)} />
       ))}

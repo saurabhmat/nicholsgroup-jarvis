@@ -47,7 +47,7 @@ Both modes ship in Release A. The app follows the device setting; the user can o
 | Side menu | `#081322`; active item `#1F4A7A` with the gold edge; switcher `#10223A` |
 
 ### Navigation (T-023, T-024)
-- **Desktop:** navy side menu. "Jarvis" wordmark with a gold star, then "Executive Portal" (D-22: Jarvis is the product name for every company; the prototype's "Pub K" wordmark is replaced, and the company name appears only in the switcher), then the company switcher, then **Get started** (T-226: first entry, owner with the brain view only; gold "N of 10" badge = completed setup sections out of the bank's section count, and when all are done the label becomes "AI brain" with a check and stays first), then Home · Finance · Inbox · Calendar · Approvals (count badge) · Assistant · Projects · Settings. Content max-width 1200px.
+- **Desktop:** navy side menu. "Jarvis" wordmark with a gold star, then "Executive Portal" (D-22: Jarvis is the product name for every company; the prototype's "Pub K" wordmark is replaced, and the company name appears only in the switcher), then the company switcher, then **Get started** (T-226: first entry, owner with the brain view only; gold "N of 10" badge = completed setup sections out of the bank's section count, and when all are done the label becomes "AI brain" with a check and stays first), then Home · Finance · Inbox · Calendar · Approvals (count badge) · Assistant · Projects · Settings. Content max-width 1440px, left-aligned next to the menu (T-230 B, see "Layout and type scale" below).
 - **iPhone:** navy header band with the company switcher; bottom tabs Home · Approvals · Inbox · Ask · More (Finance, Calendar, Projects and Settings are under More). **Get started has no tab of its own (T-226):** it is the first row of More (same badge), plus a Home banner "Finish setting up Jarvis (N of 10) →" (gold left edge) while setup is incomplete. Tabs have no back link (drop page 7's "‹ Home"); a back link appears only on pages pushed from another page.
 - **Company switcher:** lists only lanes that are enabled and allowed for the user. In the pilot that is Pub K Group. Ask Pub K, Pub K Institute, Nichols Capital and Nichols Law (finance) appear when their lanes switch on. **"All companies (owner)" is after the pilot** and needs its own decision (a view across lanes).
 - **Projects is in Release A**, pulled from monday.com (read-only): a menu entry, a Projects page (T-150; page design in batch 2) and "Projects at a glance" on Home (T-163). Changes to monday.com items still go through Approvals. The sitemap's dashed (Release B) border on Projects is superseded. Search and Commitments stay in Release B.
@@ -74,6 +74,33 @@ Both modes ship in Release A. The app follows the device setting; the user can o
 - Sign-in and authenticator pages (T-018, T-019): restyle to these tokens, no layout change.
 - App icon: H-029 (blocks T-025).
 - Meeting provider label ("Teams" on page 3) is sample text; D-1 is open.
+
+## Layout and type scale (T-230 B, Nov 9, 2026)
+
+Approved by Saurabh from production screenshots of Robert's 2000px screen (content was a ~600px column with small text). Screenshots before and after: [`t-230/`](t-230/) (`before/` is Home and Settings at 1440 on the old layout). Tokens and utilities live in `packages/ui/src/styles/theme.css`; use them, not ad hoc sizes.
+
+**Widths and spacing**
+- Side menu 240px (`--sidebar-width`), labels 14px (Tailwind `text-sm`, the only place it is still used). Main area `max-width: 1440px` (`--content-max-width`), 32px side padding (`md:px-8`), **left-aligned** next to the menu: no centred margins, so on a 2000px screen the free space is on the right. iPhone: 16px padding, unchanged.
+- Page rhythm: 16px (`gap-4`) between header, rows and cards; 8px extra under the page header.
+
+**Type scale** (defined once in `theme.css`, classes `text-body`, `text-small`, `text-card-title`, `text-page-title`; `cn()` knows them)
+
+| Use | Size | Face |
+|---|---|---|
+| Body, controls, list rows | 15px (`text-body`, also the `<body>` default) | Inter |
+| Secondary ("small"): eyebrow, notes, chips, source lines | 13px (`text-small`) | Inter |
+| Card title (h2/h3), empty-state title | 18px (`text-card-title`) | Source Serif 4, semibold |
+| Page title (h1), KPI figure | 32px (`text-page-title`) | Source Serif 4, italic accent word |
+
+**Cards** (`Card`, `PageSection`, `KpiCard` in `@nichols/ui`; every page gets the same look): 12px radius, 1px border, subtle shadow (`shadow-card`, `--card-shadow`), padding 20px (24px from `sm`), 16px gap in grids, equal heights in a row (grid items stretch). Fewer, bigger cards: a section is one card, not a card per sub-item. Placeholders that carry no information (for example "Projects at a glance" with no board) are one line, not a card.
+
+**Home** (desktop): header; briefing card full width; the four figure cards in one row (2 x 2 on iPhone); "Needs your attention" 2/3 and "Today's meetings" 1/3 (stacked on iPhone); "Projects at a glance" one line until a board is connected. The skeleton uses the same grid. The phone-only "Finish setting up" banner has a reserved 52px slot while it loads.
+
+**Settings** (desktop): two columns, a 200px sub-nav on the left (Connections, AI brain, Developer tools; in-page anchors; only the sections the user may see) and the sections on the right. iPhone: the sub-nav is a wrapping row of 44px chips above the content. *Connections* is one compact list with the columns Provider, Account, Status chip, Last sync, Actions (Google rows, Composio rows; each row stacks with labelled cells on iPhone). With no Composio project key on the server a single line replaces the Composio rows: "Composio not configured on this server (COMPOSIO_API_KEY not set)"; with the key set but a toolkit's id missing that row says "Not configured: X is not set". Setting names only, never values. *Developer tools* holds "Temporary: connection test", collapsed by default.
+
+**Get started** (`/onboarding`, `/onboarding/import`): a 280px step rail and a panel filling the rest. The intro is two columns on desktop: what Jarvis learns (with the primary **Start**) and the import card (primary **Import**, secondary Skip). The import page uses the same wide layout.
+
+**Accessibility**: every text pair is at least 4.5:1 in light and dark (`tokens.test.ts`). `--sidebar-strong` (white in both modes) is the text colour on the navy side menu and header band; `--primary-foreground` turns navy in dark mode and must not be used there. 44px touch targets on iPhone (buttons, tabs, chips, switcher); no horizontal scroll at 390px.
 
 ## Batch 2 — pending (D-21)
 Inbox, Calendar, Assistant, Projects, Settings (connections and health, sync/audit viewer, lane config), Finance detail and weekly report pages.

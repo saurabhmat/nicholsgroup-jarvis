@@ -49,12 +49,10 @@ test("capture screenshots", async ({ page }, info) => {
     await page.goto("/PKG/onboarding");
     await settle(page, /^Set up your/);
     await shot(`get-started-intro-${s.key}-light`);
-    const start = page.getByRole("link", { name: /^(Start|Continue|Resume)/ }).first();
-    if (await start.isVisible().catch(() => false)) {
-      await start.click();
-      await page.waitForTimeout(2500);
-      await shot(`get-started-wizard-${s.key}-light`);
-    }
+    await page.getByRole("button", { name: "Start" }).click();
+    await expect(page.getByTestId("interview-group")).toBeVisible({ timeout: 30_000 });
+    await page.waitForTimeout(500);
+    await shot(`get-started-wizard-${s.key}-light`);
     await page.goto("/PKG/onboarding/import");
     await page.waitForTimeout(2500);
     await shot(`import-${s.key}-light`);

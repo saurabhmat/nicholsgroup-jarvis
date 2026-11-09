@@ -32,7 +32,7 @@ export function CardTitle({ as: Heading = "h3", className, ...props }: CardTitle
 }
 
 export function CardDescription({ className, ...props }: ComponentProps<"p">) {
-  return <p data-slot="card-description" className={cn("text-secondary text-muted-foreground", className)} {...props} />;
+  return <p data-slot="card-description" className={cn("text-small text-muted-foreground", className)} {...props} />;
 }
 
 export function CardContent({ className, ...props }: ComponentProps<"div">) {

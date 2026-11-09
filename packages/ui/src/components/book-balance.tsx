@@ -6,7 +6,7 @@ export const BOOK_BALANCE_LABEL = "Book balance";
 /** The fixed "Book balance" label. It takes no text so it cannot be relabelled. */
 export function BookBalanceLabel({ className }: { className?: string }) {
   return (
-    <span data-slot="book-balance-label" className={cn("text-secondary font-medium uppercase tracking-wide text-muted-foreground", className)}>
+    <span data-slot="book-balance-label" className={cn("text-small font-medium uppercase tracking-wide text-muted-foreground", className)}>
       {BOOK_BALANCE_LABEL}
     </span>
   );

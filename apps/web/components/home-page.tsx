@@ -83,7 +83,7 @@ function ProjectsNotice() {
   return (
     <section aria-label="Projects at a glance" data-testid="projects-notice" className="flex flex-wrap items-baseline gap-x-3 gap-y-1 rounded-card border border-border bg-card px-5 py-3 text-card-foreground shadow-card">
       <h2 className="font-heading text-card-title font-semibold text-foreground">Projects at a glance</h2>
-      <p className="text-secondary text-muted-foreground">No project board connected. Status appears here, read-only, once the board is connected.</p>
+      <p className="text-small text-muted-foreground">No project board connected. Status appears here, read-only, once the board is connected.</p>
     </section>
   );
 }
@@ -94,7 +94,7 @@ function Briefing({ lines }: { lines: string[] }) {
       <span aria-hidden className="absolute inset-x-0 top-0 h-1 bg-gold" />
       <div className="flex flex-wrap items-baseline justify-between gap-2">
         <h2 className="font-heading text-card-title font-semibold text-foreground">Today&apos;s briefing</h2>
-        <p className="text-secondary text-muted-foreground">From your connected sources</p>
+        <p className="text-small text-muted-foreground">From your connected sources</p>
       </div>
       {lines.length > 0 ? (
         <p data-testid="briefing" className="mt-3 max-w-4xl text-body leading-relaxed text-foreground">
@@ -186,7 +186,7 @@ function Meetings({ calendar, meetings, upcoming, now }: { calendar: CalendarSta
 function ComingUp({ meetings }: { meetings: HomeMeeting[] }) {
   return (
     <div>
-      <h3 className="mb-1 text-secondary font-semibold uppercase tracking-wider text-muted-foreground">Coming up</h3>
+      <h3 className="mb-1 text-small font-semibold uppercase tracking-wider text-muted-foreground">Coming up</h3>
       <ul data-testid="upcoming-list" className="flex flex-col divide-y divide-border">
         {meetings.map((m, i) => (
           <li key={`${String(i)}:${m.startAt}`} className="flex gap-4 py-3 text-body">

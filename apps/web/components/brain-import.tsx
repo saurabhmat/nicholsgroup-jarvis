@@ -37,7 +37,7 @@ function CopyPrompt({ label, prompt }: { label: string; prompt: string }) {
   const [copied, setCopied] = useState(false);
   return (
     <div className="flex flex-col gap-2 rounded-control border border-border bg-background p-3">
-      <p className="text-secondary font-medium text-muted-foreground">{label}</p>
+      <p className="text-small font-medium text-muted-foreground">{label}</p>
       <p className="break-words text-body text-foreground" data-testid="import-prompt">
         {prompt}
       </p>
@@ -55,7 +55,7 @@ function CopyPrompt({ label, prompt }: { label: string; prompt: string }) {
         >
           Copy<span className="sr-only"> prompt: {label}</span>
         </Button>
-        <span className="text-secondary text-muted-foreground" role="status" aria-live="polite">
+        <span className="text-small text-muted-foreground" role="status" aria-live="polite">
           {copied ? "Copied" : ""}
         </span>
       </div>
@@ -320,7 +320,7 @@ export function BrainImport({ laneId, aiConfigured }: { laneId: string; aiConfig
                               }}
                             />
                             <div className="flex min-w-0 flex-1 flex-col gap-2">
-                              <label htmlFor={boxId} className="flex min-h-6 flex-wrap items-center gap-2 text-secondary text-muted-foreground">
+                              <label htmlFor={boxId} className="flex min-h-6 flex-wrap items-center gap-2 text-small text-muted-foreground">
                                 <span>
                                   Keep under <span className="font-medium text-foreground">{c.section}</span>
                                 </span>
@@ -335,8 +335,8 @@ export function BrainImport({ laneId, aiConfigured }: { laneId: string; aiConfig
                                 value={edits[c.id] ?? c.fact}
                                 onChange={(e) => setEdits((m) => ({ ...m, [c.id]: e.target.value }))}
                               />
-                              {c.target === "pa" ? <p className="text-secondary font-medium text-foreground" data-testid="import-pa-note">This becomes instructions for your Personal Assistant.</p> : null}
-                              {c.evidence ? <p className="break-words text-secondary text-muted-foreground">From your text: &ldquo;{c.evidence}&rdquo;</p> : null}
+                              {c.target === "pa" ? <p className="text-small font-medium text-foreground" data-testid="import-pa-note">This becomes instructions for your Personal Assistant.</p> : null}
+                              {c.evidence ? <p className="break-words text-small text-muted-foreground">From your text: &ldquo;{c.evidence}&rdquo;</p> : null}
                             </div>
                           </div>
                         </li>
@@ -392,7 +392,7 @@ export function BrainImport({ laneId, aiConfigured }: { laneId: string; aiConfig
                   <input type="file" accept=".zip,application/zip" className={control} onChange={(e) => e.target.files?.[0] && void onZip(e.target.files[0])} />
                 </label>
                 {zipNotes.map((n) => (
-                  <p key={n} className="text-secondary text-muted-foreground">
+                  <p key={n} className="text-small text-muted-foreground">
                     {n}
                   </p>
                 ))}
@@ -415,7 +415,7 @@ export function BrainImport({ laneId, aiConfigured }: { laneId: string; aiConfig
                       ) : st?.proposal ? (
                         <div className="flex flex-col gap-3">
                           {st.proposal.skips.instructions + st.proposal.skips.sensitive + st.proposal.skips.nicholsLaw > 0 ? (
-                            <p className="text-secondary text-muted-foreground">
+                            <p className="text-small text-muted-foreground">
                               Left out: {String(st.proposal.skips.instructions)} line(s) that read like instructions, {String(st.proposal.skips.sensitive)} section(s) with passwords or account numbers, {String(st.proposal.skips.nicholsLaw)} section(s) naming Nichols Law.
                             </p>
                           ) : null}
@@ -457,7 +457,7 @@ export function BrainImport({ laneId, aiConfigured }: { laneId: string; aiConfig
                       setEmpty(null);
                     }}
                   />
-                  <p className="text-secondary text-muted-foreground" aria-live="polite">
+                  <p className="text-small text-muted-foreground" aria-live="polite">
                     {text.length.toLocaleString("en-US")} of {MAX_PASTE_CHARS.toLocaleString("en-US")} characters
                   </p>
                 </div>
@@ -466,7 +466,7 @@ export function BrainImport({ laneId, aiConfigured }: { laneId: string; aiConfig
                   <input type="file" accept=".txt,.md,.json,text/plain,text/markdown,application/json" className={control} onChange={(e) => e.target.files?.[0] && void onTextFile(e.target.files[0])} />
                 </label>
                 {fileNote ? (
-                  <p className="text-secondary text-muted-foreground" role="status">
+                  <p className="text-small text-muted-foreground" role="status">
                     {fileNote}
                   </p>
                 ) : null}
@@ -487,7 +487,7 @@ export function BrainImport({ laneId, aiConfigured }: { laneId: string; aiConfig
           <p className="text-body font-medium text-foreground" data-testid="import-warning">
             {WARNING_LINE}
           </p>
-          <p className="text-secondary text-muted-foreground">{LOCAL_READ_NOTE}</p>
+          <p className="text-small text-muted-foreground">{LOCAL_READ_NOTE}</p>
         </div>
       )}
     </section>

@@ -55,7 +55,7 @@ export function KpiCard({
         {bookBalance || qualifier ? (
           <div className="flex flex-wrap items-center gap-2">
             {bookBalance ? <BookBalanceLabel /> : null}
-            {qualifier ? <span className="text-secondary text-muted-foreground">{qualifier}</span> : null}
+            {qualifier ? <span className="text-small text-muted-foreground">{qualifier}</span> : null}
           </div>
         ) : null}
       </CardHeader>

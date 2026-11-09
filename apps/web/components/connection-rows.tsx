@@ -11,7 +11,7 @@ const COLUMNS = "md:grid-cols-[minmax(0,1.1fr)_minmax(0,1.5fr)_minmax(0,0.9fr)_m
 
 export function ConnectionsHeader() {
   return (
-    <li aria-hidden className={cn("hidden gap-x-4 border-b border-border pb-2 text-secondary font-medium text-muted-foreground md:grid", COLUMNS)}>
+    <li aria-hidden className={cn("hidden gap-x-4 border-b border-border pb-2 text-small font-medium text-muted-foreground md:grid", COLUMNS)}>
       <span>Provider</span>
       <span>Account</span>
       <span>Status</span>
@@ -24,7 +24,7 @@ export function ConnectionsHeader() {
 function Cell({ label, children, className }: { label: string; children: ReactNode; className?: string }) {
   return (
     <div className={cn("flex min-w-0 flex-col gap-0.5 text-body", className)}>
-      <span className="text-secondary text-muted-foreground md:sr-only">{label}</span>
+      <span className="text-small text-muted-foreground md:sr-only">{label}</span>
       <div className="min-w-0 [overflow-wrap:anywhere]">{children}</div>
     </div>
   );
@@ -55,7 +55,7 @@ export function ConnectionRow({
       <div className={cn("grid gap-x-4 gap-y-2", COLUMNS)}>
         <Cell label="Provider">
           <span className="font-medium text-foreground">{provider}</span>
-          {sub ? <span className="block text-secondary text-muted-foreground">{sub}</span> : null}
+          {sub ? <span className="block text-small text-muted-foreground">{sub}</span> : null}
         </Cell>
         <Cell label="Account">{account}</Cell>
         <Cell label="Status">{status}</Cell>
@@ -64,7 +64,7 @@ export function ConnectionRow({
           <div className="flex flex-wrap items-start gap-2">{actions}</div>
         </Cell>
       </div>
-      {note ? <div className="text-secondary text-muted-foreground">{note}</div> : null}
+      {note ? <div className="text-small text-muted-foreground">{note}</div> : null}
     </li>
   );
 }

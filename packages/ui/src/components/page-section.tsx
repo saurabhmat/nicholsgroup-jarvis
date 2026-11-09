@@ -23,7 +23,7 @@ export function PageSection({ title, note, headingLevel: Heading = "h2", emptyTi
     <section data-slot="page-section" aria-label={title} className={cn("flex min-w-0 flex-col gap-4 rounded-card border border-border bg-card p-5 text-body text-card-foreground shadow-card sm:p-6", className)}>
       <div className="flex flex-wrap items-baseline justify-between gap-2">
         <Heading className="font-heading text-card-title font-semibold text-foreground">{title}</Heading>
-        {note ? <p className="text-secondary text-muted-foreground">{note}</p> : null}
+        {note ? <p className="text-small text-muted-foreground">{note}</p> : null}
       </div>
       {children ?? <EmptyState title={emptyTitle ?? "Nothing to show yet"} description={emptyDescription} className="border-0 bg-transparent px-0 py-6" />}
     </section>

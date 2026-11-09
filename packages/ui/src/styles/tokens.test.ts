@@ -233,9 +233,15 @@ describe("components use tokens only", () => {
 
   it("defines the type scale once (15 / 13 / 18 / 32 px)", () => {
     expect(themeCss).toMatch(/--text-body:\s*0\.9375rem/);
-    expect(themeCss).toMatch(/--text-secondary:\s*0\.8125rem/);
+    expect(themeCss).toMatch(/--text-small:\s*0\.8125rem/);
     expect(themeCss).toMatch(/--text-card-title:\s*1\.125rem/);
     expect(themeCss).toMatch(/--text-page-title:\s*2rem/);
+  });
+
+  it("no type-scale name is also a colour name (text-<name> would pick the colour: found with text-secondary)", () => {
+    for (const name of ["body", "small", "card-title", "page-title"]) {
+      expect(themeCss).not.toMatch(new RegExp(`--color-${name}\\s*:`));
+    }
   });
 
   it.each(sources())("%s does not inject HTML", (_file, source) => {

@@ -84,7 +84,7 @@ export function GoogleRows({ laneId, view }: { laneId: string; view: GoogleSecti
 
 export function GoogleNotes() {
   return (
-    <div className="text-secondary text-muted-foreground">
+    <div className="text-small text-muted-foreground">
       <p>
         Google is read-only: the portal cannot send, change or delete anything in Google, and this is not how anyone signs in to the portal.{" "}
         <span className="font-medium text-foreground">Removing the portal&apos;s access:</span> disconnecting from this page is not available yet; revoking access will be an approval action. To remove access now, use Google Account → Security → Third-party
