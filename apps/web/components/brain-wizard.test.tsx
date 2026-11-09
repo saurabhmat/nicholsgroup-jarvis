@@ -2,13 +2,18 @@
 // T-226: the guided onboarding wizard (BrainInterview mode "wizard"): save only on click, skip keeps "Not provided", back keeps
 // answers, deep link to a step, the finish screen. A stateful fake of the interview API (the same one the chat uses).
 import { afterEach, describe, expect, it, vi } from "vitest";
+import axe from "axe-core";
 import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { TEMPLATE_FILES } from "@nichols/brain/domain";
 import { GROUPS, buildGroups, setSection } from "@nichols/brain/interview";
 import { BrainInterview } from "./brain-interview";
 
+const refresh = vi.hoisted(() => vi.fn());
+vi.mock("next/navigation", () => ({ useRouter: () => ({ refresh }) }));
+
 afterEach(() => {
   cleanup();
+  refresh.mockClear();
   vi.unstubAllGlobals();
 });
 
@@ -105,6 +110,7 @@ describe("BrainInterview mode wizard", () => {
     // moves on to the next section, which is now the current one
     await waitFor(() => expect(screen.getByTestId("interview-group").getAttribute("data-group")).toBe("A-2"));
     expect(screen.getByTestId("interview-notice").textContent).toContain("Saved: About you");
+    expect(refresh).toHaveBeenCalledTimes(1); // the menu badge re-reads the count
   });
 
   it("Skip for now saves nothing and leaves the section 'Not provided' on the finish screen", async () => {
@@ -177,5 +183,28 @@ describe("BrainInterview mode wizard", () => {
     const err = await screen.findByTestId("interview-error");
     expect(err.textContent).not.toContain("secret-canary");
     expect(err.textContent).not.toContain("boom");
+  });
+
+  // jsdom has no layout or colours, so contrast is covered by the Playwright axe check; structure and names are checked here.
+  const violations = async () => (await axe.run(document.body, { runOnly: { type: "tag", values: ["wcag2a", "wcag2aa"] }, rules: { "color-contrast": { enabled: false } } })).violations.map((v) => v.id);
+
+  it("has no axe violations on the intro, a question screen with the diff, and the finish screen", async () => {
+    fakeApi();
+    render(<BrainInterview laneId="TST" mode="wizard" />);
+    await screen.findByTestId("wizard-intro");
+    expect(await violations()).toEqual([]);
+    fireEvent.click(screen.getByRole("button", { name: "Start" }));
+    await screen.findByTestId("q-A1");
+    fireEvent.change(screen.getByLabelText("Name", { exact: true }), { target: { value: "Pat Example" } });
+    fireEvent.change(screen.getByLabelText("Scope"), { target: { value: "work" } });
+    fireEvent.click(screen.getByRole("button", { name: "Preview change" }));
+    await screen.findByTestId("interview-diff");
+    expect(await violations()).toEqual([]);
+    for (let i = 0; i < GROUPS.length; i++) {
+      await screen.findByTestId("interview-group");
+      fireEvent.click(screen.getByRole("button", { name: "Skip for now" }));
+    }
+    await screen.findByTestId("wizard-finish");
+    expect(await violations()).toEqual([]);
   });
 });

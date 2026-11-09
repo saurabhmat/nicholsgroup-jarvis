@@ -61,19 +61,18 @@ test("owner: chat interview at iPhone width: preview writes nothing, Save writes
   await expect(flow.getByTestId("q-A1-known")).toContainText("Already set: Pat Example", { timeout: 30_000 });
 });
 
-test("owner: Settings -> AI brain is the fallback and links to Connections for a missing source", async ({ page }, info) => {
+test("owner: Settings -> AI brain lists the sections and opens the wizard, which links to Connections for a missing source", async ({ page }, info) => {
   test.skip(info.project.name !== "desktop", "owner persona is the desktop project's member");
   test.setTimeout(150_000);
   await signIn(page, personas(info).member);
   await page.goto("/PKG/settings");
   const section = page.getByRole("region", { name: "AI brain" });
-  await expect(section.getByTestId("brain-interview")).toHaveAttribute("data-mode", "page", { timeout: 30_000 });
+  await expect(section.getByTestId("brain-status-list")).toBeVisible({ timeout: 30_000 }); // T-226: a compact list, not the interview
   expect(await noHorizontalScroll(page)).toBe(true);
-  await section.getByRole("button", { name: "All sections" }).click();
-  await section.getByRole("button", { name: "Set up" }).nth(4).click(); // first Personal Assistant section
-  await expect(section.getByTestId("q-B2")).toBeVisible();
+  await page.goto("/PKG/onboarding?step=B-1"); // first Personal Assistant section
+  await expect(page.getByTestId("q-B2")).toBeVisible({ timeout: 30_000 });
   // No connect button anywhere in the interview: only a link to Settings -> Connections.
-  await expect(section.getByRole("button", { name: /connect/i })).toHaveCount(0);
+  await expect(page.getByTestId("brain-wizard").getByRole("button", { name: /connect/i })).toHaveCount(0);
 });
 
 test("a viewer sees no AI brain section", async ({ page }, info) => {

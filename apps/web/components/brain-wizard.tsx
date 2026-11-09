@@ -6,6 +6,7 @@
 // show "Already set: … (Edit)". All text is rendered as React text. iPhone: the rail collapses to "Step N of 10" and the
 // action bar sticks above the tab bar.
 import Link from "next/link";
+import { useRouter } from "next/navigation";
 import { useEffect, useRef, useState, type RefObject } from "react";
 import { Alert, AlertDescription, AlertTitle, Badge, Button, buttonVariants, cn } from "@nichols/ui";
 import type { GroupView } from "@nichols/brain/interview";
@@ -17,6 +18,7 @@ import { ACTION_TEXT, DiffCard, GroupNotices, QuestionBlock, REASON_TEXT, tap } 
 type Draft = { values: FormValues; editing: Set<string> };
 
 export function BrainWizard({ laneId, initialStep, hadStep }: { laneId: string; initialStep?: string; hadStep?: boolean }) {
+  const router = useRouter();
   const [state, setState] = useState<InterviewState | null>(null);
   const [loadError, setLoadError] = useState<string | null>(null);
   const [stage, setStage] = useState<Stage | null>(null);
@@ -111,6 +113,7 @@ export function BrainWizard({ laneId, initialStep, hadStep }: { laneId: string; 
     setProposal(null);
     setStage(stageAfter(r.data.state.groups, g.id));
     setNotice(`Saved: ${g.title}.`);
+    router.refresh(); // the menu badge and the Home banner count the saved section
   }
 
   async function confirm() {
@@ -129,6 +132,7 @@ export function BrainWizard({ laneId, initialStep, hadStep }: { laneId: string; 
     if (!r.ok) return setError(r);
     setState(r.data.state);
     setNotice("Your Personal Assistant is active.");
+    router.refresh();
   }
 
   const stepHref = (id: string) => `/${encodeURIComponent(laneId)}/onboarding?step=${encodeURIComponent(id)}`;
