@@ -1025,3 +1025,18 @@ Security review of the onboarding gate: no BLOCKER/HIGH. Fixed LOW-1 (onboarding
 ### T-220 approval (Nov 9, 2026)
 Saurabh approved T-220 for Release A with a Storage-bucket upload pipeline. That conflicts with spec §7a (review: no raw export stored, `brain.imports` has no `storage_path`) and CLAUDE.md rule 6 (PKG `store_content_bodies = false`). Asked; decided **D-39**: browser-side reading, nothing stored. §7a's `drafting` category does not exist in the code (categories: email, calendar, docs, finance, finance_summary, tasks); decided **D-40**: new category `brain_import`; production PKG needs it added by hand (H-043).
 
+### T-220 review follow-ups (Nov 9, 2026)
+Security review: no BLOCKER/HIGH. Code review: one HIGH. Fixed on `agent/T-220`:
+- **Code H1 (completion too generous):** strict rule. After an import Save a setup group is recorded done only when every question in it has all its targets written by that Save and none has an unimportable target (checked answers such as Timezone and Scope, a line of a section, or employee-config settings). In practice only A-3 and A-4 can be completed by an import; a single fact completes nothing. The message after Save names the sections marked done or says none were.
+- **Security M1:** `brain.import_create` no longer refuses owners with two or more brain lanes (`not (p_lane = any (v_open))`); pgTAP covers it. The migration was edited in place (not applied anywhere).
+- **Security M2:** `brain_import` does not count as an assistant tool category: `core.ai_chat_turn` (re-created in the T-220 migration) filters it out, and `takeChatTurn` / `toolCategories` filter to `TOOL_CATEGORIES`. pgTAP and unit tests.
+- **Security M3:** the Personal Assistant config is part of the proposal digest (a config change between propose and save is `proposal_changed`).
+- **Code M1:** the instruction screen is narrower: external-effect verbs only; restrictions on the assistant ("Never send email without my approval", "Never schedule before 9am") are kept as facts (the model is told to file them under Always ask me first / Never do); credential lines are dropped only in a handling context. Reviewer fixtures added (keep and drop sets). The same screen applies to edited text.
+- **Code M2:** a stricter screen for facts aimed at the Personal Assistant profile (also drops approvals, tools, sending, spending, permissions that are not restrictions); the checklist says "This becomes instructions for your Personal Assistant."
+- **Code M3 / security L6:** a multi-page Save that fails on a later page returns `partial_save` with the pages already written; the import stays open and the UI says what was saved and that the rest can be saved again. Tested.
+- **Security L1** (writer validates path + section against the fixed list), **L2** (advisory lock before the hourly count), **L3** (facts naming Nichols Law dropped at extract time, counted, never stored; legal-matter wording is only flagged), **L5** (session and role are checked before the body is read). **Code L2** (`targetPath()`), **L1** (separate messages for an over-10-MB export and for invalid JSON).
+Logged, not fixed:
+- Code L3: the completion helpers are shared by import and interview through exports of interview.ts, not a separate module; `brain-import.tsx` is one large component. Split later.
+- Code L4: "Skip" on the onboarding intro offer is client state only (it hides the card until the page is reloaded; nothing is stored).
+- Security L4: the model call runs under the HOME lane's `brain_import` policy only; a Work fact for another lane is not checked against that lane's policy (the pasted text is the user's own memory, not that lane's data).
+
