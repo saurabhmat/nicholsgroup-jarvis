@@ -38,6 +38,7 @@ function fakeApi(opts: { allKnown?: boolean } = {}) {
   let aboutMe = opts.allKnown ? fill(TEMPLATE_FILES["Context/About-Me.md"] as string, ABOUT_ME) : (TEMPLATE_FILES["Context/About-Me.md"] as string);
   const completed = new Set<string>();
   let noChanges = false;
+  let failCompletion = false;
   const state = () => ({
     homeLane: "TST",
     currentLane: "TST",
@@ -55,8 +56,12 @@ function fakeApi(opts: { allKnown?: boolean } = {}) {
       return Response.json({ ok: true, proposal: { groupId: b.group, saves: "Context/About-Me.md", proposalId: "a".repeat(64), changes: noChanges ? [] : [{ kind: "document", lane: "TST", path: "Context/About-Me.md", baseVersion: 1, diff: [{ type: "add", text: "Pat Example" }] }] } });
     if (b.action === "save") {
       if (!noChanges) aboutMe = fill(aboutMe, ABOUT_ME);
+      if (failCompletion) {
+        failCompletion = false;
+        return Response.json({ ok: true, completed: false, state: state() });
+      }
       completed.add(String(b.group));
-      return Response.json({ ok: true, state: state() });
+      return Response.json({ ok: true, completed: true, state: state() });
     }
     if (b.action === "complete") {
       completed.add(String(b.group));
@@ -64,7 +69,7 @@ function fakeApi(opts: { allKnown?: boolean } = {}) {
     }
     return Response.json({ ok: false, error: "invalid_request" }, { status: 400 });
   });
-  return Object.assign(calls, { keepDefaults: () => (noChanges = true) });
+  return Object.assign(calls, { keepDefaults: () => (noChanges = true), failNextCompletion: () => (failCompletion = true) });
 }
 
 const saves = (calls: Req[]) => calls.filter((c) => c.action === "save");
@@ -224,6 +229,35 @@ describe("BrainInterview mode wizard", () => {
     }
     const a1 = await screen.findByTestId("finish-A-1");
     expect(a1.textContent).toContain("Not provided");
+  });
+
+  it("a save that could not record completion keeps you on the section with the fixed message, and the next Save records it", async () => {
+    const calls = fakeApi();
+    calls.failNextCompletion();
+    render(<BrainInterview laneId="TST" mode="wizard" initialStep="A-1" hadStep />);
+    await screen.findByTestId("q-A1");
+    fireEvent.change(screen.getByLabelText("Name", { exact: true }), { target: { value: "Pat Example" } });
+    fireEvent.change(screen.getByLabelText("Scope"), { target: { value: "work" } });
+    fireEvent.click(screen.getByRole("button", { name: "Preview change" }));
+    fireEvent.click(await screen.findByRole("button", { name: "Save & continue" }));
+    await waitFor(() => expect(screen.getByTestId("interview-notice").textContent).toBe("Your answers were saved. Click Save again to mark this section done."));
+    expect(screen.getByTestId("interview-group").getAttribute("data-group")).toBe("A-1"); // did not move on
+    fireEvent.click(await screen.findByRole("button", { name: "Save & continue" }));
+    await waitFor(() => expect(screen.getByTestId("interview-group").getAttribute("data-group")).toBe("A-2"));
+    expect(saves(calls)).toHaveLength(2);
+  });
+
+  it("Nothing to add is disabled with a hint while there are unsaved typed answers, and works again once cleared", async () => {
+    fakeApi();
+    render(<BrainInterview laneId="TST" mode="wizard" initialStep="A-1" hadStep />);
+    await screen.findByTestId("q-A1");
+    const btn = () => screen.getByRole("button", { name: "Nothing to add" }) as HTMLButtonElement;
+    expect(btn().disabled).toBe(false);
+    fireEvent.change(screen.getByLabelText("Name", { exact: true }), { target: { value: "Pat" } });
+    expect(btn().disabled).toBe(true);
+    expect(screen.getByText("Save or clear your answers first")).toBeTruthy();
+    fireEvent.change(screen.getByLabelText("Name", { exact: true }), { target: { value: "" } });
+    expect(btn().disabled).toBe(false);
   });
 
   it("an untouched section is not done: the progress starts at 0 and Skip for now does not complete anything", async () => {

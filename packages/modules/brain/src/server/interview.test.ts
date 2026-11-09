@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { ABOUT_ME_PATH, WORK_PATH } from "../domain/index";
 import type { InterviewCtx, LaneInfo } from "../interview/index";
 import { BrainError } from "./errors";
@@ -11,7 +11,7 @@ function backend() {
   const docs = new Map<string, { id: string; body: string; version: number }>();
   let employee: Row | null = null;
   const completed = new Set<string>();
-  const fail = { completions: false };
+  const fail = { completions: false, complete: false };
   const calls: { fn: string; args: Record<string, unknown> }[] = [];
   const kindOf = (p: string) => (p === ABOUT_ME_PATH ? "about_me" : p === "Context/Preferences.md" ? "preferences" : "context");
   const rpc = async (fn: string, a: Record<string, unknown>) => {
@@ -33,6 +33,7 @@ function backend() {
         if (fail.completions) return { data: null, error: { code: "XX000", message: "down" } };
         return { data: [...completed].map((section_id) => ({ section_id, completed_at: "2026-11-09T00:00:00Z" })), error: null };
       case "brain_section_complete":
+        if (fail.complete) return { data: null, error: { code: "XX000", message: "down" } };
         for (const id of a.p_sections as string[]) completed.add(id);
         return { data: (a.p_sections as string[]).map((o_section_id) => ({ o_section_id, o_completed_at: "2026-11-09T00:00:00Z" })), error: null };
       case "brain_employees_list":
@@ -300,13 +301,90 @@ describe("proposal digest", () => {
     const a = { B2: { mailboxes: ["TST|ops@example.test"] } };
     const p = await proposeGroup(e, "B-1", a);
     const later = { ...e, now: new Date("2026-11-09T04:30:00Z") };
-    await expect(saveGroup(later, "B-1", a, p.proposalId)).resolves.toEqual({ saved: 1 });
+    await expect(saveGroup(later, "B-1", a, p.proposalId)).resolves.toEqual({ saved: 1, completed: true });
   });
 });
 
 describe("stored section completion (T-227)", () => {
   const completeCalls = (b: ReturnType<typeof backend>) => b.calls.filter((c) => c.fn === "brain_section_complete");
   const doneIds = async (e: InterviewEnv) => (await loadInterviewState(e)).groups.filter((g) => g.complete).map((g) => g.id);
+
+  const seedPreT227 = async (e: InterviewEnv, b: ReturnType<typeof backend>) => {
+    const answers = { A1: { name: "Pat" }, A2: { scope: "work" }, A3: { first_task: "Tidy my week" } };
+    const p = await proposeGroup(e, "A-1", answers);
+    await saveGroup(e, "A-1", answers, p.proposalId);
+    b.completed.clear(); // answers exist, but no completion rows (as before T-227)
+    b.calls.length = 0;
+  };
+
+  it("loadProgress never writes, not even the backfill; it shows the derived value until rows exist", async () => {
+    const { env: e, b } = env();
+    await seedPreT227(e, b);
+    const p = await loadProgress(e);
+    expect(p.filter((g) => g.complete).map((g) => g.id)).toEqual(["A-1"]);
+    expect(completeCalls(b)).toEqual([]);
+    expect(b.completed.size).toBe(0);
+  });
+
+  it("the first Save backfills older sections in the same write, before the new one", async () => {
+    const { env: e, b } = env();
+    await seedPreT227(e, b);
+    const answers = { A8: { writing: "Short" } };
+    const p = await proposeGroup(e, "A-4", answers);
+    await saveGroup(e, "A-4", answers, p.proposalId);
+    expect(completeCalls(b)).toHaveLength(1);
+    expect(completeCalls(b)[0]?.args.p_sections).toEqual(["A-1", "A-4"]);
+    expect([...b.completed].sort()).toEqual(["A-1", "A-4"]);
+  });
+
+  it("Nothing to add backfills first too", async () => {
+    const { env: e, b } = env();
+    await seedPreT227(e, b);
+    await completeGroup(e, "B-6");
+    expect([...b.completed].sort()).toEqual(["A-1", "B-6"]);
+  });
+
+  it("a backfill that fails on a state load is logged (class only) and a later Save still backfills older sections", async () => {
+    const { env: e, b } = env();
+    await seedPreT227(e, b);
+    const log = vi.spyOn(console, "error").mockImplementation(() => undefined);
+    b.fail.complete = true;
+    await loadInterviewState(e); // transient failure while backfilling
+    expect(log.mock.calls.flat().join(" ")).toContain("completion backfill failed");
+    expect(log.mock.calls.flat().join(" ")).not.toMatch(/Pat|Tidy/);
+    expect(b.completed.size).toBe(0);
+    b.fail.complete = false;
+    const answers = { A8: { writing: "Short" } };
+    const p = await proposeGroup(e, "A-4", answers);
+    await saveGroup(e, "A-4", answers, p.proposalId);
+    expect([...b.completed].sort()).toEqual(["A-1", "A-4"]);
+    log.mockRestore();
+  });
+
+  it("if only the completion write fails after a save, the answers are saved and the result says completed: false", async () => {
+    const { env: e, b } = env();
+    const log = vi.spyOn(console, "error").mockImplementation(() => undefined);
+    const answers = { A1: { name: "Pat" }, A2: { scope: "work" } };
+    const p = await proposeGroup(e, "A-1", answers);
+    b.fail.complete = true;
+    const r = await saveGroup(e, "A-1", answers, p.proposalId);
+    expect(r).toEqual({ saved: 1, completed: false });
+    expect(b.docs.get(`TST|${ABOUT_ME_PATH}`)?.body).toContain("Pat");
+    expect(log.mock.calls.flat().join(" ")).toContain("completion not recorded after a save");
+    b.fail.complete = false;
+    const again = await proposeGroup(e, "A-1", answers);
+    expect(again.changes).toEqual([]);
+    expect(await saveGroup(e, "A-1", answers, again.proposalId)).toEqual({ saved: 0, completed: true });
+    log.mockRestore();
+  });
+
+  it("chat routing skips finished sections (nextGroupId) but they stay listed and complete", async () => {
+    const { env: e } = env();
+    await completeGroup(e, "A-1");
+    const s = await loadInterviewState(e);
+    expect(s.groups.find((g) => g.id === "A-1")?.complete).toBe(true);
+    expect(s.nextGroupId).not.toBe("A-1");
+  });
 
   it("an untouched brain has no complete section, and reading state records nothing", async () => {
     const { env: e, b } = env();

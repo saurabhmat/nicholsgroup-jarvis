@@ -31,8 +31,10 @@ export type GroupView = {
   questions: QuestionView[];
   /** Chat routing only (Part A: nothing left to ask; Part B: the draft employee exists). NOT progress: use `complete`. */
   done: boolean;
-  /** Real progress (T-226): every required question is answered from stored state; optional ones never block. */
+  /** The user finished this section: the STORED completion (T-227). The engine never sets it (false); the server fills it in. */
   complete: boolean;
+  /** What T-226's rule derives from the saved answers (every required question answered; optional ones never block). Only the one-time backfill reads it. */
+  derivedComplete: boolean;
 };
 
 const docBody = (docs: Docs, t: DocTarget): string | null => docs[t.doc];
@@ -250,9 +252,9 @@ export function buildGroups(docs: Docs, employeeConfig: EmployeeConfig | null, c
     const known = asked.filter((x) => (x.view.status === "known" ? true : questionKnown(x.q, docs, employeeConfig, defaults)));
     const required = asked.filter((x) => isRequiredQuestion(x.q));
     // A section with only optional questions needs at least one answer (an untouched section is never "complete").
-    const complete = required.every((x) => known.includes(x)) && (required.length > 0 || known.length > 0);
+    const derivedComplete = required.every((x) => known.includes(x)) && (required.length > 0 || known.length > 0);
     const done = g.part === "A" ? questions.every((qv) => qv.status !== "ask") : employeeConfig !== null;
-    return { id: g.id, part: g.part, title: g.title, saves: g.saves, questions, done, complete };
+    return { id: g.id, part: g.part, title: g.title, saves: g.saves, questions, done, complete: false, derivedComplete };
   });
 }
 

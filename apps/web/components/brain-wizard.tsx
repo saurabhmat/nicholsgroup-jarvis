@@ -11,7 +11,7 @@ import { useEffect, useRef, useState, type RefObject } from "react";
 import { Alert, AlertDescription, AlertTitle, Badge, Button, buttonVariants, cn } from "@nichols/ui";
 import type { GroupView } from "@nichols/brain/interview";
 import type { InterviewState, Proposal } from "@nichols/brain/server";
-import { ERROR_TEXT, activeQuestions, buildAnswers, callInterview, canPreview, initialValues, issueLabel, type ApiErr, type FormValues } from "@/lib/brain-interview-client";
+import { COMPLETION_PENDING_TEXT, ERROR_TEXT, SAVE_FIRST_HINT, activeQuestions, buildAnswers, callInterview, canPreview, hasUnsavedAnswers, initialValues, issueLabel, type ApiErr, type FormValues } from "@/lib/brain-interview-client";
 import { firstIncomplete, initialStage, stageAfter, stageBefore, type Stage } from "@/lib/onboarding-wizard";
 import { ACTION_TEXT, DiffCard, GroupNotices, QuestionBlock, REASON_TEXT, tap } from "./brain-interview-parts";
 
@@ -98,13 +98,21 @@ export function BrainWizard({ laneId, initialStep, hadStep }: { laneId: string; 
     const d = draftFor(g);
     setBusy(true);
     setError(null);
-    const r = await callInterview<{ state: InterviewState }>(laneId, { action: "save", group: g.id, answers: buildAnswers(g, d.values, d.editing), proposalId: p.proposalId });
+    const r = await callInterview<{ state: InterviewState; completed?: boolean }>(laneId, { action: "save", group: g.id, answers: buildAnswers(g, d.values, d.editing), proposalId: p.proposalId });
     setBusy(false);
     if (!r.ok) {
       if (r.code === "proposal_changed" || r.code === "version_conflict") setProposal(null);
       return setError(r);
     }
     setState(r.data.state);
+    if (r.data.completed === false) {
+      // The answers are saved but the section was not recorded as done: stay here and let the next Save record it.
+      setProposal(null);
+      setNotice(COMPLETION_PENDING_TEXT);
+      const again = await callInterview<{ proposal: Proposal }>(laneId, { action: "propose", group: g.id, answers: buildAnswers(g, d.values, d.editing) });
+      if (again.ok) setProposal(again.data.proposal);
+      return;
+    }
     setDrafts(({ [g.id]: _saved, ...rest }) => {
       void _saved;
       return rest;
@@ -400,6 +408,7 @@ function GroupScreen({
   const nothingToAsk = activeQuestions(group, draft.editing).length === 0;
   const changes = proposal?.changes.length ?? 0;
   const last = index === total - 1;
+  const unsaved = hasUnsavedAnswers(group, draft.values, draft.editing);
   return (
     <div className="flex flex-col gap-4" data-testid="interview-group" data-group={group.id}>
       <div>
@@ -448,9 +457,16 @@ function GroupScreen({
           Skip for now
         </Button>
         {group.complete ? null : (
-          <Button variant="ghost" className="min-h-11 flex-1 md:flex-none" disabled={busy} onClick={onNothingToAdd}>
-            Nothing to add
-          </Button>
+          <>
+            <Button variant="ghost" className="min-h-11 flex-1 md:flex-none" disabled={busy || unsaved} aria-describedby={unsaved ? "nothing-to-add-hint" : undefined} onClick={onNothingToAdd}>
+              Nothing to add
+            </Button>
+            {unsaved ? (
+              <span id="nothing-to-add-hint" className="w-full text-xs text-muted-foreground">
+                {SAVE_FIRST_HINT}
+              </span>
+            ) : null}
+          </>
         )}
         <span className="sr-only md:not-sr-only md:ml-auto md:text-xs md:text-muted-foreground">Skipped answers stay &quot;Not provided&quot;.</span>
       </div>

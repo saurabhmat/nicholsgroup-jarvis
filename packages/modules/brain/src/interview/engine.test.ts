@@ -123,7 +123,7 @@ describe("answers", () => {
 describe("section progress (T-226): complete = every required question answered from stored state", () => {
   const about = TEMPLATE_FILES["Context/About-Me.md"] as string;
   const pa = TEMPLATE_FILES["Employees/Personal-Assistant.md"] as string;
-  const complete = (groups: ReturnType<typeof buildGroups>) => groups.filter((g) => g.complete).map((g) => g.id);
+  const complete = (groups: ReturnType<typeof buildGroups>) => groups.filter((g) => g.derivedComplete).map((g) => g.id);
   const withConfig = (mut: (c: ReturnType<typeof newConfig>) => void) => {
     const c = newConfig(ctx());
     mut(c);
@@ -194,7 +194,7 @@ describe("section progress (T-226): complete = every required question answered 
     cfg.output.max_drafts = 1;
     docs = { ...docs, pa: setLine(setSection(pa, "1. Role and objective", "Watch the board mail"), "7. Rules", "- Additional rules:", "- Additional rules: never reply to press") };
     const groups = buildGroups(docs, cfg, c);
-    expect(groups.filter((g) => !g.complete).map((g) => g.id)).toEqual([]);
+    expect(groups.filter((g) => !g.derivedComplete).map((g) => g.id)).toEqual([]);
   });
 
   it("a field another question also writes does not make a question known (approvals off + a news topic leave B-5 incomplete)", () => {

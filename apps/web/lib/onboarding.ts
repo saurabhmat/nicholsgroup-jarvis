@@ -1,6 +1,7 @@
 // Setup progress for the guided onboarding (T-226): which of the bank's sections are done, for the "Get started" menu
-// entry, the Home banner, Settings -> AI brain and the wizard's deep links. Read-only: the same state the interview API
-// returns (no new data path, nothing written). Shown only to an owner with the brain view in this lane (the same gate as
+// entry, the Home banner, Settings -> AI brain and the wizard's deep links. Read-only (it never writes, not even the one-time
+// completion backfill: that runs only from the interview API's state / save / complete actions); the same stored completion
+// the interview API returns (no new data path). Shown only to an owner with the brain view in this lane (the same gate as
 // the interview route); anyone else gets null, so the entry points are not drawn.
 import type { Guards } from "@nichols/core/auth";
 import { GROUPS } from "@nichols/brain/interview";
@@ -22,8 +23,9 @@ export function sectionIdFrom(raw: string | string[] | undefined): string | unde
 
 /**
  * Lightweight progress for the menu badge, the Home banner and Settings (T-226): the owner role and the brain view for THIS
- * lane only, this lane's facts (settings, policy; no connection state), the stored pages and profile, and the one
- * completion rule (`GroupView.complete`: every required question answered from stored state; optional ones never block).
+ * lane only, this lane's facts (settings, policy; no connection state), the stored pages and profile, and the stored
+ * completion (`GroupView.complete`: set by Save or "Nothing to add", T-227; until the user has any rows it shows what the
+ * T-226 rule derives from the saved answers, which is what the first full-context load records).
  * Not the full interview environment (that is the wizard's own state call). Fails closed: null hides the entry.
  */
 export async function loadOnboarding(

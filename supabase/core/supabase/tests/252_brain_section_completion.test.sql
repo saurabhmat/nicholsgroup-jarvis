@@ -3,7 +3,7 @@
 -- the writer (own rows, idempotent first-wins, unknown / null / empty / oversized section lists refused), denial by another
 -- user (second PKG owner), another lane (cross-lane both ways), AAL1, admin_technical, finance_operator, anon and service_role.
 begin;
-select plan(37);
+select plan(39);
 \ir helpers/lane_rls.psql
 
 update core.lanes set enabled = true where code = 'APK';
@@ -48,6 +48,7 @@ select throws_ok($$select * from core.brain_section_complete('PKG', array['A-1',
 select throws_ok($$select * from core.brain_section_complete('PKG', null)$$, '22023', 'brain: unknown section', 'null list refused');
 select throws_ok($$select * from core.brain_section_complete('PKG', '{}')$$, '22023', 'brain: unknown section', 'empty list refused');
 select throws_ok($$select * from core.brain_section_complete('PKG', array[null::text])$$, '22023', 'brain: unknown section', 'null element refused');
+select throws_ok($$select * from core.brain_section_complete('PKG', array_fill('A-1'::text, array[21]))$$, '22023', 'brain: unknown section', 'more than 20 ids refused');
 select throws_ok($$insert into brain.section_completions (lane_id, user_id, section_id) values ('PKG', auth.uid(), 'B-1')$$, '42501', null, 'no direct insert');
 select throws_ok($$delete from brain.section_completions$$, '42501', null, 'no direct delete');
 reset role;
@@ -79,6 +80,7 @@ reset role;
 select pg_temp.claims('owner@example.test', 'aal1');
 set local role authenticated;
 select is((select count(*)::int from brain.section_completions) , 0, 'AAL1: reads nothing');
+select is((select count(*)::int from core.brain_section_completions('PKG')), 0, 'AAL1: the wrapper reads nothing either');
 select throws_ok($$select * from core.brain_section_complete('PKG', array['A-3'])$$, '42501', 'brain: a signed-in session at aal2 is required', 'AAL1: cannot write');
 reset role;
 select pg_temp.claims('admin-technical@example.test', 'aal2');

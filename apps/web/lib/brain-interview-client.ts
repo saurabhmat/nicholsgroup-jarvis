@@ -103,6 +103,18 @@ export function buildAnswers(group: GroupView, values: FormValues, editing: Read
   return out;
 }
 
+/**
+ * True when the active questions hold typed answers that differ from where the form started (unsaved drafts). "Nothing to add"
+ * is disabled then: it would drop what the user typed.
+ */
+export function hasUnsavedAnswers(group: GroupView, values: FormValues, editing: ReadonlySet<string>): boolean {
+  const start = initialValues(group);
+  return activeQuestions(group, editing).some((q) => q.fields.some((f) => JSON.stringify(values[q.id]?.[f.key]) !== JSON.stringify(start[q.id]?.[f.key])));
+}
+
+export const SAVE_FIRST_HINT = "Save or clear your answers first";
+export const COMPLETION_PENDING_TEXT = "Your answers were saved. Click Save again to mark this section done.";
+
 /** True when every required text or select field of the active questions has a value. */
 export function canPreview(group: GroupView, values: FormValues, editing: ReadonlySet<string>): boolean {
   return activeQuestions(group, editing).every((q) =>
@@ -118,7 +130,7 @@ export function canPreview(group: GroupView, values: FormValues, editing: Readon
 
 /**
  * The next group to ask, in bank order. `visited` = groups saved or skipped in this session, never asked again. Part A
- * groups whose sections are all known are skipped. At the start (afterId null) Part B is skipped when the employee
+ * groups whose sections are all known are skipped, and so is any section the user already finished (stored completion: Save or Nothing to add); Edit still opens it explicitly. At the start (afterId null) Part B is skipped when the employee
  * already exists (go to the summary; the user picks sections to change). There is no wrap-around: null = go to the summary.
  */
 export function nextGroupId(groups: readonly GroupView[], afterId: string | null, visited: ReadonlySet<string>, hasEmployee = false): string | null {
@@ -126,7 +138,7 @@ export function nextGroupId(groups: readonly GroupView[], afterId: string | null
   return (
     groups
       .slice(start)
-      .find((g) => !visited.has(g.id) && !(g.part === "A" && g.done) && !(afterId === null && g.part === "B" && hasEmployee))?.id ?? null
+      .find((g) => !visited.has(g.id) && !g.complete && !(g.part === "A" && g.done) && !(afterId === null && g.part === "B" && hasEmployee))?.id ?? null
   );
 }
 

@@ -10,11 +10,14 @@ import { Alert, AlertDescription, AlertTitle, Badge, Button } from "@nichols/ui"
 import type { GroupView } from "@nichols/brain/interview";
 import type { InterviewState, Proposal } from "@nichols/brain/server";
 import {
+  COMPLETION_PENDING_TEXT,
   ERROR_TEXT,
+  SAVE_FIRST_HINT,
   activeQuestions,
   buildAnswers,
   callInterview,
   canPreview,
+  hasUnsavedAnswers,
   initialValues,
   issueLabel,
   nextGroupId,
@@ -126,12 +129,23 @@ function InterviewFlow({ laneId, mode, startAt }: { laneId: string; mode: "chat"
   async function save(g: GroupView, p: Proposal) {
     setBusy(true);
     setError(null);
-    const r = await callInterview<{ state: InterviewState }>(laneId, { action: "save", group: g.id, answers: buildAnswers(g, values, editing), proposalId: p.proposalId });
-    setBusy(false);
+    const r = await callInterview<{ state: InterviewState; completed?: boolean }>(laneId, { action: "save", group: g.id, answers: buildAnswers(g, values, editing), proposalId: p.proposalId });
     if (!r.ok) {
+      setBusy(false);
       if (r.code === "proposal_changed" || r.code === "version_conflict") setProposal(null);
       return fail(r);
     }
+    if (r.data.completed === false) {
+      // Saved, but the section was not recorded as done: stay, refresh, and let the next Save record it.
+      setState(r.data.state);
+      setProposal(null);
+      setNotice(COMPLETION_PENDING_TEXT);
+      const again = await callInterview<{ proposal: Proposal }>(laneId, { action: "propose", group: g.id, answers: buildAnswers(g, values, editing) });
+      setBusy(false);
+      if (again.ok) setProposal(again.data.proposal);
+      return;
+    }
+    setBusy(false);
     const seen = new Set(visited).add(g.id);
     setVisited(seen);
     setState(r.data.state);
@@ -261,9 +275,14 @@ function InterviewFlow({ laneId, mode, startAt }: { laneId: string; mode: "chat"
               <Button variant="outline" className={tap} disabled={busy} onClick={() => skip(groupView)}>
                 Skip for now
               </Button>
-              <Button variant="ghost" className={tap} disabled={busy} onClick={() => void nothingToAdd(groupView)}>
+              <Button variant="ghost" className={tap} disabled={busy || hasUnsavedAnswers(groupView, values, editing)} aria-describedby={hasUnsavedAnswers(groupView, values, editing) ? "nothing-to-add-hint" : undefined} onClick={() => void nothingToAdd(groupView)}>
                 Nothing to add
               </Button>
+              {hasUnsavedAnswers(groupView, values, editing) ? (
+                <span id="nothing-to-add-hint" className="text-xs text-muted-foreground">
+                  {SAVE_FIRST_HINT}
+                </span>
+              ) : null}
             </div>
           )}
         </div>

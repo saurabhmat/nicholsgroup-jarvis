@@ -205,8 +205,8 @@ export async function handleInterview(request: Request, laneId: string, deps: In
       case "propose":
         return json(200, { ok: true, proposal: await proposeGroup(env, req.group, req.answers) });
       case "save": {
-        await saveGroup(env, req.group, req.answers, req.proposalId);
-        return json(200, { ok: true, state: await loadInterviewState(env) });
+        const saved = await saveGroup(env, req.group, req.answers, req.proposalId);
+        return json(200, { ok: true, completed: saved.completed, state: await loadInterviewState(env) });
       }
       case "complete": {
         await completeGroup(env, req.group);

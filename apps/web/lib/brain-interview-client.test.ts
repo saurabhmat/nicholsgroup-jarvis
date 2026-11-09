@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { TEMPLATE_FILES } from "@nichols/brain/domain";
 import { buildGroups, setSection, type GroupView } from "@nichols/brain/interview";
-import { activeQuestions, buildAnswers, callInterview, canPreview, initialValues, isInterviewRequest, issueLabel, nextGroupId } from "./brain-interview-client";
+import { activeQuestions, buildAnswers, callInterview, canPreview, hasUnsavedAnswers, initialValues, isInterviewRequest, issueLabel, nextGroupId } from "./brain-interview-client";
 
 const group = (over: Partial<GroupView> = {}): GroupView => ({
   id: "A-1",
@@ -10,6 +10,7 @@ const group = (over: Partial<GroupView> = {}): GroupView => ({
   saves: "Context/About-Me.md",
   done: false,
   complete: false,
+  derivedComplete: false,
   questions: [
     { id: "A1", prompt: "What should Jarvis call you?", status: "known", known: "Pat", fields: [{ key: "name", label: "Name", kind: "text", required: true }], prefill: { name: "Pat" } },
     { id: "A3", prompt: "First task?", status: "ask", fields: [{ key: "first_task", label: "First task", kind: "longtext" }] },
@@ -55,6 +56,11 @@ describe("navigation and labels", () => {
     expect(nextGroupId(gs, "B-1", new Set(["A-2", "B-1"]))).toBe("B-2");
     expect(nextGroupId(gs, "B-2", new Set(["A-2", "B-1", "B-2"]))).toBeNull();
     expect(nextGroupId(gs, "A-2", new Set(["B-1"]))).toBe("B-2");
+  });
+  it("skips sections the user already finished (stored completion), so a new chat does not re-ask them", () => {
+    const done = [group({ id: "A-2", complete: true }), group({ id: "B-1", part: "B", complete: true }), group({ id: "B-2", part: "B" })];
+    expect(nextGroupId(done, null, new Set())).toBe("B-2");
+    expect(nextGroupId(done, "A-2", new Set())).toBe("B-2");
   });
   it("with an existing employee the start skips Part B (summary), but moving on within a session does not", () => {
     expect(nextGroupId(gs, null, new Set(["A-2"]), true)).toBeNull();
@@ -115,3 +121,17 @@ describe("callInterview", () => {
     expect(await callInterview("PKG", {})).toEqual({ ok: false, code: "unavailable" });
   });
 });
+
+describe("unsaved answers (Nothing to add is disabled while there are any)", () => {
+  const g = group({ questions: [{ id: "A1", prompt: "q", status: "ask", fields: [{ key: "name", label: "Name", kind: "text", required: true }] }] });
+  it("is false at the start, true once something is typed, false again when cleared", () => {
+    expect(hasUnsavedAnswers(g, initialValues(g), new Set())).toBe(false);
+    expect(hasUnsavedAnswers(g, { A1: { name: "Pat" } }, new Set())).toBe(true);
+    expect(hasUnsavedAnswers(g, { A1: { name: "" } }, new Set())).toBe(false);
+  });
+  it("ignores questions that are not shown as a form (known and not being edited)", () => {
+    const known = group({ questions: [{ id: "A1", prompt: "q", status: "known", known: "Pat", fields: [{ key: "name", label: "Name", kind: "text" }] }] });
+    expect(hasUnsavedAnswers(known, { A1: { name: "changed" } }, new Set())).toBe(false);
+  });
+});
+

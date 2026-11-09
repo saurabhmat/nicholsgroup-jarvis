@@ -340,7 +340,11 @@ export function sourcesView(ctx: InterviewCtx): SourceView[] {
   }));
 }
 
-/** Read-only. Nothing is created or saved here (seed pages are only the base of a diff until the user saves). */
+/**
+ * The state the setup UI renders. It reads and, the first time only, backfills completion (see `withCompletion`): the one
+ * write this function can make, to the caller's own completion rows. No page or profile is created or saved here (seed pages
+ * are only the base of a diff until the user saves).
+ */
 export async function loadInterviewState(env: InterviewEnv): Promise<InterviewState> {
   const snap = await snapshot(env);
   const groups = await withCompletion(env, buildGroups(snap.docs, snap.config, env.ctx));
@@ -351,43 +355,63 @@ export async function loadInterviewState(env: InterviewEnv): Promise<InterviewSt
     employee: await employeeView(env, snap),
     sources: sourcesView(env.ctx),
     testBriefing: { available: TEST_BRIEFING_AVAILABLE, message: TEST_BRIEFING_PENDING_MESSAGE },
-    nextGroupId: groups.find((g) => !g.done)?.id ?? null,
+    // Chat routing: sections the user already finished (Save or Nothing to add) are not asked again; Edit still opens them.
+    nextGroupId: groups.find((g) => !g.done && !g.complete)?.id ?? null,
   };
 }
 
-/**
- * Completion is stored (T-227): a section is complete when the user clicked Save on it (even with every value a kept default)
- * or "Nothing to add". This replaces `GroupView.complete` (derived by T-226) with the stored fact. One-time backfill: when
- * the user has no completion rows in the home lane yet, the sections the derived rule counts complete are recorded through
- * the same writer (idempotent: existing rows keep their time, nothing is ever removed), so answers saved before T-227 stay
- * done. The derivation lives in the interview engine, not in SQL, hence the app-side backfill. A failed read or backfill
- * write shows nothing complete (fail safe), never a guess.
- */
-async function withCompletion(env: InterviewEnv, groups: GroupView[]): Promise<GroupView[]> {
-  let stored: string[];
+// ---------------------------------------------------------------------------------------------------- completion (T-227)
+// Completion is stored: a section is complete when the user clicked Save on it (even with every value a kept default) or
+// "Nothing to add". `GroupView.derivedComplete` (T-226's rule over the saved answers) exists only for the one-time backfill of
+// answers saved before T-227: while the user has NO completion rows in the home lane, the sections that rule counts complete
+// are recorded through the same writer. The backfill only ever runs with the full interview context: from `loadInterviewState`
+// (the POST `state` action) and as part of the first Save or Nothing to add (in the SAME write as the new section, so a fresh
+// click can never become the first row ahead of an unfinished backfill). Pure reads (`loadProgress`: menu, Home, More,
+// Settings) never write; until rows exist they show the derived value. Idempotent in SQL (`on conflict do nothing`), so
+// concurrent loads are safe. An unreadable completion shows nothing complete (fail safe), never a guess.
+
+const logCompletionFailure = (what: string, e: unknown): void => {
+  console.error(`[brain-interview] ${what}:`, e instanceof Error ? e.name : typeof e); // class only, no values
+};
+
+/** The caller's stored completion in the home lane, or null when it cannot be read. */
+async function readCompletions(env: InterviewEnv): Promise<string[] | null> {
   try {
-    stored = await env.store.listCompletions(env.ctx.home);
-  } catch {
-    return groups.map((g) => ({ ...g, complete: false }));
+    return await env.store.listCompletions(env.ctx.home);
+  } catch (e) {
+    logCompletionFailure("completion unreadable", e);
+    return null;
   }
-  if (stored.length === 0) {
-    const derived = groups.filter((g) => g.complete).map((g) => g.id);
-    if (derived.length > 0) {
-      try {
-        stored = await env.store.completeSections(env.ctx.home, derived);
-      } catch {
-        stored = [];
-      }
-    }
-  }
-  const done = new Set(stored);
-  return groups.map((g) => ({ ...g, complete: done.has(g.id) }));
 }
 
-/** Section progress only (T-226 menu badge, Home banner, Settings list): the stored completion of each section. */
+/** The derived-complete sections to record, only while the user has no rows at all. */
+const pendingBackfill = (groups: readonly GroupView[], stored: readonly string[] | null): string[] =>
+  stored !== null && stored.length === 0 ? groups.filter((g) => g.derivedComplete).map((g) => g.id) : [];
+
+/** `complete` from the stored rows; with no rows yet, the derived value (what the backfill will record). */
+function applyCompletion(groups: GroupView[], stored: readonly string[] | null): GroupView[] {
+  if (stored === null) return groups.map((g) => ({ ...g, complete: false }));
+  const ids = new Set(stored.length > 0 ? stored : groups.filter((g) => g.derivedComplete).map((g) => g.id));
+  return groups.map((g) => ({ ...g, complete: ids.has(g.id) }));
+}
+
+async function withCompletion(env: InterviewEnv, groups: GroupView[]): Promise<GroupView[]> {
+  let stored = await readCompletions(env);
+  const pending = pendingBackfill(groups, stored);
+  if (pending.length > 0) {
+    try {
+      stored = await env.store.completeSections(env.ctx.home, pending);
+    } catch (e) {
+      logCompletionFailure("completion backfill failed", e); // the next full-context load or Save retries
+    }
+  }
+  return applyCompletion(groups, stored);
+}
+
+/** Section progress only (menu badge, Home banner, More, Settings). READ-ONLY: never writes, even to backfill. */
 export async function loadProgress(env: InterviewEnv): Promise<{ id: string; title: string; complete: boolean }[]> {
   const snap = await snapshot(env);
-  const groups = await withCompletion(env, buildGroups(snap.docs, snap.config, env.ctx));
+  const groups = applyCompletion(buildGroups(snap.docs, snap.config, env.ctx), await readCompletions(env));
   return groups.map((g) => ({ id: g.id, title: g.title, complete: g.complete }));
 }
 
@@ -406,25 +430,35 @@ export async function proposeGroup(env: InterviewEnv, groupId: string, answers: 
  * The user's Save click. Re-plans from what is stored NOW and refuses unless the result is exactly the proposal the user
  * saw (same pages, same versions, same text). The version check in the writer then catches a concurrent edit.
  */
-export async function saveGroup(env: InterviewEnv, groupId: string, answers: Record<string, unknown>, proposalId: string): Promise<{ saved: number }> {
+export async function saveGroup(env: InterviewEnv, groupId: string, answers: Record<string, unknown>, proposalId: string): Promise<{ saved: number; completed: boolean }> {
   const snap = await snapshot(env);
   const p = await plan(env, groupId, answers, snap);
   if (p.digest !== proposalId) throw new InterviewRefusal("proposal_changed");
+  // Backfill basis: the sections the saved answers made complete BEFORE this write, recorded together with this one.
+  const backfill = pendingBackfill(buildGroups(snap.docs, snap.config, env.ctx), await readCompletions(env));
   let saved = 0;
   for (const w of p.writes) {
     if (w.kind === "document") await env.store.saveDocument(w.lane, w.path, w.body, w.baseVersion);
     else await env.store.saveEmployee(w.lane, w.body, w.baseVersion);
     saved++;
   }
-  // The click on Save is what completes the section, even when nothing changed (every value a kept default).
-  await env.store.completeSections(env.ctx.home, [groupId]);
-  return { saved };
+  // The click on Save is what completes the section, even when nothing changed (every value a kept default). If only this
+  // step fails the answers ARE saved: say so (completed: false) instead of an error; clicking Save again records it.
+  try {
+    await env.store.completeSections(env.ctx.home, [...backfill, groupId]);
+  } catch (e) {
+    logCompletionFailure("completion not recorded after a save", e);
+    return { saved, completed: false };
+  }
+  return { saved, completed: true };
 }
 
 /** "Nothing to add": marks the section done and writes no brain page. Its answers stay "Not provided"; nothing is guessed. */
 export async function completeGroup(env: InterviewEnv, groupId: string): Promise<{ completed: string }> {
   if (groupById(groupId) === undefined) throw new InterviewRefusal("unknown_group");
-  await env.store.completeSections(env.ctx.home, [groupId]);
+  const snap = await snapshot(env);
+  const backfill = pendingBackfill(buildGroups(snap.docs, snap.config, env.ctx), await readCompletions(env));
+  await env.store.completeSections(env.ctx.home, [...backfill, groupId]);
   return { completed: groupId };
 }
 
