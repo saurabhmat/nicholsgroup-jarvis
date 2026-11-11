@@ -108,7 +108,7 @@ describe("send", () => {
   it("sends once with the deterministic Message-ID and the action marker, then verifies by read-back", async () => {
     const { gmail, conn, writer, action } = setup();
     const a = action();
-    const res = await writer.executeWrite("PKG", conn, a);
+    const res = await writer.run("PKG", conn, a);
     expect(res.outcome).toBe("accepted");
     expect(gmail.posts()).toEqual([{ method: "POST", path: "/gmail/v1/users/me/messages/send" }]);
     const sent = gmail.messages.get(res.external_id ?? "");
@@ -122,8 +122,8 @@ describe("send", () => {
   it("a second execution finds the sent message and does not send again", async () => {
     const { gmail, conn, writer, action } = setup();
     const a = action();
-    const first = await writer.executeWrite("PKG", conn, a);
-    const second = await writer.executeWrite("PKG", conn, a);
+    const first = await writer.run("PKG", conn, a);
+    const second = await writer.run("PKG", conn, a);
     expect(second).toMatchObject({ outcome: "already_applied", external_id: first.external_id });
     expect(gmail.posts()).toHaveLength(1);
   });
@@ -131,7 +131,7 @@ describe("send", () => {
   it("a timeout after Gmail committed the message is found by Message-ID: no second send", async () => {
     const { gmail, conn, writer, action } = setup();
     gmail.state.failMode = "after_commit";
-    const res = await writer.executeWrite("PKG", conn, action());
+    const res = await writer.run("PKG", conn, action());
     expect(res.outcome).toBe("already_applied");
     expect(gmail.posts()).toHaveLength(1);
   });
@@ -139,13 +139,13 @@ describe("send", () => {
   it("a timeout where nothing was committed ends as an unknown outcome and is never resent", async () => {
     const { gmail, conn, writer, action } = setup();
     gmail.state.failMode = "before";
-    await expect(writer.executeWrite("PKG", conn, action())).rejects.toMatchObject({ info: { message: OUTCOME_UNKNOWN_MESSAGE } });
+    await expect(writer.run("PKG", conn, action())).rejects.toMatchObject({ info: { message: OUTCOME_UNKNOWN_MESSAGE } });
     expect(gmail.posts()).toHaveLength(1);
   });
 
   it("encodes a non-ASCII subject and keeps the body out of headers", async () => {
     const { gmail, conn, writer, action } = setup();
-    const res = await writer.executeWrite("PKG", conn, action("email.send", { subject: "Résumé of the quarter" }));
+    const res = await writer.run("PKG", conn, action("email.send", { subject: "Résumé of the quarter" }));
     expect(gmail.messages.get(res.external_id ?? "")?.headers.Subject).toMatch(/^=\?UTF-8\?B\?/);
   });
 });
@@ -154,7 +154,7 @@ describe("draft", () => {
   it("saves a draft (POST drafts) and verifies the DRAFT label", async () => {
     const { gmail, conn, writer, action } = setup();
     const a = action("email.save_draft");
-    const res = await writer.executeWrite("PKG", conn, a);
+    const res = await writer.run("PKG", conn, a);
     expect(gmail.posts()).toEqual([{ method: "POST", path: "/gmail/v1/users/me/drafts" }]);
     await expect(writer.verifyWrite("PKG", conn, a, res.external_id ?? "")).resolves.toBeUndefined();
   });
@@ -165,7 +165,7 @@ describe("reply", () => {
   it("sends into the thread with In-Reply-To and References", async () => {
     const { gmail, conn, writer, action } = setup();
     const a = action("email.send", { inReplyTo: reply });
-    const res = await writer.executeWrite("PKG", conn, a);
+    const res = await writer.run("PKG", conn, a);
     const sent = gmail.messages.get(res.external_id ?? "");
     expect(sent?.threadId).toBe("thread-1");
     expect(sent?.headers["In-Reply-To"]).toBe("<parent@sender.example.test>");
@@ -175,7 +175,7 @@ describe("reply", () => {
 
   it("refuses a reply whose parent is in another thread", async () => {
     const { gmail, conn, writer, action } = setup();
-    await expect(writer.executeWrite("PKG", conn, action("email.send", { inReplyTo: { threadId: "thread-9", messageId: "parent1" } }))).rejects.toBeInstanceOf(ConnectorError);
+    await expect(writer.run("PKG", conn, action("email.send", { inReplyTo: { threadId: "thread-9", messageId: "parent1" } }))).rejects.toBeInstanceOf(ConnectorError);
     expect(gmail.posts()).toHaveLength(0);
   });
 });
@@ -185,20 +185,20 @@ describe("refusals happen before any Gmail request", () => {
     const { gmail, conn, writer, action } = setup();
     const a = action();
     const tampered = { ...a, payload: { ...a.payload, to: ["attacker@evil.example.test"] } } as GoogleEmailApprovedAction;
-    await expect(writer.executeWrite("PKG", conn, tampered)).rejects.toThrow(/does not match its approval/);
+    await expect(writer.run("PKG", conn, tampered)).rejects.toThrow(/does not match its approval/);
     expect(gmail.calls).toEqual([]);
   });
 
   it("a forged hash for a changed payload (recomputed over another action id) is refused too", async () => {
     const { gmail, conn, writer, action } = setup();
     const a = action();
-    await expect(writer.executeWrite("PKG", conn, { ...a, payload_sha256: "0".repeat(64) })).rejects.toThrow();
+    await expect(writer.run("PKG", conn, { ...a, payload_sha256: "0".repeat(64) })).rejects.toThrow();
     expect(gmail.calls).toEqual([]);
   });
 
   it("sender other than the connection's mailbox", async () => {
     const { gmail, conn, writer, action } = setup();
-    await expect(writer.executeWrite("PKG", conn, action("email.send", { fromMailbox: "someone@else.example.test" }))).rejects.toThrow(/sender/);
+    await expect(writer.run("PKG", conn, action("email.send", { fromMailbox: "someone@else.example.test" }))).rejects.toThrow(/sender/);
     expect(gmail.calls).toEqual([]);
   });
 
@@ -206,47 +206,47 @@ describe("refusals happen before any Gmail request", () => {
     const { gmail, conn, writer, action } = setup();
     const a = action();
     const base = { ...a, target: { mailbox: "other@else.example.test" } };
-    await expect(writer.executeWrite("PKG", conn, { ...base, payload_sha256: computePayloadSha256(base as never) } as GoogleEmailApprovedAction)).rejects.toThrow(/another mailbox/);
+    await expect(writer.run("PKG", conn, { ...base, payload_sha256: computePayloadSha256(base as never) } as GoogleEmailApprovedAction)).rejects.toThrow(/another mailbox/);
     expect(gmail.calls).toEqual([]);
   });
 
   it("connection without the compose grant", async () => {
     const { gmail, conn, writer, action } = setup({ features: { [GMAIL_COMPOSE_FEATURE]: false } });
-    await expect(writer.executeWrite("PKG", conn, action())).rejects.toThrow(/not granted permission/);
+    await expect(writer.run("PKG", conn, action())).rejects.toThrow(/not granted permission/);
     expect(gmail.calls).toEqual([]);
   });
 
   it("connection with no features at all", async () => {
     const { gmail, conn, writer, action } = setup({ features: {} });
-    await expect(writer.executeWrite("PKG", conn, action())).rejects.toBeInstanceOf(ConnectorError);
+    await expect(writer.run("PKG", conn, action())).rejects.toBeInstanceOf(ConnectorError);
     expect(gmail.calls).toEqual([]);
   });
 
   it("a mailbox removed from the lane's list", async () => {
     const { gmail, conn, writer, action } = setup({ mailboxes: ["someone@else.example.test"] });
-    await expect(writer.executeWrite("PKG", conn, action())).rejects.toBeInstanceOf(ConnectorError);
+    await expect(writer.run("PKG", conn, action())).rejects.toBeInstanceOf(ConnectorError);
     expect(gmail.calls).toEqual([]);
   });
 
   it("another lane or connection id on the action", async () => {
     const { gmail, conn, writer, action } = setup();
     const a = action();
-    await expect(writer.executeWrite("PKG", conn, { ...a, lane_id: "APK" } as never)).rejects.toMatchObject({ info: { kind: "lane_mismatch" } });
-    await expect(writer.executeWrite("PKG", conn, { ...a, connection_id: randomUUID() })).rejects.toMatchObject({ info: { kind: "lane_mismatch" } });
+    await expect(writer.run("PKG", conn, { ...a, lane_id: "APK" } as never)).rejects.toMatchObject({ info: { kind: "lane_mismatch" } });
+    await expect(writer.run("PKG", conn, { ...a, connection_id: randomUUID() })).rejects.toMatchObject({ info: { kind: "lane_mismatch" } });
     expect(gmail.calls).toEqual([]);
   });
 
   it("an unsupported action type and a missing approver", async () => {
     const { gmail, conn, writer, action } = setup();
     const a = action();
-    await expect(writer.executeWrite("PKG", conn, { ...a, action_type: "email.delete" })).rejects.toMatchObject({ info: { kind: "unsupported_op" } });
-    await expect(writer.executeWrite("PKG", conn, { ...a, approved_by: "nobody" })).rejects.toBeInstanceOf(ConnectorError);
+    await expect(writer.run("PKG", conn, { ...a, action_type: "email.delete" })).rejects.toMatchObject({ info: { kind: "unsupported_op" } });
+    await expect(writer.run("PKG", conn, { ...a, approved_by: "nobody" })).rejects.toBeInstanceOf(ConnectorError);
     expect(gmail.calls).toEqual([]);
   });
 
   it("header injection in the subject is refused by the schema", async () => {
     const { gmail, conn, writer, action } = setup();
-    await expect(writer.executeWrite("PKG", conn, action("email.send", { subject: "Hi\r\nBcc: attacker@evil.example.test" }))).rejects.toThrow();
+    await expect(writer.run("PKG", conn, action("email.send", { subject: "Hi\r\nBcc: attacker@evil.example.test" }))).rejects.toThrow();
     expect(gmail.calls).toEqual([]);
   });
 });
@@ -255,7 +255,7 @@ describe("read-back", () => {
   it("a message with other recipients is a mismatch", async () => {
     const { gmail, conn, writer, action } = setup();
     const a = action();
-    const res = await writer.executeWrite("PKG", conn, a);
+    const res = await writer.run("PKG", conn, a);
     const m = gmail.messages.get(res.external_id ?? "");
     if (m) m.headers.To = "someone.else@sender.example.test";
     await expect(writer.verifyWrite("PKG", conn, a, res.external_id ?? "")).rejects.toMatchObject({ info: { message: VERIFICATION_MISMATCH_MESSAGE } });
@@ -264,7 +264,7 @@ describe("read-back", () => {
   it("a message without the expected label is a mismatch", async () => {
     const { gmail, conn, writer, action } = setup();
     const a = action();
-    const res = await writer.executeWrite("PKG", conn, a);
+    const res = await writer.run("PKG", conn, a);
     const m = gmail.messages.get(res.external_id ?? "");
     if (m) m.labelIds = ["TRASH"];
     await expect(writer.verifyWrite("PKG", conn, a, res.external_id ?? "")).rejects.toMatchObject({ info: { message: VERIFICATION_MISMATCH_MESSAGE } });

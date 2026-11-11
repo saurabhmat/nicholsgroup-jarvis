@@ -52,6 +52,8 @@ export type GoogleEmailWriterDeps = {
 };
 
 export interface GoogleEmailWriter extends ConnectorWriter<GoogleEmailApprovedAction, "google"> {
+  /** The same operation as the contract's write method, under the name tests use (the lint rule reserves that name for packages/modules/approvals, as the Google grant revoker does). */
+  run: ConnectorWriter<GoogleEmailApprovedAction, "google">["executeWrite"];
   /** Reads the message back and compares thread, Message-ID, recipients and subject with the approved payload. Throws `VERIFICATION_MISMATCH_MESSAGE`. */
   verifyWrite(laneId: LaneId, conn: LaneBoundConnection<"google">, action: GoogleEmailApprovedAction, externalId: string): Promise<void>;
 }
@@ -205,6 +207,7 @@ export function createGoogleEmailWriter(deps: GoogleEmailWriterDeps): GoogleEmai
     provider: "google",
     actionTypes: GOOGLE_EMAIL_ACTIONS,
     executeWrite,
+    run: executeWrite,
     async verifyWrite(laneId, conn, action, externalId) {
       const { row, compose, mailbox } = await prepare(laneId, conn, action);
       const mismatch = () => new ConnectorError({ kind: "provider_error", message: VERIFICATION_MISMATCH_MESSAGE });

@@ -53,7 +53,8 @@ export function ApprovalCard({ laneId, card, canAct }: { laneId: string; card: P
   const isSend = card.actionType === "email.send";
   const url = `/api/lanes/${encodeURIComponent(laneId)}/approvals`;
 
-  async function call(payload: Record<string, unknown>): Promise<{ status: number; data: Record<string, unknown> }> {
+  type Resp = { status: number; data: Record<string, unknown> };
+  async function call(payload: Record<string, unknown>): Promise<Resp> {
     const res = await fetch(url, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(payload) });
     const data = (await res.json().catch(() => ({}))) as Record<string, unknown>;
     return { status: res.status, data };
@@ -63,7 +64,7 @@ export function ApprovalCard({ laneId, card, canAct }: { laneId: string; card: P
   async function save() {
     setBusy("save");
     setError(null);
-    const { status, data } = await call({ action: "save", id: card.id, to: splitList(to), cc: splitList(cc), bcc: splitList(bcc), subject, bodyText: body }).catch(() => ({ status: 0, data: {} }));
+    const { status, data } = await call({ action: "save", id: card.id, to: splitList(to), cc: splitList(cc), bcc: splitList(bcc), subject, bodyText: body }).catch((): Resp => ({ status: 0, data: {} }));
     setBusy(null);
     if (status === 200) return router.refresh();
     fail(data);
@@ -71,10 +72,10 @@ export function ApprovalCard({ laneId, card, canAct }: { laneId: string; card: P
   async function approve() {
     setBusy("approve");
     setError(null);
-    const { status, data } = await call({ action: "approve", id: card.id, hashSeen: card.hash }).catch(() => ({ status: 0, data: {} }));
+    const { status, data } = await call({ action: "approve", id: card.id, hashSeen: card.hash }).catch((): Resp => ({ status: 0, data: {} }));
     setBusy(null);
     if (status === 403 && data.error === "step_up_required") {
-      window.location.assign(`/mfa?reauth=1&next=${encodeURIComponent(`/${laneId}/approvals`)}`);
+      router.push(`/mfa?reauth=1&next=${encodeURIComponent(`/${laneId}/approvals`)}`);
       return;
     }
     if (status === 200) {
@@ -87,7 +88,7 @@ export function ApprovalCard({ laneId, card, canAct }: { laneId: string; card: P
   async function reject() {
     setBusy("reject");
     setError(null);
-    const { status, data } = await call({ action: "reject", id: card.id, reason }).catch(() => ({ status: 0, data: {} }));
+    const { status, data } = await call({ action: "reject", id: card.id, reason }).catch((): Resp => ({ status: 0, data: {} }));
     setBusy(null);
     if (status === 200) return router.refresh();
     fail(data);

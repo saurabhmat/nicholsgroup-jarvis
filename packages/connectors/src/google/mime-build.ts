@@ -6,7 +6,6 @@ import { ConnectorError } from "../contract/errors";
 
 export const PORTAL_ACTION_HEADER = "X-Portal-Action-Id";
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
-// eslint-disable-next-line no-control-regex
 const CONTROL = /[\u0000-\u001f\u007f-\u009f\u2028\u2029]/;
 const ADDRESS = /^[^\s@<>(),;:"[\]\\]{1,64}@[A-Za-z0-9.-]{1,255}$/;
 const refused = (message: string) => new ConnectorError({ kind: "invalid_input", message });
