@@ -14,6 +14,7 @@ const CORE_ONLY = ["@nichols/core"];
 const ALLOWED = {
   ".": ["@nichols/core", "@nichols/eslint-plugin", "@types/node", "eslint", "turbo", "typescript", "typescript-eslint", "vitest"],
   "apps/web": [
+    "@nichols/approvals", // T-232: the Approvals page and route (propose/edit/approve through the module, never the writer)
     "@nichols/ai", // T-105: the assistant chat route (gate, tool loop, provider; the SDK stays inside packages/ai)
     "@nichols/brain", // T-210: the Inngest route wires the import-candidate purge job (@nichols/brain/jobs)
     "@nichols/briefing", // T-231: Home briefing domain (pure) and the briefing job's store
@@ -21,6 +22,7 @@ const ALLOWED = {
     "@nichols/core",
     "@nichols/eslint-plugin",
     "@nichols/ui", // T-022
+    "zod", // T-232: request body schema in the approvals route (no network or DB access; same major as core)
     "fflate", // T-220: reads a brain-folder .zip in the browser (D-39: never uploaded); pinned exactly, no dependencies
     "@playwright/test", // T-018 end-to-end tests
     "@testing-library/dom", // T-216: component tests (same versions as packages/ui)
@@ -68,6 +70,9 @@ const ALLOWED = {
   ),
   // T-211: the employee config schema (strict Zod, spec §3). zod has no network or DB access; same major as core.
   "packages/modules/brain": [...CORE_ONLY, "zod"],
+  // T-232: approvals is the only module allowed to reach the connector write path (rule 5; lint limits
+  // @nichols/connectors/write to this package); zod for the email payload schema.
+  "packages/modules/approvals": [...CORE_ONLY, "@nichols/connectors", "zod"],
 };
 
 /** same matching as the lint rule: "name", "name/sub", or "@scope/*" */

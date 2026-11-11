@@ -395,7 +395,58 @@ isOneToOne: false
                 }
           }
           Functions: {
-            "ai_chat_turn":
+            "act_approve":
+{ Args: { "p_hash_seen": string,"p_id": string,"p_lane": string }; Returns: string
+                           },
+"act_claim_execution":
+{ Args: { "p_id": string,"p_lane": string }; Returns: unknown
+                          SetofOptions: {
+        from: "*"
+        to: "proposed_actions"
+        isOneToOne: true
+        isSetofReturn: false
+      } },
+"act_claim_sent":
+{ Args: { "p_external_id": string,"p_id": string,"p_lane": string }; Returns: undefined
+                           },
+"act_expire_stale":
+{ Args: { "p_lane": string }; Returns: number
+                           },
+"act_get":
+{ Args: { "p_id": string,"p_lane": string }; Returns: unknown[]
+                          SetofOptions: {
+        from: "*"
+        to: "proposed_actions"
+        isOneToOne: false
+        isSetofReturn: true
+      } },
+"act_list":
+{ Args: { "p_lane": string,"p_limit"?: number }; Returns: unknown[]
+                          SetofOptions: {
+        from: "*"
+        to: "proposed_actions"
+        isOneToOne: false
+        isSetofReturn: true
+      } },
+"act_mark_failed":
+{ Args: { "p_code": string,"p_id": string,"p_lane": string,"p_outcome": string }; Returns: undefined
+                           },
+"act_mark_verified":
+{ Args: { "p_external_id": string,"p_id": string,"p_lane": string,"p_outcome": string }; Returns: undefined
+                           },
+"act_pending_count":
+{ Args: { "p_lane": string }; Returns: number
+                           },
+"act_propose":
+{ Args: { "p_connection": string,"p_derived": boolean,"p_hash": string,"p_lane": string,"p_payload": Json,"p_proposer_kind": string,"p_proposer_user": string,"p_rationale": string,"p_source_refs": Json,"p_target": Json,"p_type": string,"p_version": number }; Returns: string
+                           },
+"act_reject":
+{ Args: { "p_id": string,"p_lane": string,"p_reason": string }; Returns: undefined
+                           },
+"act_supersede":
+{ Args: { "p_derived": boolean,"p_hash": string,"p_lane": string,"p_old": string,"p_payload": Json,"p_proposer_user": string,"p_rationale": string,"p_source_refs": Json,"p_target": Json,"p_version": number }; Returns: string
+                           },
+"ai_chat_turn":
 { Args: { "p_lane": string }; Returns: Json
                            },
 "ai_tool_categories":
