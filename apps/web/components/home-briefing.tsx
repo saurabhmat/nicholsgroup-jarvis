@@ -8,6 +8,7 @@ import {
   formatDateTimeIn,
   formatDayIn,
   formatTimeIn,
+  maskFigures,
   timeWithZone,
   ago,
   type AttentionThread,
@@ -175,7 +176,7 @@ const KIND_LABEL: Record<AttentionThread["kind"], string> = {
   repeated_failures: "Repeated failures",
 };
 
-/** Source line: mailbox · sender · date (viewer zone). Sender text is untrusted metadata: rendered as plain text. */
+/** Source line: mailbox · sender · date (viewer zone). Sender text is untrusted metadata: rendered as plain text. Subjects are shown with figures masked (rule 7). */
 function SourceLine({ t, mailbox, tz }: { t: ThreadRow; mailbox: string | undefined; tz: string }) {
   const sender = t.fromName && t.fromAddress ? `${t.fromName} <${t.fromAddress}>` : (t.fromAddress ?? t.fromName ?? "Unknown sender");
   return (
@@ -210,7 +211,7 @@ export function AttentionSection({ mail, tz }: { mail: MailSection; tz: string }
         {mail.attention.map((a) => (
           <li key={a.key} data-testid="attention-item" data-kind={a.kind} className="flex flex-col gap-1 py-3">
             <span className="flex items-baseline justify-between gap-3">
-              <span className="min-w-0 truncate font-medium text-foreground">{a.kind === "repeated_failures" ? a.reason : (a.thread.subject ?? "(No subject)")}</span>
+              <span className="min-w-0 truncate font-medium text-foreground">{a.kind === "repeated_failures" ? a.reason : a.thread.subject ? maskFigures(a.thread.subject) : "(No subject)"}</span>
               <ThreadLink t={a.thread} />
             </span>
             <span className="flex flex-wrap items-center gap-2">
@@ -241,7 +242,7 @@ export function MoneyCard({ mail, tz }: { mail: MailSection; tz: string }) {
           {mail.money.map((m) => (
             <li key={m.key} className="flex flex-col gap-1 py-3">
               <span className="flex items-baseline justify-between gap-3">
-                <span className="min-w-0 truncate font-medium text-foreground">{m.thread.subject ?? "(No subject)"}</span>
+                <span className="min-w-0 truncate font-medium text-foreground">{m.thread.subject ? maskFigures(m.thread.subject) : "(No subject)"}</span>
                 <ThreadLink t={m.thread} />
               </span>
               <span className="flex flex-wrap items-center gap-2">

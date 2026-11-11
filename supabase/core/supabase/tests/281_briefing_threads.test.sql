@@ -3,7 +3,7 @@
 -- owner's SENT reply detection (last and ever), unread/inbound counts, archived/deleted/old mail ignored, window
 -- check, and denial: other lane, AAL1, member without the comms view, outsider.
 begin;
-select plan(17);
+select plan(19);
 \ir helpers/lane_rls.psql
 
 update core.lanes set enabled = true where code = 'APK';
@@ -21,6 +21,8 @@ insert into comms.message_index (lane_id, connection_id, provider, message_id, t
   -- t2: partner wrote, owner replied last -> answered
   ('PKG', '00000000-0000-4000-8000-000000002811', 'google', 'm3', 't2', 'partner@acme.test', null, 'Lunch', now() - interval '5 hours', true, 'INBOX', '{INBOX}', false, now()),
   ('PKG', '00000000-0000-4000-8000-000000002811', 'google', 'm4', 't2', 'thr-pkg@example.test', null, 'Re: Lunch', now() - interval '4 hours', true, null, '{SENT}', false, now()),
+  -- t1 also has an unsent owner draft: a draft is the owner's, never "inbound"
+  ('PKG', '00000000-0000-4000-8000-000000002811', 'google', 'm8', 't1', 'thr-pkg@example.test', null, 'Draft reply', now() - interval '30 minutes', true, null, '{DRAFT}', false, now()),
   -- t3: archived only (no inbox message) -> not listed
   ('PKG', '00000000-0000-4000-8000-000000002811', 'google', 'm5', 't3', 'old@acme.test', null, 'Archived', now() - interval '2 hours', true, null, '{}', false, now()),
   -- t4: deleted -> not listed; t5: older than the window -> not listed
@@ -42,6 +44,8 @@ select is((select message_id || '|' || owner_replied::text || '|' || last_is_own
           'm3|true|true', 't2: the latest inbound is the partner, the owner answered last');
 select is((select count(*)::int from core.briefing_threads('PKG', now() - interval '14 days')), 3, 'a 14-day window includes the older thread');
 select throws_ok($$select * from core.briefing_threads('PKG', now() - interval '15 days')$$, '22023', null, 'more than 14 days back is refused');
+select lives_ok($$select * from core.briefing_threads('PKG', now() - interval '14 days 30 seconds')$$, 'a few seconds over 14 days is clamped, not refused');
+select is((select message_id || '|' || last_is_owner::text from core.briefing_threads('PKG', now() - interval '7 days') where thread_key = 't1'), 'm2|false', 't1: the owner''s unsent draft is ignored (not inbound, not a reply)');
 select throws_ok($$select * from core.briefing_threads(null, now())$$, '22004', null, 'a lane is required');
 select is((select count(*)::int from core.briefing_threads('APK', now() - interval '7 days')), 0, 'another lane: no threads');
 reset role;

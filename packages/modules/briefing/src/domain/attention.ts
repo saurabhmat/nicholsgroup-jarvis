@@ -1,10 +1,13 @@
 // "Needs your attention" and the Money card (T-231b): rules over thread METADATA (core.briefing_threads), no AI, no
-// bodies. Every pattern comes from lane_config.briefing (case-insensitive substrings). Order of the top list:
-//   1. lane_config priority_senders (address or @domain)
-//   2. security alerts (new sign-in, critical vulnerability, ...), even from automated senders
-//   3. threads waiting on the owner: the last message is not the owner's and the owner already wrote in the thread
-//   4. unread mail from real people (not automated, not excluded)
-//   5. repeated bot/CI failures (one item per sender), then age (older first within a tier)
+// bodies. Every pattern comes from lane_config.briefing. Sender patterns are anchored ("name@" = local part, "x.com" =
+// domain or subdomain, a word = in the local part); subject patterns match whole words. Order of the top list
+// (acceptance order):
+//   1. lane_config priority_senders (address or @domain): not subject to exclusions except one-time codes
+//   2. threads waiting on the owner: last message from a real person, not the owner, and either the owner already wrote
+//      in the thread or the message was read and left unanswered
+//   3. unread mail from real people (not automated, not excluded)
+//   4. security alerts (new sign-in, critical vulnerability, ...) from lane_config security_senders domains only
+//   5. repeated bot/CI failures (one item per sender domain); within a tier, older first (age)
 // Excluded before ranking: excluded labels (promotions, social, forums), newsletters, social networks, OTP codes, bank
 // transaction alerts (statements and due dates are kept), single bot/CI messages.
 
@@ -28,6 +31,7 @@ export type ThreadRow = {
 export type AttentionRules = {
   prioritySenders: readonly string[];
   securitySubjects: readonly string[];
+  securitySenders: readonly string[];
   exclusions: {
     labels: readonly string[];
     newsletter_senders: readonly string[];
@@ -58,11 +62,30 @@ export type AttentionThread = {
 export type MoneyKind = "invoice" | "bill" | "renewal" | "failed_payment";
 export type MoneyThread = { key: string; kind: MoneyKind; thread: ThreadRow };
 
-const has = (hay: string | null | undefined, needles: readonly string[]): boolean => {
-  if (!hay) return false;
-  const h = hay.toLowerCase();
-  return needles.some((n) => h.includes(n.toLowerCase()));
-};
+const lower = (v: string) => v.toLowerCase();
+const escapeRe = (v: string) => v.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+
+/** Whole-word, case-insensitive: "otp" matches "Your OTP" but not "footprint". */
+export function subjectHas(subject: string | null | undefined, words: readonly string[]): boolean {
+  if (!subject) return false;
+  const s = lower(subject);
+  return words.some((w) => new RegExp(`(^|[^a-z0-9])${escapeRe(lower(w))}($|[^a-z0-9])`).test(s));
+}
+
+/** Anchored sender match: "name@" = local part exactly, "x.com" = domain or a subdomain, a word = in the local part. */
+export function senderHas(address: string | null | undefined, patterns: readonly string[]): boolean {
+  if (!address) return false;
+  const a = lower(address);
+  const at = a.lastIndexOf("@");
+  const local = at >= 0 ? a.slice(0, at) : a;
+  const domain = at >= 0 ? a.slice(at + 1) : "";
+  return patterns.some((raw) => {
+    const p = lower(raw);
+    if (p.endsWith("@")) return local === p.slice(0, -1);
+    if (p.includes(".") && !p.includes("@")) return domain === p || domain.endsWith(`.${p}`);
+    return local.includes(p);
+  });
+}
 
 const domainOf = (a: string) => a.split("@")[1]?.toLowerCase() ?? "";
 
@@ -77,19 +100,19 @@ export function isPrioritySender(address: string | null, senders: readonly strin
 
 export type Classified = { excluded: string | null; automated: boolean; bot: boolean; security: boolean };
 
-/** Why a thread is left out (null = kept), and the sender class. Security alerts are never excluded. */
+/** Why a thread is left out (null = kept), and the sender class. Security alerts from trusted senders are never excluded. */
 export function classify(t: ThreadRow, r: AttentionRules): Classified {
   const x = r.exclusions;
-  const security = has(t.subject, r.securitySubjects);
-  const bot = has(t.fromAddress, x.bot_senders);
-  const automated = bot || has(t.fromAddress, x.automated_senders);
+  const security = subjectHas(t.subject, r.securitySubjects) && senderHas(t.fromAddress, r.securitySenders);
+  const bot = senderHas(t.fromAddress, x.bot_senders);
+  const automated = bot || senderHas(t.fromAddress, x.automated_senders);
   if (security) return { excluded: null, automated, bot, security };
   let excluded: string | null = null;
-  if (t.labels.some((l) => x.labels.some((e) => e.toLowerCase() === l.toLowerCase()))) excluded = "label";
-  else if (has(t.fromAddress, x.newsletter_senders)) excluded = "newsletter";
-  else if (has(t.fromAddress, x.social_senders)) excluded = "social";
-  else if (has(t.subject, x.otp_subjects)) excluded = "otp";
-  else if (has(t.subject, x.bank_alert_subjects) && !has(t.subject, x.bank_keep_subjects)) excluded = "bank_alert";
+  if (subjectHas(t.subject, x.otp_subjects)) excluded = "otp";
+  else if (t.labels.some((l) => x.labels.some((e) => lower(e) === lower(l)))) excluded = "label";
+  else if (senderHas(t.fromAddress, x.newsletter_senders)) excluded = "newsletter";
+  else if (senderHas(t.fromAddress, x.social_senders)) excluded = "social";
+  else if (subjectHas(t.subject, x.bank_alert_subjects) && !subjectHas(t.subject, x.bank_keep_subjects)) excluded = "bank_alert";
   else if (bot) excluded = "bot";
   return { excluded, automated, bot, security };
 }
@@ -109,22 +132,25 @@ export function rankAttention(rows: ThreadRow[], r: AttentionRules, now: Date, l
   const failures = new Map<string, ThreadRow[]>();
   for (const t of rows) {
     const c = classify(t, r);
-    if (c.excluded === "bot") {
-      if (has(t.subject, r.exclusions.bot_failure_words)) {
+    const priority = isPrioritySender(t.fromAddress, r.prioritySenders);
+    if (c.excluded === "bot" && !priority) {
+      if (subjectHas(t.subject, r.exclusions.bot_failure_words)) {
         const k = domainOf(t.fromAddress ?? "") || "unknown";
         failures.set(k, [...(failures.get(k) ?? []), t]);
       }
       continue;
     }
-    if (c.excluded) continue;
+    // Priority senders skip the exclusions, except one-time codes.
+    if (c.excluded && !(priority && c.excluded !== "otp")) continue;
     if (t.lastIsOwner) continue; // the owner answered last: not waiting on anyone
     const unread = t.unreadCount > 0;
     const ago = age(t.receivedAt, now);
+    const person = !c.automated;
     let item: { tier: number; kind: AttentionKind; reason: string } | null = null;
-    if (isPrioritySender(t.fromAddress, r.prioritySenders)) item = { tier: 0, kind: "priority", reason: `Priority sender${unread ? ", unread" : ", not answered"} · ${ago}` };
-    else if (c.security) item = { tier: 1, kind: "security", reason: `Security alert from ${senderLabel(t)} · ${ago}` };
-    else if (!c.automated && t.ownerReplied) item = { tier: 2, kind: "waiting", reason: `Waiting on your reply · ${ago}` };
-    else if (!c.automated && unread) item = { tier: 3, kind: "unread", reason: `Unread from ${senderLabel(t)} · ${ago}` };
+    if (priority) item = { tier: 0, kind: "priority", reason: `Priority sender${unread ? ", unread" : ", not answered"} · ${ago}` };
+    else if (person && (t.ownerReplied || !unread)) item = { tier: 1, kind: "waiting", reason: t.ownerReplied ? `Waiting on your reply · ${ago}` : `Read, not answered · ${ago}` };
+    else if (person && unread) item = { tier: 2, kind: "unread", reason: `Unread from ${senderLabel(t)} · ${ago}` };
+    else if (c.security) item = { tier: 3, kind: "security", reason: `Security alert from ${senderLabel(t)} · ${ago}` };
     if (item) out.push({ tier: item.tier, item: { key: `${t.connectionId}:${t.threadKey}`, kind: item.kind, reason: item.reason, thread: t } });
   }
   for (const [domain, list] of failures) {
@@ -144,9 +170,10 @@ export function moneyThreads(rows: ThreadRow[], r: AttentionRules, limit = 6): M
   const out: MoneyThread[] = [];
   for (const t of rows) {
     const c = classify(t, r);
-    // Billing systems are automated senders (kept); promotions, newsletters, OTPs and card alerts are not money items.
-    if (c.excluded && c.excluded !== "bot") continue;
-    const kind = MONEY_ORDER.find((k) => has(t.subject, r.money[k]));
+    // Billing systems are automated senders (kept); promotions, newsletters, OTPs, card alerts and CI mail are not money.
+    if (c.excluded) continue;
+    if (t.lastIsOwner) continue; // already answered
+    const kind = MONEY_ORDER.find((k) => subjectHas(t.subject, r.money[k]));
     if (kind) out.push({ key: `${t.connectionId}:${t.threadKey}`, kind, thread: t });
   }
   return out.sort((a, b) => MONEY_ORDER.indexOf(a.kind) - MONEY_ORDER.indexOf(b.kind) || b.thread.receivedAt.localeCompare(a.thread.receivedAt)).slice(0, limit);
@@ -189,4 +216,14 @@ export function parseThreads(data: unknown): ThreadRow[] {
       },
     ];
   });
+}
+
+/**
+ * Subjects shown on Home with figures masked: money amounts become "[amount]" and long digit runs (account, card or
+ * reference numbers) "[number]". Figures on Home come only from SQL (rule 7); a subject is sender-written text.
+ */
+export function maskFigures(subject: string): string {
+  return subject
+    .replace(/(?:[$€£¥]|usd|eur|gbp)\s?\d[\d,]*(?:\.\d+)?|\d[\d,]*(?:\.\d{2})\s?(?:usd|eur|gbp|dollars)?/gi, "[amount]")
+    .replace(/\d{4,}/g, "[number]");
 }

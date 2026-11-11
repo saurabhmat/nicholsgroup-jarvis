@@ -4,7 +4,7 @@
 -- by configuration.
 --
 -- core.briefing_threads(p_lane, p_since): one row per mail thread active since p_since (at most 14 days back) that has
--- a message in the inbox: the latest INBOUND message (not carrying Gmail's SENT label) with its sender, subject, time,
+-- a message in the inbox: the latest INBOUND message (not carrying Gmail's SENT label; drafts are ignored) with its sender, subject, time,
 -- labels and link; whether the latest message of the whole thread is the owner's own (SENT), so a thread already
 -- answered does not count as waiting; whether the owner ever wrote in the thread; unread inbound count; inbound count.
 -- At most 300 threads, newest first. SECURITY INVOKER: RLS on comms.message_index applies (AAL2 + comms view), so a
@@ -37,16 +37,20 @@ begin
   if p_lane is null or p_since is null then
     raise exception 'lane and since are required' using errcode = '22004';
   end if;
-  if p_since < pg_catalog.now() - interval '14 days' then
+  -- More than 14 days back (plus a minute of clock slack for callers that computed p_since a moment ago) is refused;
+  -- within the slack the window is clamped to 14 days.
+  if p_since < pg_catalog.now() - interval '14 days 1 minute' then
     raise exception 'since must be within the last 14 days' using errcode = '22023';
   end if;
+  p_since := greatest(p_since, pg_catalog.now() - interval '14 days');
   return query
   with msgs as (
     select m.connection_id, coalesce(m.thread_id, 'm:' || m.message_id) as tkey, m.message_id, m.from_address, m.from_name,
            m.subject, m.received_at, m.source_url, m.labels, m.is_important, m.is_read, m.folder,
            ('SENT' = any (m.labels)) as is_sent
     from comms.message_index m
-    where m.lane_id = p_lane and not m.deleted and m.received_at >= p_since
+    -- Unsent drafts are neither inbound mail nor a reply: left out.
+    where m.lane_id = p_lane and not m.deleted and m.received_at >= p_since and not ('DRAFT' = any (m.labels))
   ),
   threads as (
     select g.connection_id, g.tkey,

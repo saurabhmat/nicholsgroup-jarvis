@@ -152,23 +152,27 @@ export const laneConfigSchema = z.strictObject({
       internal_domains: z.array(z.string().regex(/^[a-z0-9.-]+\.[a-z]{2,}$/)).max(50).default([]),
       // Mail older than this is not considered for "Needs your attention".
       attention_days: z.int().min(1).max(14).default(7),
+      // Sender patterns: "name@" = the local part exactly; "example.com" (has a dot, no @) = that domain or a subdomain;
+      // a plain word = contained in the local part only (never the domain). Subject patterns match whole words.
       exclusions: z
         .strictObject({
           labels: patterns.default(["CATEGORY_PROMOTIONS", "CATEGORY_SOCIAL", "CATEGORY_FORUMS", "SPAM", "TRASH"]),
-          newsletter_senders: patterns.default(["newsletter", "news@", "marketing", "digest", "promo", "mailer-daemon", "updates@", "info@"]),
+          newsletter_senders: patterns.default(["newsletter", "news@", "digest", "marketing", "promo", "mailer-daemon@"]),
           social_senders: patterns.default(["linkedin.com", "facebookmail.com", "x.com", "twitter.com", "instagram.com", "pinterest.com", "youtube.com"]),
-          bot_senders: patterns.default(["github.com", "gitlab", "circleci", "vercel.com", "jenkins", "buildkite", "dependabot", "sentry.io", "bitbucket"]),
+          bot_senders: patterns.default(["github.com", "gitlab.com", "circleci.com", "vercel.com", "buildkite.com", "sentry.io", "bitbucket.org", "atlassian.net"]),
           // Bot/CI mail is shown only as one item when this many failures arrive in the attention window.
-          bot_failure_words: patterns.default(["fail", "error", "broken", "errored"]),
+          bot_failure_words: patterns.default(["failed", "failure", "error", "broken", "errored"]),
           bot_failure_repeat: z.int().min(2).max(50).default(3),
-          otp_subjects: patterns.default(["verification code", "one-time", "one time password", "otp", "security code", "login code", "sign-in code", "passcode", "2fa", "confirm your email"]),
-          bank_alert_subjects: patterns.default(["transaction alert", "you made a", "purchase", "debit card", "card transaction", "withdrawal", "deposit posted", "balance alert", "direct deposit"]),
+          otp_subjects: patterns.default(["verification code", "one-time code", "one-time password", "one time password", "OTP", "security code", "login code", "sign-in code", "passcode", "2FA code", "confirm your email"]),
+          bank_alert_subjects: patterns.default(["transaction alert", "you made a purchase", "purchase alert", "debit card", "card transaction", "withdrawal", "deposit posted", "balance alert", "direct deposit"]),
           // Bank mail kept even when it matches an alert pattern.
           bank_keep_subjects: patterns.default(["statement", "payment due", "due date", "is due", "minimum payment"]),
-          automated_senders: patterns.default(["no-reply", "noreply", "do-not-reply", "donotreply", "notifications@", "notification@", "alerts@", "bounce"]),
+          automated_senders: patterns.default(["no-reply", "noreply", "do-not-reply", "donotreply", "notifications", "notification", "alerts", "bounce", "mailer-daemon"]),
         })
         .prefault({}),
       security_subjects: patterns.default(["new sign-in", "new sign in", "security alert", "critical vulnerability", "suspicious", "unusual sign-in", "password was changed", "password changed"]),
+      // Security alerts count only from these sender domains (a subject alone is sender-controlled and could be phishing).
+      security_senders: patterns.default(["google.com", "microsoft.com", "apple.com", "github.com", "okta.com", "intuit.com", "stripe.com", "1password.com"]),
       money: z
         .strictObject({
           invoice: patterns.default(["invoice"]),

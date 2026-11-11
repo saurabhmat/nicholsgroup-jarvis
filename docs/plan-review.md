@@ -1040,3 +1040,19 @@ Logged, not fixed:
 - Code L4: "Skip" on the onboarding intro offer is client state only (it hides the card until the page is reloaded; nothing is stored).
 - Security L4: the model call runs under the HOME lane's `brain_import` policy only; a Work fact for another lane is not checked against that lane's policy (the pasted text is the user's own memory, not that lane's data).
 
+
+### T-231 Home briefing — autonomous run (Nov 11, 2026, branch `agent/T-231`)
+Approved by Saurabh for an unattended run (T-231a–d, T-232, T-233). Defaults the agent took, for Saurabh to confirm:
+- **Viewer time zone** comes from a `tz` cookie set by the browser (zone name only; validated, canonicalised, New York fallback). First visit renders in New York and refreshes once. Event zones are added in brackets when their clock differs. The sender's zone for mail is not available (the index stores no Date-header offset): only event zones are shown.
+- **Coverage per stream:** the stream's own sync cursor time; the connection's last succeeded run only while the stream has no cursor yet (`core.sync_runs` has no stream column). Stale after `lane_config.briefing.coverage_stale_minutes` (default 120). `core.briefing_coverage` is SECURITY DEFINER and shows holders of the comms or calendar view which accounts feed the briefing, their status, error KIND and sync time (a narrow widening of what the connections RLS gives; never tokens or provider text). Decision recorded here.
+- **Home now shows mail subjects and senders** (T-231b) to callers with the comms view at AAL2 — before T-231 it showed counts only. Subjects are shown with money amounts and long digit runs masked (`[amount]`, `[number]`, rule 7).
+- **Attention order** follows the acceptance text: priority senders, waiting on the owner (owner already wrote in the thread, or read and left unanswered), unread from real people, security alerts, then age (older first in a tier). Security alerts count only from `lane_config.briefing.security_senders` domains (a subject alone is sender-controlled). Priority senders skip exclusions except one-time codes. Drafts are ignored.
+- **Pattern matching:** sender patterns anchored (`name@` = local part, `x.com` = domain or subdomain, a word = in the local part); subject patterns whole-word. Defaults are generic mail conventions in the lane_config schema, not company data.
+- **Bot/CI noise** is excluded unless `bot_failure_repeat` (3) failure subjects from one domain arrive in the window: then one item.
+Logged, not fixed (review LOWs):
+- T-231a security L6: Join/Open links accept any https host from invite data (phishing risk from external organisers); show the host or flag unknown meeting hosts later.
+- T-231a code L8 / T-231b L2, L8: SQL limits (200 events, 300 threads) truncate silently.
+- T-231a code L9: Home v1 `home_meetings`/`home_calendar_status` still load for the top briefing sentence (duplicate calendar query; declined events counted there). Replaced when the AI briefing lands (T-231c).
+- T-231b security L1: priority-sender matching trusts the From header (no SPF/DKIM result in the index).
+- T-231b code L10: Money uses only the latest inbound subject; no "more" indicator.
+- Unit-test timeouts under machine load (eslint-plugin config-web, connector reports/sync, brain-wizard axe, brain-import zip-bomb) pass alone; they failed only while three builders ran tests at once.

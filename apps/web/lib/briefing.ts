@@ -86,6 +86,7 @@ export async function loadBriefing(client: Db, laneId: string, now: Date, viewer
   const { from, to } = dayWindow(now, viewerTz);
   const win = eventsWindow(from, to);
   const cfg = await core.from("lane_config_current").select("config").eq("lane_id", laneId).maybeSingle();
+  if (cfg.error) console.error("[home] briefing config unavailable: defaults used", { laneId });
   // A role that may not read the config still gets the defaults (the config read is optional).
   const { briefing, mailboxes, prioritySenders } = briefingConfigFrom(cfg.error ? null : cfg.data?.config);
   const [cov, events, threads] = await Promise.all([
@@ -113,7 +114,7 @@ export async function loadBriefing(client: Db, laneId: string, now: Date, viewer
   if (mailAccess && threads.error) mail = { access: false, unavailable: true };
   else if (mailAccess) {
     const rows = parseThreads(threads.data);
-    const rules: AttentionRules = { prioritySenders, securitySubjects: briefing.security_subjects, exclusions: briefing.exclusions, money: briefing.money };
+    const rules: AttentionRules = { prioritySenders, securitySubjects: briefing.security_subjects, securitySenders: briefing.security_senders, exclusions: briefing.exclusions, money: briefing.money };
     const ranked = rankAttention(rows, rules, now);
     const mailboxOf = Object.fromEntries(coverage.filter((c) => c.connectionId && c.stream === "mail").map((c) => [c.connectionId as string, c.account]));
     mail = { access: true, attention: ranked.top, more: ranked.more, money: moneyThreads(rows, rules), mailboxOf };

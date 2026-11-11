@@ -1,7 +1,8 @@
 // Home (D-20 batch 1, p3 and p6). T-200 fills "Needs your attention" and "Today's meetings" from the lane's synced data;
 // T-201 brings the prototype's layout: a gold-ruled briefing composed from that data (no AI until T-162), the four KPI
 // tiles (no figures until the finance tasks and D-8: each says why), and "Coming up" when today is clear. No approvals
-// yet (T-115). Mail appears as counts only: no subject, sender or body on Home.
+// yet (T-115). T-231b: "Needs your attention" and Money show subject (figures masked), sender and mailbox to callers
+// who may read the lane's mail (comms view, AAL2); never a body.
 import Link from "next/link";
 import { Suspense } from "react";
 import { Alert, AlertDescription, AlertTitle, buttonVariants, homeHeading, KpiCard, laneHref, PageHeader, PageSection } from "@nichols/ui";
