@@ -19,7 +19,8 @@ const CANARY = "BODY-CANARY-7f3a-not-real";
 
 type Row = Record<string, unknown> & { id: string; status: string; payload: Record<string, unknown> };
 
-function world(over: { facts?: Partial<CapabilityFacts>; mailboxes?: string[]; writer?: "ok" | "unknown" | "mismatch" | "refused" } = {}) {
+function world(over: { facts?: Partial<CapabilityFacts>; mailboxes?: string[]; writer?: "ok" | "unknown" | "mismatch" | "refused"; auditFailOnce?: string; markVerifiedThrows?: boolean } = {}) {
+  let auditFailPending = over.auditFailOnce;
   const rows = new Map<string, Row>();
   const audits: AuditEntry[] = [];
   const calls = { writes: 0, verifies: 0, claims: 0 };
@@ -118,6 +119,7 @@ function world(over: { facts?: Partial<CapabilityFacts>; mailboxes?: string[]; w
       case "act_claim_sent":
         return { data: null, error: null };
       case "act_mark_verified": {
+        if (over.markVerifiedThrows) throw new Error("network down");
         const r = get(a.p_id);
         if (!r || r.status !== "executing") return err("act: not_executing");
         r.status = "verified";
@@ -156,6 +158,10 @@ function world(over: { facts?: Partial<CapabilityFacts>; mailboxes?: string[]; w
     },
   };
   const audit = createAudit(async (row) => {
+    if (auditFailPending && row.p_action === auditFailPending) {
+      auditFailPending = undefined;
+      throw new Error("audit down");
+    }
     audits.push({ laneId: row.p_lane_id, actor: row.p_actor_kind === "user" ? { kind: "user", userId: row.p_actor_id ?? "" } : { kind: row.p_actor_kind as "service" }, action: row.p_action, ...(row.p_target ? { target: row.p_target } : {}), metadata: row.p_metadata });
   });
   const deps: ApprovalsDeps = {
@@ -288,7 +294,7 @@ describe("approveAndExecute", () => {
     const { id, hash } = await proposeEmailAction(w.deps, "PKG", input);
     // Approved but not yet executed, then two executions race: only one claim exists.
     await w.rpc("act_approve", { p_lane: "PKG", p_id: id, p_hash_seen: hash });
-    const [a, b] = await Promise.all([executeApproved(w.deps, "PKG", id, OWNER), executeApproved(w.deps, "PKG", id, OWNER)]);
+    const [a, b] = await Promise.all([executeApproved(w.deps, "PKG", id), executeApproved(w.deps, "PKG", id)]);
     expect([a.status, b.status].sort()).toEqual(["already_in_progress", "verified"]);
     expect(w.calls.writes).toBe(1);
   });
@@ -324,7 +330,7 @@ describe("approveAndExecute", () => {
     const p = await proposeEmailAction(w2.deps, "PKG", input);
     await w2.rpc("act_approve", { p_lane: "PKG", p_id: p.id, p_hash_seen: p.hash });
     (w2.rows.get(p.id)?.payload as Record<string, unknown>).subject = "Forged";
-    const res = await executeApproved(w2.deps, "PKG", p.id, OWNER);
+    const res = await executeApproved(w2.deps, "PKG", p.id);
     expect(res).toEqual({ status: "failed", actionId: p.id, failureCode: "payload_changed" });
     expect(w2.calls.writes).toBe(0);
   });
@@ -427,5 +433,60 @@ describe("audit redaction", () => {
     });
     await a.log({ laneId: "PKG", actor: { kind: "service" }, action: "action.proposed", target: "action:x", metadata: { hash: "a".repeat(64), bodyText: CANARY, subject: "S" } });
     expect(JSON.stringify(seen)).not.toContain(CANARY);
+  });
+});
+
+describe("review fixes (T-232 code review H1, H2, M1, M4)", () => {
+  const reply = { ...input, compose: { ...compose, subject: "Re: Quarterly update", inReplyTo: { threadId: "t-1", messageId: "m-1" } } };
+
+  it("a reply's subject cannot be edited (it would leave the thread and fail the read-back after sending)", async () => {
+    const w = world();
+    const { id } = await proposeEmailAction(w.deps, "PKG", reply);
+    await expect(editEmailProposal(w.deps, w.ctx, id, { subject: "Something else" })).rejects.toMatchObject({ code: "reply_subject_fixed" });
+    // The same subject (or a body edit) is fine.
+    await expect(editEmailProposal(w.deps, w.ctx, id, { subject: "Re: Quarterly update", bodyText: "New text" })).resolves.toMatchObject({ unchanged: false });
+  });
+
+  it("an approval stranded by an audit outage is resumed by the same owner and sends exactly once", async () => {
+    const w = world({ auditFailOnce: "action.approved" });
+    const { id, hash } = await proposeEmailAction(w.deps, "PKG", input);
+    await expect(approveAndExecute(w.deps, w.ctx, { actionId: id, hashSeen: hash })).rejects.toThrow();
+    expect(w.rows.get(id)?.status).toBe("approved");
+    expect(w.calls.writes).toBe(0);
+    await expect(approveAndExecute(w.deps, w.ctx, { actionId: id, hashSeen: hash })).resolves.toMatchObject({ status: "verified" });
+    await expect(approveAndExecute(w.deps, w.ctx, { actionId: id, hashSeen: hash })).rejects.toMatchObject({ code: "not_pending" });
+    expect(w.calls.writes).toBe(1);
+    expect(w.audits.some((a) => a.action === "action.resumed")).toBe(true);
+  });
+
+  it("another user cannot resume someone else's approval", async () => {
+    const w = world({ auditFailOnce: "action.approved" });
+    const { id, hash } = await proposeEmailAction(w.deps, "PKG", input);
+    await approveAndExecute(w.deps, w.ctx, { actionId: id, hashSeen: hash }).catch(() => undefined);
+    const other = { ...w.ctx, userId: "00000000-0000-4000-8000-0000000000ff" };
+    await expect(approveAndExecute(w.deps, other, { actionId: id, hashSeen: hash })).rejects.toMatchObject({ code: "already_approved" });
+    expect(w.calls.writes).toBe(0);
+  });
+
+  it("a send that was verified but could not be recorded is reported as sent, never as failed", async () => {
+    const w = world({ markVerifiedThrows: true });
+    const { id, hash } = await proposeEmailAction(w.deps, "PKG", input);
+    await expect(approveAndExecute(w.deps, w.ctx, { actionId: id, hashSeen: hash })).resolves.toMatchObject({ status: "verified" });
+    expect(w.rows.get(id)?.status).toBe("executing");
+    expect(w.audits.some((a) => a.action === "action.record_failed")).toBe(true);
+    expect(w.calls.writes).toBe(1);
+  });
+
+  it("the executor uses the approver recorded in the database", async () => {
+    const w = world();
+    const seen: string[] = [];
+    const orig = w.deps.writer.executeWrite.bind(w.deps.writer);
+    (w.deps.writer as { executeWrite: typeof orig }).executeWrite = async (l, c, a) => {
+      seen.push(a.approved_by);
+      return orig(l, c, a);
+    };
+    const { id, hash } = await proposeEmailAction(w.deps, "PKG", input);
+    await approveAndExecute(w.deps, w.ctx, { actionId: id, hashSeen: hash });
+    expect(seen).toEqual([OWNER]);
   });
 });

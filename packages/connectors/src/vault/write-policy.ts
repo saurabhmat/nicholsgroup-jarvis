@@ -36,3 +36,26 @@ export function createWritePolicyReader(clientFor: JobClientFor): WritePolicyRea
     },
   };
 }
+
+export interface ActionClaimReader {
+  /**
+   * True only when the approvals database has this action executing with an open claim, the given approved hash and the
+   * recorded approver (core.act_claim_open, service_role). Any read error is "no" (fails closed).
+   */
+  claimOpen(laneId: LaneId, actionId: string, hash: string, approvedBy: string): Promise<boolean>;
+}
+
+export function createActionClaimReader(clientFor: JobClientFor): ActionClaimReader {
+  return {
+    async claimOpen(laneId, actionId, hash, approvedBy) {
+      if (typeof laneId !== "string" || !LANE_ID.test(laneId)) return false;
+      try {
+        const client = await clientFor(laneId);
+        const { data, error } = await client.schema("core").rpc("act_claim_open", { p_lane: laneId, p_id: actionId, p_hash: hash, p_approver: approvedBy });
+        return !error && data === true;
+      } catch {
+        return false;
+      }
+    },
+  };
+}

@@ -406,6 +406,9 @@ isOneToOne: false
         isOneToOne: true
         isSetofReturn: false
       } },
+"act_claim_open":
+{ Args: { "p_approver": string,"p_hash": string,"p_id": string,"p_lane": string }; Returns: boolean
+                           },
 "act_claim_sent":
 { Args: { "p_external_id": string,"p_id": string,"p_lane": string }; Returns: undefined
                            },

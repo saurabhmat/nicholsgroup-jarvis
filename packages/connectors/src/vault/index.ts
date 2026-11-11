@@ -3,7 +3,7 @@
 import { getLaneJobClient } from "@nichols/core/lane-router";
 import { createConnectionStore } from "./connections";
 import { createLaneConfigReader } from "./lane-config";
-import { createWritePolicyReader } from "./write-policy";
+import { createActionClaimReader, createWritePolicyReader } from "./write-policy";
 import { createConnectionLoader } from "./loader";
 import { createRawRecordStore } from "../raw/store";
 import { createWebhookStore } from "../webhooks/store";
@@ -39,6 +39,8 @@ export const laneConfigReader = createLaneConfigReader(getLaneJobClient);
 
 /** Reads which write actions the lane policy allows (T-232: decides whether the Google connect asks for gmail.compose). */
 export const writePolicyReader = createWritePolicyReader(getLaneJobClient);
+/** The email writer's database check that an action was approved and claimed (T-232 security H1). */
+export const actionClaimReader = createActionClaimReader(getLaneJobClient);
 
 /** Upserts raw provider payloads into raw.source_records with the lane's job client (T-039). */
 export const rawRecords = createRawRecordStore(getLaneJobClient);

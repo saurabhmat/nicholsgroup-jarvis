@@ -151,7 +151,10 @@ export const TYPE_IMPORTS_ALLOWED = [...Object.keys(DB_DRIVERS), "inngest"];
 
 /** Restricted names: where each may be used (see rules/no-restricted-names.js). */
 export const RESTRICTED_NAMES = {
-  executeWrite: { allow: APPROVALS, allowReexport: CONNECTORS, hint: "only the approvals package executes writes" },
+  executeWrite: { allow: [...APPROVALS, "packages/connectors/src/google/email-writer.test.ts"], allowReexport: CONNECTORS, hint: "only the approvals package executes writes" },
+  // T-232 security review H1: the Gmail email writer and its write connection loader are for approvals only.
+  googleEmailWriter: { allow: [...APPROVALS, "packages/connectors/src/google/index.ts", "packages/connectors/src/google/email-writer-boundary.test.ts"], allowReexport: CONNECTORS, hint: "only the approvals package sends email" },
+  loadGoogleWriteConnection: { allow: [...APPROVALS, "packages/connectors/src/google/index.ts"], allowReexport: CONNECTORS, hint: "only the approvals package loads a write connection" },
   mintApprovedAction: { allow: APPROVALS, hint: "only the approvals package mints approved actions" },
   getSupabaseSecretKey: { allow: [...LANE_ROUTER, ...TOKEN_VAULT, ...CORE_ENV], hint: "lane router and token vault only" },
   getLaneJobClient: { allow: [...LANE_ROUTER, ...JOB_RUNNERS], hint: "the service client bypasses RLS: jobs, approvals executor and token vault only; request code uses getLaneClient / requireLane" },

@@ -5,14 +5,14 @@
 // Nothing here talks to Gmail or writes a table: the module is the only caller of the write side (rule 5).
 import {
   ApprovalsError,
-  approveAndExecute,
   capabilityOf,
   editEmailProposal,
   listApprovals,
   pendingApprovalCount,
   rejectAction,
   type ActionRow,
-  type ApprovalsDeps,
+  type ApprovalsPublicDeps,
+  type ApproveResult,
   type CapabilityFacts,
   type Rpc,
 } from "@nichols/approvals/server";
@@ -23,8 +23,11 @@ export const MAX_BODY_BYTES = 200_000;
 
 export type ApprovalsApiDeps = {
   guards: () => Promise<Pick<Guards, "requireRole" | "requireStepUp">>;
-  approvals: ApprovalsDeps;
+  /** No write member (T-232 security review H1): approving goes through `approve`, which keeps the writer private. */
+  approvals: ApprovalsPublicDeps;
+  approve: (ctx: { laneId: ApprovalsCtx["laneId"]; userId: string; rpc: Rpc }, input: { actionId: string; hashSeen: string }) => Promise<ApproveResult>;
 };
+type ApprovalsCtx = Parameters<typeof listApprovals>[1];
 
 type Client = Awaited<ReturnType<Guards["requireLane"]>>["client"];
 
@@ -68,6 +71,8 @@ const STATUS: Record<string, number> = {
   too_many_pending: 429,
   sender_mismatch: 400,
   in_progress: 409,
+  already_proposed: 409,
+  reply_subject_fixed: 400,
   unavailable: 503,
 };
 
@@ -103,11 +108,12 @@ export async function handleApprovals(request: Request, laneId: string, deps: Ap
         return json(200, { ok: true });
       case "approve": {
         // The step-up age is the lane's setting; the mailbox facts are read for the action's own connection.
-        const row = (await listApprovals(deps.approvals, ctx, 100)).find((r) => r.id === req.id);
-        if (!row) return json(404, { error: "not_found" });
-        const facts = await deps.approvals.readFacts(laneId, row.connectionId);
+        const got = await ctx.rpc("act_get", { p_lane: laneId, p_id: req.id });
+        const row = !got.error && Array.isArray(got.data) && got.data.length > 0 ? (got.data[0] as { connection_id?: unknown }) : null;
+        if (!row || typeof row.connection_id !== "string") return json(404, { error: "not_found" });
+        const facts = await deps.approvals.readFacts(laneId, row.connection_id);
         await g.requireStepUp(facts.stepUpMaxAgeS);
-        const result = await approveAndExecute(deps.approvals, ctx, { actionId: req.id, hashSeen: req.hashSeen });
+        const result = await deps.approve(ctx, { actionId: req.id, hashSeen: req.hashSeen });
         return json(200, { ok: true, ...result });
       }
     }
@@ -137,8 +143,27 @@ export type PendingCard = {
   shortHash: string;
   expiresAt: string;
   replyThread: boolean;
+  /** Per-recipient warnings (spec §8; T-232 security review M1): a domain outside the lane's mailboxes, or a hidden copy. */
+  recipientFlags: RecipientFlag[];
   capability: CardCapability;
 };
+export type RecipientFlag = { address: string; field: "to" | "cc" | "bcc"; flags: ("external" | "bcc")[] };
+
+/** Flags every recipient whose domain is not one of the lane's own mailbox domains, and every bcc. */
+export function recipientFlags(payload: Record<string, unknown>, internalDomains: readonly string[]): RecipientFlag[] {
+  const internal = new Set(internalDomains.map((d) => d.toLowerCase()));
+  const out: RecipientFlag[] = [];
+  for (const field of ["to", "cc", "bcc"] as const) {
+    for (const address of strs(payload[field])) {
+      const domain = address.split("@")[1]?.toLowerCase() ?? "";
+      const flags: RecipientFlag["flags"] = [];
+      if (!internal.has(domain)) flags.push("external");
+      if (field === "bcc") flags.push("bcc");
+      if (flags.length > 0) out.push({ address, field, flags });
+    }
+  }
+  return out;
+}
 export type HistoryItem = {
   id: string;
   actionType: "email.send" | "email.save_draft";
@@ -153,7 +178,7 @@ export type ApprovalsView = { isOwner: boolean; pending: PendingCard[]; history:
 
 const strs = (v: unknown): string[] => (Array.isArray(v) ? v.filter((x): x is string => typeof x === "string") : []);
 
-export function toCard(row: ActionRow, facts: CapabilityFacts, laneId: string): PendingCard {
+export function toCard(row: ActionRow, facts: CapabilityFacts, laneId: string, internalDomains: readonly string[] = []): PendingCard {
   const cap = capabilityOf(laneId, facts, row.actionType);
   return {
     id: row.id,
@@ -170,6 +195,7 @@ export function toCard(row: ActionRow, facts: CapabilityFacts, laneId: string): 
     shortHash: row.payloadSha256.slice(0, 8),
     expiresAt: row.expiresAt,
     replyThread: typeof row.target.thread_id === "string",
+    recipientFlags: recipientFlags(row.payload, [...internalDomains, ...(facts.mailbox ? [facts.mailbox.split("@")[1] ?? ""] : [])]),
     capability: { enabled: cap.enabled, message: cap.message, settingsHref: cap.settingsHref },
   };
 }
@@ -189,7 +215,7 @@ export function toHistory(row: ActionRow): HistoryItem {
 
 export async function loadApprovals(
   g: Pick<Guards, "requireLane" | "requireRole">,
-  approvals: ApprovalsDeps,
+  approvals: ApprovalsPublicDeps,
   laneId: string,
 ): Promise<ApprovalsView> {
   const lane = await g.requireLane(laneId);
@@ -204,13 +230,14 @@ export async function loadApprovals(
     const rows = await listApprovals(approvals, { laneId, userId: lane.session.userId, rpc: coreRpc(lane.client) }, 100);
     const facts = new Map<string, CapabilityFacts>();
     const pending: PendingCard[] = [];
+    const domains = (await approvals.laneMailboxes(laneId as Parameters<typeof approvals.laneMailboxes>[0]).catch(() => [] as string[])).map((m) => m.split("@")[1] ?? "");
     for (const row of rows.filter((r) => r.status === "proposed" && new Date(r.expiresAt).getTime() > Date.now())) {
       let f = facts.get(row.connectionId);
       if (!f) {
         f = await approvals.readFacts(laneId, row.connectionId);
         facts.set(row.connectionId, f);
       }
-      pending.push(toCard(row, f, laneId));
+      pending.push(toCard(row, f, laneId, domains));
     }
     const history = rows
       .filter((r) => r.status !== "proposed")

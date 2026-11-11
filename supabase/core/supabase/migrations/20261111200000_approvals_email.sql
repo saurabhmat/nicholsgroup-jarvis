@@ -376,8 +376,20 @@ begin
   if v_provider is null then
     raise exception 'act: the connection does not belong to this lane or is disconnected' using errcode = '23503';
   end if;
-  if (select count(*) from act.proposed_actions a where a.lane_id = p_lane and a.status = 'proposed' and a.id is distinct from p_supersedes) >= 20 then
+  -- One proposal writer per lane at a time: the cap and the duplicate check below cannot race (T-232 review M2, T-231d).
+  perform pg_catalog.pg_advisory_xact_lock(pg_catalog.hashtext('act.insert_proposal:' || p_lane));
+  -- The cap counts only unexpired proposals (expiry is lazy: an expired row still says 'proposed' until act.expire_stale).
+  if (select count(*) from act.proposed_actions a where a.lane_id = p_lane and a.status = 'proposed' and a.expires_at > pg_catalog.now()
+        and a.id is distinct from p_supersedes) >= 20 then
     raise exception 'act: too many pending proposals in this lane' using errcode = '54000';
+  end if;
+  -- T-231d: a job (the daily briefing) proposes at most one pending reply per message replied to, so re-running the
+  -- briefing never piles up copies. A user's own proposals and edits (supersede) are not limited by this.
+  if p_proposer_kind = 'job' and p_supersedes is null and p_payload -> 'inReplyTo' ->> 'messageId' is not null
+     and exists (select 1 from act.proposed_actions a
+                 where a.lane_id = p_lane and a.connection_id = p_connection and a.status = 'proposed' and a.expires_at > pg_catalog.now()
+                   and a.payload -> 'inReplyTo' ->> 'messageId' = p_payload -> 'inReplyTo' ->> 'messageId') then
+    raise exception 'act: a reply to this message is already waiting for approval' using errcode = '23505';
   end if;
   insert into act.proposed_actions (lane_id, action_type, connection_id, provider, target, payload, payload_schema_version, payload_sha256,
                                     rationale, source_refs, proposer_kind, proposer_user_id, derived_from_retrieved, supersedes_id, expires_at)
@@ -425,7 +437,8 @@ begin
   if not found then
     raise exception 'act: not_found' using errcode = 'P0002';
   end if;
-  if v_old.status not in ('proposed', 'approved') then
+  -- Only a pending proposal can be edited (security review L2): an edit never withdraws an approval in flight.
+  if v_old.status <> 'proposed' then
     raise exception 'act: not_editable' using errcode = 'P0001';
   end if;
   perform set_config('act.reason', 'edited', true);
@@ -448,6 +461,7 @@ declare
   v_uid uuid := (select auth.uid());
   v_row act.proposed_actions%rowtype;
   v_max integer;
+  v_raw text;
 begin
   if v_uid is null or coalesce((select auth.jwt() ->> 'aal'), '') <> 'aal2' then
     raise exception 'act: a signed-in session at aal2 is required' using errcode = '42501';
@@ -455,7 +469,9 @@ begin
   if p_lane is null or p_id is null or p_hash_seen is null or not core.has_lane_role(v_uid, p_lane, array['owner']) then
     raise exception 'act: the owner role in this lane is required' using errcode = '42501';
   end if;
-  v_max := coalesce(nullif(act.lane_setting(p_lane, 'step_up_max_age_s'), '')::integer, 300);
+  -- Bounded here too (security review L1): a bad or huge lane setting never widens the TOTP window; 30..900 s, default 300.
+  v_raw := act.lane_setting(p_lane, 'step_up_max_age_s');
+  v_max := case when v_raw ~ '^[0-9]{1,4}$' then least(greatest(v_raw::integer, 30), 900) else 300 end;
   if not act.step_up_ok(v_max) then
     raise exception 'act: step_up_required' using errcode = '42501';
   end if;
@@ -702,6 +718,21 @@ create function core.act_get(p_lane text, p_id uuid) returns setof act.proposed_
 language sql stable security invoker set search_path = '' as $$
   select a.* from act.proposed_actions a where a.lane_id = p_lane and a.id = p_id;
 $$;
+-- The Gmail writer's own check before any send (T-232 security review H1, defence in depth): the action is executing, its
+-- claim is open (nothing sent yet), the hash given is the approved and stored hash, and the approver given is the one
+-- recorded. A writer handed out by mistake still cannot send anything that was not approved and claimed here.
+create function core.act_claim_open(p_lane text, p_id uuid, p_hash text, p_approver uuid) returns boolean
+language sql stable security definer set search_path = '' as $$
+  select exists (
+    select 1 from act.proposed_actions a
+    join act.execution_claims c on c.action_id = a.id and c.lane_id = a.lane_id
+    where a.lane_id = p_lane and a.id = p_id and a.status = 'executing'
+      and a.approved_hash = p_hash and a.payload_sha256 = p_hash and a.approved_by = p_approver
+      and c.outcome is null);
+$$;
+comment on function core.act_claim_open(text, uuid, text, uuid) is 'Approvals (T-232): true only for an executing action with an open claim, the approved hash and the recorded approver. service_role only.';
+revoke all on function core.act_claim_open(text, uuid, text, uuid) from public, anon, authenticated;
+grant execute on function core.act_claim_open(text, uuid, text, uuid) to service_role;
 -- Pending (proposed, unexpired) count for Home. Counts only what the caller may see.
 create function core.act_pending_count(p_lane text) returns integer
 language sql stable security invoker set search_path = '' as $$

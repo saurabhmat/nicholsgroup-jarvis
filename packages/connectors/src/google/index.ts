@@ -4,7 +4,7 @@
 import type { LaneId } from "@nichols/core";
 import { requireConnectorEnv } from "@nichols/core/env/server";
 import type { LaneBoundConnection } from "../contract/lane-bound";
-import { calendarIndexStore, connectionLoader, getToken, laneConfigReader, mailIndexStore, revokeToken, rotateToken, storeToken, writePolicyReader } from "../vault/index";
+import { actionClaimReader, calendarIndexStore, connectionLoader, getToken, laneConfigReader, mailIndexStore, revokeToken, rotateToken, storeToken, writePolicyReader } from "../vault/index";
 import { SecretValue } from "../vault/secret";
 import { createGoogleApi } from "./api";
 import { createCalendarSync } from "./cal-sync";
@@ -70,7 +70,7 @@ export const calSync = createCalendarSync({ calendar: googleCalendarProvider, st
 export const googleWriter = createGoogleWriter({ vault, connections, tokens });
 
 /** Send or save-as-draft an approved email (T-232; approvals only, via the write subpath). Never called by a route, job or tool. */
-export const googleEmailWriter = createGoogleEmailWriter({ connections, tokens, api, laneConfig: laneConfigReader });
+export const googleEmailWriter = createGoogleEmailWriter({ connections, tokens, api, laneConfig: laneConfigReader, claims: actionClaimReader });
 
 /** The authoritative, lane-bound Google connection row the email writer runs on (write subpath only). */
 export async function loadGoogleWriteConnection(laneId: LaneId, connectionId: string): Promise<LaneBoundConnection<"google">> {

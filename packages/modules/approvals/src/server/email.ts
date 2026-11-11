@@ -18,7 +18,7 @@ import { OUTCOME_UNKNOWN_MESSAGE, VERIFICATION_MISMATCH_MESSAGE, type GoogleEmai
 import { capabilityOf } from "./capability";
 import { ApprovalsError, toApprovalsError } from "./errors";
 import { firstRow, hashOfRow, rowsOf } from "./rows";
-import type { ActionRow, ApprovalsDeps, EmailActionType, ProposerKind, Rpc, UserCtx } from "./types";
+import type { ActionRow, ApprovalsDeps, ApprovalsPublicDeps, EmailActionType, ProposerKind, Rpc, UserCtx } from "./types";
 import { EMAIL_ACTION_TYPES } from "./types";
 
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
@@ -71,12 +71,12 @@ function checkId(id: string): void {
 const cloneJson = <T>(v: T): T => JSON.parse(JSON.stringify(v)) as T;
 
 /** Writes an audit entry; ids, type, hash and codes only. A failure to audit stops the caller (the action does not proceed). */
-async function audit(deps: ApprovalsDeps, laneId: LaneId, actor: AuditEntry["actor"], action: string, actionId: string, metadata: Record<string, unknown>): Promise<void> {
+async function audit(deps: Pick<ApprovalsPublicDeps, "audit">, laneId: LaneId, actor: AuditEntry["actor"], action: string, actionId: string, metadata: Record<string, unknown>): Promise<void> {
   await deps.audit.log({ laneId, actor, action, target: `action:${actionId}`, metadata });
 }
 
 /** Builds the exact stored proposal for an email: sender fixed to the connection's mailbox, canonical hash. */
-async function buildProposal(deps: ApprovalsDeps, laneId: LaneId, actionType: EmailActionType, connectionId: string, compose: EmailComposeInput) {
+async function buildProposal(deps: ApprovalsPublicDeps, laneId: LaneId, actionType: EmailActionType, connectionId: string, compose: EmailComposeInput) {
   if (!EMAIL_ACTION_TYPES.includes(actionType)) throw new ApprovalsError("invalid");
   checkId(connectionId);
   const facts = await deps.readFacts(laneId, connectionId);
@@ -110,7 +110,7 @@ async function buildProposal(deps: ApprovalsDeps, laneId: LaneId, actionType: Em
 }
 
 /** Creates a proposal. Never executes; nothing is sent until the owner approves. */
-export async function proposeEmailAction(deps: ApprovalsDeps, laneId: LaneId, input: ProposeEmailInput): Promise<ProposeResult> {
+export async function proposeEmailAction(deps: ApprovalsPublicDeps, laneId: LaneId, input: ProposeEmailInput): Promise<ProposeResult> {
   checkLane(laneId);
   if (input.proposerKind === "user" && !input.proposerUserId) throw new ApprovalsError("invalid");
   if (input.proposerUserId !== undefined && !UUID.test(input.proposerUserId)) throw new ApprovalsError("invalid");
@@ -165,7 +165,7 @@ export type EmailChanges = Partial<Pick<EmailComposeInput, "to" | "cc" | "bcc" |
  * text are the owner's now: the "derived from retrieved content" flag stays only while the recipients are unchanged.
  * Returns the old id unchanged when nothing differs.
  */
-export async function editEmailProposal(deps: ApprovalsDeps, ctx: UserCtx, actionId: string, changes: EmailChanges): Promise<ProposeResult & { unchanged: boolean }> {
+export async function editEmailProposal(deps: ApprovalsPublicDeps, ctx: UserCtx, actionId: string, changes: EmailChanges): Promise<ProposeResult & { unchanged: boolean }> {
   checkLane(ctx.laneId);
   checkId(actionId);
   await requireOwner(ctx);
@@ -174,6 +174,11 @@ export async function editEmailProposal(deps: ApprovalsDeps, ctx: UserCtx, actio
   const body = old.payload.bodyText;
   if (typeof body !== "string" || old.payloadPurgedAt !== null) throw new ApprovalsError("not_editable");
   const list = (v: unknown): string[] => (Array.isArray(v) ? v.filter((x): x is string => typeof x === "string") : []);
+  // A reply keeps its subject: Gmail files a reply with a different subject in a new thread, the read-back then fails
+  // although the email went out, and a retry would send it twice (T-232 code review H1).
+  if (old.payload.inReplyTo && changes.subject !== undefined && changes.subject.trim() !== String(old.payload.subject ?? "").trim()) {
+    throw new ApprovalsError("reply_subject_fixed");
+  }
   const compose: EmailComposeInput = {
     to: changes.to ?? list(old.payload.to),
     cc: changes.cc ?? list(old.payload.cc),
@@ -204,7 +209,7 @@ export async function editEmailProposal(deps: ApprovalsDeps, ctx: UserCtx, actio
   return { id: data, hash: p.hash, unchanged: false };
 }
 
-export async function rejectAction(deps: ApprovalsDeps, ctx: UserCtx, actionId: string, reason: string): Promise<void> {
+export async function rejectAction(deps: ApprovalsPublicDeps, ctx: UserCtx, actionId: string, reason: string): Promise<void> {
   checkLane(ctx.laneId);
   checkId(actionId);
   const text = typeof reason === "string" ? reason.trim() : "";
@@ -248,7 +253,17 @@ export async function approveAndExecute(deps: ApprovalsDeps, ctx: UserCtx, input
   };
 
   const row = await getRow(ctx.rpc, ctx.laneId, input.actionId);
-  if (row.status === "approved") return blocked("already_approved");
+  if (row.status === "approved") {
+    // Resume (T-232 code review H2): approved by this owner, for this exact hash, but never carried out (an audit
+    // outage or a killed request after act_approve). The single claim keeps it to one execution; the gates run again.
+    if (row.approvedBy !== ctx.userId || row.approvedHash !== row.payloadSha256 || input.hashSeen !== row.payloadSha256 || hashOfRow(row) !== row.payloadSha256) {
+      return blocked("already_approved");
+    }
+    const capNow = capabilityOf(ctx.laneId, await deps.readFacts(ctx.laneId, row.connectionId), row.actionType);
+    if (!capNow.enabled) return blocked(capNow.reason);
+    await audit(deps, ctx.laneId, actor, "action.resumed", row.id, { action_type: row.actionType, hash: row.payloadSha256 });
+    return executeApproved(deps, ctx.laneId, row.id);
+  }
   if (row.status !== "proposed") return blocked("not_pending");
   // The stored content must still hash to the stored hash, and the hash the approver saw must be that hash.
   if (hashOfRow(row) !== row.payloadSha256 || input.hashSeen !== row.payloadSha256) return blocked("hash_mismatch");
@@ -263,14 +278,14 @@ export async function approveAndExecute(deps: ApprovalsDeps, ctx: UserCtx, input
     throw err;
   }
   await audit(deps, ctx.laneId, actor, "action.approved", row.id, { action_type: row.actionType, hash: row.payloadSha256 });
-  return executeApproved(deps, ctx.laneId, row.id, ctx.userId);
+  return executeApproved(deps, ctx.laneId, row.id);
 }
 
 /**
  * approved -> executing (the single claim) -> send or save -> read back -> verified or failed. A second call (a duplicate
  * request, a parallel worker) finds the claim taken and returns `already_in_progress` without touching Gmail.
  */
-export async function executeApproved(deps: ApprovalsDeps, laneId: LaneId, actionId: string, approvedBy: string): Promise<ApproveResult> {
+export async function executeApproved(deps: ApprovalsDeps, laneId: LaneId, actionId: string): Promise<ApproveResult> {
   const job = await deps.jobRpc(laneId);
   // "An unaudited action never runs": the start is written before the claim and before any external call.
   await audit(deps, laneId, { kind: "service" }, "action.execute_started", actionId, {});
@@ -282,13 +297,17 @@ export async function executeApproved(deps: ApprovalsDeps, laneId: LaneId, actio
     throw err;
   }
   const row = firstRow(claimed.data);
+  // The approver is the one the database recorded, never a caller's word (T-232 reviews M4 / L6).
+  const approvedBy = row.approvedBy;
 
   let stage: "before" | "send" | "verify" = "before";
+  let verified = false;
   let externalId: string | null = null;
   let outcome: "accepted" | "already_applied" = "accepted";
   try {
     // Immediately before the external call: the stored content must still be what was approved.
     if (hashOfRow(row) !== row.payloadSha256 || row.approvedHash !== row.payloadSha256) throw new TamperError();
+    if (typeof approvedBy !== "string" || !UUID.test(approvedBy)) throw new TamperError();
     if (typeof row.payload.bodyText !== "string") throw new TamperError();
     const action: GoogleEmailApprovedAction = {
       id: row.id,
@@ -311,13 +330,26 @@ export async function executeApproved(deps: ApprovalsDeps, laneId: LaneId, actio
     const sent = await job("act_claim_sent", { p_lane: laneId, p_id: actionId, p_external_id: externalId });
     if (sent.error) throw toApprovalsError(sent.error);
     await deps.writer.verifyWrite(laneId, conn, action, externalId);
+    verified = true;
     const done = await job("act_mark_verified", { p_lane: laneId, p_id: actionId, p_external_id: externalId, p_outcome: outcome });
     if (done.error) throw toApprovalsError(done.error);
   } catch (e) {
+    if (verified) {
+      // Sent and read back; only recording it failed (T-232 code review M1). Never turn a sent email into "failed": the
+      // row stays executing with its claim at "sent" (the reconcile sweep, T-192, finishes it), and the owner is told it went out.
+      console.error("[approvals] verified send could not be recorded", { laneId, actionId });
+      await audit(deps, laneId, { kind: "service" }, "action.record_failed", actionId, { external_id: externalId }).catch(() => undefined);
+      return { status: "verified", actionId };
+    }
     const f = failureOf(e, stage);
-    const marked = await job("act_mark_failed", { p_lane: laneId, p_id: actionId, p_code: f.code, p_outcome: f.outcome });
+    let marked: Awaited<ReturnType<typeof job>>;
+    try {
+      marked = await job("act_mark_failed", { p_lane: laneId, p_id: actionId, p_code: f.code, p_outcome: f.outcome });
+    } catch {
+      marked = { data: null, error: { message: "mark_failed unavailable" } };
+    }
     await audit(deps, laneId, { kind: "service" }, "action.failed", actionId, { failure_code: f.code, outcome: f.outcome }).catch(() => undefined);
-    if (marked.error) throw toApprovalsError(marked.error);
+    if (marked.error) throw new ApprovalsError("unavailable");
     return { status: "failed", actionId, failureCode: f.code };
   }
   await audit(deps, laneId, { kind: "service" }, "action.verified", actionId, { outcome, external_id: externalId }).catch(() => undefined);
@@ -327,7 +359,7 @@ export async function executeApproved(deps: ApprovalsDeps, laneId: LaneId, actio
 export type ApprovalsList = { rows: ActionRow[] };
 
 /** The lane's actions as the signed-in user may see them (RLS), newest pending first. Stale proposals are expired first. */
-export async function listApprovals(deps: ApprovalsDeps, ctx: UserCtx, limit = 50): Promise<ActionRow[]> {
+export async function listApprovals(deps: ApprovalsPublicDeps, ctx: UserCtx, limit = 50): Promise<ActionRow[]> {
   checkLane(ctx.laneId);
   try {
     const job = await deps.jobRpc(ctx.laneId);

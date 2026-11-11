@@ -16,6 +16,8 @@ export const APPROVALS_ERROR_CODES = [
   "too_many_pending",
   "sender_mismatch",
   "in_progress",
+  "already_proposed",
+  "reply_subject_fixed",
   "unavailable",
 ] as const;
 export type ApprovalsErrorCode = (typeof APPROVALS_ERROR_CODES)[number];
@@ -41,6 +43,8 @@ const MESSAGES: Record<ApprovalsErrorCode, string> = {
   too_many_pending: "Too many proposals are waiting in this company. Clear some first.",
   sender_mismatch: "An email can only be sent from the connected mailbox.",
   in_progress: "This approval is already being carried out.",
+  already_proposed: "A reply to this message is already waiting for approval.",
+  reply_subject_fixed: "The subject of a reply can't be changed: it keeps the reply in its thread.",
   unavailable: "Approvals are unavailable right now.",
 };
 
@@ -69,6 +73,7 @@ export function toApprovalsError(error: { code?: string | undefined; message?: s
   if (has("not_editable")) return new ApprovalsError("not_editable");
   if (has("not_found") || code === "P0002") return new ApprovalsError("not_found");
   if (message.includes("does not allow storing outbound drafts")) return new ApprovalsError("drafts_not_allowed");
+  if (has("already waiting for approval")) return new ApprovalsError("already_proposed");
   if (has("too many pending") || code === "54000") return new ApprovalsError("too_many_pending");
   if (code === "22023" || code === "22004" || code === "23514") return new ApprovalsError("invalid");
   if (code === "42501") return new ApprovalsError("forbidden");

@@ -24,8 +24,25 @@ const card = (over: Partial<PendingCard> = {}): PendingCard => ({
   shortHash: "aaaaaaaa",
   expiresAt: "2026-11-14T12:00:00Z",
   replyThread: false,
+  recipientFlags: [],
   capability: { enabled: true, message: null, settingsHref: null },
   ...over,
+});
+
+describe("review fixes (T-232)", () => {
+  it("shows a warning per external or bcc recipient", () => {
+    render(<ApprovalCard laneId="PKG" card={card({ recipientFlags: [{ address: "x@evil.example.test", field: "bcc", flags: ["external", "bcc"] }] })} canAct />);
+    const flags = screen.getByTestId("recipient-flags");
+    expect(flags.textContent).toContain("x@evil.example.test");
+    expect(flags.textContent).toContain("Outside your company");
+    expect(flags.textContent).toContain("Hidden copy (Bcc)");
+  });
+  it("a reply's subject is read-only and says why", () => {
+    render(<ApprovalCard laneId="PKG" card={card({ replyThread: true })} canAct />);
+    const subject = screen.getByLabelText(/^Subject/) as HTMLInputElement;
+    expect(subject.readOnly).toBe(true);
+    expect(screen.getByText(/keeps its subject/)).toBeTruthy();
+  });
 });
 
 describe("ApprovalCard", () => {

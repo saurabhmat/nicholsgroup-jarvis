@@ -72,7 +72,7 @@ const ALLOWED = {
   "packages/modules/brain": [...CORE_ONLY, "zod"],
   // T-232: approvals is the only module allowed to reach the connector write path (rule 5; lint limits
   // @nichols/connectors/write to this package); zod for the email payload schema.
-  "packages/modules/approvals": [...CORE_ONLY, "@nichols/connectors", "zod"],
+  "packages/modules/approvals": [...CORE_ONLY, "@nichols/connectors", "server-only", "zod"], // server-only: the wiring never reaches a client bundle
 };
 
 /** same matching as the lint rule: "name", "name/sub", or "@scope/*" */

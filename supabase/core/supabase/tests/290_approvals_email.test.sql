@@ -6,7 +6,7 @@
 -- the state machine and immutability, the single claim, the D-19 body purge in every terminal state, edit = supersede,
 -- history insert-only, pending count.
 begin;
-select plan(83);
+select plan(102);
 \ir helpers/lane_rls.psql
 
 -- A token whose amr carries a TOTP verification at p_at (epoch seconds), or none when p_at is null.
@@ -269,6 +269,68 @@ select lives_ok(format($$select core.act_mark_failed('PKG', %L, 'verification_mi
 reset role;
 select is((select status || ':' || failure_code || ':' || (payload ? 'bodyText')::text from act.proposed_actions where id = (select id from ids where k = 'a7')), 'failed:verification_mismatch:false', 'D-19 failed: body purged');
 select is((select count(*)::int from act.status_history where action_id = (select id from ids where k = 'a7')), 4, 'history: proposed, approved, executing, failed');
+
+
+-- ---------------------------------------------------------------- review fixes (T-232 reviews) and T-231d
+-- act_claim_open (security H1): true only for an executing action with an open claim, its approved hash and its approver.
+insert into ids select 'a8', act.propose('PKG', 'email.send', '00000000-0000-4000-8000-000000002901', '{"mailbox":"act-pkg@example.test"}', pg_temp.payload('act-pkg@example.test'), 1, pg_temp.hash('a8'), null, '[]', 'user', pg_temp.uid('owner@example.test'), false);
+select pg_temp.claims_amr('owner@example.test', 'aal2', extract(epoch from now())::bigint);
+set local role authenticated;
+select lives_ok(format($$select core.act_approve('PKG', %L, %L)$$, (select id from ids where k = 'a8'), pg_temp.hash('a8')), 'a8 approved');
+select throws_ok(format($$select core.act_claim_open('PKG', %L, %L, %L)$$, (select id from ids where k = 'a8'), pg_temp.hash('a8'), pg_temp.uid('owner@example.test')), '42501', null, 'act_claim_open is not callable by authenticated');
+reset role;
+set local role service_role;
+select is(core.act_claim_open('PKG', (select id from ids where k = 'a8'), pg_temp.hash('a8'), pg_temp.uid('owner@example.test')), false, 'approved but not claimed: not open');
+select lives_ok(format($$select core.act_claim_execution('PKG', %L)$$, (select id from ids where k = 'a8')), 'a8 claimed');
+select is(core.act_claim_open('PKG', (select id from ids where k = 'a8'), pg_temp.hash('a8'), pg_temp.uid('owner@example.test')), true, 'claimed, right hash and approver: open');
+select is(core.act_claim_open('PKG', (select id from ids where k = 'a8'), pg_temp.hash('other'), pg_temp.uid('owner@example.test')), false, 'another hash: not open');
+select is(core.act_claim_open('PKG', (select id from ids where k = 'a8'), pg_temp.hash('a8'), pg_temp.uid('viewer@example.test')), false, 'another approver: not open');
+select is(core.act_claim_open('APK', (select id from ids where k = 'a8'), pg_temp.hash('a8'), pg_temp.uid('owner@example.test')), false, 'another lane: not open');
+select lives_ok(format($$select core.act_claim_sent('PKG', %L, 'gmail-message-8')$$, (select id from ids where k = 'a8')), 'a8 sent');
+select is(core.act_claim_open('PKG', (select id from ids where k = 'a8'), pg_temp.hash('a8'), pg_temp.uid('owner@example.test')), false, 'after the send: no longer open (never twice)');
+reset role;
+
+-- supersede accepts only a pending proposal (security L2).
+insert into ids select 'a9', act.propose('PKG', 'email.send', '00000000-0000-4000-8000-000000002901', '{"mailbox":"act-pkg@example.test"}', pg_temp.payload('act-pkg@example.test'), 1, pg_temp.hash('a9'), null, '[]', 'user', pg_temp.uid('owner@example.test'), false);
+select pg_temp.claims_amr('owner@example.test', 'aal2', extract(epoch from now())::bigint);
+set local role authenticated;
+select lives_ok(format($$select core.act_approve('PKG', %L, %L)$$, (select id from ids where k = 'a9'), pg_temp.hash('a9')), 'a9 approved');
+reset role;
+set local role service_role;
+select throws_ok(format($$select core.act_supersede('PKG', %L, '{"mailbox":"act-pkg@example.test"}', %L, 1, %L, null, '[]', %L, false)$$, (select id from ids where k = 'a9'), pg_temp.payload('act-pkg@example.test'), pg_temp.hash('a9b'), pg_temp.uid('owner@example.test')),
+                 'P0001', 'act: not_editable', 'an approved action cannot be edited (superseded)');
+reset role;
+
+-- The step-up window is bounded in SQL (security L1): a lane setting of a day still needs a TOTP within 900 s.
+insert into core.lane_config (lane_id, version, config)
+select lane_id, version + 1, jsonb_set(config, '{approvals}', coalesce(config -> 'approvals', '{}'::jsonb) || '{"step_up_max_age_s": 86400}'::jsonb)
+from core.lane_config where lane_id = 'PKG' order by version desc limit 1;
+insert into ids select 'a10', act.propose('PKG', 'email.send', '00000000-0000-4000-8000-000000002901', '{"mailbox":"act-pkg@example.test"}', pg_temp.payload('act-pkg@example.test'), 1, pg_temp.hash('a10'), null, '[]', 'user', pg_temp.uid('owner@example.test'), false);
+select pg_temp.claims_amr('owner@example.test', 'aal2', extract(epoch from now())::bigint - 1000);
+set local role authenticated;
+select throws_ok(format($$select core.act_approve('PKG', %L, %L)$$, (select id from ids where k = 'a10'), pg_temp.hash('a10')), '42501', 'act: step_up_required', 'a 1000 s old TOTP is refused even when the lane setting says a day');
+reset role;
+
+-- T-231d: a job proposes at most one pending reply per message replied to; a user's own proposal is not limited.
+create function pg_temp.reply(p_msg text) returns jsonb language sql as $$
+  select pg_temp.payload('act-pkg@example.test') || jsonb_build_object('inReplyTo', jsonb_build_object('threadId', 'thread-1', 'messageId', p_msg));
+$$;
+select lives_ok($$select act.propose('PKG', 'email.send', '00000000-0000-4000-8000-000000002901', '{"mailbox":"act-pkg@example.test","thread_id":"thread-1"}', pg_temp.reply('msg-1'), 1, pg_temp.hash('r1'), null, '[]', 'job', pg_temp.uid('owner@example.test'), true)$$, 'the briefing proposes a reply to msg-1');
+select throws_ok($$select act.propose('PKG', 'email.send', '00000000-0000-4000-8000-000000002901', '{"mailbox":"act-pkg@example.test","thread_id":"thread-1"}', pg_temp.reply('msg-1'), 1, pg_temp.hash('r2'), null, '[]', 'job', pg_temp.uid('owner@example.test'), true)$$,
+                 '23505', 'act: a reply to this message is already waiting for approval', 'a second job reply to the same message is refused');
+select lives_ok($$select act.propose('PKG', 'email.send', '00000000-0000-4000-8000-000000002901', '{"mailbox":"act-pkg@example.test","thread_id":"thread-1"}', pg_temp.reply('msg-2'), 1, pg_temp.hash('r3'), null, '[]', 'job', pg_temp.uid('owner@example.test'), true)$$, 'a job reply to another message is fine');
+select lives_ok($$select act.propose('PKG', 'email.send', '00000000-0000-4000-8000-000000002901', '{"mailbox":"act-pkg@example.test","thread_id":"thread-1"}', pg_temp.reply('msg-1'), 1, pg_temp.hash('r4'), null, '[]', 'user', pg_temp.uid('owner@example.test'), false)$$, 'a user''s own reply to msg-1 is not limited');
+
+-- The 20-pending cap counts only unexpired proposals (code M2).
+insert into ids select 'cap' || g::text, act.propose('PKG', 'email.send', '00000000-0000-4000-8000-000000002901', '{"mailbox":"act-pkg@example.test"}', pg_temp.payload('act-pkg@example.test'), 1, pg_temp.hash('cap' || g::text), null, '[]', 'user', pg_temp.uid('owner@example.test'), false)
+from generate_series(1, 20 - (select count(*)::int from act.proposed_actions where lane_id = 'PKG' and status = 'proposed' and expires_at > now())) g;
+select throws_ok($$select act.propose('PKG', 'email.send', '00000000-0000-4000-8000-000000002901', '{"mailbox":"act-pkg@example.test"}', pg_temp.payload('act-pkg@example.test'), 1, pg_temp.hash('cap-over'), null, '[]', 'user', null, false)$$,
+                 '54000', null, 'at 20 unexpired pending proposals the cap refuses');
+alter table act.proposed_actions disable trigger proposed_actions_guard;
+update act.proposed_actions set expires_at = now() - interval '1 minute' where lane_id = 'PKG' and status = 'proposed';
+alter table act.proposed_actions enable trigger proposed_actions_guard;
+select lives_ok($$select act.propose('PKG', 'email.send', '00000000-0000-4000-8000-000000002901', '{"mailbox":"act-pkg@example.test"}', pg_temp.payload('act-pkg@example.test'), 1, pg_temp.hash('cap-after'), null, '[]', 'user', null, false)$$,
+                'expired (not yet swept) proposals no longer count against the cap');
 
 select * from finish();
 rollback;

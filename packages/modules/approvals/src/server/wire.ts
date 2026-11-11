@@ -1,3 +1,4 @@
+import "server-only";
 // The approvals module over the real lane router, audit and Google connector (T-232). Server only; a separate subpath
 // (`@nichols/approvals/wire`) so tests of the module logic never import the connector wiring. The job client bypasses RLS:
 // every call below passes the lane and the database re-checks it (act.* functions are lane-scoped definer functions).
@@ -5,7 +6,8 @@ import { prepareEmailWrite, laneMailboxes } from "@nichols/connectors/google";
 import { googleEmailWriter, loadGoogleWriteConnection } from "@nichols/connectors/write";
 import type { LaneId } from "@nichols/core";
 import { getAudit, getLaneJobClient } from "@nichols/core/lane-router";
-import type { CapabilityFacts, ApprovalsDeps, Rpc } from "./types";
+import { approveAndExecute, executeApproved } from "./email";
+import type { CapabilityFacts, ApprovalsDeps, ApprovalsPublicDeps, Rpc, UserCtx } from "./types";
 
 const rpcOf = (client: { schema(name: "core"): { rpc: unknown } }): Rpc => {
   const core = client.schema("core") as unknown as { rpc: Rpc };
@@ -39,13 +41,38 @@ async function readFacts(laneId: LaneId, connectionId: string): Promise<Capabili
   };
 }
 
-export const approvalsDeps: ApprovalsDeps = {
+/**
+ * What request code may hold: propose, edit, reject, list, capability (T-232 security review H1). No write member: the
+ * Gmail writer and the write-connection loader stay in `fullDeps` below, private to this file.
+ */
+export const approvalsDeps: ApprovalsPublicDeps = Object.freeze({
   jobRpc,
   prepareEmailWrite,
   laneMailboxes,
   readFacts,
+  audit: getAudit(),
+});
+
+const fullDeps: ApprovalsDeps = Object.freeze({
+  ...approvalsDeps,
   loadWriteConnection: loadGoogleWriteConnection,
   writer: googleEmailWriter,
-  audit: getAudit(),
-};
+});
 
+/** Approve the exact hash the owner saw, then carry it out once (the route calls this after requireRole + requireStepUp). */
+export function approveAndExecuteEmail(ctx: UserCtx, input: { actionId: string; hashSeen: string }) {
+  return approveAndExecute(fullDeps, ctx, input);
+}
+
+/** Carries out an action already approved in the database (a job or a resume); the approver is read from the row. */
+export function executeApprovedEmail(laneId: Parameters<typeof executeApproved>[1], actionId: string) {
+  return executeApproved(fullDeps, laneId, actionId);
+}
+
+
+/** action.expire (security review M2): expires the lane's stale actions (bodies removed in the same statement). */
+export async function expireStaleActions(laneId: LaneId): Promise<number> {
+  const { data, error } = await (await jobRpc(laneId))("act_expire_stale", { p_lane: laneId });
+  if (error || typeof data !== "number") throw new Error("action expiry failed");
+  return data;
+}

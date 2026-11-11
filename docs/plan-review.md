@@ -1074,3 +1074,20 @@ Logged, not fixed (MEDIUM and below):
 - **Open product decision (revisit after Robert sees it): money amounts in AI text.** Kept masked for now (rule 7: figures come from SQL; the QuickBooks cards show the real numbers). Options later: keep masked; or show "amount as written in the email" as a separate labelled field, never inside model prose.
 - **Local DB:** reset approved (local only, test data); `pnpm test:db` re-run on a clean reset: 37 files pass; `brief_briefings` at the current version (guard trigger BEFORE INSERT only).
 - **Production SQL:** `supabase/core/bootstrap/manual-migrations/part-9a-T-231a.sql` .. `part-9d-T-233.sql` + `check-part-9.sql` (T-230 needs no SQL). Dry-run on a clone at the part-8 state: order guard, re-run guard and 22/22 checks pass. The migration version `20261111300000` (T-233) is not a real time (hour 30); it sorts correctly and is kept so local and production versions match.
+
+### T-232 review follow-ups (Nov 11, 2026, branch `agent/T-232`)
+All HIGH items are fixed (security H1; code H1, H2), plus security M2, L1, L2, L6, L7 and code M1 – M4, L6 – L8. Details are in `.agent/pr/T-232.md`.
+
+Logged, not fixed:
+- **Security M3 / code M1 (rest), stuck `executing` rows.** There is no `action.reconcile_stuck` (T-192). A row left `executing` (the request was killed after the send, or recording failed) keeps its body and needs a manual look until T-192. Do this **before PKG sends live mail**.
+- **Security M4.** Gmail may replace a client Message-ID. The duplicate guard after a crash then rests on the claim only (safe: an unknown outcome is never resent). Check this on the first live send (H-item).
+- **Security M1 (rest).** No "new to this thread" flag and no live quote of the thread (spec §8, §10). T-231d's recipient is always the sender of the message replied to, taken from metadata.
+- **Security L3.** Switching `store_outbound_drafts` off leaves pending bodies until they expire (now at most 15 min after `expires_at`).
+- **Security L4.** The `gmail_compose` feature flag is written after the token, not in the same transaction.
+- **Security L5.** Once compose is granted, the read paths use a token that can send. Read-only rests on the GET-only `api.ts`.
+- **Security L7.** The read-back does not compare Bcc.
+- **Code L1.** A card stays "dirty" after a case-only edit.
+- **Code L2.** `ADDRESS` is stricter than `z.email()`: such an address fails after approval as `execution_refused`.
+- **Code L3.** NUL in a body gives a generic 503.
+- **Code L4.** The read-back does not check the body.
+- **Code L5.** History says "Failed" for `verification_*` codes where the mail may have gone out.

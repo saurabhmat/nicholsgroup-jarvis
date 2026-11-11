@@ -100,7 +100,7 @@ export function ApprovalCard({ laneId, card, canAct }: { laneId: string; card: P
   const id = `a-${card.id}`;
 
   return (
-    <article data-testid="approval-card" aria-label={card.subject} className="flex flex-col gap-4 rounded-card border border-border bg-card p-5 text-card-foreground shadow-card">
+    <article id={`action-${card.id}`} data-testid="approval-card" aria-label={card.subject} className="flex flex-col gap-4 rounded-card border border-border bg-card p-5 text-card-foreground shadow-card">
       <div className="flex flex-wrap items-center justify-between gap-2">
         <div className="flex flex-wrap items-center gap-2">
           <Badge variant={isSend ? "default" : "secondary"}>{isSend ? "Email to send" : "Gmail draft"}</Badge>
@@ -119,6 +119,17 @@ export function ApprovalCard({ laneId, card, canAct }: { laneId: string; card: P
           <AlertDescription>Check the recipients before approving. Text inside an email never approves anything.</AlertDescription>
         </Alert>
       ) : null}
+      {card.recipientFlags.length > 0 ? (
+        <ul data-testid="recipient-flags" aria-label="Recipients to check" className="flex flex-col gap-1 text-small">
+          {card.recipientFlags.map((f) => (
+            <li key={`${f.field}:${f.address}`} className="flex flex-wrap items-center gap-2">
+              <span className="font-medium text-foreground">{f.address}</span>
+              {f.flags.includes("external") ? <Badge variant="alert">Outside your company</Badge> : null}
+              {f.flags.includes("bcc") ? <Badge variant="alert">Hidden copy (Bcc)</Badge> : null}
+            </li>
+          ))}
+        </ul>
+      ) : null}
       <div className="grid gap-3">
         <label className="grid gap-1 text-small font-medium text-foreground" htmlFor={`${id}-to`}>
           To
@@ -136,7 +147,21 @@ export function ApprovalCard({ laneId, card, canAct }: { laneId: string; card: P
         </div>
         <label className="grid gap-1 text-small font-medium text-foreground" htmlFor={`${id}-subject`}>
           Subject
-          <input id={`${id}-subject`} className={control} value={subject} onChange={(e) => setSubject(e.target.value)} disabled={!canAct} maxLength={998} />
+          <input
+            id={`${id}-subject`}
+            className={control}
+            value={subject}
+            onChange={(e) => setSubject(e.target.value)}
+            disabled={!canAct}
+            readOnly={card.replyThread}
+            aria-describedby={card.replyThread ? `${id}-subject-note` : undefined}
+            maxLength={998}
+          />
+          {card.replyThread ? (
+            <span id={`${id}-subject-note`} className="text-small font-normal text-muted-foreground">
+              A reply keeps its subject so it stays in the same conversation.
+            </span>
+          ) : null}
         </label>
         <label className="grid gap-1 text-small font-medium text-foreground" htmlFor={`${id}-body`}>
           Message (plain text)

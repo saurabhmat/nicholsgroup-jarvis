@@ -2,8 +2,8 @@
 // models the page draws (capability message, short hash, derived banner). The module and SQL have their own tests.
 import { describe, expect, it, vi } from "vitest";
 import { AuthError } from "@nichols/core/auth";
-import { NOT_ENABLED_MESSAGE, NOT_LIVE_MESSAGE, type ActionRow, type ApprovalsDeps, type CapabilityFacts } from "@nichols/approvals/server";
-import { handleApprovals, toCard, toHistory } from "./approvals";
+import { NOT_ENABLED_MESSAGE, NOT_LIVE_MESSAGE, type ActionRow, type ApprovalsPublicDeps, type CapabilityFacts } from "@nichols/approvals/server";
+import { handleApprovals, recipientFlags, toCard, toHistory } from "./approvals";
 
 const USER = "00000000-0000-4000-8000-0000000000a1";
 const ID = "00000000-0000-4000-8000-0000000000aa";
@@ -49,7 +49,7 @@ function setup(opts: { role?: "ok" | "forbidden"; stepUp?: "ok" | "required"; ro
   const calls: { fn: string; args: Record<string, unknown> }[] = [];
   const rpc = async (fn: string, args: Record<string, unknown>) => {
     calls.push({ fn, args });
-    if (fn === "act_list") return { data: (opts.rows ?? [row()]).map(snake), error: null };
+    if (fn === "act_list" || fn === "act_get") return { data: (opts.rows ?? [row()]).map(snake), error: null };
     return { data: null, error: null };
   };
   const requireStepUp = vi.fn(async () => {
@@ -67,8 +67,9 @@ function setup(opts: { role?: "ok" | "forbidden"; stepUp?: "ok" | "required"; ro
     jobRpc: async () => async () => ({ data: 0, error: null }),
     readFacts: async () => facts,
     audit: { log: async () => undefined },
-  } as unknown as ApprovalsDeps;
-  return { g, requireStepUp, calls, deps: { guards: async () => g, approvals } };
+  } as unknown as ApprovalsPublicDeps;
+  const approve = vi.fn(async () => ({ status: "verified" as const, actionId: ID }));
+  return { g, requireStepUp, calls, approve, deps: { guards: async () => g, approvals, approve } };
 }
 
 function snake(r: ActionRow) {
@@ -112,6 +113,14 @@ describe("handleApprovals gating", () => {
     expect(await res.json()).toMatchObject({ error: "step_up_required" });
     expect(s.requireStepUp).toHaveBeenCalledWith(300); // the lane's step_up_max_age_s
     expect(s.calls.map((c) => c.fn)).not.toContain("act_approve");
+    expect(s.approve).not.toHaveBeenCalled();
+  });
+
+  it("approve after the step-up goes through the bound approve (the route never holds the writer)", async () => {
+    const s = setup();
+    const res = await handleApprovals(post({ action: "approve", id: ID, hashSeen: HASH }), "PKG", s.deps);
+    expect(res.status).toBe(200);
+    expect(s.approve).toHaveBeenCalledWith(expect.objectContaining({ laneId: "PKG", userId: USER }), { actionId: ID, hashSeen: HASH });
   });
 
   it("approve for an action the user cannot see is a 404 (RLS returns nothing)", async () => {
@@ -142,5 +151,18 @@ describe("page view models", () => {
     const h = toHistory(row({ status: "verified", payloadPurgedAt: "2026-11-11T13:00:00Z", payload: { to: ["dana@sender.example.test"], subject: "Update" }, verifiedAt: "2026-11-11T13:00:00Z" }));
     expect(h).toMatchObject({ status: "verified", to: ["dana@sender.example.test"], subject: "Update", contentPurged: true });
     expect(JSON.stringify(h)).not.toContain("bodyText");
+  });
+});
+
+describe("recipientFlags (T-232 security review M1)", () => {
+  it("flags external domains and every bcc; internal to/cc are not listed", () => {
+    const flags = recipientFlags({ to: ["dana@sender.example.test", "me@pubkgroup.example.test"], cc: [], bcc: ["boss@pubkgroup.example.test"] }, ["pubkgroup.example.test"]);
+    expect(flags).toEqual([
+      { address: "dana@sender.example.test", field: "to", flags: ["external"] },
+      { address: "boss@pubkgroup.example.test", field: "bcc", flags: ["bcc"] },
+    ]);
+  });
+  it("toCard counts the sending mailbox's domain as internal", () => {
+    expect(toCard(row(), facts, "PKG").recipientFlags).toEqual([{ address: "dana@sender.example.test", field: "to", flags: ["external"] }]);
   });
 });

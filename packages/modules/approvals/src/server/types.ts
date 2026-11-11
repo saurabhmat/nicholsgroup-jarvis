@@ -61,6 +61,9 @@ export type CapabilityFacts = {
 
 export type ProposedEmail = { proposed: { target: Record<string, unknown>; payload: Record<string, unknown>; payload_schema_version: number }; connection: LaneBoundConnection<"google"> };
 
+/** Everything but the write path: what request code (pages, routes, the briefing) may hold (T-232 security review H1). */
+export type ApprovalsPublicDeps = Omit<ApprovalsDeps, "writer" | "loadWriteConnection">;
+
 export type ApprovalsDeps = {
   /** The lane's service-role client's `core` rpc (propose, claim, mark, expire). Wired to getLaneJobClient. */
   jobRpc(laneId: LaneId): Promise<Rpc>;

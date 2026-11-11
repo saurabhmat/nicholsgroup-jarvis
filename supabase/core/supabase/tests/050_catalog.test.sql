@@ -99,6 +99,7 @@ insert into security_definer_ok values
   ('brain.import_create', 'import writer: aal2 + owner role + own rows only (auth.uid()), extraction sources, 1-100 candidates, 20 imports/hour, four interview pages, lanes the caller may open, NL candidates keep no quote (T-220)'),
   ('core.brain_import_purge', 'retention: deletes a lane''s import candidates older than 23 h and closes stale imports; service_role only, lane-checked (T-210)'),
   ('act.propose', 'creates an email proposal; service_role only; refuses unless store_outbound_drafts, deny-listed types, other lanes'' connections, more than 20 pending (T-232)'),
+  ('core.act_claim_open', 'the Gmail writer''s pre-send check: executing action, open claim, approved hash and approver; service_role only (T-232 review H1)'),
   ('act.supersede', 'edit = new proposal, old one invalidated and purged; service_role only, lane-checked (T-232)'),
   ('act.approve', 'approves the exact hash: aal2, TOTP step-up (amr), owner of the lane, approvals_live, lane policy type, compose grant; authenticated (T-232)'),
   ('act.reject', 'rejects a pending proposal; aal2 + owner of the lane, reason required (T-232)'),

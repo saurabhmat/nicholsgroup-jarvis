@@ -21,6 +21,7 @@ import { computePayloadSha256, type ApprovedActionShape, type ConnectorWriter } 
 import type { ConnectorResponse, HttpClient } from "../http/client";
 import type { ConnectorLogger } from "../log/index";
 import type { LaneConfigReader } from "../vault/lane-config";
+import type { ActionClaimReader } from "../vault/write-policy";
 import type { SecretValue } from "../vault/secret";
 import type { GoogleApi } from "./api";
 import { GMAIL_BASE, GMAIL_RATE_LIMIT } from "./constants";
@@ -45,15 +46,17 @@ export type GoogleEmailWriterDeps = {
   /** GET-only API (reads: lookup by Message-ID, the message replied to, read-back). */
   api: GoogleApi;
   laneConfig: Pick<LaneConfigReader, "mailboxes">;
+  /** The approvals database's check that this action is executing with an open claim (security review H1). */
+  claims: Pick<ActionClaimReader, "claimOpen">;
   logger?: ConnectorLogger;
+  /** Test hook: waits between the two lookups after an ambiguous failure (Gmail search can lag). */
+  sleep?: (ms: number) => Promise<void>;
   now?: () => number;
   /** Test hook: the HTTP client for the Gmail host (POSTs). */
   httpFor?: (laneId: LaneId, conn: LaneBoundConnection<string>, baseUrl: string) => HttpClient;
 };
 
 export interface GoogleEmailWriter extends ConnectorWriter<GoogleEmailApprovedAction, "google"> {
-  /** The same operation as the contract's write method, under the name tests use (the lint rule reserves that name for packages/modules/approvals, as the Google grant revoker does). */
-  run: ConnectorWriter<GoogleEmailApprovedAction, "google">["executeWrite"];
   /** Reads the message back and compares thread, Message-ID, recipients and subject with the approved payload. Throws `VERIFICATION_MISMATCH_MESSAGE`. */
   verifyWrite(laneId: LaneId, conn: LaneBoundConnection<"google">, action: GoogleEmailApprovedAction, externalId: string): Promise<void>;
 }
@@ -167,6 +170,11 @@ export function createGoogleEmailWriter(deps: GoogleEmailWriterDeps): GoogleEmai
 
   const executeWrite: GoogleEmailWriter["executeWrite"] = async (laneId, conn, action) => {
     const { row, compose, mailbox } = await prepare(laneId, conn, action);
+    // Defence in depth (security review H1): whoever holds this writer, nothing is sent unless the approvals database
+    // has this exact action approved (same hash, same approver) and claimed with nothing sent yet.
+    if (!(await deps.claims.claimOpen(laneId, action.id, action.payload_sha256, action.approved_by))) {
+      throw new ConnectorError({ kind: "forbidden", message: "This action is not approved and claimed for execution" });
+    }
     const executed_at = () => new Date((deps.now ?? Date.now)()).toISOString();
     const messageId = portalMessageId(action.id, mailbox);
 
@@ -196,8 +204,13 @@ export function createGoogleEmailWriter(deps: GoogleEmailWriterDeps): GoogleEmai
       return { outcome: "accepted", external_id: id, executed_at: executed_at(), provider_tid: res.providerTid };
     } catch (e) {
       if (isConnectorError(e) && DEFINITE_KINDS.has(e.info.kind) && e.info.message !== OUTCOME_UNKNOWN_MESSAGE) throw e;
-      // The provider may have processed it: look for the deterministic Message-ID once, and never send again.
-      const found = await findByMessageId(laneId, row, messageId).catch(() => null);
+      // The provider may have processed it: look for the deterministic Message-ID (twice: Gmail search can lag), and
+      // never send again.
+      let found = await findByMessageId(laneId, row, messageId).catch(() => null);
+      if (!found) {
+        await (deps.sleep ?? ((ms: number) => new Promise<void>((r) => setTimeout(r, ms))))(2000);
+        found = await findByMessageId(laneId, row, messageId).catch(() => null);
+      }
       if (found) return { outcome: "already_applied", external_id: found.id, executed_at: executed_at(), provider_tid: null };
       throw new ConnectorError({ kind: "provider_error", message: OUTCOME_UNKNOWN_MESSAGE });
     }
@@ -207,7 +220,6 @@ export function createGoogleEmailWriter(deps: GoogleEmailWriterDeps): GoogleEmai
     provider: "google",
     actionTypes: GOOGLE_EMAIL_ACTIONS,
     executeWrite,
-    run: executeWrite,
     async verifyWrite(laneId, conn, action, externalId) {
       const { row, compose, mailbox } = await prepare(laneId, conn, action);
       const mismatch = () => new ConnectorError({ kind: "provider_error", message: VERIFICATION_MISMATCH_MESSAGE });

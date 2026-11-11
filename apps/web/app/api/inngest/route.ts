@@ -2,6 +2,7 @@
 // the local Inngest dev server (APP_ENV=local); 503 when jobs are not configured (see @nichols/core/inngest).
 // conn.sync (T-038), token health (T-040), cal.ingest_delta (T-130), fin.sync QuickBooks (T-090), fin.qbo_reports (T-052), fin.qbo_normalize (T-056) and retention.purge (T-042) and brain.import_purge (T-210) are wired here: core cannot import connectors, so the route hands the connector job to the function.
 import {
+  actionExpireFunction,
   brainImportPurgeFunction,
   briefingDailyFunction,
   calIngestFunction,
@@ -29,6 +30,7 @@ import { retentionPurgeJob, retentionRegistry } from "@nichols/connectors/retent
 import { listQuickbooksConnectionIds, qboReportsJob } from "@nichols/connectors/reports";
 import { qboNormalizeJob } from "@nichols/connectors/normalize";
 import { purgeBriefings } from "@nichols/briefing/jobs";
+import { expireStaleActions } from "@nichols/approvals/wire";
 import { dueOwners, runScheduled } from "@/lib/briefing-schedule";
 
 const importPurge = createImportPurge({ clientFor: (laneId) => getLaneJobClient(laneId) });
@@ -112,6 +114,11 @@ export const { GET, POST, PUT } = inngestRoute((inngest) => [
     enabledLanes: () => getServerEnv().ENABLED_LANES,
     dueOwners: (laneId, now) => dueOwners(briefingClient, laneId, now),
     run: (laneId, owner, now) => runScheduled(briefingClient, laneId, owner, now),
+  }),
+  // action.expire (T-232): every 15 min, stale approval actions expire and lose their composed body (D-19).
+  actionExpireFunction(inngest, {
+    enabledLanes: () => getServerEnv().ENABLED_LANES,
+    expireLane: (laneId) => expireStaleActions(laneId as LaneId),
   }),
   // brain.import_purge (T-210): hourly, deletes brain import candidates older than 23 h and closes stale imports, per lane.
   brainImportPurgeFunction(inngest, {
