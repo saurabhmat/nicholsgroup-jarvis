@@ -73,7 +73,14 @@ test("owner: today's calendar, Next 7 days, the KPI strip and the rule-based att
   await expect(next7).toHaveAttribute("aria-expanded", "false");
   await next7.click();
   await expect(next7).toHaveAttribute("aria-expanded", "true");
-  await expect(page.getByTestId("kpi-tile")).toHaveCount(5);
+  const tiles = page.getByTestId("kpi-tile");
+  await expect(tiles).toHaveCount(5);
+  const boxes = await tiles.evaluateAll((els) => els.map((e) => e.getBoundingClientRect()));
+  if (info.project.name === "desktop") {
+    // equal heights in one row (a Not connected tile is as tall as one with a figure)
+    expect(new Set(boxes.map((b) => Math.round(b.height))).size).toBe(1);
+    expect(new Set(boxes.map((b) => Math.round(b.y))).size).toBe(1);
+  }
 });
 
 test("a finance-only viewer sees no meetings and no mail counts", async ({ page }, info) => {
@@ -89,4 +96,20 @@ test("a finance-only viewer sees no meetings and no mail counts", async ({ page 
   await expect(body).not.toContainText(ALL_DAY);
   await expect(body).not.toContainText(/unread important/);
   await expect(body).not.toContainText("Synthetic subject");
+});
+
+test("phone: the KPI tiles are one column (same x, stacked downwards)", async ({ page }, info) => {
+  test.skip(info.project.name === "desktop", "phone viewport only");
+  test.setTimeout(150_000);
+  await signIn(page, personas(info).member);
+  await page.goto("/PKG");
+  const tiles = page.getByTestId("kpi-tile");
+  await expect(tiles.first()).toBeVisible({ timeout: 30_000 }); // 5 tiles, or 2 for a role without the finance view
+  expect(await tiles.count()).toBeGreaterThanOrEqual(2);
+  const boxes = await tiles.evaluateAll((els) => els.map((e) => e.getBoundingClientRect()));
+  expect(new Set(boxes.map((b) => Math.round(b.x))).size).toBe(1);
+  boxes.forEach((b, i) => {
+    const prev = boxes[i - 1];
+    if (prev) expect(b.y).toBeGreaterThan(prev.y);
+  });
 });

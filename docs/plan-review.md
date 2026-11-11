@@ -1118,3 +1118,9 @@ Logged, not fixed:
 - **Code L5.** An empty subject replies as "Re:".
 - **Code L6.** Home's draft status does not follow the proposal (approved, rejected, expired).
 - **Code L7.** Proposals run one after another (at most 3 per run).
+
+## T-234 part 1 review: logged, not fixed
+- **Home dropped the per-account cash list ("(shared)" flags).** The Finance page's "Cash by account" card is still an empty-state placeholder, so the list is shown nowhere until the Finance page is built. Home tiles keep the caveats (unmapped accounts/invoices, payroll) but not the per-account lines. Pending the Finance page.
+- **Run now single-flight ceiling (T-234 part 0).** The ceiling lets a second run overlap after 150 s; every write of the late run is guarded by the abort signal, so at worst two rows (newest wins).
+- **Coverage on Settings shows mailbox addresses** to callers with the comms or calendar view: the same audience that saw them on Home before.
+- **Part 4 (GovCon news):** news URLs come from untrusted web results; validate each as `https:` (parse with `URL`) before it is used in an `href`. `GovConNews` currently renders `n.url` as given.

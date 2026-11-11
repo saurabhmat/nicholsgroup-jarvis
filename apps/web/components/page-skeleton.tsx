@@ -9,6 +9,17 @@ function Block({ className }: { className?: string }) {
   return <div aria-hidden className={cn("rounded-control bg-muted motion-safe:animate-pulse", className)} />;
 }
 
+/** The five-tile KPI strip as muted blocks (its own Suspense fallback on Home, same grid and height as the strip). */
+export function KpiStripSkeleton() {
+  return (
+    <div aria-hidden data-testid="kpi-skeleton" className="grid grid-cols-1 gap-4 sm:grid-cols-3 lg:grid-cols-5">
+      {[0, 1, 2, 3, 4].map((i) => (
+        <Block key={i} className="h-[9rem] rounded-card" />
+      ))}
+    </div>
+  );
+}
+
 /** The card grid of Home as muted blocks (T-234): attention 2/3 + calendar 1/3, five KPI tiles, news 2/3 + projects 1/3. */
 function Grid() {
   return (
@@ -17,11 +28,7 @@ function Grid() {
         <Block className="h-72 rounded-card lg:col-span-2" />
         <Block className="h-72 rounded-card" />
       </div>
-      <div className="grid grid-cols-2 gap-4 sm:grid-cols-3 lg:grid-cols-5">
-        {[0, 1, 2, 3, 4].map((i) => (
-          <Block key={i} className="h-[7.75rem] rounded-card" />
-        ))}
-      </div>
+      <KpiStripSkeleton />
       <div className="grid gap-4 lg:grid-cols-3">
         <Block className="h-56 rounded-card lg:col-span-2" />
         <Block className="h-56 rounded-card" />

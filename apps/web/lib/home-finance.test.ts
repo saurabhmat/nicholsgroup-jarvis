@@ -110,25 +110,22 @@ describe("cards with figures", () => {
   const cards = financeCards(ok());
   const [cash, ar, pnl] = cards;
 
-  it("Cash: Book balance label, total, per-account lines with the shared flag, unmapped note, its own as-of", () => {
+  it("Cash: Book balance label, total, unmapped caveat, its own as-of", () => {
     expect(cash?.bookBalance).toBe(true);
     expect(cash?.value).toBe("$1,314.66");
-    expect(cash?.accounts).toEqual([
-      { name: "Operating", value: "$1,234.56", shared: false },
-      { name: "Reserve", value: "-$20.00", shared: true },
-    ]);
-    expect(cash?.details).toEqual(["1 bank account is not mapped to a company and not included"]);
+    expect(cash?.flags).toEqual(["Excludes 1 unmapped account"]);
     expect(cash?.asOf).toBe("As of Nov 10, 3:00 PM ET");
   });
-  it("AR > 30: figure, invoice count, as-of is the sync's", () => {
+  it("AR > 30: figure, no caveat when all invoices have a company, as-of is the sync's", () => {
     expect(ar?.value).toBe("$160.25");
-    expect(ar?.details).toEqual(["3 open invoices"]);
+    expect(ar?.flags).toEqual([]);
+    expect(financeCards(ok({ ar_unmapped: 2 }))[1]?.flags).toEqual(["Excludes 2 invoices with no company"]);
     expect(ar?.asOf).toBe("As of Nov 11, 3:00 PM ET");
   });
-  it("P&L: net with the month, income and expenses, basis, and the payroll caveat", () => {
+  it("P&L: net with the month and the payroll caveat", () => {
     expect(pnl?.value).toBe("$755.25");
     expect(pnl?.qualifier).toBe("Net, November 2026");
-    expect(pnl?.details).toEqual(["Income $1,260.50 · Expenses $505.25", "Accrual basis", "Excludes payroll accounts"]);
+    expect(pnl?.flags).toEqual(["Excludes payroll accounts"]);
   });
   it("a zero AR is a real figure, not an empty state", () => {
     const v = ok({ ar_over_30: 0, ar_invoices: 0 });

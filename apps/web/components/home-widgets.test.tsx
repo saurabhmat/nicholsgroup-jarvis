@@ -24,8 +24,10 @@ const tilesOf = () => screen.getAllByTestId("kpi-tile");
 
 describe("KPI strip", () => {
   it("five tiles in one row from lg, in the brief's order; Cash carries Book balance; MRR and Paid subscribers are not connected, never a figure", () => {
-    render(<KpiStrip laneId="PKG" tiles={kpiTiles(toHomeFinance([okRow]), [{ provider: "quickbooks", status: "active" }])} />);
+    render(<KpiStrip laneId="PKG" canConnect tiles={kpiTiles(toHomeFinance([okRow]), [{ provider: "quickbooks", status: "active" }])} />);
     expect(screen.getByTestId("home-kpis").className).toMatch(/lg:grid-cols-5/);
+    expect(screen.getByTestId("home-kpis").className).toMatch(/(^| )grid-cols-1( |$)/); // one column on a phone
+    expect(screen.getByTestId("home-kpis").className).not.toMatch(/(^| )grid-cols-2( |$)/);
     expect(tilesOf().map((t) => t.getAttribute("data-kpi"))).toEqual(["cash", "ar30", "pnl", "mrr", "subscribers"]);
     const [cash, ar, pnl, mrr, subs] = tilesOf() as HTMLElement[];
     expect(within(cash as HTMLElement).getByText("Book balance")).toBeTruthy();
@@ -54,21 +56,46 @@ describe("KPI strip", () => {
   });
 
   it("QuickBooks not connected: the three QuickBooks tiles offer Connect; no figure anywhere", () => {
-    render(<KpiStrip laneId="PKG" tiles={kpiTiles(toHomeFinance([{ state: "not_connected" }]), [])} />);
+    render(<KpiStrip laneId="PKG" canConnect tiles={kpiTiles(toHomeFinance([{ state: "not_connected" }]), [{ provider: "quickbooks", status: "active" }])} />);
     expect(tilesOf().every((t) => t.getAttribute("data-status") === "not_connected")).toBe(true);
     expect(screen.getAllByRole("link", { name: "Connect" })).toHaveLength(5);
     expect(document.body.textContent).not.toMatch(/\$/);
   });
 
-  it("a role without finance, and an outage, are said plainly (no connect link, no figure)", () => {
-    render(<KpiStrip laneId="PKG" tiles={kpiTiles({ state: "no_access" }, [])} />);
-    expect(screen.getAllByText("Not shown for your role")).toHaveLength(3);
+  it("a role without the finance view gets no finance tile, figure or value: only MRR and Paid subscribers, in a two-column strip", () => {
+    render(<KpiStrip laneId="PKG" canConnect tiles={kpiTiles({ state: "no_access" }, [{ provider: "quickbooks", status: "active" }])} />);
+    expect(tilesOf().map((t) => t.getAttribute("data-kpi"))).toEqual(["mrr", "subscribers"]);
+    expect(screen.getByTestId("home-kpis").className).toMatch(/lg:grid-cols-2/);
+    expect(document.body.textContent).not.toMatch(/Cash|Book balance|AR > 30|P&L|\$/);
+  });
+
+  it("a caller who cannot see feeds never gets 'Not connected · Connect'; an outage and a connected feed are plain notes", () => {
+    render(<KpiStrip laneId="PKG" canConnect tiles={kpiTiles({ state: "no_access" }, [])} />);
+    expect(screen.queryByRole("link", { name: "Connect" })).toBeNull();
+    expect(document.body.textContent).not.toContain("Not connected");
+    expect(screen.getAllByText("Not available yet")).toHaveLength(2);
     cleanup();
     render(<KpiStrip laneId="PKG" tiles={kpiTiles({ state: "unavailable" }, [{ provider: "stripe", status: "active" }, { provider: "ghl", status: "active" }])} />);
     expect(screen.getAllByText("Could not load. Reload in a minute.")).toHaveLength(3);
     const [, , , mrr] = tilesOf() as HTMLElement[];
     expect(mrr?.getAttribute("data-status")).toBe("no_data"); // connected feed, no read yet: waiting, not "not connected"
     expect(mrr?.textContent).toContain("Waiting for the Stripe sync");
+  });
+
+  it("the Connect link is offered only to owner / admin_technical (canConnect); others see 'Not connected' without a link", () => {
+    const tiles = kpiTiles(toHomeFinance([{ state: "not_connected" }]), [{ provider: "quickbooks", status: "active" }]);
+    render(<KpiStrip laneId="PKG" tiles={tiles} />);
+    expect(screen.queryByRole("link", { name: "Connect" })).toBeNull();
+    expect(screen.getAllByText("Not connected")).toHaveLength(5);
+  });
+
+  it("figures carry their caveats (rule 7): unmapped accounts and invoices, payroll, and the P&L month", () => {
+    render(<KpiStrip laneId="PKG" tiles={kpiTiles(toHomeFinance([{ ...okRow, cash_unmapped: 2, ar_unmapped: 1, pnl_partial: true }]), [])} />);
+    const [cash, ar, pnl] = tilesOf() as HTMLElement[];
+    expect(within(cash as HTMLElement).getByText("Excludes 2 unmapped accounts")).toBeTruthy();
+    expect(within(ar as HTMLElement).getByText("Excludes 1 invoice with no company")).toBeTruthy();
+    expect(within(pnl as HTMLElement).getByText("Excludes payroll accounts")).toBeTruthy();
+    expect(within(pnl as HTMLElement).getByText("Net, November 2026")).toBeTruthy();
   });
 
   it("a QuickBooks connection that needs reconnecting is said on the figures", () => {
@@ -95,9 +122,13 @@ describe("Coverage status dot", () => {
     render(<CoverageDot laneId="PKG" view={{ items, unavailable: false }} />);
     expect(screen.queryByTestId("coverage-dot")).toBeNull();
   });
-  it("is hidden when Coverage could not be read (Settings says so)", () => {
-    render(<CoverageDot laneId="PKG" view={{ items: [item("error")], unavailable: true }} />);
-    expect(screen.queryByTestId("coverage-dot")).toBeNull();
+  it("when Coverage could not be read it says 'Status unknown' (accessible label, links to Settings), never a silent all-clear", () => {
+    render(<CoverageDot laneId="PKG" view={{ items: [], unavailable: true }} />);
+    const dot = screen.getByTestId("coverage-dot");
+    expect(dot.getAttribute("data-status")).toBe("unknown");
+    expect(dot.textContent).toContain("Status unknown");
+    expect(dot.getAttribute("aria-label")).toMatch(/could not be checked/);
+    expect(dot.getAttribute("href")).toBe("/PKG/settings#connections");
   });
 });
 
@@ -111,6 +142,7 @@ describe("Next 7 days (collapsible)", () => {
     expect(button.getAttribute("aria-expanded")).toBe("true");
     expect(screen.getByText("Client call").closest("[hidden]")).toBeNull();
     expect(screen.getByTestId("next-7-days").getAttribute("data-open")).toBe("true");
+    expect(screen.getByRole("region", { name: "Next 7 days" })).toBe(screen.getByTestId("next-7-days")); // labelled by its title, not the button text
     fireEvent.click(button);
     expect(button.getAttribute("aria-expanded")).toBe("false");
     expect(screen.getByText("Client call").closest("[hidden]")).toBeTruthy();

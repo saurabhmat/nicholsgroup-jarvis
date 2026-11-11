@@ -114,7 +114,8 @@ describe("Home layout (T-234 part 1)", () => {
     await draw();
     const tiles = screen.getAllByTestId("kpi-tile");
     expect(tiles.map((t) => t.getAttribute("data-kpi"))).toEqual(["cash", "ar30", "pnl", "mrr", "subscribers"]);
-    expect(tiles.every((t) => t.getAttribute("data-status") === "not_connected")).toBe(true); // finance mock: QuickBooks not connected
+    expect(tiles.slice(0, 3).every((t) => t.getAttribute("data-status") === "not_connected")).toBe(true); // finance mock: QuickBooks not connected
+    expect(tiles.slice(3).every((t) => t.getAttribute("data-status") === "no_data")).toBe(true); // this mock sees no feeds: "Not available yet", never "Not connected"
     expect(within(tiles[0] as HTMLElement).getByText("Book balance")).toBeTruthy();
   });
 

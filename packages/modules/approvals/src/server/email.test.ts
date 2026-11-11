@@ -243,6 +243,28 @@ describe("proposeEmailAction", () => {
     expect(JSON.stringify(w.audits)).not.toContain(CANARY);
   });
 
+  it("a cutoff during the insert whose withdraw fails is audited as withdraw_failed (and still throws)", async () => {
+    const w = world();
+    const c = new AbortController();
+    const slow: ApprovalsDeps = { ...w.deps, jobRpc: async () => async (fn, a) => (fn === "act_propose" ? (c.abort(), w.rpc(fn, a)) : fn === "act_withdraw_proposed" ? { data: false, error: null } : w.rpc(fn, a)) };
+    await expect(proposeEmailAction(slow, "PKG", { ...input, signal: c.signal })).rejects.toMatchObject({ code: "unavailable" });
+    expect(w.audits.map((x) => x.action)).toEqual(["action.withdraw_failed"]);
+    const throwing: ApprovalsDeps = { ...w.deps, jobRpc: async () => async (fn, a) => { if (fn === "act_withdraw_proposed") throw new Error("down"); return fn === "act_propose" ? (c2.abort(), w.rpc(fn, a)) : w.rpc(fn, a); } };
+    const c2 = new AbortController();
+    await expect(proposeEmailAction(throwing, "PKG", { ...input, signal: c2.signal })).rejects.toMatchObject({ code: "unavailable" });
+    expect(w.audits.map((x) => x.action)).toEqual(["action.withdraw_failed", "action.withdraw_failed"]);
+  });
+
+  it("a cutoff during the 'proposed' audit write withdraws the proposal too", async () => {
+    const w = world();
+    const c = new AbortController();
+    const slowAudit: ApprovalsDeps = { ...w.deps, audit: { log: async (e: AuditEntry) => { await w.deps.audit.log(e); if (e.action === "action.proposed") c.abort(); } } as never };
+    await expect(proposeEmailAction(slowAudit, "PKG", { ...input, signal: c.signal })).rejects.toMatchObject({ code: "unavailable" });
+    expect([...w.rows.values()].filter((r) => r.status === "proposed")).toHaveLength(0);
+    expect([...w.rows.values()][0]).toMatchObject({ status: "invalidated", withdraw_reason: "briefing run timed out" });
+    expect(w.audits.map((x) => x.action)).toEqual(["action.proposed", "action.withdrawn"]);
+  });
+
   it("refuses a sender other than the connection's mailbox, and a mailbox that is not the lane's", async () => {
     const w = world();
     await expect(proposeEmailAction(w.deps, "PKG", { ...input, compose: { ...compose, fromMailbox: "someone@else.example.test" } })).rejects.toMatchObject({ code: "sender_mismatch" });

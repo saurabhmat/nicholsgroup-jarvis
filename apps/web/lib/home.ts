@@ -194,13 +194,13 @@ export function homeKpis(feeds: HomeView["feeds"]): HomeKpi[] {
       key: "mrr",
       label: "MRR",
       statusText: text(["stripe"], "Stripe", "Waiting for the Stripe sync", "Stripe not connected yet"),
-      connect: !(of("stripe").length > 0 && !broken(["stripe"])),
+      connect: visible && !(of("stripe").length > 0 && !broken(["stripe"])),
     },
     {
       key: "subscribers",
       label: "Paid subscribers",
       statusText: text(["ghl", "gohighlevel"], "GoHighLevel", "Waiting for the GoHighLevel sync", "GoHighLevel not connected yet"),
-      connect: !(of("ghl", "gohighlevel").length > 0 && !broken(["ghl", "gohighlevel"])),
+      connect: visible && !(of("ghl", "gohighlevel").length > 0 && !broken(["ghl", "gohighlevel"])),
     },
   ];
 }

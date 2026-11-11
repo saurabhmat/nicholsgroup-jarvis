@@ -149,8 +149,10 @@ export async function proposeEmailAction(deps: ApprovalsPublicDeps, laneId: Lane
   });
   if (error) throw toApprovalsError(error);
   if (typeof data !== "string" || !UUID.test(data)) throw new ApprovalsError("unavailable");
-  if (input.signal?.aborted) {
-    // The cutoff fired while the insert ran: withdraw it so no orphan pending proposal outlives a "timed out" run.
+  // The cutoff may fire while the insert runs, or while the "proposed" audit below runs: either way withdraw the new proposal
+  // so no orphan pending proposal outlives a "timed out" run, and say so in the audit (withdrawn / withdraw_failed).
+  const withdrawIfAborted = async (): Promise<void> => {
+    if (!input.signal?.aborted) return;
     let withdrawn = false;
     try {
       const w = await rpc("act_withdraw_proposed", { p_lane: laneId, p_id: data, p_reason: WITHDRAW_REASON_TIMEOUT });
@@ -160,7 +162,8 @@ export async function proposeEmailAction(deps: ApprovalsPublicDeps, laneId: Lane
     }
     await audit(deps, laneId, { kind: "service" }, withdrawn ? "action.withdrawn" : "action.withdraw_failed", data, { reason: WITHDRAW_REASON_TIMEOUT, action_type: input.actionType });
     throw new ApprovalsError("unavailable");
-  }
+  };
+  await withdrawIfAborted();
   // Only a person's own proposal is audited as that person; a job's is the service's, for the owner (T-231d security L3).
   await audit(deps, laneId, input.proposerKind === "user" && input.proposerUserId ? { kind: "user", userId: input.proposerUserId } : { kind: "service" }, "action.proposed", data, {
     ...(input.proposerKind !== "user" && input.proposerUserId ? { for_user: input.proposerUserId } : {}),
@@ -170,6 +173,7 @@ export async function proposeEmailAction(deps: ApprovalsPublicDeps, laneId: Lane
     proposer_kind: input.proposerKind,
     derived_from_retrieved: input.derivedFromRetrieved,
   });
+  await withdrawIfAborted(); // the cutoff fired during the audit write
   return { id: data, hash: p.hash };
 }
 

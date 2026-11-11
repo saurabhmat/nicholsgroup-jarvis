@@ -211,5 +211,6 @@ describe("homeKpis", () => {
 
   it("a role that cannot see feeds gets a neutral text", () => {
     expect(new Set(homeKpis([]).map((t) => t.statusText))).toEqual(new Set(["Not available yet"]));
+    expect(homeKpis([]).map((t) => t.connect)).toEqual([false, false]); // never "Not connected · Connect" for a caller who cannot see feeds
   });
 });

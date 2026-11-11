@@ -13,7 +13,7 @@ import { Alert, AlertDescription, AlertTitle, buttonVariants, homeHeading, laneH
 import { eyebrowDate } from "@/lib/format-date";
 import { guards } from "@/lib/guards";
 import { cookies } from "next/headers";
-import { composeBriefing, homeFor } from "@/lib/home";
+import { composeBriefing, homeFor, type HomeView } from "@/lib/home";
 import { briefingFor, lastFailureReason, latestBriefing, viewerZone } from "@/lib/briefing";
 import { aiSetupFailure } from "@/lib/briefing-setup";
 import { adminHint } from "@nichols/briefing/hints";
@@ -28,7 +28,7 @@ import { TimezoneCookie } from "./timezone-cookie";
 import { loadLane } from "@/lib/lane-page";
 import { ApprovalsWaiting } from "./approvals-waiting";
 import { OnboardingBanner } from "./onboarding-entry";
-import { HomeSkeleton } from "./page-skeleton";
+import { HomeSkeleton, KpiStripSkeleton } from "./page-skeleton";
 import { onboardingFor } from "@/lib/onboarding-progress";
 import { timed } from "@/lib/timed";
 import { homeFinanceFor } from "@/lib/home-finance";
@@ -85,12 +85,11 @@ async function HomeSections({ laneId, now }: { laneId: string; now: Date }) {
   const g = await guards();
   // Home v1 counts and the T-231 briefing sections load in parallel. Each shows its own "unavailable" state; neither ever shows an empty day.
   const laneClient = async () => (await g.requireLane(laneId as Parameters<typeof g.requireLane>[0])).client;
-  const [view, brief, saved, isAdmin, finance] = await Promise.all([
+  const [view, brief, saved, isAdmin] = await Promise.all([
     timed("load.home", async () => homeFor(g, laneId, now)),
     timed("load.briefing", async () => briefingFor(await laneClient(), laneId, now, tz)),
     timed("load.briefing_latest", async () => latestBriefing(await laneClient(), laneId)),
     g.requireRole(laneId as Parameters<typeof g.requireLane>[0], ["owner", "admin_technical"]).then(() => true, () => false),
-    timed("load.home_finance", async () => homeFinanceFor(g, laneId)),
   ]);
   // Why there is no AI summary: the AI setup itself (names only), else the stored code of the newest failed attempt.
   const setup = aiSetupFailure();
@@ -121,7 +120,9 @@ async function HomeSections({ laneId, now }: { laneId: string; now: Date }) {
         </div>
       </div>
       {/* Row 2 */}
-      <KpiStrip laneId={laneId} tiles={kpiTiles(finance, view.feeds)} />
+      <Suspense fallback={<KpiStripSkeleton />}>
+        <KpiSection laneId={laneId} feeds={view.feeds} canConnect={isAdmin} />
+      </Suspense>
       {/* Row 3 */}
       <div data-testid="home-row-news" className="grid items-stretch gap-4 lg:grid-cols-3">
         <div data-testid="home-news-slot" className="min-w-0 lg:col-span-2">
@@ -133,4 +134,10 @@ async function HomeSections({ laneId, now }: { laneId: string; now: Date }) {
       </div>
     </>
   );
+}
+
+/** Row 2 in its own boundary: a slow QuickBooks read (core.home_finance) never holds the rest of Home back (T-230 A). */
+async function KpiSection({ laneId, feeds, canConnect }: { laneId: string; feeds: HomeView["feeds"]; canConnect: boolean }) {
+  const finance = await timed("load.home_finance", async () => homeFinanceFor(await guards(), laneId));
+  return <KpiStrip laneId={laneId} tiles={kpiTiles(finance, feeds)} canConnect={canConnect} />;
 }

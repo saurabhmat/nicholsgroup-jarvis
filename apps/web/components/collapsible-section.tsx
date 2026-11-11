@@ -3,15 +3,17 @@
 // calendar). The body is rendered by the server and passed in; only the open state lives here, so a later refresh of the
 // page data (part 5) keeps it as the user left it. Content is hidden with the `hidden` attribute (out of the tab order).
 import { useId, useState, type ReactNode } from "react";
+import { Card } from "@nichols/ui";
 
 export function CollapsibleSection({ title, note, children, testId }: { title: string; note?: string; children: ReactNode; testId?: string }) {
   const [open, setOpen] = useState(false);
   const bodyId = useId();
+  const titleId = useId();
   return (
-    <section aria-label={title} data-testid={testId} data-open={open ? "true" : "false"} className="flex min-w-0 flex-col rounded-card border border-border bg-card p-5 text-body text-card-foreground shadow-card sm:px-6">
+    <Card role="region" aria-labelledby={titleId} data-testid={testId} data-open={open ? "true" : "false"} className="min-w-0 gap-0">
       <h2 className="font-heading text-card-title font-semibold text-foreground">
         <button type="button" aria-expanded={open} aria-controls={bodyId} onClick={() => setOpen((o) => !o)} className="flex min-h-11 w-full items-center justify-between gap-2 text-left sm:min-h-0">
-          <span>{title}</span>
+          <span id={titleId}>{title}</span>
           <span className="flex items-center gap-2 text-small font-normal text-muted-foreground">
             {note ? <span>{note}</span> : null}
             <span aria-hidden>{open ? "Hide" : "Show"}</span>
@@ -21,6 +23,6 @@ export function CollapsibleSection({ title, note, children, testId }: { title: s
       <div id={bodyId} hidden={!open} className="mt-3">
         {children}
       </div>
-    </section>
+    </Card>
   );
 }
