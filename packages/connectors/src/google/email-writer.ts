@@ -135,28 +135,32 @@ export function createGoogleEmailWriter(deps: GoogleEmailWriterDeps): GoogleEmai
     return { row, compose, mailbox };
   }
 
-  async function findByMessageId(laneId: LaneId, conn: LaneBoundConnection<string>, messageId: string): Promise<MessageRef | null> {
-    const res = await deps.api.get<{ messages?: MessageRef[] }>(laneId, conn, PATH_MESSAGES, undefined, {
-      q: `rfc822msgid:${messageId.replace(/^<|>$/g, "")}`,
-      maxResults: 1,
-      includeSpamTrash: true,
-    });
-    const first = res.data?.messages?.[0];
-    return first && typeof first.id === "string" ? first : null;
-  }
-
   /**
-   * Only the mailbox's OWN copy: `in:sent` for a send, `in:drafts` for a draft. An inbound message that carries our Message-ID
-   * (a list or group redistribution, an auto-forward, a forged mail) is not our send and must never decide the outcome
-   * (T-192 security M1): not finding our own copy stays "undecided".
+   * The ONE lookup of "is this action's message already in the mailbox", shared by the execute path (pre-send duplicate check
+   * and post-failure lookup) and the reconciler's `findWrite`, so they cannot drift (T-192 security M1 and follow-up).
+   * Searches only the sending mailbox's own `in:sent` (email.send) or `in:drafts` (email.save_draft): never Inbox, Spam or
+   * Trash (no `includeSpamTrash`). A hit counts only when, read back, it carries our Message-ID or X-Portal-Action-Id AND its
+   * From is the sending mailbox (bare address, case-insensitive) AND it has the expected SENT / DRAFT label. An inbound or
+   * forged message with our Message-ID therefore never blocks a send and never decides an outcome.
    */
-  async function findAllByMessageId(laneId: LaneId, conn: LaneBoundConnection<string>, messageId: string, where: "sent" | "drafts"): Promise<string[]> {
+  async function findOwnCopies(laneId: LaneId, conn: LaneBoundConnection<string>, action: GoogleEmailApprovedAction, mailbox: string): Promise<string[]> {
+    const isSend = action.action_type === "email.send";
+    const messageId = portalMessageId(action.id, mailbox);
     const res = await deps.api.get<{ messages?: MessageRef[] }>(laneId, conn, PATH_MESSAGES, undefined, {
-      q: `rfc822msgid:${messageId.replace(/^<|>$/g, "")} in:${where}`,
+      q: `rfc822msgid:${messageId.replace(/^<|>$/g, "")} in:${isSend ? "sent" : "drafts"}`,
       maxResults: 5,
-      includeSpamTrash: true,
     });
-    return (res.data?.messages ?? []).filter((m) => m && typeof m.id === "string" && m.id !== "").map((m) => m.id);
+    const own: string[] = [];
+    for (const hit of res.data?.messages ?? []) {
+      if (!hit || typeof hit.id !== "string" || hit.id === "") continue;
+      const m = await readMeta(laneId, conn, hit.id, ["Message-ID", "From", PORTAL_ACTION_HEADER]);
+      const mid = header(m, "Message-ID")?.trim().toLowerCase();
+      const marker = header(m, PORTAL_ACTION_HEADER)?.trim().toLowerCase();
+      const ours = mid === messageId.toLowerCase() || marker === action.id.toLowerCase();
+      const from = addressSet(header(m, "From"));
+      if (ours && from.length === 1 && from[0] === mailbox.toLowerCase() && (m.labelIds ?? []).includes(isSend ? "SENT" : "DRAFT")) own.push(m.id);
+    }
+    return own;
   }
 
   async function readMeta(laneId: LaneId, conn: LaneBoundConnection<string>, id: string, headers: string[]): Promise<MetaMessage> {
@@ -199,10 +203,9 @@ export function createGoogleEmailWriter(deps: GoogleEmailWriterDeps): GoogleEmai
       throw new ConnectorError({ kind: "forbidden", message: "This action is not approved and claimed for execution" });
     }
     const executed_at = () => new Date((deps.now ?? Date.now)()).toISOString();
-    const messageId = portalMessageId(action.id, mailbox);
 
-    const existing = await findByMessageId(laneId, row, messageId);
-    if (existing) return { outcome: "already_applied", external_id: existing.id, executed_at: executed_at(), provider_tid: null } satisfies ExecResult;
+    const existing = (await findOwnCopies(laneId, row, action, mailbox))[0];
+    if (existing) return { outcome: "already_applied", external_id: existing, executed_at: executed_at(), provider_tid: null } satisfies ExecResult;
 
     let reply: { messageId: string; references: string } | undefined;
     if (compose.inReplyTo) {
@@ -229,12 +232,12 @@ export function createGoogleEmailWriter(deps: GoogleEmailWriterDeps): GoogleEmai
       if (isConnectorError(e) && DEFINITE_KINDS.has(e.info.kind) && e.info.message !== OUTCOME_UNKNOWN_MESSAGE) throw e;
       // The provider may have processed it: look for the deterministic Message-ID (twice: Gmail search can lag), and
       // never send again.
-      let found = await findByMessageId(laneId, row, messageId).catch(() => null);
+      let found = (await findOwnCopies(laneId, row, action, mailbox).catch(() => []))[0];
       if (!found) {
         await (deps.sleep ?? ((ms: number) => new Promise<void>((r) => setTimeout(r, ms))))(2000);
-        found = await findByMessageId(laneId, row, messageId).catch(() => null);
+        found = (await findOwnCopies(laneId, row, action, mailbox).catch(() => []))[0];
       }
-      if (found) return { outcome: "already_applied", external_id: found.id, executed_at: executed_at(), provider_tid: null };
+      if (found) return { outcome: "already_applied", external_id: found, executed_at: executed_at(), provider_tid: null };
       throw new ConnectorError({ kind: "provider_error", message: OUTCOME_UNKNOWN_MESSAGE });
     }
   };
@@ -245,7 +248,7 @@ export function createGoogleEmailWriter(deps: GoogleEmailWriterDeps): GoogleEmai
     executeWrite,
     async findWrite(laneId, conn, action) {
       const { row, mailbox } = await prepare(laneId, conn, action);
-      return findAllByMessageId(laneId, row, portalMessageId(action.id, mailbox), action.action_type === "email.send" ? "sent" : "drafts");
+      return findOwnCopies(laneId, row, action, mailbox);
     },
     async verifyWrite(laneId, conn, action, externalId) {
       const { row, compose, mailbox } = await prepare(laneId, conn, action);

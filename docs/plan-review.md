@@ -1083,7 +1083,7 @@ Logged, not fixed:
 - **T-192 review follow-ups (Nov 11, 2026).** Security M1, L1 - L6 and code M1 - M3, L4 - L6 are fixed (see `.agent/pr/T-192.md`). Logged, not fixed:
   - code L7: a sweep handles at most 20 rows per lane; more than 20 stuck rows (e.g. a long outage) take several 5-minute runs, oldest first. The worst starvation case (rows that always error) is closed by security L1.
   - code L9 (skipped as agreed).
-  - The execute path's own pre-send and post-failure `findByMessageId` (`email-writer.ts`) is not scoped to `in:sent` / `in:drafts` like the reconciler's lookup: an inbound copy carrying our Message-ID could make an execute report `already_applied` for a message that is not ours; the read-back then fails as `verification_mismatch` (shown as "may have been sent, check the mailbox"). Scope it in a follow-up.
+  - Resolved by the T-192 follow-up commit: the execute path's pre-send and post-failure lookup and the reconciler's `findWrite` now share one helper (`findOwnCopies`): the mailbox's own `in:sent` / `in:drafts` only (no spam or trash), and a hit counts only with our Message-ID or `X-Portal-Action-Id`, From = the sending mailbox and the SENT / DRAFT label.
   - Not-found actions keep their body until the give-up time (default 60 min); D-19 purge happens at the terminal transition.
 - **Security M4.** Gmail may replace a client Message-ID. The duplicate guard after a crash then rests on the claim only (safe: an unknown outcome is never resent). Check this on the first live send (H-item).
 - **Security M1 (rest).** No "new to this thread" flag and no live quote of the thread (spec §8, §10). T-231d's recipient is always the sender of the message replied to, taken from metadata.

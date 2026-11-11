@@ -22,6 +22,7 @@ type Msg = { id: string; threadId: string; labelIds: string[]; headers: Record<s
 function fakeGmail() {
   const messages = new Map<string, Msg>();
   const calls: { method: string; path: string }[] = [];
+  const queries: Record<string, unknown>[] = [];
   const state = { failMode: null as null | "before" | "after_commit", seq: 0 };
   // A seeded parent message for replies.
   messages.set("parent1", { id: "parent1", threadId: "thread-1", labelIds: ["INBOX"], headers: { "Message-ID": "<parent@sender.example.test>", References: "<root@sender.example.test>" } });
@@ -41,6 +42,7 @@ function fakeGmail() {
     async get(_lane, _conn, path, params, query) {
       calls.push({ method: "GET", path });
       if (path === "/gmail/v1/users/me/messages") {
+        queries.push({ ...(query ?? {}) });
         const q = String(query?.q ?? "");
         const id = /rfc822msgid:(\S+)/.exec(q)?.[1] ?? "";
         const label = /\bin:(sent|drafts)\b/.exec(q)?.[1];
@@ -64,7 +66,7 @@ function fakeGmail() {
       return resp(isDraft ? { id: `d-${m.id}`, message: { id: m.id, threadId: m.threadId } } : { id: m.id, threadId: m.threadId }) as unknown as ConnectorResponse<T>;
     },
   };
-  return { api, http, messages, calls, state, posts: () => calls.filter((c) => c.method === "POST") };
+  return { api, http, messages, calls, queries, state, posts: () => calls.filter((c) => c.method === "POST") };
 }
 
 function setup(over: { features?: Record<string, boolean>; mailboxes?: string[]; status?: Connection<"google">["status"]; claimOpen?: boolean } = {}) {
@@ -360,5 +362,83 @@ describe("findWrite ignores inbound copies of our Message-ID (T-192 security M1)
     const ids = await writer.findWrite("PKG", conn, a);
     expect(ids).toEqual([res.external_id]);
     await expect(writer.verifyWrite("PKG", conn, a, ids[0] ?? "")).resolves.toBeUndefined();
+  });
+});
+
+describe("one own-copy lookup for execute and reconcile (follow-up: inbound or forged copies never block a send)", () => {
+  const forged = (gmail: ReturnType<typeof setup>["gmail"], id: string, labels: string[], actionId: string, from = "attacker@evil.example.test") =>
+    gmail.messages.set(id, { id, threadId: "t-forged", labelIds: labels, headers: { "Message-ID": portalMessageId(actionId, MAILBOX), "X-Portal-Action-Id": actionId, From: from } });
+
+  it.each([
+    ["Inbox", ["INBOX"]],
+    ["Spam", ["SPAM"]],
+  ])("a forged copy in %s carrying our portal id does not block the real send: exactly one send, verified", async (_n, labels) => {
+    const { gmail, conn, writer, action } = setup();
+    const a = action();
+    forged(gmail, "forged1", labels, a.id);
+    const res = await writer.executeWrite("PKG", conn, a);
+    expect(res.outcome).toBe("accepted");
+    expect(gmail.posts()).toHaveLength(1);
+    expect(res.external_id).not.toBe("forged1");
+    await expect(writer.verifyWrite("PKG", conn, a, res.external_id ?? "")).resolves.toBeUndefined();
+  });
+
+  it("a forged copy that even carries SENT but another From does not count (a Sent copy with a different From)", async () => {
+    const { gmail, conn, writer, action } = setup();
+    const a = action();
+    forged(gmail, "forged2", ["SENT"], a.id, "Someone <someone.else@evil.example.test>");
+    expect(await writer.findWrite("PKG", conn, a)).toEqual([]);
+    const res = await writer.executeWrite("PKG", conn, a);
+    expect(res.outcome).toBe("accepted");
+    expect(gmail.posts()).toHaveLength(1);
+  });
+
+  it("our own Sent copy (From = the sending mailbox, any case, with a display name) still counts: already_applied, no second send", async () => {
+    const { gmail, conn, writer, action } = setup();
+    const a = action();
+    forged(gmail, "own1", ["SENT"], a.id, `Exec <${MAILBOX.toUpperCase()}>`);
+    const res = await writer.executeWrite("PKG", conn, a);
+    expect(res).toMatchObject({ outcome: "already_applied", external_id: "own1" });
+    expect(gmail.posts()).toHaveLength(0);
+  });
+
+  it("a draft action looks only in drafts and needs the DRAFT label", async () => {
+    const { gmail, conn, writer, action } = setup();
+    const a = action("email.save_draft");
+    forged(gmail, "sent-not-draft", ["SENT"], a.id, MAILBOX);
+    expect(await writer.findWrite("PKG", conn, a)).toEqual([]);
+    forged(gmail, "own-draft", ["DRAFT"], a.id, MAILBOX);
+    expect(await writer.findWrite("PKG", conn, a)).toEqual(["own-draft"]);
+  });
+
+  it("the reconciler: an inbound forged copy plus a From mismatch stay undecided (nothing found)", async () => {
+    const { gmail, conn, writer, action } = setup();
+    const a = action();
+    forged(gmail, "f-inbox", ["INBOX"], a.id, MAILBOX);
+    forged(gmail, "f-from", ["SENT"], a.id, "attacker@evil.example.test");
+    expect(await writer.findWrite("PKG", conn, a)).toEqual([]);
+    expect(gmail.posts()).toHaveLength(0);
+  });
+
+  it("the Gmail query is scoped to in:sent / in:drafts and never asks for spam or trash", async () => {
+    const { gmail, conn, writer, action } = setup();
+    await writer.executeWrite("PKG", conn, action("email.send"));
+    await writer.executeWrite("PKG", conn, action("email.save_draft"));
+    await writer.findWrite("PKG", conn, action("email.send"));
+    await writer.findWrite("PKG", conn, action("email.save_draft"));
+    expect(gmail.queries.length).toBeGreaterThanOrEqual(4);
+    for (const q of gmail.queries) {
+      expect(String(q.q)).toMatch(/ in:(sent|drafts)$/);
+      expect("includeSpamTrash" in q).toBe(false);
+    }
+    expect(gmail.queries.map((q) => /in:(sent|drafts)/.exec(String(q.q))?.[1])).toEqual(["sent", "drafts", "sent", "drafts"]);
+  });
+
+  it("after an ambiguous failure the post-failure lookup finds only our own copy", async () => {
+    const { gmail, conn, writer, action } = setup();
+    const a = action();
+    forged(gmail, "forged3", ["INBOX"], a.id);
+    gmail.state.failMode = "before";
+    await expect(writer.executeWrite("PKG", conn, a)).rejects.toMatchObject({ info: { message: OUTCOME_UNKNOWN_MESSAGE } });
   });
 });
