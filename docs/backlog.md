@@ -1039,6 +1039,42 @@ Spec: `docs/specs/brain-and-employees.md`, `docs/specs/brain-interview.md`; seed
 
 # Release B — Dec 7 – 31
 
+### T-231a Home briefing: Coverage strip + today's calendar + 7-day look-ahead (no AI)
+- status: approved
+- depends: T-230, T-063, T-064
+- note: approved by Saurabh Nov 11, 2026 (autonomous run; goal: the "Aria daily briefing" email on Home, from PKG native Google mail + calendar). Quality bar: each item = what happened, why it matters, next step, source (mailbox, sender, subject, date) + thread link; a Coverage line always (missing access is never "nothing"); times in the viewer's zone with the sender's/event's zone added when different; exclusions (newsletters, promotions, social, bot/CI noise unless repeated failures, OTPs, bank transaction alerts; statements and due dates kept); never invent decisions, prices, dates or commitments ("Awaiting your input"); T-230 layout and tokens.
+- acceptance: Coverage strip on Home: each configured mailbox and its calendar, last sync, OK / stale / error with a fixed reason (never provider text), link to Settings; a configured mailbox with no connection shows "Not connected". Today's calendar: time, title, attendees, Join, RSVP-pending flag, clashes and back-to-backs flagged, declined and cancelled hidden. 7-day look-ahead with notable events (all-day/holidays, external attendees). Read-only SQL (security invoker, RLS) + pgTAP incl. cross-lane denial; unit tests.
+
+### T-231b Home briefing: Needs your attention (top 5, rules) + Money card (no AI)
+- status: approved
+- depends: T-231a
+- note: approved by Saurabh Nov 11, 2026 (autonomous run).
+- acceptance: top 5 by rules: lane_config priority_senders first, then threads waiting on the owner (last message not from the owner, Sent checked), unread from real people, security alerts (new sign-in, critical vulnerability), then age; one-line reason + thread link each. Money card: invoices, bills, renewals, failed payments by patterns in lane_config. Exclusions configurable in lane_config (defaults generic, no company data). Metadata only (no bodies). Tests.
+
+### T-231c Home briefing: AI daily briefing job + "Run now"
+- status: approved
+- depends: T-231b, T-212
+- note: approved by Saurabh Nov 11, 2026 (autonomous run). ANTHROPIC_* for the model; tests use the mock provider.
+- acceptance: `briefing.daily` job + "Run now" on Home. Reads the top threads live (bodies never stored, untrusted) and writes Today's briefing (3-5 lines), Needs your attention upgraded with what/why/next, Deadlines and follow-ups, Top 3 priorities with reasons. Uses the owner's Personal Assistant profile from the brain. `brief.briefings` (lane_id, RLS, pgTAP, retention) with coverage + source refs; Home shows "prepared at" and the review window. Schedule built but OFF by default (lane_config flag).
+
+### T-232 Approval Center for email (email.save_draft, email.send)
+- status: approved
+- depends: T-063
+- note: approved by Saurabh Nov 11, 2026 (autonomous run). Minimal Approval Center for email only; refines T-110 – T-116 for these two types (those tasks stay open for monday.com and the full spec).
+- acceptance: proposal -> user edits the draft in the card (to/cc/subject/body) -> approve the exact edited payload (hash) -> execute once -> verify -> audit. Approvals page lists them; Home shows a count. Executor through the Google connector write path, importable only by approvals. Send/draft need a Gmail compose scope the read-only connection lacks: requested only behind lane_policies.write_actions_allowed (OFF for PKG); "Approve & send" / "Save as Gmail draft" disabled with "Sending isn't enabled for this mailbox yet. Reconnect Google with send permission in Settings" until the connection has the scope and the flag is on. "Sends as <address>" on every card (sender is always the connected mailbox). Tests with a fake Gmail transport: edit, approve, send once, no double-send, payload tamper rejected, audit row. H-item with exact steps.
+
+### T-231d Home briefing: reply drafts (AI) -> Approval Center
+- status: approved
+- depends: T-231c, T-232
+- note: approved by Saurabh Nov 11, 2026 (autonomous run).
+- acceptance: up to 3 reply drafts per briefing for threads needing a reply: thread, recipient, status (Ready for your review / Awaiting your input), context note, copy-ready text, Copy button. Shown on Home AND created as email.send proposals in Approvals (T-232), editable there. Never sent without approval. Further replies listed by name.
+
+### T-233 QuickBooks on the Home dashboard
+- status: approved
+- depends: T-056, T-230
+- note: approved by Saurabh Nov 11, 2026 (autonomous run, "if time remains"). No live connect (Saurabh does the OAuth click); synthetic fixtures only.
+- acceptance: Home's Cash (book balance), AR > 30 days and a small P&L month-to-date card from fin.* SQL reads (rule 7: figures from SQL, "book balance" label). No QBO connection or no data: clear empty state with "Connect QuickBooks in Settings". The "Temporary: connection test" QuickBooks button becomes a proper Settings -> Connections QuickBooks row (status, realm, last sync, Connect). pgTAP + unit tests.
+
 ## Phase B1 — Rollout and specs
 ### T-174 Lane onboarding playbook + dry run
 - status: proposed
