@@ -5,7 +5,7 @@ For whoever picks up T-234 in the morning (Saurabh or the next agent). Checkout 
 ## Branches and push/merge order
 1. `agent/T-232` (ends `8ecf816`), as in the previous checkpoint.
 2. **`agent/T-192`** from `agent/T-232`, ending at `cbb66a4`. **Done.**
-3. **`agent/T-234`** from `agent/T-192` (`cbb66a4`). Parts 0 and 1 are done; part 2 is in progress; parts 3 to 5 have not started.
+3. **`agent/T-234`** from `agent/T-192` (`cbb66a4`). Parts 0 and 1 are done and reviewed; part 2 is committed but not yet reviewed; parts 3 to 5 have not started.
 
 Push and merge in that order. Each branch contains the one before it.
 
@@ -33,7 +33,7 @@ The brief, verbatim: `.agent/tasks/T-234-brief.md`. Running log: `.agent/notes/T
 |---|---|---|
 | 0: env hardening and Run now | `09255a8`, `3206321`, `9868356` | Done; security and code reviewed, plus a security re-check. No BLOCKER or HIGH open. |
 | 1: layout | `ca17c30`, `78f5af4` | Done; security and code reviewed. Full typecheck, lint and test pass at `78f5af4`. |
-| 2: Needs your attention | not committed yet | A builder was working on it when this was written (see below). |
+| 2: Needs your attention | `bd7e524` | Committed and passing (typecheck, lint, 18/18 test tasks, test:db 42 files). **Not reviewed yet.** |
 | 3: reply drawer | | Not started |
 | 4: GovCon news | | Not started |
 | 5: auto-refresh without losing work | | Not started |
@@ -52,14 +52,24 @@ The brief, verbatim: `.agent/tasks/T-234-brief.md`. Running log: `.agent/notes/T
 
 **Process note:** commit `9868356` (part 0 fixes) also contains part 1's deletion of `home-finance.tsx` and its test. Two builders were running in the same tree at the time, and that commit doesn't typecheck on its own. Every commit from `ca17c30` on is green. From now on, run one builder at a time.
 
-### State of part 2 at writing time
-When this checkpoint was written, a builder had uncommitted part 2 work in the tree:
-- Open link and thread view: `inbox-links.ts`, `gmail-url.ts` and `message-page.tsx`.
-- Exclusion flags, worked out at sync time: `mail-flags.ts`, plus migration `20261113120000_message_flags_and_thread_ref.sql` and pgTAP `303_message_flags.test.sql`.
-- Attention changes in `packages/modules/briefing/src/domain/attention.ts`.
-- `reply-action.tsx`, a placeholder that part 3 replaces.
-
-It was left to finish and commit as "T-234 part 2: …". **Morning step 1:** check `git log`. If part 2 is committed, run the security and code reviews on it. If it isn't, look at `git status` and finish it.
+### Part 2 (`bd7e524`), not reviewed yet
+- **Open link bug, cause and fix:**
+  - The sync stored `mail/u/<address>/#all/<id>`. Gmail's `/u/` takes an account index, not an address, so Google opened the wrong page.
+  - Home now opens `/<lane>/inbox/<messageId>`, the existing T-202 thread view.
+  - "Open in Gmail" is built as `?authuser=<mailbox>#all/<hex thread id>` (`packages/connectors/src/comms/gmail-url.ts`).
+- **Exclusions:**
+  - One `classify` function (`packages/modules/briefing/src/domain/attention.ts`) applies to Home, the money list and the AI input.
+  - `lane_config.briefing.exclusions` holds `org_newsletter_senders` (empty), `calendar_subjects`, `auto_reply_subjects` and `bot_subjects`.
+  - New boolean columns on `comms.message_index`: `is_bulk`, `is_calendar` and `is_auto`. They are worked out from headers at sync time; no headers or bodies are stored.
+- **Decision to review:** priority senders now skip every exclusion except OTP, calendar and auto-reply.
+- **Known limit:** Gmail metadata doesn't list nested MIME parts. A `text/calendar` part is therefore caught only through the Calendar `Sender` header, the `Content-Class` header or the subject prefixes.
+- **Card:**
+  - The AI summary shows 2 lines, with "More from the briefing" for the rest.
+  - Below it: the prepared time, Run now and the top 3.
+  - The top 5 items each have Reply and Open.
+  - Drafts and deadlines are folded into a collapsed section.
+  - `components/reply-action.tsx` is the hook part 3 replaces with the drawer.
+- **The `mail.test.ts` rate-limit test** failed once under load. It passed 5 of 5 alone and in the full run, and part 2 adds no reads, so it's logged as a flake in the T-234 notes.
 
 ## Production SQL (Saurabh runs it by hand in the SQL Editor, in this order)
 All files are in `supabase/core/bootstrap/manual-migrations/`. Git ignores this folder, so the files exist only in this checkout.
@@ -68,16 +78,16 @@ All files are in `supabase/core/bootstrap/manual-migrations/`. Git ignores this 
 3. **`part-12-T-234.sql`**, then **`check-part-12.sql`**: every row should be true. **Not final.** Later parts keep adding to it. So far it has:
    - `20261113100000` briefing_failure_reason
    - `20261113110000` approvals_withdraw_proposed
-   - `20261113120000` message flags, from part 2 (still in progress)
+   - `20261113120000` message_flags_and_thread_ref (part 2; ran against the local DB, every check row true)
 
    It refuses to run unless `20261112100000` (part 11) is recorded. Don't run it until T-234 is finished.
 
 ## Needs human
 - **H-047** (live sending): its steps are unchanged, and step 6 now refers to part 11.
-- **New in T-234 so far:** none recorded. Part 2 is expected to add one: PKG's own newsletter sender addresses for the exclusion list in `lane_config`.
+- **H-048 (new, doesn't block):** PKG's own newsletter sender addresses go into `briefing.exclusions.org_newsletter_senders` in the lane config editor. Optionally, run one full Gmail resync after production part 12, so the last 90 days get their flags.
 
 ## Next (morning)
-1. Part 2: confirm the commit, run the full checks, then the security and code reviews, then fix every BLOCKER and HIGH (and the worthwhile MEDIUMs).
+1. Part 2 (`bd7e524`): run the security and code reviews, then fix every BLOCKER and HIGH (and the worthwhile MEDIUMs). Also review the hand-edited `packages/core/src/db/types.ts`; regenerating it is safer.
 2. Parts 3, 4 and 5, one builder at a time, each followed by both reviews.
    - Part 4 must check that news URLs are https before putting them in an `href` (logged in plan-review).
    - Part 4 adds the `web` category to `llm_allowed_categories`, plus a per-lane monthly spend cap, with migration, pgTAP and part 12.
