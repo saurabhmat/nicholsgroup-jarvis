@@ -61,7 +61,7 @@ export interface GoogleEmailWriter extends ConnectorWriter<GoogleEmailApprovedAc
   verifyWrite(laneId: LaneId, conn: LaneBoundConnection<"google">, action: GoogleEmailApprovedAction, externalId: string): Promise<void>;
   /**
    * Read-only marker lookup for recovery (T-192): the ids of the messages in the mailbox whose Message-ID is this action's
-   * deterministic `<portal-{id}@domain>` (at most 5; spam and trash included). Runs the same checks as `verifyWrite` but not
+   * deterministic `<portal-{id}@domain>` (at most 5, only the mailbox's own sent or draft copy: an inbound message carrying the Message-ID is ignored). Runs the same checks as `verifyWrite` but not
    * the open-claim check, sends nothing and writes nothing. An empty list does NOT prove nothing was sent (Gmail search can lag).
    */
   findWrite(laneId: LaneId, conn: LaneBoundConnection<"google">, action: GoogleEmailApprovedAction): Promise<string[]>;
@@ -145,9 +145,14 @@ export function createGoogleEmailWriter(deps: GoogleEmailWriterDeps): GoogleEmai
     return first && typeof first.id === "string" ? first : null;
   }
 
-  async function findAllByMessageId(laneId: LaneId, conn: LaneBoundConnection<string>, messageId: string): Promise<string[]> {
+  /**
+   * Only the mailbox's OWN copy: `in:sent` for a send, `in:drafts` for a draft. An inbound message that carries our Message-ID
+   * (a list or group redistribution, an auto-forward, a forged mail) is not our send and must never decide the outcome
+   * (T-192 security M1): not finding our own copy stays "undecided".
+   */
+  async function findAllByMessageId(laneId: LaneId, conn: LaneBoundConnection<string>, messageId: string, where: "sent" | "drafts"): Promise<string[]> {
     const res = await deps.api.get<{ messages?: MessageRef[] }>(laneId, conn, PATH_MESSAGES, undefined, {
-      q: `rfc822msgid:${messageId.replace(/^<|>$/g, "")}`,
+      q: `rfc822msgid:${messageId.replace(/^<|>$/g, "")} in:${where}`,
       maxResults: 5,
       includeSpamTrash: true,
     });
@@ -240,7 +245,7 @@ export function createGoogleEmailWriter(deps: GoogleEmailWriterDeps): GoogleEmai
     executeWrite,
     async findWrite(laneId, conn, action) {
       const { row, mailbox } = await prepare(laneId, conn, action);
-      return findAllByMessageId(laneId, row, portalMessageId(action.id, mailbox));
+      return findAllByMessageId(laneId, row, portalMessageId(action.id, mailbox), action.action_type === "email.send" ? "sent" : "drafts");
     },
     async verifyWrite(laneId, conn, action, externalId) {
       const { row, compose, mailbox } = await prepare(laneId, conn, action);

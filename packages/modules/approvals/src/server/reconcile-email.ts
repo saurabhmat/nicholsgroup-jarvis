@@ -3,6 +3,7 @@
 // reaches Gmail only through the connector (tokens stay in the Vault).
 import { isConnectorError, type LaneBoundConnection } from "@nichols/connectors";
 import { VERIFICATION_MISMATCH_MESSAGE, type GoogleEmailApprovedAction, type GoogleEmailReconciler } from "@nichols/connectors/write";
+import type { LaneId } from "@nichols/core";
 import type { ActionReconciler, ReconcileDecision } from "./reconcile";
 import { EMAIL_ACTION_TYPES } from "./types";
 
@@ -10,7 +11,7 @@ const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
 export type EmailReconcilerDeps = {
   reconciler: GoogleEmailReconciler;
-  loadWriteConnection(laneId: string, connectionId: string): Promise<LaneBoundConnection<"google">>;
+  loadWriteConnection(laneId: LaneId, connectionId: string): Promise<LaneBoundConnection<"google">>;
 };
 
 const isMismatch = (e: unknown): boolean => isConnectorError(e) && e.info.message === VERIFICATION_MISMATCH_MESSAGE;
@@ -29,7 +30,7 @@ function undecidedOf(e: unknown): ReconcileDecision {
 export function createEmailReconciler(deps: EmailReconcilerDeps): ActionReconciler {
   return {
     actionTypes: EMAIL_ACTION_TYPES,
-    async decide({ laneId, row, claimExternalId }) {
+    async decide({ laneId, row, claimOutcome, claimExternalId }) {
       if (typeof row.approvedBy !== "string" || !UUID.test(row.approvedBy)) return { kind: "failed", code: "reconcile_payload_changed", outcome: "outcome_unknown" };
       const action: GoogleEmailApprovedAction = {
         id: row.id,
@@ -46,17 +47,19 @@ export function createEmailReconciler(deps: EmailReconcilerDeps): ActionReconcil
       try {
         conn = await deps.loadWriteConnection(laneId, row.connectionId);
       } catch (e) {
-        return undecidedOf(e);
+        const u = undecidedOf(e) as { kind: "undecided"; code: string };
+        return claimOutcome === "sent" && claimExternalId !== null ? { ...u, sentUnverified: true } : u;
       }
 
-      // 1. The provider id the claim recorded right after the send: read it back directly (no search lag).
-      if (claimExternalId !== null) {
+      // 1. The claim says the send was accepted (outcome "sent") and holds the provider's id: read it back directly (no search lag).
+      //    If the read-back cannot run, the mail was sent but not verified: undecided, then "sent, not read back" at give-up.
+      if (claimOutcome === "sent" && claimExternalId !== null) {
         try {
           await deps.reconciler.verifyWrite(laneId, conn, action, claimExternalId);
           return { kind: "verified", externalId: claimExternalId, outcome: "accepted" };
         } catch (e) {
           if (isMismatch(e)) return { kind: "failed", code: "verification_mismatch", outcome: "mismatch" };
-          return undecidedOf(e);
+          return { ...(undecidedOf(e) as { kind: "undecided"; code: string }), sentUnverified: true };
         }
       }
 

@@ -395,7 +395,12 @@ isOneToOne: false
                 }
           }
           Functions: {
-            "act_approve":
+            "act_action_state":
+{ Args: { "p_id": string,"p_lane": string }; Returns: {
+              "failure_code": string,"status": string
+            }[]
+                           },
+"act_approve":
 { Args: { "p_hash_seen": string,"p_id": string,"p_lane": string }; Returns: string
                            },
 "act_claim_execution":
@@ -454,7 +459,7 @@ isOneToOne: false
                            },
 "act_stuck_actions":
 { Args: { "p_lane": string,"p_limit"?: number }; Returns: {
-              "action": Json,"age_s": number,"claim_external_id": string,"claim_outcome": string,"give_up": boolean
+              "action": Json,"claim_external_id": string,"claim_outcome": string,"give_up": boolean
             }[]
                            },
 "act_supersede":

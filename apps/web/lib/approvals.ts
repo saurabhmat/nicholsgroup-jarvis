@@ -165,10 +165,10 @@ export function recipientFlags(payload: Record<string, unknown>, internalDomains
   return out;
 }
 /**
- * Failure codes after which the email MAY have gone out (T-192 and T-232): the owner must check the Sent folder (or Drafts)
+ * Failure codes after which the email MAY have gone out (a verification mismatch means a message with our Message-ID exists) (T-192 and T-232): the owner must check the Sent folder (or Drafts)
  * before asking for it again. The reconciler's codes all start with `reconcile_`.
  */
-const OUTCOME_UNKNOWN_CODES: ReadonlySet<string> = new Set(["outcome_unknown", "verification_unavailable", "marker_not_found", "ambiguous_match"]);
+const OUTCOME_UNKNOWN_CODES: ReadonlySet<string> = new Set(["outcome_unknown", "verification_unavailable", "verification_mismatch", "marker_not_found", "ambiguous_match"]);
 export function isOutcomeUnknown(code: string | null): boolean {
   return code !== null && (OUTCOME_UNKNOWN_CODES.has(code) || code.startsWith("reconcile_"));
 }

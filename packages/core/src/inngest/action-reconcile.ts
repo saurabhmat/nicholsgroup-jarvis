@@ -31,6 +31,9 @@ export async function handleActionReconcile(deps: ActionReconcileDeps, step: Ste
     }
   }
   if (failed.length > 0) throw new NonRetriableError(`action.reconcile_stuck: failed for lane(s) ${failed.join(",")}`);
+  // Per-action errors are logged inside the sweep; surfacing them here makes the run show as failed (ids only, no detail).
+  const erroring = Object.entries(results).filter(([, r]) => r.errors > 0).map(([l]) => l);
+  if (erroring.length > 0) throw new NonRetriableError(`action.reconcile_stuck: errors in lane(s) ${erroring.join(",")}`);
   return { lanes: lanes.length, results };
 }
 

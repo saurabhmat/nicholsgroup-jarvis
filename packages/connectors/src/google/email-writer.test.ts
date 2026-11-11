@@ -42,8 +42,10 @@ function fakeGmail() {
       calls.push({ method: "GET", path });
       if (path === "/gmail/v1/users/me/messages") {
         const q = String(query?.q ?? "");
-        const id = q.replace("rfc822msgid:", "");
-        const hit = [...messages.values()].find((m) => m.headers["Message-ID"] === `<${id}>`);
+        const id = /rfc822msgid:(\S+)/.exec(q)?.[1] ?? "";
+        const label = /\bin:(sent|drafts)\b/.exec(q)?.[1];
+        const want = label === "sent" ? "SENT" : label === "drafts" ? "DRAFT" : undefined;
+        const hit = [...messages.values()].find((m) => m.headers["Message-ID"] === `<${id}>` && (want === undefined || m.labelIds.includes(want)));
         return resp({ messages: hit ? [{ id: hit.id, threadId: hit.threadId }] : [] }) as never;
       }
       const m = messages.get(String(params?.id));
@@ -338,5 +340,25 @@ describe("findWrite: the read-only marker lookup for recovery (T-192)", () => {
     await expect(down.writer.findWrite("PKG", down.conn, down.action())).rejects.toBeInstanceOf(ConnectorError);
     expect(ungranted.gmail.calls).toHaveLength(0);
     expect(down.gmail.calls).toHaveLength(0);
+  });
+});
+
+describe("findWrite ignores inbound copies of our Message-ID (T-192 security M1)", () => {
+  it("an inbound message carrying the portal Message-ID is not our send: nothing found (undecided), nothing sent", async () => {
+    const { gmail, conn, writer, action } = setup();
+    const a = action();
+    gmail.messages.set("inbound1", { id: "inbound1", threadId: "t-in", labelIds: ["INBOX", "SPAM"], headers: { "Message-ID": portalMessageId(a.id, MAILBOX), "X-Portal-Action-Id": a.id } });
+    expect(await writer.findWrite("PKG", conn, a)).toEqual([]);
+    expect(gmail.posts()).toHaveLength(0);
+  });
+  it("an inbound copy beside our sent copy: only our copy is returned and it verifies", async () => {
+    const { gmail, conn, writer, action } = setup();
+    const a = action();
+    gmail.state.failMode = "after_commit";
+    const res = await writer.executeWrite("PKG", conn, a);
+    gmail.messages.set("inbound1", { id: "inbound1", threadId: "t-in", labelIds: ["INBOX"], headers: { "Message-ID": portalMessageId(a.id, MAILBOX) } });
+    const ids = await writer.findWrite("PKG", conn, a);
+    expect(ids).toEqual([res.external_id]);
+    await expect(writer.verifyWrite("PKG", conn, a, ids[0] ?? "")).resolves.toBeUndefined();
   });
 });

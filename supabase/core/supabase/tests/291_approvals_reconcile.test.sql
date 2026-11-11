@@ -4,7 +4,7 @@
 -- the body purge (D-19), never a second claim, idempotent rerun (second call returns false), not-due rows are untouched,
 -- CROSS-LANE denial (another lane's action cannot be listed or transitioned through this lane), invalid outcomes.
 begin;
-select plan(33);
+select plan(40);
 \ir helpers/lane_rls.psql
 
 create temp table ids (k text primary key, id uuid);
@@ -70,8 +70,8 @@ select ok(not has_function_privilege('authenticated', 'act.reconcile_after_minut
 -- ---------------------------------------------------------------- threshold and listing
 set local role service_role;
 select is((select count(*)::int from core.act_stuck_actions('PKG')), 3, 'default threshold 10 min: the 30, 20 and 90 minute actions are listed, the 3 minute one is not');
-select is((select array_agg(age_s / 60 order by age_s desc)::text from core.act_stuck_actions('PKG')), '{90,30,20}', 'oldest first');
-select is((select give_up::text from core.act_stuck_actions('PKG') where age_s > 80 * 60), 'true', 'older than the give-up time (default 60 min): give_up');
+select is((select array_agg(round(extract(epoch from now() - (action ->> 'executing_at')::timestamptz) / 60)::int order by (action ->> 'executing_at')::timestamptz)::text from core.act_stuck_actions('PKG')), '{90,30,20}', 'oldest first');
+select is((select give_up::text from core.act_stuck_actions('PKG') where (action ->> 'executing_at')::timestamptz < now() - interval '80 minutes'), 'true', 'older than the give-up time (default 60 min): give_up');
 select is((select count(*)::int from core.act_stuck_actions('PKG') where give_up), 1, 'only the 90 minute action is past the give-up time');
 select is((select claim_outcome || ':' || claim_external_id from core.act_stuck_actions('PKG') where (action ->> 'id')::uuid = (select id from ids where k = 'sent')), 'sent:gmail-sent-1', 'the claim state is returned');
 select is((select count(*)::int from core.act_stuck_actions('APK')), 1, 'APK lists its own action');
@@ -85,7 +85,7 @@ from core.lane_config where lane_id = 'PKG' order by version desc limit 1;
 set local role service_role;
 select is((select count(*)::int from core.act_stuck_actions('PKG')), 2, 'reconcile_after_minutes = 25 from lane_config: only the 30 and 90 minute actions');
 reset role;
-select is((select act.reconcile_give_up_minutes('PKG')), 25, 'give-up time is never below the reconcile threshold');
+select is((select act.reconcile_give_up_minutes('PKG')), 30, 'give-up time is always at least the reconcile threshold + 5 minutes');
 insert into core.lane_config (lane_id, version, config)
 select lane_id, version + 1, jsonb_set(config, '{approvals}', config -> 'approvals' || '{"reconcile_after_minutes": 1}'::jsonb)
 from core.lane_config where lane_id = 'PKG' order by version desc limit 1;
@@ -117,6 +117,20 @@ select is((select status || ':' || (result ->> 'external_id') || ':' || (result 
 select is((select count(*)::int from act.execution_claims where action_id in (select id from ids)), 5, 'still exactly one claim per action: the reconciler never creates a claim');
 select is((select outcome from act.execution_claims where action_id = (select id from ids where k = 'old')), 'outcome_unknown', 'the claim records outcome_unknown');
 select is((select count(*)::int from act.status_history where action_id in (select id from ids where k in ('old', 'sent')) and reason like 'reconciler:%' and actor_kind = 'service'), 2, 'each transition is in the history, by the service, reason "reconciler: ..."');
+
+-- L3: never verify a different message than the one the claim recorded.
+select pg_temp.executing('other', 'PKG', '00000000-0000-4000-8000-000000001921', 'rec-pkg@example.test', 40);
+update act.execution_claims set outcome = 'sent', external_id = 'gmail-recorded' where action_id = (select id from ids where k = 'other');
+set local role service_role;
+select is(core.act_reconcile_verified('PKG', (select id from ids where k = 'other'), 'gmail-different', 'already_applied'), false, 'a claim that recorded another provider id is not verified with a different one');
+select is((select status from core.act_action_state('PKG', (select id from ids where k = 'other'))), 'executing', 'it is still executing');
+-- L2: sent but could not be read back: the claim keeps outcome sent.
+select is(core.act_reconcile_failed('PKG', (select id from ids where k = 'other'), 'reconcile_sent_unverified', 'sent'), true, 'executing -> failed with the claim still "sent"');
+select throws_ok(format($$select core.act_reconcile_failed('PKG', %L, 'reconcile_sent_unverified', 'sent')$$, (select id from ids where k = 'veryold')), '22023', 'act: invalid outcome', 'outcome sent needs a claim that recorded the send');
+select is((select status || ':' || coalesce(failure_code, '') from core.act_action_state('PKG', (select id from ids where k = 'other'))), 'failed:reconcile_sent_unverified', 'action_state reports the settled status and code');
+select is((select count(*)::int from core.act_action_state('APK', (select id from ids where k = 'other'))), 0, 'CROSS-LANE: action_state of another lane is empty');
+reset role;
+select is((select outcome || ':' || (finished_at is not null)::text from act.execution_claims where action_id = (select id from ids where k = 'other')), 'sent:true', 'the claim kept "sent" and is finished');
 
 select * from finish();
 rollback;

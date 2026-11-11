@@ -856,7 +856,7 @@ T-110, T-111 and T-114 are **track W5**, parallel with the connectors. T-112 nee
 - acceptance: Spec: `docs/specs/approvals.md` §6. `action.expire` cron (every 5 min) expires `proposed`/`approved` actions past `expires_at` (defaults from lane_config: email 72 h, monday 168 h); deferred items resurface; also invalidates approved actions whose approver lost the approver role (`act.invalidate_approved`); audited; test.
 
 ### T-192 action.reconcile_stuck
-- status: approved
+- status: done
 - depends: T-113
 - note: approved by Saurabh Nov 11, 2026; must be done before H-047 (live sending). T-113 is still open for monday.com; the email execute path it depends on was built in T-232 (done), so T-192 is built against that path (email.send, email.save_draft).
 - acceptance: Spec: `docs/specs/approvals.md` §6. Cron that finds actions in `executing` longer than N minutes (lane_config), runs the provider marker lookup/read-back, and moves them to `verified` or `failed` (verify-only: never creates a second claim, never re-executes; monday create uses the marker lookup) (`outcome_unknown` when undecidable, never re-sending); audited; test with a mock connector that crashes after accepting a send.

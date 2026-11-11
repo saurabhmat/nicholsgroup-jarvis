@@ -341,6 +341,10 @@ export async function executeApproved(deps: ApprovalsDeps, laneId: LaneId, actio
     const done = await job("act_mark_verified", { p_lane: laneId, p_id: actionId, p_external_id: externalId, p_outcome: outcome });
     if (done.error) throw toApprovalsError(done.error);
   } catch (e) {
+    // An execute that lost a race to the reconciler (T-192 code review M1): the row is already finished. Report what the
+    // database says, write no contradicting audit entry.
+    const settled = await settledState(job, laneId, actionId);
+    if (settled) return settled;
     if (verified) {
       // Sent and read back; only recording it failed (T-232 code review M1). Never turn a sent email into "failed": the
       // row stays executing with its claim at "sent" (the reconcile sweep, T-192, finishes it), and the owner is told it went out.
@@ -355,12 +359,32 @@ export async function executeApproved(deps: ApprovalsDeps, laneId: LaneId, actio
     } catch {
       marked = { data: null, error: { message: "mark_failed unavailable" } };
     }
+    if (marked.error) {
+      // Lost the race after the check above: report the real state and write no failure audit.
+      const after = await settledState(job, laneId, actionId);
+      if (after) return after;
+      await audit(deps, laneId, { kind: "service" }, "action.failed", actionId, { failure: f.code, outcome: f.outcome }).catch(() => undefined);
+      throw new ApprovalsError("unavailable");
+    }
     await audit(deps, laneId, { kind: "service" }, "action.failed", actionId, { failure: f.code, outcome: f.outcome }).catch(() => undefined);
-    if (marked.error) throw new ApprovalsError("unavailable");
     return { status: "failed", actionId, failureCode: f.code };
   }
   await audit(deps, laneId, { kind: "service" }, "action.verified", actionId, { outcome, external_id: externalId }).catch(() => undefined);
   return { status: "verified", actionId };
+}
+
+/** The action's status when it is already verified or failed (finished by someone else), else null (still executing, or unreadable). */
+async function settledState(job: Rpc, laneId: LaneId, actionId: string): Promise<ApproveResult | null> {
+  try {
+    const { data, error } = await job("act_action_state", { p_lane: laneId, p_id: actionId });
+    if (error || !Array.isArray(data) || data.length === 0) return null;
+    const row = data[0] as { status?: unknown; failure_code?: unknown };
+    if (row.status === "verified") return { status: "verified", actionId };
+    if (row.status === "failed") return { status: "failed", actionId, failureCode: typeof row.failure_code === "string" ? row.failure_code : "outcome_unknown" };
+    return null;
+  } catch {
+    return null;
+  }
 }
 
 export type ApprovalsList = { rows: ActionRow[] };

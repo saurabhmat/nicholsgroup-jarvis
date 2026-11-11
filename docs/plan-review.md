@@ -1080,6 +1080,11 @@ All HIGH items are fixed (security H1; code H1, H2), plus security M2, L1, L2, L
 
 Logged, not fixed:
 - **Security M3 / code M1 (rest), stuck `executing` rows.** Resolved by T-192 (`action.reconcile_stuck`, spec approvals §6a; migration `20261112100000`, production part 11): a row left `executing` is verified by the provider marker or failed as `outcome_unknown` after the give-up time (default 60 min), and its body is purged on the terminal transition. Production needs part 11 applied **before PKG sends live mail** (H-047 step 6).
+- **T-192 review follow-ups (Nov 11, 2026).** Security M1, L1 - L6 and code M1 - M3, L4 - L6 are fixed (see `.agent/pr/T-192.md`). Logged, not fixed:
+  - code L7: a sweep handles at most 20 rows per lane; more than 20 stuck rows (e.g. a long outage) take several 5-minute runs, oldest first. The worst starvation case (rows that always error) is closed by security L1.
+  - code L9 (skipped as agreed).
+  - The execute path's own pre-send and post-failure `findByMessageId` (`email-writer.ts`) is not scoped to `in:sent` / `in:drafts` like the reconciler's lookup: an inbound copy carrying our Message-ID could make an execute report `already_applied` for a message that is not ours; the read-back then fails as `verification_mismatch` (shown as "may have been sent, check the mailbox"). Scope it in a follow-up.
+  - Not-found actions keep their body until the give-up time (default 60 min); D-19 purge happens at the terminal transition.
 - **Security M4.** Gmail may replace a client Message-ID. The duplicate guard after a crash then rests on the claim only (safe: an unknown outcome is never resent). Check this on the first live send (H-item).
 - **Security M1 (rest).** No "new to this thread" flag and no live quote of the thread (spec §8, §10). T-231d's recipient is always the sender of the message replied to, taken from metadata.
 - **Security L3.** Switching `store_outbound_drafts` off leaves pending bodies until they expire (now at most 15 min after `expires_at`).

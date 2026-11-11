@@ -97,7 +97,6 @@ function build(over: { after?: number; giveUp?: number } = {}) {
             action: structuredClone(r),
             claim_outcome: claims.get(r.id)?.outcome ?? null,
             claim_external_id: claims.get(r.id)?.external_id ?? null,
-            age_s: Math.floor((Date.now() - (started.get(r.id) ?? 0)) / 1000),
             give_up: Date.now() - (started.get(r.id) ?? 0) >= giveUp * MIN,
           }));
         return { data: list, error: null };
@@ -109,6 +108,7 @@ function build(over: { after?: number; giveUp?: number } = {}) {
         if (!r || r.lane_id !== a.p_lane || r.status !== "executing" || !due(r.id)) return { data: false, error: null };
         const claim = claims.get(r.id);
         if (!claim) return { data: null, error: { code: "P0001", message: "act: no claim" } };
+        if (fn === "act_reconcile_verified" && claim.external_id !== null && claim.external_id !== a.p_external_id) return { data: false, error: null };
         if (fn === "act_reconcile_verified") {
           r.status = "verified";
           r.result = { external_id: a.p_external_id, outcome: a.p_outcome, reconciled: true };
@@ -118,7 +118,7 @@ function build(over: { after?: number; giveUp?: number } = {}) {
         } else {
           r.status = "failed";
           r.failure_code = a.p_code as string;
-          claim.outcome = a.p_outcome as string;
+          if (a.p_outcome !== "sent") claim.outcome = a.p_outcome as string;
           history.push({ id: r.id, reason: `reconciler: failed: ${String(a.p_code)}` });
         }
         purge(r);
@@ -152,7 +152,7 @@ describe("action.reconcile_stuck: verify, never re-send", () => {
     expect(w.rpcCalls.filter((f) => !["act_stuck_actions", "act_reconcile_verified", "act_reconcile_failed"].includes(f))).toEqual([]); // never act_claim_execution
     expect(row.payload.bodyText).toBeUndefined(); // D-19: purged with the terminal transition
     expect(w.history).toEqual([{ id: row.id, reason: "reconciler: verified by read-back" }]);
-    expect(w.audits.map((a) => [a.action, a.actor.kind, a.metadata?.by, a.target])).toEqual([["action.verified", "service", "reconciler", `action:${row.id}`]]);
+    expect(w.audits.map((a) => [a.action, a.actor.kind, a.metadata?.by, a.metadata?.action_type, a.target])).toEqual([["action.verified", "service", "reconciler", "email.send", `action:${row.id}`]]);
     expect(JSON.stringify(w.audits)).not.toContain("BODY-CANARY");
   });
 
@@ -290,6 +290,90 @@ describe("action.reconcile_stuck: verify, never re-send", () => {
   });
 });
 
+describe("action.reconcile_stuck: recorded ids, drafts, trouble, errors (T-192 reviews)", () => {
+  it("the claim recorded the id but the read-back cannot find it: undecided, then failed / reconcile_sent_unverified with the claim still 'sent'", async () => {
+    const w = build();
+    const early = w.addExecuting({ ageMin: 20, claim: { outcome: "sent", external_id: "gone-1" } });
+    const late = w.addExecuting({ ageMin: 90, claim: { outcome: "sent", external_id: "gone-2" } });
+    const sum = await reconcileStuckActions(w.deps, "PKG");
+    expect(sum).toMatchObject({ undecided: 1, failed: 1 });
+    expect(early.status).toBe("executing");
+    expect(late.failure_code).toBe("reconcile_sent_unverified");
+    expect(w.claims.get(late.id)?.outcome).toBe("sent");
+    expect(w.mailbox.sends).toBe(0);
+    expect(w.audits.map((a) => a.metadata?.outcome)).toEqual(["sent"]);
+  });
+
+  it("the recorded id's message does not match: failed / verification_mismatch at once", async () => {
+    const w = build();
+    const row = w.addExecuting({ ageMin: 12 });
+    const id = w.mailbox.send(row.id, false);
+    w.claims.set(row.id, { outcome: "sent", external_id: id });
+    await reconcileStuckActions(w.deps, "PKG");
+    expect(row.failure_code).toBe("verification_mismatch");
+    expect(w.claims.get(row.id)?.outcome).toBe("mismatch");
+  });
+
+  it("an email.save_draft action is reconciled the same way", async () => {
+    const w = build();
+    const row = w.addExecuting({ ageMin: 30, type: "email.save_draft" });
+    w.mailbox.send(row.id);
+    await reconcileStuckActions(w.deps, "PKG");
+    expect(row.status).toBe("verified");
+    expect(w.audits[0]?.metadata?.action_type).toBe("email.save_draft");
+  });
+
+  it("one match plus a lookup problem is undecided (never verified on partial evidence), then outcome_unknown at give-up", async () => {
+    const w = build();
+    const early = w.addExecuting({ ageMin: 20 });
+    const late = w.addExecuting({ ageMin: 80 });
+    w.mailbox.send(early.id);
+    w.mailbox.send(late.id);
+    w.finder.verifyError = new ConnectorError({ kind: "timeout", message: "t" });
+    await reconcileStuckActions(w.deps, "PKG");
+    expect(early.status).toBe("executing");
+    expect(late.status).toBe("failed");
+    expect(late.failure_code).toBe("reconcile_lookup_failed");
+    expect(w.claims.get(late.id)?.outcome).toBe("outcome_unknown");
+  });
+
+  it("a handler's failed decision after the give-up time is applied with its own code and outcome", async () => {
+    const w = build();
+    const row = w.addExecuting({ ageMin: 90 });
+    const h: ActionReconciler = { actionTypes: ["email.send"], decide: async () => ({ kind: "failed", code: "verification_mismatch", outcome: "mismatch" }) };
+    await reconcileStuckActions({ ...w.deps, reconcilers: [h] }, "PKG");
+    expect(row.failure_code).toBe("verification_mismatch");
+    expect(w.claims.get(row.id)?.outcome).toBe("mismatch");
+  });
+
+  it("a row that cannot be parsed ends failed / reconcile_error once past the give-up time (never keeps its body forever)", async () => {
+    const w = build();
+    const row = w.addExecuting({ ageMin: 90 });
+    const young = w.addExecuting({ ageMin: 20 });
+    const orig = w.impl;
+    const err = vi.spyOn(console, "error").mockImplementation(() => undefined);
+    const broken: ReconcileDeps = {
+      ...w.deps,
+      jobRpc: async () => async (fn, args) => {
+        const res = orig(fn, args);
+        if (fn === "act_stuck_actions") {
+          const list = res.data as { action: Record<string, unknown> }[];
+          for (const it of list) it.action = { ...it.action, status: "something-else" }; // fails the row schema
+        }
+        return res;
+      },
+    };
+    const sum = await reconcileStuckActions(broken, "PKG");
+    expect(sum).toMatchObject({ errors: 2, failed: 1 });
+    expect(row.status).toBe("failed");
+    expect(row.failure_code).toBe("reconcile_error");
+    expect(w.claims.get(row.id)?.outcome).toBe("outcome_unknown");
+    expect(young.status).toBe("executing");
+    expect(w.audits.map((a) => a.metadata?.failure)).toEqual(["reconcile_error"]);
+    err.mockRestore();
+  });
+});
+
 describe("action.reconcile_stuck: idempotent and concurrency-safe", () => {
   it("a rerun after the work is done changes nothing and audits nothing more", async () => {
     const w = build();
@@ -304,7 +388,7 @@ describe("action.reconcile_stuck: idempotent and concurrency-safe", () => {
     expect(w.mailbox.sends).toBe(1);
   });
 
-  it("two sweeps at the same time make exactly one transition and one audit entry", async () => {
+  it("(mock level: the row lock itself is covered by pgTAP 291) two sweeps in one process make exactly one transition and one audit entry", async () => {
     const w = build();
     const row = w.addExecuting({ ageMin: 30 });
     w.mailbox.send(row.id);

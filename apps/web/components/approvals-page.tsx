@@ -71,7 +71,9 @@ async function ApprovalsBody({ laneId }: { laneId: string }) {
                   </p>
                   {h.outcomeUnknown ? (
                     <p data-testid="approvals-outcome-unknown" className="text-small text-alert-foreground">
-                      Outcome unknown: it may have been {h.actionType === "email.send" ? "sent" : "saved"}. Check the mailbox before asking for it again.
+                      {h.failureCode === "reconcile_sent_unverified"
+                        ? `It was ${h.actionType === "email.send" ? "sent" : "saved"} but could not be read back. Check the mailbox before asking for it again.`
+                        : `Outcome unknown: it may have been ${h.actionType === "email.send" ? "sent" : "saved"}. Check the mailbox before asking for it again.`}
                     </p>
                   ) : null}
                 </div>

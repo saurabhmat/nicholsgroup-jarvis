@@ -110,6 +110,7 @@ insert into security_definer_ok values
   ('act.expire_stale', 'expires proposed/approved actions past expires_at; service_role only, lane-scoped (T-232)'),
   ('act.stuck_actions', 'lists executing actions older than the lane threshold with their claim state; service_role only, lane-scoped (T-192)'),
   ('act.reconcile_verified', 'reconciler: executing -> verified; service_role only, conditional on executing + due + claim, never creates a claim (T-192)'),
+  ('act.action_state', 'status and failure code of one action, lane-scoped; service_role only; lets a late execute see it was finished by the reconciler (T-192)'),
   ('act.reconcile_failed', 'reconciler: executing -> failed (mismatch / outcome_unknown); service_role only, conditional on executing + due + claim (T-192)');
 
 -- App functions authenticated may execute (callable through the API). Each one is reviewed.

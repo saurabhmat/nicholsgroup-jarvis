@@ -27,6 +27,19 @@ describe("action.reconcile_stuck", () => {
     expect(String(err)).not.toContain("secret detail");
     expect(done).toEqual(["PKG"]);
   });
+  it("fails the run (ids only) when a sweep reported per-action errors, after sweeping every lane", async () => {
+    const done: string[] = [];
+    const deps = {
+      enabledLanes: () => ["PKG", "APK"],
+      reconcileLane: async (l: string) => {
+        done.push(l);
+        return { ...sum, errors: l === "PKG" ? 2 : 0 };
+      },
+    };
+    const err = await handleActionReconcile(deps, step).catch((e: Error) => e);
+    expect(String(err)).toContain("action.reconcile_stuck: errors in lane(s) PKG");
+    expect(done).toEqual(["PKG", "APK"]);
+  });
   it("reports per lane", async () => {
     await expect(handleActionReconcile({ enabledLanes: () => ["PKG"], reconcileLane: async () => sum }, step)).resolves.toEqual({ lanes: 1, results: { PKG: sum } });
   });

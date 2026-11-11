@@ -26,9 +26,10 @@ import type { ActionRow, Rpc } from "./types";
 export type ReconcileDecision =
   | { kind: "verified"; externalId: string; outcome: "accepted" | "already_applied" }
   | { kind: "failed"; code: string; outcome: "mismatch" | "outcome_unknown" }
-  | { kind: "undecided"; code: string };
+  /** `sentUnverified`: the claim recorded the provider's id (the send was accepted) but the read-back cannot run. */
+  | { kind: "undecided"; code: string; sentUnverified?: true };
 
-export type ReconcileInput = { laneId: LaneId; row: ActionRow; claimExternalId: string | null };
+export type ReconcileInput = { laneId: LaneId; row: ActionRow; claimOutcome: string | null; claimExternalId: string | null };
 
 export interface ActionReconciler {
   /** The action types this handler decides (exact `action_type` strings). */
@@ -47,10 +48,11 @@ export type ReconcileSummary = { lane: string; checked: number; verified: number
 
 const LANE = /^[A-Z]{1,8}$/;
 const CODE = /^[a-z][a-z0-9_]{0,63}$/;
+const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 /** Per sweep and lane. The rest wait for the next run (every 5 minutes). */
 export const RECONCILE_BATCH = 20;
 
-type StuckRow = { action: unknown; claim_outcome: string | null; claim_external_id: string | null; age_s: number; give_up: boolean };
+type StuckRow = { action: unknown; claim_outcome: string | null; claim_external_id: string | null; give_up: boolean };
 
 function stuckRows(data: unknown): StuckRow[] {
   if (!Array.isArray(data)) throw new Error("reconcile: list unavailable");
@@ -68,27 +70,46 @@ export async function reconcileStuckActions(deps: ReconcileDeps, laneId: LaneId)
   for (const item of stuckRows(listed.data)) {
     summary.checked += 1;
     let actionId = "unknown";
+    let actionType = "unknown";
     try {
       const row = toRow(item.action);
       actionId = row.id;
+      actionType = row.actionType;
       // The list is for this lane only; anything else is refused here too (cross-lane defence in depth).
       if (row.laneId !== laneId || row.status !== "executing") {
         summary.unchanged += 1;
         continue;
       }
-      const decision = await decide(deps, laneId, row, item.claim_external_id);
+      const decision = await decide(deps, laneId, row, item.claim_outcome, item.claim_external_id);
       const applied = await apply(deps, rpc, laneId, row, decision, item.give_up);
       summary[applied] += 1;
     } catch (e) {
       summary.errors += 1;
       // Ids only: never a body, a token or a provider message.
       console.error("[approvals] reconcile failed for an action", { laneId, actionId, error: e instanceof Error ? e.name : "unknown" });
+      // A row that keeps erroring must not keep its body and starve the batch forever (T-192 security L1): once it is past
+      // the give-up time it ends failed / outcome_unknown, found by its raw id.
+      if (item.give_up === true) {
+        const raw = (item.action as { id?: unknown; action_type?: unknown } | null) ?? {};
+        const rawId = typeof raw.id === "string" && UUID.test(raw.id) ? raw.id : null;
+        if (rawId !== null) {
+          try {
+            const res = await rpc("act_reconcile_failed", { p_lane: laneId, p_id: rawId, p_code: "reconcile_error", p_outcome: "outcome_unknown" });
+            if (!res.error && res.data === true) {
+              summary.failed += 1;
+              await auditTransition(deps, laneId, "action.failed", rawId, { by: "reconciler", reconciled: true, action_type: typeof raw.action_type === "string" ? raw.action_type : actionType, failure: "reconcile_error", outcome: "outcome_unknown" });
+            }
+          } catch {
+            // Still logged above; the next sweep tries again.
+          }
+        }
+      }
     }
   }
   return summary;
 }
 
-async function decide(deps: ReconcileDeps, laneId: LaneId, row: ActionRow, claimExternalId: string | null): Promise<ReconcileDecision> {
+async function decide(deps: ReconcileDeps, laneId: LaneId, row: ActionRow, claimOutcome: string | null, claimExternalId: string | null): Promise<ReconcileDecision> {
   // The stored content must still be what was approved. If not, nothing here trusts it (the writer refused it, too).
   let intact = false;
   try {
@@ -100,7 +121,7 @@ async function decide(deps: ReconcileDeps, laneId: LaneId, row: ActionRow, claim
   const handler = deps.reconcilers.find((r) => r.actionTypes.includes(row.actionType));
   if (!handler) return { kind: "undecided", code: "reconcile_unsupported" };
   try {
-    const d = await handler.decide({ laneId, row, claimExternalId });
+    const d = await handler.decide({ laneId, row, claimOutcome, claimExternalId });
     if (d.kind !== "verified" && !CODE.test(d.code)) return { kind: "undecided", code: "reconcile_error" };
     return d;
   } catch {
@@ -112,22 +133,23 @@ async function decide(deps: ReconcileDeps, laneId: LaneId, row: ActionRow, claim
 async function apply(deps: ReconcileDeps, rpc: Rpc, laneId: LaneId, row: ActionRow, d: ReconcileDecision, giveUp: boolean): Promise<"verified" | "failed" | "undecided" | "unchanged"> {
   if (d.kind === "undecided") {
     if (!giveUp) return "undecided";
-    return finishFailed(deps, rpc, laneId, row, d.code, "outcome_unknown");
+    // Sent but never read back: the claim keeps "sent" and the code says so (the owner is told to check the mailbox).
+    return d.sentUnverified ? finishFailed(deps, rpc, laneId, row, "reconcile_sent_unverified", "sent") : finishFailed(deps, rpc, laneId, row, d.code, "outcome_unknown");
   }
   if (d.kind === "failed") return finishFailed(deps, rpc, laneId, row, d.code, d.outcome);
   const res = await rpc("act_reconcile_verified", { p_lane: laneId, p_id: row.id, p_external_id: d.externalId, p_outcome: d.outcome });
   if (res.error) throw toApprovalsError(res.error);
   // false: another sweep or the original execute finished it first. Nothing to do, nothing to audit twice.
   if (res.data !== true) return "unchanged";
-  await auditTransition(deps, laneId, "action.verified", row.id, { by: "reconciler", reconciled: true, outcome: d.outcome, external_id: d.externalId });
+  await auditTransition(deps, laneId, "action.verified", row.id, { by: "reconciler", reconciled: true, action_type: row.actionType, outcome: d.outcome, external_id: d.externalId });
   return "verified";
 }
 
-async function finishFailed(deps: ReconcileDeps, rpc: Rpc, laneId: LaneId, row: ActionRow, code: string, outcome: "mismatch" | "outcome_unknown"): Promise<"failed" | "unchanged"> {
+async function finishFailed(deps: ReconcileDeps, rpc: Rpc, laneId: LaneId, row: ActionRow, code: string, outcome: "mismatch" | "outcome_unknown" | "sent"): Promise<"failed" | "unchanged"> {
   const res = await rpc("act_reconcile_failed", { p_lane: laneId, p_id: row.id, p_code: code, p_outcome: outcome });
   if (res.error) throw toApprovalsError(res.error);
   if (res.data !== true) return "unchanged";
-  await auditTransition(deps, laneId, "action.failed", row.id, { by: "reconciler", reconciled: true, failure: code, outcome });
+  await auditTransition(deps, laneId, "action.failed", row.id, { by: "reconciler", reconciled: true, action_type: row.actionType, failure: code, outcome });
   return "failed";
 }
 

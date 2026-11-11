@@ -154,10 +154,10 @@ describe("page view models", () => {
     expect(h.outcomeUnknown).toBe(false);
   });
   it("a failed action whose outcome is unknown (reconciler or execute) is flagged: check the mailbox before asking again (T-192)", () => {
-    for (const failureCode of ["outcome_unknown", "marker_not_found", "ambiguous_match", "reconcile_lookup_failed", "reconcile_connection_unhealthy", "verification_unavailable"]) {
+    for (const failureCode of ["outcome_unknown", "marker_not_found", "ambiguous_match", "verification_mismatch", "reconcile_sent_unverified", "reconcile_lookup_failed", "reconcile_connection_unhealthy", "verification_unavailable"]) {
       expect(toHistory(row({ status: "failed", failureCode })).outcomeUnknown, failureCode).toBe(true);
     }
-    for (const failureCode of ["connection_unhealthy", "execution_refused", "verification_mismatch", "payload_changed"]) {
+    for (const failureCode of ["connection_unhealthy", "execution_refused", "payload_changed"]) {
       expect(toHistory(row({ status: "failed", failureCode })).outcomeUnknown, failureCode).toBe(false);
     }
     expect(toHistory(row({ status: "verified", failureCode: "marker_not_found" })).outcomeUnknown).toBe(false);
