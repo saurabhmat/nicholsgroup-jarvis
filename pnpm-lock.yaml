@@ -202,6 +202,9 @@ importers:
       '@nichols/brain':
         specifier: workspace:*
         version: link:../../packages/modules/brain
+      '@nichols/briefing':
+        specifier: workspace:*
+        version: link:../../packages/modules/briefing
       '@nichols/connectors':
         specifier: workspace:*
         version: link:../../packages/connectors

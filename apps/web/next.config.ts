@@ -10,7 +10,7 @@ const distDir = process.env.NEXT_DIST_DIR;
 const nextConfig: NextConfig = {
   ...(distDir && ALLOWED_DIST_DIRS.has(distDir) && !process.env.VERCEL ? { distDir } : {}),
   // Workspace packages are consumed as TypeScript source.
-  transpilePackages: ["@nichols/ai", "@nichols/approvals", "@nichols/brain", "@nichols/connectors", "@nichols/core", "@nichols/ui"],
+  transpilePackages: ["@nichols/ai", "@nichols/approvals", "@nichols/brain", "@nichols/briefing", "@nichols/connectors", "@nichols/core", "@nichols/ui"],
   experimental: {
     agentFeedback: true,
   },

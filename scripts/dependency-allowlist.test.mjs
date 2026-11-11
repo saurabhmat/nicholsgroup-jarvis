@@ -16,6 +16,7 @@ const ALLOWED = {
   "apps/web": [
     "@nichols/ai", // T-105: the assistant chat route (gate, tool loop, provider; the SDK stays inside packages/ai)
     "@nichols/brain", // T-210: the Inngest route wires the import-candidate purge job (@nichols/brain/jobs)
+    "@nichols/briefing", // T-231: Home briefing domain (pure) and the briefing job's store
     "@nichols/connectors", // T-035: the /api/connect routes wrap @nichols/connectors/oauth (no vendor SDKs come with it)
     "@nichols/core",
     "@nichols/eslint-plugin",

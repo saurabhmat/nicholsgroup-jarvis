@@ -54,7 +54,7 @@ test("a member sees the shell, a switcher with only the allowed lane, and a 404 
 
   await page.goto("/PKG");
   await expect(page.getByRole("heading", { name: "Good morning", level: 1 })).toBeVisible();
-  for (const title of ["Today's briefing", "Needs your attention", "Today's meetings", "Projects at a glance"]) {
+  for (const title of ["Today's briefing", "Needs your attention", "Today's calendar", "Projects at a glance"]) {
     await expect(page.getByRole("heading", { name: title, level: 2 })).toBeVisible();
   }
   await expect(page.getByRole("link", { name: "Ask Jarvis" })).toHaveAttribute("href", "/PKG/assistant");

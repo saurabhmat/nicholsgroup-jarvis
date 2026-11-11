@@ -34,6 +34,7 @@ insert into private_table_ok values
 -- Tables whose SELECT policy is not the exact standard expression (reviewed by hand; each still requires aal2).
 create temp table custom_policy_ok (name text primary key, why text not null) on commit drop;
 insert into custom_policy_ok values
+  ('brief.briefings', 'standard expression (briefing view) AND owner_user_id = auth.uid(): a prepared briefing is its owner''s alone (T-231c)'),
   ('core.memberships', 'own rows, plus lanes with the memberships view'),
   ('core.users', 'own row, plus members of lanes with the memberships view'),
   ('core.lanes', 'standard expression on code (the lane id) instead of lane_id'),
@@ -54,6 +55,10 @@ create temp table unprotected_read_ok (name text primary key, why text not null)
 -- Security-definer functions (they bypass RLS and run as their owner). Each one is reviewed.
 create temp table security_definer_ok (name text primary key, why text not null) on commit drop;
 insert into security_definer_ok values
+  ('brief.briefings_guard', 'insert trigger: reply drafts only with store_outbound_drafts; lane enabled; owner holds the owner role and the briefing view (T-231c)'),
+  ('core.briefing_coverage', 'Home coverage strip: answers only the caller''s comms/calendar views at aal2; connection facts, no tokens (T-231a)'),
+  ('core.briefing_save_own', 'Run now writer: aal2 + owner role + briefing view, owner = auth.uid(), 2-minute cooldown under an advisory lock (T-231c)'),
+  ('core.home_finance_context', 'Home finance: QuickBooks connection facts and mapping for a caller with the finance view at aal2 only (T-233)'),
   ('core.allowed_lanes', 'reads memberships for RLS; own uid at aal2 only (T-012)'),
   ('core.has_lane_role', 'role check for actions; own uid at aal2 only (T-012)'),
   ('core.lane_config_public', 'non-sensitive config subset for lane members (T-011)'),
@@ -106,6 +111,13 @@ insert into security_definer_ok values
 -- App functions authenticated may execute (callable through the API). Each one is reviewed.
 create temp table authenticated_exec_ok (name text primary key, why text not null) on commit drop;
 insert into authenticated_exec_ok values
+  ('core.briefing_coverage', 'Home briefing coverage; definer, checks the caller''s views itself (T-231a)'),
+  ('core.briefing_events', 'Home calendar; invoker, RLS on cal.event_index applies (T-231a)'),
+  ('core.briefing_threads', 'Home attention and money threads; invoker, RLS on comms.message_index applies (T-231b)'),
+  ('core.briefing_latest', 'Home AI briefing: the caller''s own latest; invoker, RLS on brief.briefings applies (T-231c)'),
+  ('core.briefing_save_own', 'Run now: saves the caller''s own briefing; checks aal2, owner role and the briefing view itself (T-231c)'),
+  ('core.home_finance', 'Home finance figures; invoker over fin tables (T-233)'),
+  ('core.home_finance_context', 'Home finance context; definer, checks the finance view at aal2 itself (T-233)'),
   ('core.allowed_lanes', 'used by every RLS policy'),
   ('core.has_lane_role', 'role checks (requireRole)'),
   ('core.lane_config_public', 'public config subset'),

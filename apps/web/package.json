@@ -17,6 +17,7 @@
     "@nichols/ai": "workspace:*",
     "@nichols/approvals": "workspace:*",
     "@nichols/brain": "workspace:*",
+    "@nichols/briefing": "workspace:*",
     "@nichols/connectors": "workspace:*",
     "@nichols/core": "workspace:*",
     "@nichols/ui": "workspace:*",

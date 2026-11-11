@@ -9,7 +9,7 @@ const m = vi.hoisted(() => ({
   result: null as unknown,
   google: null as unknown,
   composio: null as unknown,
-  test: false,
+  quickbooks: null as unknown,
   brain: null as unknown,
   origin: null as unknown,
   // T-230 A: records when each loader starts, the guards it got, and lets a test hold every loader open.
@@ -28,16 +28,17 @@ const loader = <T,>(name: string, value: () => T) => async (g?: unknown) => {
 vi.mock("@/lib/lane-page", () => ({ loadLane: async () => ({ laneId: "PKG", name: "Pub K Group", lanes: [] }) }));
 vi.mock("@/lib/guards", () => ({ guards: async () => m.sharedGuards }));
 vi.mock("@/lib/connect-result", () => ({ connectResultFor: (g: unknown) => loader("result", () => m.result)(g) }));
-vi.mock("@/lib/connection-test", () => ({ connectionTestVisible: (g: unknown) => loader("test", () => m.test)(g) }));
+vi.mock("@/lib/quickbooks-connection", () => ({ quickbooksSectionFor: (g: unknown) => loader("quickbooks", () => m.quickbooks)(g) }));
 vi.mock("@/lib/google-connection", () => ({ googleSectionFor: (g: unknown) => loader("google", () => m.google)(g) }));
 vi.mock("@/lib/composio-availability", () => ({ availability: () => ({}), missingSettings: () => ({}) }));
 vi.mock("@/lib/composio-connection", () => ({ composioSectionFor: (g: unknown) => loader("composio", () => m.composio)(g) }));
 vi.mock("@/lib/origin-notice-server", () => ({ currentOriginNotice: async () => m.origin }));
 vi.mock("@/lib/onboarding-progress", () => ({ onboardingFor: () => loader("brain", () => m.brain)() }));
 vi.mock("./connections-section", () => ({
-  ConnectionsSection: ({ google, composio }: { google: unknown; composio: unknown }) => <div data-testid="connections-section" data-google={String(Boolean(google))} data-composio={String(Boolean(composio))} />,
+  ConnectionsSection: ({ google, quickbooks, composio }: { google: unknown; quickbooks: unknown; composio: unknown }) => (
+    <div data-testid="connections-section" data-google={String(Boolean(google))} data-quickbooks={String(Boolean(quickbooks))} data-composio={String(Boolean(composio))} />
+  ),
 }));
-vi.mock("./connection-test-section", () => ({ ConnectionTestSection: () => <div data-testid="test-section" /> }));
 // The shared module page is async (a server component); here only whether it is asked to draw the placeholder matters.
 vi.mock("./module-page", () => ({ ModulePage: ({ placeholder }: { placeholder?: boolean }) => <div data-testid="module-page" data-placeholder={String(placeholder)} /> }));
 
@@ -53,7 +54,7 @@ const view = (done: number) => ({
 
 beforeEach(() => {
   m.result = m.google = m.composio = m.brain = m.origin = null;
-  m.test = false;
+  m.quickbooks = null;
   m.started = [];
   m.seenGuards = [];
   m.gate = null;
@@ -75,7 +76,7 @@ describe("Settings page sections", () => {
     ["the Google section", () => (m.google = { connections: [] })],
     ["the Composio section", () => (m.composio = { toolkits: [] })],
     ["the AI brain card", () => (m.brain = view(3))],
-    ["the connection test", () => (m.test = true)],
+    ["the QuickBooks row", () => (m.quickbooks = { connections: [] })],
   ])("hides the placeholder when %s renders", async (_name, set) => {
     set();
     expect(await draw()).toBe("false");
@@ -137,10 +138,9 @@ describe("layout (T-230 B)", () => {
     m.google = { connections: [] };
     m.composio = { toolkits: [] };
     m.brain = view(2);
-    m.test = true;
     await draw();
-    expect(navLabels()).toEqual(["Connections|#connections", "AI brain|#ai-brain", "Developer tools|#developer-tools"]);
-    // one Connections section carries both providers
+    expect(navLabels()).toEqual(["Connections|#connections", "AI brain|#ai-brain"]);
+    // one Connections section carries every provider
     const c = screen.getByTestId("connections-section");
     expect(c.getAttribute("data-google")).toBe("true");
     expect(c.getAttribute("data-composio")).toBe("true");
@@ -154,12 +154,20 @@ describe("layout (T-230 B)", () => {
     expect(screen.queryByTestId("connections-section")).toBeNull();
   });
 
-  it("only Composio visible: Connections is still one entry; no Developer tools entry without the test", async () => {
+  it("only Composio visible: Connections is still one entry; there is no Developer tools section any more (T-233)", async () => {
     m.composio = { toolkits: [] };
     await draw();
     expect(navLabels()).toEqual(["Connections|#connections"]);
     expect(screen.getByTestId("connections-section").getAttribute("data-google")).toBe("false");
-    expect(screen.queryByTestId("test-section")).toBeNull();
+    expect(screen.getByTestId("connections-section").getAttribute("data-quickbooks")).toBe("false");
+    expect(screen.queryByText("Developer tools")).toBeNull();
+  });
+
+  it("only the QuickBooks row visible: Connections is drawn with it", async () => {
+    m.quickbooks = { connections: [] };
+    await draw();
+    expect(navLabels()).toEqual(["Connections|#connections"]);
+    expect(screen.getByTestId("connections-section").getAttribute("data-quickbooks")).toBe("true");
   });
 });
 
@@ -167,14 +175,14 @@ describe("loading (T-230 A)", () => {
   it("starts every independent loader at once, with the one guards object, instead of one after the other", async () => {
     let release = () => {};
     m.gate = new Promise<void>((r) => (release = r));
-    m.test = true;
+    m.quickbooks = { connections: [] };
     const drawing = SettingsPage(props);
     await new Promise((r) => setTimeout(r, 10));
-    expect(m.started.sort()).toEqual(["brain", "composio", "google", "result", "test"]); // all five under way before any answers
+    expect(m.started.sort()).toEqual(["brain", "composio", "google", "quickbooks", "result"]); // all five under way before any answers
     expect(m.seenGuards.filter((g) => g !== undefined).every((g) => g === m.sharedGuards)).toBe(true);
     release();
     render(await drawing);
-    expect(screen.getByTestId("test-section")).toBeTruthy();
+    expect(screen.getByTestId("connections-section").getAttribute("data-quickbooks")).toBe("true");
   });
 
   it("an outage in one loader is still an error, never a half-drawn page", async () => {
