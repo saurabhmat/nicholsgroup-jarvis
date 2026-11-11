@@ -13,14 +13,15 @@ import { fileURLToPath } from "node:url";
 
 export class BacklogError extends Error {}
 
-const TASK_HEAD = /^###\s+(T-\d+)(?=\s|$)/;
+// Ids may carry one lowercase letter for a split task (T-231a, T-231b).
+const TASK_HEAD = /^###\s+(T-\d+[a-z]?)(?=\s|$)/;
 const HEADING = /^#{1,6}\s/;
 const RULE = /^---+\s*$/;
 const FENCE = /^\s*(`{3,}|~{3,})/;
 const FIELD = /^- (status|depends|needs|acceptance):[ \t]*(.*?)\s*$/;
 // Catches field-ish lines in any spelling outside task blocks (e.g. "- **needs:**", "> + Depends on:").
 const FIELD_LIKE = /^[\s>]*[-*+]?\s*\**\s*(status|depends?|needs?|deps|requires?|blocked)\b[^:]{0,20}:/i;
-const DEP_TOKEN = /^T-\d+$/;
+const DEP_TOKEN = /^T-\d+[a-z]?$/;
 // A need is an H/D id, optionally followed by a parenthetical note that names no other id.
 const NEED_TOKEN = /^([HD]-\d+)(?:\s+\(([^()]*)\))?$/;
 const ANY_NEED_ID = /\b[HD]-\d+\b/;

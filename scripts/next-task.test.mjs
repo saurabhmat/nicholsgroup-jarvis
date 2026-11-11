@@ -223,7 +223,15 @@ test("code fences are a backlog error", () => {
 });
 
 test("task heading needs a word boundary after the id", () => {
-  assert.deepEqual(parseTasks(doc("### T-001x Fake\n\n")).map(t => t.id), []);
+  assert.deepEqual(parseTasks(doc("### T-001xy Fake\n\n")).map(t => t.id), []);
+  assert.deepEqual(parseTasks(doc("### T-001X Fake\n\n")).map(t => t.id), []);
+  assert.deepEqual(parseTasks(doc("### T-001_ Fake\n\n")).map(t => t.id), []);
+});
+
+test("split task ids carry one lowercase letter (T-231a) and work as deps", () => {
+  const md = doc(task("T-001a", { status: "done" }), task("T-001b", { depends: "T-001a" }));
+  assert.deepEqual(parseTasks(md).map(t => t.id), ["T-001a", "T-001b"]);
+  assert.equal(nextTask(md), "T-001b");
 });
 
 const script = fileURLToPath(new URL("./next-task.mjs", import.meta.url));
@@ -231,7 +239,7 @@ const repoRoot = fileURLToPath(new URL("..", import.meta.url));
 
 test("CLI smoke: real backlog prints nothing or a single task id", () => {
   const out = execFileSync(process.execPath, [script], { cwd: repoRoot, encoding: "utf8" });
-  assert.match(out, /^(T-\d+\n)?$/);
+  assert.match(out, /^(T-\d+[a-z]?\n)?$/);
 });
 
 test("CLI --explain runs on the real backlog", () => {
