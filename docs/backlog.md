@@ -1090,6 +1090,12 @@ Spec: `docs/specs/brain-and-employees.md`, `docs/specs/brain-interview.md`; seed
 - note: approved by Saurabh Nov 11, 2026 (autonomous run, "if time remains"). No live connect (Saurabh does the OAuth click); synthetic fixtures only.
 - acceptance: Home's Cash (book balance), AR > 30 days and a small P&L month-to-date card from fin.* SQL reads (rule 7: figures from SQL, "book balance" label). No QBO connection or no data: clear empty state with "Connect QuickBooks in Settings". The "Temporary: connection test" QuickBooks button becomes a proper Settings -> Connections QuickBooks row (status, realm, last sync, Connect). pgTAP + unit tests.
 
+### T-234 Home v2 (from Saurabh's production review)
+- status: approved
+- depends: T-192, T-230, T-231d, T-232, T-233
+- note: approved by Saurabh Nov 11, 2026 (autonomous: build without asking, log Needs-human items and keep going; commit per part; don't push). Full brief, verbatim: `.agent/tasks/T-234-brief.md`. Brings T-218 (GovCon news, `web` category) forward for PKG.
+- acceptance: Parts 0-5 of the brief: (0) env schema trims ANTHROPIC_*/connector values and validates model ids (`^claude-[a-z0-9-]+$`, error names the variable); fixed briefing failure reasons + admin hint; manual Run now works without Inngest. (1) Home grid: Needs your attention 2/3 + calendar column; 5-card KPI strip; GovCon news 2/3 + projects 1/3; Coverage moves to Settings -> Connections with a header status dot; iPhone single column. (2) Needs your attention merges the AI briefing (summary, prepared-at, Run now, top 3), top 5 items with Reply/Open, Open -> /[laneId]/inbox/[messageId], "Open in Gmail" authuser URL, lane_config exclusions (bulk, calendar invites, auto-replies, OTPs, bot noise). (3) Reply drawer: Send = approve the exact payload and execute once via T-232/T-192; Save draft; disabled Send until H-047. (4) GovCon news via Anthropic web search through LLMProvider, untrusted + cited, cached per lane per day, Refresh 1/hour, `web` category migration + pgTAP + production SQL, per-lane monthly spend cap. (5) Auto-refresh every 5 min when visible, never loses drawer/edit state, sessionStorage autosave, refresh never triggers AI/news/sync. Tests + full reviews per part; `pnpm e2e:brain` at the end; checkpoint note.
+
 ## Phase B1 — Rollout and specs
 ### T-174 Lane onboarding playbook + dry run
 - status: proposed
