@@ -26,7 +26,14 @@ export type BriefRef = {
 export type AttentionNote = { ref: string; what: string; why: string; next: string };
 export type Deadline = { ref: string | null; text: string; due: string | null };
 export type Priority = { text: string; reason: string; refs: string[] };
-export type ReplyDraft = { ref: string; status: "ready" | "awaiting_input"; context: string; text: string };
+export type ReplyDraft = {
+  ref: string;
+  status: "ready" | "awaiting_input";
+  context: string;
+  text: string;
+  /** The email.send proposal created for it in Approvals (T-231d); absent when none was created. */
+  proposalId?: string | null;
+};
 
 export type BriefContent = {
   lines: string[];

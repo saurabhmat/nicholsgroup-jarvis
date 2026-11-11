@@ -12,6 +12,7 @@ import { cookies } from "next/headers";
 import { composeBriefing, homeFor, homeKpis } from "@/lib/home";
 import { briefingFor, latestBriefing, viewerZone } from "@/lib/briefing";
 import { AiBriefing, DeadlinesAndPriorities, notesByMessage } from "./home-ai-briefing";
+import { ReplyDrafts } from "./home-reply-drafts";
 import { AttentionSection, CalendarSections, CoverageStrip, MoneyCard } from "./home-briefing";
 import { TimezoneCookie } from "./timezone-cookie";
 import { loadLane } from "@/lib/lane-page";
@@ -98,6 +99,7 @@ async function HomeSections({ laneId, now }: { laneId: string; now: Date }) {
             <AttentionSection mail={brief.mail} tz={brief.viewerTz} notes={notesByMessage(saved)} />
           </PageSection>
           <MoneyCard mail={brief.mail} tz={brief.viewerTz} />
+          <ReplyDrafts laneId={laneId} brief={saved} tz={brief.viewerTz} />
           <DeadlinesAndPriorities brief={saved} tz={brief.viewerTz} />
         </div>
         <div className="flex min-w-0 flex-col gap-4">

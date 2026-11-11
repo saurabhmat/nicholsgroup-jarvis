@@ -8,9 +8,11 @@
 //   3. one model call with the owner's brain profile (About-Me, Preferences, lane pages) and BRIEFING_RULES;
 //   4. the JSON checked (known refs only, grounding: no invented figures or dates -> "Awaiting your input"), then every
 //      model string masked (amounts, long numbers: rule 7);
-//   5. saved to brief.briefings with coverage, source refs and the review window. Reply drafts are kept only when the
-//      lane policy stores outbound drafts (D-19); the recipient always comes from metadata, never from the model.
-// Nothing here sends, saves to Gmail or approves anything; proposals for drafts go through the Approval Center (T-232).
+//   5. reply drafts (kept only when the lane policy stores outbound drafts, D-19) become email.send PROPOSALS in the
+//      Approval Center (T-231d, T-232): recipient, subject, thread and sending mailbox come from the stored metadata, never
+//      from the model; only the body text is the model's. Proposing never sends; the owner edits and approves there;
+//   6. saved to brief.briefings with coverage, source refs, the review window and each draft's proposal id.
+// Nothing here sends, saves to Gmail or approves anything.
 import { wrapUntrusted, UNTRUSTED_DATA_RULE, type LLMProvider } from "@nichols/ai";
 import { assemblePrompt, BRAIN_RULES, withUserContext } from "@nichols/ai/prompts";
 import type { LaneId } from "@nichols/core";
@@ -29,7 +31,60 @@ export type RunDeps = {
   /** lane_policies: what may go to the model (llm_allowed_categories); outbound drafts may be stored. */
   policy: BriefingPolicy;
   save: (laneId: LaneId, record: SavedBriefing) => Promise<string>;
+  /** Creates one email.send proposal (T-231d) and returns its id. Absent: drafts stay on Home only. Throws a coded error. */
+  proposeReply?: (laneId: LaneId, reply: ReplyProposal) => Promise<string>;
 };
+
+/** What the briefing hands to the Approval Center: everything but `bodyText` and `rationale` is mail metadata. */
+export type ReplyProposal = {
+  connectionId: string;
+  to: string[];
+  subject: string;
+  bodyText: string;
+  inReplyTo: { threadId: string; messageId: string };
+  rationale: string;
+  sourceRefs: { kind: "message"; id: string }[];
+};
+
+const MASKED = /\[(?:amount|number)\]/;
+const reSubject = (s: string | null) => {
+  const t = (s ?? "").replace(/[\r\n]+/g, " ").trim();
+  return /^re:/i.test(t) ? t : `Re: ${t}`.trim();
+};
+
+/**
+ * Turns the checked drafts into proposals. A draft is proposed only when its thread is a real provider thread, the
+ * sender is known and is not the lane mailbox itself. A masked figure in the text means the owner must fill it in:
+ * the draft becomes "Awaiting your input". A failure never stops the briefing; it leaves a code in the notes.
+ */
+async function proposeReplies(deps: RunDeps, laneId: LaneId, content: BriefContent, refs: readonly BriefRef[]): Promise<void> {
+  if (!deps.proposeReply) return;
+  const byRef = new Map(refs.map((r) => [r.ref, r]));
+  for (const d of content.replies) {
+    if (MASKED.test(d.text)) d.status = "awaiting_input";
+    const r = byRef.get(d.ref);
+    const to = r?.fromAddress?.toLowerCase() ?? null;
+    if (!r || !d.text || !to || !r.threadKey || r.threadKey.startsWith("m:") || to === r.mailbox?.toLowerCase()) {
+      content.notes.push(`reply_not_proposed:${d.ref}`);
+      continue;
+    }
+    try {
+      d.proposalId = await deps.proposeReply(laneId, {
+        connectionId: r.connectionId,
+        to: [to],
+        subject: reSubject(r.subject),
+        bodyText: d.text,
+        inReplyTo: { threadId: r.threadKey, messageId: r.messageId },
+        rationale: d.context,
+        sourceRefs: [{ kind: "message", id: r.messageId }],
+      });
+    } catch (e) {
+      const code = typeof (e as { code?: unknown }).code === "string" ? (e as { code: string }).code : "unavailable";
+      content.notes.push(`reply_proposal_${code === "already_proposed" ? "exists" : "failed"}:${d.ref}`);
+      if (code !== "already_proposed") console.error("[briefing] reply proposal failed", { laneId, code });
+    }
+  }
+}
 
 export type SavedBriefing = {
   ownerUserId: string;
@@ -175,6 +230,7 @@ export async function runBriefing(deps: RunDeps, input: { laneId: LaneId; ownerU
     return { id, status: "failed" };
   }
   content.notes = [...notes, ...content.notes];
+  if (policy.storeDrafts) await proposeReplies(deps, laneId, content, refs);
   const partial = view.coverage.some((c) => c.state !== "ok") || notes.some((n) => n.startsWith("body_unreadable")) || !view.mail.access || content.notes.includes("lines_ungrounded");
   const status = partial ? "partial" : "ready";
   const id = await deps.save(laneId, { ...base, status, content, model });
