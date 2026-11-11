@@ -36,7 +36,7 @@ export type RunDeps = {
   policy: BriefingPolicy;
   save: (laneId: LaneId, record: SavedBriefing) => Promise<string>;
   /** Creates one email.send proposal (T-231d) and returns its id. Absent: drafts stay on Home only. Throws a coded error. */
-  proposeReply?: (laneId: LaneId, reply: ReplyProposal) => Promise<string>;
+  proposeReply?: (laneId: LaneId, reply: ReplyProposal, signal?: AbortSignal) => Promise<string>;
 };
 
 /** What the briefing hands to the Approval Center: everything but `bodyText` and `rationale` is mail metadata. */
@@ -90,7 +90,7 @@ async function proposeReplies(deps: RunDeps, laneId: LaneId, content: BriefConte
         inReplyTo: { threadId: r.threadKey, messageId: r.messageId },
         rationale: d.context,
         sourceRefs: [{ kind: "message", id: r.messageId }],
-      });
+      }, deps.signal);
     } catch (e) {
       const code = typeof (e as { code?: unknown }).code === "string" ? (e as { code: string }).code : "unavailable";
       content.notes.push(`reply_proposal_${code === "already_proposed" ? "exists" : "failed"}:${d.ref}`);
@@ -272,7 +272,7 @@ export async function runBriefing(deps: RunDeps, input: { laneId: LaneId; ownerU
 /** Default bound for a manual run: under the Home route's maxDuration (90 s) with room to save and refresh. */
 export const RUN_NOW_TIMEOUT_MS = 75_000;
 
-const inFlight = new Set<string>();
+const inFlight = new Map<string, symbol>();
 
 /**
  * Runs one briefing with a time bound and at most one run per lane and owner in this process. A second call while one is
@@ -290,7 +290,11 @@ export async function runBriefingBounded(
 ): Promise<Awaited<ReturnType<typeof runBriefing>> | { busy: true }> {
   const key = `${input.laneId}:${input.ownerUserId}`;
   if (inFlight.has(key)) return { busy: true };
-  inFlight.add(key);
+  const token = Symbol(key);
+  inFlight.set(key, token);
+  const release = () => {
+    if (inFlight.get(key) === token) inFlight.delete(key); // never frees a newer run's key
+  };
   const controller = new AbortController();
   const live = () => {
     if (controller.signal.aborted) throw new BriefingTimeoutError();
@@ -318,7 +322,7 @@ export async function runBriefingBounded(
       ? {
           proposeReply: async (l: LaneId, r: ReplyProposal) => {
             live();
-            return propose(l, r);
+            return propose(l, r, controller.signal);
           },
         }
       : {}),
@@ -328,7 +332,13 @@ export async function runBriefingBounded(
     () => undefined,
     () => undefined,
   );
-  void settled.finally(() => inFlight.delete(key));
+  // Freed when the run settles, or at a hard ceiling (2 x the bound) if it never does, whichever comes first.
+  const ceiling = setTimeout(release, 2 * (opts.timeoutMs ?? RUN_NOW_TIMEOUT_MS));
+  ceiling.unref?.();
+  void settled.finally(() => {
+    clearTimeout(ceiling);
+    release();
+  });
   let timer: ReturnType<typeof setTimeout> | undefined;
   try {
     const limit = new Promise<"timeout">((resolve) => {

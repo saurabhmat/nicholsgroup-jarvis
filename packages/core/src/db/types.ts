@@ -465,6 +465,9 @@ isOneToOne: false
 "act_supersede":
 { Args: { "p_derived": boolean,"p_hash": string,"p_lane": string,"p_old": string,"p_payload": Json,"p_proposer_user": string,"p_rationale": string,"p_source_refs": Json,"p_target": Json,"p_version": number }; Returns: string
                            },
+"act_withdraw_proposed":
+{ Args: { "p_id": string,"p_lane": string,"p_reason": string }; Returns: boolean
+                           },
 "ai_chat_turn":
 { Args: { "p_lane": string }; Returns: Json
                            },

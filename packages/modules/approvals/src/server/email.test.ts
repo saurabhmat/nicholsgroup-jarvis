@@ -88,6 +88,15 @@ function world(over: { facts?: Partial<CapabilityFacts>; mailboxes?: string[]; w
         return { data: [...rows.values()].filter((r) => r.lane_id === a.p_lane && r.status === "proposed").length, error: null };
       case "act_expire_stale":
         return { data: 0, error: null };
+      case "act_withdraw_proposed": {
+        // twin of act.withdraw_proposed: only a pending JOB proposal; body purged
+        const r = get(a.p_id);
+        if (!r || r.status !== "proposed" || r.proposer_kind !== "job") return { data: false, error: null };
+        r.status = "invalidated";
+        r.withdraw_reason = a.p_reason;
+        purge(r);
+        return { data: true, error: null };
+      }
       case "act_approve": {
         const r = get(a.p_id);
         if (!r) return err("act: not_found", "P0002");
@@ -209,6 +218,29 @@ describe("proposeEmailAction", () => {
     expect(JSON.stringify(w.audits)).not.toContain(CANARY);
     expect(JSON.stringify(w.audits)).not.toContain("Quarterly update");
     expect(w.calls.writes).toBe(0);
+  });
+
+  it("a cutoff before the insert creates nothing", async () => {
+    const w = world();
+    const c = new AbortController();
+    c.abort();
+    await expect(proposeEmailAction(w.deps, "PKG", { ...input, signal: c.signal })).rejects.toMatchObject({ code: "unavailable" });
+    expect(w.rows.size).toBe(0);
+  });
+
+  it("a cutoff during the insert withdraws the new job proposal (audited as the service) and throws", async () => {
+    const w = world();
+    const c = new AbortController();
+    const slow: ApprovalsDeps = { ...w.deps, jobRpc: async () => async (fn, a) => (fn === "act_propose" ? (c.abort(), w.rpc(fn, a)) : w.rpc(fn, a)) };
+    await expect(proposeEmailAction(slow, "PKG", { ...input, signal: c.signal })).rejects.toMatchObject({ code: "unavailable" });
+    const rows = [...w.rows.values()];
+    expect(rows).toHaveLength(1);
+    expect(rows[0]).toMatchObject({ status: "invalidated", withdraw_reason: "briefing run timed out" });
+    expect(rows.filter((r) => r.status === "proposed")).toHaveLength(0);
+    expect(rows[0]?.payload.bodyText).toBeUndefined();
+    expect(w.audits.map((x) => x.action)).toEqual(["action.withdrawn"]);
+    expect(w.audits[0]).toMatchObject({ actor: { kind: "service" }, metadata: { reason: "briefing run timed out" } });
+    expect(JSON.stringify(w.audits)).not.toContain(CANARY);
   });
 
   it("refuses a sender other than the connection's mailbox, and a mailbox that is not the lane's", async () => {

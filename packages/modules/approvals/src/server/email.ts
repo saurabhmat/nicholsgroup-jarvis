@@ -54,7 +54,15 @@ export type ProposeEmailInput = {
   proposerUserId?: string;
   /** True when recipients, thread or text were taken from retrieved content (shown as a banner next to the recipients). */
   derivedFromRetrieved: boolean;
+  /**
+   * A caller's cutoff (the briefing's Run-now time bound). Checked immediately before the insert; if it fires while the insert
+   * is running, the new (job) proposal is withdrawn again (act.withdraw_proposed), audited as the service, and the call throws.
+   */
+  signal?: AbortSignal;
 };
+
+/** Reason written to the status history and audit when a cutoff withdraws a job proposal. */
+export const WITHDRAW_REASON_TIMEOUT = "briefing run timed out";
 
 export type ProposeResult = { id: string; hash: string };
 export type ApproveResult =
@@ -124,6 +132,7 @@ export async function proposeEmailAction(deps: ApprovalsPublicDeps, laneId: Lane
   }
   const p = await buildProposal(deps, laneId, input.actionType, input.connectionId, input.compose);
   const rpc = await deps.jobRpc(laneId);
+  if (input.signal?.aborted) throw new ApprovalsError("unavailable"); // right before the insert
   const { data, error } = await rpc("act_propose", {
     p_lane: laneId,
     p_type: input.actionType,
@@ -140,6 +149,18 @@ export async function proposeEmailAction(deps: ApprovalsPublicDeps, laneId: Lane
   });
   if (error) throw toApprovalsError(error);
   if (typeof data !== "string" || !UUID.test(data)) throw new ApprovalsError("unavailable");
+  if (input.signal?.aborted) {
+    // The cutoff fired while the insert ran: withdraw it so no orphan pending proposal outlives a "timed out" run.
+    let withdrawn = false;
+    try {
+      const w = await rpc("act_withdraw_proposed", { p_lane: laneId, p_id: data, p_reason: WITHDRAW_REASON_TIMEOUT });
+      withdrawn = !w.error && w.data === true;
+    } catch {
+      withdrawn = false;
+    }
+    await audit(deps, laneId, { kind: "service" }, withdrawn ? "action.withdrawn" : "action.withdraw_failed", data, { reason: WITHDRAW_REASON_TIMEOUT, action_type: input.actionType });
+    throw new ApprovalsError("unavailable");
+  }
   // Only a person's own proposal is audited as that person; a job's is the service's, for the owner (T-231d security L3).
   await audit(deps, laneId, input.proposerKind === "user" && input.proposerUserId ? { kind: "user", userId: input.proposerUserId } : { kind: "service" }, "action.proposed", data, {
     ...(input.proposerKind !== "user" && input.proposerUserId ? { for_user: input.proposerUserId } : {}),

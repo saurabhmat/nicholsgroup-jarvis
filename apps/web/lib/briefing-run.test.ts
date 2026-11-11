@@ -1,7 +1,7 @@
 // T-231c: one briefing run with the mock provider and a fake lane client. Bodies are read live and never saved; email
 // reaches the model only when the lane policy allows it; model text is checked against the refs; a model failure saves a
 // "failed" briefing with codes only.
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { createMockProvider, textResult } from "@nichols/ai/testing";
 import { LLMProviderError } from "@nichols/ai/types";
 import type { LaneId } from "@nichols/core";
@@ -218,6 +218,48 @@ describe("runBriefingBounded (Run now: inline, bounded, single-flight)", () => {
     await expect(runBriefingBounded(d, input)).resolves.toEqual({ busy: true }); // late run still going
     await new Promise((res) => setTimeout(res, 250));
     await expect(runBriefingBounded(d, input)).resolves.not.toHaveProperty("busy");
+  });
+
+  it("abort during proposeReply: the proposal is withdrawn, so nothing pending remains and the run reports timeout", async () => {
+    // A fake approvals side: propose inserts (after a delay), and withdraws on an aborted signal like proposeEmailAction does.
+    const pending = new Set<string>();
+    let n = 0;
+    const proposeReply: NonNullable<RunDeps["proposeReply"]> = async (_l, _r, signal) => {
+      if (signal?.aborted) throw new Error("aborted before insert");
+      await new Promise((res) => setTimeout(res, 60)); // the insert is running when the bound fires
+      const id = `p${String(++n)}`;
+      pending.add(id);
+      if (signal?.aborted) {
+        pending.delete(id); // act_withdraw_proposed
+        throw new Error("withdrawn");
+      }
+      return id;
+    };
+    const { d, saved } = deps({ reply: READY, policy: { email: true, calendar: true, storeDrafts: true }, proposeReply });
+    d.provider = slowProvider(1, READY);
+    const r = await runBriefingBounded(d, input, { timeoutMs: 30 });
+    expect(r).toMatchObject({ status: "failed", reason: "timeout" });
+    await new Promise((res) => setTimeout(res, 200));
+    expect(pending.size).toBe(0);
+    expect(saved).toHaveLength(1);
+    expect(saved[0]?.status).toBe("failed");
+  });
+
+  describe("single-flight hard ceiling", () => {
+    afterEach(() => vi.useRealTimers());
+    it("frees the key at 2 x the bound even when the run never settles; a newer run's key is not freed by the old one", async () => {
+      vi.useFakeTimers();
+      const { d } = deps({ reply: "{}" });
+      const never = { ...d.provider, complete: () => new Promise<never>(() => undefined) } as typeof d.provider;
+      d.provider = never;
+      const first = runBriefingBounded(d, input, { timeoutMs: 1000 });
+      await vi.advanceTimersByTimeAsync(1000);
+      await expect(first).resolves.toMatchObject({ reason: "timeout" });
+      await expect(runBriefingBounded(d, input, { timeoutMs: 1000 })).resolves.toEqual({ busy: true }); // not released yet
+      await vi.advanceTimersByTimeAsync(1000); // 2 x the bound
+      const { d: d2 } = deps({ reply: "{}" });
+      await expect(runBriefingBounded(d2, input, { timeoutMs: 1000 })).resolves.not.toHaveProperty("busy");
+    });
   });
 
   it("the guard is released after a failure", async () => {
