@@ -490,11 +490,14 @@ isOneToOne: false
                            },
 "briefing_latest":
 { Args: { "p_lane": string }; Returns: {
-              "content": Json,"coverage": Json,"id": string,"model": string,"prepared_at": string,"source_refs": Json,"status": string,"trigger": string,"window_from": string,"window_to": string
+              "content": Json,"coverage": Json,"id": string,"last_failed_at": string,"last_run_at": string,"model": string,"prepared_at": string,"source_refs": Json,"status": string,"trigger": string,"window_from": string,"window_to": string
             }[]
                            },
 "briefing_save":
 { Args: { "p_content": Json,"p_coverage": Json,"p_lane": string,"p_model": string,"p_owner": string,"p_source_refs": Json,"p_status": string,"p_trigger": string,"p_window_from": string,"p_window_to": string }; Returns: string
+                           },
+"briefing_save_own":
+{ Args: { "p_content": Json,"p_coverage": Json,"p_lane": string,"p_model": string,"p_source_refs": Json,"p_status": string,"p_window_from": string,"p_window_to": string }; Returns: string
                            },
 "briefing_threads":
 { Args: { "p_lane": string,"p_since": string }; Returns: {

@@ -22,6 +22,8 @@ import {
   rankAttention,
   moneyThreads,
   type AttentionRules,
+  type BriefContent,
+  type BriefRef,
   type AttentionThread,
   type MoneyThread,
   type DayEvent,
@@ -138,5 +140,107 @@ export async function briefingFor(client: Db, laneId: string, now: Date, viewerT
       mailboxes: [],
       unavailable: true,
     };
+  }
+}
+
+// ---------------------------------------------------------------------------------------------------------- AI briefing (T-231c)
+
+export type SavedBriefingView = {
+  id: string;
+  status: "ready" | "partial" | "failed";
+  trigger: string;
+  preparedAt: string;
+  windowFrom: string;
+  windowTo: string;
+  content: BriefContent;
+  refs: BriefRef[];
+  /** Newest failed attempt after this briefing (Home says so); null when none. */
+  lastFailedAt: string | null;
+  /** Newest attempt of any kind (the Run-now cooldown). */
+  lastRunAt: string | null;
+};
+
+const strs = (v: unknown): string[] => (Array.isArray(v) ? v.filter((x): x is string => typeof x === "string") : []);
+
+/**
+ * Parses core.briefing_latest's row (stored content was checked when it was written; parsed again defensively). The row
+ * is the newest non-failed briefing; when every attempt failed its id is null and this returns a "failed" view at the
+ * newest failed attempt.
+ */
+export function parseSavedBriefing(data: unknown): SavedBriefingView | null {
+  const row = Array.isArray(data) ? (data[0] as Record<string, unknown> | undefined) : undefined;
+  if (!row) return null;
+  const lastFailedAt = typeof row.last_failed_at === "string" ? row.last_failed_at : null;
+  const lastRunAt = typeof row.last_run_at === "string" ? row.last_run_at : null;
+  if (row.id === null && lastFailedAt) {
+    return {
+      id: "",
+      status: "failed",
+      trigger: "manual",
+      preparedAt: lastFailedAt,
+      windowFrom: lastFailedAt,
+      windowTo: lastFailedAt,
+      refs: [],
+      content: { lines: [], attention: [], deadlines: [], priorities: [], replies: [], moreReplies: [], notes: [] },
+      lastFailedAt,
+      lastRunAt,
+    };
+  }
+  if (typeof row.id !== "string" || typeof row.prepared_at !== "string") return null;
+  const status = row.status === "ready" || row.status === "partial" || row.status === "failed" ? row.status : "failed";
+  const c = (typeof row.content === "object" && row.content !== null ? row.content : {}) as Record<string, unknown>;
+  const list = <T,>(v: unknown, f: (x: Record<string, unknown>) => T | null): T[] =>
+    Array.isArray(v) ? v.flatMap((x) => (typeof x === "object" && x !== null ? [f(x as Record<string, unknown>)].filter((y): y is T => y !== null) : [])) : [];
+  const s = (v: unknown) => (typeof v === "string" ? v : null);
+  const refs = list(row.source_refs, (r) =>
+    typeof r.ref === "string" && typeof r.connectionId === "string" && typeof r.messageId === "string"
+      ? ({
+          ref: r.ref,
+          connectionId: r.connectionId,
+          messageId: r.messageId,
+          threadKey: s(r.threadKey) ?? "",
+          mailbox: s(r.mailbox),
+          fromAddress: s(r.fromAddress),
+          fromName: s(r.fromName),
+          subject: s(r.subject),
+          receivedAt: s(r.receivedAt) ?? "",
+          sourceUrl: typeof r.sourceUrl === "string" && r.sourceUrl.startsWith("https://") ? r.sourceUrl : null,
+          reason: s(r.reason) ?? "",
+          kind: s(r.kind) ?? "",
+        } satisfies BriefRef)
+      : null,
+  );
+  return {
+    id: row.id,
+    status,
+    trigger: s(row.trigger) ?? "manual",
+    preparedAt: row.prepared_at,
+    windowFrom: s(row.window_from) ?? row.prepared_at,
+    windowTo: s(row.window_to) ?? row.prepared_at,
+    lastFailedAt,
+    lastRunAt,
+    refs,
+    content: {
+      lines: strs(c.lines),
+      attention: list(c.attention, (a) => (typeof a.ref === "string" ? { ref: a.ref, what: s(a.what) ?? "", why: s(a.why) ?? "", next: s(a.next) ?? "" } : null)),
+      deadlines: list(c.deadlines, (d) => (typeof d.text === "string" ? { ref: s(d.ref), text: d.text, due: s(d.due) } : null)),
+      priorities: list(c.priorities, (p) => (typeof p.text === "string" ? { text: p.text, reason: s(p.reason) ?? "", refs: strs(p.refs) } : null)),
+      replies: list(c.replies, (r) =>
+        typeof r.ref === "string" && typeof r.text === "string" ? { ref: r.ref, status: r.status === "ready" ? ("ready" as const) : ("awaiting_input" as const), context: s(r.context) ?? "", text: r.text } : null,
+      ),
+      moreReplies: strs(c.moreReplies),
+      notes: strs(c.notes),
+    },
+  };
+}
+
+/** The caller's latest prepared briefing (null when none, or on error: Home then shows the rule-based sections only). */
+export async function latestBriefing(client: Db, laneId: string): Promise<SavedBriefingView | null> {
+  try {
+    const { data, error } = await client.schema("core").rpc("briefing_latest", { p_lane: laneId });
+    if (error) return null;
+    return parseSavedBriefing(data);
+  } catch {
+    return null;
   }
 }

@@ -11,6 +11,7 @@ import {
   maskFigures,
   timeWithZone,
   ago,
+  type AttentionNote,
   type AttentionThread,
   type CoverageItem,
   type DayEvent,
@@ -194,7 +195,7 @@ function ThreadLink({ t }: { t: ThreadRow }) {
   ) : null;
 }
 
-export function AttentionSection({ mail, tz }: { mail: MailSection; tz: string }) {
+export function AttentionSection({ mail, tz, notes }: { mail: MailSection; tz: string; notes?: Map<string, AttentionNote> }) {
   if (!mail.access) {
     return mail.unavailable ? (
       <EmptyState title="Mail could not be read" description="Reload in a minute. Coverage above shows the last sync." className="border-0 bg-transparent px-0 py-6" />
@@ -218,12 +219,28 @@ export function AttentionSection({ mail, tz }: { mail: MailSection; tz: string }
               <Badge variant={a.kind === "priority" || a.kind === "security" ? "alert" : "outline"}>{KIND_LABEL[a.kind]}</Badge>
               {a.kind === "repeated_failures" ? null : <span className="text-small text-foreground">{a.reason}</span>}
             </span>
+            <AiNote note={notes?.get(`${a.thread.connectionId}:${a.thread.messageId}`)} />
             <SourceLine t={a.thread} mailbox={mail.mailboxOf[a.thread.connectionId]} tz={tz} />
           </li>
         ))}
       </ol>
       {mail.more > 0 ? <p className="text-small text-muted-foreground">{mail.more} more in the Inbox.</p> : null}
     </div>
+  );
+}
+
+/** What happened / why it matters / next step, from today's AI briefing (plain text). */
+function AiNote({ note }: { note: AttentionNote | undefined }) {
+  if (!note) return null;
+  return (
+    <dl data-testid="attention-note" className="grid grid-cols-[auto_1fr] gap-x-3 gap-y-0.5 text-small">
+      <dt className="text-muted-foreground">What</dt>
+      <dd className="text-foreground">{note.what}</dd>
+      <dt className="text-muted-foreground">Why</dt>
+      <dd className="text-foreground">{note.why}</dd>
+      <dt className="text-muted-foreground">Next</dt>
+      <dd className="text-foreground">{note.next}</dd>
+    </dl>
   );
 }
 

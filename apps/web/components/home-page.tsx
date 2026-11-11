@@ -10,7 +10,8 @@ import { eyebrowDate } from "@/lib/format-date";
 import { guards } from "@/lib/guards";
 import { cookies } from "next/headers";
 import { composeBriefing, homeFor, homeKpis } from "@/lib/home";
-import { briefingFor, viewerZone } from "@/lib/briefing";
+import { briefingFor, latestBriefing, viewerZone } from "@/lib/briefing";
+import { AiBriefing, DeadlinesAndPriorities, notesByMessage } from "./home-ai-briefing";
 import { AttentionSection, CalendarSections, CoverageStrip, MoneyCard } from "./home-briefing";
 import { TimezoneCookie } from "./timezone-cookie";
 import { loadLane } from "@/lib/lane-page";
@@ -62,9 +63,11 @@ async function HomeSections({ laneId, now }: { laneId: string; now: Date }) {
   const tz = viewerZone(tzCookie);
   const g = await guards();
   // Home v1 counts and the T-231 briefing sections load in parallel. Each shows its own "unavailable" state; neither ever shows an empty day.
-  const [view, brief] = await Promise.all([
+  const laneClient = async () => (await g.requireLane(laneId as Parameters<typeof g.requireLane>[0])).client;
+  const [view, brief, saved] = await Promise.all([
     timed("load.home", async () => homeFor(g, laneId, now)),
-    timed("load.briefing", async () => briefingFor((await g.requireLane(laneId as Parameters<typeof g.requireLane>[0])).client, laneId, now, tz)),
+    timed("load.briefing", async () => briefingFor(await laneClient(), laneId, now, tz)),
+    timed("load.briefing_latest", async () => latestBriefing(await laneClient(), laneId)),
   ]);
   return (
     <>
@@ -75,7 +78,7 @@ async function HomeSections({ laneId, now }: { laneId: string; now: Date }) {
           <AlertDescription>Reload the page in a minute. If it keeps happening, check Settings → Connections.</AlertDescription>
         </Alert>
       ) : null}
-      <Briefing lines={view.unavailable ? [] : composeBriefing(view, now)} />
+      <AiBriefing laneId={laneId} brief={saved} fallbackLines={view.unavailable ? [] : composeBriefing(view, now)} tz={brief.viewerTz} canRun={brief.mail.access} />
       <CoverageStrip laneId={laneId} view={brief} now={now} />
       <Suspense fallback={<HomeFinanceFallback />}>
         <HomeFinance laneId={laneId} />
@@ -88,9 +91,10 @@ async function HomeSections({ laneId, now }: { laneId: string; now: Date }) {
       <div data-testid="home-main-grid" className="grid gap-4 lg:grid-cols-3">
         <div className="flex min-w-0 flex-col gap-4 lg:col-span-2">
           <PageSection title="Needs your attention" note="Top 5 by rules · metadata only">
-            <AttentionSection mail={brief.mail} tz={brief.viewerTz} />
+            <AttentionSection mail={brief.mail} tz={brief.viewerTz} notes={notesByMessage(saved)} />
           </PageSection>
           <MoneyCard mail={brief.mail} tz={brief.viewerTz} />
+          <DeadlinesAndPriorities brief={saved} tz={brief.viewerTz} />
         </div>
         <div className="flex min-w-0 flex-col gap-4">
           <CalendarSections view={brief} now={now} />
@@ -111,21 +115,3 @@ function ProjectsNotice() {
   );
 }
 
-function Briefing({ lines }: { lines: string[] }) {
-  return (
-    <section aria-label="Today's briefing" className="relative overflow-hidden rounded-card border border-border bg-card p-5 text-card-foreground shadow-card sm:p-6">
-      <span aria-hidden className="absolute inset-x-0 top-0 h-1 bg-gold" />
-      <div className="flex flex-wrap items-baseline justify-between gap-2">
-        <h2 className="font-heading text-card-title font-semibold text-foreground">Today&apos;s briefing</h2>
-        <p className="text-small text-muted-foreground">From your connected sources</p>
-      </div>
-      {lines.length > 0 ? (
-        <p data-testid="briefing" className="mt-3 max-w-4xl text-body leading-relaxed text-foreground">
-          {lines.join(" ")}
-        </p>
-      ) : (
-        <p className="mt-3 text-body text-muted-foreground">Your briefing appears here once this company&apos;s sources are connected.</p>
-      )}
-    </section>
-  );
-}

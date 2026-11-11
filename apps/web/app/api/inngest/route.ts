@@ -3,6 +3,7 @@
 // conn.sync (T-038), token health (T-040), cal.ingest_delta (T-130), fin.sync QuickBooks (T-090), fin.qbo_reports (T-052), fin.qbo_normalize (T-056) and retention.purge (T-042) and brain.import_purge (T-210) are wired here: core cannot import connectors, so the route hands the connector job to the function.
 import {
   brainImportPurgeFunction,
+  briefingDailyFunction,
   calIngestFunction,
   connHealthFunctions,
   connSyncFunction,
@@ -27,10 +28,19 @@ import { listHealthConnectionIds, listRenewConnectionIds, subscriptionRenewJob, 
 import { retentionPurgeJob, retentionRegistry } from "@nichols/connectors/retention";
 import { listQuickbooksConnectionIds, qboReportsJob } from "@nichols/connectors/reports";
 import { qboNormalizeJob } from "@nichols/connectors/normalize";
+import { purgeBriefings } from "@nichols/briefing/jobs";
+import { dueOwners, runScheduled } from "@/lib/briefing-schedule";
 
 const importPurge = createImportPurge({ clientFor: (laneId) => getLaneJobClient(laneId) });
 // The brain tables in the retention catalog: kept until deleted, or cleaned by brain-import-purge (never by retention.purge).
 for (const declaration of BRAIN_RETENTION) retentionRegistry.declare(declaration);
+// brief.briefings (T-231c): prepared briefings follow the lane policy's retention (default 30 days, capped by SQL).
+// Registered once (register throws on a duplicate id if this module is evaluated again). The job client is created here,
+// the only briefing code that holds it (security review H2).
+if (!retentionRegistry.list().some((t) => t.id === "brief.briefings")) {
+  retentionRegistry.register({ id: "brief.briefings", class: "policy", purge: async (laneId, keepDays) => purgeBriefings(await getLaneJobClient(laneId as LaneId), laneId as LaneId, Math.min(keepDays ?? 30, 30)) });
+}
+const briefingClient = (laneId: string) => getLaneJobClient(laneId as LaneId);
 
 export const { GET, POST, PUT } = inngestRoute((inngest) => [
   ...platformFunctions(inngest),
@@ -95,6 +105,13 @@ export const { GET, POST, PUT } = inngestRoute((inngest) => [
   ...retentionPurgeFunctions(inngest, {
     purgeLane: (laneId) => retentionPurgeJob.run(laneId),
     enabledLanes: () => getServerEnv().ENABLED_LANES,
+  }),
+  // briefing.daily (T-231c): hourly tick; a lane runs only when lane_config.briefing.schedule_enabled (default off) and it is
+  // the lane's briefing hour in New York. Owners re-checked every run.
+  briefingDailyFunction(inngest, {
+    enabledLanes: () => getServerEnv().ENABLED_LANES,
+    dueOwners: (laneId, now) => dueOwners(briefingClient, laneId, now),
+    run: (laneId, owner, now) => runScheduled(briefingClient, laneId, owner, now),
   }),
   // brain.import_purge (T-210): hourly, deletes brain import candidates older than 23 h and closes stale imports, per lane.
   brainImportPurgeFunction(inngest, {

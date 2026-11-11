@@ -1056,3 +1056,15 @@ Logged, not fixed (review LOWs):
 - T-231b security L1: priority-sender matching trusts the From header (no SPF/DKIM result in the index).
 - T-231b code L10: Money uses only the latest inbound subject; no "more" indicator.
 - Unit-test timeouts under machine load (eslint-plugin config-web, connector reports/sync, brain-wizard axe, brain-import zip-bomb) pass alone; they failed only while three builders ran tests at once.
+
+### T-231c review follow-ups (Nov 11, 2026, branch `agent/T-231`)
+Fixed before done: security H1 (the lane's `llm_allowed_categories` now gates mail metadata, bodies and calendar facts; no model call with neither; fail closed on a policy read error), H2 (no service client reachable from request code: the briefing jobs module takes explicit clients, only the Inngest route creates the job client, "Run now" saves through the definer `core.briefing_save_own`), H3 (every model string is masked for amounts and long digit runs before saving; the model sees masked subjects); code H1/security M3 (sender metadata and calendar titles wrapped as untrusted data); code H3 (a failed attempt never hides the last good briefing; Home says a newer attempt failed; scheduled model failures throw so Inngest retries); security M1, M4, L3, L5; code M4 (grounding matches whole figures, months either order, ISO dates), M5 (an ungrounded reply keeps no text), M6 (attention item with nothing verified dropped; all lines dropped -> partial), M7 (`maxDuration` 90 on the Home page).
+**Decision taken (default, tell Saurabh):** AI text on Home never shows money amounts or long numbers (masked like subjects, rule 7). If Robert wants "amount as written in the email", that is a product decision: add it as a labelled field later.
+Logged, not fixed (MEDIUM and below):
+- Code M8 / rule 6: what/why/next summaries derived from bodies are stored (30 days max, capped by the lane policy). Architecture §317 lists summaries as a permitted derived class; recorded here so the D-19 review covers it.
+- Code M9: the schedule uses only the hour of `briefing.time` ("07:30" runs at 07:05); `now` is taken per invocation (step ids can change if a run crosses midnight); a scheduled run can repeat a morning "Run now". Security L4: on the DST fall-back day a 01:xx time matches twice.
+- Security M2 (partly): the SQL cooldown runs at save time, after the model call, so two parallel "Run now" requests can each make a model call (the second save is refused). A claim-before-run row would close it.
+- Code L12: the Run now button shows to non-owners (they get "Only the owner can prepare the briefing").
+- Code L15 / security L3: `briefings_purge` refuses disabled lanes, so a disabled lane's briefings wait until it is enabled again.
+- Security L1/L2: the scheduled run reads the lane's whole mail index with the job client; equal to the owner's own view today (comms RLS is per lane). If RLS ever narrows per mailbox, filter by owner there.
+- Code test gaps still open: no component test for `AiBriefing` / `DeadlinesAndPriorities`, no test for the server action itself (guards are covered elsewhere).
