@@ -12,6 +12,7 @@ import { cookies } from "next/headers";
 import { composeBriefing, homeFor, homeKpis } from "@/lib/home";
 import { briefingFor, lastFailureReason, latestBriefing, viewerZone } from "@/lib/briefing";
 import { aiSetupFailure } from "@/lib/briefing-setup";
+import { adminHint } from "@nichols/briefing/hints";
 import { AiBriefing, DeadlinesAndPriorities, notesByMessage } from "./home-ai-briefing";
 import { ReplyDrafts } from "./home-reply-drafts";
 import { AttentionSection, CalendarSections, CoverageStrip, MoneyCard } from "./home-briefing";
@@ -77,7 +78,10 @@ async function HomeSections({ laneId, now }: { laneId: string; now: Date }) {
     g.requireRole(laneId as Parameters<typeof g.requireLane>[0], ["owner", "admin_technical"]).then(() => true, () => false),
   ]);
   // Why there is no AI summary: the AI setup itself (names only), else the stored code of the newest failed attempt.
-  const failure = aiSetupFailure() ?? (saved && (saved.status === "failed" || saved.lastFailedAt) ? await lastFailureReason(await laneClient(), laneId) : null);
+  const setup = aiSetupFailure();
+  const failure = setup?.code ?? (saved && (saved.status === "failed" || saved.lastFailedAt) ? await lastFailureReason(await laneClient(), laneId) : null);
+  // The hint is built here, on the server, and only for admins: non-admins get no hint string at all.
+  const failureHint = isAdmin && failure ? adminHint(failure, setup?.names ?? []) : null;
   return (
     <>
       <TimezoneCookie current={tzCookie ?? null} />
@@ -87,7 +91,7 @@ async function HomeSections({ laneId, now }: { laneId: string; now: Date }) {
           <AlertDescription>Reload the page in a minute. If it keeps happening, check Settings → Connections.</AlertDescription>
         </Alert>
       ) : null}
-      <AiBriefing laneId={laneId} brief={saved} fallbackLines={view.unavailable ? [] : composeBriefing(view, now)} tz={brief.viewerTz} canRun={brief.mail.access} failure={failure} isAdmin={isAdmin} />
+      <AiBriefing laneId={laneId} brief={saved} fallbackLines={view.unavailable ? [] : composeBriefing(view, now)} tz={brief.viewerTz} canRun={brief.mail.access} failure={failure} failureHint={failureHint} />
       <CoverageStrip laneId={laneId} view={brief} now={now} />
       <Suspense fallback={<HomeFinanceFallback />}>
         <HomeFinance laneId={laneId} />

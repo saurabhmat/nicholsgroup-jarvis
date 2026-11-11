@@ -13,7 +13,7 @@ const MESSAGES: Record<string, string> = {
   unavailable: "The briefing could not be prepared. Try again in a minute.",
 };
 
-export function RunBriefingButton({ laneId, isAdmin = false }: { laneId: string; isAdmin?: boolean }) {
+export function RunBriefingButton({ laneId }: { laneId: string }) {
   const [state, action, pending] = useActionState<RunNowState, FormData>(() => runBriefingNow(laneId), null);
   return (
     <form action={action} className="flex items-center gap-2">
@@ -23,7 +23,7 @@ export function RunBriefingButton({ laneId, isAdmin = false }: { laneId: string;
       {state && "error" in state ? (
         state.reason ? (
           <span role="status">
-            <FailureReason code={state.reason} isAdmin={isAdmin} prefix="Not prepared" />
+            <FailureReason code={state.reason} hint={state.hint ?? null} prefix="Not prepared" />
           </span>
         ) : (
           <span role="status" className="text-small text-muted-foreground">
@@ -32,7 +32,7 @@ export function RunBriefingButton({ laneId, isAdmin = false }: { laneId: string;
         )
       ) : state?.reason ? (
         <span role="status">
-          <FailureReason code={state.reason} isAdmin={isAdmin} prefix="Not prepared" />
+          <FailureReason code={state.reason} hint={state.hint ?? null} prefix="Not prepared" />
         </span>
       ) : null}
     </form>

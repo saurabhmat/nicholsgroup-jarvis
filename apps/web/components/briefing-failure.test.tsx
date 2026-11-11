@@ -8,17 +8,17 @@ afterEach(cleanup);
 
 describe("FailureReason", () => {
   it("shows the fixed text without a hint to a non-admin", () => {
-    render(<FailureReason code="model_setting_invalid" isAdmin={false} />);
+    render(<FailureReason code="model_setting_invalid" />);
     expect(screen.getByTestId("briefing-failure").textContent).toBe("AI summary unavailable: AI model setting is invalid");
     expect(screen.queryByTestId("briefing-failure-hint")).toBeNull();
     expect(document.body.textContent).not.toContain("ANTHROPIC");
   });
   it("shows the hint to an admin, naming the variable", () => {
-    render(<FailureReason code="model_setting_invalid" isAdmin />);
-    expect(screen.getByTestId("briefing-failure-hint").textContent).toBe("Check ANTHROPIC_MODEL_ANALYSIS in the environment");
+    render(<FailureReason code="model_setting_invalid" hint="Check ANTHROPIC_MODEL_ANALYSIS (or the request size)" />);
+    expect(screen.getByTestId("briefing-failure-hint").textContent).toBe("Check ANTHROPIC_MODEL_ANALYSIS (or the request size)");
   });
   it("an unknown or missing code reads generically", () => {
-    render(<FailureReason code={null} isAdmin />);
+    render(<FailureReason code={null} />);
     expect(screen.getByTestId("briefing-failure").textContent).toBe("AI summary unavailable: Could not be prepared");
   });
 });

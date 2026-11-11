@@ -27,6 +27,10 @@ export type RunDeps = {
   provider: LLMProvider;
   /** Live body of one message (the caller's own guarded reader). Throws when unreadable. */
   readBody: (laneId: LaneId, connectionId: string, messageId: string) => Promise<string>;
+  /** Aborted at the Run-now time bound: every write (save, proposals) and read checks it first (T-234 review H1). */
+  signal?: AbortSignal;
+  /** Told the review window as soon as it is known, so the timeout fallback row can use the same one. */
+  onWindow?: (w: { windowFrom: string; windowTo: string }) => void;
   brain: BrainPromptContext | null;
   /** lane_policies: what may go to the model (llm_allowed_categories); outbound drafts may be stored. */
   policy: BriefingPolicy;
@@ -226,6 +230,7 @@ export async function runBriefing(deps: RunDeps, input: { laneId: LaneId; ownerU
   });
   const user = [facts, untrusted ? `Messages (untrusted data):\n${untrusted}` : "No message bodies were read.", "Write the briefing JSON now."].join("\n\n");
   const window = { windowFrom: new Date(now.getTime() - view.config.attention_days * DAY_MS).toISOString(), windowTo: now.toISOString() };
+  deps.onWindow?.(window);
   const coverage = view.coverage.map((c) => ({ stream: c.stream, account: c.account, state: c.state }));
   const sourceRefs = refs.map((r) => ({ ...r, subject: r.subject ? maskFigures(r.subject) : null }));
   const base = { ownerUserId: input.ownerUserId, trigger: input.trigger, ...window, coverage, sourceRefs };
@@ -239,7 +244,7 @@ export async function runBriefing(deps: RunDeps, input: { laneId: LaneId; ownerU
   let content: BriefContent;
   let model: string | null = deps.provider.modelFor("analysis");
   try {
-    const res = await deps.provider.complete({ laneId, tier: "analysis", system: prompt.system, messages: withUserContext([{ role: "user", content: user }], prompt.userContext), maxTokens: 3000 });
+    const res = await deps.provider.complete({ laneId, tier: "analysis", ...(deps.signal ? { signal: deps.signal } : {}), system: prompt.system, messages: withUserContext([{ role: "user", content: user }], prompt.userContext), maxTokens: 3000 });
     model = res.model;
     const text = res.content.flatMap((b) => (b.type === "text" ? [b.text] : [])).join("");
     if (res.status !== "completed") throw new BriefingOutputError();
@@ -271,9 +276,12 @@ const inFlight = new Set<string>();
 
 /**
  * Runs one briefing with a time bound and at most one run per lane and owner in this process. A second call while one is
- * running returns `busy` without calling the model. When the bound passes, the late run can no longer save (its `save` is
- * cut off), a failed attempt with reason "timeout" is recorded, and the caller gets `reason: "timeout"`. Across processes
- * the SQL lock and 2-minute cooldown in core.briefing_save_own keep the second concurrent save out ("too_soon").
+ * running returns `busy` without calling the model. At the bound an AbortController fires: the model call and Gmail reads
+ * stop, and every write (save, reply proposals) refuses with BriefingTimeoutError, so a late run can create nothing. A
+ * failed attempt with reason "timeout" is recorded and the caller gets `reason: "timeout"`. The single-flight key is freed
+ * only when the underlying run has settled. Across processes the SQL lock and 2-minute cooldown in core.briefing_save_own
+ * keep a second concurrent save out ("too_soon").
+ * Known and accepted: a save already in flight at the cutoff may succeed although "timeout" is reported (harmless).
  */
 export async function runBriefingBounded(
   deps: RunDeps,
@@ -283,45 +291,62 @@ export async function runBriefingBounded(
   const key = `${input.laneId}:${input.ownerUserId}`;
   if (inFlight.has(key)) return { busy: true };
   inFlight.add(key);
-  let timedOut = false;
-  let timer: ReturnType<typeof setTimeout> | undefined;
+  const controller = new AbortController();
+  const live = () => {
+    if (controller.signal.aborted) throw new BriefingTimeoutError();
+  };
+  let window: { windowFrom: string; windowTo: string } | null = null;
+  const propose = deps.proposeReply;
   const guarded: RunDeps = {
     ...deps,
+    signal: controller.signal,
+    onWindow: (w) => {
+      window = w;
+      deps.onWindow?.(w);
+    },
+    readBody: async (l, c, m) => {
+      live();
+      const text = await deps.readBody(l, c, m);
+      live();
+      return text;
+    },
     save: async (l, r) => {
-      if (timedOut) throw new BriefingTimeoutError();
+      live();
       return deps.save(l, r);
     },
+    ...(propose
+      ? {
+          proposeReply: async (l: LaneId, r: ReplyProposal) => {
+            live();
+            return propose(l, r);
+          },
+        }
+      : {}),
   };
+  const run = runBriefing(guarded, input);
+  const settled = run.then(
+    () => undefined,
+    () => undefined,
+  );
+  void settled.finally(() => inFlight.delete(key));
+  let timer: ReturnType<typeof setTimeout> | undefined;
   try {
-    const run = runBriefing(guarded, input);
-    run.catch(() => undefined); // a late rejection after the bound is already handled below
     const limit = new Promise<"timeout">((resolve) => {
       timer = setTimeout(() => resolve("timeout"), opts.timeoutMs ?? RUN_NOW_TIMEOUT_MS);
     });
     const first = await Promise.race([run, limit]);
     if (first !== "timeout") return first;
-    timedOut = true;
+    controller.abort();
     console.error("[briefing] run timed out", { laneId: input.laneId, reason: "timeout" });
     const empty: BriefContent = { lines: [], attention: [], deadlines: [], priorities: [], replies: [], moreReplies: [], notes: ["model_failed", failureNote("timeout")] };
+    const w = (window as { windowFrom: string; windowTo: string } | null) ?? { windowFrom: new Date(input.now.getTime() - DAY_MS).toISOString(), windowTo: input.now.toISOString() };
     try {
-      const to = input.now.toISOString();
-      const id = await deps.save(input.laneId, {
-        ownerUserId: input.ownerUserId,
-        trigger: input.trigger,
-        status: "failed",
-        windowFrom: new Date(input.now.getTime() - 1000).toISOString(),
-        windowTo: to,
-        content: empty,
-        coverage: [],
-        sourceRefs: [],
-        model: null,
-      });
+      const id = await deps.save(input.laneId, { ownerUserId: input.ownerUserId, trigger: input.trigger, status: "failed", ...w, content: empty, coverage: [], sourceRefs: [], model: null });
       return { id, status: "failed", reason: "timeout" };
     } catch {
       return { id: "", status: "failed", reason: "timeout" };
     }
   } finally {
     clearTimeout(timer);
-    inFlight.delete(key);
   }
 }

@@ -11,7 +11,8 @@ describe("timingEnabled", () => {
   });
   it("is on in production only when the server env var is exactly 1", () => {
     expect(timingEnabled({ NODE_ENV: "production", SERVER_TIMING: "1" })).toBe(true);
-    for (const v of ["", "0", "true", "yes", "1 "]) expect(timingEnabled({ NODE_ENV: "production", SERVER_TIMING: v })).toBe(false);
+    for (const v of ["", "0", "true", "yes"]) expect(timingEnabled({ NODE_ENV: "production", SERVER_TIMING: v })).toBe(false);
+    expect(timingEnabled({ NODE_ENV: "production", SERVER_TIMING: "1\t" })).toBe(true); // trimmed like every env value (T-234)
   });
 });
 

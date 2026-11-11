@@ -93,7 +93,7 @@ export function getInngestEnv(env: EnvRecord = process.env) {
  * production build only when the operator sets the SERVER_TIMING env var to exactly "1". Never decided by a request.
  */
 export function serverTimingEnabled(env: EnvRecord = process.env): boolean {
-  return env.NODE_ENV === "development" || env.SERVER_TIMING === "1";
+  return env.NODE_ENV?.trim() === "development" || env.SERVER_TIMING?.trim() === "1";
 }
 
 /** True when this process runs a development build (`next dev`, tests), never a production build (`next start`). */

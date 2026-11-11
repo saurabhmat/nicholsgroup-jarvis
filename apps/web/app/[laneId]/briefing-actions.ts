@@ -11,7 +11,9 @@ import type { LaneId } from "@nichols/core";
 import { AuthError } from "@nichols/core/auth";
 import { createBrainStore, loadBrainPromptContext, type BrainPromptContext, type ClientFor } from "@nichols/brain/server";
 import { saveOwnBriefing } from "@nichols/briefing/jobs";
-import { codeForMissingEnv, classifyFailure, type FailureCode } from "@nichols/briefing/domain";
+import { classifyFailure, type FailureCode } from "@nichols/briefing/domain";
+import { adminHint } from "@nichols/briefing/hints";
+import { aiSetupFailure } from "@/lib/briefing-setup";
 import { readGmailBody } from "@nichols/connectors/google";
 import { cookies } from "next/headers";
 import { revalidatePath } from "next/cache";
@@ -22,8 +24,8 @@ import { replyProposer } from "@/lib/briefing-proposals";
 
 // `reason` is a fixed failure code (domain/failure.ts); the client maps it to short text and, for admins, a hint.
 export type RunNowState =
-  | { ok: true; status: string; reason?: FailureCode }
-  | { error: "forbidden" | "not_configured" | "too_soon" | "busy" | "unavailable"; reason?: FailureCode }
+  | { ok: true; status: string; reason?: FailureCode; hint?: string }
+  | { error: "forbidden" | "not_configured" | "too_soon" | "busy" | "unavailable"; reason?: FailureCode; hint?: string }
   | null;
 
 const COOLDOWN_MS = 2 * 60_000;
@@ -37,7 +39,12 @@ export async function runBriefingNow(laneId: string): Promise<RunNowState> {
     const { client, session } = await g.requireRole(laneId as LaneId, ["owner"]);
     // 60 s per model call, one retry: the whole run is bounded again by RUN_NOW_TIMEOUT_MS (Home's maxDuration is 90 s).
     const p = getLLMProvider({ timeoutMs: 60_000, maxRetries: 1 });
-    if (!p.configured) return { error: "not_configured", reason: codeForMissingEnv(p.missing) };
+    // Run now is owner-only and owners are admins, so the hint (names only) goes with every coded reason here.
+    if (!p.configured) {
+      const setup = aiSetupFailure();
+      const code = setup?.code ?? "key_missing";
+      return { error: "not_configured", reason: code, hint: adminHint(code, setup?.names ?? []) };
+    }
     const latest = await latestBriefing(client, laneId);
     if (latest?.lastRunAt && Date.now() - Date.parse(latest.lastRunAt) < COOLDOWN_MS) return { error: "too_soon" };
     const pol = await client.schema("core").from("lane_policies").select("llm_allowed_categories, store_outbound_drafts").eq("lane_id", laneId).maybeSingle();
@@ -63,11 +70,11 @@ export async function runBriefingNow(laneId: string): Promise<RunNowState> {
     );
     if ("busy" in res) return { error: "busy" };
     revalidatePath(`/${laneId}`);
-    return { ok: true, status: res.status, ...(res.reason ? { reason: res.reason } : {}) };
+    return { ok: true, status: res.status, ...(res.reason ? { reason: res.reason, hint: adminHint(res.reason) } : {}) };
   } catch (e) {
     if (e instanceof AuthError) return { error: "forbidden" };
     // A bad AI setting in production throws EnvValidationError (names only): say which code, never the message.
-    if (e instanceof Error && e.name === "EnvValidationError") return { error: "not_configured", reason: classifyFailure(e) };
+    if (e instanceof Error && e.name === "EnvValidationError") { const reason = classifyFailure(e); return { error: "not_configured", reason, hint: adminHint(reason) }; }
     if (e instanceof Error && e.message === "briefing too_soon") return { error: "too_soon" };
     console.error("[briefing] run now failed", { laneId, error: e instanceof Error ? e.name : typeof e });
     return { error: "unavailable" };

@@ -14,8 +14,8 @@ const STATUS: Record<SavedBriefingView["status"], { label: string; variant: "suc
   failed: { label: "Could not be prepared", variant: "alert" },
 };
 
-/** `failure`: why the newest attempt (or the AI setup) failed, a fixed code; `isAdmin`: owner or admin_technical (sees the hint). */
-export function AiBriefing({ laneId, brief, fallbackLines, tz, canRun, failure = null, isAdmin = false }: { laneId: string; brief: SavedBriefingView | null; fallbackLines: string[]; tz: string; canRun: boolean; failure?: FailureCode | null; isAdmin?: boolean }) {
+/** `failure`: why the newest attempt (or the AI setup) failed, a fixed code; `failureHint`: the admin hint, set server-side only for owner or admin_technical. */
+export function AiBriefing({ laneId, brief, fallbackLines, tz, canRun, failure = null, failureHint = null }: { laneId: string; brief: SavedBriefingView | null; fallbackLines: string[]; tz: string; canRun: boolean; failure?: FailureCode | null; failureHint?: string | null }) {
   const lines = brief && brief.status !== "failed" && brief.content.lines.length > 0 ? brief.content.lines : null;
   return (
     <section aria-label="Today's briefing" className="relative overflow-hidden rounded-card border border-border bg-card p-5 text-card-foreground shadow-card sm:p-6">
@@ -32,7 +32,7 @@ export function AiBriefing({ laneId, brief, fallbackLines, tz, canRun, failure =
             <span className="text-small text-muted-foreground">From your connected sources</span>
           )}
           {brief ? <Badge variant={STATUS[brief.status].variant}>{STATUS[brief.status].label}</Badge> : null}
-          {canRun ? <RunBriefingButton laneId={laneId} isAdmin={isAdmin} /> : null}
+          {canRun ? <RunBriefingButton laneId={laneId} /> : null}
         </div>
       </div>
       {brief && brief.status !== "failed" && brief.lastFailedAt ? (
@@ -42,7 +42,7 @@ export function AiBriefing({ laneId, brief, fallbackLines, tz, canRun, failure =
       ) : null}
       {failure || (brief && (brief.status === "failed" || brief.lastFailedAt)) ? (
         <p className="mt-2">
-          <FailureReason code={failure} isAdmin={isAdmin} />
+          <FailureReason code={failure} hint={failureHint} />
         </p>
       ) : null}
       {lines ? (

@@ -6,6 +6,7 @@
   "exports": {
     ".": "./src/index.ts",
     "./domain": "./src/domain/index.ts",
+    "./hints": "./src/domain/hints.ts",
     "./tools": "./src/tools/index.ts",
     "./jobs": "./src/jobs/index.ts",
     "./ui": "./src/ui/index.ts"

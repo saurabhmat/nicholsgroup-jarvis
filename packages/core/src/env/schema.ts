@@ -72,7 +72,7 @@ export function isRealDataEnv(env: EnvRecord): boolean {
   if (isProduction(env)) return true;
   // On Vercel, staging is only the custom environment "staging"; a PR Preview or `vercel dev` never is, whatever
   // APP_ENV claims. Off Vercel, APP_ENV=staging is a developer machine pointed at staging (allowed by design).
-  return env.APP_ENV === "staging" && (!isVercel(env.VERCEL) || env.VERCEL_TARGET_ENV === "staging");
+  return env.APP_ENV?.trim() === "staging" && (!isVercel(env.VERCEL) || env.VERCEL_TARGET_ENV?.trim() === "staging");
 }
 
 // ---------------------------------------------------------------- server schema
@@ -118,7 +118,7 @@ export const inngestShape = {
 export const anthropicEnvSchema = z.object(anthropicShape);
 export const inngestEnvSchema = z.object(inngestShape);
 
-const isVercel = (v: string | undefined) => v !== undefined && /^(1|true)$/i.test(v);
+const isVercel = (v: string | undefined) => v !== undefined && /^(1|true)$/i.test(v.trim());
 
 type CrossFieldInput = {
   APP_ENV?: string;
@@ -283,9 +283,9 @@ export const connectorEnvShapes = {
 export type RuntimeFlags = { production: boolean; local: boolean; realData: boolean; /** Origin of NEXT_PUBLIC_APP_URL, when set and valid. */ appOrigin?: string | undefined };
 export const runtimeFlags = (env: EnvRecord): RuntimeFlags => ({
   production: isProduction(env),
-  local: env.APP_ENV === "local",
+  local: env.APP_ENV?.trim() === "local",
   realData: isRealDataEnv(env),
-  appOrigin: typeof env.NEXT_PUBLIC_APP_URL === "string" && URL.canParse(env.NEXT_PUBLIC_APP_URL) ? new URL(env.NEXT_PUBLIC_APP_URL).origin : undefined,
+  appOrigin: typeof env.NEXT_PUBLIC_APP_URL === "string" && URL.canParse(env.NEXT_PUBLIC_APP_URL.trim()) ? new URL(env.NEXT_PUBLIC_APP_URL.trim()).origin : undefined,
 });
 
 /** One schema factory per connector. The returned values contain only the connector's own variables. */
@@ -427,7 +427,7 @@ export function parseEnv<S extends z.ZodType>(scope: string, schema: S, env: Env
 export const parseServerEnv = (env: EnvRecord): ServerEnvWithSecrets =>
   parseEnv(
     "server environment",
-    isProduction(env) ? serverEnvProductionSchema : env.APP_ENV === "preview" ? serverEnvPreviewSchema : serverEnvSchema,
+    isProduction(env) ? serverEnvProductionSchema : env.APP_ENV?.trim() === "preview" ? serverEnvPreviewSchema : serverEnvSchema,
     env,
   );
 export const parseClientEnv = (env: EnvRecord): ClientEnv => parseEnv("client environment", clientEnvSchema, env);

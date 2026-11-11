@@ -3,12 +3,16 @@
 import { getLLMProvider } from "@nichols/ai/config";
 import { classifyFailure, codeForMissingEnv, type FailureCode } from "@nichols/briefing/domain";
 
+export type AiSetupFailure = { code: FailureCode; /** Refused SDK override variable names (sdk_override_set only). */ names: string[] };
+
 /** null when the AI is configured; otherwise why not. Never throws. */
-export function aiSetupFailure(env?: Record<string, string | undefined>): FailureCode | null {
+export function aiSetupFailure(env?: Record<string, string | undefined>): AiSetupFailure | null {
   try {
     const p = env ? getLLMProvider({ env }) : getLLMProvider();
-    return p.configured ? null : codeForMissingEnv(p.missing);
+    if (p.configured) return null;
+    if (p.refused.length > 0) return { code: "sdk_override_set", names: p.refused };
+    return { code: codeForMissingEnv(p.missing), names: [] };
   } catch (e) {
-    return classifyFailure(e);
+    return { code: classifyFailure(e), names: [] };
   }
 }

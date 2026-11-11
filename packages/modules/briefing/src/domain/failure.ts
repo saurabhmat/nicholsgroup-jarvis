@@ -2,7 +2,7 @@
 // hint. Codes and hints name variables and settings only: never an environment value, a provider message or a secret.
 // The code is stored as a note "fail:<code>" in the briefing's content.notes (codes only).
 
-export const FAILURE_CODES = ["model_setting_invalid", "key_missing", "model_not_allowed", "timeout", "provider_error", "output_invalid"] as const;
+export const FAILURE_CODES = ["model_setting_invalid", "key_missing", "model_not_allowed", "timeout", "provider_error", "output_invalid", "sdk_override_set"] as const;
 export type FailureCode = (typeof FAILURE_CODES)[number];
 
 export const FAILURE_TEXT: Readonly<Record<FailureCode, string>> = {
@@ -12,16 +12,7 @@ export const FAILURE_TEXT: Readonly<Record<FailureCode, string>> = {
   timeout: "Timed out",
   provider_error: "Provider error",
   output_invalid: "The AI reply could not be read",
-};
-
-/** Shown to admins only (owner, admin_technical). Names the setting to look at, never a value. */
-export const FAILURE_ADMIN_HINT: Readonly<Record<FailureCode, string>> = {
-  model_setting_invalid: "Check ANTHROPIC_MODEL_ANALYSIS in the environment",
-  key_missing: "Check ANTHROPIC_API_KEY in the environment",
-  model_not_allowed: "Check the AI categories in this company's lane policy (email, calendar)",
-  timeout: "The AI provider did not answer in time; try Run now again",
-  provider_error: "Check the AI provider status and ANTHROPIC_API_KEY",
-  output_invalid: "The model's reply was not the expected format; try Run now again",
+  sdk_override_set: "AI provider override is set",
 };
 
 const PREFIX = "fail:";
@@ -37,8 +28,6 @@ export function failureFromNotes(notes: readonly string[]): FailureCode | null {
   return null;
 }
 
-/** Roles that may see the admin hint (the connector admins: owner and admin_technical). */
-export const ADMIN_HINT_ROLES = ["owner", "admin_technical"] as const;
 
 /**
  * Maps a thrown error to a code. Only the error's class and its fixed `code` field are read (LLMProviderError carries a
@@ -50,7 +39,11 @@ export function classifyFailure(e: unknown): FailureCode {
   if (name === "EnvValidationError") return "model_setting_invalid";
   if (name === "LLMProviderError") {
     if (code === "unauthorized") return "key_missing";
-    if (code === "invalid_request") return "model_setting_invalid";
+    if (code === "invalid_request") {
+      // The provider's HTTP status, when it carries one: 404 = unknown model; any other 4xx is not the model setting.
+      const status = (e as { status?: unknown }).status;
+      return typeof status === "number" && status !== 404 ? "provider_error" : "model_setting_invalid";
+    }
     if (code === "timeout" || code === "aborted") return "timeout";
     return "provider_error";
   }

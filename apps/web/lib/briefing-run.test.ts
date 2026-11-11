@@ -149,8 +149,8 @@ describe("runBriefing", () => {
 });
 
 describe("runBriefingBounded (Run now: inline, bounded, single-flight)", () => {
-  const slowProvider = (ms: number) => {
-    const inner = createMockProvider([textResult("{}")]);
+  const slowProvider = (ms: number, reply = "{}") => {
+    const inner = createMockProvider([textResult(reply)]);
     return { ...inner, complete: async (...a: Parameters<typeof inner.complete>) => (await new Promise((r) => setTimeout(r, ms)), inner.complete(...a)) } as typeof inner;
   };
 
@@ -177,15 +177,47 @@ describe("runBriefingBounded (Run now: inline, bounded, single-flight)", () => {
     expect(rs.some((r) => "busy" in r)).toBe(false);
   });
 
-  it("after the time bound the run reports timeout, records one failed attempt and the late run cannot save", async () => {
-    const { d, saved } = deps({ reply: "{}" });
-    d.provider = slowProvider(80);
+  const READY = JSON.stringify({ lines: ["A renewal needs you."], attention: [], deadlines: [], priorities: [], replies: [{ ref: "r1", status: "ready", context: "c", text: "Thanks, confirmed." }] });
+
+  it("after the time bound: reports timeout, one failed row, and the late run writes nothing (no save, no proposal)", async () => {
+    const proposals: unknown[] = [];
+    const { d, saved } = deps({ reply: READY, policy: { email: true, calendar: true, storeDrafts: true }, proposeReply: async (_l, r) => (proposals.push(r), "p1") });
+    d.provider = slowProvider(80, READY);
     const r = await runBriefingBounded(d, input, { timeoutMs: 20 });
     expect(r).toMatchObject({ status: "failed", reason: "timeout" });
-    await new Promise((res) => setTimeout(res, 150)); // the slow run finishes now
+    await new Promise((res) => setTimeout(res, 200)); // the slow model call resolves with a ready reply now
+    expect(proposals).toHaveLength(0);
     expect(saved).toHaveLength(1);
     expect(saved[0]?.status).toBe("failed");
     expect(saved[0]?.content.notes).toContain("fail:timeout");
+    expect(saved[0]?.windowTo).toBe(NOW.toISOString());
+  });
+
+  it("control: without a timeout the same reply does create the proposal", async () => {
+    const proposals: unknown[] = [];
+    const { d } = deps({ reply: READY, policy: { email: true, calendar: true, storeDrafts: true }, proposeReply: async (_l, r) => (proposals.push(r), "p1") });
+    d.provider = slowProvider(10, READY);
+    await runBriefingBounded(d, input);
+    expect(proposals).toHaveLength(1);
+  });
+
+  it("the abort signal reaches the model call", async () => {
+    const { d } = deps({ reply: "{}" });
+    let seen: AbortSignal | undefined;
+    const inner = d.provider;
+    d.provider = { ...inner, complete: async (req: Parameters<typeof inner.complete>[0]) => ((seen = req.signal), inner.complete(req)) } as typeof inner;
+    await runBriefingBounded(d, input);
+    expect(seen).toBeInstanceOf(AbortSignal);
+  });
+
+  it("the single-flight key is held until the late run settles, then released", async () => {
+    const { d } = deps({ reply: "{}" });
+    d.provider = slowProvider(120);
+    const first = await runBriefingBounded(d, input, { timeoutMs: 20 });
+    expect(first).toMatchObject({ reason: "timeout" });
+    await expect(runBriefingBounded(d, input)).resolves.toEqual({ busy: true }); // late run still going
+    await new Promise((res) => setTimeout(res, 250));
+    await expect(runBriefingBounded(d, input)).resolves.not.toHaveProperty("busy");
   });
 
   it("the guard is released after a failure", async () => {

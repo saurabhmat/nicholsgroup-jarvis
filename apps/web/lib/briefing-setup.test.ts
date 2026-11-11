@@ -11,11 +11,15 @@ describe("aiSetupFailure", () => {
     expect(aiSetupFailure({ ...OK, ANTHROPIC_MODEL_ANALYSIS: "claude-sonnet-5-5\t" })).toBeNull();
   });
   it("a bad model id is model_setting_invalid", () => {
-    expect(aiSetupFailure({ ...OK, ANTHROPIC_MODEL_ANALYSIS: "claude sonnet" })).toBe("model_setting_invalid");
-    expect(aiSetupFailure({ ...OK, ANTHROPIC_MODEL_ANALYSIS: "gpt-4" })).toBe("model_setting_invalid");
+    expect(aiSetupFailure({ ...OK, ANTHROPIC_MODEL_ANALYSIS: "claude sonnet" })).toMatchObject({ code: "model_setting_invalid" });
+    expect(aiSetupFailure({ ...OK, ANTHROPIC_MODEL_ANALYSIS: "gpt-4" })).toMatchObject({ code: "model_setting_invalid" });
   });
   it("a missing key is key_missing", () => {
-    expect(aiSetupFailure({ ...OK, ANTHROPIC_API_KEY: "" })).toBe("key_missing");
-    expect(aiSetupFailure({})).toBe("key_missing");
+    expect(aiSetupFailure({ ...OK, ANTHROPIC_API_KEY: "" })).toMatchObject({ code: "key_missing" });
+    expect(aiSetupFailure({})).toMatchObject({ code: "key_missing" });
+  });
+  it("a refused SDK override is its own code and names the variable", () => {
+    const vars = { ...OK, ANTHROPIC_BASE_URL: "https://proxy.example.test" };
+    expect(aiSetupFailure(vars)).toEqual({ code: "sdk_override_set", names: ["ANTHROPIC_BASE_URL"] });
   });
 });

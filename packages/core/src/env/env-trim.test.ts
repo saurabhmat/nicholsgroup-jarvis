@@ -1,8 +1,10 @@
 // T-234 part 0: every environment value is trimmed centrally; model ids must look like model ids after trimming; a bad
 // value fails with the variable NAME and never prints the value.
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
+import { shouldValidateBuildEnv } from "./build";
 import {
   EnvValidationError,
+  isRealDataEnv,
   describeEnvError,
   normalizeEnv,
   parseConnectorEnv,
@@ -114,5 +116,33 @@ describe("other values are trimmed centrally", () => {
       err = e;
     }
     expect(describeEnvError(err as EnvValidationError)).toBe("NEXT_PUBLIC_SUPABASE_URL: surrounding whitespace");
+  });
+});
+
+describe("entry points compare trimmed values (T-234 review M3/L1)", () => {
+  it.each(["preview\t", "staging\t", "production\n", " production "])("shouldValidateBuildEnv is true for APP_ENV=%j", (v) => {
+    expect(shouldValidateBuildEnv({ APP_ENV: v })).toBe(true);
+  });
+  it("shouldValidateBuildEnv stays false for local", () => {
+    expect(shouldValidateBuildEnv({ APP_ENV: "local\t" })).toBe(false);
+  });
+  it("isRealDataEnv and runtimeFlags read trimmed values", () => {
+    expect(isRealDataEnv({ APP_ENV: "staging\t" })).toBe(true);
+    expect(isRealDataEnv({ APP_ENV: "production\n" })).toBe(true);
+    expect(isRealDataEnv({ APP_ENV: "staging", VERCEL: "1\t", VERCEL_TARGET_ENV: "preview" })).toBe(false);
+    expect(runtimeFlags({ APP_ENV: "local\t" }).local).toBe(true);
+    expect(runtimeFlags({ APP_ENV: "production\n" }).production).toBe(true);
+  });
+  it("parseServerEnv picks the preview schema for 'preview\\t' (no database needed)", () => {
+    const s = parseServerEnv({ NEXT_PUBLIC_APP_URL: "https://app.example.test", APP_ENV: "preview\t", ENABLED_LANES: "PKG", VERCEL: "1", VERCEL_ENV: "preview", VERCEL_TARGET_ENV: "preview" });
+    expect(s.APP_ENV).toBe("preview");
+  });
+  it("startup warning treats 'preview\\t' as a preview", () => {
+    const logs: string[] = [];
+    vi.resetModules();
+    return import("./startup").then((m) => {
+      m.warnUnconfiguredFeatures({ APP_ENV: "preview\t" }, (x) => logs.push(x));
+      expect(logs.join(" ")).toContain("No database in this preview deployment");
+    });
   });
 });

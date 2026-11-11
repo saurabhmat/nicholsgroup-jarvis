@@ -247,7 +247,6 @@ export function parseSavedBriefing(data: unknown): SavedBriefingView | null {
   };
 }
 
-/** The caller's latest prepared briefing (null when none, or on error: Home then shows the rule-based sections only). */
 /**
  * Why the caller's newest briefing attempt failed: a fixed code from the stored "fail:<code>" note (core.briefing_last_failure),
  * or null when the newest attempt did not fail, predates codes or the lookup failed. Never raw text.
@@ -263,6 +262,7 @@ export async function lastFailureReason(client: Db, laneId: string): Promise<Fai
   }
 }
 
+/** The caller's latest prepared briefing (null when none, or on error: Home then shows the rule-based sections only). */
 export async function latestBriefing(client: Db, laneId: string): Promise<SavedBriefingView | null> {
   try {
     const { data, error } = await client.schema("core").rpc("briefing_latest", { p_lane: laneId });
