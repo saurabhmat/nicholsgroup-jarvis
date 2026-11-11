@@ -517,6 +517,16 @@ isOneToOne: false
 "home_calendar_status":
 { Args: { "p_lane": string }; Returns: string
                            },
+"home_finance":
+{ Args: { "p_lane": string }; Returns: {
+              "ar_invoices": number,"ar_over_30": number,"ar_reason": string,"ar_unmapped": number,"as_of": string,"business_date": string,"cash_accounts": Json,"cash_as_of": string,"cash_reason": string,"cash_total": number,"cash_unmapped": number,"connection_status": string,"last_sync_at": string,"pnl_as_of": string,"pnl_end": string,"pnl_expenses": number,"pnl_income": number,"pnl_method": string,"pnl_net": number,"pnl_partial": boolean,"pnl_reason": string,"pnl_start": string,"state": string
+            }[]
+                           },
+"home_finance_context":
+{ Args: { "p_lane": string }; Returns: {
+              "allowed": boolean,"bank_accounts": Json,"connected": boolean,"connection_status": string,"last_normalized_at": string,"last_sync_at": string,"mapping_mode": string,"own_entity": string
+            }[]
+                           },
 "home_mail_attention":
 { Args: { "p_lane": string,"p_since": string }; Returns: {
               "priority_configured": boolean,"unread_important": number,"unread_priority": number

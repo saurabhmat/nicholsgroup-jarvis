@@ -9,6 +9,7 @@ import { eyebrowDate } from "@/lib/format-date";
 import { guards } from "@/lib/guards";
 import { composeBriefing, formatDay, formatTime, homeFor, homeKpis, timedLeft, type AttentionItem, type CalendarState, type HomeMeeting } from "@/lib/home";
 import { loadLane } from "@/lib/lane-page";
+import { HomeFinance, HomeFinanceFallback } from "./home-finance";
 import { OnboardingBanner } from "./onboarding-entry";
 import { HomeSkeleton } from "./page-skeleton";
 import { onboardingFor } from "@/lib/onboarding-progress";
@@ -62,6 +63,9 @@ async function HomeSections({ laneId, now }: { laneId: string; now: Date }) {
         </Alert>
       ) : null}
       <Briefing lines={view.unavailable ? [] : composeBriefing(view, now)} />
+      <Suspense fallback={<HomeFinanceFallback />}>
+        <HomeFinance laneId={laneId} />
+      </Suspense>
       <section aria-label="Key figures" data-testid="home-kpis" className="grid grid-cols-2 gap-4 lg:grid-cols-4">
         {homeKpis(view.feeds).map((k) => (
           <KpiCard key={k.key} label={k.label} bookBalance={k.bookBalance} status="no_data" statusText={k.statusText} />
