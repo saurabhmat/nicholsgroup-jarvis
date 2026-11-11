@@ -90,7 +90,13 @@ export async function reconcileStuckActions(deps: ReconcileDeps, laneId: LaneId)
 
 async function decide(deps: ReconcileDeps, laneId: LaneId, row: ActionRow, claimExternalId: string | null): Promise<ReconcileDecision> {
   // The stored content must still be what was approved. If not, nothing here trusts it (the writer refused it, too).
-  if (hashOfRow(row) !== row.payloadSha256 || row.approvedHash !== row.payloadSha256) return { kind: "failed", code: "reconcile_payload_changed", outcome: "outcome_unknown" };
+  let intact = false;
+  try {
+    intact = hashOfRow(row) === row.payloadSha256 && row.approvedHash === row.payloadSha256;
+  } catch {
+    intact = false; // content that cannot even be canonicalised is not what was approved
+  }
+  if (!intact) return { kind: "failed", code: "reconcile_payload_changed", outcome: "outcome_unknown" };
   const handler = deps.reconcilers.find((r) => r.actionTypes.includes(row.actionType));
   if (!handler) return { kind: "undecided", code: "reconcile_unsupported" };
   try {
