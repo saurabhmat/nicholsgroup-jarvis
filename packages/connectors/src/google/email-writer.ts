@@ -26,7 +26,7 @@ import type { SecretValue } from "../vault/secret";
 import type { GoogleApi } from "./api";
 import { GMAIL_BASE, GMAIL_RATE_LIMIT } from "./constants";
 import { assertGoogleConnection } from "./guard";
-import { cleanText, decodeEncodedWords } from "./headers";
+import { cleanText, decodeEncodedWords, MAX_SINGLE_HEADER, parseAddressList } from "./headers";
 import { createGoogleHttp } from "./http";
 import { buildRfc822, PORTAL_ACTION_HEADER, portalMessageId, toBase64Url } from "./mime-build";
 import type { GoogleTokenManager } from "./token-manager";
@@ -98,6 +98,15 @@ function assertPayloadHash(action: GoogleEmailApprovedAction): void {
 function header(m: MetaMessage, name: string): string | undefined {
   return m.payload?.headers?.find((h) => h.name.toLowerCase() === name.toLowerCase())?.value;
 }
+/**
+ * True when the From header is exactly ONE mailbox whose bare address is `mailbox` (case-insensitive). Uses the quote-,
+ * comment- and encoded-word-aware parser of `headers.ts`: `"Last, First" <a@b>`, `=?UTF-8?B?..?= <a@b>` and `a@b (note)` are
+ * accepted; `"<a@b>" <evil@x>` is the address in the LAST angle brackets (evil@x), and two addresses are refused.
+ */
+function fromIsMailbox(value: string | undefined, mailbox: string): boolean {
+  const list = parseAddressList(value, 3, MAX_SINGLE_HEADER);
+  return list.length === 1 && list[0]?.address === mailbox.toLowerCase();
+}
 const addressSet = (value: string | undefined): string[] =>
   [...new Set((value ?? "").split(",").map((p) => (/<([^<>]+)>/.exec(p)?.[1] ?? p).trim().toLowerCase()).filter((p) => p !== ""))].sort();
 
@@ -157,8 +166,7 @@ export function createGoogleEmailWriter(deps: GoogleEmailWriterDeps): GoogleEmai
       const mid = header(m, "Message-ID")?.trim().toLowerCase();
       const marker = header(m, PORTAL_ACTION_HEADER)?.trim().toLowerCase();
       const ours = mid === messageId.toLowerCase() || marker === action.id.toLowerCase();
-      const from = addressSet(header(m, "From"));
-      if (ours && from.length === 1 && from[0] === mailbox.toLowerCase() && (m.labelIds ?? []).includes(isSend ? "SENT" : "DRAFT")) own.push(m.id);
+      if (ours && fromIsMailbox(header(m, "From"), mailbox) && (m.labelIds ?? []).includes(isSend ? "SENT" : "DRAFT")) own.push(m.id);
     }
     return own;
   }

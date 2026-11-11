@@ -1084,6 +1084,7 @@ Logged, not fixed:
   - code L7: a sweep handles at most 20 rows per lane; more than 20 stuck rows (e.g. a long outage) take several 5-minute runs, oldest first. The worst starvation case (rows that always error) is closed by security L1.
   - code L9 (skipped as agreed).
   - Resolved by the T-192 follow-up commit: the execute path's pre-send and post-failure lookup and the reconciler's `findWrite` now share one helper (`findOwnCopies`): the mailbox's own `in:sent` / `in:drafts` only (no spam or trash), and a hit counts only with our Message-ID or `X-Portal-Action-Id`, From = the sending mailbox and the SENT / DRAFT label.
+  - Accepted trade-offs of the own-copy lookup (safe: nothing is ever resent, the action ends `outcome_unknown` for a human): a Sent copy moved to Trash after a crash is not seen (the lookup is `in:sent`); a draft the user sends or edits before the reconciler runs loses the DRAFT label or its id.
   - Not-found actions keep their body until the give-up time (default 60 min); D-19 purge happens at the terminal transition.
 - **Security M4.** Gmail may replace a client Message-ID. The duplicate guard after a crash then rests on the claim only (safe: an unknown outcome is never resent). Check this on the first live send (H-item).
 - **Security M1 (rest).** No "new to this thread" flag and no live quote of the thread (spec §8, §10). T-231d's recipient is always the sender of the message replied to, taken from metadata.

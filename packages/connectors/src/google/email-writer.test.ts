@@ -23,7 +23,7 @@ function fakeGmail() {
   const messages = new Map<string, Msg>();
   const calls: { method: string; path: string }[] = [];
   const queries: Record<string, unknown>[] = [];
-  const state = { failMode: null as null | "before" | "after_commit", seq: 0 };
+  const state = { failMode: null as null | "before" | "after_commit", seq: 0, rawSearch: false };
   // A seeded parent message for replies.
   messages.set("parent1", { id: "parent1", threadId: "thread-1", labelIds: ["INBOX"], headers: { "Message-ID": "<parent@sender.example.test>", References: "<root@sender.example.test>" } });
 
@@ -47,8 +47,10 @@ function fakeGmail() {
         const id = /rfc822msgid:(\S+)/.exec(q)?.[1] ?? "";
         const label = /\bin:(sent|drafts)\b/.exec(q)?.[1];
         const want = label === "sent" ? "SENT" : label === "drafts" ? "DRAFT" : undefined;
-        const hit = [...messages.values()].find((m) => m.headers["Message-ID"] === `<${id}>` && (want === undefined || m.labelIds.includes(want)));
-        return resp({ messages: hit ? [{ id: hit.id, threadId: hit.threadId }] : [] }) as never;
+        // rawSearch: a Gmail that ignores `in:` and the spam/trash default and returns EVERY message with the Message-ID
+        // (so only the writer's own label and From checks can reject a forged copy).
+        const hits = [...messages.values()].filter((m) => m.headers["Message-ID"] === `<${id}>` && (state.rawSearch || want === undefined || m.labelIds.includes(want)));
+        return resp({ messages: (state.rawSearch ? hits : hits.slice(0, 1)).map((m) => ({ id: m.id, threadId: m.threadId })) }) as never;
       }
       const m = messages.get(String(params?.id));
       if (!m) throw new ConnectorError({ kind: "not_found", message: "no" });
@@ -440,5 +442,59 @@ describe("one own-copy lookup for execute and reconcile (follow-up: inbound or f
     forged(gmail, "forged3", ["INBOX"], a.id);
     gmail.state.failMode = "before";
     await expect(writer.executeWrite("PKG", conn, a)).rejects.toMatchObject({ info: { message: OUTCOME_UNKNOWN_MESSAGE } });
+  });
+});
+
+describe("the helper's own checks, with a search that returns everything (T-192 security review M2)", () => {
+  const put = (gmail: ReturnType<typeof setup>["gmail"], id: string, labels: string[], actionId: string, from: string) =>
+    gmail.messages.set(id, { id, threadId: "t-" + id, labelIds: labels, headers: { "Message-ID": portalMessageId(actionId, MAILBOX), "X-Portal-Action-Id": actionId, From: from } });
+
+  it("an INBOX forged copy (From = the mailbox), a SPAM one and our own SENT copy: only our SENT copy is returned (label check alone)", async () => {
+    const { gmail, conn, writer, action } = setup();
+    const a = action();
+    gmail.state.rawSearch = true;
+    put(gmail, "forged-inbox", ["INBOX"], a.id, MAILBOX);
+    put(gmail, "forged-spam", ["SPAM"], a.id, MAILBOX);
+    put(gmail, "own-sent", ["SENT"], a.id, MAILBOX);
+    expect(await writer.findWrite("PKG", conn, a)).toEqual(["own-sent"]);
+  });
+
+  it("forged first, real second: the real send is still found, and execute makes no second send", async () => {
+    const { gmail, conn, writer, action } = setup();
+    const a = action();
+    gmail.state.rawSearch = true;
+    put(gmail, "f1", ["INBOX"], a.id, MAILBOX);
+    put(gmail, "f2", ["SENT"], a.id, "attacker@evil.example.test");
+    put(gmail, "real", ["SENT"], a.id, MAILBOX);
+    expect(await writer.findWrite("PKG", conn, a)).toEqual(["real"]);
+    expect(await writer.executeWrite("PKG", conn, a)).toMatchObject({ outcome: "already_applied", external_id: "real" });
+    expect(gmail.posts()).toHaveLength(0);
+  });
+
+  it("forged copies only: nothing found, and the real send goes out once", async () => {
+    const { gmail, conn, writer, action } = setup();
+    const a = action();
+    gmail.state.rawSearch = true;
+    put(gmail, "f1", ["INBOX"], a.id, MAILBOX);
+    put(gmail, "f2", ["SPAM"], a.id, MAILBOX);
+    const res = await writer.executeWrite("PKG", conn, a);
+    expect(res.outcome).toBe("accepted");
+    expect(gmail.posts()).toHaveLength(1);
+  });
+
+  it.each([
+    ["a quoted display name with a comma", `"Nichols, Robert" <${MAILBOX}>`, true],
+    ["an encoded-word display name", `=?UTF-8?B?Um9iZXJ0IE5pY2hvbHM=?= <${MAILBOX}>`, true],
+    ["a bare address with a comment", `${MAILBOX} (Robert)`, true],
+    ["upper case", `Exec <${MAILBOX.toUpperCase()}>`, true],
+    ["an address hidden in a quoted display name", `"<${MAILBOX}>" <attacker@evil.example.test>`, false],
+    ["two addresses", `${MAILBOX}, attacker@evil.example.test`, false],
+    ["two addresses, ours second", `attacker@evil.example.test, "X, Y" <${MAILBOX}>`, false],
+    ["another address", "attacker@evil.example.test", false],
+  ])("From %s: %s", async (_n, from, ok) => {
+    const { gmail, conn, writer, action } = setup();
+    const a = action();
+    put(gmail, "m1", ["SENT"], a.id, from);
+    expect(await writer.findWrite("PKG", conn, a)).toEqual(ok ? ["m1"] : []);
   });
 });
