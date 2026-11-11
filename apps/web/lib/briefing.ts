@@ -9,7 +9,10 @@ import {
   BUSINESS_TZ,
   coverageLine,
   dayWindow,
+  localDate,
   notableAhead,
+  PUBLIC_MAIL_DOMAINS,
+  splitByDay,
   parseCoverageRows,
   parseEvents,
   toCoverage,
@@ -23,7 +26,7 @@ const DAY_MS = 86_400_000;
 
 export type BriefingConfig = LaneConfig["briefing"];
 
-export type CalendarSection = { access: true; today: DayEvent[]; ahead: NotableEvent[]; owners: string[] } | { access: false };
+export type CalendarSection = { access: true; today: DayEvent[]; ahead: NotableEvent[]; owners: string[] } | { access: false; unavailable?: true };
 
 export type BriefingView = {
   viewerTz: string;
@@ -50,35 +53,48 @@ export const domainOf = (email: string) => email.split("@")[1]?.toLowerCase() ??
 
 type Db = Pick<LaneClient, "schema">;
 
-/** Loads Coverage + calendar for one lane. Throws on a database error (Home then says "unavailable", never an empty day). */
+/** The events window: the viewer's day plus 7 days, never more than the SQL cap of 8 x 24 h (a 25-hour DST day included). */
+export function eventsWindow(from: Date, to: Date): { from: Date; to: Date } {
+  return { from, to: new Date(Math.min(to.getTime() + 7 * DAY_MS, from.getTime() + 8 * DAY_MS)) };
+}
+
+/** Owner domains count as internal, except public mail providers (gmail.com says nothing about who is a colleague). */
+export function internalDomains(configured: readonly string[], owners: Iterable<string>): Set<string> {
+  const own = [...owners].map(domainOf).filter((d) => d !== "" && !PUBLIC_MAIL_DOMAINS.has(d));
+  return new Set([...configured, ...own]);
+}
+
+/**
+ * Loads Coverage + calendar for one lane. Throws only when Coverage itself cannot be read (Home then says
+ * "unavailable", never an empty day); an events error keeps Coverage and marks the calendar unavailable.
+ */
 export async function loadBriefing(client: Db, laneId: string, now: Date, viewerTz: string): Promise<BriefingView> {
   const core = client.schema("core");
   const { from, to } = dayWindow(now, viewerTz);
+  const win = eventsWindow(from, to);
   const [cfg, cov, events] = await Promise.all([
     core.from("lane_config_current").select("config").eq("lane_id", laneId).maybeSingle(),
     core.rpc("briefing_coverage", { p_lane: laneId }),
-    core.rpc("briefing_events", { p_lane: laneId, p_from: from.toISOString(), p_to: new Date(to.getTime() + 7 * DAY_MS).toISOString() }),
+    core.rpc("briefing_events", { p_lane: laneId, p_from: win.from.toISOString(), p_to: win.to.toISOString() }),
   ]);
-  if (cov.error || events.error) throw new Error(`briefing data unavailable: ${[cov.error && "coverage", events.error && "events"].filter(Boolean).join(",")}`);
+  if (cov.error) throw new Error("briefing data unavailable: coverage");
+  if (events.error) console.error("[home] briefing events unavailable", { laneId });
   // A role that may not read the config still gets the defaults (the config read is optional).
   const { briefing, mailboxes } = briefingConfigFrom(cfg.error ? null : cfg.data?.config);
-  const coverage = toCoverage(parseCoverageRows(cov.data), now, briefing.coverage_stale_minutes);
-  const calendarAccess = coverage.some((c) => c.stream === "calendar");
-  const mailAccess = coverage.some((c) => c.stream === "mail");
-  // The owner's own addresses: every account the briefing covers (their RSVP decides "pending" and "declined").
-  const owners = new Set([...mailboxes, ...coverage.map((c) => c.account.toLowerCase())]);
-  const internal = new Set([...briefing.internal_domains, ...[...owners].map(domainOf)].filter((d) => d !== ""));
-  const all = parseEvents(events.data);
-  const todays = all.filter((e) => Date.parse(e.startAt) < to.getTime() && Date.parse(e.endAt) > from.getTime());
-  const later = all.filter((e) => Date.parse(e.startAt) >= to.getTime());
-  return {
-    viewerTz,
-    coverage,
-    coverageLine: coverageLine(coverage, mailAccess || calendarAccess),
-    calendar: calendarAccess ? { access: true, today: analyzeDay(todays, owners, internal), ahead: notableAhead(later, owners, internal), owners: [...owners] } : { access: false },
-    config: briefing,
-    mailboxes,
-  };
+  const rows = parseCoverageRows(cov.data);
+  const coverage = toCoverage(rows, now, briefing.coverage_stale_minutes);
+  // Any row, including the "nothing set up" marker, means the caller holds that stream's view.
+  const calendarAccess = rows.some((c) => c.stream === "calendar");
+  const mailAccess = rows.some((c) => c.stream === "mail");
+  const owners = new Set([...mailboxes, ...coverage.map((c) => c.account.toLowerCase())].filter((o) => o !== ""));
+  const internal = internalDomains(briefing.internal_domains, owners);
+  let calendar: CalendarSection = { access: false };
+  if (calendarAccess && events.error) calendar = { access: false, unavailable: true };
+  else if (calendarAccess) {
+    const split = splitByDay(parseEvents(events.data), from, to, localDate(from, viewerTz), 7);
+    calendar = { access: true, today: analyzeDay(split.today, owners, internal), ahead: notableAhead(split.later, owners, internal), owners: [...owners] };
+  }
+  return { viewerTz, coverage, coverageLine: coverageLine(coverage, mailAccess || calendarAccess), calendar, config: briefing, mailboxes };
 }
 
 /** Home's briefing view; an outage gives `unavailable` (with a Coverage line that says so), never an empty day. */

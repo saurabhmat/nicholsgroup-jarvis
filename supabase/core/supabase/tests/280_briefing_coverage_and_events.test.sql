@@ -4,7 +4,7 @@
 -- zone, cancelled excluded, de-duplicated, window checks), and denial: other lane, AAL1, member without the views,
 -- outsider.
 begin;
-select plan(27);
+select plan(31);
 \ir helpers/lane_rls.psql
 
 update core.lanes set enabled = true where code = 'APK';
@@ -60,7 +60,7 @@ select is((select configured from core.briefing_coverage('PKG') where account = 
 select is((select status || '|' || error_kind from core.briefing_coverage('PKG') where account = 'brief-pkg@example.test' and stream = 'mail'), 'degraded|rate_limited',
           'connected account: status and the error kind only');
 select is((select last_sync_at from core.briefing_coverage('PKG') where account = 'brief-pkg@example.test' and stream = 'mail'), '2026-11-11 10:01Z'::timestamptz,
-          'mail last sync = last succeeded run');
+          'mail without its own cursor: last succeeded run');
 select ok((select last_sync_at > '2026-11-11 10:01Z' from core.briefing_coverage('PKG') where account = 'brief-pkg@example.test' and stream = 'calendar'),
           'calendar last sync = its newer cursor time');
 select ok(not exists (select 1 from core.briefing_coverage('PKG') c where c::text like '%provider text%'), 'no provider error text in coverage');
@@ -74,6 +74,8 @@ select throws_ok($$select * from core.briefing_coverage(null)$$, '22004', null, 
 
 -- cross-lane: APK has a connection and events; the owner is not an APK member
 select is((select count(*)::int from core.briefing_coverage('APK')), 0, 'another lane: no coverage rows');
+select is((select string_agg(stream || ':' || status || ':' || coalesce(account, '-'), ',' order by stream) from core.briefing_coverage('NC')), null,
+          'a lane the owner is not a member of: nothing');
 select is((select count(*)::int from core.briefing_events('APK', '2026-11-12 05:00Z', '2026-11-13 05:00Z')), 0, 'another lane: no events');
 reset role;
 set local role service_role;
@@ -98,10 +100,39 @@ select pg_temp.claims('viewer@example.test', 'aal2');
 set local role authenticated;
 select is((select count(*)::int from core.briefing_coverage('PKG')), 0, 'viewer: no coverage');
 reset role;
+-- per-stream: a viewer holding only the calendar view gets calendar rows only, and the reverse
+update core.memberships set views = '{calendar}' where lane_id = 'PKG' and user_id = pg_temp.uid('viewer@example.test');
+select pg_temp.claims('viewer@example.test', 'aal2');
+set local role authenticated;
+select is((select string_agg(distinct stream, ',') from core.briefing_coverage('PKG')), 'calendar', 'calendar view only: calendar rows only');
+reset role;
+-- (viewers cannot hold the comms view: memberships_views_check; the mail-only case needs no separate role)
+update core.memberships set views = '{finance}' where lane_id = 'PKG' and user_id = pg_temp.uid('viewer@example.test');
 select pg_temp.claims('outsider@example.test', 'aal2');
 set local role authenticated;
 select is((select count(*)::int from core.briefing_coverage('PKG')), 0, 'outsider: no coverage');
+reset role;
+update core.lanes set enabled = false where code = 'APK';
+set local role service_role;
+select is((select count(*)::int from core.briefing_coverage('APK')), 0, 'a disabled lane answers nothing, even to service_role');
+reset role;
+update core.lanes set enabled = true where code = 'APK';
+set local role authenticated;
 select is((select count(*)::int from core.briefing_events('PKG', '2026-11-12 05:00Z', '2026-11-13 05:00Z')), 0, 'outsider: no events');
+reset role;
+
+-- access but nothing set up: a not_configured row per stream (PKG without mailboxes or connections)
+insert into core.lane_config (lane_id, version, config)
+select lane_id, version + 1, jsonb_set(config, '{mailboxes}', '[]'::jsonb)
+from core.lane_config where lane_id = 'PKG' order by version desc limit 1;
+delete from cal.event_index where connection_id = '00000000-0000-4000-8000-000000002801';
+delete from core.sync_cursors where connection_id = '00000000-0000-4000-8000-000000002801';
+delete from core.sync_runs where connection_id = '00000000-0000-4000-8000-000000002801';
+update core.connections set status = 'disconnected', last_error = null where lane_id = 'PKG';
+select pg_temp.claims('owner@example.test', 'aal2');
+set local role authenticated;
+select is((select string_agg(stream || ':' || status || ':' || coalesce(account, '-'), ',' order by stream) from core.briefing_coverage('PKG')),
+          'calendar:not_configured:-,mail:not_configured:-', 'nothing set up: one not_configured row per visible stream');
 reset role;
 
 select * from finish();

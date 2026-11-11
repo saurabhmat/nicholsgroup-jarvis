@@ -59,7 +59,7 @@ async function HomeSections({ laneId, now }: { laneId: string; now: Date }) {
   const tzCookie = (await cookies()).get("tz")?.value;
   const tz = viewerZone(tzCookie);
   const g = await guards();
-  // Home v1 counts and the T-231 briefing sections load in parallel; each fails on its own ("unavailable"), never as an empty day.
+  // Home v1 counts and the T-231 briefing sections load in parallel. Each shows its own "unavailable" state; neither ever shows an empty day.
   const [view, brief] = await Promise.all([
     timed("load.home", async () => homeFor(g, laneId, now)),
     timed("load.briefing", async () => briefingFor((await g.requireLane(laneId as Parameters<typeof g.requireLane>[0])).client, laneId, now, tz)),

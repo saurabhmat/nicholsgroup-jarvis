@@ -67,7 +67,11 @@ function Flags({ e }: { e: DayEvent }) {
 
 export function TodayCalendar({ calendar, tz, now }: { calendar: CalendarSection; tz: string; now: Date }) {
   if (!calendar.access) {
-    return <EmptyState title="No calendar to show" description="Your role does not include the calendar, or it could not be read. See Coverage." className="border-0 bg-transparent px-0 py-6" />;
+    return calendar.unavailable ? (
+      <EmptyState title="Calendar could not be read" description="Reload in a minute. Coverage above shows the last sync." className="border-0 bg-transparent px-0 py-6" />
+    ) : (
+      <EmptyState title="No calendar to show" description="Your role in this company does not include the calendar." className="border-0 bg-transparent px-0 py-6" />
+    );
   }
   if (calendar.today.length === 0) return <p className="text-body text-muted-foreground">Nothing scheduled today.</p>;
   const owners = new Set(calendar.owners);

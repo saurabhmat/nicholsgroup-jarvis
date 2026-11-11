@@ -36,7 +36,7 @@ const STATUS_REASONS: Record<string, string> = {
 
 /** Turns coverage rows into states with fixed reasons. `staleMinutes` from lane_config.briefing.coverage_stale_minutes. */
 export function toCoverage(rows: CoverageRow[], now: Date, staleMinutes: number): CoverageItem[] {
-  return rows.map((r) => {
+  return rows.filter((r) => r.status !== "not_configured").map((r) => {
     if (r.status === "not_connected" || r.connectionId === null) return { ...r, state: "not_connected", reason: STATUS_REASONS.not_connected ?? null };
     if (r.status !== "active") {
       const reason = (r.errorKind ? ERROR_REASONS[r.errorKind] : undefined) ?? STATUS_REASONS[r.status] ?? "The connection has a problem. Check Settings.";
@@ -53,12 +53,13 @@ export function parseCoverageRows(data: unknown): CoverageRow[] {
   if (!Array.isArray(data)) return [];
   return data.flatMap((raw: Record<string, unknown>) => {
     const stream = raw.stream;
-    if ((stream !== "mail" && stream !== "calendar") || typeof raw.account !== "string" || typeof raw.status !== "string") return [];
+    // A row with no account is the "access, but nothing set up" marker (status not_configured): kept for the access test.
+    if ((stream !== "mail" && stream !== "calendar") || typeof raw.status !== "string" || (typeof raw.account !== "string" && raw.status !== "not_configured")) return [];
     const at = typeof raw.last_sync_at === "string" && !Number.isNaN(Date.parse(raw.last_sync_at)) ? new Date(raw.last_sync_at).toISOString() : null;
     return [
       {
         stream,
-        account: raw.account,
+        account: typeof raw.account === "string" ? raw.account : "",
         connectionId: typeof raw.connection_id === "string" ? raw.connection_id : null,
         provider: typeof raw.provider === "string" ? raw.provider : null,
         status: raw.status,

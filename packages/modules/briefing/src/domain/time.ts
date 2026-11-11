@@ -8,8 +8,8 @@ const ZONE_RE = /^[A-Za-z][A-Za-z0-9_+./-]{0,63}$/;
 export function validTimeZone(tz: unknown): string | null {
   if (typeof tz !== "string" || !ZONE_RE.test(tz)) return null;
   try {
-    new Intl.DateTimeFormat("en-US", { timeZone: tz }).format(0);
-    return tz;
+    // The canonical spelling, so "america/NEW_york" and "America/New_York" are one zone (and one cache key).
+    return new Intl.DateTimeFormat("en-US", { timeZone: tz }).resolvedOptions().timeZone;
   } catch {
     return null;
   }
@@ -19,6 +19,7 @@ const cache = new Map<string, Intl.DateTimeFormat>();
 function fmt(key: string, make: () => Intl.DateTimeFormat): Intl.DateTimeFormat {
   let f = cache.get(key);
   if (!f) {
+    if (cache.size >= 500) cache.clear(); // bounded: keys come from zone names
     f = make();
     cache.set(key, f);
   }
@@ -87,4 +88,18 @@ export function ago(iso: string, now: Date): string {
   const h = Math.round(mins / 60);
   if (h < 48) return `${String(h)}h ago`;
   return `${String(Math.round(h / 24))}d ago`;
+}
+
+/** "YYYY-MM-DD" of an instant in a zone. */
+export function localDate(at: Date, tz: string): string {
+  const parts = fmt(`p:${tz}`, () => new Intl.DateTimeFormat("en-US", { timeZone: tz, year: "numeric", month: "2-digit", day: "2-digit" })).formatToParts(at);
+  const v = (t: string) => parts.find((p) => p.type === t)?.value ?? "";
+  return `${v("year")}-${v("month")}-${v("day")}`;
+}
+
+/** A calendar date plus n days ("2026-11-12" + 1 = "2026-11-13"). */
+export function addDays(date: string, n: number): string {
+  const d = new Date(`${date}T12:00:00Z`);
+  d.setUTCDate(d.getUTCDate() + n);
+  return d.toISOString().slice(0, 10);
 }

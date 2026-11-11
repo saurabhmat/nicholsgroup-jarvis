@@ -7,9 +7,11 @@
 --   ('not_connected' when a configured mailbox has no live connection), when that stream last synced (the stream's
 --   cursor time or the connection's last succeeded run, whichever is later), and the connector error KIND only (never
 --   provider text). SECURITY DEFINER only to read core.connections / core.sync_cursors / core.sync_runs, which need the
---   connections/health views; it answers only for a caller who already holds the comms or calendar view on the lane at
+--   connections/health views (a deliberate, narrow widening: comms/calendar holders see which accounts feed the briefing,
+--   their status, error kind and sync time, never tokens or provider text; plan-review T-231); it answers only for a caller who already holds the comms or calendar view on the lane at
 --   AAL2, per stream, and returns nothing else about the connection (no tokens, no error messages).
---   Missing access is never "nothing": a stream the caller may see always appears, as not_connected if need be.
+--   Missing access is never "nothing": a stream the caller may see always appears, as not_connected if need be, and as
+--   one 'not_configured' row (account null) when the lane has no mailbox and no connection at all.
 --
 -- core.briefing_events(p_lane, p_from, p_to): the lane's events overlapping a window of at most 8 days (today plus the
 --   7-day look-ahead), cancelled excluded, de-duplicated across calendars like core.home_meetings, with the columns the
@@ -52,6 +54,9 @@ begin
     v_mail := p_lane = any (core.allowed_lanes(v_uid, 'comms'));
     v_cal := p_lane = any (core.allowed_lanes(v_uid, 'calendar'));
   end if;
+  if not exists (select 1 from core.lanes l where l.code = p_lane and l.enabled) then
+    return;
+  end if;
   if not (v_mail or v_cal) then
     return;
   end if;
@@ -89,9 +94,11 @@ begin
     k.provider,
     coalesce(k.status, 'not_connected'),
     a.account = any (v_boxes),
-    case when k.id is null then null else greatest(
-      (select max(r.finished_at) from core.sync_runs r where r.connection_id = k.id and r.lane_id = p_lane and r.status = 'succeeded'),
-      (select max(sc.updated_at) from core.sync_cursors sc where sc.connection_id = k.id and sc.lane_id = p_lane and sc.stream = s.stream)
+    -- The stream's own cursor time; the connection's last succeeded run only while the stream has no cursor yet
+    -- (sync_runs has no stream column, so a calendar-only success must not make mail look fresh).
+    case when k.id is null then null else coalesce(
+      (select max(sc.updated_at) from core.sync_cursors sc where sc.connection_id = k.id and sc.lane_id = p_lane and sc.stream = s.stream),
+      (select max(r.finished_at) from core.sync_runs r where r.connection_id = k.id and r.lane_id = p_lane and r.status = 'succeeded')
     ) end,
     case
       when k.last_error is null then null
@@ -102,6 +109,13 @@ begin
   cross join streams s
   left join conn k on k.account = a.account
   order by s.stream desc, a.account;
+  -- Access but nothing configured or connected: one row per visible stream says so (never "no rows" = "no access").
+  if not found then
+    return query
+    select x.stream, null::text, null::uuid, null::text, 'not_configured'::text, false, null::timestamptz, null::text
+    from (select 'mail'::text as stream where v_mail union all select 'calendar'::text where v_cal) x
+    order by x.stream desc;
+  end if;
 end;
 $$;
 comment on function core.briefing_coverage(text) is

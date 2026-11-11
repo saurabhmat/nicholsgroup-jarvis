@@ -12,6 +12,8 @@ export type BriefEvent = {
   endAt: string;
   allDay: boolean;
   startDate: string | null;
+  /** All-day events: the first date AFTER the event (exclusive), as the providers send it. */
+  endDate: string | null;
   timezone: string | null;
   location: string | null;
   calendarUrl: string | null;
@@ -78,6 +80,7 @@ export function parseEvents(rows: unknown): BriefEvent[] {
         endAt,
         allDay: r.all_day === true,
         startDate: typeof r.start_date === "string" ? r.start_date : null,
+        endDate: typeof r.end_date === "string" ? r.end_date : null,
         timezone: text(r.timezone),
         location: text(r.location),
         calendarUrl: https(r.source_url),
@@ -103,8 +106,8 @@ export function externalAttendees(e: BriefEvent, owners: ReadonlySet<string>, in
   return e.attendees.filter((a) => !owners.has(a.email) && !internalDomains.has(domainOf(a.email)) && !a.email.endsWith("calendar.google.com")).map((a) => a.email);
 }
 
-/** Holiday calendars (Google's public holiday calendars) or an all-day event on another shared calendar. */
-export const isHoliday = (e: BriefEvent): boolean => /#holiday@group\.v\.calendar\.google\.com$/i.test(e.calendarId) || /holiday/i.test(e.calendarId);
+/** Google's public holiday calendars. */
+export const isHoliday = (e: BriefEvent): boolean => /#holiday@group\.v\.calendar\.google\.com$/i.test(e.calendarId);
 
 /**
  * Today's events: declined ones hidden; timed events get clash and back-to-back flags (against other visible timed
@@ -156,4 +159,32 @@ export function attendeeSummary(e: BriefEvent, owners: ReadonlySet<string>, max 
   if (others.length === 0) return null;
   const shown = others.slice(0, max).map((a) => a.name ?? a.email);
   return others.length > max ? `${shown.join(", ")} +${String(others.length - max)}` : shown.join(", ");
+}
+
+/** Mail providers whose domain says nothing about who is a colleague (never treated as internal). */
+export const PUBLIC_MAIL_DOMAINS: ReadonlySet<string> = new Set(["gmail.com", "googlemail.com", "outlook.com", "hotmail.com", "live.com", "yahoo.com", "icloud.com", "me.com", "aol.com", "proton.me", "protonmail.com"]);
+
+/**
+ * Splits events into today and the following days by the VIEWER's local dates. All-day events go by their dates (the
+ * sync stores their instants as midnight in the event's own zone, which is another day for a viewer elsewhere); timed
+ * events by instant against [from, to). `days` = how many days after today the look-ahead covers.
+ */
+export function splitByDay(events: BriefEvent[], from: Date, to: Date, today: string, days: number): { today: BriefEvent[]; later: BriefEvent[] } {
+  const end = (() => {
+    const d = new Date(`${today}T12:00:00Z`);
+    d.setUTCDate(d.getUTCDate() + days + 1);
+    return d.toISOString().slice(0, 10);
+  })();
+  const out = { today: [] as BriefEvent[], later: [] as BriefEvent[] };
+  for (const e of events) {
+    if (e.allDay && e.startDate && e.endDate) {
+      if (e.startDate <= today && e.endDate > today) out.today.push(e);
+      else if (e.startDate > today && e.startDate < end) out.later.push(e);
+    } else if (!e.allDay) {
+      const s = Date.parse(e.startAt);
+      if (s < to.getTime() && Date.parse(e.endAt) > from.getTime()) out.today.push(e);
+      else if (s >= to.getTime()) out.later.push(e);
+    }
+  }
+  return out;
 }
