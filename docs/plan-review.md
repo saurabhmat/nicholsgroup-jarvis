@@ -1091,3 +1091,24 @@ Logged, not fixed:
 - **Code L3.** NUL in a body gives a generic 503.
 - **Code L4.** The read-back does not check the body.
 - **Code L5.** History says "Failed" for `verification_*` codes where the mail may have gone out.
+
+### T-231d review follow-ups (Nov 11, 2026, branch `agent/T-232`)
+Fixed before done:
+- code H1 / security M1: only a ready draft becomes a proposal. A masked, ungrounded or placeholder draft never does.
+- security M2 (partly): a link or address not in the reply's own thread empties the draft.
+- security M4: a job may have at most 6 pending proposals.
+- security L1: no new job reply while one is pending, approved, executing or sent, or for 7 days after a rejection.
+- security L2: bound `proposeBriefingReply`.
+- security L3: a job proposal is audited as the service.
+- security L4 / code L4: never to the lane's mailboxes or a no-reply address.
+- code M2 and M3: Home shows the re-run link and a failure line, never raw codes.
+
+Logged, not fixed:
+- **Security M2 (rest), rule 9.** One model call sees up to 8 threads (with up to 5 bodies), so an injected email can shape the *text* of a reply to another thread. The recipient, thread and sender are always metadata, links and addresses must come from the reply's own thread, and every send needs the owner's approval. Follow-ups:
+  - per-thread model calls for reply drafts;
+  - or propose only to senders with a DMARC/SPF pass, or people the owner has written to before. Needs auth results in the mail index.
+- **Security M3.** Parallel "Run now" requests each call the model before the SQL cooldown; their proposals are de-duplicated per message, so at most one pending reply per thread. Same root as the T-231c note: a claim-before-run row.
+- **Security L5 / rule 7.** The Approvals card shows the raw subject (sender-written metadata, needed for the thread); Home masks it.
+- **Code L5.** An empty subject replies as "Re:".
+- **Code L6.** Home's draft status does not follow the proposal (approved, rejected, expired).
+- **Code L7.** Proposals run one after another (at most 3 per run).

@@ -47,6 +47,7 @@ export type ReplyProposal = {
 };
 
 const MASKED = /\[(?:amount|number)\]/;
+const NO_REPLY = /^(?:no-?reply|do-?not-?reply|mailer-daemon|notifications?)[@+.]/i;
 const reSubject = (s: string | null) => {
   const t = (s ?? "").replace(/[\r\n]+/g, " ").trim();
   return /^re:/i.test(t) ? t : `Re: ${t}`.trim();
@@ -60,11 +61,19 @@ const reSubject = (s: string | null) => {
 async function proposeReplies(deps: RunDeps, laneId: LaneId, content: BriefContent, refs: readonly BriefRef[]): Promise<void> {
   if (!deps.proposeReply) return;
   const byRef = new Map(refs.map((r) => [r.ref, r]));
+  const ownMailboxes = new Set(refs.flatMap((r) => (r.mailbox ? [r.mailbox.toLowerCase()] : [])));
   for (const d of content.replies) {
-    if (MASKED.test(d.text)) d.status = "awaiting_input";
     const r = byRef.get(d.ref);
     const to = r?.fromAddress?.toLowerCase() ?? null;
-    if (!r || !d.text || !to || !r.threadKey || r.threadKey.startsWith("m:") || to === r.mailbox?.toLowerCase()) {
+    // A masked figure means the owner must fill it in: the draft stays on Home ("Awaiting your input", Copy) and is
+    // never proposed, so "[amount]" can never be approved and sent as written (T-231d code review H1).
+    if (MASKED.test(d.text)) {
+      d.status = "awaiting_input";
+      content.notes.push(`reply_not_proposed:${d.ref}`);
+      continue;
+    }
+    // Only a draft checked as ready is proposed (T-231d security review M1): "Awaiting your input" stays on Home.
+    if (d.status !== "ready" || !r || !d.text || !to || !r.threadKey || r.threadKey.startsWith("m:") || ownMailboxes.has(to) || NO_REPLY.test(to)) {
       content.notes.push(`reply_not_proposed:${d.ref}`);
       continue;
     }

@@ -183,10 +183,25 @@ describe("reply drafts -> Approval Center proposals (T-231d)", () => {
     expect(saved[0]?.sourceRefs[0]?.subject).not.toContain("1,200");
   });
 
-  it("a draft with a masked figure waits for the owner's input", async () => {
-    const { d, saved } = deps({ reply: replyJson("We can do it for $1,200."), policy: on, proposeReply: async () => PROPOSAL });
+  it("a draft with a masked figure waits for the owner's input on Home and is never proposed", async () => {
+    let calls = 0;
+    const { d, saved } = deps({ reply: replyJson("We can do it for $1,200."), policy: on, proposeReply: async () => (calls++, PROPOSAL) });
     await runBriefing(d, input);
     expect(saved[0]?.content.replies[0]?.status).toBe("awaiting_input");
+    expect(saved[0]?.content.replies[0]?.text).toContain("[amount]");
+    expect(saved[0]?.content.notes).toContain("reply_not_proposed:r1");
+    expect(calls).toBe(0);
+  });
+
+  it("no proposal to a no-reply sender", async () => {
+    let calls = 0;
+    const noreply = fakeClient({
+      briefing_coverage: { data: [{ stream: "mail", account: "me@pubk.test", connection_id: "c1", provider: "google", status: "active", configured: true, last_sync_at: "2026-11-11T14:59:00Z" }], error: null },
+      briefing_threads: { data: [{ connection_id: "c1", thread_key: "t1", message_id: "m1", from_address: "no-reply@acme.test", from_name: "Acme", subject: "Hi", received_at: "2026-11-11T10:00:00Z", source_url: null, labels: ["INBOX"], last_is_owner: false, owner_replied: false, unread_count: 1, inbound_count: 1 }], error: null },
+    });
+    const { d } = deps({ client: noreply, reply: replyJson("Thanks."), policy: on, proposeReply: async () => (calls++, PROPOSAL) });
+    await runBriefing(d, input);
+    expect(calls).toBe(0);
   });
 
   it("an existing pending reply or a failure never stops the briefing", async () => {

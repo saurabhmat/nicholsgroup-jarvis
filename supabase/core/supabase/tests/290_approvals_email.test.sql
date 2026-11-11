@@ -6,7 +6,7 @@
 -- the state machine and immutability, the single claim, the D-19 body purge in every terminal state, edit = supersede,
 -- history insert-only, pending count.
 begin;
-select plan(102);
+select plan(106);
 \ir helpers/lane_rls.psql
 
 -- A token whose amr carries a TOTP verification at p_at (epoch seconds), or none when p_at is null.
@@ -320,6 +320,22 @@ select throws_ok($$select act.propose('PKG', 'email.send', '00000000-0000-4000-8
                  '23505', 'act: a reply to this message is already waiting for approval', 'a second job reply to the same message is refused');
 select lives_ok($$select act.propose('PKG', 'email.send', '00000000-0000-4000-8000-000000002901', '{"mailbox":"act-pkg@example.test","thread_id":"thread-1"}', pg_temp.reply('msg-2'), 1, pg_temp.hash('r3'), null, '[]', 'job', pg_temp.uid('owner@example.test'), true)$$, 'a job reply to another message is fine');
 select lives_ok($$select act.propose('PKG', 'email.send', '00000000-0000-4000-8000-000000002901', '{"mailbox":"act-pkg@example.test","thread_id":"thread-1"}', pg_temp.reply('msg-1'), 1, pg_temp.hash('r4'), null, '[]', 'user', pg_temp.uid('owner@example.test'), false)$$, 'a user''s own reply to msg-1 is not limited');
+
+-- A rejected job reply is not proposed again for 7 days (T-231d security L1).
+insert into ids select 'rj', act.propose('PKG', 'email.send', '00000000-0000-4000-8000-000000002901', '{"mailbox":"act-pkg@example.test","thread_id":"thread-1"}', pg_temp.reply('msg-rj'), 1, pg_temp.hash('rj'), null, '[]', 'job', pg_temp.uid('owner@example.test'), true);
+select pg_temp.claims_amr('owner@example.test', 'aal2', extract(epoch from now())::bigint);
+set local role authenticated;
+select lives_ok(format($$select core.act_reject('PKG', %L, 'not this')$$, (select id from ids where k = 'rj')), 'the owner rejects the prepared reply');
+reset role;
+select throws_ok($$select act.propose('PKG', 'email.send', '00000000-0000-4000-8000-000000002901', '{"mailbox":"act-pkg@example.test","thread_id":"thread-1"}', pg_temp.reply('msg-rj'), 1, pg_temp.hash('rj2'), null, '[]', 'job', pg_temp.uid('owner@example.test'), true)$$,
+                 '23505', null, 'a reply the owner rejected is not prepared again (7 days)');
+-- Jobs have their own cap of 6 pending, so the owner keeps room for their own proposals (T-231d security M4).
+insert into ids select 'job' || g::text, act.propose('PKG', 'email.send', '00000000-0000-4000-8000-000000002901', '{"mailbox":"act-pkg@example.test","thread_id":"thread-1"}', pg_temp.reply('msg-job-' || g::text), 1, pg_temp.hash('job' || g::text), null, '[]', 'job', pg_temp.uid('owner@example.test'), true)
+from generate_series(1, 6 - (select count(*)::int from act.proposed_actions where lane_id = 'PKG' and status = 'proposed' and proposer_kind = 'job' and expires_at > now())) g;
+select throws_ok($$select act.propose('PKG', 'email.send', '00000000-0000-4000-8000-000000002901', '{"mailbox":"act-pkg@example.test","thread_id":"thread-1"}', pg_temp.reply('msg-job-over'), 1, pg_temp.hash('job-over'), null, '[]', 'job', pg_temp.uid('owner@example.test'), true)$$,
+                 '54000', null, 'a 7th pending job proposal is refused');
+select lives_ok($$select act.propose('PKG', 'email.send', '00000000-0000-4000-8000-000000002901', '{"mailbox":"act-pkg@example.test"}', pg_temp.payload('act-pkg@example.test'), 1, pg_temp.hash('user-after-jobs'), null, '[]', 'user', pg_temp.uid('owner@example.test'), false)$$,
+                'the owner can still propose while the job cap is full');
 
 -- The 20-pending cap counts only unexpired proposals (code M2).
 insert into ids select 'cap' || g::text, act.propose('PKG', 'email.send', '00000000-0000-4000-8000-000000002901', '{"mailbox":"act-pkg@example.test"}', pg_temp.payload('act-pkg@example.test'), 1, pg_temp.hash('cap' || g::text), null, '[]', 'user', pg_temp.uid('owner@example.test'), false)

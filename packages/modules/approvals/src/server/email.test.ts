@@ -490,3 +490,15 @@ describe("review fixes (T-232 code review H1, H2, M1, M4)", () => {
     expect(seen).toEqual([OWNER]);
   });
 });
+
+describe("job proposals (T-231d security review L3, L4)", () => {
+  it("a job's proposal is audited as the service, for the owner", async () => {
+    const w = world();
+    await proposeEmailAction(w.deps, "PKG", input);
+    expect(w.audits[0]).toMatchObject({ action: "action.proposed", actor: { kind: "service" }, metadata: { for_user: OWNER } });
+  });
+  it("a job never addresses one of the lane's own mailboxes", async () => {
+    const w = world();
+    await expect(proposeEmailAction(w.deps, "PKG", { ...input, compose: { ...compose, to: [MAILBOX] } })).rejects.toMatchObject({ code: "invalid" });
+  });
+});

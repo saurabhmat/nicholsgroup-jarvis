@@ -117,6 +117,11 @@ export async function proposeEmailAction(deps: ApprovalsPublicDeps, laneId: Lane
   if (typeof input.derivedFromRetrieved !== "boolean") throw new ApprovalsError("invalid");
   if (input.rationale !== undefined && (typeof input.rationale !== "string" || input.rationale.length > 2000)) throw new ApprovalsError("invalid");
   if (input.sourceRefs !== undefined && input.sourceRefs.length > 20) throw new ApprovalsError("invalid");
+  // A job never addresses the lane's own mailboxes (a reply to ourselves; T-231d security review L4).
+  if (input.proposerKind === "job") {
+    const own = new Set((await deps.laneMailboxes(laneId)).map((m) => m.toLowerCase()));
+    if ([...input.compose.to, ...(input.compose.cc ?? []), ...(input.compose.bcc ?? [])].some((a) => own.has(a.toLowerCase()))) throw new ApprovalsError("invalid");
+  }
   const p = await buildProposal(deps, laneId, input.actionType, input.connectionId, input.compose);
   const rpc = await deps.jobRpc(laneId);
   const { data, error } = await rpc("act_propose", {
@@ -135,7 +140,9 @@ export async function proposeEmailAction(deps: ApprovalsPublicDeps, laneId: Lane
   });
   if (error) throw toApprovalsError(error);
   if (typeof data !== "string" || !UUID.test(data)) throw new ApprovalsError("unavailable");
-  await audit(deps, laneId, input.proposerUserId ? { kind: "user", userId: input.proposerUserId } : { kind: "service" }, "action.proposed", data, {
+  // Only a person's own proposal is audited as that person; a job's is the service's, for the owner (T-231d security L3).
+  await audit(deps, laneId, input.proposerKind === "user" && input.proposerUserId ? { kind: "user", userId: input.proposerUserId } : { kind: "service" }, "action.proposed", data, {
+    ...(input.proposerKind !== "user" && input.proposerUserId ? { for_user: input.proposerUserId } : {}),
     action_type: input.actionType,
     connection_id: p.connectionId,
     hash: p.hash,

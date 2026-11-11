@@ -4,8 +4,8 @@
 // from the newest attempt, failed ones included; enforced again in SQL by core.briefing_save_own under a lock) -> the
 // run with the OWNER'S own lane client for every read (RLS applies) -> save with that same client through
 // core.briefing_save_own (definer: owner = auth.uid()). No service client in briefing code on this path; reply drafts
-// become proposals through the approvals module (T-231d), which holds its own job client (rule 5 boundary) and only
-// proposes. Errors return a code only; logs carry the class only.
+// become proposals through the approvals module's bound proposeBriefingReply (T-231d), which keeps its own job client
+// inside the module (rule 5 boundary) and only proposes. Errors return a code only; logs carry the class only.
 import { getLLMProvider } from "@nichols/ai/config";
 import type { LaneId } from "@nichols/core";
 import { AuthError } from "@nichols/core/auth";

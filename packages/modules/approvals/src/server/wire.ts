@@ -6,7 +6,7 @@ import { prepareEmailWrite, laneMailboxes } from "@nichols/connectors/google";
 import { googleEmailWriter, loadGoogleWriteConnection } from "@nichols/connectors/write";
 import type { LaneId } from "@nichols/core";
 import { getAudit, getLaneJobClient } from "@nichols/core/lane-router";
-import { approveAndExecute, executeApproved } from "./email";
+import { approveAndExecute, executeApproved, proposeEmailAction, type ProposeEmailInput } from "./email";
 import type { CapabilityFacts, ApprovalsDeps, ApprovalsPublicDeps, Rpc, UserCtx } from "./types";
 
 const rpcOf = (client: { schema(name: "core"): { rpc: unknown } }): Rpc => {
@@ -75,4 +75,19 @@ export async function expireStaleActions(laneId: LaneId): Promise<number> {
   const { data, error } = await (await jobRpc(laneId))("act_expire_stale", { p_lane: laneId });
   if (error || typeof data !== "number") throw new Error("action expiry failed");
   return data;
+}
+
+/**
+ * The briefing's one entry point (T-231d security review L2): a job proposal for the owner, bound to the real deps, so
+ * the briefing never holds `approvalsDeps` (whose jobRpc is the service-role rpc). Proposes only; never approves or sends.
+ */
+export async function proposeBriefingReply(laneId: LaneId, ownerUserId: string, input: Pick<ProposeEmailInput, "connectionId" | "compose" | "rationale" | "sourceRefs">): Promise<string> {
+  const { id } = await proposeEmailAction(approvalsDeps, laneId, {
+    ...input,
+    actionType: "email.send",
+    proposerKind: "job",
+    proposerUserId: ownerUserId,
+    derivedFromRetrieved: true,
+  });
+  return id;
 }

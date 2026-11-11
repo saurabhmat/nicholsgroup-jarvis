@@ -28,6 +28,7 @@ import {
   type MoneyThread,
   type DayEvent,
   type NotableEvent,
+  AWAITING,
 } from "@nichols/briefing/domain";
 
 const DAY_MS = 86_400_000;
@@ -232,7 +233,8 @@ export function parseSavedBriefing(data: unknown): SavedBriefingView | null {
               ref: r.ref,
               status: r.status === "ready" ? ("ready" as const) : ("awaiting_input" as const),
               context: s(r.context) ?? "",
-              text: r.text,
+              // Rows saved before T-231d's review kept the placeholder as text: Home shows "No text yet" instead.
+              text: r.text === AWAITING ? "" : r.text,
               proposalId: typeof r.proposalId === "string" && UUID_RE.test(r.proposalId) ? r.proposalId : null,
             }
           : null,

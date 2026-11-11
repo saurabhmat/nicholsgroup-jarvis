@@ -383,12 +383,23 @@ begin
         and a.id is distinct from p_supersedes) >= 20 then
     raise exception 'act: too many pending proposals in this lane' using errcode = '54000';
   end if;
-  -- T-231d: a job (the daily briefing) proposes at most one pending reply per message replied to, so re-running the
-  -- briefing never piles up copies. A user's own proposals and edits (supersede) are not limited by this.
+  -- T-231d: jobs (the daily briefing) have their own, smaller cap, so mail that lands in "attention" can never fill the
+  -- lane's slots and lock the owner's own proposals out (T-231d security review M4).
+  if p_proposer_kind = 'job' and p_supersedes is null
+     and (select count(*) from act.proposed_actions a where a.lane_id = p_lane and a.status = 'proposed' and a.proposer_kind = 'job'
+            and a.expires_at > pg_catalog.now()) >= 6 then
+    raise exception 'act: too many pending proposals in this lane (prepared replies)' using errcode = '54000';
+  end if;
+  -- T-231d: a job proposes at most one reply per message replied to: never while one is pending, approved, being sent
+  -- or sent, and not again for 7 days after the owner rejected one (T-231d security review L1). A user's own proposals
+  -- and edits (supersede) are not limited by this.
   if p_proposer_kind = 'job' and p_supersedes is null and p_payload -> 'inReplyTo' ->> 'messageId' is not null
      and exists (select 1 from act.proposed_actions a
-                 where a.lane_id = p_lane and a.connection_id = p_connection and a.status = 'proposed' and a.expires_at > pg_catalog.now()
-                   and a.payload -> 'inReplyTo' ->> 'messageId' = p_payload -> 'inReplyTo' ->> 'messageId') then
+                 where a.lane_id = p_lane and a.connection_id = p_connection
+                   and a.payload -> 'inReplyTo' ->> 'messageId' = p_payload -> 'inReplyTo' ->> 'messageId'
+                   and ((a.status = 'proposed' and a.expires_at > pg_catalog.now())
+                        or a.status in ('approved', 'executing', 'verified')
+                        or (a.status = 'rejected' and a.updated_at > pg_catalog.now() - interval '7 days'))) then
     raise exception 'act: a reply to this message is already waiting for approval' using errcode = '23505';
   end if;
   insert into act.proposed_actions (lane_id, action_type, connection_id, provider, target, payload, payload_schema_version, payload_sha256,

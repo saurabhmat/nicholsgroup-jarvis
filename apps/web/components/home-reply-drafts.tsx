@@ -64,6 +64,13 @@ export function ReplyDrafts({ laneId, brief, tz }: { laneId: string; brief: Save
                   <Link href={`${laneHref(laneId, "approvals")}#action-${d.proposalId}`} className="text-small text-primary underline-offset-2 hover:underline">
                     Review in Approvals
                   </Link>
+                ) : notes.includes(`reply_proposal_exists:${d.ref}`) ? (
+                  // A re-run: the reply prepared earlier is still waiting (its text may differ from this draft).
+                  <Link href={laneHref(laneId, "approvals")} className="text-small text-primary underline-offset-2 hover:underline">
+                    An earlier draft is waiting in Approvals
+                  </Link>
+                ) : notes.includes(`reply_proposal_failed:${d.ref}`) ? (
+                  <span className="text-small text-muted-foreground">Could not be added to Approvals: copy it instead.</span>
                 ) : null}
               </div>
             </li>

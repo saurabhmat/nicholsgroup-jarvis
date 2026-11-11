@@ -64,6 +64,25 @@ describe("ReplyDrafts", () => {
     expect(screen.getByTestId("more-replies").textContent).toContain("Person 3");
   });
 
+  it("a re-run links to the earlier draft waiting in Approvals; a failure says to copy instead (never a raw code)", () => {
+    render(
+      <ReplyDrafts
+        laneId="PKG"
+        brief={brief({
+          replies: [
+            { ref: "r1", status: "ready", context: "", text: "Hi", proposalId: null },
+            { ref: "r2", status: "ready", context: "", text: "Hello", proposalId: null },
+          ],
+          notes: ["reply_proposal_exists:r1", "reply_proposal_failed:r2"],
+        })}
+        tz="America/New_York"
+      />,
+    );
+    expect(screen.getByRole("link", { name: "An earlier draft is waiting in Approvals" }).getAttribute("href")).toBe("/PKG/approvals");
+    expect(screen.getByText(/Could not be added to Approvals/)).toBeTruthy();
+    expect(document.body.textContent).not.toContain("reply_proposal");
+  });
+
   it("Copy copies the exact text and says so", async () => {
     const writeText = vi.fn(async () => undefined);
     Object.assign(navigator, { clipboard: { writeText } });
