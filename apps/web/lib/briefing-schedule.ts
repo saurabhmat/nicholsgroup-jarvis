@@ -12,6 +12,7 @@ import { readGmailBody } from "@nichols/connectors/google";
 import { BUSINESS_TZ } from "@nichols/briefing/domain";
 import { briefingConfigFrom } from "./briefing";
 import { policyFrom, runBriefing } from "./briefing-run";
+import { replyProposer } from "./briefing-proposals";
 
 type Db = Parameters<typeof briefingOwners>[0] & Parameters<typeof runBriefing>[0]["client"];
 export type ClientFor = (laneId: string) => Promise<Db>;
@@ -49,6 +50,7 @@ export async function runScheduled(clientFor: ClientFor, laneId: string, ownerUs
       brain: { brainUser: null, laneBrain: {}, notes: ["no_brain_in_schedule"] },
       policy: policyFrom(pol.data),
       save: (l, r) => saveBriefing(c, l, r),
+      proposeReply: replyProposer(ownerUserId),
     },
     { laneId: laneId as LaneId, ownerUserId, trigger: "schedule", now, viewerTz: BUSINESS_TZ },
   );

@@ -196,6 +196,9 @@ importers:
       '@nichols/ai':
         specifier: workspace:*
         version: link:../../packages/ai
+      '@nichols/approvals':
+        specifier: workspace:*
+        version: link:../../packages/modules/approvals
       '@nichols/brain':
         specifier: workspace:*
         version: link:../../packages/modules/brain
@@ -223,6 +226,9 @@ importers:
       react-dom:
         specifier: 19.3.0
         version: 19.3.0(react@19.3.0)
+      zod:
+        specifier: 4.6.7
+        version: 4.6.7
     devDependencies:
       '@nichols/eslint-plugin':
         specifier: workspace:*
@@ -349,9 +355,18 @@ importers:
 
   packages/modules/approvals:
     dependencies:
+      '@nichols/connectors':
+        specifier: workspace:*
+        version: link:../../connectors
       '@nichols/core':
         specifier: workspace:*
         version: link:../../core
+      server-only:
+        specifier: ^0.0.1
+        version: 0.0.1
+      zod:
+        specifier: 4.6.7
+        version: 4.6.7
 
   packages/modules/brain:
     dependencies:

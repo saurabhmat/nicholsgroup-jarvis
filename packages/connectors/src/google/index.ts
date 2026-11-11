@@ -4,7 +4,7 @@
 import type { LaneId } from "@nichols/core";
 import { requireConnectorEnv } from "@nichols/core/env/server";
 import type { LaneBoundConnection } from "../contract/lane-bound";
-import { calendarIndexStore, connectionLoader, getToken, laneConfigReader, mailIndexStore, revokeToken, rotateToken, storeToken } from "../vault/index";
+import { actionClaimReader, calendarIndexStore, connectionLoader, getToken, laneConfigReader, mailIndexStore, revokeToken, rotateToken, storeToken, writePolicyReader } from "../vault/index";
 import { SecretValue } from "../vault/secret";
 import { createGoogleApi } from "./api";
 import { createCalendarSync } from "./cal-sync";
@@ -13,6 +13,7 @@ import { createGmailProvider } from "./mail";
 import { createMailSync } from "./mail-sync";
 import { createGoogleOAuthProvider, type GoogleClientConfig } from "./provider";
 import { createGoogleTokenManager } from "./token-manager";
+import { createGoogleEmailWriter } from "./email-writer";
 import { createGoogleWriter } from "./writer";
 
 function client(): GoogleClientConfig {
@@ -20,7 +21,7 @@ function client(): GoogleClientConfig {
   return { clientId: env.GOOGLE_OAUTH_CLIENT_ID, clientSecret: new SecretValue(env.GOOGLE_OAUTH_CLIENT_SECRET), redirectUri: env.GOOGLE_REDIRECT_URI };
 }
 
-export const googleOAuthProvider = createGoogleOAuthProvider({ client, laneConfig: laneConfigReader });
+export const googleOAuthProvider = createGoogleOAuthProvider({ client, laneConfig: laneConfigReader, composeAllowed: (laneId) => writePolicyReader.emailWritesAllowed(laneId) });
 
 const vault = { getToken, rotateToken, storeToken, revokeToken };
 const tokens = createGoogleTokenManager({ vault, client });
@@ -45,6 +46,21 @@ export async function readGmailBody(laneId: LaneId, connectionId: string, messag
   return { text: res.data.reveal(), truncated: res.data.truncated };
 }
 
+/**
+ * Email proposals (T-232): builds the proposed payload for an email action from a connection (no external effect, no
+ * token read). The connection is loaded by (lane, id) from the authoritative row; `prepareWrite` refuses a sender other
+ * than the connection's mailbox. Only the approvals module proposes; execution is `googleEmailWriter` (write subpath).
+ */
+export async function prepareEmailWrite(laneId: LaneId, connectionId: string, intent: Parameters<typeof gmailProvider.prepareWrite>[2]) {
+  const conn = await connectionLoader.loadConnection(laneId, connectionId);
+  return { connection: conn as LaneBoundConnection<"google">, proposed: await gmailProvider.prepareWrite(laneId, conn as LaneBoundConnection<"google">, intent) };
+}
+
+/** The lane's configured mailboxes (`lane_config.mailboxes`), lower-cased; the approvals module checks a proposal's sender against them. */
+export function laneMailboxes(laneId: LaneId): Promise<string[]> {
+  return laneConfigReader.mailboxes(laneId);
+}
+
 /** Google Calendar event metadata sync, live description. Polling (calendar push is not built). */
 export const googleCalendarProvider = createGoogleCalendarProvider({ api, connections, laneConfig: laneConfigReader });
 /** Runs one connection's calendar metadata sync into cal.event_index (the sync job calls this; Inngest wiring: T-038). */
@@ -52,6 +68,14 @@ export const calSync = createCalendarSync({ calendar: googleCalendarProvider, st
 
 /** Revoke-at-Google and delete-Vault-tokens (D-24: approvals only). No route, job or connector method calls it. */
 export const googleWriter = createGoogleWriter({ vault, connections, tokens });
+
+/** Send or save-as-draft an approved email (T-232; approvals only, via the write subpath). Never called by a route, job or tool. */
+export const googleEmailWriter = createGoogleEmailWriter({ connections, tokens, api, laneConfig: laneConfigReader, claims: actionClaimReader });
+
+/** The authoritative, lane-bound Google connection row the email writer runs on (write subpath only). */
+export async function loadGoogleWriteConnection(laneId: LaneId, connectionId: string): Promise<LaneBoundConnection<"google">> {
+  return (await connectionLoader.loadConnection(laneId, connectionId)) as LaneBoundConnection<"google">;
+}
 
 export { mailIndexStore, calendarIndexStore };
 export { GOOGLE_SLUG, GOOGLE_SCOPES } from "./constants";

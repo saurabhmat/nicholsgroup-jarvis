@@ -28,6 +28,7 @@ import {
   type MoneyThread,
   type DayEvent,
   type NotableEvent,
+  AWAITING,
 } from "@nichols/briefing/domain";
 
 const DAY_MS = 86_400_000;
@@ -160,6 +161,7 @@ export type SavedBriefingView = {
   lastRunAt: string | null;
 };
 
+const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 const strs = (v: unknown): string[] => (Array.isArray(v) ? v.filter((x): x is string => typeof x === "string") : []);
 
 /**
@@ -226,7 +228,16 @@ export function parseSavedBriefing(data: unknown): SavedBriefingView | null {
       deadlines: list(c.deadlines, (d) => (typeof d.text === "string" ? { ref: s(d.ref), text: d.text, due: s(d.due) } : null)),
       priorities: list(c.priorities, (p) => (typeof p.text === "string" ? { text: p.text, reason: s(p.reason) ?? "", refs: strs(p.refs) } : null)),
       replies: list(c.replies, (r) =>
-        typeof r.ref === "string" && typeof r.text === "string" ? { ref: r.ref, status: r.status === "ready" ? ("ready" as const) : ("awaiting_input" as const), context: s(r.context) ?? "", text: r.text } : null,
+        typeof r.ref === "string" && typeof r.text === "string"
+          ? {
+              ref: r.ref,
+              status: r.status === "ready" ? ("ready" as const) : ("awaiting_input" as const),
+              context: s(r.context) ?? "",
+              // Rows saved before T-231d's review kept the placeholder as text: Home shows "No text yet" instead.
+              text: r.text === AWAITING ? "" : r.text,
+              proposalId: typeof r.proposalId === "string" && UUID_RE.test(r.proposalId) ? r.proposalId : null,
+            }
+          : null,
       ),
       moreReplies: strs(c.moreReplies),
       notes: strs(c.notes),

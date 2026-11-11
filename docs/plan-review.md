@@ -1074,3 +1074,41 @@ Logged, not fixed (MEDIUM and below):
 - **Open product decision (revisit after Robert sees it): money amounts in AI text.** Kept masked for now (rule 7: figures come from SQL; the QuickBooks cards show the real numbers). Options later: keep masked; or show "amount as written in the email" as a separate labelled field, never inside model prose.
 - **Local DB:** reset approved (local only, test data); `pnpm test:db` re-run on a clean reset: 37 files pass; `brief_briefings` at the current version (guard trigger BEFORE INSERT only).
 - **Production SQL:** `supabase/core/bootstrap/manual-migrations/part-9a-T-231a.sql` .. `part-9d-T-233.sql` + `check-part-9.sql` (T-230 needs no SQL). Dry-run on a clone at the part-8 state: order guard, re-run guard and 22/22 checks pass. The migration version `20261111300000` (T-233) is not a real time (hour 30); it sorts correctly and is kept so local and production versions match.
+
+### T-232 review follow-ups (Nov 11, 2026, branch `agent/T-232`)
+All HIGH items are fixed (security H1; code H1, H2), plus security M2, L1, L2, L6, L7 and code M1 – M4, L6 – L8. Details are in `.agent/pr/T-232.md`.
+
+Logged, not fixed:
+- **Security M3 / code M1 (rest), stuck `executing` rows.** There is no `action.reconcile_stuck` (T-192). A row left `executing` (the request was killed after the send, or recording failed) keeps its body and needs a manual look until T-192. Do this **before PKG sends live mail**.
+- **Security M4.** Gmail may replace a client Message-ID. The duplicate guard after a crash then rests on the claim only (safe: an unknown outcome is never resent). Check this on the first live send (H-item).
+- **Security M1 (rest).** No "new to this thread" flag and no live quote of the thread (spec §8, §10). T-231d's recipient is always the sender of the message replied to, taken from metadata.
+- **Security L3.** Switching `store_outbound_drafts` off leaves pending bodies until they expire (now at most 15 min after `expires_at`).
+- **Security L4.** The `gmail_compose` feature flag is written after the token, not in the same transaction.
+- **Security L5.** Once compose is granted, the read paths use a token that can send. Read-only rests on the GET-only `api.ts`.
+- **Security L7.** The read-back does not compare Bcc.
+- **Code L1.** A card stays "dirty" after a case-only edit.
+- **Code L2.** `ADDRESS` is stricter than `z.email()`: such an address fails after approval as `execution_refused`.
+- **Code L3.** NUL in a body gives a generic 503.
+- **Code L4.** The read-back does not check the body.
+- **Code L5.** History says "Failed" for `verification_*` codes where the mail may have gone out.
+
+### T-231d review follow-ups (Nov 11, 2026, branch `agent/T-232`)
+Fixed before done:
+- code H1 / security M1: only a ready draft becomes a proposal. A masked, ungrounded or placeholder draft never does.
+- security M2 (partly): a link or address not in the reply's own thread empties the draft.
+- security M4: a job may have at most 6 pending proposals.
+- security L1: no new job reply while one is pending, approved, executing or sent, or for 7 days after a rejection.
+- security L2: bound `proposeBriefingReply`.
+- security L3: a job proposal is audited as the service.
+- security L4 / code L4: never to the lane's mailboxes or a no-reply address.
+- code M2 and M3: Home shows the re-run link and a failure line, never raw codes.
+
+Logged, not fixed:
+- **Security M2 (rest), rule 9.** One model call sees up to 8 threads (with up to 5 bodies), so an injected email can shape the *text* of a reply to another thread. The recipient, thread and sender are always metadata, links and addresses must come from the reply's own thread, and every send needs the owner's approval. Follow-ups:
+  - per-thread model calls for reply drafts;
+  - or propose only to senders with a DMARC/SPF pass, or people the owner has written to before. Needs auth results in the mail index.
+- **Security M3.** Parallel "Run now" requests each call the model before the SQL cooldown; their proposals are de-duplicated per message, so at most one pending reply per thread. Same root as the T-231c note: a claim-before-run row.
+- **Security L5 / rule 7.** The Approvals card shows the raw subject (sender-written metadata, needed for the thread); Home masks it.
+- **Code L5.** An empty subject replies as "Re:".
+- **Code L6.** Home's draft status does not follow the proposal (approved, rejected, expired).
+- **Code L7.** Proposals run one after another (at most 3 per run).

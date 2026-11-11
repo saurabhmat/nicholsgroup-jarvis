@@ -42,7 +42,8 @@ insert into custom_policy_ok values
   ('brain.document_versions', 'same as brain.documents: kind and owner_user_id are copied onto each version by a trigger (T-210)'),
   ('brain.imports', 'standard expression AND user_id = auth.uid(): an import is its user''s alone (T-210)'),
   ('brain.import_candidates', 'standard expression AND user_id = auth.uid() AND created_at within 24 h: candidates are their user''s alone and expire (T-210)'),
-  ('brain.section_completions', 'standard expression AND user_id = auth.uid(): completion is its user''s alone (T-227)');
+  ('brain.section_completions', 'standard expression AND user_id = auth.uid(): completion is its user''s alone (T-227)'),
+  ('act.proposed_actions', 'standard expression for the approvals view (owner) OR (proposer_user_id = auth.uid() AND lane member): a proposer sees their own proposals (T-232, approvals spec §4)');
 
 -- Tables where authenticated may write directly (grants or write policies). Empty: writes go through service code or
 -- reviewed security-definer functions.
@@ -96,7 +97,17 @@ insert into security_definer_ok values
   ('brain.import_decide', 'import review: aal2 + owner role + own open import only; finish deletes the candidates (T-210)'),
   ('brain.section_complete', 'setup-interview completion writer: aal2 + owner role + own rows only (auth.uid()), known section ids, idempotent (T-227)'),
   ('brain.import_create', 'import writer: aal2 + owner role + own rows only (auth.uid()), extraction sources, 1-100 candidates, 20 imports/hour, four interview pages, lanes the caller may open, NL candidates keep no quote (T-220)'),
-  ('core.brain_import_purge', 'retention: deletes a lane''s import candidates older than 23 h and closes stale imports; service_role only, lane-checked (T-210)');
+  ('core.brain_import_purge', 'retention: deletes a lane''s import candidates older than 23 h and closes stale imports; service_role only, lane-checked (T-210)'),
+  ('act.propose', 'creates an email proposal; service_role only; refuses unless store_outbound_drafts, deny-listed types, other lanes'' connections, more than 20 pending (T-232)'),
+  ('core.act_claim_open', 'the Gmail writer''s pre-send check: executing action, open claim, approved hash and approver; service_role only (T-232 review H1)'),
+  ('act.supersede', 'edit = new proposal, old one invalidated and purged; service_role only, lane-checked (T-232)'),
+  ('act.approve', 'approves the exact hash: aal2, TOTP step-up (amr), owner of the lane, approvals_live, lane policy type, compose grant; authenticated (T-232)'),
+  ('act.reject', 'rejects a pending proposal; aal2 + owner of the lane, reason required (T-232)'),
+  ('act.claim_execution', 'approved -> executing with the single claim; service_role only, re-checks every gate (T-232)'),
+  ('act.claim_sent', 'records the provider id after the external write; service_role only, open claim required (T-232)'),
+  ('act.mark_verified', 'executing -> verified; service_role only (T-232)'),
+  ('act.mark_failed', 'executing -> failed; service_role only (T-232)'),
+  ('act.expire_stale', 'expires proposed/approved actions past expires_at; service_role only, lane-scoped (T-232)');
 
 -- App functions authenticated may execute (callable through the API). Each one is reviewed.
 create temp table authenticated_exec_ok (name text primary key, why text not null) on commit drop;
@@ -151,7 +162,14 @@ insert into authenticated_exec_ok values
   ('core.brain_import_create', 'brain: wrapper over brain.import_create; invoker (T-220)'),
   ('core.brain_import_candidates', 'brain: the caller''s candidates of one open import; invoker, RLS applies (T-220)'),
   ('core.brain_section_completions', 'brain: the caller''s completed setup sections; invoker, RLS applies (T-227)'),
-  ('core.brain_section_complete', 'brain: wrapper over brain.section_complete; invoker (T-227)');
+  ('core.brain_section_complete', 'brain: wrapper over brain.section_complete; invoker (T-227)'),
+  ('act.approve', 'approval writer; checks aal2, step-up, owner role, hash and gates itself (T-232)'),
+  ('act.reject', 'rejection writer; checks aal2 and owner role itself (T-232)'),
+  ('core.act_approve', 'approvals: wrapper over act.approve; invoker (T-232)'),
+  ('core.act_reject', 'approvals: wrapper over act.reject; invoker (T-232)'),
+  ('core.act_list', 'approvals: the lane''s actions; invoker, RLS applies (T-232)'),
+  ('core.act_get', 'approvals: one action; invoker, RLS applies (T-232)'),
+  ('core.act_pending_count', 'approvals: pending count for Home; invoker, RLS applies (T-232)');
 
 create temp view app_objects as
   select c.oid, format('%s.%s', n.nspname, c.relname) as name, c.relkind

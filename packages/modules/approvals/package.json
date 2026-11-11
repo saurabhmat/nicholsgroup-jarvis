@@ -8,7 +8,9 @@
     "./domain": "./src/domain/index.ts",
     "./tools": "./src/tools/index.ts",
     "./jobs": "./src/jobs/index.ts",
-    "./ui": "./src/ui/index.ts"
+    "./ui": "./src/ui/index.ts",
+    "./server": "./src/server/index.ts",
+    "./wire": "./src/server/wire.ts"
   },
   "scripts": {
     "typecheck": "tsc -b",
@@ -16,6 +18,9 @@
     "test": "vitest run"
   },
   "dependencies": {
-    "@nichols/core": "workspace:*"
+    "@nichols/connectors": "workspace:*",
+    "@nichols/core": "workspace:*",
+    "server-only": "^0.0.1",
+    "zod": "4.6.7"
   }
 }

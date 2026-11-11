@@ -5,6 +5,8 @@
 // Pure: no zod here (the module may depend on core only), hand-written validation instead.
 
 export const AWAITING = "Awaiting your input";
+/** URLs, bare domains with a path, and email addresses (T-231d security review M2). */
+const LINK_OR_ADDRESS = /\bhttps?:\/\/[^\s<>"]+|\bwww\.[^\s<>"]+|[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}/gi;
 
 export type BriefRef = {
   /** "r1", "r2", ... given to the model. */
@@ -26,7 +28,14 @@ export type BriefRef = {
 export type AttentionNote = { ref: string; what: string; why: string; next: string };
 export type Deadline = { ref: string | null; text: string; due: string | null };
 export type Priority = { text: string; reason: string; refs: string[] };
-export type ReplyDraft = { ref: string; status: "ready" | "awaiting_input"; context: string; text: string };
+export type ReplyDraft = {
+  ref: string;
+  status: "ready" | "awaiting_input";
+  context: string;
+  text: string;
+  /** The email.send proposal created for it in Approvals (T-231d); absent when none was created. */
+  proposalId?: string | null;
+};
 
 export type BriefContent = {
   lines: string[];
@@ -187,12 +196,18 @@ export function checkContent(raw: unknown, refs: readonly BriefRef[], sourcesFor
         if (!ref || !known.has(ref) || replySeen.has(ref) || !text) return [];
         replySeen.add(ref);
         const src = sourcesFor(ref);
-        const okText = grounded(text, src);
-        if (!okText) notes.push(`ungrounded:${ref}.reply`);
-        // A draft that asserts an unverified figure or date is never kept: it becomes an empty draft waiting for the owner,
-        // so no invented figure reaches Home, the copy button or an Approvals proposal.
+        const isGrounded = grounded(text, src);
+        if (!isGrounded) notes.push(`ungrounded:${ref}.reply`);
+        // Rule 9 (T-231d security review M2): a link or an email address that is not in this thread's own sources may
+        // have been planted by another email in the same model call; such a draft is never offered as ready.
+        const own = src.join("\n").toLowerCase();
+        const foreign = (text.match(LINK_OR_ADDRESS) ?? []).some((t) => !own.includes(t.toLowerCase().replace(/[.,;:)]+$/, "")));
+        if (foreign) notes.push(`foreign_link:${ref}.reply`);
+        const okText = isGrounded && !foreign && text !== AWAITING;
+        // A draft that asserts an unverified figure or date, or carries a foreign link, is never kept: it becomes an EMPTY
+        // draft waiting for the owner, so nothing invented reaches Home, the copy button or an Approvals proposal.
         const status: ReplyDraft["status"] = x.status === "ready" && okText ? "ready" : "awaiting_input";
-        return [{ ref, status, context: ground(str(x.context, MAX.field), src, `${ref}.context`), text: okText ? text : AWAITING }];
+        return [{ ref, status, context: ground(str(x.context, MAX.field), src, `${ref}.context`), text: okText ? text : "" }];
       }).slice(0, MAX.replies);
   const moreReplies = arr(o.more_replies ?? o.moreReplies).flatMap((n) => (typeof n === "string" && known.has(n) ? [n] : [])).slice(0, 20);
   return { lines, attention, deadlines, priorities, replies, moreReplies, notes };

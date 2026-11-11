@@ -4,7 +4,7 @@
 // downgrades an active connection. Uses the lane's job client: `connectionStore` is a restricted name (connectors only).
 import type { LaneId } from "@nichols/core";
 import { ACCOUNT_IN_USE_MESSAGE, ConnectorError } from "../contract/errors";
-import { mintLaneBoundConnection, type LaneBoundConnection } from "../contract/lane-bound";
+import { assertLaneBound, mintLaneBoundConnection, type LaneBoundConnection } from "../contract/lane-bound";
 import type { Connection, Provider } from "../contract/schemas";
 import { CONNECTION_COLUMNS } from "./loader";
 import type { JobClientFor } from "./tokens";
@@ -12,6 +12,8 @@ import type { JobClientFor } from "./tokens";
 export interface ConnectionStore {
   /** The lane's connection for this provider account, created `pending` when there is none; minted lane-bound. */
   ensureConnection(laneId: LaneId, provider: Provider, externalAccountId: string, createdBy?: string): Promise<LaneBoundConnection>;
+  /** Merges boolean features into the connection row (T-232: Google `gmail_compose`), through the lane's job client. */
+  setFeatures(laneId: LaneId, connection: LaneBoundConnection, features: Record<string, boolean>): Promise<void>;
   /** The lane's newest connection for the provider that is not disconnected, or null. Read-only (T-198 health check). */
   findConnection(laneId: LaneId, provider: Provider): Promise<LaneBoundConnection | null>;
 }
@@ -62,6 +64,29 @@ export function createConnectionStore(clientFor: JobClientFor): ConnectionStore 
         return mintLaneBoundConnection(row as Connection);
       } catch {
         throw new ConnectorError({ kind: "provider_error", message: "Stored connection row is invalid" });
+      }
+    },
+    async setFeatures(laneId, connection, features) {
+      assertLaneBound(laneId, connection);
+      let client: Awaited<ReturnType<JobClientFor>>;
+      try {
+        client = await clientFor(laneId);
+      } catch {
+        throw new ConnectorError({ kind: "connection_unavailable", message: "Lane is not available for connection access" });
+      }
+      try {
+        const { data, error } = await client
+          .schema("core")
+          .from("connections")
+          .update({ features: { ...connection.features, ...features }, features_checked_at: new Date().toISOString() })
+          .eq("lane_id", laneId)
+          .eq("id", connection.id)
+          .eq("provider", connection.provider)
+          .select("id");
+        if (error) throw error;
+        if (!Array.isArray(data) || data.length === 0) throw new Error("no row");
+      } catch {
+        throw new ConnectorError({ kind: "transient", message: "Connection store unavailable" });
       }
     },
     async findConnection(laneId, provider) {

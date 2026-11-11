@@ -158,3 +158,82 @@ describe("parseSavedBriefing", () => {
     expect(parseSavedBriefing([])).toBeNull();
   });
 });
+
+describe("reply drafts -> Approval Center proposals (T-231d)", () => {
+  const replyJson = (text: string, status = "ready") => JSON.stringify({ lines: ["One renewal needs you."], replies: [{ ref: "r1", status, context: "Client asked to confirm", text }] });
+  const PROPOSAL = "00000000-0000-4000-8000-0000000000d1";
+  const on = { email: true, calendar: true, storeDrafts: true };
+
+  it("proposes each draft with metadata recipient, the real subject and thread, and saves the proposal id on the draft", async () => {
+    const proposed: unknown[] = [];
+    const { d, saved } = deps({ reply: replyJson("Thanks, confirmed."), policy: on, proposeReply: async (_l, p) => (proposed.push(p), PROPOSAL) });
+    await runBriefing(d, input);
+    expect(proposed).toEqual([
+      {
+        connectionId: "c1",
+        to: ["client@acme.test"],
+        subject: "Re: Renewal $1,200", // the real subject keeps the reply in its thread; Home shows it masked
+        bodyText: "Thanks, confirmed.",
+        inReplyTo: { threadId: "t1", messageId: "m1" },
+        rationale: "Client asked to confirm",
+        sourceRefs: [{ kind: "message", id: "m1" }],
+      },
+    ]);
+    expect(saved[0]?.content.replies[0]).toMatchObject({ ref: "r1", status: "ready", proposalId: PROPOSAL });
+    expect(saved[0]?.sourceRefs[0]?.subject).not.toContain("1,200");
+  });
+
+  it("a draft with a masked figure waits for the owner's input on Home and is never proposed", async () => {
+    let calls = 0;
+    const { d, saved } = deps({ reply: replyJson("We can do it for $1,200."), policy: on, proposeReply: async () => (calls++, PROPOSAL) });
+    await runBriefing(d, input);
+    expect(saved[0]?.content.replies[0]?.status).toBe("awaiting_input");
+    expect(saved[0]?.content.replies[0]?.text).toContain("[amount]");
+    expect(saved[0]?.content.notes).toContain("reply_not_proposed:r1");
+    expect(calls).toBe(0);
+  });
+
+  it("no proposal to a no-reply sender", async () => {
+    let calls = 0;
+    const noreply = fakeClient({
+      briefing_coverage: { data: [{ stream: "mail", account: "me@pubk.test", connection_id: "c1", provider: "google", status: "active", configured: true, last_sync_at: "2026-11-11T14:59:00Z" }], error: null },
+      briefing_threads: { data: [{ connection_id: "c1", thread_key: "t1", message_id: "m1", from_address: "no-reply@acme.test", from_name: "Acme", subject: "Hi", received_at: "2026-11-11T10:00:00Z", source_url: null, labels: ["INBOX"], last_is_owner: false, owner_replied: false, unread_count: 1, inbound_count: 1 }], error: null },
+    });
+    const { d } = deps({ client: noreply, reply: replyJson("Thanks."), policy: on, proposeReply: async () => (calls++, PROPOSAL) });
+    await runBriefing(d, input);
+    expect(calls).toBe(0);
+  });
+
+  it("an existing pending reply or a failure never stops the briefing", async () => {
+    const exists = deps({ reply: replyJson("Thanks."), policy: on, proposeReply: async () => Promise.reject(Object.assign(new Error("x"), { code: "already_proposed" })) });
+    await expect(runBriefing(exists.d, input)).resolves.toMatchObject({ status: "ready" });
+    expect(exists.saved[0]?.content.notes).toContain("reply_proposal_exists:r1");
+    expect(exists.saved[0]?.content.replies[0]?.proposalId).toBeUndefined();
+    const down = deps({ reply: replyJson("Thanks."), policy: on, proposeReply: async () => Promise.reject(new Error("db down")) });
+    await expect(runBriefing(down.d, input)).resolves.toMatchObject({ status: "ready" });
+    expect(down.saved[0]?.content.notes).toContain("reply_proposal_failed:r1");
+  });
+
+  it("nothing is proposed when drafts are off, or without a real thread", async () => {
+    let calls = 0;
+    const off = deps({ reply: replyJson("Thanks."), proposeReply: async () => (calls++, PROPOSAL) });
+    await runBriefing(off.d, input);
+    expect(calls).toBe(0);
+    const noThread = fakeClient({
+      briefing_coverage: { data: [{ stream: "mail", account: "me@pubk.test", connection_id: "c1", provider: "google", status: "active", configured: true, last_sync_at: "2026-11-11T14:59:00Z" }], error: null },
+      briefing_threads: { data: [{ connection_id: "c1", thread_key: "m:m1", message_id: "m1", from_address: "client@acme.test", from_name: "Client", subject: "Hi", received_at: "2026-11-11T10:00:00Z", source_url: null, labels: ["INBOX"], last_is_owner: false, owner_replied: false, unread_count: 1, inbound_count: 1 }], error: null },
+    });
+    const nt = deps({ client: noThread, reply: replyJson("Thanks."), policy: on, proposeReply: async () => (calls++, PROPOSAL) });
+    await runBriefing(nt.d, input);
+    expect(calls).toBe(0);
+    expect(nt.saved[0]?.content.notes).toContain("reply_not_proposed:r1");
+  });
+});
+
+describe("parseSavedBriefing proposal ids", () => {
+  it("keeps a uuid proposalId and drops anything else", () => {
+    const base = { id: "b1", prepared_at: "2026-11-11T12:00:00Z", status: "ready", source_refs: [] };
+    const v = parseSavedBriefing([{ ...base, content: { replies: [{ ref: "r1", text: "t", status: "ready", proposalId: "00000000-0000-4000-8000-0000000000d1" }, { ref: "r2", text: "t", proposalId: "javascript:x" }] } }]);
+    expect(v?.content.replies.map((r) => r.proposalId)).toEqual(["00000000-0000-4000-8000-0000000000d1", null]);
+  });
+});

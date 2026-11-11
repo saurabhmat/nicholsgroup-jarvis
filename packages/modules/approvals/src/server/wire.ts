@@ -1,0 +1,93 @@
+import "server-only";
+// The approvals module over the real lane router, audit and Google connector (T-232). Server only; a separate subpath
+// (`@nichols/approvals/wire`) so tests of the module logic never import the connector wiring. The job client bypasses RLS:
+// every call below passes the lane and the database re-checks it (act.* functions are lane-scoped definer functions).
+import { prepareEmailWrite, laneMailboxes } from "@nichols/connectors/google";
+import { googleEmailWriter, loadGoogleWriteConnection } from "@nichols/connectors/write";
+import type { LaneId } from "@nichols/core";
+import { getAudit, getLaneJobClient } from "@nichols/core/lane-router";
+import { approveAndExecute, executeApproved, proposeEmailAction, type ProposeEmailInput } from "./email";
+import type { CapabilityFacts, ApprovalsDeps, ApprovalsPublicDeps, Rpc, UserCtx } from "./types";
+
+const rpcOf = (client: { schema(name: "core"): { rpc: unknown } }): Rpc => {
+  const core = client.schema("core") as unknown as { rpc: Rpc };
+  return core.rpc.bind(core) as Rpc;
+};
+
+/** The rpc of the lane's service-role client. */
+export async function jobRpc(laneId: LaneId): Promise<Rpc> {
+  return rpcOf((await getLaneJobClient(laneId)) as never);
+}
+
+async function readFacts(laneId: LaneId, connectionId: string): Promise<CapabilityFacts> {
+  const client = await getLaneJobClient(laneId);
+  const core = client.schema("core");
+  const [conn, policy, config] = await Promise.all([
+    core.from("connections").select("provider, external_account_id, status, features").eq("lane_id", laneId).eq("id", connectionId).maybeSingle(),
+    core.from("lane_policies").select("write_actions_allowed").eq("lane_id", laneId).maybeSingle(),
+    core.from("lane_config_current").select("config").eq("lane_id", laneId).maybeSingle(),
+  ]);
+  if (conn.error || policy.error || config.error) throw new Error("capability facts unavailable");
+  const c = conn.data as { provider: string; external_account_id: string; status: string; features: Record<string, unknown> } | null;
+  const usable = c !== null && c.provider === "google" && (c.status === "active" || c.status === "degraded");
+  const approvals = ((config.data?.config as { approvals?: Record<string, unknown> } | null | undefined)?.approvals ?? {}) as Record<string, unknown>;
+  const age = approvals.step_up_max_age_s;
+  return {
+    mailbox: usable ? c.external_account_id.toLowerCase() : null,
+    composeGranted: usable && c.features?.gmail_compose === true,
+    writeActionsAllowed: ((policy.data?.write_actions_allowed as string[] | undefined) ?? []).filter((x) => typeof x === "string"),
+    approvalsLive: approvals.approvals_live === true,
+    stepUpMaxAgeS: typeof age === "number" && Number.isInteger(age) && age >= 30 && age <= 900 ? age : 300,
+  };
+}
+
+/**
+ * What request code may hold: propose, edit, reject, list, capability (T-232 security review H1). No write member: the
+ * Gmail writer and the write-connection loader stay in `fullDeps` below, private to this file.
+ */
+export const approvalsDeps: ApprovalsPublicDeps = Object.freeze({
+  jobRpc,
+  prepareEmailWrite,
+  laneMailboxes,
+  readFacts,
+  audit: getAudit(),
+});
+
+const fullDeps: ApprovalsDeps = Object.freeze({
+  ...approvalsDeps,
+  loadWriteConnection: loadGoogleWriteConnection,
+  writer: googleEmailWriter,
+});
+
+/** Approve the exact hash the owner saw, then carry it out once (the route calls this after requireRole + requireStepUp). */
+export function approveAndExecuteEmail(ctx: UserCtx, input: { actionId: string; hashSeen: string }) {
+  return approveAndExecute(fullDeps, ctx, input);
+}
+
+/** Carries out an action already approved in the database (a job or a resume); the approver is read from the row. */
+export function executeApprovedEmail(laneId: Parameters<typeof executeApproved>[1], actionId: string) {
+  return executeApproved(fullDeps, laneId, actionId);
+}
+
+
+/** action.expire (security review M2): expires the lane's stale actions (bodies removed in the same statement). */
+export async function expireStaleActions(laneId: LaneId): Promise<number> {
+  const { data, error } = await (await jobRpc(laneId))("act_expire_stale", { p_lane: laneId });
+  if (error || typeof data !== "number") throw new Error("action expiry failed");
+  return data;
+}
+
+/**
+ * The briefing's one entry point (T-231d security review L2): a job proposal for the owner, bound to the real deps, so
+ * the briefing never holds `approvalsDeps` (whose jobRpc is the service-role rpc). Proposes only; never approves or sends.
+ */
+export async function proposeBriefingReply(laneId: LaneId, ownerUserId: string, input: Pick<ProposeEmailInput, "connectionId" | "compose" | "rationale" | "sourceRefs">): Promise<string> {
+  const { id } = await proposeEmailAction(approvalsDeps, laneId, {
+    ...input,
+    actionType: "email.send",
+    proposerKind: "job",
+    proposerUserId: ownerUserId,
+    derivedFromRetrieved: true,
+  });
+  return id;
+}

@@ -12,9 +12,11 @@ import { cookies } from "next/headers";
 import { composeBriefing, homeFor, homeKpis } from "@/lib/home";
 import { briefingFor, latestBriefing, viewerZone } from "@/lib/briefing";
 import { AiBriefing, DeadlinesAndPriorities, notesByMessage } from "./home-ai-briefing";
+import { ReplyDrafts } from "./home-reply-drafts";
 import { AttentionSection, CalendarSections, CoverageStrip, MoneyCard } from "./home-briefing";
 import { TimezoneCookie } from "./timezone-cookie";
 import { loadLane } from "@/lib/lane-page";
+import { ApprovalsWaiting } from "./approvals-waiting";
 import { HomeFinance, HomeFinanceFallback } from "./home-finance";
 import { OnboardingBanner } from "./onboarding-entry";
 import { HomeSkeleton } from "./page-skeleton";
@@ -43,6 +45,9 @@ export async function HomePage({ params }: { params: Promise<{ laneId: string }>
       {/* The setup banner is phone-only (md:hidden). Its slot has the banner's own height while it loads, so it never pushes the cards down. */}
       <Suspense fallback={<div aria-hidden data-testid="setup-banner-slot" className={`${BANNER_SLOT} md:hidden`} />}>
         <SetupBanner laneId={lane.laneId} />
+      </Suspense>
+      <Suspense fallback={null}>
+        <ApprovalsWaiting laneId={lane.laneId} />
       </Suspense>
       <Suspense fallback={<HomeSkeleton />}>
         <HomeSections laneId={lane.laneId} now={now} />
@@ -94,6 +99,7 @@ async function HomeSections({ laneId, now }: { laneId: string; now: Date }) {
             <AttentionSection mail={brief.mail} tz={brief.viewerTz} notes={notesByMessage(saved)} />
           </PageSection>
           <MoneyCard mail={brief.mail} tz={brief.viewerTz} />
+          <ReplyDrafts laneId={laneId} brief={saved} tz={brief.viewerTz} />
           <DeadlinesAndPriorities brief={saved} tz={brief.viewerTz} />
         </div>
         <div className="flex min-w-0 flex-col gap-4">

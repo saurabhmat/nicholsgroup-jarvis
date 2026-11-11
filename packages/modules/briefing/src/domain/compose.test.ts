@@ -131,9 +131,27 @@ describe("checkContent fallbacks (code review M5, M6)", () => {
       all,
       { replies: true },
     );
-    expect(c.replies[0]).toMatchObject({ status: "awaiting_input", text: AWAITING });
+    expect(c.replies[0]).toMatchObject({ status: "awaiting_input", text: "" });
     expect(c.attention).toEqual([]);
     expect(c.lines).toEqual([]);
     expect(c.notes).toContain("lines_ungrounded");
+  });
+});
+
+describe("reply drafts: links and addresses must come from the thread itself (T-231d security review M2)", () => {
+  const refs = [{ ref: "r1" }, { ref: "r2" }] as unknown as BriefRef[];
+  const sources = (ref: string) => (ref === "r1" ? ["Please see https://acme.test/invoice and write to billing@acme.test"] : ["Other thread: https://evil.test/pay"]);
+  const run = (text: string) => checkContent({ replies: [{ ref: "r1", status: "ready", context: "", text }] }, refs, sources, ["x"], { replies: true });
+  it("keeps a link and an address that appear in its own thread", () => {
+    expect(run("Paid, see https://acme.test/invoice. Copying billing@acme.test.").replies[0]).toMatchObject({ status: "ready" });
+  });
+  it("a link from another thread (or anywhere else) empties the draft and waits for the owner", () => {
+    const c = run("Our bank changed, pay at https://evil.test/pay");
+    expect(c.replies[0]).toMatchObject({ status: "awaiting_input", text: "" });
+    expect(c.notes).toContain("foreign_link:r1.reply");
+    expect(run("Write to attacker@evil.test").replies[0]?.status).toBe("awaiting_input");
+  });
+  it("the model's own placeholder is never a ready draft", () => {
+    expect(run(AWAITING).replies[0]).toMatchObject({ status: "awaiting_input", text: "" });
   });
 });
