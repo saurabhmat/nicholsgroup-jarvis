@@ -21,7 +21,7 @@ import type { ConnectorLogger } from "../log/index";
 import type { OAuthProvider, TokenResponse } from "../oauth/flow";
 import type { LaneConfigReader } from "../vault/lane-config";
 import { SecretValue } from "../vault/secret";
-import { GMAIL_BASE, GMAIL_RATE_LIMIT, GOOGLE_GMAIL_HOSTS, GOOGLE_AUTHORIZATION_PARAMS, GOOGLE_AUTHORIZATION_URL, GOOGLE_CALLBACK_PATH, GOOGLE_SCOPES, GOOGLE_SLUG, GOOGLE_TOKEN_URL } from "./constants";
+import { GMAIL_BASE, GMAIL_COMPOSE, GMAIL_RATE_LIMIT, GOOGLE_GMAIL_HOSTS, GOOGLE_AUTHORIZATION_PARAMS, GOOGLE_AUTHORIZATION_URL, GOOGLE_CALLBACK_PATH, GOOGLE_SCOPES, GOOGLE_SLUG, GOOGLE_TOKEN_URL } from "./constants";
 import { createGoogleHttp } from "./http";
 
 export type GoogleClientConfig = { clientId: string; clientSecret: SecretValue; redirectUri: string };
@@ -29,6 +29,12 @@ export type GoogleClientConfig = { clientId: string; clientSecret: SecretValue; 
 export type GoogleProviderDeps = {
   client: () => GoogleClientConfig;
   laneConfig: Pick<LaneConfigReader, "mailboxes">;
+  /**
+   * Whether the lane's policy allows email writes (`write_actions_allowed` has email_send or email_draft, T-232). When
+   * true the consent asks for gmail.compose too and the callback accepts it (never otherwise). Default: never (read-only).
+   * Fails closed: if it throws, no connect starts and no callback completes.
+   */
+  composeAllowed?: (laneId: LaneId) => Promise<boolean>;
   logger?: ConnectorLogger;
   /** Test hook: the HTTP client for the Gmail host. */
   httpFor?: (laneId: LaneId, baseUrl: string) => HttpClient;
@@ -48,14 +54,17 @@ export function assertRedirectUri(redirectUri: string): void {
  * Refuses a grant whose scopes are not exactly the required read-only set. `scope` absent counts as missing: we cannot
  * tell what was granted. Throws forbidden (the flow turns it into `account_refused`).
  */
-export function assertGrantedScopes(scope: string | undefined): void {
+export function assertGrantedScopes(scope: string | undefined, composeAllowed = false): { compose: boolean } {
   const granted = new Set((scope ?? "").split(/[\s,]+/).filter((s) => s !== ""));
   for (const g of granted) {
+    if (g === GMAIL_COMPOSE && composeAllowed) continue;
     if (!REQUIRED.has(g) && !HARMLESS.has(g)) throw new ConnectorError({ kind: "forbidden", message: "Google granted a scope that was not requested (write access is never accepted)" });
   }
   for (const r of REQUIRED) {
     if (!granted.has(r)) throw new ConnectorError({ kind: "forbidden", message: "Google did not grant every required read-only scope" });
   }
+  // With the lane flag the compose scope is optional on the consent screen: unticked means the connection cannot send.
+  return { compose: composeAllowed && granted.has(GMAIL_COMPOSE) };
 }
 
 const ProfileSchema = z.object({ emailAddress: z.string().min(3).max(320) }).loose();
@@ -71,11 +80,16 @@ export function createGoogleOAuthProvider(deps: GoogleProviderDeps): OAuthProvid
     return mailboxes;
   };
 
+  const composeAllowed = async (laneId: LaneId): Promise<boolean> => (deps.composeAllowed ? (await deps.composeAllowed(laneId)) === true : false);
+
   return {
     provider: "google",
     slug: GOOGLE_SLUG,
     accountLabel: "Google mailbox",
     scopes: GOOGLE_SCOPES,
+    async scopesFor(laneId) {
+      return (await composeAllowed(laneId)) ? [...GOOGLE_SCOPES, GMAIL_COMPOSE] : GOOGLE_SCOPES;
+    },
     authorizationParams: GOOGLE_AUTHORIZATION_PARAMS,
     async endpoints() {
       return { authorization: GOOGLE_AUTHORIZATION_URL, token: GOOGLE_TOKEN_URL };
@@ -89,7 +103,7 @@ export function createGoogleOAuthProvider(deps: GoogleProviderDeps): OAuthProvid
       await allowlist(laneId);
     },
     async identify({ laneId, tokens }: { laneId: LaneId; tokens: TokenResponse; callback: URLSearchParams; http: HttpClient }) {
-      assertGrantedScopes(tokens.scope);
+      const { compose } = assertGrantedScopes(tokens.scope, await composeAllowed(laneId));
       if (!tokens.refresh_token) throw new ConnectorError({ kind: "forbidden", message: "Google issued no refresh token" });
       const mailboxes = await allowlist(laneId);
       const base = new URL(GMAIL_BASE);
@@ -102,7 +116,8 @@ export function createGoogleOAuthProvider(deps: GoogleProviderDeps): OAuthProvid
       if (!profile.success) throw new ConnectorError({ kind: "provider_error", message: "Gmail profile is not valid" });
       const email = profile.data.emailAddress.toLowerCase();
       if (!mailboxes.includes(email)) throw new ConnectorError({ kind: "forbidden", message: "This Google account is not one of the lane's configured mailboxes" });
-      return { externalAccountId: email, expiresAt: null };
+      // Always recorded, so a reconnect without the scope clears an earlier `true`.
+      return { externalAccountId: email, expiresAt: null, features: { gmail_compose: compose } };
     },
   };
 }

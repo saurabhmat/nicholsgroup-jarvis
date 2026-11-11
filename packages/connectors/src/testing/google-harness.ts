@@ -52,6 +52,8 @@ export type GoogleHarnessOptions = {
   fake: FakeGoogle;
   /** `lane_config.mailboxes` per lane. */
   mailboxes?: Record<string, string[]>;
+  /** Lanes whose policy allows email writes (`write_actions_allowed` has email_send or email_draft, T-232). Default: none. */
+  composeLanes?: readonly string[];
   /** `core.lane_policies.retention_days` per lane (default 90). */
   retention?: Record<string, number>;
   /** `lane_config.calendar` per lane (default: the safe defaults); "unreadable" makes the read fail (fail-closed tests). */
@@ -132,6 +134,10 @@ export function createGoogleHarness(options: GoogleHarnessOptions) {
   };
 
   const connections = {
+    async setFeatures(laneId: string, conn: { id: string }, features: Record<string, boolean>) {
+      const row = rowOf(laneId, conn);
+      row.features = { ...row.features, ...features };
+    },
     async ensureConnection(laneId: string, provider: string, externalAccountId: string) {
       let row = [...rows.values()].find((r) => r.lane_id === laneId && r.provider === provider && r.external_account_id === externalAccountId);
       if (!row) {
@@ -159,6 +165,7 @@ export function createGoogleHarness(options: GoogleHarnessOptions) {
     },
   };
 
+  const composeLanes = new Set(options.composeLanes ?? []);
   const retention: Record<string, number> = { ...options.retention };
   const calendarConfig: Record<string, CalendarSettings | "unreadable"> = { ...options.calendar };
   const clock = options.now ?? (() => HARNESS_NOW);
@@ -305,7 +312,7 @@ export function createGoogleHarness(options: GoogleHarnessOptions) {
   const fastHttp = (laneId: string, connectionId: string | undefined, baseUrl: string) =>
     createGoogleHttp({ baseUrl, laneId, ...(connectionId ? { connectionId } : {}), retryBaseMs: 1, retryMaxMs: 5, maxRetries: 1, logger });
   const client = () => ({ clientId: FAKE_CLIENT_ID, clientSecret: new SecretValue(FAKE_CLIENT_SECRET), redirectUri: HARNESS_REDIRECT });
-  const provider = createGoogleOAuthProvider({ client, laneConfig, logger, httpFor: (laneId, baseUrl) => fastHttp(laneId, undefined, baseUrl) });
+  const provider = createGoogleOAuthProvider({ client, laneConfig, logger, composeAllowed: async (laneId) => composeLanes.has(laneId), httpFor: (laneId, baseUrl) => fastHttp(laneId, undefined, baseUrl) });
   const newTokenManager = () =>
     createGoogleTokenManager({ vault, client, httpFor: fastHttp, logger, sleep: (ms) => new Promise((resolve) => setTimeout(resolve, Math.min(ms, 5))) });
   const tokens = newTokenManager();

@@ -4,7 +4,7 @@
 import type { LaneId } from "@nichols/core";
 import { requireConnectorEnv } from "@nichols/core/env/server";
 import type { LaneBoundConnection } from "../contract/lane-bound";
-import { calendarIndexStore, connectionLoader, getToken, laneConfigReader, mailIndexStore, revokeToken, rotateToken, storeToken } from "../vault/index";
+import { calendarIndexStore, connectionLoader, getToken, laneConfigReader, mailIndexStore, revokeToken, rotateToken, storeToken, writePolicyReader } from "../vault/index";
 import { SecretValue } from "../vault/secret";
 import { createGoogleApi } from "./api";
 import { createCalendarSync } from "./cal-sync";
@@ -13,6 +13,7 @@ import { createGmailProvider } from "./mail";
 import { createMailSync } from "./mail-sync";
 import { createGoogleOAuthProvider, type GoogleClientConfig } from "./provider";
 import { createGoogleTokenManager } from "./token-manager";
+import { createGoogleEmailWriter } from "./email-writer";
 import { createGoogleWriter } from "./writer";
 
 function client(): GoogleClientConfig {
@@ -20,7 +21,7 @@ function client(): GoogleClientConfig {
   return { clientId: env.GOOGLE_OAUTH_CLIENT_ID, clientSecret: new SecretValue(env.GOOGLE_OAUTH_CLIENT_SECRET), redirectUri: env.GOOGLE_REDIRECT_URI };
 }
 
-export const googleOAuthProvider = createGoogleOAuthProvider({ client, laneConfig: laneConfigReader });
+export const googleOAuthProvider = createGoogleOAuthProvider({ client, laneConfig: laneConfigReader, composeAllowed: (laneId) => writePolicyReader.emailWritesAllowed(laneId) });
 
 const vault = { getToken, rotateToken, storeToken, revokeToken };
 const tokens = createGoogleTokenManager({ vault, client });
@@ -52,6 +53,9 @@ export const calSync = createCalendarSync({ calendar: googleCalendarProvider, st
 
 /** Revoke-at-Google and delete-Vault-tokens (D-24: approvals only). No route, job or connector method calls it. */
 export const googleWriter = createGoogleWriter({ vault, connections, tokens });
+
+/** Send or save-as-draft an approved email (T-232; approvals only, via the write subpath). Never called by a route, job or tool. */
+export const googleEmailWriter = createGoogleEmailWriter({ connections, tokens, api, laneConfig: laneConfigReader });
 
 export { mailIndexStore, calendarIndexStore };
 export { GOOGLE_SLUG, GOOGLE_SCOPES } from "./constants";

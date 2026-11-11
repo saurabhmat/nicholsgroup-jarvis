@@ -32,7 +32,12 @@ export const HISTORY_TYPES = ["messageAdded", "messageDeleted", "labelAdded", "l
 export const GMAIL_READONLY = "https://www.googleapis.com/auth/gmail.readonly";
 export const CALENDAR_READONLY = "https://www.googleapis.com/auth/calendar.readonly";
 export const DRIVE_READONLY = "https://www.googleapis.com/auth/drive.readonly";
-/** Exactly these three, requested and required on the callback (H-008). Never a write scope. */
+/**
+ * The one write scope (T-232): compose (send mail and manage drafts; no read, no delete, no settings). Requested ONLY when
+ * the lane's policy allows email_send or email_draft (`core.lane_policies.write_actions_allowed`); PKG today does not.
+ */
+export const GMAIL_COMPOSE = "https://www.googleapis.com/auth/gmail.compose";
+/** Exactly these three by default, requested and required on the callback (H-008); `GMAIL_COMPOSE` is added only behind the lane policy. */
 export const GOOGLE_SCOPES = [GMAIL_READONLY, CALENDAR_READONLY, DRIVE_READONLY] as const;
 
 /** Extra parameters on the consent URL: a refresh token every time, and never merge earlier grants. */

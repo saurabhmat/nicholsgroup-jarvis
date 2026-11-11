@@ -43,6 +43,8 @@ export interface OAuthProvider {
   /** Route segment, e.g. "qbo" for /api/connect/qbo/callback (must match the redirect URI registered with the provider). */
   slug: string;
   scopes: readonly string[];
+  /** Scopes for one lane when they depend on the lane's policy (Google adds gmail.compose behind the write flag, T-232). Default: `scopes`. */
+  scopesFor?(laneId: LaneId): Promise<readonly string[]>;
   /** What the provider calls the account, for messages: "QuickBooks company", "Stripe account". Default "account". */
   accountLabel?: string;
   /** Authorization and token endpoints (from discovery where the provider has it). */
@@ -65,6 +67,8 @@ export interface OAuthProvider {
   identify(input: { laneId: LaneId; tokens: TokenResponse; callback: URLSearchParams; http: HttpClient }): Promise<{
     externalAccountId: string;
     expiresAt: Date | null;
+    /** Boolean connection features to record on the connection row (e.g. Google `gmail_compose`); merged into the stored ones. */
+    features?: Record<string, boolean>;
   }>;
 }
 
@@ -73,7 +77,11 @@ export type Authorized = { userId: string; client: LaneClient };
 export type OAuthFlowDeps = {
   providers: readonly OAuthProvider[];
   states: StateStore;
-  connections: { ensureConnection(laneId: LaneId, provider: Provider, externalAccountId: string, createdBy?: string): Promise<LaneBoundConnection> };
+  connections: {
+    ensureConnection(laneId: LaneId, provider: Provider, externalAccountId: string, createdBy?: string): Promise<LaneBoundConnection>;
+    /** Merges boolean features into the connection row (T-232); required only for providers whose `identify` returns features. */
+    setFeatures?(laneId: LaneId, connection: LaneBoundConnection, features: Record<string, boolean>): Promise<void>;
+  };
   storeToken(laneId: LaneId, conn: LaneBoundConnection<string>, secret: SecretValue, expiresAt: Date | null, actorUserId?: string): Promise<void>;
   audit: Audit;
   /** HTTP client for a provider's token endpoint (injected in tests). */
@@ -158,7 +166,7 @@ export function createOAuthFlow(deps: OAuthFlowDeps) {
         response_type: "code",
         client_id: clientId,
         redirect_uri: redirectUri,
-        scope: p.scopes.join(" "),
+        scope: (p.scopesFor ? await p.scopesFor(laneId) : p.scopes).join(" "),
         state,
         code_challenge: codeChallenge(verifier),
         code_challenge_method: "S256",
@@ -211,7 +219,7 @@ export function createOAuthFlow(deps: OAuthFlowDeps) {
           // dropped (never stored, never logged) and the owner is told to remove the app's access (D-24: no revoke here).
           exchanged = true;
           const http = httpFor(p, laneId, new URL((await p.endpoints(laneId)).token).origin);
-          let identity: { externalAccountId: string; expiresAt: Date | null };
+          let identity: { externalAccountId: string; expiresAt: Date | null; features?: Record<string, boolean> };
           try {
             identity = await p.identify({ laneId, tokens, callback: query, http });
           } catch (e) {
@@ -232,6 +240,10 @@ export function createOAuthFlow(deps: OAuthFlowDeps) {
           await refuseInUse(() =>
             deps.storeToken(laneId, connection, new SecretValue(JSON.stringify({ ...tokens, obtained_at: new Date().toISOString() })), identity.expiresAt, userId),
           );
+          if (identity.features) {
+            if (!deps.connections.setFeatures) throw new TypeError("connections.setFeatures is required for a provider that reports features");
+            await deps.connections.setFeatures(laneId, connection, identity.features);
+          }
           return connection;
         });
         return { ok: true, provider: p.provider, laneId, connectionId: conn.id };
@@ -305,7 +317,7 @@ export async function exchangeAuthorizationCode(
   new SecretValue(JSON.stringify(parsed.data));
   // A token broader than the scopes we asked for is refused (e.g. a provider that merges earlier grants).
   if (parsed.data.scope !== undefined) {
-    const allowed = new Set([...p.scopes, ...OIDC_SCOPES]);
+    const allowed = new Set([...(p.scopesFor ? await p.scopesFor(laneId) : p.scopes), ...OIDC_SCOPES]);
     if (parsed.data.scope.split(/[\s,]+/).some((g) => g !== "" && !allowed.has(g))) {
       throw new ConnectorError({ kind: "provider_error", message: "Token carries scopes that were not requested" });
     }
