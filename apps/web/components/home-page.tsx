@@ -4,13 +4,13 @@
 // yet (T-115). Mail appears as counts only: no subject, sender or body on Home.
 import Link from "next/link";
 import { Suspense } from "react";
-import { Alert, AlertDescription, AlertTitle, Badge, buttonVariants, EmptyState, homeHeading, KpiCard, laneHref, PageHeader, PageSection } from "@nichols/ui";
+import { Alert, AlertDescription, AlertTitle, buttonVariants, homeHeading, KpiCard, laneHref, PageHeader, PageSection } from "@nichols/ui";
 import { eyebrowDate } from "@/lib/format-date";
 import { guards } from "@/lib/guards";
 import { cookies } from "next/headers";
-import { composeBriefing, homeFor, homeKpis, type AttentionItem } from "@/lib/home";
+import { composeBriefing, homeFor, homeKpis } from "@/lib/home";
 import { briefingFor, viewerZone } from "@/lib/briefing";
-import { CalendarSections, CoverageStrip } from "./home-briefing";
+import { AttentionSection, CalendarSections, CoverageStrip, MoneyCard } from "./home-briefing";
 import { TimezoneCookie } from "./timezone-cookie";
 import { loadLane } from "@/lib/lane-page";
 import { OnboardingBanner } from "./onboarding-entry";
@@ -81,7 +81,12 @@ async function HomeSections({ laneId, now }: { laneId: string; now: Date }) {
         ))}
       </section>
       <div data-testid="home-main-grid" className="grid gap-4 lg:grid-cols-3">
-        <PageSection title="Needs your attention" className="lg:col-span-2">{view.unavailable ? undefined : <AttentionList laneId={laneId} items={view.attention} />}</PageSection>
+        <div className="flex min-w-0 flex-col gap-4 lg:col-span-2">
+          <PageSection title="Needs your attention" note="Top 5 by rules · metadata only">
+            <AttentionSection mail={brief.mail} tz={brief.viewerTz} />
+          </PageSection>
+          <MoneyCard mail={brief.mail} tz={brief.viewerTz} />
+        </div>
         <div className="flex min-w-0 flex-col gap-4">
           <CalendarSections view={brief} now={now} />
         </div>
@@ -117,29 +122,5 @@ function Briefing({ lines }: { lines: string[] }) {
         <p className="mt-3 text-body text-muted-foreground">Your briefing appears here once this company&apos;s sources are connected.</p>
       )}
     </section>
-  );
-}
-
-function AttentionList({ laneId, items }: { laneId: string; items: AttentionItem[] }) {
-  if (items.length === 0) {
-    return <EmptyState title="Nothing needs you right now" description="Feed problems, the next meeting and unread important mail appear here." className="border-0 bg-transparent px-0 py-6" />;
-  }
-  return (
-    <ul data-testid="attention-list" className="flex flex-col divide-y divide-border">
-      {items.map((item) => (
-        <li key={item.key}>
-          <Link href={laneHref(laneId, item.segment)} className="flex items-center justify-between gap-3 py-3 text-body hover:underline">
-            <span className="min-w-0 truncate font-medium text-foreground">{item.label}</span>
-            {item.count !== undefined ? (
-              <Badge variant="alert" aria-label={`${item.count} ${item.source}`}>
-                {item.count}
-              </Badge>
-            ) : (
-              <span className="shrink-0 text-muted-foreground">{item.source}</span>
-            )}
-          </Link>
-        </li>
-      ))}
-    </ul>
   );
 }

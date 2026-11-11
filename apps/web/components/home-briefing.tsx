@@ -3,8 +3,21 @@
 // never show; clashes, back-to-backs and unanswered invitations are flagged.
 import Link from "next/link";
 import { Badge, EmptyState, laneHref, PageSection } from "@nichols/ui";
-import { attendeeSummary, formatDayIn, formatTimeIn, timeWithZone, ago, type CoverageItem, type DayEvent, type NotableEvent } from "@nichols/briefing/domain";
-import type { BriefingView, CalendarSection } from "@/lib/briefing";
+import {
+  attendeeSummary,
+  formatDateTimeIn,
+  formatDayIn,
+  formatTimeIn,
+  timeWithZone,
+  ago,
+  type AttentionThread,
+  type CoverageItem,
+  type DayEvent,
+  type MoneyThread,
+  type NotableEvent,
+  type ThreadRow,
+} from "@nichols/briefing/domain";
+import type { BriefingView, CalendarSection, MailSection } from "@/lib/briefing";
 
 const STATE_BADGE: Record<CoverageItem["state"], { label: string; variant: "success" | "alert" | "muted" | "outline" }> = {
   ok: { label: "OK", variant: "success" },
@@ -151,5 +164,94 @@ export function CalendarSections({ view, now }: { view: BriefingView; now: Date 
       </PageSection>
       <PageSection title="Next 7 days">{view.calendar.access ? <LookAhead events={view.calendar.ahead} tz={view.viewerTz} /> : <p className="text-body text-muted-foreground">No calendar to look ahead in. See Coverage.</p>}</PageSection>
     </>
+  );
+}
+
+const KIND_LABEL: Record<AttentionThread["kind"], string> = {
+  priority: "Priority",
+  security: "Security",
+  waiting: "Waiting on you",
+  unread: "Unread",
+  repeated_failures: "Repeated failures",
+};
+
+/** Source line: mailbox · sender · date (viewer zone). Sender text is untrusted metadata: rendered as plain text. */
+function SourceLine({ t, mailbox, tz }: { t: ThreadRow; mailbox: string | undefined; tz: string }) {
+  const sender = t.fromName && t.fromAddress ? `${t.fromName} <${t.fromAddress}>` : (t.fromAddress ?? t.fromName ?? "Unknown sender");
+  return (
+    <span className="truncate text-small text-muted-foreground">
+      {[mailbox, sender, formatDateTimeIn(t.receivedAt, tz)].filter(Boolean).join(" · ")}
+    </span>
+  );
+}
+
+function ThreadLink({ t }: { t: ThreadRow }) {
+  return t.sourceUrl ? (
+    <a href={t.sourceUrl} target="_blank" rel="noopener noreferrer" className="shrink-0 text-small text-primary underline-offset-2 hover:underline">
+      Open thread
+    </a>
+  ) : null;
+}
+
+export function AttentionSection({ mail, tz }: { mail: MailSection; tz: string }) {
+  if (!mail.access) {
+    return mail.unavailable ? (
+      <EmptyState title="Mail could not be read" description="Reload in a minute. Coverage above shows the last sync." className="border-0 bg-transparent px-0 py-6" />
+    ) : (
+      <EmptyState title="No mail to show" description="Your role in this company does not include mail." className="border-0 bg-transparent px-0 py-6" />
+    );
+  }
+  if (mail.attention.length === 0) {
+    return <p className="text-body text-muted-foreground">Nothing needs you in the mail that was read (newsletters, promotions, codes and automated alerts are left out). See Coverage for what was read.</p>;
+  }
+  return (
+    <div className="flex flex-col gap-2">
+      <ol data-testid="attention-list" className="flex flex-col divide-y divide-border">
+        {mail.attention.map((a) => (
+          <li key={a.key} data-testid="attention-item" data-kind={a.kind} className="flex flex-col gap-1 py-3">
+            <span className="flex items-baseline justify-between gap-3">
+              <span className="min-w-0 truncate font-medium text-foreground">{a.kind === "repeated_failures" ? a.reason : (a.thread.subject ?? "(No subject)")}</span>
+              <ThreadLink t={a.thread} />
+            </span>
+            <span className="flex flex-wrap items-center gap-2">
+              <Badge variant={a.kind === "priority" || a.kind === "security" ? "alert" : "outline"}>{KIND_LABEL[a.kind]}</Badge>
+              {a.kind === "repeated_failures" ? null : <span className="text-small text-foreground">{a.reason}</span>}
+            </span>
+            <SourceLine t={a.thread} mailbox={mail.mailboxOf[a.thread.connectionId]} tz={tz} />
+          </li>
+        ))}
+      </ol>
+      {mail.more > 0 ? <p className="text-small text-muted-foreground">{mail.more} more in the Inbox.</p> : null}
+    </div>
+  );
+}
+
+const MONEY_LABEL: Record<MoneyThread["kind"], string> = { invoice: "Invoice", bill: "Bill", renewal: "Renewal", failed_payment: "Failed payment" };
+
+/** Money card: mail that looks like invoices, bills, renewals or failed payments. No amounts: figures come only from SQL. */
+export function MoneyCard({ mail, tz }: { mail: MailSection; tz: string }) {
+  return (
+    <PageSection title="Money" note="From mail subjects · no amounts">
+      {!mail.access ? (
+        <p className="text-body text-muted-foreground">{mail.unavailable ? "Mail could not be read right now." : "Your role does not include mail."}</p>
+      ) : mail.money.length === 0 ? (
+        <p className="text-body text-muted-foreground">No invoices, bills, renewals or failed payments in recent mail.</p>
+      ) : (
+        <ul data-testid="money-list" className="flex flex-col divide-y divide-border">
+          {mail.money.map((m) => (
+            <li key={m.key} className="flex flex-col gap-1 py-3">
+              <span className="flex items-baseline justify-between gap-3">
+                <span className="min-w-0 truncate font-medium text-foreground">{m.thread.subject ?? "(No subject)"}</span>
+                <ThreadLink t={m.thread} />
+              </span>
+              <span className="flex flex-wrap items-center gap-2">
+                <Badge variant={m.kind === "failed_payment" ? "alert" : "outline"}>{MONEY_LABEL[m.kind]}</Badge>
+              </span>
+              <SourceLine t={m.thread} mailbox={mail.mailboxOf[m.thread.connectionId]} tz={tz} />
+            </li>
+          ))}
+        </ul>
+      )}
+    </PageSection>
   );
 }

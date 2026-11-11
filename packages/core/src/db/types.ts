@@ -488,6 +488,11 @@ isOneToOne: false
               "all_day": boolean,"attendees": Json,"calendar_id": string,"connection_id": string,"end_at": string,"end_date": string,"event_id": string,"location": string,"online_meeting_url": string,"organizer_email": string,"organizer_name": string,"source_url": string,"start_at": string,"start_date": string,"status": string,"timezone": string,"title": string
             }[]
                            },
+"briefing_threads":
+{ Args: { "p_lane": string,"p_since": string }; Returns: {
+              "connection_id": string,"from_address": string,"from_name": string,"inbound_count": number,"is_important": boolean,"labels": (string)[],"last_at": string,"last_is_owner": boolean,"message_id": string,"owner_replied": boolean,"received_at": string,"source_url": string,"subject": string,"thread_key": string,"unread_count": number
+            }[]
+                           },
 "cal_events_apply_page":
 { Args: { "p_complete"?: boolean,"p_connection_id": string,"p_cursor": string,"p_drop_calendars"?: (string)[],"p_expected_cursor": string,"p_lane": string,"p_removals": Json,"p_upserts": Json }; Returns: Json
                            },

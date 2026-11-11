@@ -14,7 +14,7 @@ vi.mock("next/headers", () => ({ cookies: async () => ({ get: () => undefined })
 vi.mock("next/navigation", () => ({ useRouter: () => ({ refresh: () => undefined }) }));
 vi.mock("@/lib/briefing", async (orig) => ({
   ...(await orig<typeof import("@/lib/briefing")>()),
-  briefingFor: async () => ({ viewerTz: "America/New_York", coverage: [], coverageLine: "Coverage: test.", calendar: { access: false }, config: {}, mailboxes: [] }),
+  briefingFor: async () => ({ viewerTz: "America/New_York", coverage: [], coverageLine: "Coverage: test.", calendar: { access: false }, mail: { access: false }, config: {}, mailboxes: [] }),
 }));
 vi.mock("@/lib/timed", () => ({ timed: async <T,>(_n: string, f: () => Promise<T>) => f() }));
 vi.mock("@/lib/onboarding-progress", () => ({
@@ -66,7 +66,8 @@ describe("Home layout", () => {
     expect(grid.className).toMatch(/lg:grid-cols-3/);
     const attention = within(grid).getByRole("region", { name: "Needs your attention" });
     const meetings = within(grid).getByRole("region", { name: "Today's calendar" });
-    expect(attention.className).toMatch(/lg:col-span-2/);
+    expect(attention.parentElement?.className).toMatch(/lg:col-span-2/); // with the Money card below it (T-231b)
+    expect(within(grid).getByRole("region", { name: "Money" })).toBeTruthy();
     expect(meetings.className).not.toMatch(/col-span/);
     expect(within(grid).getByRole("region", { name: "Next 7 days" })).toBeTruthy();
     // T-231a: the Coverage strip sits between the briefing and the figures, and always has a line.

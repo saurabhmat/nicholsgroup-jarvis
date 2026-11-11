@@ -44,7 +44,7 @@ test.beforeEach(() => {
 });
 test.afterAll(cleanup);
 
-test("owner: today's meetings and the attention queue, with mail as counts only", async ({ page }, info) => {
+test("owner: today's calendar, Coverage and the rule-based attention list", async ({ page }, info) => {
   test.skip(info.project.name !== "desktop", "owner persona is the desktop project's member");
   test.setTimeout(150_000);
   // The timed meeting must still be today in New York when the page loads.
@@ -61,14 +61,13 @@ test("owner: today's meetings and the attention queue, with mail as counts only"
   await expect(meetings.getByRole("link", { name: "Join" }).first()).toHaveAttribute("href", /^https:\/\//);
   await expect(meetings.getByRole("link", { name: "Join" }).first()).toHaveAttribute("rel", "noopener noreferrer");
 
+  // T-231b: "Needs your attention" lists threads by rule (subject, reason, source) instead of counts; the read message is
+  // not listed (nothing unread, nothing waiting).
   const attention = page.getByRole("region", { name: "Needs your attention" });
-  await expect(attention.getByText(`Next: ${MEETING}`)).toBeVisible();
-  // At least the three synthetic unread important messages (real synced mail may add to the count).
-  await expect(attention.getByText(/\d+ unread important emails? in the last 24 hours/)).toBeVisible();
-  // Counts only: no subject or sender of any message on Home.
-  const body = page.locator("body");
-  await expect(body).not.toContainText("Synthetic subject");
-  await expect(body).not.toContainText("sender@example.test");
+  await expect(attention.getByText("Synthetic subject 1")).toBeVisible();
+  await expect(attention.getByText("Unread from sender@example.test", { exact: false }).first()).toBeVisible();
+  await expect(attention.getByText("Synthetic subject 4")).toHaveCount(0);
+  await expect(page.getByTestId("coverage-line")).toBeVisible();
 });
 
 test("a finance-only viewer sees no meetings and no mail counts", async ({ page }, info) => {
@@ -83,4 +82,5 @@ test("a finance-only viewer sees no meetings and no mail counts", async ({ page 
   await expect(body).not.toContainText(MEETING);
   await expect(body).not.toContainText(ALL_DAY);
   await expect(body).not.toContainText(/unread important/);
+  await expect(body).not.toContainText("Synthetic subject");
 });

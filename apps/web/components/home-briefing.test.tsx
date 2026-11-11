@@ -4,7 +4,7 @@
 import { afterEach, describe, expect, it } from "vitest";
 import { cleanup, render, screen, within } from "@testing-library/react";
 import { analyzeDay, notableAhead, parseEvents, toCoverage, parseCoverageRows, coverageLine } from "@nichols/briefing/domain";
-import { CoverageStrip, LookAhead, TodayCalendar } from "./home-briefing";
+import { AttentionSection, CoverageStrip, LookAhead, MoneyCard, TodayCalendar } from "./home-briefing";
 import type { BriefingView } from "@/lib/briefing";
 
 afterEach(cleanup);
@@ -67,5 +67,30 @@ describe("LookAhead", () => {
     render(<LookAhead events={ahead} tz="America/New_York" />);
     expect(screen.getByText("External: c@acme.test")).toBeTruthy();
     expect(screen.getByText(/Sat, Nov 14/)).toBeTruthy();
+  });
+});
+
+describe("AttentionSection and MoneyCard", () => {
+  const thread = {
+    connectionId: "c1", threadKey: "t1", messageId: "m1", fromAddress: "boss@pubk.test", fromName: "Boss", subject: "Board deck", receivedAt: "2026-11-12T12:00:00Z",
+    sourceUrl: "https://mail.google.com/mail/u/me/#all/t1", labels: ["INBOX"], isImportant: false, lastIsOwner: false, ownerReplied: false, unreadCount: 1, inboundCount: 1,
+  };
+  it("shows subject, reason, source (mailbox, sender, date) and a thread link", () => {
+    render(<AttentionSection tz="America/New_York" mail={{ access: true, attention: [{ key: "k", kind: "priority", reason: "Priority sender, unread · 1h", thread }], more: 2, money: [], mailboxOf: { c1: "me@pubk.test" } }} />);
+    const item = screen.getByTestId("attention-item");
+    expect(within(item).getByText("Board deck")).toBeTruthy();
+    expect(within(item).getByText("Priority sender, unread · 1h")).toBeTruthy();
+    expect(within(item).getByText("me@pubk.test · Boss <boss@pubk.test> · Thu, Nov 12, 7:00 AM")).toBeTruthy();
+    expect(within(item).getByRole("link", { name: "Open thread" }).getAttribute("href")).toBe(thread.sourceUrl);
+    expect(screen.getByText("2 more in the Inbox.")).toBeTruthy();
+  });
+  it("says why there is no mail instead of 'nothing'", () => {
+    render(<AttentionSection tz="America/New_York" mail={{ access: false, unavailable: true }} />);
+    expect(screen.getByText("Mail could not be read")).toBeTruthy();
+  });
+  it("Money lists the kind and never an amount", () => {
+    render(<MoneyCard tz="America/New_York" mail={{ access: true, attention: [], more: 0, money: [{ key: "k", kind: "failed_payment", thread: { ...thread, subject: "Payment failed" } }], mailboxOf: {} }} />);
+    expect(screen.getByText("Failed payment")).toBeTruthy();
+    expect(screen.getByText("From mail subjects · no amounts")).toBeTruthy();
   });
 });
