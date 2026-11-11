@@ -164,6 +164,14 @@ export function recipientFlags(payload: Record<string, unknown>, internalDomains
   }
   return out;
 }
+/**
+ * Failure codes after which the email MAY have gone out (T-192 and T-232): the owner must check the Sent folder (or Drafts)
+ * before asking for it again. The reconciler's codes all start with `reconcile_`.
+ */
+const OUTCOME_UNKNOWN_CODES: ReadonlySet<string> = new Set(["outcome_unknown", "verification_unavailable", "marker_not_found", "ambiguous_match"]);
+export function isOutcomeUnknown(code: string | null): boolean {
+  return code !== null && (OUTCOME_UNKNOWN_CODES.has(code) || code.startsWith("reconcile_"));
+}
 export type HistoryItem = {
   id: string;
   actionType: "email.send" | "email.save_draft";
@@ -171,6 +179,8 @@ export type HistoryItem = {
   to: string[];
   subject: string;
   failureCode: string | null;
+  /** True when the email may already have been sent or saved: check the mailbox before asking again. */
+  outcomeUnknown: boolean;
   at: string;
   contentPurged: boolean;
 };
@@ -208,6 +218,7 @@ export function toHistory(row: ActionRow): HistoryItem {
     to: strs(row.payload.to),
     subject: typeof row.payload.subject === "string" ? row.payload.subject : "",
     failureCode: row.failureCode,
+    outcomeUnknown: row.status === "failed" && isOutcomeUnknown(row.failureCode),
     at: row.verifiedAt ?? row.updatedAt,
     contentPurged: row.payloadPurgedAt !== null,
   };

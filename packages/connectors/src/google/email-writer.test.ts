@@ -292,3 +292,51 @@ describe("read-back", () => {
     await expect(writer.verifyWrite("PKG", conn, a, res.external_id ?? "")).rejects.toMatchObject({ info: { message: VERIFICATION_MISMATCH_MESSAGE } });
   });
 });
+
+describe("findWrite: the read-only marker lookup for recovery (T-192)", () => {
+  it("finds a send the process lost (accepted by Gmail, never recorded) by its Message-ID, with zero writes and no claim check", async () => {
+    const { gmail, conn, writer, action, claimChecks } = setup();
+    const a = action();
+    gmail.state.failMode = "after_commit";
+    const res = await writer.executeWrite("PKG", conn, a); // the crash is simulated by discarding this result
+    expect(gmail.posts()).toHaveLength(1);
+    const writesBefore = gmail.posts().length;
+    claimChecks.length = 0;
+    const ids = await writer.findWrite("PKG", conn, a);
+    expect(ids).toEqual([res.external_id]);
+    await expect(writer.verifyWrite("PKG", conn, a, ids[0] ?? "")).resolves.toBeUndefined();
+    expect(gmail.posts()).toHaveLength(writesBefore);
+    expect(claimChecks).toEqual([]);
+  });
+
+  it("finds a saved draft as well", async () => {
+    const { gmail, conn, writer, action } = setup();
+    const a = action("email.save_draft");
+    const res = await writer.executeWrite("PKG", conn, a);
+    const ids = await writer.findWrite("PKG", conn, a);
+    expect(ids).toHaveLength(1);
+    expect(gmail.messages.get(ids[0] ?? "")?.labelIds).toContain("DRAFT");
+    expect(res.external_id).toBeTruthy();
+  });
+
+  it("an empty list when nothing is in the mailbox (which does not prove nothing was sent)", async () => {
+    const { gmail, conn, writer, action } = setup();
+    expect(await writer.findWrite("PKG", conn, action())).toEqual([]);
+    expect(gmail.posts()).toHaveLength(0);
+  });
+
+  it("runs the same checks as the write path: wrong lane, another connection, a tampered payload, an unhealthy or ungranted connection", async () => {
+    const { gmail, conn, writer, action } = setup();
+    const a = action();
+    await expect(writer.findWrite("APK", conn, a)).rejects.toBeInstanceOf(ConnectorError);
+    await expect(writer.findWrite("PKG", conn, { ...a, connection_id: randomUUID() })).rejects.toMatchObject({ info: { kind: "lane_mismatch" } });
+    await expect(writer.findWrite("PKG", conn, { ...a, payload: { ...a.payload, subject: "Changed" } })).rejects.toMatchObject({ info: { kind: "invalid_input" } });
+    expect(gmail.calls).toHaveLength(0);
+    const ungranted = setup({ features: {} });
+    await expect(ungranted.writer.findWrite("PKG", ungranted.conn, ungranted.action())).rejects.toMatchObject({ info: { kind: "forbidden" } });
+    const down = setup({ status: "reconnect_required" });
+    await expect(down.writer.findWrite("PKG", down.conn, down.action())).rejects.toBeInstanceOf(ConnectorError);
+    expect(ungranted.gmail.calls).toHaveLength(0);
+    expect(down.gmail.calls).toHaveLength(0);
+  });
+});

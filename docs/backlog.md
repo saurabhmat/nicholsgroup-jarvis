@@ -200,7 +200,7 @@ These tasks have all their dependencies done and all their `needs` checked. A hu
   3. Settings -> Connections -> **Reconnect Google**. Then check `select features from core.connections where lane_id = 'PKG' and provider = 'google';` shows `{"gmail_compose": true}`.
   4. First live check, to a synthetic recipient you control: approve one "Save as Gmail draft" and one "Approve & send". In Gmail, confirm the message has the header `X-Portal-Action-Id` and a Message-ID `<portal-...@...>`.
   5. `approvals_live` stays the T-170 gate. Flip it only after the pilot security test passes, through a new lane_config version. Same insert as H-046, with `'{approvals}'` and `{"approvals_live": true}`.
-  6. Before live sending, T-192 (`action.reconcile_stuck`) should exist, or check `select id, updated_at from act.proposed_actions where status = 'executing' and updated_at < now() - interval '10 minutes';` daily.
+  6. Before live sending, apply production part 11 (`supabase/core/bootstrap/manual-migrations/part-11-T-192.sql`, after part 10; check with `check-part-11.sql`, every row true). T-192 (`action.reconcile_stuck`, a 5-minute Inngest cron) then finishes any action stuck in `executing`: verified by the Gmail marker, or failed as `outcome_unknown` after 60 minutes (the Approvals page then says to check the mailbox before asking again). Settings in `lane_config.approvals`: `reconcile_after_minutes` (default 10), `reconcile_give_up_minutes` (default 60).
 
 ### Decisions (details and options in `docs/plan-review.md`)
 - [x] D-1 pub-k.org provider (pilot-scope open decision 1). Decided Nov 4, 2026 by Saurabh: **Google Workspace for Pub K Group**. Release A builds the Google tasks (T-063 – T-065, search T-186); the Microsoft tasks (T-066 – T-068, T-187) move to Release B or later and stay behind the same interface for companies on Microsoft 365. The provider is per lane in `lane_config`, never in code (rule 2). Next human items: H-008 (Google OAuth client) and H-013 (Pub/Sub for Gmail watch).
@@ -856,8 +856,9 @@ T-110, T-111 and T-114 are **track W5**, parallel with the connectors. T-112 nee
 - acceptance: Spec: `docs/specs/approvals.md` §6. `action.expire` cron (every 5 min) expires `proposed`/`approved` actions past `expires_at` (defaults from lane_config: email 72 h, monday 168 h); deferred items resurface; also invalidates approved actions whose approver lost the approver role (`act.invalidate_approved`); audited; test.
 
 ### T-192 action.reconcile_stuck
-- status: proposed
+- status: approved
 - depends: T-113
+- note: approved by Saurabh Nov 11, 2026; must be done before H-047 (live sending). T-113 is still open for monday.com; the email execute path it depends on was built in T-232 (done), so T-192 is built against that path (email.send, email.save_draft).
 - acceptance: Spec: `docs/specs/approvals.md` §6. Cron that finds actions in `executing` longer than N minutes (lane_config), runs the provider marker lookup/read-back, and moves them to `verified` or `failed` (verify-only: never creates a second claim, never re-executes; monday create uses the marker lookup) (`outcome_unknown` when undecidable, never re-sending); audited; test with a mock connector that crashes after accepting a send.
 
 ### T-115 Approval Center UI

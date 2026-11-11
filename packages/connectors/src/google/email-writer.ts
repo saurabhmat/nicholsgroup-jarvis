@@ -59,7 +59,16 @@ export type GoogleEmailWriterDeps = {
 export interface GoogleEmailWriter extends ConnectorWriter<GoogleEmailApprovedAction, "google"> {
   /** Reads the message back and compares thread, Message-ID, recipients and subject with the approved payload. Throws `VERIFICATION_MISMATCH_MESSAGE`. */
   verifyWrite(laneId: LaneId, conn: LaneBoundConnection<"google">, action: GoogleEmailApprovedAction, externalId: string): Promise<void>;
+  /**
+   * Read-only marker lookup for recovery (T-192): the ids of the messages in the mailbox whose Message-ID is this action's
+   * deterministic `<portal-{id}@domain>` (at most 5; spam and trash included). Runs the same checks as `verifyWrite` but not
+   * the open-claim check, sends nothing and writes nothing. An empty list does NOT prove nothing was sent (Gmail search can lag).
+   */
+  findWrite(laneId: LaneId, conn: LaneBoundConnection<"google">, action: GoogleEmailApprovedAction): Promise<string[]>;
 }
+
+/** What the reconciler may hold: look up and read back, never `executeWrite`. */
+export type GoogleEmailReconciler = Pick<GoogleEmailWriter, "findWrite" | "verifyWrite">;
 
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 const refused = (message: string) => new ConnectorError({ kind: "invalid_input", message });
@@ -134,6 +143,15 @@ export function createGoogleEmailWriter(deps: GoogleEmailWriterDeps): GoogleEmai
     });
     const first = res.data?.messages?.[0];
     return first && typeof first.id === "string" ? first : null;
+  }
+
+  async function findAllByMessageId(laneId: LaneId, conn: LaneBoundConnection<string>, messageId: string): Promise<string[]> {
+    const res = await deps.api.get<{ messages?: MessageRef[] }>(laneId, conn, PATH_MESSAGES, undefined, {
+      q: `rfc822msgid:${messageId.replace(/^<|>$/g, "")}`,
+      maxResults: 5,
+      includeSpamTrash: true,
+    });
+    return (res.data?.messages ?? []).filter((m) => m && typeof m.id === "string" && m.id !== "").map((m) => m.id);
   }
 
   async function readMeta(laneId: LaneId, conn: LaneBoundConnection<string>, id: string, headers: string[]): Promise<MetaMessage> {
@@ -220,6 +238,10 @@ export function createGoogleEmailWriter(deps: GoogleEmailWriterDeps): GoogleEmai
     provider: "google",
     actionTypes: GOOGLE_EMAIL_ACTIONS,
     executeWrite,
+    async findWrite(laneId, conn, action) {
+      const { row, mailbox } = await prepare(laneId, conn, action);
+      return findAllByMessageId(laneId, row, portalMessageId(action.id, mailbox));
+    },
     async verifyWrite(laneId, conn, action, externalId) {
       const { row, compose, mailbox } = await prepare(laneId, conn, action);
       const mismatch = () => new ConnectorError({ kind: "provider_error", message: VERIFICATION_MISMATCH_MESSAGE });

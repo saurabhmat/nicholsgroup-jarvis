@@ -18,3 +18,6 @@ export type { ApproveResult, EmailChanges, EmailComposeInput, ProposeEmailInput,
 export { hashOfRow } from "./rows";
 export { EMAIL_ACTION_TYPES } from "./types";
 export type { ActionRow, ActionStatus, ApprovalsDeps, ApprovalsPublicDeps, CapabilityFacts, EmailActionType, ProposerKind, Rpc, UserCtx } from "./types";
+// action.reconcile_stuck (T-192); the wired sweep is `reconcileStuckLane` in `@nichols/approvals/wire`.
+export { RECONCILE_BATCH, reconcileStuckActions } from "./reconcile";
+export type { ActionReconciler, ReconcileDecision, ReconcileDeps, ReconcileInput, ReconcileSummary } from "./reconcile";

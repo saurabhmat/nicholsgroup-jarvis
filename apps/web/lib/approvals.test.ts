@@ -151,6 +151,16 @@ describe("page view models", () => {
     const h = toHistory(row({ status: "verified", payloadPurgedAt: "2026-11-11T13:00:00Z", payload: { to: ["dana@sender.example.test"], subject: "Update" }, verifiedAt: "2026-11-11T13:00:00Z" }));
     expect(h).toMatchObject({ status: "verified", to: ["dana@sender.example.test"], subject: "Update", contentPurged: true });
     expect(JSON.stringify(h)).not.toContain("bodyText");
+    expect(h.outcomeUnknown).toBe(false);
+  });
+  it("a failed action whose outcome is unknown (reconciler or execute) is flagged: check the mailbox before asking again (T-192)", () => {
+    for (const failureCode of ["outcome_unknown", "marker_not_found", "ambiguous_match", "reconcile_lookup_failed", "reconcile_connection_unhealthy", "verification_unavailable"]) {
+      expect(toHistory(row({ status: "failed", failureCode })).outcomeUnknown, failureCode).toBe(true);
+    }
+    for (const failureCode of ["connection_unhealthy", "execution_refused", "verification_mismatch", "payload_changed"]) {
+      expect(toHistory(row({ status: "failed", failureCode })).outcomeUnknown, failureCode).toBe(false);
+    }
+    expect(toHistory(row({ status: "verified", failureCode: "marker_not_found" })).outcomeUnknown).toBe(false);
   });
 });
 

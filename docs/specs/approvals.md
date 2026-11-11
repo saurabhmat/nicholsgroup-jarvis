@@ -94,7 +94,30 @@ The execute function is configured with **Inngest retries = 0**: a failed or tim
 4. **Verify** by read-back (sent item by id, monday item fields vs payload). Match → `verified`; mismatch → `failed` with `verification_mismatch`.
 5. Audit each step, emit `approval.failed` on failure. Reaching `verified` or `failed` purges an email body in the same transaction (D-19).
 
-`action.expire` (cron every 5 min) expires stale proposals. `action.reconcile_stuck` (cron, T-192) finds `executing` older than N minutes and runs verify-or-fail. Email bodies are purged at the terminal transition (D-19), not by retention. For other types the retention job (T-042) calls `act.purge_content()` on terminal actions after `lane_config.approvals.payload_retention_days` (default 30, proposed).
+`action.expire` (cron every 15 min) expires stale proposals. `action.reconcile_stuck` (cron every 5 min, T-192, section 6a) finds `executing` older than N minutes and runs verify-or-fail. Email bodies are purged at the terminal transition (D-19), not by retention. For other types the retention job (T-042) calls `act.purge_content()` on terminal actions after `lane_config.approvals.payload_retention_days` (default 30, proposed).
+
+### 6a. Reconciliation (`action.reconcile_stuck`, T-192; built for `email.send` and `email.save_draft`)
+
+**Settings** (`lane_config.approvals`, per lane): `reconcile_after_minutes` (default 10, 5 to 1440) and `reconcile_give_up_minutes` (default 60, 10 to 2880, never below the first). The cron lists, per served lane, `executing` actions whose `executing_at` is at least `reconcile_after_minutes` old (`core.act_stuck_actions`, at most 20 per run, oldest first). Younger ones are never touched (an execute may still be running).
+
+**Verify-only.** The sweep calls only `act_stuck_actions` (read), `act_reconcile_verified` and `act_reconcile_failed`. It never calls `act_claim_execution`, so no second claim exists (the primary key on `act.execution_claims` would refuse one anyway). The handler holds the connector's read side only (`findWrite` marker lookup, `verifyWrite` read-back: `GoogleEmailReconciler`, which has no `executeWrite`), so nothing can be sent or saved from here. Handlers are dispatched by action type (`ActionReconciler.actionTypes`); monday.com plugs in later by adding a handler and its own marker lookup (`portal_action_id` column), with no change to the sweep or the SQL.
+
+**Decision, per action:**
+
+| Evidence | Result |
+|---|---|
+| The claim recorded the provider id (`outcome = 'sent'`, the send was accepted, recording the result failed) | read the message back by that id (no search lag): match -> `verified` (`accepted`); mismatch -> `failed` / `verification_mismatch` |
+| No id recorded; the marker lookup (`rfc822msgid:<portal-{id}@domain>`, spam and trash included) finds exactly one message that matches the approved payload (thread, Message-ID or `X-Portal-Action-Id`, label SENT or DRAFT, recipients, subject) | `verified` (`already_applied`) |
+| Messages found, none matches | `failed` / `verification_mismatch` (outcome `mismatch`), at once |
+| Two or more messages match | `failed` / `ambiguous_match` (`outcome_unknown`), at once |
+| Stored content no longer hashes to the approved hash | `failed` / `reconcile_payload_changed` (`outcome_unknown`), at once, no provider call |
+| **Nothing found**, lookup error, connection unhealthy or not loadable, scope missing (any "cannot decide") | **undecided**: before the give-up time the action stays `executing` and is looked up again on the next run (no state change, no audit). At or after `reconcile_give_up_minutes` (default 60): `failed` with `outcome_unknown` and a specific code: `marker_not_found`, `reconcile_lookup_failed`, `reconcile_connection_unhealthy`, `reconcile_scope_missing`, `reconcile_message_gone`, `reconcile_unsupported`, `reconcile_error` |
+
+**Why "not found" is never a plain failure.** Not finding the marker does not prove nothing was sent: Gmail search can lag behind a send for minutes, and the process may have died between the provider accepting the message and anything being recorded (the claim has no "about to send" marker, so "the claim never reached the send" cannot be told apart from "it did"). So (1) a not-found result alone never ends the action before the give-up time (a late-appearing message is still verified by a later run); (2) at the give-up time it ends `failed` with `outcome_unknown`, never as a retry-safe failure, and the Approvals page says "Outcome unknown: check the mailbox before asking for it again"; (3) the app never re-sends. The cost is a stuck `executing` row for at most the give-up time; the alternative (failing at 10 minutes) would invite a human to re-propose an email that was in fact sent. Re-proposing creates a new action with a new Message-ID, so nothing dedupes it: the human check is the control.
+
+**Races.** `act.reconcile_verified` and `act.reconcile_failed` lock the row, change it only while it is still `executing`, due (older than the threshold, rechecked in SQL) and holding its claim, and return `false` otherwise. Two sweeps, or a sweep and a late-finishing execute, make exactly one transition; the loser changes and audits nothing. A late execute that loses (its `act_claim_sent` or `act_mark_*` finds the row terminal) leaves the reconciler's result in place; the email is never sent twice because the claim is single. The thresholds are at least 5 minutes so an execute that is still running is not overtaken.
+
+**Every transition** writes `act.status_history` in the same statement (actor `service`, reason `reconciler: verified by read-back` or `reconciler: failed: <code>`), purges the email body in that statement (D-19), updates the claim (`verified`, `mismatch` or `outcome_unknown`, `finished_at`) and is audited by the winner as `action.verified` / `action.failed` with `by: reconciler` (ids, type, outcome and code only).
 
 ## 7. Go-live gate (T-119)
 
@@ -139,7 +162,7 @@ Events (T-161, template text + lane code only): `approval.needed`, `approval.fai
 4. Given an AAL1 session, a stale TOTP (older than max age), a viewer, a finance_operator or admin_technical, when they call approve, then each is denied.
 5. Given a user in lane A, when approving or reading lane B's action, then denied (pgTAP cross-lane denial on `act.*` and `core.action_index`).
 6. Given a duplicate `action/approved` event or two concurrent workers, then exactly one `executeWrite` call (mock connector counts calls).
-7. Given a send that succeeds but the process crashes before recording, when the job retries, then the marker lookup finds the sent message and the action is verified without a second send; if the lookup is inconclusive the action ends `failed/outcome_unknown`.
+7. Given a send that succeeds but the process crashes before recording, when the job retries, then the marker lookup finds the sent message and the action is verified without a second send; if the lookup is inconclusive the action ends `failed/outcome_unknown` (after the give-up time; see section 6a).
 8. Given a read-back that differs from the payload, then the status is `failed/verification_mismatch`.
 9. Given `approvals_live = false`, then approve and execute both refuse and the UI shows "Not live"; flipping needs owner + step-up and is audited.
 10. Given proposals of type payment/transfer/delete/qbo_post, when proposed via service or inserted via SQL, then both layers reject them.

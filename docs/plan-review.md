@@ -1079,7 +1079,7 @@ Logged, not fixed (MEDIUM and below):
 All HIGH items are fixed (security H1; code H1, H2), plus security M2, L1, L2, L6, L7 and code M1 – M4, L6 – L8. Details are in `.agent/pr/T-232.md`.
 
 Logged, not fixed:
-- **Security M3 / code M1 (rest), stuck `executing` rows.** There is no `action.reconcile_stuck` (T-192). A row left `executing` (the request was killed after the send, or recording failed) keeps its body and needs a manual look until T-192. Do this **before PKG sends live mail**.
+- **Security M3 / code M1 (rest), stuck `executing` rows.** Resolved by T-192 (`action.reconcile_stuck`, spec approvals §6a; migration `20261112100000`, production part 11): a row left `executing` is verified by the provider marker or failed as `outcome_unknown` after the give-up time (default 60 min), and its body is purged on the terminal transition. Production needs part 11 applied **before PKG sends live mail** (H-047 step 6).
 - **Security M4.** Gmail may replace a client Message-ID. The duplicate guard after a crash then rests on the claim only (safe: an unknown outcome is never resent). Check this on the first live send (H-item).
 - **Security M1 (rest).** No "new to this thread" flag and no live quote of the thread (spec §8, §10). T-231d's recipient is always the sender of the message replied to, taken from metadata.
 - **Security L3.** Switching `store_outbound_drafts` off leaves pending bodies until they expire (now at most 15 min after `expires_at`).

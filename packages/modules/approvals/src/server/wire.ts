@@ -3,10 +3,12 @@ import "server-only";
 // (`@nichols/approvals/wire`) so tests of the module logic never import the connector wiring. The job client bypasses RLS:
 // every call below passes the lane and the database re-checks it (act.* functions are lane-scoped definer functions).
 import { prepareEmailWrite, laneMailboxes } from "@nichols/connectors/google";
-import { googleEmailWriter, loadGoogleWriteConnection } from "@nichols/connectors/write";
+import { googleEmailReconciler, googleEmailWriter, loadGoogleWriteConnection } from "@nichols/connectors/write";
 import type { LaneId } from "@nichols/core";
 import { getAudit, getLaneJobClient } from "@nichols/core/lane-router";
 import { approveAndExecute, executeApproved, proposeEmailAction, type ProposeEmailInput } from "./email";
+import { reconcileStuckActions, type ReconcileDeps, type ReconcileSummary } from "./reconcile";
+import { createEmailReconciler } from "./reconcile-email";
 import type { CapabilityFacts, ApprovalsDeps, ApprovalsPublicDeps, Rpc, UserCtx } from "./types";
 
 const rpcOf = (client: { schema(name: "core"): { rpc: unknown } }): Rpc => {
@@ -75,6 +77,19 @@ export async function expireStaleActions(laneId: LaneId): Promise<number> {
   const { data, error } = await (await jobRpc(laneId))("act_expire_stale", { p_lane: laneId });
   if (error || typeof data !== "number") throw new Error("action expiry failed");
   return data;
+}
+
+/**
+ * action.reconcile_stuck (T-192): one sweep of one lane. Verify-only: the handlers hold the connector's marker lookup and
+ * read-back (no executeWrite) and the database functions never create a claim. Add other types (monday) as more handlers.
+ */
+const reconcileDeps: ReconcileDeps = Object.freeze({
+  jobRpc,
+  audit: approvalsDeps.audit,
+  reconcilers: Object.freeze([createEmailReconciler({ reconciler: googleEmailReconciler, loadWriteConnection: loadGoogleWriteConnection })]),
+});
+export function reconcileStuckLane(laneId: LaneId): Promise<ReconcileSummary> {
+  return reconcileStuckActions(reconcileDeps, laneId);
 }
 
 /**

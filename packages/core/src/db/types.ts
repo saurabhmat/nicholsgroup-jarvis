@@ -443,8 +443,19 @@ isOneToOne: false
 "act_propose":
 { Args: { "p_connection": string,"p_derived": boolean,"p_hash": string,"p_lane": string,"p_payload": Json,"p_proposer_kind": string,"p_proposer_user": string,"p_rationale": string,"p_source_refs": Json,"p_target": Json,"p_type": string,"p_version": number }; Returns: string
                            },
+"act_reconcile_failed":
+{ Args: { "p_code": string,"p_id": string,"p_lane": string,"p_outcome": string }; Returns: boolean
+                           },
+"act_reconcile_verified":
+{ Args: { "p_external_id": string,"p_id": string,"p_lane": string,"p_outcome": string }; Returns: boolean
+                           },
 "act_reject":
 { Args: { "p_id": string,"p_lane": string,"p_reason": string }; Returns: undefined
+                           },
+"act_stuck_actions":
+{ Args: { "p_lane": string,"p_limit"?: number }; Returns: {
+              "action": Json,"age_s": number,"claim_external_id": string,"claim_outcome": string,"give_up": boolean
+            }[]
                            },
 "act_supersede":
 { Args: { "p_derived": boolean,"p_hash": string,"p_lane": string,"p_old": string,"p_payload": Json,"p_proposer_user": string,"p_rationale": string,"p_source_refs": Json,"p_target": Json,"p_version": number }; Returns: string

@@ -355,7 +355,7 @@ export async function executeApproved(deps: ApprovalsDeps, laneId: LaneId, actio
     } catch {
       marked = { data: null, error: { message: "mark_failed unavailable" } };
     }
-    await audit(deps, laneId, { kind: "service" }, "action.failed", actionId, { failure_code: f.code, outcome: f.outcome }).catch(() => undefined);
+    await audit(deps, laneId, { kind: "service" }, "action.failed", actionId, { failure: f.code, outcome: f.outcome }).catch(() => undefined);
     if (marked.error) throw new ApprovalsError("unavailable");
     return { status: "failed", actionId, failureCode: f.code };
   }
