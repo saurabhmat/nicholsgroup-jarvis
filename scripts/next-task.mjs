@@ -3,7 +3,7 @@
 //
 // Fails closed. The backlog grammar is an allowlist:
 // - A task block starts at `### T-xxx` and ends at the next heading (any level) or `---` rule.
-//   Every non-blank line in it must be one of `- status:`, `- depends:`, `- needs:`, `- acceptance:`,
+//   Every non-blank line in it must be one of `- status:`, `- depends:`, `- needs:`, `- acceptance:`, `- note:`,
 //   each at most once; `status` and `depends` are required. Anything else blocks that task.
 // - Structural problems throw (stdout stays empty, exit 1): code fences anywhere, duplicate task ids,
 //   field-like lines outside a task block after the first task, not exactly one `## Needs human`
@@ -18,7 +18,7 @@ const TASK_HEAD = /^###\s+(T-\d+[a-z]?)(?=\s|$)/;
 const HEADING = /^#{1,6}\s/;
 const RULE = /^---+\s*$/;
 const FENCE = /^\s*(`{3,}|~{3,})/;
-const FIELD = /^- (status|depends|needs|acceptance):[ \t]*(.*?)\s*$/;
+const FIELD = /^- (status|depends|needs|acceptance|note):[ \t]*(.*?)\s*$/;
 // Catches field-ish lines in any spelling outside task blocks (e.g. "- **needs:**", "> + Depends on:").
 const FIELD_LIKE = /^[\s>]*[-*+]?\s*\**\s*(status|depends?|needs?|deps|requires?|blocked)\b[^:]{0,20}:/i;
 const DEP_TOKEN = /^T-\d+[a-z]?$/;

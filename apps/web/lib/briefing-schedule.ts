@@ -6,7 +6,7 @@
 // The brain profile needs the owner's session, so a scheduled run goes without it (note "no_brain_in_schedule").
 import { getLLMProvider } from "@nichols/ai/config";
 import type { LaneId } from "@nichols/core";
-import { isBriefingHour } from "@nichols/core/inngest";
+import { isBriefingDue } from "@nichols/core/inngest";
 import { briefingOwners, saveBriefing } from "@nichols/briefing/jobs";
 import { readGmailBody } from "@nichols/connectors/google";
 import { BUSINESS_TZ } from "@nichols/briefing/domain";
@@ -23,7 +23,7 @@ export async function dueOwners(clientFor: ClientFor, laneId: string, now: Date)
   const cfg = await c.schema("core").from("lane_config_current").select("config").eq("lane_id", laneId).maybeSingle();
   if (cfg.error) return [];
   const { briefing } = briefingConfigFrom(cfg.data?.config);
-  if (!briefing.schedule_enabled || !isBriefingHour(briefing.time, now)) return [];
+  if (!briefing.schedule_enabled || !isBriefingDue(briefing.time, briefing.days, now)) return [];
   const owners = await briefingOwners(c, laneId as LaneId);
   const allowed = await Promise.all(
     owners.map(async (uid) => {

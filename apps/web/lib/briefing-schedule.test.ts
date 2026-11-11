@@ -34,4 +34,10 @@ describe("dueOwners", () => {
     await expect(dueOwners(client(cfg, views), "PKG", AT_7_NY)).resolves.toEqual([A]);
     await expect(dueOwners(client(cfg, views), "PKG", new Date("2026-11-11T14:10:00Z"))).resolves.toEqual([]);
   });
+  it("defaults (D-32): 06:30 New York on weekdays only", async () => {
+    const cfg = { briefing: { schedule_enabled: true } };
+    const views = { [A]: ["briefing", "comms", "calendar"] };
+    await expect(dueOwners(client(cfg, views), "PKG", new Date("2026-11-11T11:30:00Z"))).resolves.toEqual([A]); // Wed 06:30
+    await expect(dueOwners(client(cfg, views), "PKG", new Date("2026-11-14T11:30:00Z"))).resolves.toEqual([]); // Sat 06:30
+  });
 });

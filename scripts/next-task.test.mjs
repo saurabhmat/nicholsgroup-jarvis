@@ -267,3 +267,11 @@ test("CLI: missing backlog file exits 1 with a message", () => {
   assert.equal(r.stdout, "");
   assert.match(r.stderr, /next-task: .*does\/not\/exist\.md/);
 });
+
+test("a '- note:' line is allowed once per task and its text is ignored (ids in it are not deps)", () => {
+  const md = doc("### T-001 A\n- status: approved\n- depends: -\n- note: approved Nov 11; refines T-999, needs: H-999\n- acceptance: x\n\n");
+  assert.equal(nextTask(md), "T-001");
+  const twice = doc("### T-001 A\n- status: approved\n- depends: -\n- note: a\n- note: b\n\n");
+  assert.equal(nextTask(twice), undefined);
+  assert.match(evaluate(twice)[0].errors.join(" "), /repeated "note"/);
+});
