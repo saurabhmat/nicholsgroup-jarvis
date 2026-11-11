@@ -9,7 +9,13 @@ import type { HomeView } from "@/lib/home";
 
 const m = vi.hoisted(() => ({ view: null as unknown, progress: null as unknown }));
 vi.mock("@/lib/lane-page", () => ({ loadLane: async () => ({ laneId: "PKG", name: "Pub K Group", lanes: [] }) }));
-vi.mock("@/lib/guards", () => ({ guards: async () => ({}) }));
+vi.mock("@/lib/guards", () => ({ guards: async () => ({ requireLane: async () => ({ client: {} }) }) }));
+vi.mock("next/headers", () => ({ cookies: async () => ({ get: () => undefined }) }));
+vi.mock("next/navigation", () => ({ useRouter: () => ({ refresh: () => undefined }) }));
+vi.mock("@/lib/briefing", async (orig) => ({
+  ...(await orig<typeof import("@/lib/briefing")>()),
+  briefingFor: async () => ({ viewerTz: "America/New_York", coverage: [], coverageLine: "Coverage: test.", calendar: { access: false }, config: {}, mailboxes: [] }),
+}));
 vi.mock("@/lib/timed", () => ({ timed: async <T,>(_n: string, f: () => Promise<T>) => f() }));
 vi.mock("@/lib/onboarding-progress", () => ({
   onboardingFor: async () => m.progress,
@@ -59,9 +65,12 @@ describe("Home layout", () => {
     const grid = screen.getByTestId("home-main-grid");
     expect(grid.className).toMatch(/lg:grid-cols-3/);
     const attention = within(grid).getByRole("region", { name: "Needs your attention" });
-    const meetings = within(grid).getByRole("region", { name: "Today's meetings" });
+    const meetings = within(grid).getByRole("region", { name: "Today's calendar" });
     expect(attention.className).toMatch(/lg:col-span-2/);
     expect(meetings.className).not.toMatch(/col-span/);
+    expect(within(grid).getByRole("region", { name: "Next 7 days" })).toBeTruthy();
+    // T-231a: the Coverage strip sits between the briefing and the figures, and always has a line.
+    expect(screen.getByTestId("coverage-line").textContent).toBe("Coverage: test.");
 
     // order in the page: briefing, KPIs, grid, notice
     const order = [screen.getByRole("region", { name: "Today's briefing" }), kpis, grid, screen.getByTestId("projects-notice")];

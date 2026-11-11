@@ -7,7 +7,11 @@ import { Suspense } from "react";
 import { Alert, AlertDescription, AlertTitle, Badge, buttonVariants, EmptyState, homeHeading, KpiCard, laneHref, PageHeader, PageSection } from "@nichols/ui";
 import { eyebrowDate } from "@/lib/format-date";
 import { guards } from "@/lib/guards";
-import { composeBriefing, formatDay, formatTime, homeFor, homeKpis, timedLeft, type AttentionItem, type CalendarState, type HomeMeeting } from "@/lib/home";
+import { cookies } from "next/headers";
+import { composeBriefing, homeFor, homeKpis, type AttentionItem } from "@/lib/home";
+import { briefingFor, viewerZone } from "@/lib/briefing";
+import { CalendarSections, CoverageStrip } from "./home-briefing";
+import { TimezoneCookie } from "./timezone-cookie";
 import { loadLane } from "@/lib/lane-page";
 import { OnboardingBanner } from "./onboarding-entry";
 import { HomeSkeleton } from "./page-skeleton";
@@ -52,9 +56,17 @@ async function SetupBanner({ laneId }: { laneId: string }) {
 }
 
 async function HomeSections({ laneId, now }: { laneId: string; now: Date }) {
-  const view = await timed("load.home", async () => homeFor(await guards(), laneId, now));
+  const tzCookie = (await cookies()).get("tz")?.value;
+  const tz = viewerZone(tzCookie);
+  const g = await guards();
+  // Home v1 counts and the T-231 briefing sections load in parallel; each fails on its own ("unavailable"), never as an empty day.
+  const [view, brief] = await Promise.all([
+    timed("load.home", async () => homeFor(g, laneId, now)),
+    timed("load.briefing", async () => briefingFor((await g.requireLane(laneId as Parameters<typeof g.requireLane>[0])).client, laneId, now, tz)),
+  ]);
   return (
     <>
+      <TimezoneCookie current={tzCookie ?? null} />
       {view.unavailable ? (
         <Alert variant="alert">
           <AlertTitle>Some of today&apos;s information could not be loaded</AlertTitle>
@@ -62,6 +74,7 @@ async function HomeSections({ laneId, now }: { laneId: string; now: Date }) {
         </Alert>
       ) : null}
       <Briefing lines={view.unavailable ? [] : composeBriefing(view, now)} />
+      <CoverageStrip laneId={laneId} view={brief} now={now} />
       <section aria-label="Key figures" data-testid="home-kpis" className="grid grid-cols-2 gap-4 lg:grid-cols-4">
         {homeKpis(view.feeds).map((k) => (
           <KpiCard key={k.key} label={k.label} bookBalance={k.bookBalance} status="no_data" statusText={k.statusText} />
@@ -69,9 +82,9 @@ async function HomeSections({ laneId, now }: { laneId: string; now: Date }) {
       </section>
       <div data-testid="home-main-grid" className="grid gap-4 lg:grid-cols-3">
         <PageSection title="Needs your attention" className="lg:col-span-2">{view.unavailable ? undefined : <AttentionList laneId={laneId} items={view.attention} />}</PageSection>
-        <PageSection title="Today's meetings" note={view.meetings.length > 0 || view.upcoming.length > 0 ? "Google Calendar" : undefined}>
-          {view.unavailable ? undefined : <Meetings calendar={view.calendar} meetings={view.meetings} upcoming={view.upcoming} now={now} />}
-        </PageSection>
+        <div className="flex min-w-0 flex-col gap-4">
+          <CalendarSections view={brief} now={now} />
+        </div>
       </div>
       <ProjectsNotice />
     </>
@@ -128,85 +141,5 @@ function AttentionList({ laneId, items }: { laneId: string; items: AttentionItem
         </li>
       ))}
     </ul>
-  );
-}
-
-function Meetings({ calendar, meetings, upcoming, now }: { calendar: CalendarState; meetings: HomeMeeting[]; upcoming: HomeMeeting[]; now: Date }) {
-  if (calendar === "no_access") {
-    return <EmptyState title="No calendar to show" description="Your role in this company does not include the calendar." className="border-0 bg-transparent px-0 py-6" />;
-  }
-  if (calendar === "not_connected") {
-    return <EmptyState title="No calendar connected" description="Today's meetings appear here once Google is connected in Settings." className="border-0 bg-transparent px-0 py-6" />;
-  }
-  // Nothing timed left today: keep any all-day events, say the day is clear, and show what is coming up.
-  const anyLeft = timedLeft(meetings, now).length > 0;
-  const shown = anyLeft ? meetings : meetings.filter((m) => m.allDay);
-  const clear = anyLeft ? null : (
-    <div className="flex flex-col gap-3">
-      <p className="text-body text-muted-foreground">{meetings.length === 0 ? "Nothing scheduled today." : meetings.some((m) => !m.allDay) ? "No more meetings today." : "No meetings today."}</p>
-      {upcoming.length > 0 ? <ComingUp meetings={upcoming} /> : null}
-    </div>
-  );
-  if (shown.length === 0) return clear;
-  return (
-    <div className="flex flex-col gap-3">
-      <ul data-testid="meeting-list" className="flex flex-col divide-y divide-border">
-        {shown.map((m, i) => {
-          const past = !m.allDay && Date.parse(m.endAt) <= now.getTime();
-          return (
-            <li key={`${String(i)}:${m.startAt}`} className={`flex gap-4 py-3 text-body ${past ? "opacity-60" : ""}`}>
-              <span className="w-32 shrink-0 tabular-nums text-muted-foreground">{m.allDay ? "All day" : `${formatTime(m.startAt)} – ${formatTime(m.endAt)}`}</span>
-              <span className="flex min-w-0 flex-col gap-1">
-                <span className="truncate font-medium text-foreground">{m.title}</span>
-                {m.location ? <span className="truncate text-muted-foreground">{m.location}</span> : null}
-                {m.meetingUrl || m.calendarUrl ? (
-                  <span className="flex gap-3">
-                    {m.meetingUrl && !past ? (
-                      <a href={m.meetingUrl} target="_blank" rel="noopener noreferrer" className="text-primary underline-offset-2 hover:underline">
-                        Join
-                      </a>
-                    ) : null}
-                    {m.calendarUrl ? (
-                      <a href={m.calendarUrl} target="_blank" rel="noopener noreferrer" className="text-primary underline-offset-2 hover:underline">
-                        Open in Calendar
-                      </a>
-                    ) : null}
-                  </span>
-                ) : null}
-              </span>
-            </li>
-          );
-        })}
-      </ul>
-      {clear}
-    </div>
-  );
-}
-
-function ComingUp({ meetings }: { meetings: HomeMeeting[] }) {
-  return (
-    <div>
-      <h3 className="mb-1 text-small font-semibold uppercase tracking-wider text-muted-foreground">Coming up</h3>
-      <ul data-testid="upcoming-list" className="flex flex-col divide-y divide-border">
-        {meetings.map((m, i) => (
-          <li key={`${String(i)}:${m.startAt}`} className="flex gap-4 py-3 text-body">
-            <span className="w-32 shrink-0 tabular-nums text-muted-foreground">
-              {formatDay(m.startAt)}
-              <br />
-              {formatTime(m.startAt)}
-            </span>
-            <span className="flex min-w-0 flex-col gap-1">
-              <span className="truncate font-medium text-foreground">{m.title}</span>
-              {m.location ? <span className="truncate text-muted-foreground">{m.location}</span> : null}
-              {m.calendarUrl ? (
-                <a href={m.calendarUrl} target="_blank" rel="noopener noreferrer" className="text-primary underline-offset-2 hover:underline">
-                  Open in Calendar
-                </a>
-              ) : null}
-            </span>
-          </li>
-        ))}
-      </ul>
-    </div>
   );
 }

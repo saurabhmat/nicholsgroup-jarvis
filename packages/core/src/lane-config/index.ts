@@ -13,6 +13,8 @@ export const email = z.email().max(254);
 const ids = z.array(id).max(500).default([]);
 /** Free-text labels (GoHighLevel tags, pipeline stage names): any printable text, no control characters. */
 const tags = z.array(z.string().min(1).max(100).regex(/^[^\u0000-\u001f\u007f]+$/)).max(500).default([]);
+/** Case-insensitive substring patterns (briefing rules): plain text, never a regular expression. */
+const patterns = z.array(z.string().min(2).max(100).regex(/^[^\u0000-\u001f\u007f]+$/)).max(100);
 /** Nesting beyond this is never a valid config; the scan refuses it instead of recursing. */
 const MAX_DEPTH = 16;
 
@@ -137,7 +139,46 @@ export const laneConfigSchema = z.strictObject({
     })
     .prefault({}),
   priority_senders: z.array(z.union([email, z.string().regex(/^@[a-z0-9.-]+\.[a-z]{2,}$/)])).max(200).default([]),
-  briefing: z.strictObject({ time: hhmm.default("07:00") }).prefault({}),
+  // Daily briefing (T-231). Pattern lists are case-insensitive substrings (never regular expressions). The defaults are
+  // generic mail conventions, not company data; a lane replaces a list by setting it.
+  briefing: z
+    .strictObject({
+      time: hhmm.default("07:00"),
+      // The AI briefing job's daily schedule (T-231c). Off unless set to true: "Run now" on Home works either way.
+      schedule_enabled: z.boolean().default(false),
+      // A mail or calendar stream counts as stale when it last synced longer ago than this.
+      coverage_stale_minutes: z.int().min(15).max(10080).default(120),
+      // Domains that count as internal for "external attendees" (the lane's mailbox domains always count).
+      internal_domains: z.array(z.string().regex(/^[a-z0-9.-]+\.[a-z]{2,}$/)).max(50).default([]),
+      // Mail older than this is not considered for "Needs your attention".
+      attention_days: z.int().min(1).max(14).default(7),
+      exclusions: z
+        .strictObject({
+          labels: patterns.default(["CATEGORY_PROMOTIONS", "CATEGORY_SOCIAL", "CATEGORY_FORUMS", "SPAM", "TRASH"]),
+          newsletter_senders: patterns.default(["newsletter", "news@", "marketing", "digest", "promo", "mailer-daemon", "updates@", "info@"]),
+          social_senders: patterns.default(["linkedin.com", "facebookmail.com", "x.com", "twitter.com", "instagram.com", "pinterest.com", "youtube.com"]),
+          bot_senders: patterns.default(["github.com", "gitlab", "circleci", "vercel.com", "jenkins", "buildkite", "dependabot", "sentry.io", "bitbucket"]),
+          // Bot/CI mail is shown only as one item when this many failures arrive in the attention window.
+          bot_failure_words: patterns.default(["fail", "error", "broken", "errored"]),
+          bot_failure_repeat: z.int().min(2).max(50).default(3),
+          otp_subjects: patterns.default(["verification code", "one-time", "one time password", "otp", "security code", "login code", "sign-in code", "passcode", "2fa", "confirm your email"]),
+          bank_alert_subjects: patterns.default(["transaction alert", "you made a", "purchase", "debit card", "card transaction", "withdrawal", "deposit posted", "balance alert", "direct deposit"]),
+          // Bank mail kept even when it matches an alert pattern.
+          bank_keep_subjects: patterns.default(["statement", "payment due", "due date", "is due", "minimum payment"]),
+          automated_senders: patterns.default(["no-reply", "noreply", "do-not-reply", "donotreply", "notifications@", "notification@", "alerts@", "bounce"]),
+        })
+        .prefault({}),
+      security_subjects: patterns.default(["new sign-in", "new sign in", "security alert", "critical vulnerability", "suspicious", "unusual sign-in", "password was changed", "password changed"]),
+      money: z
+        .strictObject({
+          invoice: patterns.default(["invoice"]),
+          bill: patterns.default(["bill is ready", "amount due", "payment due", "statement is ready", "your bill"]),
+          renewal: patterns.default(["renewal", "renews", "will renew", "subscription will", "expires soon"]),
+          failed_payment: patterns.default(["payment failed", "failed payment", "payment declined", "card declined", "past due", "unable to process", "overdue"]),
+        })
+        .prefault({}),
+    })
+    .prefault({}),
   finance: z
     .strictObject({
       accounting_method: z.enum(["accrual", "cash"]).default("accrual"),

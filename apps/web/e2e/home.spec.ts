@@ -54,7 +54,7 @@ test("owner: today's meetings and the attention queue, with mail as counts only"
   seed();
   await page.goto("/PKG");
 
-  const meetings = page.getByRole("region", { name: "Today's meetings" });
+  const meetings = page.getByRole("region", { name: "Today's calendar" });
   await expect(meetings.getByText(MEETING)).toBeVisible({ timeout: 30_000 });
   await expect(meetings.getByText(ALL_DAY)).toBeVisible();
   await expect(meetings.getByText("Synthetic room")).toBeVisible();
@@ -77,7 +77,7 @@ test("a finance-only viewer sees no meetings and no mail counts", async ({ page 
   await signIn(page, personas(info).secondMember);
   seed();
   await page.goto("/PKG");
-  const meetings = page.getByRole("region", { name: "Today's meetings" });
+  const meetings = page.getByRole("region", { name: "Today's calendar" });
   await expect(meetings.getByText("No calendar to show")).toBeVisible({ timeout: 30_000 });
   const body = page.locator("body");
   await expect(body).not.toContainText(MEETING);

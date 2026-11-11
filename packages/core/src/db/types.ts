@@ -478,6 +478,16 @@ isOneToOne: false
               "body_md": string,"id": string,"is_mine": boolean,"key": string,"title": string,"updated_at": string,"version": number
             }[]
                            },
+"briefing_coverage":
+{ Args: { "p_lane": string }; Returns: {
+              "account": string,"configured": boolean,"connection_id": string,"error_kind": string,"last_sync_at": string,"provider": string,"status": string,"stream": string
+            }[]
+                           },
+"briefing_events":
+{ Args: { "p_from": string,"p_lane": string,"p_to": string }; Returns: {
+              "all_day": boolean,"attendees": Json,"calendar_id": string,"connection_id": string,"end_at": string,"end_date": string,"event_id": string,"location": string,"online_meeting_url": string,"organizer_email": string,"organizer_name": string,"source_url": string,"start_at": string,"start_date": string,"status": string,"timezone": string,"title": string
+            }[]
+                           },
 "cal_events_apply_page":
 { Args: { "p_complete"?: boolean,"p_connection_id": string,"p_cursor": string,"p_drop_calendars"?: (string)[],"p_expected_cursor": string,"p_lane": string,"p_removals": Json,"p_upserts": Json }; Returns: Json
                            },
