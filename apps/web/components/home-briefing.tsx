@@ -2,11 +2,14 @@
 // Coverage moved to Settings -> Connections (coverage-list.tsx) and the Money card was removed from Home (T-234 part 1).
 // Times are in the viewer's zone; an event's own zone is added when its clock differs. Declined and cancelled events
 // never show; clashes, back-to-backs and unanswered invitations are flagged.
-import { Badge, EmptyState, PageSection } from "@nichols/ui";
+import Link from "next/link";
+import { Badge, buttonVariants, EmptyState, laneHref, PageSection } from "@nichols/ui";
 import { CollapsibleSection } from "./collapsible-section";
+import { ReplyAction } from "./reply-action";
+import { inboxHref } from "@/lib/inbox-links";
 import {
+  ageLabel,
   attendeeSummary,
-  formatDateTimeIn,
   formatDayIn,
   formatTimeIn,
   maskFigures,
@@ -137,25 +140,15 @@ const KIND_LABEL: Record<AttentionThread["kind"], string> = {
   repeated_failures: "Repeated failures",
 };
 
-/** Source line: mailbox · sender · date (viewer zone). Sender text is untrusted metadata: rendered as plain text. Subjects are shown with figures masked (rule 7). */
-function SourceLine({ t, mailbox, tz }: { t: ThreadRow; mailbox: string | undefined; tz: string }) {
-  const sender = t.fromName && t.fromAddress ? `${t.fromName} <${t.fromAddress}>` : (t.fromAddress ?? t.fromName ?? "Unknown sender");
-  return (
-    <span className="truncate text-small text-muted-foreground">
-      {[mailbox, sender, formatDateTimeIn(t.receivedAt, tz)].filter(Boolean).join(" · ")}
-    </span>
-  );
-}
+/** Sender text is untrusted metadata: rendered as plain text. */
+const senderOf = (t: ThreadRow) => (t.fromName && t.fromAddress ? `${t.fromName} <${t.fromAddress}>` : (t.fromAddress ?? t.fromName ?? "Unknown sender"));
 
-function ThreadLink({ t }: { t: ThreadRow }) {
-  return t.sourceUrl ? (
-    <a href={t.sourceUrl} target="_blank" rel="noopener noreferrer" className="shrink-0 text-small text-primary underline-offset-2 hover:underline">
-      Open thread
-    </a>
-  ) : null;
-}
-
-export function AttentionSection({ mail, tz, notes }: { mail: MailSection; tz: string; notes?: Map<string, AttentionNote> }) {
+/**
+ * "Needs your attention" items (T-234 part 2): the top 5 by rules. Each shows the title (figures masked, rule 7), the AI's
+ * why-it-matters and next step when today's briefing has them, then sender, mailbox and age with a status chip, and two
+ * actions: Reply (the hook part 3 turns into the drawer) and Open (the thread in Jarvis, never a Google page).
+ */
+export function AttentionSection({ laneId, mail, now, notes, replies }: { laneId: string; mail: MailSection; now: Date; notes?: Map<string, AttentionNote>; replies?: Map<string, string> }) {
   if (!mail.access) {
     return mail.unavailable ? (
       <EmptyState title="Mail could not be read" description="Reload in a minute. Settings → Connections shows the last sync." className="border-0 bg-transparent px-0 py-6" />
@@ -164,42 +157,53 @@ export function AttentionSection({ mail, tz, notes }: { mail: MailSection; tz: s
     );
   }
   if (mail.attention.length === 0) {
-    return <p className="text-body text-muted-foreground">Nothing needs you in the mail that was read (newsletters, promotions, codes and automated alerts are left out). Settings → Connections shows what was read.</p>;
+    return <p className="text-body text-muted-foreground">Nothing needs you in the mail that was read (newsletters, calendar invitations, auto-replies, codes and automated alerts are left out). Settings → Connections shows what was read.</p>;
   }
   return (
     <div className="flex flex-col gap-2">
       <ol data-testid="attention-list" className="flex flex-col divide-y divide-border">
-        {mail.attention.map((a) => (
-          <li key={a.key} data-testid="attention-item" data-kind={a.kind} className="flex flex-col gap-1 py-3">
-            <span className="flex items-baseline justify-between gap-3">
-              <span className="min-w-0 truncate font-medium text-foreground">{a.kind === "repeated_failures" ? a.reason : a.thread.subject ? maskFigures(a.thread.subject) : "(No subject)"}</span>
-              <ThreadLink t={a.thread} />
-            </span>
-            <span className="flex flex-wrap items-center gap-2">
-              <Badge variant={a.kind === "priority" || a.kind === "security" ? "alert" : "outline"}>{KIND_LABEL[a.kind]}</Badge>
-              {a.kind === "repeated_failures" ? null : <span className="text-small text-foreground">{a.reason}</span>}
-            </span>
-            <AiNote note={notes?.get(`${a.thread.connectionId}:${a.thread.messageId}`)} />
-            <SourceLine t={a.thread} mailbox={mail.mailboxOf[a.thread.connectionId]} tz={tz} />
-          </li>
-        ))}
+        {mail.attention.map((a) => {
+          const t = a.thread;
+          const note = notes?.get(`${t.connectionId}:${t.messageId}`);
+          const mailbox = mail.mailboxOf[t.connectionId];
+          return (
+            <li key={a.key} data-testid="attention-item" data-kind={a.kind} className="flex flex-col gap-1.5 py-3">
+              <span className="flex flex-wrap items-start justify-between gap-x-3 gap-y-2">
+                <span className="min-w-0 flex-1 break-words font-medium text-foreground">{a.kind === "repeated_failures" ? a.reason : t.subject ? maskFigures(t.subject) : "(No subject)"}</span>
+                <span className="flex shrink-0 items-center gap-2">
+                  {a.kind === "repeated_failures" ? null : <ReplyAction target={{ laneId, connectionId: t.connectionId, messageId: t.messageId, threadKey: t.threadKey, proposalId: replies?.get(`${t.connectionId}:${t.messageId}`) ?? null }} />}
+                  <Link href={inboxHref(laneId, t.messageId)} data-testid="attention-open" className={buttonVariants({ variant: "outline", size: "sm" })}>
+                    Open
+                  </Link>
+                </span>
+              </span>
+              {note ? (
+                <dl data-testid="attention-note" className="grid grid-cols-[auto_1fr] gap-x-3 gap-y-0.5 text-small">
+                  <dt className="text-muted-foreground">Why</dt>
+                  <dd className="text-foreground">{note.why}</dd>
+                  <dt className="text-muted-foreground">Next</dt>
+                  <dd className="text-foreground">{note.next}</dd>
+                </dl>
+              ) : null}
+              <span className="flex flex-wrap items-center gap-x-2 gap-y-1 text-small text-muted-foreground">
+                <Badge variant={a.kind === "priority" || a.kind === "security" ? "alert" : "outline"}>{KIND_LABEL[a.kind]}</Badge>
+                <span data-testid="attention-meta" className="min-w-0 break-words">
+                  {[senderOf(t), mailbox ? `to ${mailbox}` : null, `${ageLabel(t.receivedAt, now)} ago`].filter(Boolean).join(" · ")}
+                </span>
+              </span>
+            </li>
+          );
+        })}
       </ol>
-      {mail.more > 0 ? <p className="text-small text-muted-foreground">{mail.more} more in the Inbox.</p> : null}
+      {mail.more > 0 ? (
+        <p className="text-small text-muted-foreground">
+          {mail.more} more in the{" "}
+          <Link href={laneHref(laneId, "inbox")} className="text-primary underline-offset-2 hover:underline">
+            Inbox
+          </Link>
+          .
+        </p>
+      ) : null}
     </div>
-  );
-}
-
-/** What happened / why it matters / next step, from today's AI briefing (plain text). */
-function AiNote({ note }: { note: AttentionNote | undefined }) {
-  if (!note) return null;
-  return (
-    <dl data-testid="attention-note" className="grid grid-cols-[auto_1fr] gap-x-3 gap-y-0.5 text-small">
-      <dt className="text-muted-foreground">What</dt>
-      <dd className="text-foreground">{note.what}</dd>
-      <dt className="text-muted-foreground">Why</dt>
-      <dd className="text-foreground">{note.why}</dd>
-      <dt className="text-muted-foreground">Next</dt>
-      <dd className="text-foreground">{note.next}</dd>
-    </dl>
   );
 }

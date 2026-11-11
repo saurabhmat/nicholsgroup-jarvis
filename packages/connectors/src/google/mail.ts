@@ -48,6 +48,8 @@ import type { LaneConfigReader } from "../vault/lane-config";
 import type { GoogleApi } from "./api";
 import { DEFAULT_FULL_SYNC_DAYS, DEFAULT_MAX_BODY_CHARS, HISTORY_TYPES, METADATA_HEADERS } from "./constants";
 import { createProviderGuard } from "./guard";
+import { deriveMailFlags } from "./mail-flags";
+import { gmailThreadUrl } from "../comms/gmail-url";
 import { cleanText, MAX_SINGLE_HEADER, parseAddressList, parseSubject } from "./headers";
 import { extractText, type GmailPart } from "./mime";
 
@@ -101,7 +103,7 @@ const MetaResponseSchema = z.object({
   labelIds: z.array(z.string()).optional(),
   internalDate: z.string().regex(/^\d{1,16}$/).optional(),
   // `snippet` is deliberately not declared: zod drops it, so a preview can never reach a record.
-  payload: z.object({ headers: z.array(z.object({ name: z.string(), value: z.string() })).optional() }).optional(),
+  payload: z.object({ mimeType: z.string().optional(), headers: z.array(z.object({ name: z.string(), value: z.string() })).optional(), parts: z.array(z.looseObject({ mimeType: z.string().optional() })).optional() }).optional(),
 });
 type MetaResponse = z.infer<typeof MetaResponseSchema>;
 const HistoryResponseSchema = z.object({
@@ -180,7 +182,8 @@ export function createGmailProvider(deps: GmailProviderDeps): MailProvider<"goog
     const base = {
       message_id: m.id,
       thread_id: m.threadId ?? null,
-      source_url: `https://mail.google.com/mail/u/${encodeURIComponent(conn.external_account_id)}/#all/${encodeURIComponent(m.threadId ?? m.id)}`,
+      // Opens the thread in Gmail for this mailbox (authuser); null when the thread id is not Gmail's own.
+      source_url: gmailThreadUrl(conn.external_account_id, m.threadId),
       from_address: fromList[0]?.address ?? null,
       from_name: fromList[0]?.name ?? null,
       to_recipients: parseAddressList(headers.get("to")),
@@ -191,6 +194,7 @@ export function createGmailProvider(deps: GmailProviderDeps): MailProvider<"goog
       is_starred: has("STARRED"),
       is_important: has("IMPORTANT"),
       has_attachments: /^\s*multipart\/mixed\b/i.test(headers.get("content-type") ?? ""),
+      ...deriveMailFlags(headers, m.payload ? { mimeType: m.payload.mimeType, parts: m.payload.parts } : undefined),
       folder: has("INBOX") ? "INBOX" : null,
       labels,
       source_updated_at: received,

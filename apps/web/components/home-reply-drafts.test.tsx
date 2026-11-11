@@ -64,6 +64,11 @@ describe("ReplyDrafts", () => {
     expect(screen.getByTestId("more-replies").textContent).toContain("Person 3");
   });
 
+  it("'Open thread' opens the thread in Jarvis, not the stored Google link", () => {
+    render(<ReplyDrafts laneId="PKG" brief={brief()} tz="America/New_York" />);
+    expect(screen.getAllByRole("link", { name: "Open thread" }).map((a) => a.getAttribute("href"))).toEqual(["/PKG/inbox/m1", "/PKG/inbox/m2"]);
+  });
+
   it("a re-run links to the earlier draft waiting in Approvals; a failure says to copy instead (never a raw code)", () => {
     render(
       <ReplyDrafts

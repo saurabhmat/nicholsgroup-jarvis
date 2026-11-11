@@ -8,8 +8,9 @@
 //   3. unread mail from real people (not automated, not excluded)
 //   4. security alerts (new sign-in, critical vulnerability, ...) from lane_config security_senders domains only
 //   5. repeated bot/CI failures (one item per sender domain); within a tier, older first (age)
-// Excluded before ranking: excluded labels (promotions, social, forums), newsletters, social networks, OTP codes, bank
-// transaction alerts (statements and due dates are kept), single bot/CI messages.
+// Excluded before ranking: OTP codes, calendar invitations/updates, auto-replies, bulk/marketing mail (header flag or the org's
+// own newsletter senders), excluded labels (promotions, social, forums), newsletters, social networks, bank transaction alerts
+// (statements and due dates are kept), single bot/CI messages (and automated senders' CI-style subjects).
 
 export type ThreadRow = {
   connectionId: string;
@@ -26,6 +27,10 @@ export type ThreadRow = {
   ownerReplied: boolean;
   unreadCount: number;
   inboundCount: number;
+  /** Flags derived from headers at sync time (T-234 part 2; never the headers themselves). Absent = false (older rows). */
+  isBulk?: boolean;
+  isCalendar?: boolean;
+  isAuto?: boolean;
 };
 
 export type AttentionRules = {
@@ -43,6 +48,10 @@ export type AttentionRules = {
     bank_alert_subjects: readonly string[];
     bank_keep_subjects: readonly string[];
     automated_senders: readonly string[];
+    org_newsletter_senders: readonly string[];
+    calendar_subjects: readonly string[];
+    auto_reply_subjects: readonly string[];
+    bot_subjects: readonly string[];
   };
   money: { invoice: readonly string[]; bill: readonly string[]; renewal: readonly string[]; failed_payment: readonly string[] };
 };
@@ -72,7 +81,14 @@ export function subjectHas(subject: string | null | undefined, words: readonly s
   return words.some((w) => new RegExp(`(^|[^a-z0-9])${escapeRe(lower(w))}($|[^a-z0-9])`).test(s));
 }
 
-/** Anchored sender match: "name@" = local part exactly, "x.com" = domain or a subdomain, a word = in the local part. */
+/** Case-insensitive prefix match on the trimmed subject ("Invitation:" matches "Invitation: Standup", not "Re: Invitation: ..."). */
+export function subjectStarts(subject: string | null | undefined, prefixes: readonly string[]): boolean {
+  if (!subject) return false;
+  const s = lower(subject).trimStart();
+  return prefixes.some((p) => s.startsWith(lower(p)));
+}
+
+/** Anchored sender match: "name@" = local part exactly, "name@x.com" = that address, "x.com" = domain or a subdomain, a word = in the local part. */
 export function senderHas(address: string | null | undefined, patterns: readonly string[]): boolean {
   if (!address) return false;
   const a = lower(address);
@@ -82,6 +98,7 @@ export function senderHas(address: string | null | undefined, patterns: readonly
   return patterns.some((raw) => {
     const p = lower(raw);
     if (p.endsWith("@")) return local === p.slice(0, -1);
+    if (p.includes("@")) return a === p; // a full address ("weekly@example.com")
     if (p.includes(".") && !p.includes("@")) return domain === p || domain.endsWith(`.${p}`);
     return local.includes(p);
   });
@@ -100,7 +117,14 @@ export function isPrioritySender(address: string | null, senders: readonly strin
 
 export type Classified = { excluded: string | null; automated: boolean; bot: boolean; security: boolean };
 
-/** Why a thread is left out (null = kept), and the sender class. Security alerts from trusted senders are never excluded. */
+/** Exclusions a priority sender cannot skip: one-time codes, calendar notifications and auto-replies are never a person's request. */
+export const HARD_EXCLUSIONS: ReadonlySet<string> = new Set(["otp", "calendar", "auto_reply"]);
+
+/**
+ * Why a thread is left out (null = kept), and the sender class. Security alerts from trusted senders are never excluded.
+ * Order: one-time codes, calendar invitations/updates, auto-replies, bulk mail (header flag or the org's own newsletter
+ * senders), labels, newsletters, social, bank alerts, bot/CI. The same function feeds Home and the AI briefing input.
+ */
 export function classify(t: ThreadRow, r: AttentionRules): Classified {
   const x = r.exclusions;
   const security = subjectHas(t.subject, r.securitySubjects) && senderHas(t.fromAddress, r.securitySenders);
@@ -109,15 +133,20 @@ export function classify(t: ThreadRow, r: AttentionRules): Classified {
   if (security) return { excluded: null, automated, bot, security };
   let excluded: string | null = null;
   if (subjectHas(t.subject, x.otp_subjects)) excluded = "otp";
+  else if (t.isCalendar === true || subjectStarts(t.subject, x.calendar_subjects)) excluded = "calendar";
+  else if (t.isAuto === true || subjectStarts(t.subject, x.auto_reply_subjects)) excluded = "auto_reply";
+  else if (t.isBulk === true || senderHas(t.fromAddress, x.org_newsletter_senders)) excluded = "bulk";
   else if (t.labels.some((l) => x.labels.some((e) => lower(e) === lower(l)))) excluded = "label";
   else if (senderHas(t.fromAddress, x.newsletter_senders)) excluded = "newsletter";
   else if (senderHas(t.fromAddress, x.social_senders)) excluded = "social";
   else if (subjectHas(t.subject, x.bank_alert_subjects) && !subjectHas(t.subject, x.bank_keep_subjects)) excluded = "bank_alert";
   else if (bot) excluded = "bot";
+  else if (automated && subjectHas(t.subject, x.bot_subjects)) excluded = "bot_subject";
   return { excluded, automated, bot, security };
 }
 
-function age(iso: string, now: Date): string {
+/** "3h", "2d", "under an hour". */
+export function ageLabel(iso: string, now: Date): string {
   const h = Math.max(0, Math.round((now.getTime() - Date.parse(iso)) / 3_600_000));
   if (h < 1) return "under an hour";
   if (h < 48) return `${String(h)}h`;
@@ -140,11 +169,11 @@ export function rankAttention(rows: ThreadRow[], r: AttentionRules, now: Date, l
       }
       continue;
     }
-    // Priority senders skip the exclusions, except one-time codes.
-    if (c.excluded && !(priority && c.excluded !== "otp")) continue;
+    // Priority senders skip the exclusions, except one-time codes, calendar notifications and auto-replies.
+    if (c.excluded && !(priority && !HARD_EXCLUSIONS.has(c.excluded))) continue;
     if (t.lastIsOwner) continue; // the owner answered last: not waiting on anyone
     const unread = t.unreadCount > 0;
-    const ago = age(t.receivedAt, now);
+    const ago = ageLabel(t.receivedAt, now);
     const person = !c.automated;
     let item: { tier: number; kind: AttentionKind; reason: string } | null = null;
     if (priority) item = { tier: 0, kind: "priority", reason: `Priority sender${unread ? ", unread" : ", not answered"} · ${ago}` };
@@ -213,6 +242,9 @@ export function parseThreads(data: unknown): ThreadRow[] {
         ownerReplied: r.owner_replied === true,
         unreadCount: num(r.unread_count),
         inboundCount: num(r.inbound_count),
+        isBulk: r.is_bulk === true,
+        isCalendar: r.is_calendar === true,
+        isAuto: r.is_auto === true,
       },
     ];
   });

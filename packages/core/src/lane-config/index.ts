@@ -170,6 +170,18 @@ export const laneConfigSchema = z.strictObject({
           // Bank mail kept even when it matches an alert pattern.
           bank_keep_subjects: patterns.default(["statement", "payment due", "due date", "is due", "minimum payment"]),
           automated_senders: patterns.default(["no-reply", "noreply", "do-not-reply", "donotreply", "notifications", "notification", "alerts", "bounce", "mailer-daemon"]),
+          // T-234 part 2. Bulk/marketing mail is recognised by its headers at sync time (List-Unsubscribe, Precedence bulk/list/junk,
+          // List-Id: stored as the boolean is_bulk, never the headers). These are the org's OWN newsletter senders, which look like
+          // colleagues but are bulk: same sender syntax as above ("name@", "example.com", a word). Empty by default (company data).
+          org_newsletter_senders: patterns.default([]),
+          // Calendar invitations and updates: text/calendar mail is flagged at sync (is_calendar); these subject PREFIXES (case-insensitive,
+          // at the start of the subject, so "Re: Invitation: ..." from a person is not caught) cover mail whose parts are not visible.
+          calendar_subjects: patterns.default(["Invitation:", "Updated invitation:", "Updated invitation with note:", "Canceled event:", "Cancelled event:", "Canceled:", "Accepted:", "Declined:", "Tentatively accepted:", "New event:"]),
+          // Auto-replies are recognised by Auto-Submitted (not "no"), X-Autoreply / X-Autorespond and Precedence auto_reply at sync (is_auto);
+          // these subject PREFIXES catch the rest.
+          auto_reply_subjects: patterns.default(["Automatic reply:", "Auto-reply:", "Autoreply:", "Auto reply:", "Out of office:", "Out of Office Autoreply:", "Automatic response:"]),
+          // Bot/CI subjects (whole words). Applied only to automated senders (no-reply, notifications ... or bot_senders), never to a person.
+          bot_subjects: patterns.default(["[github]", "dependabot", "pull request", "workflow run", "build #", "pipeline #", "deployment ready", "preview deployment", "check suite"]),
         })
         .prefault({}),
       security_subjects: patterns.default(["new sign-in", "new sign in", "security alert", "critical vulnerability", "suspicious", "unusual sign-in", "password was changed", "password changed"]),

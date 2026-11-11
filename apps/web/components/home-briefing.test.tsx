@@ -78,22 +78,55 @@ describe("LookAhead", () => {
   });
 });
 
-describe("AttentionSection", () => {
+describe("AttentionSection (T-234 part 2)", () => {
   const thread = {
-    connectionId: "c1", threadKey: "t1", messageId: "m1", fromAddress: "boss@pubk.test", fromName: "Boss", subject: "Board deck", receivedAt: "2026-11-12T12:00:00Z",
+    connectionId: "c1", threadKey: "t1", messageId: "m1", fromAddress: "boss@pubk.test", fromName: "Boss", subject: "Board deck $1,200", receivedAt: "2026-11-12T10:00:00Z",
     sourceUrl: "https://mail.google.com/mail/u/me/#all/t1", labels: ["INBOX"], isImportant: false, lastIsOwner: false, ownerReplied: false, unreadCount: 1, inboundCount: 1,
   };
-  it("shows subject, reason, source (mailbox, sender, date) and a thread link", () => {
-    render(<AttentionSection tz="America/New_York" mail={{ access: true, attention: [{ key: "k", kind: "priority", reason: "Priority sender, unread · 1h", thread }], more: 2, money: [], mailboxOf: { c1: "me@pubk.test" } }} />);
+  const mail = (more = 0) => ({ access: true as const, attention: [{ key: "k", kind: "priority" as const, reason: "Priority sender, unread · 1h", thread }], more, money: [], mailboxOf: { c1: "me@pubk.test" } });
+  const note = { ref: "r1", what: "Deck", why: "Board meets Friday", next: "Send comments" };
+
+  it("shows title (masked), AI why and next, sender, mailbox, age and a status chip", () => {
+    render(<AttentionSection laneId="PKG" now={now} mail={mail()} notes={new Map([["c1:m1", note]])} />);
     const item = screen.getByTestId("attention-item");
-    expect(within(item).getByText("Board deck")).toBeTruthy();
-    expect(within(item).getByText("Priority sender, unread · 1h")).toBeTruthy();
-    expect(within(item).getByText("me@pubk.test · Boss <boss@pubk.test> · Thu, Nov 12, 7:00 AM")).toBeTruthy();
-    expect(within(item).getByRole("link", { name: "Open thread" }).getAttribute("href")).toBe(thread.sourceUrl);
-    expect(screen.getByText("2 more in the Inbox.")).toBeTruthy();
+    expect(within(item).getByText("Board deck [amount]")).toBeTruthy();
+    expect(within(item).getByText("Priority")).toBeTruthy();
+    expect(within(item).getByText("Board meets Friday")).toBeTruthy();
+    expect(within(item).getByText("Send comments")).toBeTruthy();
+    expect(within(item).queryByText("Deck")).toBeNull(); // "what" repeats the title
+    expect(within(item).getByTestId("attention-meta").textContent).toBe("Boss <boss@pubk.test> · to me@pubk.test · 3h ago");
   });
+
+  it("Open goes to the thread in Jarvis, never to a Google page (the old link used the stored provider URL)", () => {
+    render(<AttentionSection laneId="PKG" now={now} mail={mail()} />);
+    const open = screen.getByRole("link", { name: "Open" });
+    expect(open.getAttribute("href")).toBe("/PKG/inbox/m1");
+    expect(open.getAttribute("target")).toBeNull();
+    for (const a of screen.getAllByRole("link")) expect(a.getAttribute("href")).not.toMatch(/google\.com/);
+  });
+
+  it("Reply: with a T-231d draft it goes to that proposal in Approvals; without one, to the thread", () => {
+    const { rerender } = render(<AttentionSection laneId="PKG" now={now} mail={mail()} />);
+    expect(screen.getByTestId("attention-reply").getAttribute("href")).toBe("/PKG/inbox/m1");
+    rerender(<AttentionSection laneId="PKG" now={now} mail={mail()} replies={new Map([["c1:m1", "00000000-0000-4000-8000-0000000000d1"]])} />);
+    expect(screen.getByTestId("attention-reply").getAttribute("href")).toBe("/PKG/approvals#action-00000000-0000-4000-8000-0000000000d1");
+    expect(screen.getByTestId("attention-reply").getAttribute("data-has-draft")).toBe("true");
+  });
+
+  it("a repeated-failures item has Open but no Reply", () => {
+    const m = { ...mail(), attention: [{ key: "failures:ci.test", kind: "repeated_failures" as const, reason: "3 failure alerts from ci.test", thread, count: 3 }] };
+    render(<AttentionSection laneId="PKG" now={now} mail={m} />);
+    expect(screen.queryByTestId("attention-reply")).toBeNull();
+    expect(screen.getByTestId("attention-open")).toBeTruthy();
+  });
+
+  it("links the rest to the Inbox", () => {
+    render(<AttentionSection laneId="PKG" now={now} mail={mail(2)} />);
+    expect(screen.getByRole("link", { name: "Inbox" }).getAttribute("href")).toBe("/PKG/inbox");
+  });
+
   it("says why there is no mail instead of 'nothing'", () => {
-    render(<AttentionSection tz="America/New_York" mail={{ access: false, unavailable: true }} />);
+    render(<AttentionSection laneId="PKG" now={now} mail={{ access: false, unavailable: true }} />);
     expect(screen.getByText("Mail could not be read")).toBeTruthy();
   });
 });

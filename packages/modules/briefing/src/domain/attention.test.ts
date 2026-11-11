@@ -43,6 +43,60 @@ describe("exclusions", () => {
   });
 });
 
+// T-234 part 2: synthetic look-alikes of two real false positives, plus auto-reply, OTP and CI, and the negatives.
+describe("T-234 part 2 exclusions", () => {
+  const orgRules: AttentionRules = { ...rules, exclusions: { ...b.exclusions, org_newsletter_senders: ["weekly@pubk.test"] } };
+  const kept = (over: Partial<ThreadRow>, r = rules) => rankAttention([t(over)], r, now).top.length === 1;
+  it("an org newsletter with List-Unsubscribe (flag from sync) is excluded, even from the lane's own domain", () => {
+    const row = t({ fromAddress: "robert.jones@pubk.test", fromName: "Pub K Weekly", subject: "This week at Pub K", isBulk: true });
+    expect(classify(row, rules).excluded).toBe("bulk");
+    expect(kept({ fromAddress: "robert.jones@pubk.test", subject: "This week at Pub K", isBulk: true })).toBe(false);
+  });
+  it("an org newsletter sender listed in lane_config is excluded even without a flag (older rows)", () => {
+    expect(classify(t({ fromAddress: "weekly@pubk.test", subject: "Weekly update" }), orgRules).excluded).toBe("bulk");
+    expect(kept({ fromAddress: "weekly@pubk.test", subject: "Weekly update" }, orgRules)).toBe(false);
+    expect(kept({ fromAddress: "weekly@pubk.test", subject: "Weekly update" })).toBe(true); // not listed: the default list is empty
+  });
+  it("'Updated invitation: ... @ Wed Nov 12' with a text/calendar part is excluded by flag and by subject", () => {
+    const subject = "Updated invitation: Capture review @ Wed Nov 12, 2026 2pm - 3pm (EST) (robert@pubk.test)";
+    expect(classify(t({ fromAddress: "calendar-notification@google.com", subject, isCalendar: true }), rules).excluded).toBe("calendar");
+    expect(classify(t({ fromAddress: "colleague@pubk.test", subject }), rules).excluded).toBe("calendar"); // no flag: prefix pattern
+    expect(classify(t({ subject: "Canceled event: Standup @ Thu Nov 13" }), rules).excluded).toBe("calendar");
+    expect(classify(t({ subject: "Invitation: Standup @ Thu Nov 13" }), rules).excluded).toBe("calendar");
+  });
+  it("a priority sender cannot bring back a calendar notification, an auto-reply or a code", () => {
+    expect(kept({ fromAddress: "boss@pubk.test", subject: "Invitation: board call", isCalendar: true })).toBe(false);
+    expect(kept({ fromAddress: "boss@pubk.test", subject: "Out of office", isAuto: true })).toBe(false);
+    expect(kept({ fromAddress: "boss@pubk.test", subject: "Capture review" })).toBe(true);
+  });
+  it("auto-replies are excluded by flag and by subject prefix", () => {
+    expect(classify(t({ subject: "Re: Proposal", isAuto: true }), rules).excluded).toBe("auto_reply");
+    expect(classify(t({ subject: "Automatic reply: Proposal" }), rules).excluded).toBe("auto_reply");
+    expect(classify(t({ subject: "Out of Office Autoreply: Proposal" }), rules).excluded).toBe("auto_reply");
+  });
+  it("one-time codes are excluded", () => {
+    expect(classify(t({ fromAddress: "colleague@pubk.test", subject: "Your one-time code is 482913" }), rules).excluded).toBe("otp");
+  });
+  it("CI / bot noise from automated senders is excluded, including a no-reply sender with a CI subject", () => {
+    expect(classify(t({ fromAddress: "noreply@ci.example.test", subject: "[GitHub] Pull request merged: fix typo" }), rules).excluded).toBe("bot_subject");
+    expect(classify(t({ fromAddress: "notifications@vercel.com", subject: "Deployment ready: web-app" }), rules).excluded).toBe("bot");
+    expect(kept({ fromAddress: "noreply@ci.example.test", subject: "Preview deployment ready" })).toBe(false);
+  });
+  it("negatives: a real person from the org's own domain with no bulk headers is kept; a person's pull request question is kept", () => {
+    expect(classify(t({ fromAddress: "robert.jones@pubk.test", subject: "Can you review the capture plan?" }), rules).excluded).toBeNull();
+    expect(kept({ fromAddress: "robert.jones@pubk.test", subject: "Can you review the capture plan?" }, orgRules)).toBe(true);
+    expect(classify(t({ fromAddress: "colleague@pubk.test", subject: "Pull request on the proposal?" }), rules).excluded).toBeNull();
+    expect(classify(t({ fromAddress: "colleague@pubk.test", subject: "Re: Invitation: board call" }), rules).excluded).toBeNull();
+    expect(classify(t({ fromAddress: "colleague@pubk.test", subject: "Your invitation to the gala" }), rules).excluded).toBeNull();
+  });
+  it("security alerts from trusted senders are still never excluded", () => {
+    expect(classify(t({ fromAddress: "no-reply@accounts.google.com", subject: "Security alert: new sign-in", isBulk: true }), rules)).toMatchObject({ excluded: null, security: true });
+  });
+  it("excluded mail does not reach the money list either", () => {
+    expect(moneyThreads([t({ fromAddress: "billing@pubk.test", subject: "Invoice 1042 is attached", isBulk: true })], rules)).toEqual([]);
+  });
+});
+
 describe("matching", () => {
   it("sender patterns are anchored: no fedex.com for x.com, no mary.jenkins for a bot domain", () => {
     expect(senderHas("ship@fedex.com", ["x.com"])).toBe(false);

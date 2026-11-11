@@ -12,7 +12,7 @@ import { createGoogleHarness } from "../testing/google-harness";
 import { delay, http, HttpResponse, useMockServer } from "../testing/msw/index";
 import { createFakeGoogle, GOOGLE_ATTACHMENT_CANARY, GOOGLE_BODY_CANARY, GOOGLE_SNIPPET_CANARY, seedMessage } from "../testing/msw/google/handlers";
 import { assertGoogleHost } from "./guard";
-import { GOOGLE_HOSTS } from "./constants";
+import { GOOGLE_HOSTS, METADATA_HEADERS } from "./constants";
 import { createGoogleApi } from "./api";
 import { createGmailProvider, parseCursor, quoteGmailQuery } from "./mail";
 
@@ -52,7 +52,7 @@ describe("sync requests", () => {
     expect(gets.length).toBe(5);
     for (const r of gets) {
       expect(r.query.get("format")).toBe("metadata");
-      expect(r.query.getAll("metadataHeaders")).toEqual(["From", "To", "Cc", "Subject", "Date", "Content-Type"]);
+      expect(r.query.getAll("metadataHeaders")).toEqual([...METADATA_HEADERS]);
     }
     expect(fake.state.gmailRequests.every((r) => r.method === "GET")).toBe(true);
     expect(fake.state.gmailRequests.some((r) => ["full", "raw"].includes(r.query.get("format") ?? ""))).toBe(false);
@@ -106,7 +106,7 @@ describe("metadata records", () => {
     ]);
     expect(one.received_at).toBe(new Date(seedMessage(1, EXEC).internalDate).toISOString());
     expect(one.source_updated_at).toBe(one.received_at);
-    expect(one.source_url).toBe(`https://mail.google.com/mail/u/${encodeURIComponent(EXEC)}/#all/${seedMessage(1, EXEC).threadId}`);
+    expect(one.source_url).toBe(`https://mail.google.com/mail/?authuser=${encodeURIComponent(EXEC)}#all/${seedMessage(1, EXEC).threadId}`);
     const three = byId.get(seedMessage(3, EXEC).id) as MessageMeta;
     expect(three).toMatchObject({ is_starred: true, has_attachments: true, labels: ["INBOX", "UNREAD", "STARRED", "Label_77"] });
     const four = byId.get(seedMessage(4, EXEC).id) as MessageMeta;
@@ -132,6 +132,33 @@ describe("metadata records", () => {
     expect(got.subject?.length).toBeLessThanOrEqual(998);
     expect(got.from_name?.length).toBeLessThanOrEqual(200);
     expect(got.to_recipients).toEqual([{ address: "ok@fine.example.test" }]);
+  });
+});
+
+describe("header-derived flags (T-234 part 2)", () => {
+  it("stores booleans only: bulk, auto-reply and calendar flags from headers; a plain message has none; no header value is kept", async () => {
+    const { fake, h, conn, account } = setup();
+    const add = (extra: Record<string, string>, contentType?: string) => {
+      const id = fake.addMessage(account);
+      const m = account.messages.get(id);
+      if (m) {
+        m.extraHeaders = extra;
+        if (contentType) m.contentType = contentType;
+      }
+      return id;
+    };
+    const bulk = add({ "List-Unsubscribe": "<https://news.example.test/u/CANARY-UNSUB-TOKEN>" });
+    const auto = add({ "Auto-Submitted": "auto-replied" });
+    const cal = add({ Sender: "Google Calendar <calendar-notification@google.com>" });
+    const ics = add({}, 'text/calendar; method=REQUEST; charset="UTF-8"');
+    const { upserts } = await drain(h, conn, null);
+    const by = (id: string) => upserts.find((u) => u.message_id === id) as MessageMeta;
+    expect(by(bulk)).toMatchObject({ is_bulk: true, is_auto: false, is_calendar: false });
+    expect(by(auto)).toMatchObject({ is_bulk: false, is_auto: true, is_calendar: false });
+    expect(by(cal)).toMatchObject({ is_bulk: false, is_auto: false, is_calendar: true });
+    expect(by(ics)).toMatchObject({ is_calendar: true });
+    expect(by(seedMessage(1, EXEC).id)).toMatchObject({ is_bulk: false, is_auto: false, is_calendar: false });
+    expect(JSON.stringify(upserts)).not.toContain("CANARY-UNSUB-TOKEN");
   });
 });
 

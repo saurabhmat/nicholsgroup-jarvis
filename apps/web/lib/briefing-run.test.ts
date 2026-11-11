@@ -367,3 +367,31 @@ describe("parseSavedBriefing proposal ids", () => {
     expect(v?.content.replies.map((r) => r.proposalId)).toEqual(["00000000-0000-4000-8000-0000000000d1", null]);
   });
 });
+
+// T-234 part 2: excluded mail never reaches the model (no metadata line, no live body read). Synthetic look-alikes of the real
+// false positives (an org newsletter with List-Unsubscribe, an "Updated invitation" with a text/calendar part) plus auto-reply, OTP, CI.
+describe("exclusions reach neither the attention list nor the AI input (T-234 part 2)", () => {
+  const th = (n: number, over: Record<string, unknown>) => ({ connection_id: "c1", thread_key: `t${String(n)}`, message_id: `m${String(n)}`, from_address: "someone@pubk.test", from_name: "Someone", subject: `Subject ${String(n)}`, received_at: "2026-11-11T10:00:00Z", source_url: null, labels: ["INBOX"], last_is_owner: false, owner_replied: false, unread_count: 1, inbound_count: 1, ...over });
+  const rows = [
+    th(1, { from_address: "colleague@pubk.test", from_name: "Colleague", subject: "Capture plan review" }), // a real person from the org's domain, no bulk headers
+    th(2, { from_address: "robert.jones@pubk.test", subject: "This week at Pub K", is_bulk: true }), // org newsletter (List-Unsubscribe)
+    th(3, { from_address: "calendar-notification@google.com", subject: "Updated invitation: Capture review @ Wed Nov 12, 2026 2pm", is_calendar: true }),
+    th(4, { from_address: "away@acme.test", subject: "Re: Proposal", is_auto: true }),
+    th(5, { from_address: "colleague2@pubk.test", subject: "Your one-time code is 482913" }),
+    th(6, { from_address: "noreply@ci.example.test", subject: "[GitHub] Pull request merged" }),
+  ];
+  const cov = { data: [{ stream: "mail", account: "me@pubk.test", connection_id: "c1", provider: "google", status: "active", configured: true, last_sync_at: "2026-11-11T14:59:00Z" }], error: null };
+
+  it("only the real person's thread is in the view, the refs, the model input and the live body reads", async () => {
+    const c = fakeClient({ briefing_coverage: cov, briefing_threads: { data: rows, error: null } });
+    const view = await loadBriefing(c, "PKG", NOW, "America/New_York");
+    expect(view.mail.access && view.mail.attention.map((a) => a.thread.messageId)).toEqual(["m1"]);
+    expect(refsFrom(view).map((r) => r.messageId)).toEqual(["m1"]);
+    const { d, reads, provider } = deps({ client: c, reply: '{"lines": ["ok"]}' });
+    await runBriefing(d, input);
+    expect(reads).toEqual(["m1"]);
+    const sent = JSON.stringify(provider.calls[0]?.messages);
+    for (const gone of ["This week at Pub K", "Updated invitation", "Proposal", "one-time code", "Pull request"]) expect(sent).not.toContain(gone);
+    expect(sent).toContain("Capture plan review");
+  });
+});

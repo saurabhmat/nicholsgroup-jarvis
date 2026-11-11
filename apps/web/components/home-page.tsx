@@ -1,5 +1,5 @@
 // Home (D-20 batch 1, p3 and p6; T-234 part 1 layout, on the T-230 tokens). Three aligned rows:
-//   1. "Needs your attention" (2/3; interim: the AI briefing summary + Run now and the rule-based list, part 2 merges them) |
+//   1. "Needs your attention" (2/3; T-234 part 2: AI summary + Run now + Top 3, top 5 items with Reply/Open, drafts and deadlines folded) |
 //      right column: Today's calendar with "Next 7 days" collapsed below it.
 //   2. KPI strip: five equal compact tiles (Cash book balance, AR > 30 days, P&L MTD, MRR, Paid subscribers).
 //   3. GovCon news (2/3; empty state until part 4) | Projects at a glance (1/3).
@@ -17,7 +17,7 @@ import { composeBriefing, homeFor, type HomeView } from "@/lib/home";
 import { briefingFor, lastFailureReason, latestBriefing, viewerZone } from "@/lib/briefing";
 import { aiSetupFailure } from "@/lib/briefing-setup";
 import { adminHint } from "@nichols/briefing/hints";
-import { AiBriefing, DeadlinesAndPriorities, notesByMessage } from "./home-ai-briefing";
+import { AiBriefing, Deadlines, notesByMessage, repliesByMessage } from "./home-ai-briefing";
 import { ReplyDrafts } from "./home-reply-drafts";
 import { AttentionSection, CalendarSections } from "./home-briefing";
 import { HomeCoverageDot } from "./coverage-dot";
@@ -108,12 +108,20 @@ async function HomeSections({ laneId, now }: { laneId: string; now: Date }) {
       {/* Row 1 */}
       <div data-testid="home-row-attention" className="grid items-start gap-4 lg:grid-cols-3">
         <div data-testid="home-attention-slot" className="flex min-w-0 flex-col gap-4 lg:col-span-2">
-          <PageSection title="Needs your attention" note="Top 5 by rules · metadata only">
+          <PageSection title="Needs your attention" note="Top 5 · metadata only">
             <AiBriefing laneId={laneId} brief={saved} fallbackLines={view.unavailable ? [] : composeBriefing(view, now)} tz={brief.viewerTz} canRun={brief.mail.access} failure={failure} failureHint={failureHint} />
-            <AttentionSection mail={brief.mail} tz={brief.viewerTz} notes={notesByMessage(saved)} />
+            <AttentionSection laneId={laneId} mail={brief.mail} now={now} notes={notesByMessage(saved)} replies={repliesByMessage(saved)} />
+            {saved && saved.status !== "failed" ? (
+              // Folded so the card stays short: reply drafts (with Copy) and deadlines from the briefing.
+              <details data-testid="attention-extras" className="border-t border-border pt-3">
+                <summary className="cursor-pointer text-small font-medium text-primary">Drafts and deadlines</summary>
+                <div className="mt-3 flex flex-col gap-5">
+                  <ReplyDrafts laneId={laneId} brief={saved} tz={brief.viewerTz} />
+                  <Deadlines laneId={laneId} brief={saved} tz={brief.viewerTz} />
+                </div>
+              </details>
+            ) : null}
           </PageSection>
-          <ReplyDrafts laneId={laneId} brief={saved} tz={brief.viewerTz} />
-          <DeadlinesAndPriorities brief={saved} tz={brief.viewerTz} />
         </div>
         <div data-testid="home-calendar-slot" className="flex min-w-0 flex-col gap-4">
           <CalendarSections view={brief} now={now} />

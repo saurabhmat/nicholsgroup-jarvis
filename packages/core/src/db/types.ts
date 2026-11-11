@@ -579,7 +579,7 @@ isOneToOne: false
                            },
 "briefing_threads":
 { Args: { "p_lane": string,"p_since": string }; Returns: {
-              "connection_id": string,"from_address": string,"from_name": string,"inbound_count": number,"is_important": boolean,"labels": (string)[],"last_at": string,"last_is_owner": boolean,"message_id": string,"owner_replied": boolean,"received_at": string,"source_url": string,"subject": string,"thread_key": string,"unread_count": number
+              "connection_id": string,"from_address": string,"from_name": string,"inbound_count": number,"is_auto": boolean,"is_bulk": boolean,"is_calendar": boolean,"is_important": boolean,"labels": (string)[],"last_at": string,"last_is_owner": boolean,"message_id": string,"owner_replied": boolean,"received_at": string,"source_url": string,"subject": string,"thread_key": string,"unread_count": number
             }[]
                            },
 "briefings_purge":
@@ -646,7 +646,7 @@ isOneToOne: false
                            },
 "inbox_message_ref":
 { Args: { "p_lane": string,"p_message_id": string }; Returns: {
-              "cc_recipients": Json,"connection_id": string,"from_address": string,"from_name": string,"has_attachments": boolean,"is_important": boolean,"is_read": boolean,"message_id": string,"provider": string,"received_at": string,"source_url": string,"subject": string,"to_recipients": Json
+              "cc_recipients": Json,"connection_id": string,"from_address": string,"from_name": string,"has_attachments": boolean,"is_important": boolean,"is_read": boolean,"message_id": string,"provider": string,"received_at": string,"source_url": string,"subject": string,"thread_id": string,"to_recipients": Json
             }[]
                            },
 "inbox_messages":
