@@ -1,34 +1,42 @@
 // @vitest-environment jsdom
-// T-231a: the Coverage strip always shows a line and each stream with a fixed reason; Today's calendar shows flags and
+// T-231a: Coverage (now in Settings -> Connections, T-234) shows each stream with a fixed reason; Today's calendar shows flags and
 // Join, never declined events; times are in the viewer's zone with the event's zone added when it differs.
 import { afterEach, describe, expect, it } from "vitest";
 import { cleanup, render, screen, within } from "@testing-library/react";
-import { analyzeDay, notableAhead, parseEvents, toCoverage, parseCoverageRows, coverageLine } from "@nichols/briefing/domain";
-import { AttentionSection, CoverageStrip, LookAhead, MoneyCard, TodayCalendar } from "./home-briefing";
-import type { BriefingView } from "@/lib/briefing";
+import { analyzeDay, notableAhead, parseEvents, toCoverage, parseCoverageRows } from "@nichols/briefing/domain";
+import { AttentionSection, LookAhead, TodayCalendar } from "./home-briefing";
+import { CoverageList } from "./coverage-list";
 
 afterEach(cleanup);
 const now = new Date("2026-11-12T13:00:00Z");
 const owners = new Set(["me@pubk.test"]);
 const internal = new Set(["pubk.test"]);
 
-describe("CoverageStrip", () => {
-  it("lists every stream with its state and reason, and links to Settings", () => {
-    const coverage = toCoverage(
+describe("CoverageList (Settings -> Connections)", () => {
+  it("lists every stream with its last sync, state and fixed reason", () => {
+    const items = toCoverage(
       parseCoverageRows([
         { stream: "mail", account: "me@pubk.test", connection_id: "c", provider: "google", status: "active", configured: true, last_sync_at: "2026-11-12T12:55:00Z" },
+        { stream: "calendar", account: "me@pubk.test", connection_id: "c", provider: "google", status: "reconnect_required", configured: true, last_sync_at: "2026-11-12T08:00:00Z", error_kind: "reconnect_required" },
         { stream: "mail", account: "ceo@pubk.test", connection_id: null, provider: null, status: "not_connected", configured: true, last_sync_at: null },
       ]),
       now,
       120,
     );
-    const view = { viewerTz: "America/New_York", coverage, coverageLine: coverageLine(coverage, true), calendar: { access: false }, config: {}, mailboxes: [] } as unknown as BriefingView;
-    render(<CoverageStrip laneId="PKG" view={view} now={now} />);
-    const items = screen.getAllByTestId("coverage-item");
-    expect(items.map((i) => i.getAttribute("data-state"))).toEqual(["ok", "not_connected"]);
-    expect(within(items[1] as HTMLElement).getByText("Not connected. Connect it in Settings.")).toBeTruthy();
-    expect(screen.getByTestId("coverage-line").textContent).toMatch(/ceo@pubk\.test: not connected/);
-    expect(screen.getByRole("link", { name: "Connections in Settings" }).getAttribute("href")).toBe("/PKG/settings#connections");
+    render(<CoverageList view={{ items, unavailable: false }} tz="America/New_York" now={now} />);
+    const rows = screen.getAllByTestId("coverage-item");
+    expect(rows.map((i) => i.getAttribute("data-state"))).toEqual(["ok", "error", "not_connected"]);
+    expect(within(rows[0] as HTMLElement).getByText("Synced 7:55 AM (5 min ago)")).toBeTruthy();
+    expect(within(rows[1] as HTMLElement).getByText("Access expired. Reconnect in Settings.")).toBeTruthy();
+    expect(within(rows[1] as HTMLElement).getByText("Error")).toBeTruthy();
+    expect(within(rows[2] as HTMLElement).getByText("Never synced")).toBeTruthy();
+    expect(within(rows[2] as HTMLElement).getByText("Not connected. Connect it in Settings.")).toBeTruthy();
+  });
+
+  it("an outage says so instead of an empty list", () => {
+    render(<CoverageList view={{ items: [], unavailable: true }} tz="America/New_York" now={now} />);
+    expect(screen.getByTestId("coverage-unavailable")).toBeTruthy();
+    expect(screen.queryByTestId("coverage-item")).toBeNull();
   });
 });
 
@@ -70,7 +78,7 @@ describe("LookAhead", () => {
   });
 });
 
-describe("AttentionSection and MoneyCard", () => {
+describe("AttentionSection", () => {
   const thread = {
     connectionId: "c1", threadKey: "t1", messageId: "m1", fromAddress: "boss@pubk.test", fromName: "Boss", subject: "Board deck", receivedAt: "2026-11-12T12:00:00Z",
     sourceUrl: "https://mail.google.com/mail/u/me/#all/t1", labels: ["INBOX"], isImportant: false, lastIsOwner: false, ownerReplied: false, unreadCount: 1, inboundCount: 1,
@@ -87,10 +95,5 @@ describe("AttentionSection and MoneyCard", () => {
   it("says why there is no mail instead of 'nothing'", () => {
     render(<AttentionSection tz="America/New_York" mail={{ access: false, unavailable: true }} />);
     expect(screen.getByText("Mail could not be read")).toBeTruthy();
-  });
-  it("Money lists the kind and never an amount", () => {
-    render(<MoneyCard tz="America/New_York" mail={{ access: true, attention: [], more: 0, money: [{ key: "k", kind: "failed_payment", thread: { ...thread, subject: "Payment failed" } }], mailboxOf: {} }} />);
-    expect(screen.getByText("Failed payment")).toBeTruthy();
-    expect(screen.getByText("From mail subjects · no amounts")).toBeTruthy();
   });
 });

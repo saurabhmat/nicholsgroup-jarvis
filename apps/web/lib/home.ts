@@ -175,6 +175,8 @@ export type HomeKpi = {
   label: string;
   bookBalance?: boolean;
   statusText: string;
+  /** True when the source is not connected (or needs reconnecting): the tile offers a Connect link instead of waiting. */
+  connect: boolean;
 };
 
 /**
@@ -192,11 +194,13 @@ export function homeKpis(feeds: HomeView["feeds"]): HomeKpi[] {
       key: "mrr",
       label: "MRR",
       statusText: text(["stripe"], "Stripe", "Waiting for the Stripe sync", "Stripe not connected yet"),
+      connect: !(of("stripe").length > 0 && !broken(["stripe"])),
     },
     {
       key: "subscribers",
       label: "Paid subscribers",
       statusText: text(["ghl", "gohighlevel"], "GoHighLevel", "Waiting for the GoHighLevel sync", "GoHighLevel not connected yet"),
+      connect: !(of("ghl", "gohighlevel").length > 0 && !broken(["ghl", "gohighlevel"])),
     },
   ];
 }

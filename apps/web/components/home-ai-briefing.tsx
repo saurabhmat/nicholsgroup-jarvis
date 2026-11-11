@@ -1,4 +1,4 @@
-// AI briefing on Home (T-231c): Today's briefing (3-5 lines) with "prepared at" and the review window, Deadlines and
+// AI briefing on Home (T-231c; T-234 part 1: no longer its own card, it sits at the top of "Needs your attention"; part 2 merges it): the briefing (3-5 lines) with "prepared at" and the review window, Deadlines and
 // follow-ups, Top 3 priorities, and the what/why/next notes merged into "Needs your attention". All model text is plain
 // text (React escapes it); sources and links come from the stored refs (metadata), never from the model.
 import { Badge, PageSection } from "@nichols/ui";
@@ -10,7 +10,7 @@ import { RunBriefingButton } from "./run-briefing-button";
 
 const STATUS: Record<SavedBriefingView["status"], { label: string; variant: "success" | "outline" | "alert" }> = {
   ready: { label: "Ready", variant: "success" },
-  partial: { label: "Partial: see Coverage", variant: "outline" },
+  partial: { label: "Partial: see Settings → Connections", variant: "outline" },
   failed: { label: "Could not be prepared", variant: "alert" },
 };
 
@@ -18,10 +18,8 @@ const STATUS: Record<SavedBriefingView["status"], { label: string; variant: "suc
 export function AiBriefing({ laneId, brief, fallbackLines, tz, canRun, failure = null, failureHint = null }: { laneId: string; brief: SavedBriefingView | null; fallbackLines: string[]; tz: string; canRun: boolean; failure?: FailureCode | null; failureHint?: string | null }) {
   const lines = brief && brief.status !== "failed" && brief.content.lines.length > 0 ? brief.content.lines : null;
   return (
-    <section aria-label="Today's briefing" className="relative overflow-hidden rounded-card border border-border bg-card p-5 text-card-foreground shadow-card sm:p-6">
-      <span aria-hidden className="absolute inset-x-0 top-0 h-1 bg-gold" />
+    <div data-testid="ai-briefing" className="flex flex-col border-b border-border pb-4">
       <div className="flex flex-wrap items-baseline justify-between gap-2">
-        <h2 className="font-heading text-card-title font-semibold text-foreground">Today&apos;s briefing</h2>
         <div className="flex flex-wrap items-center gap-3">
           {brief ? (
             <span data-testid="briefing-prepared" className="text-small text-muted-foreground">
@@ -58,7 +56,7 @@ export function AiBriefing({ laneId, brief, fallbackLines, tz, canRun, failure =
       ) : (
         <p className="mt-3 text-body text-muted-foreground">Your briefing appears here once this company&apos;s sources are connected.</p>
       )}
-    </section>
+    </div>
   );
 }
 

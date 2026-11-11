@@ -44,7 +44,7 @@ test.beforeEach(() => {
 });
 test.afterAll(cleanup);
 
-test("owner: today's calendar, Coverage and the rule-based attention list", async ({ page }, info) => {
+test("owner: today's calendar, Next 7 days, the KPI strip and the rule-based attention list", async ({ page }, info) => {
   test.skip(info.project.name !== "desktop", "owner persona is the desktop project's member");
   test.setTimeout(150_000);
   // The timed meeting must still be today in New York when the page loads.
@@ -67,7 +67,13 @@ test("owner: today's calendar, Coverage and the rule-based attention list", asyn
   await expect(attention.getByText("Synthetic subject 1")).toBeVisible();
   await expect(attention.getByText("Unread from sender@example.test", { exact: false }).first()).toBeVisible();
   await expect(attention.getByText("Synthetic subject 4")).toHaveCount(0);
-  await expect(page.getByTestId("coverage-line")).toBeVisible();
+  // T-234 part 1: Coverage is no longer on Home (Settings -> Connections); Next 7 days is collapsed until clicked; five KPI tiles.
+  await expect(page.getByTestId("coverage-line")).toHaveCount(0);
+  const next7 = page.getByRole("button", { name: /Next 7 days/ });
+  await expect(next7).toHaveAttribute("aria-expanded", "false");
+  await next7.click();
+  await expect(next7).toHaveAttribute("aria-expanded", "true");
+  await expect(page.getByTestId("kpi-tile")).toHaveCount(5);
 });
 
 test("a finance-only viewer sees no meetings and no mail counts", async ({ page }, info) => {

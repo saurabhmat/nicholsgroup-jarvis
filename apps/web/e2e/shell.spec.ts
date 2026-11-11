@@ -54,9 +54,11 @@ test("a member sees the shell, a switcher with only the allowed lane, and a 404 
 
   await page.goto("/PKG");
   await expect(page.getByRole("heading", { name: "Good morning", level: 1 })).toBeVisible();
-  for (const title of ["Today's briefing", "Needs your attention", "Today's calendar", "Projects at a glance"]) {
+  for (const title of ["Needs your attention", "Today's calendar", "GovCon news", "Projects at a glance"]) {
     await expect(page.getByRole("heading", { name: title, level: 2 })).toBeVisible();
   }
+  await expect(page.getByRole("button", { name: /Next 7 days/ })).toHaveAttribute("aria-expanded", "false"); // T-234: collapsed by default
+  await expect(page.getByTestId("kpi-tile")).toHaveCount(5);
   await expect(page.getByRole("link", { name: "Ask Jarvis" })).toHaveAttribute("href", "/PKG/assistant");
   if (isMobile) {
     const band = page.locator("[data-slot=mobile-header]");

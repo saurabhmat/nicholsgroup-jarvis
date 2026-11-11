@@ -200,11 +200,13 @@ describe("homeKpis", () => {
   it("never shows a figure; each tile says why, from the visible feeds (QuickBooks figures are on their own cards, T-233)", () => {
     const tiles = homeKpis([{ provider: "quickbooks", status: "active" }, { provider: "google", status: "active" }]);
     expect(tiles.map((t) => `${t.label}: ${t.statusText}`)).toEqual(["MRR: Stripe not connected yet", "Paid subscribers: GoHighLevel not connected yet"]);
+    expect(tiles.map((t) => t.connect)).toEqual([true, true]);
   });
 
   it("a broken feed asks for a reconnect; a working one waits for its sync", () => {
     const tiles = homeKpis([{ provider: "quickbooks", status: "reconnect_required" }, { provider: "stripe", status: "active" }, { provider: "ghl", status: "active" }]);
     expect(tiles.map((t) => t.statusText)).toEqual(["Waiting for the Stripe sync", "Waiting for the GoHighLevel sync"]);
+    expect(tiles.map((t) => t.connect)).toEqual([false, false]);
   });
 
   it("a role that cannot see feeds gets a neutral text", () => {
