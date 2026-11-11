@@ -196,6 +196,9 @@ importers:
       '@nichols/ai':
         specifier: workspace:*
         version: link:../../packages/ai
+      '@nichols/approvals':
+        specifier: workspace:*
+        version: link:../../packages/modules/approvals
       '@nichols/brain':
         specifier: workspace:*
         version: link:../../packages/modules/brain
@@ -346,9 +349,15 @@ importers:
 
   packages/modules/approvals:
     dependencies:
+      '@nichols/connectors':
+        specifier: workspace:*
+        version: link:../../connectors
       '@nichols/core':
         specifier: workspace:*
         version: link:../../core
+      zod:
+        specifier: ^4.6.7
+        version: 4.6.7
 
   packages/modules/brain:
     dependencies:

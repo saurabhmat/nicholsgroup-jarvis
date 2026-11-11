@@ -6,7 +6,7 @@ export { quickbooksWriter } from "../quickbooks/index";
 export { QBO_REVOKE_ACTION, type QboApprovedAction } from "../quickbooks/writer";
 export { googleWriter } from "../google/index";
 export { GOOGLE_REVOKE_ACTION, type GoogleApprovedAction } from "../google/writer";
-export { googleEmailWriter } from "../google/index";
+export { googleEmailWriter, loadGoogleWriteConnection } from "../google/index";
 export {
   GMAIL_COMPOSE_FEATURE,
   GOOGLE_EMAIL_ACTIONS,
