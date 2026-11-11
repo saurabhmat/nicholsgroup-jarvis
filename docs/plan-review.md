@@ -1040,3 +1040,37 @@ Logged, not fixed:
 - Code L4: "Skip" on the onboarding intro offer is client state only (it hides the card until the page is reloaded; nothing is stored).
 - Security L4: the model call runs under the HOME lane's `brain_import` policy only; a Work fact for another lane is not checked against that lane's policy (the pasted text is the user's own memory, not that lane's data).
 
+
+### T-231 Home briefing — autonomous run (Nov 11, 2026, branch `agent/T-231`)
+Approved by Saurabh for an unattended run (T-231a–d, T-232, T-233). Defaults the agent took, for Saurabh to confirm:
+- **Viewer time zone** comes from a `tz` cookie set by the browser (zone name only; validated, canonicalised, New York fallback). First visit renders in New York and refreshes once. Event zones are added in brackets when their clock differs. The sender's zone for mail is not available (the index stores no Date-header offset): only event zones are shown.
+- **Coverage per stream:** the stream's own sync cursor time; the connection's last succeeded run only while the stream has no cursor yet (`core.sync_runs` has no stream column). Stale after `lane_config.briefing.coverage_stale_minutes` (default 120). `core.briefing_coverage` is SECURITY DEFINER and shows holders of the comms or calendar view which accounts feed the briefing, their status, error KIND and sync time (a narrow widening of what the connections RLS gives; never tokens or provider text). Decision recorded here.
+- **Home now shows mail subjects and senders** (T-231b) to callers with the comms view at AAL2 — before T-231 it showed counts only. Subjects are shown with money amounts and long digit runs masked (`[amount]`, `[number]`, rule 7).
+- **Attention order** follows the acceptance text: priority senders, waiting on the owner (owner already wrote in the thread, or read and left unanswered), unread from real people, security alerts, then age (older first in a tier). Security alerts count only from `lane_config.briefing.security_senders` domains (a subject alone is sender-controlled). Priority senders skip exclusions except one-time codes. Drafts are ignored.
+- **Pattern matching:** sender patterns anchored (`name@` = local part, `x.com` = domain or subdomain, a word = in the local part); subject patterns whole-word. Defaults are generic mail conventions in the lane_config schema, not company data.
+- **Bot/CI noise** is excluded unless `bot_failure_repeat` (3) failure subjects from one domain arrive in the window: then one item.
+Logged, not fixed (review LOWs):
+- T-231a security L6: Join/Open links accept any https host from invite data (phishing risk from external organisers); show the host or flag unknown meeting hosts later.
+- T-231a code L8 / T-231b L2, L8: SQL limits (200 events, 300 threads) truncate silently.
+- T-231a code L9: Home v1 `home_meetings`/`home_calendar_status` still load for the top briefing sentence (duplicate calendar query; declined events counted there). Replaced when the AI briefing lands (T-231c).
+- T-231b security L1: priority-sender matching trusts the From header (no SPF/DKIM result in the index).
+- T-231b code L10: Money uses only the latest inbound subject; no "more" indicator.
+- Unit-test timeouts under machine load (eslint-plugin config-web, connector reports/sync, brain-wizard axe, brain-import zip-bomb) pass alone; they failed only while three builders ran tests at once.
+
+### T-231c review follow-ups (Nov 11, 2026, branch `agent/T-231`)
+Fixed before done: security H1 (the lane's `llm_allowed_categories` now gates mail metadata, bodies and calendar facts; no model call with neither; fail closed on a policy read error), H2 (no service client reachable from request code: the briefing jobs module takes explicit clients, only the Inngest route creates the job client, "Run now" saves through the definer `core.briefing_save_own`), H3 (every model string is masked for amounts and long digit runs before saving; the model sees masked subjects); code H1/security M3 (sender metadata and calendar titles wrapped as untrusted data); code H3 (a failed attempt never hides the last good briefing; Home says a newer attempt failed; scheduled model failures throw so Inngest retries); security M1, M4, L3, L5; code M4 (grounding matches whole figures, months either order, ISO dates), M5 (an ungrounded reply keeps no text), M6 (attention item with nothing verified dropped; all lines dropped -> partial), M7 (`maxDuration` 90 on the Home page).
+**Decision taken (default, tell Saurabh):** AI text on Home never shows money amounts or long numbers (masked like subjects, rule 7). If Robert wants "amount as written in the email", that is a product decision: add it as a labelled field later.
+Logged, not fixed (MEDIUM and below):
+- Code M8 / rule 6: what/why/next summaries derived from bodies are stored (30 days max, capped by the lane policy). Architecture §317 lists summaries as a permitted derived class; recorded here so the D-19 review covers it.
+- Code M9 (fixed Nov 11 with D-32): the tick runs every 15 minutes and matches `briefing.time` to the minute window plus `briefing.days`. Still open: `now` is taken per invocation (step ids can change if a run crosses midnight); a scheduled run can repeat a morning "Run now". Security L4: on the DST fall-back day a 01:xx time matches twice.
+- Security M2 (partly): the SQL cooldown runs at save time, after the model call, so two parallel "Run now" requests can each make a model call (the second save is refused). A claim-before-run row would close it.
+- Code L12: the Run now button shows to non-owners (they get "Only the owner can prepare the briefing").
+- Code L15 / security L3: `briefings_purge` refuses disabled lanes, so a disabled lane's briefings wait until it is enabled again.
+- Security L1/L2: the scheduled run reads the lane's whole mail index with the job client; equal to the owner's own view today (comms RLS is per lane). If RLS ever narrows per mailbox, filter by owner there.
+- Code test gaps still open: no component test for `AiBriefing` / `DeadlinesAndPriorities`, no test for the server action itself (guards are covered elsewhere).
+
+### Nov 11, 2026 — Saurabh's decisions on T-231c
+- **D-32 applied in code:** `lane_config.briefing.time` default `06:30`, new `briefing.days` default `[1,2,3,4,5]` (0 = Sunday, New York date); `briefing.daily` ticks every 15 minutes (`*/15 * * * *`). `schedule_enabled` stays **false** for PKG until Saurabh has reviewed two manual "Run now" briefings in production; the switch-on SQL is a Needs-human item in `.agent/notes/checkpoint-2026-11-11.md`.
+- **Open product decision (revisit after Robert sees it): money amounts in AI text.** Kept masked for now (rule 7: figures come from SQL; the QuickBooks cards show the real numbers). Options later: keep masked; or show "amount as written in the email" as a separate labelled field, never inside model prose.
+- **Local DB:** reset approved (local only, test data); `pnpm test:db` re-run on a clean reset: 37 files pass; `brief_briefings` at the current version (guard trigger BEFORE INSERT only).
+- **Production SQL:** `supabase/core/bootstrap/manual-migrations/part-9a-T-231a.sql` .. `part-9d-T-233.sql` + `check-part-9.sql` (T-230 needs no SQL). Dry-run on a clone at the part-8 state: order guard, re-run guard and 22/22 checks pass. The migration version `20261111300000` (T-233) is not a real time (hour 30); it sorts correctly and is kept so local and production versions match.

@@ -178,8 +178,8 @@ export type HomeKpi = {
 };
 
 /**
- * The prototype's four Home tiles. No figures until the finance tasks land (T-081 – T-087, D-8): each tile says why,
- * from the feeds the caller can see. Never sample numbers.
+ * The prototype's MRR and Paid subscribers tiles. No figures until the Stripe and GoHighLevel tasks land: each tile says why,
+ * from the feeds the caller can see. Never sample numbers. Cash, AR > 30 and P&L come from QuickBooks (T-233, home-finance.ts).
  */
 export function homeKpis(feeds: HomeView["feeds"]): HomeKpi[] {
   const of = (...p: string[]) => feeds.filter((f) => p.includes(f.provider) && f.status !== "disconnected");
@@ -187,10 +187,7 @@ export function homeKpis(feeds: HomeView["feeds"]): HomeKpi[] {
   const visible = feeds.length > 0;
   const text = (p: string[], name: string, waiting: string, missing: string) =>
     !visible ? "Not available yet" : broken(p) ? `Reconnect ${name} in Settings` : of(...p).length > 0 ? waiting : missing;
-  const qbo = text(["quickbooks"], "QuickBooks", "Waiting for the QuickBooks account mapping", "Connect QuickBooks in Settings");
   return [
-    { key: "cash", label: "Cash", bookBalance: true, statusText: qbo },
-    { key: "ar30", label: "AR > 30 days", statusText: qbo },
     {
       key: "mrr",
       label: "MRR",

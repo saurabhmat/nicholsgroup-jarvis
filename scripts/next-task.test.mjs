@@ -223,7 +223,15 @@ test("code fences are a backlog error", () => {
 });
 
 test("task heading needs a word boundary after the id", () => {
-  assert.deepEqual(parseTasks(doc("### T-001x Fake\n\n")).map(t => t.id), []);
+  assert.deepEqual(parseTasks(doc("### T-001xy Fake\n\n")).map(t => t.id), []);
+  assert.deepEqual(parseTasks(doc("### T-001X Fake\n\n")).map(t => t.id), []);
+  assert.deepEqual(parseTasks(doc("### T-001_ Fake\n\n")).map(t => t.id), []);
+});
+
+test("split task ids carry one lowercase letter (T-231a) and work as deps", () => {
+  const md = doc(task("T-001a", { status: "done" }), task("T-001b", { depends: "T-001a" }));
+  assert.deepEqual(parseTasks(md).map(t => t.id), ["T-001a", "T-001b"]);
+  assert.equal(nextTask(md), "T-001b");
 });
 
 const script = fileURLToPath(new URL("./next-task.mjs", import.meta.url));
@@ -231,7 +239,7 @@ const repoRoot = fileURLToPath(new URL("..", import.meta.url));
 
 test("CLI smoke: real backlog prints nothing or a single task id", () => {
   const out = execFileSync(process.execPath, [script], { cwd: repoRoot, encoding: "utf8" });
-  assert.match(out, /^(T-\d+\n)?$/);
+  assert.match(out, /^(T-\d+[a-z]?\n)?$/);
 });
 
 test("CLI --explain runs on the real backlog", () => {
@@ -258,4 +266,12 @@ test("CLI: missing backlog file exits 1 with a message", () => {
   assert.equal(r.status, 1);
   assert.equal(r.stdout, "");
   assert.match(r.stderr, /next-task: .*does\/not\/exist\.md/);
+});
+
+test("a '- note:' line is allowed once per task and its text is ignored (ids in it are not deps)", () => {
+  const md = doc("### T-001 A\n- status: approved\n- depends: -\n- note: approved Nov 11; refines T-999, needs: H-999\n- acceptance: x\n\n");
+  assert.equal(nextTask(md), "T-001");
+  const twice = doc("### T-001 A\n- status: approved\n- depends: -\n- note: a\n- note: b\n\n");
+  assert.equal(nextTask(twice), undefined);
+  assert.match(evaluate(twice)[0].errors.join(" "), /repeated "note"/);
 });

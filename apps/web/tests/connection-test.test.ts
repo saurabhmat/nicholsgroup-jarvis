@@ -1,10 +1,10 @@
-// T-198: the temporary QuickBooks connection test. The route is guarded by requireRole(owner | admin_technical) at AAL2
-// (other roles 403, other lanes 404), is off unless the lane switched it on, calls one read-only check and returns only a
-// status, a time and Intuit's request id. Mocks only (rule 10).
-import { readFileSync } from "node:fs";
+// T-198 / T-233: the QuickBooks "Check connection" route (the action of the QuickBooks row in Settings -> Connections). The
+// route is guarded by requireRole(owner | admin_technical) at AAL2 (other roles 403, other lanes 404), calls one read-only
+// check and returns only a status, a time and Intuit's request id. Mocks only (rule 10).
+import { existsSync, readFileSync } from "node:fs";
 import { describe, expect, it, vi } from "vitest";
 import { AuthError } from "@nichols/core/auth";
-import { createConnectionCheckHandler, connectionTestEnabled, connectionTestVisible } from "../lib/connection-test";
+import { createConnectionCheckHandler } from "../lib/connection-test";
 import { CHECK_STATUSES, describeCheck, parseCheckResult } from "../lib/connection-check-view";
 
 const ORIGIN = "http://localhost:3000";
@@ -12,7 +12,7 @@ const CLIENT = { marker: "lane-client" } as never;
 const request = (lane = "PKG", headers: Record<string, string> = { origin: ORIGIN }) =>
   new Request(`${ORIGIN}/api/connection-test/qbo/check?lane=${lane}`, { method: "POST", headers });
 
-type Behaviour = { lane?: AuthError | null; role?: AuthError | null; enabled?: boolean };
+type Behaviour = { lane?: AuthError | null; role?: AuthError | null };
 function setup(b: Behaviour = {}) {
   const calls = { requireLane: [] as string[], requireRole: [] as { lane: string; roles: readonly string[] }[], check: [] as string[] };
   const check = vi.fn(async (lane: string) => {
@@ -33,7 +33,6 @@ function setup(b: Behaviour = {}) {
         return { session: {}, laneId: lane, client: CLIENT } as never;
       },
     }),
-    enabled: async () => b.enabled ?? true,
     check,
   });
   return { handler, calls, check };
@@ -87,17 +86,6 @@ describe("check route", () => {
     expect(check).not.toHaveBeenCalled();
   });
 
-  it("is off unless the lane switched it on: 404 and no check", async () => {
-    const { handler, check } = setup({ enabled: false });
-    expect((await handler(request())).status).toBe(404);
-    expect(check).not.toHaveBeenCalled();
-  });
-
-  it("a wrong role is refused (403) even when the switch is off, so the switch reveals nothing to other roles", async () => {
-    const { handler } = setup({ role: new AuthError("forbidden"), enabled: false });
-    expect((await handler(request())).status).toBe(403);
-  });
-
   it("refuses a cross-origin or origin-less request before touching the session", async () => {
     const { handler, calls } = setup();
     expect((await handler(request("PKG", { origin: "https://evil.example.test" }))).status).toBe(403);
@@ -108,7 +96,6 @@ describe("check route", () => {
   it("an outage is 503 with no detail", async () => {
     const handler = createConnectionCheckHandler({
       guards: async () => ({ requireLane: async () => ({ client: CLIENT }) as never, requireRole: async () => ({ client: CLIENT }) as never }),
-      enabled: async () => true,
       check: async () => {
         throw new Error("database password=synthetic");
       },
@@ -124,54 +111,6 @@ describe("check route", () => {
     const src = readFileSync(new URL("../app/api/connection-test/qbo/check/route.ts", import.meta.url), "utf8");
     expect(src).toContain("checkQuickBooksConnection");
     expect(src).not.toMatch(/fetch\(|process\.env|storeToken|getToken|revoke/i);
-  });
-});
-
-describe("the lane switch (lane_config.pilot.connection_test_enabled)", () => {
-  const clientWith = (result: { data: unknown; error: unknown }) => {
-    const seen: [string, unknown][] = [];
-    const q = {
-      select: (c: string) => (seen.push(["select", c]), q),
-      eq: (c: string, v: unknown) => (seen.push([c, v]), q),
-      maybeSingle: async () => result,
-    };
-    return { seen, client: { schema: (s: string) => (seen.push(["schema", s]), { from: (t: string) => (seen.push(["from", t]), q) }) } as never };
-  };
-
-  it("reads the lane's current config with the caller's own client", async () => {
-    const { client, seen } = clientWith({ data: { config: { pilot: { connection_test_enabled: true } } }, error: null });
-    expect(await connectionTestEnabled(client, "PKG")).toBe(true);
-    expect(seen).toEqual([["schema", "core"], ["from", "lane_config_current"], ["select", "config"], ["lane_id", "PKG"]]);
-  });
-
-  it.each([
-    ["missing config", { data: null, error: null }],
-    ["no pilot section", { data: { config: {} }, error: null }],
-    ["false", { data: { config: { pilot: { connection_test_enabled: false } } }, error: null }],
-    ["the string 'true'", { data: { config: { pilot: { connection_test_enabled: "true" } } }, error: null }],
-    ["1", { data: { config: { pilot: { connection_test_enabled: 1 } } }, error: null }],
-    ["a read error", { data: null, error: { message: "boom" } }],
-  ])("is off for %s (fails closed)", async (_name, result) => {
-    expect(await connectionTestEnabled(clientWith(result).client, "PKG")).toBe(false);
-  });
-});
-
-describe("settings visibility", () => {
-  it("shown to an owner or admin_technical when switched on; hidden when off", async () => {
-    const roles: (readonly string[])[] = [];
-    const g = { requireRole: async (_l: string, r: readonly string[]) => (roles.push(r), { client: CLIENT }) as never };
-    expect(await connectionTestVisible(g, "PKG", async () => true)).toBe(true);
-    expect(await connectionTestVisible(g, "PKG", async () => false)).toBe(false);
-    expect([...(roles[0] ?? [])].sort()).toEqual(["admin_technical", "owner"]);
-  });
-
-  it("hidden (not an error) for another role, AAL1 or another lane; an outage is not swallowed", async () => {
-    for (const reason of ["forbidden", "mfa_required", "no_session"] as const) {
-      const g = { requireRole: async () => Promise.reject(new AuthError(reason)) };
-      expect(await connectionTestVisible(g, "PKG", async () => true), reason).toBe(false);
-    }
-    const down = { requireRole: async () => Promise.reject(new Error("outage")) };
-    await expect(connectionTestVisible(down, "PKG", async () => true)).rejects.toThrow("outage");
   });
 });
 
@@ -195,12 +134,12 @@ describe("what the page can render", () => {
 
 describe("the Settings page", () => {
   const read = (p: string) => readFileSync(new URL(p, import.meta.url), "utf8");
-  const files = ["../components/connection-test-section.tsx", "../components/connection-check-button.tsx", "../components/settings-page.tsx", "../lib/connection-check-view.ts"];
+  const files = ["../components/quickbooks-connection-section.tsx", "../components/connection-check-button.tsx", "../components/settings-page.tsx", "../lib/connection-check-view.ts"];
 
   it("calls loadLane (the page-level lane gate) before anything else", () => {
     const src = read("../components/settings-page.tsx");
     expect(src).toMatch(/await loadLane\(/);
-    expect(src.indexOf("loadLane(")).toBeLessThan(src.indexOf("connectionTestVisible("));
+    expect(src.indexOf("loadLane(")).toBeLessThan(src.indexOf("quickbooksSectionFor("));
   });
 
   it("uses design tokens only: no hard-coded colours, no palette utilities, no arbitrary values", () => {
@@ -213,13 +152,15 @@ describe("the Settings page", () => {
     }
   });
 
-  it("is labelled 'Temporary: connection test' with Connect QuickBooks and Check connection, and has no disconnect control", () => {
-    const section = read("../components/connection-test-section.tsx") + read("../components/connection-check-button.tsx");
-    expect(section).toContain("Temporary: connection test");
+  it("the QuickBooks row has Connect / Reconnect QuickBooks and Check connection, and no disconnect control; the temporary section is gone", () => {
+    const section = read("../components/quickbooks-connection-section.tsx") + read("../components/connection-check-button.tsx");
     expect(section).toContain("Connect QuickBooks");
+    expect(section).toContain("Reconnect QuickBooks");
     expect(section).toContain("Check connection");
     expect(section).toMatch(/\/api\/connect\/qbo\/start\?lane=/);
-    expect(section.toLowerCase()).not.toMatch(/disconnect|revoke/);
+    expect(section.toLowerCase()).not.toMatch(/disconnect|revoke|temporary/);
+    expect(existsSync(new URL("../components/connection-test-section.tsx", import.meta.url))).toBe(false);
+    expect(read("../components/settings-page.tsx")).not.toMatch(/Temporary|connectionTest|ConnectionTestSection|developer-tools/);
   });
 
   it("the client component never renders anything but the parsed three fields", () => {

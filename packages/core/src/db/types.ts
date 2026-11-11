@@ -478,6 +478,35 @@ isOneToOne: false
               "body_md": string,"id": string,"is_mine": boolean,"key": string,"title": string,"updated_at": string,"version": number
             }[]
                            },
+"briefing_coverage":
+{ Args: { "p_lane": string }; Returns: {
+              "account": string,"configured": boolean,"connection_id": string,"error_kind": string,"last_sync_at": string,"provider": string,"status": string,"stream": string
+            }[]
+                           },
+"briefing_events":
+{ Args: { "p_from": string,"p_lane": string,"p_to": string }; Returns: {
+              "all_day": boolean,"attendees": Json,"calendar_id": string,"connection_id": string,"end_at": string,"end_date": string,"event_id": string,"location": string,"online_meeting_url": string,"organizer_email": string,"organizer_name": string,"source_url": string,"start_at": string,"start_date": string,"status": string,"timezone": string,"title": string
+            }[]
+                           },
+"briefing_latest":
+{ Args: { "p_lane": string }; Returns: {
+              "content": Json,"coverage": Json,"id": string,"last_failed_at": string,"last_run_at": string,"model": string,"prepared_at": string,"source_refs": Json,"status": string,"trigger": string,"window_from": string,"window_to": string
+            }[]
+                           },
+"briefing_save":
+{ Args: { "p_content": Json,"p_coverage": Json,"p_lane": string,"p_model": string,"p_owner": string,"p_source_refs": Json,"p_status": string,"p_trigger": string,"p_window_from": string,"p_window_to": string }; Returns: string
+                           },
+"briefing_save_own":
+{ Args: { "p_content": Json,"p_coverage": Json,"p_lane": string,"p_model": string,"p_source_refs": Json,"p_status": string,"p_window_from": string,"p_window_to": string }; Returns: string
+                           },
+"briefing_threads":
+{ Args: { "p_lane": string,"p_since": string }; Returns: {
+              "connection_id": string,"from_address": string,"from_name": string,"inbound_count": number,"is_important": boolean,"labels": (string)[],"last_at": string,"last_is_owner": boolean,"message_id": string,"owner_replied": boolean,"received_at": string,"source_url": string,"subject": string,"thread_key": string,"unread_count": number
+            }[]
+                           },
+"briefings_purge":
+{ Args: { "p_keep_days": number,"p_lane": string }; Returns: number
+                           },
 "cal_events_apply_page":
 { Args: { "p_complete"?: boolean,"p_connection_id": string,"p_cursor": string,"p_drop_calendars"?: (string)[],"p_expected_cursor": string,"p_lane": string,"p_removals": Json,"p_upserts": Json }; Returns: Json
                            },
@@ -516,6 +545,16 @@ isOneToOne: false
                            },
 "home_calendar_status":
 { Args: { "p_lane": string }; Returns: string
+                           },
+"home_finance":
+{ Args: { "p_lane": string }; Returns: {
+              "ar_invoices": number,"ar_over_30": number,"ar_reason": string,"ar_unmapped": number,"as_of": string,"business_date": string,"cash_accounts": Json,"cash_as_of": string,"cash_reason": string,"cash_total": number,"cash_unmapped": number,"connection_status": string,"last_sync_at": string,"pnl_as_of": string,"pnl_end": string,"pnl_expenses": number,"pnl_income": number,"pnl_method": string,"pnl_net": number,"pnl_partial": boolean,"pnl_reason": string,"pnl_start": string,"state": string
+            }[]
+                           },
+"home_finance_context":
+{ Args: { "p_lane": string }; Returns: {
+              "allowed": boolean,"bank_accounts": Json,"connected": boolean,"connection_status": string,"last_normalized_at": string,"last_sync_at": string,"mapping_mode": string,"own_entity": string
+            }[]
                            },
 "home_mail_attention":
 { Args: { "p_lane": string,"p_since": string }; Returns: {

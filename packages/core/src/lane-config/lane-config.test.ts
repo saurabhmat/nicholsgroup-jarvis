@@ -210,3 +210,16 @@ describe("action types and shared validators (T-211, D-34)", () => {
     expect(hhmm.safeParse("24:00").success).toBe(false);
   });
 });
+
+describe("briefing schedule (D-32, T-231c)", () => {
+  it("defaults to 06:30 Mon-Fri with the schedule off", () => {
+    const b = laneConfigSchema.shape.briefing.parse({});
+    expect(b.time).toBe("06:30");
+    expect(b.days).toEqual([1, 2, 3, 4, 5]);
+    expect(b.schedule_enabled).toBe(false);
+  });
+  it("accepts custom days and rejects out-of-range, duplicate or empty lists", () => {
+    expect(laneConfigSchema.shape.briefing.parse({ days: [0, 6] }).days).toEqual([0, 6]);
+    for (const days of [[7], [-1], [1, 1], [], [1.5]]) expect(laneConfigSchema.shape.briefing.safeParse({ days }).success).toBe(false);
+  });
+});

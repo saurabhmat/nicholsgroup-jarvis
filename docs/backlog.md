@@ -1026,7 +1026,7 @@ Spec: `docs/specs/brain-and-employees.md`, `docs/specs/brain-interview.md`; seed
 ### T-230 Denser professional layout + navigation speed
 - status: done
 - depends: T-226, T-227, T-220
-- note: approved by Saurabh Nov 9, 2026 from production screenshots (content a ~600px column on a 2000px screen, small text, empty space; slow menu clicks). Branched from agent/T-220: T-228 does not exist yet, so "keep T-228's contrast fixes" means keep the current WCAG AA contrast in light and dark. The session check already uses getClaims() (cookieSessionReader); the repeated work is guards()/session/lane checks per call. Done Nov 9: Part A f499d68..fd853a3, Part B fc8cd03..0ef019c; security + code review fixed (no BLOCKER/HIGH open); `pnpm e2e:brain` 18 passed, 0 failed (the 6 older failures are gone); screenshots to retake: H-044; timing opt-in is a server env var, not a header (needs Saurabh's sign-off, see PR).
+- note: approved by Saurabh Nov 9, 2026 from production screenshots (content a ~600px column on a 2000px screen, small text, empty space; slow menu clicks). Branched from agent/T-220: T-228 does not exist yet, so "keep T-228's contrast fixes" means keep the current WCAG AA contrast in light and dark. The session check already uses getClaims() (cookieSessionReader); the repeated work is guards()/session/lane checks per call. Done Nov 9: Part A f499d68..fd853a3, Part B fc8cd03..0ef019c; security + code review fixed (no BLOCKER/HIGH open); `pnpm e2e:brain` 18 passed, 0 failed (the 6 older failures are gone); screenshots to retake: H-044; timing opt-in is the server env var SERVER_TIMING, off by default, not a header (signed off by Saurabh Nov 9). No production SQL.
 - acceptance: **Part A, speed (first; measure before and after):** (1) Server-Timing (dev; in production only behind an opt-in header, names and durations only, no data) for proxy auth, lane gate, guards and each page's DB calls; report timings for Home, Inbox, Calendar, Settings, Get started and the number of sequential DB/auth round-trips per navigation. (2) One request-scoped cache (React `cache()`) for session/user, guards and lane load; Settings stops calling guards() and loading per section in sequence; independent loads run in parallel (`Promise.all`); proxy and page do not repeat the same DB check where one result can be passed along safely (every security check kept). (3) `loading.tsx` skeletons for every `[laneId]` route (layout stays), Suspense around slow cards so the shell renders first, `next/link` prefetch on the sidebar and tabs. (4) `getClaims()` (local JWT verify) where a full `getUser()` is not required, nothing weakened; confirmed by the security review. (5) Target: click → visible page < 300 ms with a skeleton; content < 1 s on a warm function. **Part B, layout (desktop first; iPhone unchanged or better):** main area max-width 1440px, 32px side padding, left-aligned next to a 240px sidebar with 14px labels; type: body 15px, secondary 13px, card titles 18px serif, page title 32px serif (Source Serif + Inter, navy/cream/gold tokens); cards: 16px gap grid, 20–24px padding, equal heights in a row, 12px radius, subtle shadow, fewer bigger cards. Home: briefing full width; 4 KPI cards in one row; Needs your attention (2/3) + Today's meetings (1/3); "Projects at a glance" a one-line notice while no board is connected. Settings: two columns, left sub-nav (Connections, AI brain, Developer tools) with anchors; Connections a compact table/list (provider, account, status chip, last sync, actions); Composio compact, and with nothing configured a single line "Composio not configured on this server (COMPOSIO_API_KEY not set)"; "Temporary: connection test" under Developer tools, collapsed. Get started: 280px step rail + panel filling the width; intro in two columns (what Jarvis learns / import card); Start and Import as clear primary actions. WCAG AA in light and dark; `docs/design/README.md` updated (widths, type scale, spacing); no horizontal scroll at 390px; 44px targets. **Tests:** unit + e2e:brain specs updated; a Playwright check that a sidebar click shows the skeleton within 300 ms locally; screenshots desktop 1440 and 1920 and iPhone. Full code review; security review for the auth/caching changes. Commit per part.
 
 ### T-227 Explicit per-section completion for the setup interview
@@ -1038,6 +1038,42 @@ Spec: `docs/specs/brain-and-employees.md`, `docs/specs/brain-interview.md`; seed
 ---
 
 # Release B — Dec 7 – 31
+
+### T-231a Home briefing: Coverage strip + today's calendar + 7-day look-ahead (no AI)
+- status: done
+- depends: T-230, T-063, T-064
+- note: approved by Saurabh Nov 11, 2026 (autonomous run; goal: the "Aria daily briefing" email on Home, from PKG native Google mail + calendar). Quality bar: each item = what happened, why it matters, next step, source (mailbox, sender, subject, date) + thread link; a Coverage line always (missing access is never "nothing"); times in the viewer's zone with the sender's/event's zone added when different; exclusions (newsletters, promotions, social, bot/CI noise unless repeated failures, OTPs, bank transaction alerts; statements and due dates kept); never invent decisions, prices, dates or commitments ("Awaiting your input"); T-230 layout and tokens.
+- acceptance: Coverage strip on Home: each configured mailbox and its calendar, last sync, OK / stale / error with a fixed reason (never provider text), link to Settings; a configured mailbox with no connection shows "Not connected". Today's calendar: time, title, attendees, Join, RSVP-pending flag, clashes and back-to-backs flagged, declined and cancelled hidden. 7-day look-ahead with notable events (all-day/holidays, external attendees). Read-only SQL (security invoker, RLS) + pgTAP incl. cross-lane denial; unit tests.
+
+### T-231b Home briefing: Needs your attention (top 5, rules) + Money card (no AI)
+- status: done
+- depends: T-231a
+- note: approved by Saurabh Nov 11, 2026 (autonomous run).
+- acceptance: top 5 by rules: lane_config priority_senders first, then threads waiting on the owner (last message not from the owner, Sent checked), unread from real people, security alerts (new sign-in, critical vulnerability), then age; one-line reason + thread link each. Money card: invoices, bills, renewals, failed payments by patterns in lane_config. Exclusions configurable in lane_config (defaults generic, no company data). Metadata only (no bodies). Tests.
+
+### T-231c Home briefing: AI daily briefing job + "Run now"
+- status: done
+- depends: T-231b, T-212
+- note: approved by Saurabh Nov 11, 2026 (autonomous run). ANTHROPIC_* for the model; tests use the mock provider.
+- acceptance: `briefing.daily` job + "Run now" on Home. Reads the top threads live (bodies never stored, untrusted) and writes Today's briefing (3-5 lines), Needs your attention upgraded with what/why/next, Deadlines and follow-ups, Top 3 priorities with reasons. Uses the owner's Personal Assistant profile from the brain. `brief.briefings` (lane_id, RLS, pgTAP, retention) with coverage + source refs; Home shows "prepared at" and the review window. Schedule built but OFF by default (lane_config flag).
+
+### T-232 Approval Center for email (email.save_draft, email.send)
+- status: approved
+- depends: T-063
+- note: approved by Saurabh Nov 11, 2026 (autonomous run). Minimal Approval Center for email only; refines T-110 – T-116 for these two types (those tasks stay open for monday.com and the full spec).
+- acceptance: proposal -> user edits the draft in the card (to/cc/subject/body) -> approve the exact edited payload (hash) -> execute once -> verify -> audit. Approvals page lists them; Home shows a count. Executor through the Google connector write path, importable only by approvals. Send/draft need a Gmail compose scope the read-only connection lacks: requested only behind lane_policies.write_actions_allowed (OFF for PKG); "Approve & send" / "Save as Gmail draft" disabled with "Sending isn't enabled for this mailbox yet. Reconnect Google with send permission in Settings" until the connection has the scope and the flag is on. "Sends as <address>" on every card (sender is always the connected mailbox). Tests with a fake Gmail transport: edit, approve, send once, no double-send, payload tamper rejected, audit row. H-item with exact steps.
+
+### T-231d Home briefing: reply drafts (AI) -> Approval Center
+- status: approved
+- depends: T-231c, T-232
+- note: approved by Saurabh Nov 11, 2026 (autonomous run).
+- acceptance: up to 3 reply drafts per briefing for threads needing a reply: thread, recipient, status (Ready for your review / Awaiting your input), context note, copy-ready text, Copy button. Shown on Home AND created as email.send proposals in Approvals (T-232), editable there. Never sent without approval. Further replies listed by name.
+
+### T-233 QuickBooks on the Home dashboard
+- status: done
+- depends: T-056, T-230
+- note: approved by Saurabh Nov 11, 2026 (autonomous run, "if time remains"). No live connect (Saurabh does the OAuth click); synthetic fixtures only.
+- acceptance: Home's Cash (book balance), AR > 30 days and a small P&L month-to-date card from fin.* SQL reads (rule 7: figures from SQL, "book balance" label). No QBO connection or no data: clear empty state with "Connect QuickBooks in Settings". The "Temporary: connection test" QuickBooks button becomes a proper Settings -> Connections QuickBooks row (status, realm, last sync, Connect). pgTAP + unit tests.
 
 ## Phase B1 — Rollout and specs
 ### T-174 Lane onboarding playbook + dry run

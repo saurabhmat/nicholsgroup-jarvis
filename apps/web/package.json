@@ -16,6 +16,7 @@
   "dependencies": {
     "@nichols/ai": "workspace:*",
     "@nichols/brain": "workspace:*",
+    "@nichols/briefing": "workspace:*",
     "@nichols/connectors": "workspace:*",
     "@nichols/core": "workspace:*",
     "@nichols/ui": "workspace:*",

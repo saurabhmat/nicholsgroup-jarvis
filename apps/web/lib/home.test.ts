@@ -197,20 +197,14 @@ describe("composeBriefing", () => {
 });
 
 describe("homeKpis", () => {
-  it("never shows a figure; each tile says why, from the visible feeds", () => {
+  it("never shows a figure; each tile says why, from the visible feeds (QuickBooks figures are on their own cards, T-233)", () => {
     const tiles = homeKpis([{ provider: "quickbooks", status: "active" }, { provider: "google", status: "active" }]);
-    expect(tiles.map((t) => `${t.label}: ${t.statusText}`)).toEqual([
-      "Cash: Waiting for the QuickBooks account mapping",
-      "AR > 30 days: Waiting for the QuickBooks account mapping",
-      "MRR: Stripe not connected yet",
-      "Paid subscribers: GoHighLevel not connected yet",
-    ]);
-    expect(tiles[0]?.bookBalance).toBe(true);
+    expect(tiles.map((t) => `${t.label}: ${t.statusText}`)).toEqual(["MRR: Stripe not connected yet", "Paid subscribers: GoHighLevel not connected yet"]);
   });
 
   it("a broken feed asks for a reconnect; a working one waits for its sync", () => {
     const tiles = homeKpis([{ provider: "quickbooks", status: "reconnect_required" }, { provider: "stripe", status: "active" }, { provider: "ghl", status: "active" }]);
-    expect(tiles.map((t) => t.statusText)).toEqual(["Reconnect QuickBooks in Settings", "Reconnect QuickBooks in Settings", "Waiting for the Stripe sync", "Waiting for the GoHighLevel sync"]);
+    expect(tiles.map((t) => t.statusText)).toEqual(["Waiting for the Stripe sync", "Waiting for the GoHighLevel sync"]);
   });
 
   it("a role that cannot see feeds gets a neutral text", () => {
