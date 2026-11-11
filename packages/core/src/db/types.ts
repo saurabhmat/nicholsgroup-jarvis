@@ -558,6 +558,11 @@ isOneToOne: false
               "all_day": boolean,"attendees": Json,"calendar_id": string,"connection_id": string,"end_at": string,"end_date": string,"event_id": string,"location": string,"online_meeting_url": string,"organizer_email": string,"organizer_name": string,"source_url": string,"start_at": string,"start_date": string,"status": string,"timezone": string,"title": string
             }[]
                            },
+"briefing_last_failure":
+{ Args: { "p_lane": string }; Returns: {
+              "prepared_at": string,"reason": string
+            }[]
+                           },
 "briefing_latest":
 { Args: { "p_lane": string }; Returns: {
               "content": Json,"coverage": Json,"id": string,"last_failed_at": string,"last_run_at": string,"model": string,"prepared_at": string,"source_refs": Json,"status": string,"trigger": string,"window_from": string,"window_to": string

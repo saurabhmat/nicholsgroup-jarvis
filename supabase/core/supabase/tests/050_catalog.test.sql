@@ -120,6 +120,7 @@ insert into authenticated_exec_ok values
   ('core.briefing_events', 'Home calendar; invoker, RLS on cal.event_index applies (T-231a)'),
   ('core.briefing_threads', 'Home attention and money threads; invoker, RLS on comms.message_index applies (T-231b)'),
   ('core.briefing_latest', 'Home AI briefing: the caller''s own latest; invoker, RLS on brief.briefings applies (T-231c)'),
+  ('core.briefing_last_failure', 'Home briefing failure reason: the caller''s newest failed attempt; invoker, RLS on brief.briefings applies (T-234)'),
   ('core.briefing_save_own', 'Run now: saves the caller''s own briefing; checks aal2, owner role and the briefing view itself (T-231c)'),
   ('core.home_finance', 'Home finance figures; invoker over fin tables (T-233)'),
   ('core.home_finance_context', 'Home finance context; definer, checks the finance view at aal2 itself (T-233)'),

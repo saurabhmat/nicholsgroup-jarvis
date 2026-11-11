@@ -60,7 +60,8 @@ export const CLIENT_ENV_NAMES = Object.keys(clientEnvShape) as (keyof typeof cli
 
 /** Production (fail-closed) when APP_ENV=production or Vercel says VERCEL_ENV=production. */
 export function isProduction(env: EnvRecord): boolean {
-  return env.APP_ENV === "production" || env.VERCEL_ENV === "production";
+  // Trimmed like every other value (normalizeEnv), so "production\t" can never read as "not production".
+  return env.APP_ENV?.trim() === "production" || env.VERCEL_ENV?.trim() === "production";
 }
 
 /**
@@ -101,10 +102,14 @@ export const serverCoreShape = {
  * Optional everywhere (the feature reports "not configured" when the group is absent). In production a partially set
  * group is an error, so a half-entered key fails the build instead of silently switching the feature off.
  */
+// A model id after trimming (normalize() trims every value centrally). An internal space, a tab or any other
+// character outside the pattern is rejected; the rule text names the variable's problem, never its value.
+const MODEL_ID = /^claude-[a-z0-9-]+$/;
+const modelId = z.string().refine((v) => MODEL_ID.test(v), { message: "invalid model id" }); // refine = a "custom" issue, so the rule text is reported
 export const anthropicShape = {
   ANTHROPIC_API_KEY: z.string().min(1),
-  ANTHROPIC_MODEL_ANALYSIS: z.string().min(1),
-  ANTHROPIC_MODEL_FAST: z.string().min(1),
+  ANTHROPIC_MODEL_ANALYSIS: modelId,
+  ANTHROPIC_MODEL_FAST: modelId,
 };
 export const inngestShape = {
   INNGEST_EVENT_KEY: z.string().min(1),
@@ -334,6 +339,7 @@ export const CONNECTOR_NAMES = Object.keys(connectorSchemaFactories) as Connecto
  */
 export const ENV_RULE_TEXTS: ReadonlySet<string> = new Set([
   "surrounding whitespace",
+  "invalid model id",
   "value looks like a secret and cannot be public",
   "required",
   "invalid combination",
@@ -382,14 +388,21 @@ export function describeEnvError(e: EnvValidationError): string {
   return parts.join("; ");
 }
 
-/** Empty strings count as unset, so a blank `NAME=` line in `.env.local` behaves like an absent variable. */
-function normalize(env: EnvRecord): Record<string, string> {
+/**
+ * The one place values are cleaned (T-234: a trailing tab in ANTHROPIC_MODEL_ANALYSIS broke every AI call). Every value is
+ * trimmed (spaces, tabs, CR/LF), and an empty or whitespace-only value counts as unset, so a blank `NAME=` line behaves
+ * like an absent variable. Exception: NEXT_PUBLIC_* values are inlined into the browser bundle by the build and never
+ * pass through here, so they are left as given and a stray space is reported by name instead (publicValue).
+ */
+export function normalizeEnv(env: EnvRecord): Record<string, string> {
   const out: Record<string, string> = {};
   for (const [key, value] of Object.entries(env)) {
-    if (typeof value === "string" && value.trim() !== "") out[key] = value;
+    if (typeof value !== "string" || value.trim() === "") continue;
+    out[key] = key.startsWith("NEXT_PUBLIC_") ? value : value.trim();
   }
   return out;
 }
+const normalize = normalizeEnv;
 
 /** Parse `env` with `schema`. On failure throws EnvValidationError listing variable NAMES only. */
 export function parseEnv<S extends z.ZodType>(scope: string, schema: S, env: EnvRecord): z.infer<S> {

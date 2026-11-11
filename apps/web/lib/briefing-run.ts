@@ -16,7 +16,7 @@
 import { wrapUntrusted, UNTRUSTED_DATA_RULE, type LLMProvider } from "@nichols/ai";
 import { assemblePrompt, BRAIN_RULES, withUserContext } from "@nichols/ai/prompts";
 import type { LaneId } from "@nichols/core";
-import { BRIEFING_RULES, checkContent, extractJson, maskContent, maskFigures, type BriefContent, type BriefRef } from "@nichols/briefing/domain";
+import { BRIEFING_RULES, checkContent, classifyFailure, extractJson, failureNote, maskContent, maskFigures, type BriefContent, type BriefRef, type FailureCode } from "@nichols/briefing/domain";
 import type { BrainPromptContext } from "@nichols/brain/server";
 import { loadBriefing, type BriefingView } from "./briefing";
 
@@ -107,6 +107,20 @@ export type SavedBriefing = {
   model: string | null;
 };
 
+/** Thrown inside the model step so classifyFailure can tell "the reply was unusable" from a provider failure. */
+export class BriefingOutputError extends Error {
+  constructor() {
+    super("briefing output unusable");
+    this.name = "BriefingOutputError";
+  }
+}
+export class BriefingTimeoutError extends Error {
+  constructor() {
+    super("briefing timed out");
+    this.name = "BriefingTimeoutError";
+  }
+}
+
 export type BriefingPolicy = { email: boolean; calendar: boolean; storeDrafts: boolean };
 
 /** The lane_policies row -> what the briefing may send to the model. Missing or unreadable -> nothing (fail closed). */
@@ -170,7 +184,7 @@ function factsText(view: BriefingView, refs: BriefRef[], now: Date, policy: Brie
 }
 
 /** Runs one briefing and saves it. Returns the saved id and the content. */
-export async function runBriefing(deps: RunDeps, input: { laneId: LaneId; ownerUserId: string; trigger: "manual" | "schedule"; now: Date; viewerTz: string }): Promise<{ id: string; status: SavedBriefing["status"] }> {
+export async function runBriefing(deps: RunDeps, input: { laneId: LaneId; ownerUserId: string; trigger: "manual" | "schedule"; now: Date; viewerTz: string }): Promise<{ id: string; status: SavedBriefing["status"]; reason?: FailureCode }> {
   const { laneId, now } = input;
   const view = await loadBriefing(deps.client, laneId, now, input.viewerTz);
   const { policy } = deps;
@@ -218,8 +232,8 @@ export async function runBriefing(deps: RunDeps, input: { laneId: LaneId; ownerU
   const empty = (extra: string[]): BriefContent => ({ lines: [], attention: [], deadlines: [], priorities: [], replies: [], moreReplies: [], notes: [...notes, ...extra] });
   if (!policy.email && !policy.calendar) {
     // Nothing may go to the model for this lane: no call. Home keeps the rule-based sections.
-    const id = await deps.save(laneId, { ...base, status: "partial", content: empty(["model_not_allowed"]), model: null });
-    return { id, status: "partial" };
+    const id = await deps.save(laneId, { ...base, status: "partial", content: empty(["model_not_allowed", failureNote("model_not_allowed")]), model: null });
+    return { id, status: "partial", reason: "model_not_allowed" };
   }
 
   let content: BriefContent;
@@ -228,15 +242,17 @@ export async function runBriefing(deps: RunDeps, input: { laneId: LaneId; ownerU
     const res = await deps.provider.complete({ laneId, tier: "analysis", system: prompt.system, messages: withUserContext([{ role: "user", content: user }], prompt.userContext), maxTokens: 3000 });
     model = res.model;
     const text = res.content.flatMap((b) => (b.type === "text" ? [b.text] : [])).join("");
-    if (res.status !== "completed") throw new Error(`model ${res.status}`);
+    if (res.status !== "completed") throw new BriefingOutputError();
     const raw = extractJson(text);
-    if (raw === null) throw new Error("model output is not JSON");
+    if (raw === null) throw new BriefingOutputError();
     content = maskContent(checkContent(raw, refs, sourcesFor, allSources, { replies: policy.storeDrafts }));
     if (!policy.storeDrafts) notes.push("reply_drafts_off");
   } catch (e) {
-    console.error("[briefing] model step failed", { laneId, error: e instanceof Error ? e.name : typeof e });
-    const id = await deps.save(laneId, { ...base, status: "failed", content: empty(["model_failed"]), model });
-    return { id, status: "failed" };
+    // Class name and the fixed reason code only: never a provider message, a value or a prompt.
+    const reason = classifyFailure(e);
+    console.error("[briefing] model step failed", { laneId, error: e instanceof Error ? e.name : typeof e, reason });
+    const id = await deps.save(laneId, { ...base, status: "failed", content: empty(["model_failed", failureNote(reason)]), model });
+    return { id, status: "failed", reason };
   }
   content.notes = [...notes, ...content.notes];
   if (policy.storeDrafts) await proposeReplies(deps, laneId, content, refs);
@@ -244,4 +260,68 @@ export async function runBriefing(deps: RunDeps, input: { laneId: LaneId; ownerU
   const status = partial ? "partial" : "ready";
   const id = await deps.save(laneId, { ...base, status, content, model });
   return { id, status };
+}
+
+// ---------------------------------------------------------------- bounded, single-flight run (Run now, T-234 part 0)
+
+/** Default bound for a manual run: under the Home route's maxDuration (90 s) with room to save and refresh. */
+export const RUN_NOW_TIMEOUT_MS = 75_000;
+
+const inFlight = new Set<string>();
+
+/**
+ * Runs one briefing with a time bound and at most one run per lane and owner in this process. A second call while one is
+ * running returns `busy` without calling the model. When the bound passes, the late run can no longer save (its `save` is
+ * cut off), a failed attempt with reason "timeout" is recorded, and the caller gets `reason: "timeout"`. Across processes
+ * the SQL lock and 2-minute cooldown in core.briefing_save_own keep the second concurrent save out ("too_soon").
+ */
+export async function runBriefingBounded(
+  deps: RunDeps,
+  input: Parameters<typeof runBriefing>[1],
+  opts: { timeoutMs?: number } = {},
+): Promise<Awaited<ReturnType<typeof runBriefing>> | { busy: true }> {
+  const key = `${input.laneId}:${input.ownerUserId}`;
+  if (inFlight.has(key)) return { busy: true };
+  inFlight.add(key);
+  let timedOut = false;
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const guarded: RunDeps = {
+    ...deps,
+    save: async (l, r) => {
+      if (timedOut) throw new BriefingTimeoutError();
+      return deps.save(l, r);
+    },
+  };
+  try {
+    const run = runBriefing(guarded, input);
+    run.catch(() => undefined); // a late rejection after the bound is already handled below
+    const limit = new Promise<"timeout">((resolve) => {
+      timer = setTimeout(() => resolve("timeout"), opts.timeoutMs ?? RUN_NOW_TIMEOUT_MS);
+    });
+    const first = await Promise.race([run, limit]);
+    if (first !== "timeout") return first;
+    timedOut = true;
+    console.error("[briefing] run timed out", { laneId: input.laneId, reason: "timeout" });
+    const empty: BriefContent = { lines: [], attention: [], deadlines: [], priorities: [], replies: [], moreReplies: [], notes: ["model_failed", failureNote("timeout")] };
+    try {
+      const to = input.now.toISOString();
+      const id = await deps.save(input.laneId, {
+        ownerUserId: input.ownerUserId,
+        trigger: input.trigger,
+        status: "failed",
+        windowFrom: new Date(input.now.getTime() - 1000).toISOString(),
+        windowTo: to,
+        content: empty,
+        coverage: [],
+        sourceRefs: [],
+        model: null,
+      });
+      return { id, status: "failed", reason: "timeout" };
+    } catch {
+      return { id: "", status: "failed", reason: "timeout" };
+    }
+  } finally {
+    clearTimeout(timer);
+    inFlight.delete(key);
+  }
 }

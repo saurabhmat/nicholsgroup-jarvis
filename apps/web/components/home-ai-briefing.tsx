@@ -3,7 +3,9 @@
 // text (React escapes it); sources and links come from the stored refs (metadata), never from the model.
 import { Badge, PageSection } from "@nichols/ui";
 import { formatDateTimeIn, maskFigures, type AttentionNote, type BriefRef } from "@nichols/briefing/domain";
+import type { FailureCode } from "@nichols/briefing/domain";
 import type { SavedBriefingView } from "@/lib/briefing";
+import { FailureReason } from "./briefing-failure";
 import { RunBriefingButton } from "./run-briefing-button";
 
 const STATUS: Record<SavedBriefingView["status"], { label: string; variant: "success" | "outline" | "alert" }> = {
@@ -12,7 +14,8 @@ const STATUS: Record<SavedBriefingView["status"], { label: string; variant: "suc
   failed: { label: "Could not be prepared", variant: "alert" },
 };
 
-export function AiBriefing({ laneId, brief, fallbackLines, tz, canRun }: { laneId: string; brief: SavedBriefingView | null; fallbackLines: string[]; tz: string; canRun: boolean }) {
+/** `failure`: why the newest attempt (or the AI setup) failed, a fixed code; `isAdmin`: owner or admin_technical (sees the hint). */
+export function AiBriefing({ laneId, brief, fallbackLines, tz, canRun, failure = null, isAdmin = false }: { laneId: string; brief: SavedBriefingView | null; fallbackLines: string[]; tz: string; canRun: boolean; failure?: FailureCode | null; isAdmin?: boolean }) {
   const lines = brief && brief.status !== "failed" && brief.content.lines.length > 0 ? brief.content.lines : null;
   return (
     <section aria-label="Today's briefing" className="relative overflow-hidden rounded-card border border-border bg-card p-5 text-card-foreground shadow-card sm:p-6">
@@ -29,12 +32,17 @@ export function AiBriefing({ laneId, brief, fallbackLines, tz, canRun }: { laneI
             <span className="text-small text-muted-foreground">From your connected sources</span>
           )}
           {brief ? <Badge variant={STATUS[brief.status].variant}>{STATUS[brief.status].label}</Badge> : null}
-          {canRun ? <RunBriefingButton laneId={laneId} /> : null}
+          {canRun ? <RunBriefingButton laneId={laneId} isAdmin={isAdmin} /> : null}
         </div>
       </div>
       {brief && brief.status !== "failed" && brief.lastFailedAt ? (
         <p data-testid="briefing-last-failed" className="mt-2 text-small text-muted-foreground">
           A newer attempt at {formatDateTimeIn(brief.lastFailedAt, tz)} could not be prepared; this is the last good briefing.
+        </p>
+      ) : null}
+      {failure || (brief && (brief.status === "failed" || brief.lastFailedAt)) ? (
+        <p className="mt-2">
+          <FailureReason code={failure} isAdmin={isAdmin} />
         </p>
       ) : null}
       {lines ? (

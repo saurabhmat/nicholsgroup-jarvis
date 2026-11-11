@@ -10,7 +10,8 @@ import { eyebrowDate } from "@/lib/format-date";
 import { guards } from "@/lib/guards";
 import { cookies } from "next/headers";
 import { composeBriefing, homeFor, homeKpis } from "@/lib/home";
-import { briefingFor, latestBriefing, viewerZone } from "@/lib/briefing";
+import { briefingFor, lastFailureReason, latestBriefing, viewerZone } from "@/lib/briefing";
+import { aiSetupFailure } from "@/lib/briefing-setup";
 import { AiBriefing, DeadlinesAndPriorities, notesByMessage } from "./home-ai-briefing";
 import { ReplyDrafts } from "./home-reply-drafts";
 import { AttentionSection, CalendarSections, CoverageStrip, MoneyCard } from "./home-briefing";
@@ -69,11 +70,14 @@ async function HomeSections({ laneId, now }: { laneId: string; now: Date }) {
   const g = await guards();
   // Home v1 counts and the T-231 briefing sections load in parallel. Each shows its own "unavailable" state; neither ever shows an empty day.
   const laneClient = async () => (await g.requireLane(laneId as Parameters<typeof g.requireLane>[0])).client;
-  const [view, brief, saved] = await Promise.all([
+  const [view, brief, saved, isAdmin] = await Promise.all([
     timed("load.home", async () => homeFor(g, laneId, now)),
     timed("load.briefing", async () => briefingFor(await laneClient(), laneId, now, tz)),
     timed("load.briefing_latest", async () => latestBriefing(await laneClient(), laneId)),
+    g.requireRole(laneId as Parameters<typeof g.requireLane>[0], ["owner", "admin_technical"]).then(() => true, () => false),
   ]);
+  // Why there is no AI summary: the AI setup itself (names only), else the stored code of the newest failed attempt.
+  const failure = aiSetupFailure() ?? (saved && (saved.status === "failed" || saved.lastFailedAt) ? await lastFailureReason(await laneClient(), laneId) : null);
   return (
     <>
       <TimezoneCookie current={tzCookie ?? null} />
@@ -83,7 +87,7 @@ async function HomeSections({ laneId, now }: { laneId: string; now: Date }) {
           <AlertDescription>Reload the page in a minute. If it keeps happening, check Settings → Connections.</AlertDescription>
         </Alert>
       ) : null}
-      <AiBriefing laneId={laneId} brief={saved} fallbackLines={view.unavailable ? [] : composeBriefing(view, now)} tz={brief.viewerTz} canRun={brief.mail.access} />
+      <AiBriefing laneId={laneId} brief={saved} fallbackLines={view.unavailable ? [] : composeBriefing(view, now)} tz={brief.viewerTz} canRun={brief.mail.access} failure={failure} isAdmin={isAdmin} />
       <CoverageStrip laneId={laneId} view={brief} now={now} />
       <Suspense fallback={<HomeFinanceFallback />}>
         <HomeFinance laneId={laneId} />

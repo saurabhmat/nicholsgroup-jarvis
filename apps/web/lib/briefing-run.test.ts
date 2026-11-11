@@ -5,7 +5,7 @@ import { describe, expect, it } from "vitest";
 import { createMockProvider, textResult } from "@nichols/ai/testing";
 import { LLMProviderError } from "@nichols/ai/types";
 import type { LaneId } from "@nichols/core";
-import { policyFrom, runBriefing, refsFrom, type RunDeps, type SavedBriefing } from "./briefing-run";
+import { policyFrom, runBriefing, runBriefingBounded, refsFrom, type RunDeps, type SavedBriefing } from "./briefing-run";
 import { loadBriefing, parseSavedBriefing } from "./briefing";
 
 const NOW = new Date("2026-11-11T15:00:00Z");
@@ -96,6 +96,7 @@ describe("runBriefing", () => {
     await expect(runBriefing(d, input)).resolves.toMatchObject({ status: "partial" });
     expect(provider.calls).toHaveLength(0);
     expect(saved[0]?.content.notes).toContain("model_not_allowed");
+    expect(saved[0]?.content.notes).toContain("fail:model_not_allowed");
   });
 
   it("policyFrom fails closed", () => {
@@ -125,17 +126,72 @@ describe("runBriefing", () => {
   });
 
   it("a model error or non-JSON answer saves a failed briefing with codes only", async () => {
-    for (const reply of [new LLMProviderError("rate_limited"), "not json at all"]) {
+    for (const [reply, reason] of [
+      [new LLMProviderError("rate_limited"), "provider_error"],
+      ["not json at all", "output_invalid"],
+      [new LLMProviderError("invalid_request"), "model_setting_invalid"],
+      [new LLMProviderError("unauthorized"), "key_missing"],
+      [new LLMProviderError("timeout"), "timeout"],
+    ] as const) {
       const { d, saved } = deps({ reply });
-      await expect(runBriefing(d, input)).resolves.toEqual({ id: "id-1", status: "failed" });
+      await expect(runBriefing(d, input)).resolves.toEqual({ id: "id-1", status: "failed", reason });
       expect(saved[0]?.content.lines).toEqual([]);
       expect(saved[0]?.content.notes).toContain("model_failed");
+      expect(saved[0]?.content.notes).toContain(`fail:${reason}`); // the code only: no message, no value
+      expect(JSON.stringify(saved[0])).not.toContain("LLM provider error");
     }
   });
 
   it("refsFrom gives nothing without mail access", async () => {
     const v = await loadBriefing(fakeClient({ briefing_coverage: { data: [], error: null } }), "PKG", NOW, "America/New_York");
     expect(refsFrom(v)).toEqual([]);
+  });
+});
+
+describe("runBriefingBounded (Run now: inline, bounded, single-flight)", () => {
+  const slowProvider = (ms: number) => {
+    const inner = createMockProvider([textResult("{}")]);
+    return { ...inner, complete: async (...a: Parameters<typeof inner.complete>) => (await new Promise((r) => setTimeout(r, ms)), inner.complete(...a)) } as typeof inner;
+  };
+
+  it("runs the same code path and saves once", async () => {
+    const { d, saved } = deps({ reply: "{}" });
+    await expect(runBriefingBounded(d, input)).resolves.toMatchObject({ id: "id-1" });
+    expect(saved).toHaveLength(1);
+  });
+
+  it("a second Run now for the same lane and owner while one runs is refused without a model call", async () => {
+    const { d, saved } = deps({ reply: "{}" });
+    d.provider = slowProvider(40);
+    const [a, b] = await Promise.all([runBriefingBounded(d, input), runBriefingBounded(d, input)]);
+    expect([a, b].filter((r) => "busy" in r)).toHaveLength(1);
+    expect(saved).toHaveLength(1);
+    // released afterwards
+    await expect(runBriefingBounded(d, input)).resolves.not.toHaveProperty("busy");
+  });
+
+  it("another owner or lane is not blocked", async () => {
+    const { d } = deps({ reply: "{}" });
+    d.provider = slowProvider(30);
+    const rs = await Promise.all([runBriefingBounded(d, input), runBriefingBounded(d, { ...input, ownerUserId: "00000000-0000-4000-8000-000000000002" })]);
+    expect(rs.some((r) => "busy" in r)).toBe(false);
+  });
+
+  it("after the time bound the run reports timeout, records one failed attempt and the late run cannot save", async () => {
+    const { d, saved } = deps({ reply: "{}" });
+    d.provider = slowProvider(80);
+    const r = await runBriefingBounded(d, input, { timeoutMs: 20 });
+    expect(r).toMatchObject({ status: "failed", reason: "timeout" });
+    await new Promise((res) => setTimeout(res, 150)); // the slow run finishes now
+    expect(saved).toHaveLength(1);
+    expect(saved[0]?.status).toBe("failed");
+    expect(saved[0]?.content.notes).toContain("fail:timeout");
+  });
+
+  it("the guard is released after a failure", async () => {
+    const { d } = deps({ reply: new LLMProviderError("timeout") });
+    await runBriefingBounded(d, input);
+    await expect(runBriefingBounded(d, input)).resolves.not.toHaveProperty("busy");
   });
 });
 
