@@ -4,7 +4,7 @@
 import { prepareEmailWrite, laneMailboxes } from "@nichols/connectors/google";
 import { googleEmailWriter, loadGoogleWriteConnection } from "@nichols/connectors/write";
 import type { LaneId } from "@nichols/core";
-import { getAudit, getLaneClient, getLaneJobClient } from "@nichols/core/lane-router";
+import { getAudit, getLaneJobClient } from "@nichols/core/lane-router";
 import type { CapabilityFacts, ApprovalsDeps, Rpc } from "./types";
 
 const rpcOf = (client: { schema(name: "core"): { rpc: unknown } }): Rpc => {
@@ -49,7 +49,3 @@ export const approvalsDeps: ApprovalsDeps = {
   audit: getAudit(),
 };
 
-/** The signed-in user's own (RLS) rpc for a lane, through the lane router: a lane the user may not open has no client. */
-export async function userRpc(laneId: LaneId, session: Parameters<typeof getLaneClient>[1]): Promise<Rpc> {
-  return rpcOf((await getLaneClient(laneId, session)) as never);
-}

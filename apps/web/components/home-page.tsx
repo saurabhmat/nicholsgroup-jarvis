@@ -9,6 +9,7 @@ import { eyebrowDate } from "@/lib/format-date";
 import { guards } from "@/lib/guards";
 import { composeBriefing, formatDay, formatTime, homeFor, homeKpis, timedLeft, type AttentionItem, type CalendarState, type HomeMeeting } from "@/lib/home";
 import { loadLane } from "@/lib/lane-page";
+import { ApprovalsWaiting } from "./approvals-waiting";
 import { OnboardingBanner } from "./onboarding-entry";
 import { HomeSkeleton } from "./page-skeleton";
 import { onboardingFor } from "@/lib/onboarding-progress";
@@ -36,6 +37,9 @@ export async function HomePage({ params }: { params: Promise<{ laneId: string }>
       {/* The setup banner is phone-only (md:hidden). Its slot has the banner's own height while it loads, so it never pushes the cards down. */}
       <Suspense fallback={<div aria-hidden data-testid="setup-banner-slot" className={`${BANNER_SLOT} md:hidden`} />}>
         <SetupBanner laneId={lane.laneId} />
+      </Suspense>
+      <Suspense fallback={null}>
+        <ApprovalsWaiting laneId={lane.laneId} />
       </Suspense>
       <Suspense fallback={<HomeSkeleton />}>
         <HomeSections laneId={lane.laneId} now={now} />
