@@ -7,7 +7,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { cleanup, render, screen, within } from "@testing-library/react";
 import type { HomeView } from "@/lib/home";
 
-const m = vi.hoisted(() => ({ view: null as unknown, progress: null as unknown }));
+const m = vi.hoisted(() => ({ view: null as unknown, progress: null as unknown, finance: { state: "not_connected", asOf: null, lastSyncAt: null, connectionStatus: null, cash: { reason: null, total: null, asOf: null, accounts: [], unmapped: 0 }, ar: { reason: null, over30: null, invoices: 0, unmapped: 0 }, pnl: { reason: null, income: null, expenses: null, net: null, start: null, end: null, method: null, partial: false, asOf: null } } as unknown }));
 vi.mock("@/lib/lane-page", () => ({ loadLane: async () => ({ laneId: "PKG", name: "Pub K Group", lanes: [] }) }));
 vi.mock("@/lib/guards", () => ({ guards: async () => ({ requireLane: async () => ({ client: {} }) }) }));
 vi.mock("next/headers", () => ({ cookies: async () => ({ get: () => undefined }) }));
@@ -20,6 +20,7 @@ vi.mock("@/lib/timed", () => ({ timed: async <T,>(_n: string, f: () => Promise<T
 vi.mock("@/lib/onboarding-progress", () => ({
   onboardingFor: async () => m.progress,
 }));
+vi.mock("@/lib/home-finance", async (orig) => ({ ...(await orig<typeof import("@/lib/home-finance")>()), homeFinanceFor: async () => m.finance }));
 vi.mock("@/lib/home", async (orig) => ({ ...(await orig<typeof import("@/lib/home")>()), homeFor: async () => m.view }));
 
 import { HomePage } from "./home-page";
@@ -60,7 +61,10 @@ describe("Home layout", () => {
     const kpis = screen.getByTestId("home-kpis");
     expect(kpis.className).toMatch(/grid-cols-2/);
     expect(kpis.className).toMatch(/lg:grid-cols-4/);
-    expect(kpis.querySelectorAll("[data-slot=kpi-card]")).toHaveLength(4);
+    expect(kpis.querySelectorAll("[data-slot=kpi-card]")).toHaveLength(2); // MRR and Paid subscribers; QuickBooks cards are their own section (T-233)
+    const finance = screen.getByTestId("home-finance");
+    expect(finance.querySelectorAll("[data-slot=kpi-card]")).toHaveLength(3);
+    expect(finance.textContent).toContain("Book balance");
 
     const grid = screen.getByTestId("home-main-grid");
     expect(grid.className).toMatch(/lg:grid-cols-3/);
@@ -74,7 +78,7 @@ describe("Home layout", () => {
     expect(screen.getByTestId("coverage-line").textContent).toBe("Coverage: test.");
 
     // order in the page: briefing, KPIs, grid, notice
-    const order = [screen.getByRole("region", { name: "Today's briefing" }), kpis, grid, screen.getByTestId("projects-notice")];
+    const order = [screen.getByRole("region", { name: "Today's briefing" }), finance, kpis, grid, screen.getByTestId("projects-notice")];
     order.forEach((el, i) => {
       const prev = order[i - 1];
       if (prev) expect(prev.compareDocumentPosition(el) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
