@@ -73,6 +73,7 @@ type KeptBlock = { type: "kept_server_block"; raw: unknown };
 type InternalBlock = LLMContentBlock | KeptBlock;
 const CODE_EXEC_TOOLS = new Set(["code_execution", "bash_code_execution", "text_editor_code_execution"]);
 const CODE_EXEC_RESULTS = new Set(["code_execution_tool_result", "bash_code_execution_tool_result", "text_editor_code_execution_tool_result"]);
+const PUBLIC_BLOCK_TYPES: ReadonlySet<string> = new Set(["text", "tool_use", "tool_result", "thinking", "redacted_thinking", "server_tool_use", "web_search_tool_result"]);
 const publicBlocks = (blocks: InternalBlock[]): LLMContentBlock[] => blocks.filter((b): b is LLMContentBlock => b.type !== "kept_server_block");
 
 function toBlock(b: InternalBlock): Anthropic.ContentBlockParam {
@@ -198,6 +199,10 @@ export function buildParams(req: LLMRequest, model: string, resume?: InternalBlo
   } else if (req.serverTools !== undefined && Object.keys(req.serverTools).length > 0) {
     throw new LLMProviderError("invalid_request");
   }
+  // Caller messages may contain only the public block kinds. The internal kept_server_block (raw provider JSON, re-sent
+  // unchanged) is valid ONLY in `resume`, which this file builds itself; a caller that builds messages from stored or
+  // deserialised JSON can never smuggle raw blocks past the tool round-trip and server-block checks (part 4 re-check M1).
+  if (req.messages.some((m) => blocksOf(m).some((b) => !PUBLIC_BLOCK_TYPES.has((b as { type?: unknown }).type as string)))) throw new LLMProviderError("invalid_request");
   // Server-side blocks (and citations) in the messages are only valid for a request that opted in.
   if (!web && (req.messages.some((m) => blocksOf(m).some(isServerBlock)) || resume)) throw new LLMProviderError("invalid_request");
   if (req.messages.some((m) => m.role === "user" && blocksOf(m).some(isServerBlock))) throw new LLMProviderError("invalid_request");
