@@ -3,6 +3,7 @@
 // effort via output_config, no assistant prefill.
 import "server-only";
 import Anthropic from "@anthropic-ai/sdk";
+import { transformJSONSchema } from "@anthropic-ai/sdk/lib/transform-json-schema";
 import { LLMProviderError } from "./types";
 import type {
   LLMCallLog,
@@ -172,6 +173,20 @@ function validateWebSearch(w: LLMWebSearch): void {
   }
 }
 
+/** `{type: ["string","null"]}` -> `{anyOf: [{type: "string"}, {type: "null"}]}` everywhere (Zod 4 emits type arrays for nullable; the SDK's transform keeps them). */
+function typeArraysToAnyOf(node: unknown): unknown {
+  if (Array.isArray(node)) return node.map(typeArraysToAnyOf);
+  if (node === null || typeof node !== "object") return node;
+  const o = node as Record<string, unknown>;
+  const out: Record<string, unknown> = {};
+  for (const [k, v] of Object.entries(o)) out[k] = k === "properties" || k === "$defs" ? Object.fromEntries(Object.entries(v as object).map(([n, c]) => [n, typeArraysToAnyOf(c)])) : typeArraysToAnyOf(v);
+  if (Array.isArray(o.type)) {
+    const { type, ...rest } = out;
+    return { ...rest, anyOf: (type as unknown[]).map((t) => ({ type: t })) };
+  }
+  return out;
+}
+
 /**
  * Pure request builder (exported for tests). Throws invalid_request for combinations the API rejects.
  * `resume` (internal, set only by the provider's pause_turn loop) appends the assistant content of the paused turn after the
@@ -226,8 +241,19 @@ export function buildParams(req: LLMRequest, model: string, resume?: InternalBlo
     }
     if (web) throw new LLMProviderError("invalid_request");
   }
+  // API-safe schema, built the way the SDK's own zodOutputFormat does: no $schema, closed objects, anyOf instead of type arrays.
+  let apiSchema: Record<string, unknown> | undefined;
+  if (out) {
+    try {
+      const rest: Record<string, unknown> = { ...out.schema };
+      delete rest.$schema;
+      apiSchema = typeArraysToAnyOf(transformJSONSchema(rest)) as Record<string, unknown>;
+    } catch {
+      throw new LLMProviderError("invalid_request");
+    }
+  }
   if (req.effort || out) {
-    params.output_config = { ...(req.effort ? { effort: req.effort } : {}), ...(out ? { format: { type: "json_schema" as const, schema: out.schema } } : {}) };
+    params.output_config = { ...(req.effort ? { effort: req.effort } : {}), ...(apiSchema ? { format: { type: "json_schema" as const, schema: apiSchema } } : {}) };
   }
   if (req.tools?.length) {
     params.tools = req.tools.map((t) => ({

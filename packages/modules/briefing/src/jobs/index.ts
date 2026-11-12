@@ -68,6 +68,13 @@ export async function purgeBriefings(client: Rpc, laneId: LaneId, keepDays: numb
   return data;
 }
 
+/** Run-claim retention (T-235; brief.briefing_runs_purge: floor 1 day, by New York day). `client` must be the job client. */
+export async function purgeBriefingRuns(client: Rpc, laneId: LaneId, keepDays: number): Promise<number> {
+  const { data, error } = await client.schema("core").rpc("briefing_runs_purge", { p_lane: laneId, p_keep_days: keepDays });
+  if (error || typeof data !== "number") throw new Error("briefing runs purge failed");
+  return data;
+}
+
 /** News retention (brief.news_purge: floor 1 day, lane cap, never this month's rows). `client` must be the job client. */
 export async function purgeNews(client: Rpc, laneId: LaneId, keepDays: number): Promise<number> {
   const { data, error } = await client.schema("core").rpc("news_purge", { p_lane: laneId, p_keep_days: keepDays });

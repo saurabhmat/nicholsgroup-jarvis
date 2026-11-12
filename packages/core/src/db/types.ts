@@ -562,6 +562,9 @@ isOneToOne: false
 "briefing_claim_regenerate":
 { Args: { "p_lane": string }; Returns: Json
                            },
+"briefing_claim_release":
+{ Args: { "p_claim": string,"p_lane": string }; Returns: boolean
+                           },
 "briefing_claim_schedule":
 { Args: { "p_lane": string,"p_owner": string }; Returns: string
                            },
@@ -589,6 +592,9 @@ isOneToOne: false
 { Args: { "p_lane": string }; Returns: {
               "last_attempt_at": string,"last_regenerate_at": string,"latest_prepared_at": string,"running": boolean,"runs_today": number
             }[]
+                           },
+"briefing_runs_purge":
+{ Args: { "p_keep_days": number,"p_lane": string }; Returns: number
                            },
 "briefing_save":
 { Args: { "p_content": Json,"p_coverage": Json,"p_lane": string,"p_model": string,"p_owner": string,"p_source_refs": Json,"p_status": string,"p_trigger": string,"p_window_from": string,"p_window_to": string }; Returns: string

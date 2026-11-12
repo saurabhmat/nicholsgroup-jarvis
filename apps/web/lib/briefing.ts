@@ -161,7 +161,7 @@ export type SavedBriefingView = {
   refs: BriefRef[];
   /** Newest failed attempt after this briefing (Home says so); null when none. */
   lastFailedAt: string | null;
-  /** Newest attempt of any kind (the Run-now cooldown). */
+  /** Newest attempt of any kind (the owner save cooldown). */
   lastRunAt: string | null;
 };
 

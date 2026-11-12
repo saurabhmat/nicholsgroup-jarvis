@@ -31,7 +31,7 @@ import { listHealthConnectionIds, listRenewConnectionIds, subscriptionRenewJob, 
 import { retentionPurgeJob, retentionRegistry } from "@nichols/connectors/retention";
 import { listQuickbooksConnectionIds, qboReportsJob } from "@nichols/connectors/reports";
 import { qboNormalizeJob } from "@nichols/connectors/normalize";
-import { purgeBriefings, purgeNews } from "@nichols/briefing/jobs";
+import { purgeBriefingRuns, purgeBriefings, purgeNews } from "@nichols/briefing/jobs";
 import { expireStaleActions, reconcileStuckLane } from "@nichols/approvals/wire";
 import { dueOwners, runScheduled } from "@/lib/briefing-schedule";
 import { newsDue, runScheduledNews } from "@/lib/news-schedule";
@@ -47,6 +47,10 @@ for (const declaration of BRAIN_RETENTION) retentionRegistry.declare(declaration
 // the only briefing code that holds it (security review H2).
 if (!retentionRegistry.list().some((t) => t.id === "brief.briefings")) {
   retentionRegistry.register({ id: "brief.briefings", class: "policy", purge: async (laneId, keepDays) => purgeBriefings(await getLaneJobClient(laneId as LaneId), laneId as LaneId, Math.min(keepDays ?? 30, 30)) });
+}
+// brief.briefing_runs (T-235): run claims (metadata only, about 6 rows per lane and day), kept 30 days like the briefings.
+if (!retentionRegistry.list().some((t) => t.id === "brief.briefing_runs")) {
+  retentionRegistry.register({ id: "brief.briefing_runs", class: "policy", purge: async (laneId, keepDays) => purgeBriefingRuns(await getLaneJobClient(laneId as LaneId), laneId as LaneId, Math.min(keepDays ?? 30, 30)) });
 }
 // brief.news_digests (T-234 part 4): kept 30 days by default (the SQL purge never deletes the current month, the spend ledger).
 if (!retentionRegistry.list().some((t) => t.id === "brief.news_digests")) {

@@ -2,10 +2,10 @@
 -- briefing_run_state, plus the claim close in core.briefing_save_own and core.briefing_save.
 -- Covered: lane_id + RLS + grants; auto gates (stale, running, cooldown, daily cap of 6 per lane and New York day); Regenerate once per
 -- 30 minutes inside the same cap; the schedule claim counts toward the cap but is never refused; a lost claim (> 10 min) is closed as
--- failed in a COMMITTED step even when the claim is then refused; the save closes the claim and skips the 2-minute cooldown only
+-- lost (not counted toward the cap) in a COMMITTED step even when the claim is then refused; release of an own claim; schedule claim idempotent per owner and day; retention purge; the save closes the claim and skips the 2-minute cooldown only
 -- while a claim is open; run state; read denial: other lane, AAL1, same-lane non-owner, outsider, anon.
 begin;
-select plan(68);
+select plan(97);
 \ir helpers/lane_rls.psql
 
 update core.lanes set enabled = true where code = 'APK';
@@ -30,8 +30,15 @@ select ok(not has_function_privilege('authenticated', 'brief.briefing_claim(text
 select ok(not has_function_privilege('authenticated', 'brief.briefing_runs_close(text, uuid, text[], text)', 'execute') and has_function_privilege('service_role', 'brief.briefing_runs_close(text, uuid, text[], text)', 'execute'), 'close: service_role only');
 select ok(coalesce((select bool_and(prosecdef and proconfig = array['search_path=""']) from pg_proc where oid in (
   'core.briefing_claim_auto(text)'::regprocedure, 'core.briefing_claim_regenerate(text)'::regprocedure, 'core.briefing_claim_schedule(text, uuid)'::regprocedure,
-  'core.briefing_run_state(text)'::regprocedure, 'brief.briefing_claim(text, uuid, text)'::regprocedure, 'brief.briefing_runs_close(text, uuid, text[], text)'::regprocedure)), false),
-  'every new function is definer with an empty search_path');
+  'core.briefing_run_state(text)'::regprocedure, 'brief.briefing_claim(text, uuid, text)'::regprocedure, 'brief.briefing_runs_close(text, uuid, text[], text)'::regprocedure,
+  'core.briefing_claim_release(text, uuid)'::regprocedure, 'brief.briefing_runs_purge(text, integer)'::regprocedure)), false),
+  'every new definer function has an empty search_path');
+select is((select provolatile::text from pg_proc where oid = 'core.briefing_run_state(text)'::regprocedure), 'v', 'run state is volatile (it reads the clock and is polled)');
+select ok(has_function_privilege('authenticated', 'core.briefing_claim_release(text, uuid)', 'execute') and not has_function_privilege('anon', 'core.briefing_claim_release(text, uuid)', 'execute')
+          and not has_function_privilege('service_role', 'core.briefing_claim_release(text, uuid)', 'execute'), 'release: authenticated only');
+select ok(has_function_privilege('service_role', 'core.briefing_runs_purge(text, integer)', 'execute') and has_function_privilege('service_role', 'brief.briefing_runs_purge(text, integer)', 'execute')
+          and not has_function_privilege('authenticated', 'core.briefing_runs_purge(text, integer)', 'execute') and not has_function_privilege('authenticated', 'brief.briefing_runs_purge(text, integer)', 'execute')
+          and not has_function_privilege('anon', 'core.briefing_runs_purge(text, integer)', 'execute'), 'purge: service_role only');
 
 -- ---------------------------------------------------------------- auto: stale, running, cooldown
 select pg_temp.claims('owner@example.test', 'aal2');
@@ -84,7 +91,7 @@ delete from brief.briefing_runs;
 delete from brief.briefings;
 insert into brief.briefing_runs (lane_id, owner_user_id, kind, started_at, finished_at, status)
 select 'PKG', pg_temp.uid('owner@example.test'), k, now() - interval '3 hours', now() - interval '3 hours', 'done'
-from unnest(array['auto', 'regenerate', 'manual', 'auto', 'schedule']) k;
+from unnest(array['auto', 'regenerate', 'manual', 'auto', 'manual']) k;
 select is((select count(*)::int from brief.briefing_runs where lane_id = 'PKG'), 5, 'five runs today');
 select pg_temp.claims('owner@example.test', 'aal2');
 set local role authenticated;
@@ -102,7 +109,7 @@ reset role;
 set local role service_role;
 select isnt(core.briefing_claim_schedule('PKG', pg_temp.uid('owner@example.test')), null, 'the scheduled claim is made even at the cap');
 reset role;
-select is((select count(*)::int from brief.briefing_runs where lane_id = 'PKG' and kind = 'schedule'), 2, 'recorded (counts toward the cap)');
+select is((select count(*)::int from brief.briefing_runs where lane_id = 'PKG' and kind = 'schedule'), 1, 'recorded (counts toward the cap)');
 -- A run claimed yesterday (New York day) does not count today.
 update brief.briefing_runs set day = day - 1;
 select pg_temp.claims('owner@example.test', 'aal2');
@@ -129,17 +136,72 @@ set local role authenticated;
 select isnt((select core.briefing_claim_regenerate('PKG') ->> 'id'), null, '31 minutes later: claimed');
 reset role;
 
--- ---------------------------------------------------------------- a lost claim is closed in a committed step, even when the claim is then refused
+-- ---------------------------------------------------------------- a lost claim is closed in a committed step, even when the claim is then refused; it is not counted
 delete from brief.briefing_runs;
 insert into brief.briefing_runs (lane_id, owner_user_id, kind, started_at) values ('PKG', pg_temp.uid('owner@example.test'), 'auto', now() - interval '11 minutes');
 insert into brief.briefing_runs (lane_id, owner_user_id, kind, started_at, finished_at, status)
-select 'PKG', pg_temp.uid('owner@example.test'), 'auto', now() - interval '1 hour', now() - interval '1 hour', 'done' from generate_series(1, 5);
+select 'PKG', pg_temp.uid('owner@example.test'), 'schedule', now() - interval '1 hour', now() - interval '1 hour', 'done' from generate_series(1, 6);
 select pg_temp.claims('owner@example.test', 'aal2');
 set local role authenticated;
-select is((select core.briefing_claim_auto('PKG') ->> 'gate'), 'cap_reached', 'refused at the cap (6 today including the lost one)');
+select is((select core.briefing_claim_auto('PKG') ->> 'gate'), 'cap_reached', 'refused at the cap (6 finished runs today)');
 reset role;
-select is((select status from brief.briefing_runs where kind = 'auto' and started_at < now() - interval '10 minutes' and finished_at is not null and status = 'failed' limit 1), 'failed', 'the lost claim was closed as failed by the same call');
+select is((select count(*)::int from brief.briefing_runs where status = 'lost'), 1, 'the lost claim was closed as lost by the same call');
 select is((select count(*)::int from brief.briefing_runs where status = 'running'), 0, 'nothing is left running');
+-- A crashed run does not use up a slot of the daily cap.
+delete from brief.briefing_runs;
+insert into brief.briefing_runs (lane_id, owner_user_id, kind, started_at, finished_at, status)
+select 'PKG', pg_temp.uid('owner@example.test'), 'schedule', now() - interval '1 hour', now() - interval '1 hour', 'done' from generate_series(1, 5);
+insert into brief.briefing_runs (lane_id, owner_user_id, kind, started_at, finished_at, status)
+select 'PKG', pg_temp.uid('owner@example.test'), 'auto', now() - interval '3 hours', now() - interval '3 hours', 'lost' from generate_series(1, 4);
+select pg_temp.claims('owner@example.test', 'aal2');
+set local role authenticated;
+select is((select runs_today from core.briefing_run_state('PKG')), 5, 'lost claims are not counted in the run state');
+select isnt((select core.briefing_claim_auto('PKG') ->> 'id'), null, '5 counted + 4 lost: the sixth run is still allowed');
+reset role;
+
+-- ---------------------------------------------------------------- release of an own open claim (no claim leaks when the app cannot start the run)
+delete from brief.briefing_runs;
+select pg_temp.claims('owner@example.test', 'aal2');
+set local role authenticated;
+create temp table claimed on commit drop as select (core.briefing_claim_auto('PKG') ->> 'id')::uuid as id;
+grant select on claimed to authenticated;
+select is((select count(*)::int from brief.briefing_runs where status = 'running'), 1, 'claimed');
+select ok(core.briefing_claim_release('PKG', (select id from claimed)), 'the owner releases their open claim');
+select is((select status from brief.briefing_runs where id = (select id from claimed)), 'lost', 'closed as lost');
+select ok(not core.briefing_claim_release('PKG', (select id from claimed)), 'releasing again changes nothing');
+select is((select runs_today from core.briefing_run_state('PKG')), 0, 'a released claim does not count toward the cap');
+reset role;
+-- Another owner's claim cannot be released; AAL1, a non-owner and another lane are refused.
+insert into core.memberships (user_id, lane_id, role) values (pg_temp.uid('outsider@example.test'), 'APK', 'owner');
+insert into brief.briefing_runs (lane_id, owner_user_id, kind) values ('APK', pg_temp.uid('outsider@example.test'), 'auto');
+select pg_temp.claims('owner@example.test', 'aal2');
+set local role authenticated;
+select throws_ok($$select core.briefing_claim_release('APK', (select id from brief.briefing_runs limit 1))$$, '42501', 'not allowed', 'release in a lane without a role: refused');
+reset role;
+select pg_temp.claims('owner@example.test', 'aal1');
+set local role authenticated;
+select throws_ok($$select core.briefing_claim_release('PKG', gen_random_uuid())$$, '42501', 'not allowed', 'AAL1: release refused');
+reset role;
+select is((select status from brief.briefing_runs where lane_id = 'APK'), 'running', 'the other lane''s claim is untouched');
+delete from brief.briefing_runs;
+delete from core.memberships where lane_id = 'APK' and user_id = pg_temp.uid('outsider@example.test');
+
+-- ---------------------------------------------------------------- the schedule claim is idempotent per lane + owner + New York day
+delete from brief.briefing_runs;
+set local role service_role;
+select is(core.briefing_claim_schedule('PKG', pg_temp.uid('owner@example.test')), core.briefing_claim_schedule('PKG', pg_temp.uid('owner@example.test')), 'a retry reuses the open schedule claim');
+reset role;
+select is((select count(*)::int from brief.briefing_runs where kind = 'schedule'), 1, 'one row after two calls');
+update brief.briefing_runs set status = 'failed', finished_at = now();
+set local role service_role;
+select is(core.briefing_claim_schedule('PKG', pg_temp.uid('owner@example.test')), (select id from brief.briefing_runs where kind = 'schedule'), 'a retry after a finished (failed) run reuses it too');
+reset role;
+select is((select count(*)::int from brief.briefing_runs where kind = 'schedule'), 1, 'still one row');
+update brief.briefing_runs set day = day - 1;
+set local role service_role;
+select isnt(core.briefing_claim_schedule('PKG', pg_temp.uid('owner@example.test')), (select id from brief.briefing_runs), 'the next New York day claims anew');
+reset role;
+select is((select count(*)::int from brief.briefing_runs where kind = 'schedule'), 2, 'two rows (two days)');
 
 -- ---------------------------------------------------------------- the job's save closes a scheduled claim
 delete from brief.briefing_runs;
@@ -181,6 +243,49 @@ select throws_ok($$select core.briefing_claim_regenerate('APK')$$, '42501', 'not
 select is((select count(*)::int from core.briefing_run_state('APK')), 0, 'other lane: no run state');
 select is((select count(*)::int from brief.briefing_runs where lane_id = 'APK'), 0, 'other lane: reads nothing');
 reset role;
+-- A REAL APK row (inserted as superuser, owned by an APK owner): the PKG owner at AAL2 reads 0 of it, the APK owner reads their own.
+insert into core.memberships (user_id, lane_id, role) values (pg_temp.uid('outsider@example.test'), 'APK', 'owner');
+insert into brief.briefing_runs (lane_id, owner_user_id, kind) values ('APK', pg_temp.uid('outsider@example.test'), 'auto');
+select pg_temp.claims('owner@example.test', 'aal2');
+set local role authenticated;
+select is((select count(*)::int from brief.briefing_runs where lane_id = 'APK'), 0, 'cross-lane: the PKG owner (AAL2) cannot read an APK run row');
+select is((select count(*)::int from brief.briefing_runs), 1, 'the PKG owner still reads their own PKG row only');
+reset role;
+select pg_temp.claims('outsider@example.test', 'aal2');
+set local role authenticated;
+select is((select count(*)::int from brief.briefing_runs where lane_id = 'APK'), 1, 'the APK owner reads their own APK row');
+select is((select count(*)::int from brief.briefing_runs where lane_id = 'PKG'), 0, 'and no PKG row');
+reset role;
+delete from brief.briefing_runs where lane_id = 'APK';
+delete from core.memberships where lane_id = 'APK' and user_id = pg_temp.uid('outsider@example.test');
+-- Another owner's open claim does not let this owner skip the 2-minute save cooldown (too_soon).
+update core.memberships set role = 'owner' where lane_id = 'PKG' and user_id = pg_temp.uid('finance-operator@example.test');
+delete from brief.briefing_runs;
+delete from brief.briefings;
+insert into brief.briefing_runs (lane_id, owner_user_id, kind) values ('PKG', pg_temp.uid('finance-operator@example.test'), 'auto');
+select pg_temp.claims('owner@example.test', 'aal2');
+insert into brief.briefings (lane_id, owner_user_id, trigger, status, window_from, window_to, content, coverage, source_refs, model, prepared_at)
+values ('PKG', pg_temp.uid('owner@example.test'), 'manual', 'ready', now() - interval '1 day', now(), '{}', '[]', '[]', 'mock', now() - interval '1 minute');
+select pg_temp.claims('owner@example.test', 'aal2');
+set local role authenticated;
+select throws_ok($$select core.briefing_save_own('PKG', 'ready', now() - interval '1 day', now(), '{}', '[]', '[]', 'mock')$$, 'P0001', 'too_soon', 'owner B''s open claim does not skip owner A''s cooldown');
+reset role;
+select is((select status from brief.briefing_runs where owner_user_id = pg_temp.uid('finance-operator@example.test')), 'running', 'and does not close B''s claim');
+update core.memberships set role = 'finance_operator' where lane_id = 'PKG' and user_id = pg_temp.uid('finance-operator@example.test');
+delete from brief.briefing_runs;
+delete from brief.briefings;
+
+-- ---------------------------------------------------------------- retention purge
+insert into brief.briefing_runs (lane_id, owner_user_id, kind, day, started_at, finished_at, status)
+select 'PKG', pg_temp.uid('owner@example.test'), 'auto', (now() at time zone 'America/New_York')::date - d, now() - make_interval(days => d), now() - make_interval(days => d), 'done'
+from unnest(array[0, 5, 29, 31, 40]) d;
+set local role service_role;
+select throws_ok($$select core.briefing_runs_purge('PKG', 0)$$, '22023', 'keep at least 1 day of briefing runs', 'purge: floor of 1 day');
+select throws_ok($$select core.briefing_runs_purge('ZZZ', 30)$$, '22023', 'lane is not enabled', 'purge: unknown lane refused');
+select is(core.briefing_runs_purge('PKG', 30), 2, 'purge: keeps 30 days, deletes the two older ones');
+reset role;
+select is((select count(*)::int from brief.briefing_runs), 3, 'three recent runs remain');
+delete from brief.briefing_runs;
 
 select pg_temp.claims('outsider@example.test', 'aal2');
 set local role authenticated;

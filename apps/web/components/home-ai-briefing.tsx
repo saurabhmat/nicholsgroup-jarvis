@@ -19,6 +19,15 @@ const STATUS: Record<SavedBriefingView["status"], { label: string; variant: "suc
   failed: { label: "Could not be prepared", variant: "alert" },
 };
 
+/** "EST" / "PST" for the zone at that moment; the zone name when the runtime has no short name. */
+function zoneAbbr(tz: string, iso: string): string {
+  try {
+    return new Intl.DateTimeFormat("en-US", { timeZone: tz, timeZoneName: "short" }).formatToParts(new Date(iso)).find((p) => p.type === "timeZoneName")?.value ?? tz;
+  } catch {
+    return tz;
+  }
+}
+
 /** The summary is the first two lines of the briefing (1-2 sentences); the rest sits behind "More from the briefing". */
 const SUMMARY_LINES = 2;
 
@@ -57,7 +66,7 @@ export function AiBriefing({ brief, fallbackLines, tz, controls = null, now = ne
       )}
       <div className="flex flex-wrap items-center gap-x-3 gap-y-2">
         {brief ? (
-          <span data-testid="briefing-prepared" className="text-small text-muted-foreground" title={brief.status === "failed" ? undefined : `Mail reviewed ${formatDateTimeIn(brief.windowFrom, tz)} – ${formatDateTimeIn(brief.windowTo, tz)}`}>
+          <span data-testid="briefing-prepared" className="text-small text-muted-foreground" title={[brief.status === "failed" ? null : `Mail reviewed ${formatDateTimeIn(brief.windowFrom, tz)} – ${formatDateTimeIn(brief.windowTo, tz)}`, `Times in ${zoneAbbr(tz, brief.preparedAt)}`].filter(Boolean).join(" · ")}>
             {brief.status === "failed" ? "Last attempt" : "Summary at"} {brief.status === "failed" ? formatDateTimeIn(brief.preparedAt, tz) : newsTime(brief.preparedAt, tz, now)}
           </span>
         ) : (

@@ -6,15 +6,16 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { cleanup, render, screen, within } from "@testing-library/react";
 import type { HomeView } from "@/lib/home";
 
-const m = vi.hoisted(() => ({ coverage: { items: [], unavailable: false } as unknown, view: null as unknown, progress: null as unknown, finance: { state: "not_connected", asOf: null, lastSyncAt: null, connectionStatus: null, cash: { reason: null, total: null, asOf: null, accounts: [], unmapped: 0 }, ar: { reason: null, over30: null, invoices: 0, unmapped: 0 }, pnl: { reason: null, income: null, expenses: null, net: null, start: null, end: null, method: null, partial: false, asOf: null } } as unknown }));
+const m = vi.hoisted(() => ({ owner: false, mail: { access: false } as { access: boolean; attention?: unknown[]; more?: number; money?: unknown[]; mailboxOf?: Record<string, string> }, coverage: { items: [], unavailable: false } as unknown, view: null as unknown, progress: null as unknown, finance: { state: "not_connected", asOf: null, lastSyncAt: null, connectionStatus: null, cash: { reason: null, total: null, asOf: null, accounts: [], unmapped: 0 }, ar: { reason: null, over30: null, invoices: 0, unmapped: 0 }, pnl: { reason: null, income: null, expenses: null, net: null, start: null, end: null, method: null, partial: false, asOf: null } } as unknown }));
 vi.mock("@/lib/lane-page", () => ({ loadLane: async () => ({ laneId: "PKG", name: "Pub K Group", lanes: [], userId: "u1" }) }));
-vi.mock("@/lib/guards", () => ({ guards: async () => ({ requireLane: async () => ({ client: {}, session: { userId: "u1" } }), requireRole: async () => { throw new Error("not admin"); } }) }));
+vi.mock("@/lib/guards", () => ({ guards: async () => ({ requireLane: async () => ({ client: {}, session: { userId: "u1" } }), requireRole: async (_l: string, roles: string[]) => { if (m.owner && roles.includes("owner")) return { client: {}, session: { userId: "u1" } }; throw new Error("not admin"); } }) }));
+vi.mock("@/app/[laneId]/briefing-actions", () => ({ ensureFreshBriefing: async () => ({ started: false, gate: "not_stale" }), regenerateBriefing: async () => ({ started: false, gate: "not_stale" }), briefingRunState: async () => null }));
 vi.mock("@/lib/briefing-setup", () => ({ aiSetupFailure: () => null }));
 vi.mock("next/headers", () => ({ cookies: async () => ({ get: () => undefined }) }));
 vi.mock("next/navigation", () => ({ useRouter: () => ({ refresh: () => undefined }) }));
 vi.mock("@/lib/briefing", async (orig) => ({
   ...(await orig<typeof import("@/lib/briefing")>()),
-  briefingFor: async () => ({ viewerTz: "America/New_York", coverage: [], coverageLine: "Coverage: test.", calendar: { access: false }, mail: { access: false }, config: {}, mailboxes: [] }),
+  briefingFor: async () => ({ viewerTz: "America/New_York", coverage: [], coverageLine: "Coverage: test.", calendar: { access: false }, mail: m.mail.access ? { access: true, attention: [], more: 0, money: [], mailboxOf: {} } : { access: false }, config: {}, mailboxes: [] }),
 }));
 vi.mock("@/lib/coverage", async (orig) => ({ ...(await orig<typeof import("@/lib/coverage")>()), coverageFor: async () => m.coverage }));
 vi.mock("@/lib/timed", () => ({ timed: async <T,>(_n: string, f: () => Promise<T>) => f() }));
@@ -67,6 +68,8 @@ afterEach(() => {
   cleanup();
   m.finance = defaultFinance;
   m.progress = null;
+  m.owner = false;
+  m.mail = { access: false };
   m.coverage = { items: [], unavailable: false };
 });
 
@@ -180,5 +183,24 @@ describe("Home layout (T-234 part 1)", () => {
     const root = screen.getByTestId("card-skeleton");
     expect(root.querySelector(".lg\\:grid-cols-5")?.children).toHaveLength(5);
     expect(root.querySelectorAll(".lg\\:grid-cols-3")).toHaveLength(2);
+  });
+});
+
+describe("the automatic summary controls (T-235 part 1)", () => {
+  it("shown to the owner who has mail access; hidden without mail access (no auto-run without sources) and for a non-owner", async () => {
+    m.view = view();
+    m.owner = true;
+    m.mail = { access: true };
+    await draw();
+    expect(screen.getByTestId("briefing-menu-button")).toBeTruthy();
+    cleanup();
+    m.mail = { access: false };
+    await draw();
+    expect(screen.queryByTestId("briefing-menu-button")).toBeNull();
+    cleanup();
+    m.owner = false;
+    m.mail = { access: true };
+    await draw();
+    expect(screen.queryByTestId("briefing-menu-button")).toBeNull();
   });
 });

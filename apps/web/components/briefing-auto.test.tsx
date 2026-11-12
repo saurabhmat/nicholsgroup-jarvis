@@ -33,6 +33,7 @@ beforeEach(() => {
   act_.regen.mockReset().mockResolvedValue({ started: true });
   act_.state.mockReset().mockResolvedValue({ ...idle, running: true });
   resetRefreshGate();
+  window.sessionStorage.clear();
 });
 afterEach(() => {
   cleanup();
@@ -47,6 +48,43 @@ describe("the automatic trigger", () => {
     expect(act_.ensure).toHaveBeenCalledWith("PKG");
     expect(screen.getByTestId("briefing-updating").textContent).toContain("Updating summary…");
     expect(screen.getByRole("status").getAttribute("aria-live")).toBe("polite");
+  });
+
+  it("the status live region is mounted from the start (empty), only its text changes", async () => {
+    draw({ preparedAt: FRESH });
+    const region = screen.getByRole("status");
+    expect(region.textContent).toBe("");
+    act_.regen.mockResolvedValueOnce({ started: true });
+    fireEvent.click(screen.getByTestId("briefing-menu-button"));
+    fireEvent.click(screen.getByTestId("briefing-regenerate"));
+    await advance(0);
+    expect(screen.getByRole("status")).toBe(region); // the same node
+    expect(region.textContent).toContain("Updating summary…");
+  });
+
+  it("a REMOUNT in the same tab within 10 minutes does not call the action again; after 10 minutes it does", async () => {
+    act_.ensure.mockResolvedValue({ started: false, gate: "cooldown" });
+    draw();
+    await advance(0);
+    cleanup();
+    draw();
+    await advance(0);
+    expect(act_.ensure).toHaveBeenCalledTimes(1);
+    cleanup();
+    vi.setSystemTime(new Date(T0.getTime() + 10 * 60_000 + 1));
+    draw();
+    await advance(0);
+    expect(act_.ensure).toHaveBeenCalledTimes(2);
+  });
+
+  it("another lane has its own guard", async () => {
+    act_.ensure.mockResolvedValue({ started: false, gate: "cooldown" });
+    draw();
+    await advance(0);
+    cleanup();
+    render(<BriefingAuto laneId="APK" preparedAt={OLD} initial={idle} tz="America/New_York" />);
+    await advance(0);
+    expect(act_.ensure).toHaveBeenCalledTimes(2);
   });
 
   it("does not fire on a re-render or when the page refreshes with new props (router.refresh keeps the component mounted)", async () => {
@@ -139,57 +177,102 @@ describe("polling", () => {
   });
 });
 
-describe("the ⋯ menu", () => {
+describe("the ⋯ disclosure", () => {
   const openMenu = async () => {
     fireEvent.click(screen.getByTestId("briefing-menu-button"));
     await advance(0);
   };
+  const panel = () => screen.getByTestId("briefing-menu");
+  const item = () => screen.getByRole("button", { name: /Regenerate/ });
 
-  it("is an accessible menu button; Escape closes it", async () => {
+  it("is a disclosure button (aria-expanded, aria-controls), not a menu; the panel is always rendered and hidden when closed", async () => {
     draw({ preparedAt: FRESH });
     const btn = screen.getByRole("button", { name: "Summary options" });
-    expect(btn.getAttribute("aria-haspopup")).toBe("menu");
+    expect(btn.getAttribute("aria-haspopup")).toBeNull();
     expect(btn.getAttribute("aria-expanded")).toBe("false");
+    expect(btn.getAttribute("aria-controls")).toBe(panel().id);
+    expect(panel().hidden).toBe(true);
+    expect(screen.queryByRole("menu")).toBeNull();
     await openMenu();
     expect(btn.getAttribute("aria-expanded")).toBe("true");
-    expect(screen.getByRole("menuitem", { name: /Regenerate/ })).toBeTruthy();
-    fireEvent.keyDown(document, { key: "Escape" });
-    expect(screen.queryByRole("menu")).toBeNull();
+    expect(panel().hidden).toBe(false);
+    expect(screen.queryByRole("menuitem")).toBeNull();
+    expect(item()).toBeTruthy();
   });
 
-  it("Regenerate is enabled when the last one was over 30 minutes ago; clicking starts a run and polls", async () => {
+  it("the trigger is 44 px on phones", () => {
+    draw({ preparedAt: FRESH });
+    expect(screen.getByTestId("briefing-menu-button").className).toContain("size-11");
+  });
+
+  it("Escape closes it and focus returns to the trigger", async () => {
+    draw({ preparedAt: FRESH });
+    const btn = screen.getByTestId("briefing-menu-button");
+    await openMenu();
+    item().focus();
+    fireEvent.keyDown(document, { key: "Escape" });
+    expect(btn.getAttribute("aria-expanded")).toBe("false");
+    expect(panel().hidden).toBe(true);
+    expect(document.activeElement).toBe(btn);
+  });
+
+  it("the trigger toggles it with a click (Enter and Space click a button)", async () => {
+    draw({ preparedAt: FRESH });
+    const btn = screen.getByTestId("briefing-menu-button");
+    await openMenu();
+    expect(btn.getAttribute("aria-expanded")).toBe("true");
+    fireEvent.click(btn);
+    expect(btn.getAttribute("aria-expanded")).toBe("false");
+  });
+
+  it("focus moving out of the control closes it; focus moving inside does not", async () => {
+    draw({ preparedAt: FRESH });
+    const btn = screen.getByTestId("briefing-menu-button");
+    await openMenu();
+    fireEvent.blur(btn, { relatedTarget: item() });
+    expect(btn.getAttribute("aria-expanded")).toBe("true");
+    fireEvent.blur(item(), { relatedTarget: document.body });
+    expect(btn.getAttribute("aria-expanded")).toBe("false");
+  });
+
+  it("Regenerate is enabled when the last one was over 30 minutes ago; clicking starts a run, closes the panel, returns focus and polls", async () => {
     draw({ preparedAt: FRESH, initial: { ...idle, lastRegenerateAt: "2026-11-12T14:00:00.000Z" } });
     await openMenu();
-    const item = screen.getByRole("menuitem", { name: /Regenerate/ }) as HTMLButtonElement;
-    expect(item.disabled).toBe(false);
-    fireEvent.click(item);
+    expect(item().getAttribute("aria-disabled")).toBe("false");
+    fireEvent.click(item());
     await advance(0);
     expect(act_.regen).toHaveBeenCalledWith("PKG");
     expect(screen.getByTestId("briefing-updating")).toBeTruthy();
+    expect(panel().hidden).toBe(true);
+    expect(document.activeElement).toBe(screen.getByTestId("briefing-menu-button"));
   });
 
-  it("within 30 minutes of the last Regenerate it is disabled and says when it is available", async () => {
+  it("within 30 minutes of the last Regenerate it is aria-disabled (still focusable), reads the reason and does nothing", async () => {
     draw({ preparedAt: FRESH, initial: { ...idle, lastRegenerateAt: "2026-11-12T14:45:00.000Z" } }); // 9:45 AM ET, available 10:15 AM
     await openMenu();
-    const item = screen.getByRole("menuitem", { name: /Regenerate/ }) as HTMLButtonElement;
-    expect(item.disabled).toBe(true);
+    const el = item() as HTMLButtonElement;
+    expect(el.getAttribute("aria-disabled")).toBe("true");
+    expect(el.disabled).toBe(false); // not `disabled`: it stays reachable, so the reason is read
+    expect(el.textContent).toContain("Available at 10:15 AM"); // inside the control: part of its accessible name
     expect(screen.getByTestId("briefing-regenerate-reason").textContent).toBe("Available at 10:15 AM");
-    fireEvent.click(item);
+    el.focus();
+    expect(document.activeElement).toBe(el);
+    fireEvent.click(el);
     await advance(0);
     expect(act_.regen).not.toHaveBeenCalled();
   });
 
-  it("after 6 runs today it is disabled and shows the daily limit", async () => {
+  it("after 6 runs today it is aria-disabled and shows the daily limit", async () => {
     draw({ preparedAt: FRESH, initial: { ...idle, runsToday: 6 } });
     await openMenu();
-    expect((screen.getByRole("menuitem", { name: /Regenerate/ }) as HTMLButtonElement).disabled).toBe(true);
+    expect(item().getAttribute("aria-disabled")).toBe("true");
     expect(screen.getByTestId("briefing-regenerate-reason").textContent).toBe("Daily limit reached (6 a day)");
   });
 
-  it("is disabled while a run is open", async () => {
+  it("is aria-disabled while a run is open", async () => {
     draw({ preparedAt: FRESH, initial: { ...idle, running: true } });
     await openMenu();
-    expect((screen.getByRole("menuitem", { name: /Regenerate/ }) as HTMLButtonElement).disabled).toBe(true);
+    expect(item().getAttribute("aria-disabled")).toBe("true");
     expect(screen.getByTestId("briefing-regenerate-reason").textContent).toBe("Updating…");
   });
 
@@ -198,14 +281,14 @@ describe("the ⋯ menu", () => {
     act_.regen.mockResolvedValueOnce({ started: false, gate: "rate_limited" });
     act_.state.mockResolvedValueOnce({ ...idle, lastRegenerateAt: "2026-11-12T14:50:00.000Z" });
     await openMenu();
-    fireEvent.click(screen.getByRole("menuitem", { name: /Regenerate/ }));
+    fireEvent.click(item());
     await advance(0);
     expect(screen.getByTestId("briefing-regenerate-reason").textContent).toMatch(/^Available at /);
     cleanup();
     draw({ preparedAt: FRESH });
     act_.regen.mockResolvedValueOnce({ error: "unavailable" });
     await openMenu();
-    fireEvent.click(screen.getByRole("menuitem", { name: /Regenerate/ }));
+    fireEvent.click(item());
     await advance(0);
     expect(screen.getByTestId("briefing-regenerate-message").textContent).toMatch(/could not be started/);
   });

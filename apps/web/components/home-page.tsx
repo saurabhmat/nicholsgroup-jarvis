@@ -134,7 +134,7 @@ async function HomeSections({ laneId, now }: { laneId: string; now: Date }) {
       <div data-testid="home-row-attention" className="grid items-start gap-4 lg:grid-cols-3">
         <div data-testid="home-attention-slot" className="flex min-w-0 flex-col gap-4 lg:col-span-2">
           <PageSection title="Needs your attention" note="Top 5 · metadata only">
-            <AiBriefing laneId={laneId} brief={saved} fallbackLines={view.unavailable ? [] : composeBriefing(view, now)} tz={brief.viewerTz} controls={isOwner ? <BriefingAuto laneId={laneId} preparedAt={saved && saved.status !== "failed" ? saved.preparedAt : null} initial={runState} tz={brief.viewerTz} /> : null} now={now} failure={failure} failureHint={failureHint} />
+            <AiBriefing laneId={laneId} brief={saved} fallbackLines={view.unavailable ? [] : composeBriefing(view, now)} tz={brief.viewerTz} controls={isOwner && brief.mail.access ? <BriefingAuto laneId={laneId} preparedAt={saved && saved.status !== "failed" ? saved.preparedAt : null} initial={runState} tz={brief.viewerTz} /> : null} now={now} failure={failure} failureHint={failureHint} />
             <AttentionSection laneId={laneId} mail={brief.mail} now={now} notes={notesByMessage(saved)} replies={repliesByMessage(saved)} canReply={isOwner} />
             {saved && saved.status !== "failed" ? (
               // Folded so the card stays short: reply drafts (with Copy) and deadlines from the briefing.

@@ -3,12 +3,15 @@
 //   * on mount, ONCE per page load, asks the server to start a background run when the latest briefing is older than 3 hours
 //     (ensureFreshBriefing; the SQL claim has the last word: daily cap, one run at a time). A router.refresh() (the 5-minute
 //     auto-refresh, the poll's own refresh) does not re-run the effect: the component stays mounted, the effect has no
-//     changing dependency and a ref guards React strict mode's second mount. It is never called from a server render.
+//     changing dependency and a ref guards React strict mode's second mount. A per-tab sessionStorage guard keeps a REMOUNT (a
+//     navigation back to Home) from calling it more than once per lane per 10 minutes. It is never called from a server render.
 //   * while a run is open it shows "Updating summary…" (the previous summary stays on the page) and polls the cheap run state every
 //     12 s for at most 3 minutes; when the run has ended it refreshes the page ONCE through requestRefresh (lib/refresh-gate.ts), so the
 //     shared refresh clock stays correct, and waits while the reply drawer holds the refresh.
-//   * a "⋯" menu with "Regenerate": disabled with "Available at <time>" within 30 minutes of the last one, and with the daily limit
-//     when 6 runs were made today.
+//   * a "⋯" disclosure (a button with aria-expanded / aria-controls; the panel is always rendered and hidden when closed) holding
+//     "Regenerate": aria-disabled (not disabled, so the reason stays reachable) with "Available at <time>" within 30 minutes of the
+//     last one, and with the daily limit when 6 runs were made today. Escape and focus leaving close it and focus returns to the
+//     trigger; the trigger is 44 px on phones. The status live region is always mounted; only its text changes.
 import { useRouter } from "next/navigation";
 import { useCallback, useEffect, useId, useRef, useState } from "react";
 import { briefingRunState, ensureFreshBriefing, regenerateBriefing, type BriefingStartState } from "@/app/[laneId]/briefing-actions";
@@ -17,6 +20,20 @@ import { isRefreshHeld, requestRefresh, subscribeRefreshGate } from "@/lib/refre
 
 export const POLL_EVERY_MS = 12_000;
 export const POLL_FOR_MS = 3 * 60_000;
+export const ENSURE_GUARD_MS = 10 * 60_000;
+
+/** Per-tab guard: true when this lane asked for a fresh summary less than 10 minutes ago in this tab (sessionStorage). */
+function ensuredRecently(laneId: string, nowMs: number): boolean {
+  try {
+    const key = `briefing-ensure:${laneId}`;
+    const last = Number(window.sessionStorage.getItem(key));
+    if (Number.isFinite(last) && last > 0 && nowMs - last < ENSURE_GUARD_MS) return true;
+    window.sessionStorage.setItem(key, String(nowMs));
+  } catch {
+    /* storage unavailable: the server-side claim still decides */
+  }
+  return false;
+}
 
 const clock = (ms: number, tz: string): string => {
   try {
@@ -46,6 +63,7 @@ export function BriefingAuto({ laneId, preparedAt, initial, tz }: { laneId: stri
   const polling = useRef<{ timer: number; stop: () => void } | null>(null);
   const preparedRef = useRef(preparedAt);
   const wrapRef = useRef<HTMLDivElement>(null);
+  const triggerRef = useRef<HTMLButtonElement>(null);
 
   useEffect(() => {
     refreshRef.current = router.refresh;
@@ -94,6 +112,7 @@ export function BriefingAuto({ laneId, preparedAt, initial, tz }: { laneId: stri
       return;
     }
     if (!isStale(preparedRef.current, Date.now())) return;
+    if (ensuredRecently(laneId, Date.now())) return;
     void ensureFreshBriefing(laneId).then((r) => {
       if ("started" in r && (r.started || r.gate === "running")) poll();
     });
@@ -102,13 +121,18 @@ export function BriefingAuto({ laneId, preparedAt, initial, tz }: { laneId: stri
 
   useEffect(() => () => polling.current?.stop(), []);
 
+  const close = useCallback((returnFocus: boolean) => {
+    setOpen(false);
+    if (returnFocus) triggerRef.current?.focus();
+  }, []);
+
   useEffect(() => {
     if (!open) return;
     const onDown = (e: MouseEvent) => {
       if (wrapRef.current && !wrapRef.current.contains(e.target as Node)) setOpen(false);
     };
     const onKey = (e: KeyboardEvent) => {
-      if (e.key === "Escape") setOpen(false);
+      if (e.key === "Escape") close(true);
     };
     document.addEventListener("mousedown", onDown);
     document.addEventListener("keydown", onKey);
@@ -116,7 +140,7 @@ export function BriefingAuto({ laneId, preparedAt, initial, tz }: { laneId: stri
       document.removeEventListener("mousedown", onDown);
       document.removeEventListener("keydown", onKey);
     };
-  }, [open]);
+  }, [open, close]);
 
   const availableAt = nowMs === 0 ? null : regenerateAvailableAt(state?.lastRegenerateAt ?? null, nowMs);
   const capped = (state?.runsToday ?? 0) >= DAILY_RUN_CAP;
@@ -128,7 +152,7 @@ export function BriefingAuto({ laneId, preparedAt, initial, tz }: { laneId: stri
     setMessage(null);
     const r: BriefingStartState = await regenerateBriefing(laneId);
     if ("started" in r && r.started) {
-      setOpen(false);
+      close(true);
       setNowMs(Date.now());
       setState((s) => (s ? { ...s, running: true, lastRegenerateAt: new Date().toISOString(), runsToday: s.runsToday + 1 } : s));
       poll();
@@ -145,22 +169,29 @@ export function BriefingAuto({ laneId, preparedAt, initial, tz }: { laneId: stri
   };
 
   return (
-    <div ref={wrapRef} className="relative flex items-center gap-2">
-      {updating ? (
-        <span role="status" aria-live="polite" data-testid="briefing-updating" className="inline-flex items-center gap-1.5 text-small text-muted-foreground">
-          <span aria-hidden className="inline-block size-2 animate-pulse rounded-full bg-muted-foreground" />
-          Updating summary…
-        </span>
-      ) : null}
-      {message ? (
-        <span role="status" data-testid="briefing-regenerate-message" className="text-small text-muted-foreground">
-          {message}
-        </span>
-      ) : null}
+    <div
+      ref={wrapRef}
+      className="relative flex items-center gap-2"
+      onBlur={(e) => {
+        // Focus left the whole control (not just moved between the trigger and the panel): close without stealing focus.
+        if (open && !e.currentTarget.contains(e.relatedTarget as Node | null)) setOpen(false);
+      }}
+    >
+      {/* Always mounted so assistive tech announces the change of text, not the appearance of a node. */}
+      <span role="status" aria-live="polite" data-testid="briefing-status" className="inline-flex items-center gap-1.5 text-small text-muted-foreground">
+        {updating ? (
+          <span data-testid="briefing-updating" className="inline-flex items-center gap-1.5">
+            <span aria-hidden className="inline-block size-2 animate-pulse rounded-full bg-muted-foreground" />
+            Updating summary…
+          </span>
+        ) : message ? (
+          <span data-testid="briefing-regenerate-message">{message}</span>
+        ) : null}
+      </span>
       <button
+        ref={triggerRef}
         type="button"
         aria-label="Summary options"
-        aria-haspopup="menu"
         aria-expanded={open}
         aria-controls={menuId}
         data-testid="briefing-menu-button"
@@ -168,30 +199,26 @@ export function BriefingAuto({ laneId, preparedAt, initial, tz }: { laneId: stri
           setNowMs(Date.now());
           setOpen((o) => !o);
         }}
-        className="inline-flex size-8 items-center justify-center rounded-md text-muted-foreground hover:bg-muted focus-visible:outline focus-visible:outline-2 focus-visible:outline-ring"
+        className="inline-flex size-11 items-center justify-center rounded-md text-muted-foreground hover:bg-muted focus-visible:outline focus-visible:outline-2 focus-visible:outline-ring sm:size-8"
       >
         <span aria-hidden>⋯</span>
       </button>
-      {open ? (
-        <div id={menuId} role="menu" aria-label="Summary options" data-testid="briefing-menu" className="absolute right-0 top-9 z-20 min-w-48 rounded-md border border-border bg-card p-1 shadow-md">
-          <button
-            type="button"
-            role="menuitem"
-            disabled={blocked}
-            aria-disabled={blocked}
-            data-testid="briefing-regenerate"
-            onClick={() => void onRegenerate()}
-            className="flex w-full flex-col items-start rounded px-3 py-2 text-left text-small text-foreground hover:bg-muted disabled:cursor-not-allowed disabled:text-muted-foreground disabled:hover:bg-transparent"
-          >
-            <span>Regenerate</span>
-            {reason ? (
-              <span data-testid="briefing-regenerate-reason" className="text-small text-muted-foreground">
-                {reason}
-              </span>
-            ) : null}
-          </button>
-        </div>
-      ) : null}
+      <div id={menuId} hidden={!open} data-testid="briefing-menu" className="absolute right-0 top-11 z-20 min-w-48 rounded-md border border-border bg-card p-1 shadow-md sm:top-9">
+        <button
+          type="button"
+          aria-disabled={blocked}
+          data-testid="briefing-regenerate"
+          onClick={() => void onRegenerate()}
+          className={`flex min-h-11 w-full flex-col items-start rounded px-3 py-2 text-left text-small sm:min-h-0 ${blocked ? "cursor-not-allowed text-muted-foreground" : "text-foreground hover:bg-muted"}`}
+        >
+          <span>Regenerate</span>
+          {reason ? (
+            <span data-testid="briefing-regenerate-reason" className="text-small text-muted-foreground">
+              {reason}
+            </span>
+          ) : null}
+        </button>
+      </div>
     </div>
   );
 }

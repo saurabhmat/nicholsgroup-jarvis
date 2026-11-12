@@ -4,7 +4,8 @@ export const STALE_AFTER_MS = 3 * 3_600_000;
 export const REGENERATE_EVERY_MS = 30 * 60_000;
 export const DAILY_RUN_CAP = 6;
 
-export type BriefingGate = "not_stale" | "running" | "cap_reached" | "cooldown" | "rate_limited";
+/** `no_sources` is the app's own gate (no mail view: nothing to summarise); the rest come from the SQL claim. */
+export type BriefingGate = "not_stale" | "running" | "cap_reached" | "cooldown" | "rate_limited" | "no_sources";
 
 /** What the card needs from core.briefing_run_state. Times are ISO strings or null. */
 export type BriefingRunStateView = { running: boolean; lastRegenerateAt: string | null; runsToday: number; latestPreparedAt: string | null; lastAttemptAt: string | null };

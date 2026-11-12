@@ -11,16 +11,17 @@ export const BriefingOutputSchema = z.object({
   attention: z.array(z.object({ ref: text, what: text, why: text, next: text })),
   deadlines: z.array(z.object({ ref: text.nullable(), text, due: text.nullable() })),
   priorities: z.array(z.object({ text, reason: text, refs: z.array(text) })),
-  replies: z.array(z.object({ ref: text, status: z.enum(["ready", "awaiting_input"]), context: text, text })),
-  more_replies: z.array(text),
+  // Lanes with drafts off may omit these two: the default keeps that from costing a retry (the API schema still lists them as required).
+  replies: z.array(z.object({ ref: text, status: z.enum(["ready", "awaiting_input"]), context: text, text })).default([]),
+  more_replies: z.array(text).default([]),
 });
 export type BriefingOutput = z.infer<typeof BriefingOutputSchema>;
 
-/** What goes in `LLMRequest.outputSchema`. Generated from the Zod schema, so the two cannot drift. */
-export const BRIEFING_OUTPUT_SCHEMA: LLMOutputSchema = {
-  name: "briefing",
-  schema: z.toJSONSchema(BriefingOutputSchema, { target: "draft-2020-12" }) as Record<string, unknown>,
-};
+/** What goes in `LLMRequest.outputSchema`. Generated from the Zod schema, so the two cannot drift. `$schema` is dropped (the API
+ * rejects it); the provider additionally runs the SDK's transformJSONSchema (closed objects, no type arrays). */
+const GENERATED = z.toJSONSchema(BriefingOutputSchema, { target: "draft-2020-12" }) as Record<string, unknown>;
+delete GENERATED.$schema;
+export const BRIEFING_OUTPUT_SCHEMA: LLMOutputSchema = { name: "briefing", schema: GENERATED };
 
 /** A validation problem as codes only: the path and the Zod issue code (and the expected type name). Never a value. */
 export type OutputIssue = { path: string; code: string; expected?: string };

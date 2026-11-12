@@ -58,7 +58,7 @@ create temp table security_definer_ok (name text primary key, why text not null)
 insert into security_definer_ok values
   ('brief.briefings_guard', 'insert trigger: reply drafts only with store_outbound_drafts; lane enabled; owner holds the owner role and the briefing view (T-231c)'),
   ('core.briefing_coverage', 'Home coverage strip: answers only the caller''s comms/calendar views at aal2; connection facts, no tokens (T-231a)'),
-  ('core.briefing_save_own', 'Run now writer: aal2 + owner role + briefing view, owner = auth.uid(), 2-minute cooldown under an advisory lock (T-231c)'),
+  ('core.briefing_save_own', 'Owner briefing writer: aal2 + owner role + briefing view, owner = auth.uid(), 2-minute cooldown under an advisory lock (T-231c)'),
   ('core.home_finance_context', 'Home finance: QuickBooks connection facts and mapping for a caller with the finance view at aal2 only (T-233)'),
   ('core.allowed_lanes', 'reads memberships for RLS; own uid at aal2 only (T-012)'),
   ('core.has_lane_role', 'role check for actions; own uid at aal2 only (T-012)'),
@@ -126,7 +126,9 @@ insert into security_definer_ok values
   ('core.briefing_claim_auto', 'Home auto-summary claim: aal2 + lane owner + briefing view, then brief.briefing_claim (T-235)'),
   ('core.briefing_claim_regenerate', 'owner Regenerate claim: aal2 + lane owner + briefing view, then brief.briefing_claim (30-min limit, daily cap) (T-235)'),
   ('core.briefing_claim_schedule', 'the 06:30 job records its run; service_role only, owner role and view re-checked; never gated (T-235)'),
-  ('core.briefing_run_state', 'Home: a run is open, last Regenerate, runs today, newest briefing times; aal2 + lane owner + briefing view, else no row (T-235)');
+  ('core.briefing_run_state', 'Home: a run is open, last Regenerate, runs today, newest briefing times; aal2 + lane owner + briefing view, else no row (T-235)'),
+  ('core.briefing_claim_release', 'the claiming owner releases their own open run claim (closed as lost); aal2 + lane owner + briefing view, own row only (T-235)'),
+  ('brief.briefing_runs_purge', 'retention of run claims older than N New York days (floor 1); service_role only (T-235)');
 
 -- App functions authenticated may execute (callable through the API). Each one is reviewed.
 create temp table authenticated_exec_ok (name text primary key, why text not null) on commit drop;
@@ -136,7 +138,7 @@ insert into authenticated_exec_ok values
   ('core.briefing_threads', 'Home attention and money threads; invoker, RLS on comms.message_index applies (T-231b)'),
   ('core.briefing_latest', 'Home AI briefing: the caller''s own latest; invoker, RLS on brief.briefings applies (T-231c)'),
   ('core.briefing_last_failure', 'Home briefing failure reason: the caller''s newest failed attempt; invoker, RLS on brief.briefings applies (T-234)'),
-  ('core.briefing_save_own', 'Run now: saves the caller''s own briefing; checks aal2, owner role and the briefing view itself (T-231c)'),
+  ('core.briefing_save_own', 'Saves the caller''s own briefing; checks aal2, owner role and the briefing view itself (T-231c)'),
   ('core.home_finance', 'Home finance figures; invoker over fin tables (T-233)'),
   ('core.home_finance_context', 'Home finance context; definer, checks the finance view at aal2 itself (T-233)'),
   ('core.allowed_lanes', 'used by every RLS policy'),
@@ -199,7 +201,8 @@ insert into authenticated_exec_ok values
   ('core.news_enabled', 'is news configured for the lane; boolean only, checks aal2 and the briefing view itself (T-234 part 4)'),
   ('core.briefing_claim_auto', 'Home auto-summary claim; checks aal2, owner role and the briefing view itself; gates in SQL (T-235)'),
   ('core.briefing_claim_regenerate', 'owner Regenerate claim; checks aal2, owner role and the briefing view itself; 30-min limit and daily cap in SQL (T-235)'),
-  ('core.briefing_run_state', 'Home run state for the owner; checks aal2, owner role and the briefing view itself, else no row (T-235)');
+  ('core.briefing_run_state', 'Home run state for the owner; checks aal2, owner role and the briefing view itself, else no row (T-235)'),
+  ('core.briefing_claim_release', 'the claiming owner releases their own open claim; checks aal2, owner role, the briefing view and the claim owner itself (T-235)');
 
 create temp view app_objects as
   select c.oid, format('%s.%s', n.nspname, c.relname) as name, c.relkind

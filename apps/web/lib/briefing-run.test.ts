@@ -159,7 +159,7 @@ describe("runBriefing", () => {
   });
 });
 
-describe("runBriefingBounded (Run now: inline, bounded, single-flight)", () => {
+describe("runBriefingBounded (background: bounded, single-flight)", () => {
   const slowProvider = (ms: number, reply = "{}") => {
     const inner = createMockProvider([textResult(complete(reply))]);
     return { ...inner, complete: async (...a: Parameters<typeof inner.complete>) => (await new Promise((r) => setTimeout(r, ms)), inner.complete(...a)) } as typeof inner;
@@ -171,7 +171,7 @@ describe("runBriefingBounded (Run now: inline, bounded, single-flight)", () => {
     expect(saved).toHaveLength(1);
   });
 
-  it("a second Run now for the same lane and owner while one runs is refused without a model call", async () => {
+  it("a second run for the same lane and owner while one runs is refused without a model call", async () => {
     const { d, saved } = deps({ reply: "{}" });
     d.provider = slowProvider(40);
     const [a, b] = await Promise.all([runBriefingBounded(d, input), runBriefingBounded(d, input)]);
@@ -460,6 +460,26 @@ describe("structured output and the one retry (T-235 part 1)", () => {
     expect(logged).toContain("not_json");
     expect(logged).toContain("invalid_type");
     expect(logged).not.toContain("SECRET");
+  });
+  it("no retry once more than 40 s of the run have elapsed: the failure is recorded with the usual code", async () => {
+    quiet();
+    const provider = createMockProvider([textResult("not json"), jsonResult(GOOD)]);
+    let t = 1_000_000;
+    const { d, saved } = deps({ provider });
+    d.clock = () => (t += 45_000); // every reading is 45 s later: the run start, then the check (45 s elapsed)
+    const res = await runBriefing(d, input);
+    expect(res).toEqual({ id: "id-1", status: "failed", reason: "output_invalid" });
+    expect(provider.calls).toHaveLength(1);
+    expect(saved[0]?.content.notes).toContain("fail:output_invalid");
+    expect(JSON.stringify(err.mock.calls)).toContain("briefing.retry_skipped");
+  });
+  it("a fast first failure is still retried", async () => {
+    quiet();
+    const provider = createMockProvider([textResult("not json"), jsonResult(GOOD)]);
+    const { d } = deps({ provider });
+    d.clock = () => 1_000_000;
+    expect((await runBriefing(d, input)).status).toBe("ready");
+    expect(provider.calls).toHaveLength(2);
   });
   it("a refusal or truncated reply is not retried", async () => {
     quiet();
