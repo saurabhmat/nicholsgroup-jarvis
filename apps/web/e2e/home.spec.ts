@@ -44,7 +44,7 @@ test.beforeEach(() => {
 });
 test.afterAll(cleanup);
 
-test("owner: today's calendar, Coverage and the rule-based attention list", async ({ page }, info) => {
+test("owner: today's calendar, Next 7 days, the KPI strip and the rule-based attention list", async ({ page }, info) => {
   test.skip(info.project.name !== "desktop", "owner persona is the desktop project's member");
   test.setTimeout(150_000);
   // The timed meeting must still be today in New York when the page loads.
@@ -65,9 +65,46 @@ test("owner: today's calendar, Coverage and the rule-based attention list", asyn
   // not listed (nothing unread, nothing waiting).
   const attention = page.getByRole("region", { name: "Needs your attention" });
   await expect(attention.getByText("Synthetic subject 1")).toBeVisible();
-  await expect(attention.getByText("Unread from sender@example.test", { exact: false }).first()).toBeVisible();
+  await expect(attention.getByText("sender@example.test", { exact: false }).first()).toBeVisible();
+  // T-234 part 2: each item has Reply and Open; Open goes to the thread in Jarvis (never a Google page).
+  const firstItem = attention.getByTestId("attention-item").first();
+  await expect(firstItem.getByRole("link", { name: "Reply" })).toBeVisible();
+  await expect(firstItem.getByRole("link", { name: "Open" })).toHaveAttribute("href", /^\/PKG\/inbox\/[A-Za-z0-9_-]+$/);
   await expect(attention.getByText("Synthetic subject 4")).toHaveCount(0);
-  await expect(page.getByTestId("coverage-line")).toBeVisible();
+  // T-234 part 1: Coverage is no longer on Home (Settings -> Connections); Next 7 days is collapsed until clicked; five KPI tiles.
+  await expect(page.getByTestId("coverage-line")).toHaveCount(0);
+  const next7 = page.getByRole("button", { name: /Next 7 days/ });
+  await expect(next7).toHaveAttribute("aria-expanded", "false");
+  await next7.click();
+  await expect(next7).toHaveAttribute("aria-expanded", "true");
+  // T-234 part 5: the header says when the data was read (silent text, absolute time in the title), and an expanded section
+  // survives a full reload (sessionStorage, per company and user).
+  await expect(page.getByTestId("home-updated")).toHaveText(/^Updated (just now|\d+ min ago)$/);
+  await expect(page.getByTestId("home-updated")).toHaveAttribute("title", /^Data read at /);
+  // A real router.refresh() (Next's own app router, as the 5-minute timer calls it): the expanded section stays open and the
+  // data-read time moves on. (The Reply drawer is not covered here: the owner persona's Reply needs a live Google mailbox.)
+  const readAt = await page.getByTestId("home-updated").getAttribute("title");
+  await page.waitForTimeout(1100); // the title has a seconds resolution
+  const refreshed = await page.evaluate(() => {
+    const r = (window as unknown as { next?: { router?: { refresh?: () => void } } }).next?.router;
+    if (!r?.refresh) return false;
+    r.refresh();
+    return true;
+  });
+  expect(refreshed, "window.next.router.refresh must exist in this Next build").toBe(true);
+  await expect(page.getByTestId("home-updated")).not.toHaveAttribute("title", readAt ?? "");
+  await expect(page.getByRole("button", { name: /Next 7 days/ })).toHaveAttribute("aria-expanded", "true");
+  await page.reload();
+  await expect(page.getByRole("button", { name: /Next 7 days/ })).toHaveAttribute("aria-expanded", "true");
+  await expect(page.getByTestId("home-updated")).toHaveText("Updated just now");
+  const tiles = page.getByTestId("kpi-tile");
+  await expect(tiles).toHaveCount(5);
+  const boxes = await tiles.evaluateAll((els) => els.map((e) => e.getBoundingClientRect()));
+  if (info.project.name === "desktop") {
+    // equal heights in one row (a Not connected tile is as tall as one with a figure)
+    expect(new Set(boxes.map((b) => Math.round(b.height))).size).toBe(1);
+    expect(new Set(boxes.map((b) => Math.round(b.y))).size).toBe(1);
+  }
 });
 
 test("a finance-only viewer sees no meetings and no mail counts", async ({ page }, info) => {
@@ -83,4 +120,20 @@ test("a finance-only viewer sees no meetings and no mail counts", async ({ page 
   await expect(body).not.toContainText(ALL_DAY);
   await expect(body).not.toContainText(/unread important/);
   await expect(body).not.toContainText("Synthetic subject");
+});
+
+test("phone: the KPI tiles are one column (same x, stacked downwards)", async ({ page }, info) => {
+  test.skip(info.project.name === "desktop", "phone viewport only");
+  test.setTimeout(150_000);
+  await signIn(page, personas(info).member);
+  await page.goto("/PKG");
+  const tiles = page.getByTestId("kpi-tile");
+  await expect(tiles.first()).toBeVisible({ timeout: 30_000 }); // 5 tiles, or 2 for a role without the finance view
+  expect(await tiles.count()).toBeGreaterThanOrEqual(2);
+  const boxes = await tiles.evaluateAll((els) => els.map((e) => e.getBoundingClientRect()));
+  expect(new Set(boxes.map((b) => Math.round(b.x))).size).toBe(1);
+  boxes.forEach((b, i) => {
+    const prev = boxes[i - 1];
+    if (prev) expect(b.y).toBeGreaterThan(prev.y);
+  });
 });

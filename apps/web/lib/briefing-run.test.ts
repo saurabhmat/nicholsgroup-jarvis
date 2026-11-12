@@ -1,11 +1,11 @@
 // T-231c: one briefing run with the mock provider and a fake lane client. Bodies are read live and never saved; email
 // reaches the model only when the lane policy allows it; model text is checked against the refs; a model failure saves a
 // "failed" briefing with codes only.
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { createMockProvider, textResult } from "@nichols/ai/testing";
 import { LLMProviderError } from "@nichols/ai/types";
 import type { LaneId } from "@nichols/core";
-import { policyFrom, runBriefing, refsFrom, type RunDeps, type SavedBriefing } from "./briefing-run";
+import { policyFrom, runBriefing, runBriefingBounded, refsFrom, type RunDeps, type SavedBriefing } from "./briefing-run";
 import { loadBriefing, parseSavedBriefing } from "./briefing";
 
 const NOW = new Date("2026-11-11T15:00:00Z");
@@ -96,6 +96,7 @@ describe("runBriefing", () => {
     await expect(runBriefing(d, input)).resolves.toMatchObject({ status: "partial" });
     expect(provider.calls).toHaveLength(0);
     expect(saved[0]?.content.notes).toContain("model_not_allowed");
+    expect(saved[0]?.content.notes).toContain("fail:model_not_allowed");
   });
 
   it("policyFrom fails closed", () => {
@@ -125,17 +126,146 @@ describe("runBriefing", () => {
   });
 
   it("a model error or non-JSON answer saves a failed briefing with codes only", async () => {
-    for (const reply of [new LLMProviderError("rate_limited"), "not json at all"]) {
+    for (const [reply, reason] of [
+      [new LLMProviderError("rate_limited"), "provider_error"],
+      ["not json at all", "output_invalid"],
+      [new LLMProviderError("invalid_request"), "model_setting_invalid"],
+      [new LLMProviderError("unauthorized"), "key_missing"],
+      [new LLMProviderError("timeout"), "timeout"],
+    ] as const) {
       const { d, saved } = deps({ reply });
-      await expect(runBriefing(d, input)).resolves.toEqual({ id: "id-1", status: "failed" });
+      await expect(runBriefing(d, input)).resolves.toEqual({ id: "id-1", status: "failed", reason });
       expect(saved[0]?.content.lines).toEqual([]);
       expect(saved[0]?.content.notes).toContain("model_failed");
+      expect(saved[0]?.content.notes).toContain(`fail:${reason}`); // the code only: no message, no value
+      expect(JSON.stringify(saved[0])).not.toContain("LLM provider error");
     }
   });
 
   it("refsFrom gives nothing without mail access", async () => {
     const v = await loadBriefing(fakeClient({ briefing_coverage: { data: [], error: null } }), "PKG", NOW, "America/New_York");
     expect(refsFrom(v)).toEqual([]);
+  });
+});
+
+describe("runBriefingBounded (Run now: inline, bounded, single-flight)", () => {
+  const slowProvider = (ms: number, reply = "{}") => {
+    const inner = createMockProvider([textResult(reply)]);
+    return { ...inner, complete: async (...a: Parameters<typeof inner.complete>) => (await new Promise((r) => setTimeout(r, ms)), inner.complete(...a)) } as typeof inner;
+  };
+
+  it("runs the same code path and saves once", async () => {
+    const { d, saved } = deps({ reply: "{}" });
+    await expect(runBriefingBounded(d, input)).resolves.toMatchObject({ id: "id-1" });
+    expect(saved).toHaveLength(1);
+  });
+
+  it("a second Run now for the same lane and owner while one runs is refused without a model call", async () => {
+    const { d, saved } = deps({ reply: "{}" });
+    d.provider = slowProvider(40);
+    const [a, b] = await Promise.all([runBriefingBounded(d, input), runBriefingBounded(d, input)]);
+    expect([a, b].filter((r) => "busy" in r)).toHaveLength(1);
+    expect(saved).toHaveLength(1);
+    // released afterwards
+    await expect(runBriefingBounded(d, input)).resolves.not.toHaveProperty("busy");
+  });
+
+  it("another owner or lane is not blocked", async () => {
+    const { d } = deps({ reply: "{}" });
+    d.provider = slowProvider(30);
+    const rs = await Promise.all([runBriefingBounded(d, input), runBriefingBounded(d, { ...input, ownerUserId: "00000000-0000-4000-8000-000000000002" })]);
+    expect(rs.some((r) => "busy" in r)).toBe(false);
+  });
+
+  const READY = JSON.stringify({ lines: ["A renewal needs you."], attention: [], deadlines: [], priorities: [], replies: [{ ref: "r1", status: "ready", context: "c", text: "Thanks, confirmed." }] });
+
+  it("after the time bound: reports timeout, one failed row, and the late run writes nothing (no save, no proposal)", async () => {
+    const proposals: unknown[] = [];
+    const { d, saved } = deps({ reply: READY, policy: { email: true, calendar: true, storeDrafts: true }, proposeReply: async (_l, r) => (proposals.push(r), "p1") });
+    d.provider = slowProvider(80, READY);
+    const r = await runBriefingBounded(d, input, { timeoutMs: 20 });
+    expect(r).toMatchObject({ status: "failed", reason: "timeout" });
+    await new Promise((res) => setTimeout(res, 200)); // the slow model call resolves with a ready reply now
+    expect(proposals).toHaveLength(0);
+    expect(saved).toHaveLength(1);
+    expect(saved[0]?.status).toBe("failed");
+    expect(saved[0]?.content.notes).toContain("fail:timeout");
+    expect(saved[0]?.windowTo).toBe(NOW.toISOString());
+  });
+
+  it("control: without a timeout the same reply does create the proposal", async () => {
+    const proposals: unknown[] = [];
+    const { d } = deps({ reply: READY, policy: { email: true, calendar: true, storeDrafts: true }, proposeReply: async (_l, r) => (proposals.push(r), "p1") });
+    d.provider = slowProvider(10, READY);
+    await runBriefingBounded(d, input);
+    expect(proposals).toHaveLength(1);
+  });
+
+  it("the abort signal reaches the model call", async () => {
+    const { d } = deps({ reply: "{}" });
+    let seen: AbortSignal | undefined;
+    const inner = d.provider;
+    d.provider = { ...inner, complete: async (req: Parameters<typeof inner.complete>[0]) => ((seen = req.signal), inner.complete(req)) } as typeof inner;
+    await runBriefingBounded(d, input);
+    expect(seen).toBeInstanceOf(AbortSignal);
+  });
+
+  it("the single-flight key is held until the late run settles, then released", async () => {
+    const { d } = deps({ reply: "{}" });
+    d.provider = slowProvider(120);
+    const first = await runBriefingBounded(d, input, { timeoutMs: 20 });
+    expect(first).toMatchObject({ reason: "timeout" });
+    await expect(runBriefingBounded(d, input)).resolves.toEqual({ busy: true }); // late run still going
+    await new Promise((res) => setTimeout(res, 250));
+    await expect(runBriefingBounded(d, input)).resolves.not.toHaveProperty("busy");
+  });
+
+  it("abort during proposeReply: the proposal is withdrawn, so nothing pending remains and the run reports timeout", async () => {
+    // A fake approvals side: propose inserts (after a delay), and withdraws on an aborted signal like proposeEmailAction does.
+    const pending = new Set<string>();
+    let n = 0;
+    const proposeReply: NonNullable<RunDeps["proposeReply"]> = async (_l, _r, signal) => {
+      if (signal?.aborted) throw new Error("aborted before insert");
+      await new Promise((res) => setTimeout(res, 60)); // the insert is running when the bound fires
+      const id = `p${String(++n)}`;
+      pending.add(id);
+      if (signal?.aborted) {
+        pending.delete(id); // act_withdraw_proposed
+        throw new Error("withdrawn");
+      }
+      return id;
+    };
+    const { d, saved } = deps({ reply: READY, policy: { email: true, calendar: true, storeDrafts: true }, proposeReply });
+    d.provider = slowProvider(1, READY);
+    const r = await runBriefingBounded(d, input, { timeoutMs: 30 });
+    expect(r).toMatchObject({ status: "failed", reason: "timeout" });
+    await new Promise((res) => setTimeout(res, 200));
+    expect(pending.size).toBe(0);
+    expect(saved).toHaveLength(1);
+    expect(saved[0]?.status).toBe("failed");
+  });
+
+  describe("single-flight hard ceiling", () => {
+    afterEach(() => vi.useRealTimers());
+    it("frees the key at 2 x the bound even when the run never settles; a newer run's key is not freed by the old one", async () => {
+      vi.useFakeTimers();
+      const { d } = deps({ reply: "{}" });
+      const never = { ...d.provider, complete: () => new Promise<never>(() => undefined) } as typeof d.provider;
+      d.provider = never;
+      const first = runBriefingBounded(d, input, { timeoutMs: 1000 });
+      await vi.advanceTimersByTimeAsync(1000);
+      await expect(first).resolves.toMatchObject({ reason: "timeout" });
+      await expect(runBriefingBounded(d, input, { timeoutMs: 1000 })).resolves.toEqual({ busy: true }); // not released yet
+      await vi.advanceTimersByTimeAsync(1000); // 2 x the bound
+      const { d: d2 } = deps({ reply: "{}" });
+      await expect(runBriefingBounded(d2, input, { timeoutMs: 1000 })).resolves.not.toHaveProperty("busy");
+    });
+  });
+
+  it("the guard is released after a failure", async () => {
+    const { d } = deps({ reply: new LLMProviderError("timeout") });
+    await runBriefingBounded(d, input);
+    await expect(runBriefingBounded(d, input)).resolves.not.toHaveProperty("busy");
   });
 });
 
@@ -235,5 +365,33 @@ describe("parseSavedBriefing proposal ids", () => {
     const base = { id: "b1", prepared_at: "2026-11-11T12:00:00Z", status: "ready", source_refs: [] };
     const v = parseSavedBriefing([{ ...base, content: { replies: [{ ref: "r1", text: "t", status: "ready", proposalId: "00000000-0000-4000-8000-0000000000d1" }, { ref: "r2", text: "t", proposalId: "javascript:x" }] } }]);
     expect(v?.content.replies.map((r) => r.proposalId)).toEqual(["00000000-0000-4000-8000-0000000000d1", null]);
+  });
+});
+
+// T-234 part 2: excluded mail never reaches the model (no metadata line, no live body read). Synthetic look-alikes of the real
+// false positives (an org newsletter with List-Unsubscribe, an "Updated invitation" with a text/calendar part) plus auto-reply, OTP, CI.
+describe("exclusions reach neither the attention list nor the AI input (T-234 part 2)", () => {
+  const th = (n: number, over: Record<string, unknown>) => ({ connection_id: "c1", thread_key: `t${String(n)}`, message_id: `m${String(n)}`, from_address: "someone@pubk.test", from_name: "Someone", subject: `Subject ${String(n)}`, received_at: "2026-11-11T10:00:00Z", source_url: null, labels: ["INBOX"], last_is_owner: false, owner_replied: false, unread_count: 1, inbound_count: 1, ...over });
+  const rows = [
+    th(1, { from_address: "colleague@pubk.test", from_name: "Colleague", subject: "Capture plan review" }), // a real person from the org's domain, no bulk headers
+    th(2, { from_address: "robert.jones@pubk.test", subject: "This week at Pub K", is_bulk: true }), // org newsletter (List-Unsubscribe)
+    th(3, { from_address: "calendar-notification@google.com", subject: "Updated invitation: Capture review @ Wed Nov 12, 2026 2pm", is_calendar: true }),
+    th(4, { from_address: "away@acme.test", subject: "Re: Proposal", is_auto: true }),
+    th(5, { from_address: "colleague2@pubk.test", subject: "Your one-time code is 482913" }),
+    th(6, { from_address: "noreply@ci.example.test", subject: "[GitHub] Pull request merged" }),
+  ];
+  const cov = { data: [{ stream: "mail", account: "me@pubk.test", connection_id: "c1", provider: "google", status: "active", configured: true, last_sync_at: "2026-11-11T14:59:00Z" }], error: null };
+
+  it("only the real person's thread is in the view, the refs, the model input and the live body reads", async () => {
+    const c = fakeClient({ briefing_coverage: cov, briefing_threads: { data: rows, error: null } });
+    const view = await loadBriefing(c, "PKG", NOW, "America/New_York");
+    expect(view.mail.access && view.mail.attention.map((a) => a.thread.messageId)).toEqual(["m1"]);
+    expect(refsFrom(view).map((r) => r.messageId)).toEqual(["m1"]);
+    const { d, reads, provider } = deps({ client: c, reply: '{"lines": ["ok"]}' });
+    await runBriefing(d, input);
+    expect(reads).toEqual(["m1"]);
+    const sent = JSON.stringify(provider.calls[0]?.messages);
+    for (const gone of ["This week at Pub K", "Updated invitation", "Proposal", "one-time code", "Pull request"]) expect(sent).not.toContain(gone);
+    expect(sent).toContain("Capture plan review");
   });
 });

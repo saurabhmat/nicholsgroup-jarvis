@@ -1,5 +1,6 @@
 // Two-factor step (T-019, D-6): enrol an authenticator app once (QR code or secret), then enter its 6-digit code at
 // every sign-in. Functional layout on the provisional tokens; restyled with the signed-off designs (D-20).
+import { SignOutForm } from "@/components/sign-out-form";
 import { redirect } from "next/navigation";
 import { connection } from "next/server";
 import { Suspense } from "react";
@@ -87,11 +88,11 @@ async function MfaStep({ searchParams }: PageProps<"/mfa">) {
               <Button type="submit">Verify</Button>
             </form>
           )}
-          <form action={signOut}>
+          <SignOutForm action={signOut}>
             <Button type="submit" variant="ghost" className="w-full">
               Sign out
             </Button>
-          </form>
+          </SignOutForm>
         </CardContent>
       </Card>
     </main>

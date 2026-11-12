@@ -1,35 +1,56 @@
-// Home (D-20 batch 1, p3 and p6). T-200 fills "Needs your attention" and "Today's meetings" from the lane's synced data;
-// T-201 brings the prototype's layout: a gold-ruled briefing composed from that data (no AI until T-162), the four KPI
-// tiles (no figures until the finance tasks and D-8: each says why), and "Coming up" when today is clear. No approvals
-// yet (T-115). T-231b: "Needs your attention" and Money show subject (figures masked), sender and mailbox to callers
-// who may read the lane's mail (comms view, AAL2); never a body.
+// Home (D-20 batch 1, p3 and p6; T-234 part 1 layout, on the T-230 tokens). Three aligned rows:
+//   1. "Needs your attention" (2/3; T-234 part 2: AI summary + Run now + Top 3, top 5 items with Reply/Open, drafts and deadlines folded) |
+//      right column: Today's calendar with "Next 7 days" collapsed below it.
+//   2. KPI strip: five equal compact tiles (Cash book balance, AR > 30 days, P&L MTD, MRR, Paid subscribers).
+//   3. GovCon news (2/3; the stored digest, read only) | Projects at a glance (1/3).
+// T-234 part 5: HomeAutoRefresh (header) re-reads this page every 5 minutes with router.refresh() only. A render of this page
+// reads stored data and starts nothing: no AI briefing (Run now is a button), no news fetch (stored digest; Refresh is a button),
+// no sync (the sync jobs run in Inngest). Client state (drawer, fields, expanded sections) lives in client components below.
+// One column on a phone, in the same order: attention, calendar, KPIs, news, projects. Coverage is no longer a card here: a
+// small status dot in the header shows only when a source is stale or in error and links to Settings -> Connections.
+// T-231b: "Needs your attention" shows subject (figures masked), sender and mailbox to callers who may read the lane's mail
+// (comms view, AAL2); never a body.
 import Link from "next/link";
 import { Suspense } from "react";
-import { Alert, AlertDescription, AlertTitle, buttonVariants, homeHeading, KpiCard, laneHref, PageHeader, PageSection } from "@nichols/ui";
+import { Alert, AlertDescription, AlertTitle, buttonVariants, homeHeading, laneHref, PageHeader, PageSection } from "@nichols/ui";
 import { eyebrowDate } from "@/lib/format-date";
 import { guards } from "@/lib/guards";
 import { cookies } from "next/headers";
-import { composeBriefing, homeFor, homeKpis } from "@/lib/home";
-import { briefingFor, latestBriefing, viewerZone } from "@/lib/briefing";
-import { AiBriefing, DeadlinesAndPriorities, notesByMessage } from "./home-ai-briefing";
+import { composeBriefing, homeFor, type HomeView } from "@/lib/home";
+import { briefingFor, lastFailureReason, latestBriefing, viewerZone } from "@/lib/briefing";
+import { aiSetupFailure } from "@/lib/briefing-setup";
+import { adminHint } from "@nichols/briefing/hints";
+import { AiBriefing, Deadlines, notesByMessage, repliesByMessage } from "./home-ai-briefing";
 import { ReplyDrafts } from "./home-reply-drafts";
-import { AttentionSection, CalendarSections, CoverageStrip, MoneyCard } from "./home-briefing";
+import { AttentionSection, CalendarSections } from "./home-briefing";
+import { HomeCoverageDot } from "./coverage-dot";
+import { KpiStrip } from "./kpi-strip";
+import { GovConNews } from "./home-news";
+import { loadNewsCard } from "@/lib/news";
+import { ProjectsGlance } from "./home-projects";
 import { TimezoneCookie } from "./timezone-cookie";
 import { loadLane } from "@/lib/lane-page";
+import { HomeScope, PersistedDetails } from "./home-scope";
+import { HomeAutoRefresh } from "./home-auto-refresh";
 import { ApprovalsWaiting } from "./approvals-waiting";
-import { HomeFinance, HomeFinanceFallback } from "./home-finance";
 import { OnboardingBanner } from "./onboarding-entry";
-import { HomeSkeleton } from "./page-skeleton";
+import { HomeSkeleton, KpiStripSkeleton } from "./page-skeleton";
 import { onboardingFor } from "@/lib/onboarding-progress";
 import { timed } from "@/lib/timed";
+import { homeFinanceFor } from "@/lib/home-finance";
+import { kpiTiles } from "@/lib/home-kpi-tiles";
 
 export async function HomePage({ params }: { params: Promise<{ laneId: string }> }) {
   const lane = await loadLane((await params).laneId);
   const now = new Date();
+  // The verified user id (from loadLane's lane check) is only a sessionStorage key part for view state (expanded sections, the open drawer).
+  const userId = lane.userId;
+  const tz = viewerZone((await cookies()).get("tz")?.value);
   const heading = homeHeading(); // no first name in the session yet: "Good morning"
   // T-230 A: the header renders as soon as the lane is verified; the data sections and the setup banner stream in behind it
   // (each in its own boundary, so the slow setup lookup never holds back today's figures, and neither holds the header).
   return (
+    <HomeScope laneId={lane.laneId} userId={userId}>
     <div className="flex flex-col gap-4">
       <PageHeader
         className="mb-2"
@@ -37,9 +58,15 @@ export async function HomePage({ params }: { params: Promise<{ laneId: string }>
         title={heading.lead}
         accent={heading.accent}
         actions={
-          <Link href={laneHref(lane.laneId, "assistant")} className={buttonVariants()}>
-            Ask Jarvis
-          </Link>
+          <>
+            <HomeAutoRefresh renderedAt={now.toISOString()} tz={tz} />
+            <Suspense fallback={null}>
+              <HomeCoverageDot laneId={lane.laneId} />
+            </Suspense>
+            <Link href={laneHref(lane.laneId, "assistant")} className={buttonVariants()}>
+              Ask Jarvis
+            </Link>
+          </>
         }
       />
       {/* The setup banner is phone-only (md:hidden). Its slot has the banner's own height while it loads, so it never pushes the cards down. */}
@@ -53,6 +80,7 @@ export async function HomePage({ params }: { params: Promise<{ laneId: string }>
         <HomeSections laneId={lane.laneId} now={now} />
       </Suspense>
     </div>
+    </HomeScope>
   );
 }
 
@@ -69,11 +97,27 @@ async function HomeSections({ laneId, now }: { laneId: string; now: Date }) {
   const g = await guards();
   // Home v1 counts and the T-231 briefing sections load in parallel. Each shows its own "unavailable" state; neither ever shows an empty day.
   const laneClient = async () => (await g.requireLane(laneId as Parameters<typeof g.requireLane>[0])).client;
-  const [view, brief, saved] = await Promise.all([
+  const [view, brief, saved, isAdmin, isOwner, newsCard] = await Promise.all([
     timed("load.home", async () => homeFor(g, laneId, now)),
     timed("load.briefing", async () => briefingFor(await laneClient(), laneId, now, tz)),
     timed("load.briefing_latest", async () => latestBriefing(await laneClient(), laneId)),
+    g.requireRole(laneId as Parameters<typeof g.requireLane>[0], ["owner", "admin_technical"]).then(() => true, () => false),
+    // Reply is a drawer only for the owner (T-234 part 3): it proposes and sends through approvals, which are owner-only.
+    g.requireRole(laneId as Parameters<typeof g.requireLane>[0], ["owner"]).then(() => true, () => false),
+    // The stored GovCon news digest, read only: a render (or the 5-minute auto-refresh) never starts a fetch (T-234 part 4).
+    timed("load.news", async () => {
+      const [admin, owner] = await Promise.all([
+        g.requireRole(laneId as Parameters<typeof g.requireLane>[0], ["owner", "admin_technical"]).then(() => true, () => false),
+        g.requireRole(laneId as Parameters<typeof g.requireLane>[0], ["owner"]).then(() => true, () => false),
+      ]);
+      return loadNewsCard(await laneClient(), laneId, { isOwner: owner, isAdmin: admin }, now).catch(() => null);
+    }),
   ]);
+  // Why there is no AI summary: the AI setup itself (names only), else the stored code of the newest failed attempt.
+  const setup = aiSetupFailure();
+  const failure = setup?.code ?? (saved && (saved.status === "failed" || saved.lastFailedAt) ? await lastFailureReason(await laneClient(), laneId) : null);
+  // The hint is built here, on the server, and only for admins: non-admins get no hint string at all.
+  const failureHint = isAdmin && failure ? adminHint(failure, setup?.names ?? []) : null;
   return (
     <>
       <TimezoneCookie current={tzCookie ?? null} />
@@ -83,41 +127,46 @@ async function HomeSections({ laneId, now }: { laneId: string; now: Date }) {
           <AlertDescription>Reload the page in a minute. If it keeps happening, check Settings → Connections.</AlertDescription>
         </Alert>
       ) : null}
-      <AiBriefing laneId={laneId} brief={saved} fallbackLines={view.unavailable ? [] : composeBriefing(view, now)} tz={brief.viewerTz} canRun={brief.mail.access} />
-      <CoverageStrip laneId={laneId} view={brief} now={now} />
-      <Suspense fallback={<HomeFinanceFallback />}>
-        <HomeFinance laneId={laneId} />
-      </Suspense>
-      <section aria-label="Key figures" data-testid="home-kpis" className="grid grid-cols-2 gap-4 lg:grid-cols-4">
-        {homeKpis(view.feeds).map((k) => (
-          <KpiCard key={k.key} label={k.label} bookBalance={k.bookBalance} status="no_data" statusText={k.statusText} />
-        ))}
-      </section>
-      <div data-testid="home-main-grid" className="grid gap-4 lg:grid-cols-3">
-        <div className="flex min-w-0 flex-col gap-4 lg:col-span-2">
-          <PageSection title="Needs your attention" note="Top 5 by rules · metadata only">
-            <AttentionSection mail={brief.mail} tz={brief.viewerTz} notes={notesByMessage(saved)} />
+      {/* Row 1 */}
+      <div data-testid="home-row-attention" className="grid items-start gap-4 lg:grid-cols-3">
+        <div data-testid="home-attention-slot" className="flex min-w-0 flex-col gap-4 lg:col-span-2">
+          <PageSection title="Needs your attention" note="Top 5 · metadata only">
+            <AiBriefing laneId={laneId} brief={saved} fallbackLines={view.unavailable ? [] : composeBriefing(view, now)} tz={brief.viewerTz} canRun={brief.mail.access} failure={failure} failureHint={failureHint} />
+            <AttentionSection laneId={laneId} mail={brief.mail} now={now} notes={notesByMessage(saved)} replies={repliesByMessage(saved)} canReply={isOwner} />
+            {saved && saved.status !== "failed" ? (
+              // Folded so the card stays short: reply drafts (with Copy) and deadlines from the briefing.
+              <PersistedDetails id="attention-extras" testId="attention-extras" className="border-t border-border pt-3" summaryClassName="cursor-pointer text-small font-medium text-primary" summary="Drafts and deadlines">
+                <div className="mt-3 flex flex-col gap-5">
+                  <ReplyDrafts laneId={laneId} brief={saved} tz={brief.viewerTz} />
+                  <Deadlines laneId={laneId} brief={saved} tz={brief.viewerTz} />
+                </div>
+              </PersistedDetails>
+            ) : null}
           </PageSection>
-          <MoneyCard mail={brief.mail} tz={brief.viewerTz} />
-          <ReplyDrafts laneId={laneId} brief={saved} tz={brief.viewerTz} />
-          <DeadlinesAndPriorities brief={saved} tz={brief.viewerTz} />
         </div>
-        <div className="flex min-w-0 flex-col gap-4">
+        <div data-testid="home-calendar-slot" className="flex min-w-0 flex-col gap-4">
           <CalendarSections view={brief} now={now} />
         </div>
       </div>
-      <ProjectsNotice />
+      {/* Row 2 */}
+      <Suspense fallback={<KpiStripSkeleton />}>
+        <KpiSection laneId={laneId} feeds={view.feeds} canConnect={isAdmin} />
+      </Suspense>
+      {/* Row 3 */}
+      <div data-testid="home-row-news" className="grid items-stretch gap-4 lg:grid-cols-3">
+        <div data-testid="home-news-slot" className="min-w-0 lg:col-span-2">
+          <GovConNews laneId={laneId} card={newsCard} tz={brief.viewerTz} now={now} />
+        </div>
+        <div data-testid="home-projects-slot" className="min-w-0">
+          <ProjectsGlance />
+        </div>
+      </div>
     </>
   );
 }
 
-/** "Projects at a glance" is one line while no project board is connected (the board arrives with the Projects task). */
-function ProjectsNotice() {
-  return (
-    <section aria-label="Projects at a glance" data-testid="projects-notice" className="flex flex-wrap items-baseline gap-x-3 gap-y-1 rounded-card border border-border bg-card px-5 py-3 text-card-foreground shadow-card">
-      <h2 className="font-heading text-card-title font-semibold text-foreground">Projects at a glance</h2>
-      <p className="text-small text-muted-foreground">No project board connected. Status appears here, read-only, once the board is connected.</p>
-    </section>
-  );
+/** Row 2 in its own boundary: a slow QuickBooks read (core.home_finance) never holds the rest of Home back (T-230 A). */
+async function KpiSection({ laneId, feeds, canConnect }: { laneId: string; feeds: HomeView["feeds"]; canConnect: boolean }) {
+  const finance = await timed("load.home_finance", async () => homeFinanceFor(await guards(), laneId));
+  return <KpiStrip laneId={laneId} tiles={kpiTiles(finance, feeds)} canConnect={canConnect} />;
 }
-

@@ -27,9 +27,7 @@ export function shouldValidateBuildEnv(env: EnvRecord): boolean {
   return (
     parseGateFlag("VERCEL", env.VERCEL) ||
     parseGateFlag("NICHOLS_VALIDATE_ENV", env.NICHOLS_VALIDATE_ENV) ||
-    env.APP_ENV === "preview" ||
-    env.APP_ENV === "staging" ||
-    env.APP_ENV === "production"
+    ["preview", "staging", "production"].includes(env.APP_ENV?.trim() ?? "")
   );
 }
 

@@ -85,6 +85,8 @@ export type FakeMessage = {
   contentType: string;
   /** No internalDate and no Date header (a malformed message). */
   omitDate?: boolean;
+  /** Extra headers (T-234 part 2: List-Unsubscribe, Auto-Submitted, Sender ...), returned only when requested in metadataHeaders. */
+  extraHeaders?: Record<string, string>;
 };
 
 type HistoryEvent = { id: number; kind: "added" | "deleted" | "labelAdded" | "labelRemoved"; messageId: string };
@@ -337,9 +339,13 @@ export function createFakeGoogle(): FakeGoogle {
     const all: Record<string, string | undefined> = { from: m.from, to: m.to, cc: m.cc, subject: m.subject, date: m.omitDate ? undefined : new Date(m.internalDate).toUTCString(), "content-type": m.contentType, "message-id": `<${m.id}@mail.example.test>` };
     const wanted = new Set(headerNames.map((h) => h.toLowerCase()));
     const pretty: Record<string, string> = { from: "From", to: "To", cc: "Cc", subject: "Subject", date: "Date", "content-type": "Content-Type", "message-id": "Message-ID" };
-    const headers = Object.entries(all)
-      .filter(([k, v]) => v !== undefined && wanted.has(k))
-      .map(([k, v]) => ({ name: pretty[k] as string, value: v as string }));
+    const extra = Object.entries(m.extraHeaders ?? {}).map(([k, v]) => [k.toLowerCase(), v, k] as const);
+    const headers = [
+      ...Object.entries(all)
+        .filter(([k, v]) => v !== undefined && wanted.has(k))
+        .map(([k, v]) => ({ name: pretty[k] as string, value: v as string })),
+      ...extra.filter(([k]) => wanted.has(k)).map(([, v, name]) => ({ name, value: v })),
+    ];
     return {
       id: m.id,
       threadId: m.threadId,

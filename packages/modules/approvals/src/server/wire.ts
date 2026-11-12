@@ -96,7 +96,7 @@ export function reconcileStuckLane(laneId: LaneId): Promise<ReconcileSummary> {
  * The briefing's one entry point (T-231d security review L2): a job proposal for the owner, bound to the real deps, so
  * the briefing never holds `approvalsDeps` (whose jobRpc is the service-role rpc). Proposes only; never approves or sends.
  */
-export async function proposeBriefingReply(laneId: LaneId, ownerUserId: string, input: Pick<ProposeEmailInput, "connectionId" | "compose" | "rationale" | "sourceRefs">): Promise<string> {
+export async function proposeBriefingReply(laneId: LaneId, ownerUserId: string, input: Pick<ProposeEmailInput, "connectionId" | "compose" | "rationale" | "sourceRefs" | "signal">): Promise<string> {
   const { id } = await proposeEmailAction(approvalsDeps, laneId, {
     ...input,
     actionType: "email.send",

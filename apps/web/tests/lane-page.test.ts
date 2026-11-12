@@ -30,14 +30,14 @@ beforeEach(() => {
 
 describe("loadLane", () => {
   it("returns the lane and the allowed lanes when the guard passes and the lane is listed", async () => {
-    requireLane.mockResolvedValue({});
+    requireLane.mockResolvedValue({ session: { userId: "u1" } });
     listLanes.mockResolvedValue(LANES);
-    expect(await loadLane("PKG")).toEqual({ laneId: "PKG", name: "Pub K Group", lanes: LANES });
+    expect(await loadLane("PKG")).toEqual({ laneId: "PKG", name: "Pub K Group", lanes: LANES, userId: "u1" });
     expect(requireLane).toHaveBeenCalledWith("PKG");
   });
 
   it("is a 404 when the guard passes but the lane is not in the user's list", async () => {
-    requireLane.mockResolvedValue({});
+    requireLane.mockResolvedValue({ session: { userId: "u1" } });
     listLanes.mockResolvedValue([LANES[1]]);
     await expect(loadLane("PKG")).rejects.toThrow("NOT_FOUND");
   });
@@ -55,7 +55,7 @@ describe("loadLane", () => {
     requireLane.mockImplementation(async () => {
       started.push("check");
       await gate();
-      return {};
+      return { session: { userId: "u1" } };
     });
     listLanes.mockImplementation(async () => {
       started.push("list");
@@ -88,7 +88,7 @@ describe("loadLane", () => {
   it("lets an outage propagate: never a 404 and never access", async () => {
     requireLane.mockRejectedValue(new Error("auth service unavailable"));
     await expect(loadLane("PKG")).rejects.toThrow("auth service unavailable");
-    requireLane.mockResolvedValue({});
+    requireLane.mockResolvedValue({ session: { userId: "u1" } });
     listLanes.mockRejectedValue(new Error("lanes query failed"));
     await expect(loadLane("PKG")).rejects.toThrow("lanes query failed");
   });

@@ -4,6 +4,8 @@
 // Gmail: never stored (rule 6), shown as plain untrusted text (rule 9), nothing written anywhere (rule 5).
 import type { Guards } from "@nichols/core/auth";
 import type { LaneClient } from "@nichols/core/lane-router";
+import { gmailThreadUrl } from "@nichols/connectors/comms";
+import { parseCoverageRows } from "@nichols/briefing/domain";
 
 export const INBOX_FILTERS = ["all", "unread", "important"] as const;
 export type InboxFilter = (typeof INBOX_FILTERS)[number];
@@ -102,7 +104,10 @@ export type MessageMeta = {
   cc: string[];
   subject: string | null;
   receivedAt: string;
-  sourceUrl: string | null;
+  /** The connected mailbox this message sits in (from Coverage), or null when it could not be told. */
+  mailbox: string | null;
+  /** "Open in Gmail": https://mail.google.com/mail/?authuser=<mailbox>#all/<thread id>; null unless both are usable. */
+  gmailUrl: string | null;
 };
 
 export type MessageView =
@@ -112,17 +117,6 @@ export type MessageView =
 
 /** The live body read: injected so tests never call Google. Returns the revealed text (the caller never stores it). */
 export type ReadBody = (laneId: string, connectionId: string, messageId: string) => Promise<{ text: string; truncated: boolean }>;
-
-/** "Open in Gmail" goes to Gmail only: the column is service-written, but still treated as untrusted (rule 9). */
-const gmailUrl = (v: unknown): string | null => {
-  if (typeof v !== "string") return null;
-  try {
-    const u = new URL(v);
-    return u.protocol === "https:" && u.hostname === "mail.google.com" ? u.toString() : null;
-  } catch {
-    return null;
-  }
-};
 
 // Bidi overrides/isolates and control characters (except tab and newline) can make text read differently on screen.
 const SPOOF = /[\u0000-\u0008\u000B-\u001F\u007F-\u009F\u200E\u200F\u202A-\u202E\u2066-\u2069]/g;
@@ -140,6 +134,17 @@ function addresses(v: unknown): string[] {
   });
 }
 
+/** The mailbox address of a connection, from Coverage (core.briefing_coverage answers only for the caller's own comms view). Null on any failure: the link is then left out, the message still opens. */
+async function mailboxOf(client: Db, laneId: string, connectionId: string): Promise<string | null> {
+  try {
+    const { data, error } = await client.schema("core").rpc("briefing_coverage", { p_lane: laneId });
+    if (error) return null;
+    return parseCoverageRows(data).find((c) => c.stream === "mail" && c.connectionId === connectionId)?.account || null;
+  } catch {
+    return null;
+  }
+}
+
 /**
  * Proves visibility under RLS with the user's client, then reads the body live. A message the user may not see (other
  * lane, no comms view, AAL1, unknown or malformed id) is `not_found`, and Google is never called for it.
@@ -150,6 +155,7 @@ export async function openMessage(client: Db, laneId: string, messageId: string,
   if (error) throw new Error("message unavailable");
   const row = Array.isArray(data) ? (data[0] as Record<string, unknown> | undefined) : undefined;
   if (!row || typeof row.connection_id !== "string" || row.provider !== "google" || typeof row.received_at !== "string") return { state: "not_found" };
+  const mailbox = await mailboxOf(client, laneId, row.connection_id);
   const meta: MessageMeta = {
     messageId,
     fromName: str(row.from_name),
@@ -158,7 +164,8 @@ export async function openMessage(client: Db, laneId: string, messageId: string,
     cc: addresses(row.cc_recipients),
     subject: (v => v && displayText(v))(str(row.subject)),
     receivedAt: new Date(Date.parse(row.received_at)).toISOString(),
-    sourceUrl: gmailUrl(row.source_url),
+    mailbox,
+    gmailUrl: gmailThreadUrl(mailbox, str(row.thread_id)),
   };
   try {
     const body = await readBody(laneId, row.connection_id, messageId);

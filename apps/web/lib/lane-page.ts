@@ -11,7 +11,7 @@ import type { LaneSummary } from "@nichols/core/lanes";
 import { guards } from "./guards";
 import { timed } from "./timed";
 
-export type LoadedLane = { laneId: string; name: string; lanes: LaneSummary[] };
+export type LoadedLane = { laneId: string; name: string; lanes: LaneSummary[]; /** The verified session's user id (from the same lane check). */ userId: string };
 
 export const loadLane = cache(async (laneParam: string): Promise<LoadedLane> => {
   await connection(); // per request, never prerendered
@@ -26,7 +26,7 @@ export const loadLane = cache(async (laneParam: string): Promise<LoadedLane> => 
     const lanes = list.value;
     const lane = lanes.find((l) => l.laneId === laneParam);
     if (!lane) notFound();
-    return { laneId: lane.laneId, name: lane.name, lanes };
+    return { laneId: lane.laneId, name: lane.name, lanes, userId: check.value.session.userId };
   } catch (e) {
     if (e instanceof AuthError) {
       if (e.reason === "no_session") redirect("/sign-in");

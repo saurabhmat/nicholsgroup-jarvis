@@ -110,9 +110,8 @@ export type FinanceCard = {
   asOf: string | null;
   /** Show the link to Settings -> Connections. */
   connectLink: boolean;
-  /** Small lines under the figure. */
-  details: string[];
-  accounts: { name: string; value: string; shared: boolean }[];
+  /** Short caveats that must travel with the figure (rule 7 / D-18): what the figure leaves out. */
+  flags: string[];
 };
 
 const CASH_REASONS: Record<string, string> = {
@@ -153,7 +152,7 @@ export function emptyStateText(view: Exclude<HomeFinanceView, { state: "no_acces
 /** The three cards for a view. [] for a role that may not see finance. */
 export function financeCards(view: HomeFinanceView): FinanceCard[] {
   if (view.state === "no_access") return [];
-  const base = (key: FinanceCardKey, label: string, extra: Partial<FinanceCard> = {}): FinanceCard => ({ key, label, asOf: null, connectLink: false, details: [], accounts: [], ...extra });
+  const base = (key: FinanceCardKey, label: string, extra: Partial<FinanceCard> = {}): FinanceCard => ({ key, label, asOf: null, connectLink: false, flags: [], ...extra });
   const empty = emptyStateText(view);
   if (empty !== null) {
     const link = view.state === "not_connected";
@@ -177,8 +176,7 @@ export function financeCards(view: HomeFinanceView): FinanceCard[] {
           bookBalance: true,
           value: formatMoney(c.total),
           asOf: asOfFor(c.asOf),
-          accounts: c.accounts.flatMap((a) => (a.bookBalance === null ? [] : [{ name: a.name, value: formatMoney(a.bookBalance), shared: a.shared }])),
-          details: c.unmapped > 0 ? [`${String(c.unmapped)} bank ${c.unmapped === 1 ? "account is" : "accounts are"} not mapped to a company and not included`] : [],
+          flags: c.unmapped > 0 ? [`Excludes ${String(c.unmapped)} unmapped ${c.unmapped === 1 ? "account" : "accounts"}`] : [],
         })
       : base("cash", "Cash", { bookBalance: true, statusText: reasonText(CASH_REASONS, c.reason ?? "") });
 
@@ -189,10 +187,7 @@ export function financeCards(view: HomeFinanceView): FinanceCard[] {
           value: formatMoney(a.over30),
           asOf: asOfFor(view.asOf),
           qualifier: "more than 30 days past due",
-          details: [
-            `${String(a.invoices)} open ${a.invoices === 1 ? "invoice" : "invoices"}`,
-            ...(a.unmapped > 0 ? [`${String(a.unmapped)} overdue ${a.unmapped === 1 ? "invoice has" : "invoices have"} no company and ${a.unmapped === 1 ? "is" : "are"} not included`] : []),
-          ],
+          flags: a.unmapped > 0 ? [`Excludes ${String(a.unmapped)} ${a.unmapped === 1 ? "invoice" : "invoices"} with no company`] : [],
         })
       : base("ar30", "AR > 30 days", { statusText: reasonText(AR_REASONS, a.reason ?? "") });
 
@@ -203,11 +198,7 @@ export function financeCards(view: HomeFinanceView): FinanceCard[] {
           qualifier: `Net, ${p.start ? formatMonth(p.start) : "this month"}`,
           value: formatMoney(p.net),
           asOf: asOfFor(p.asOf),
-          details: [
-            `Income ${formatMoney(p.income)} · Expenses ${formatMoney(p.expenses)}`,
-            ...(p.method ? [`${p.method === "cash" ? "Cash" : "Accrual"} basis`] : []),
-            ...(p.partial ? ["Excludes payroll accounts"] : []),
-          ],
+          flags: p.partial ? ["Excludes payroll accounts"] : [],
         })
       : base("pnl", "P&L month to date", { statusText: reasonText(PNL_REASONS, p.reason ?? "") });
 

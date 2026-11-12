@@ -12,7 +12,7 @@ import { createGoogleHarness } from "../testing/google-harness";
 import { delay, http, HttpResponse, useMockServer } from "../testing/msw/index";
 import { createFakeGoogle, GOOGLE_ATTACHMENT_CANARY, GOOGLE_BODY_CANARY, GOOGLE_SNIPPET_CANARY, seedMessage } from "../testing/msw/google/handlers";
 import { assertGoogleHost } from "./guard";
-import { GOOGLE_HOSTS } from "./constants";
+import { GOOGLE_HOSTS, METADATA_HEADERS } from "./constants";
 import { createGoogleApi } from "./api";
 import { createGmailProvider, parseCursor, quoteGmailQuery } from "./mail";
 
@@ -52,7 +52,7 @@ describe("sync requests", () => {
     expect(gets.length).toBe(5);
     for (const r of gets) {
       expect(r.query.get("format")).toBe("metadata");
-      expect(r.query.getAll("metadataHeaders")).toEqual(["From", "To", "Cc", "Subject", "Date", "Content-Type"]);
+      expect(r.query.getAll("metadataHeaders")).toEqual([...METADATA_HEADERS]);
     }
     expect(fake.state.gmailRequests.every((r) => r.method === "GET")).toBe(true);
     expect(fake.state.gmailRequests.some((r) => ["full", "raw"].includes(r.query.get("format") ?? ""))).toBe(false);
@@ -106,7 +106,7 @@ describe("metadata records", () => {
     ]);
     expect(one.received_at).toBe(new Date(seedMessage(1, EXEC).internalDate).toISOString());
     expect(one.source_updated_at).toBe(one.received_at);
-    expect(one.source_url).toBe(`https://mail.google.com/mail/u/${encodeURIComponent(EXEC)}/#all/${seedMessage(1, EXEC).threadId}`);
+    expect(one.source_url).toBe(`https://mail.google.com/mail/?authuser=${encodeURIComponent(EXEC)}#all/${seedMessage(1, EXEC).threadId}`);
     const three = byId.get(seedMessage(3, EXEC).id) as MessageMeta;
     expect(three).toMatchObject({ is_starred: true, has_attachments: true, labels: ["INBOX", "UNREAD", "STARRED", "Label_77"] });
     const four = byId.get(seedMessage(4, EXEC).id) as MessageMeta;
@@ -132,6 +132,44 @@ describe("metadata records", () => {
     expect(got.subject?.length).toBeLessThanOrEqual(998);
     expect(got.from_name?.length).toBeLessThanOrEqual(200);
     expect(got.to_recipients).toEqual([{ address: "ok@fine.example.test" }]);
+  });
+});
+
+describe("header-derived flags (T-234 part 2)", () => {
+  it("stores booleans only: bulk, auto-reply and calendar flags from headers; a plain message has none; no header value is kept", async () => {
+    const { fake, h, conn, account } = setup();
+    const add = (extra: Record<string, string>, contentType?: string) => {
+      const id = fake.addMessage(account);
+      const m = account.messages.get(id);
+      if (m) {
+        m.extraHeaders = extra;
+        if (contentType) m.contentType = contentType;
+      }
+      return id;
+    };
+    const bulk = add({ "List-Unsubscribe": "<https://news.example.test/u/CANARY-UNSUB-TOKEN>" });
+    const auto = add({ "Auto-Submitted": "auto-replied" });
+    const cal = add({ Sender: "Google Calendar <calendar-notification@google.com>" });
+    const ics = add({}, 'text/calendar; method=REQUEST; charset="UTF-8"');
+    const gen = add({ "Auto-Submitted": "auto-generated" });
+    const authed = add({ "Authentication-Results": "mx.google.com; dkim=pass header.i=@pubk.test header.s=CANARY-SELECTOR; dmarc=pass (p=NONE) header.from=pubk.test" });
+    const am = account.messages.get(authed);
+    if (am) am.from = "Boss <boss@pubk.test>";
+    const spoof = add({ "Authentication-Results": "mx.google.com; dkim=pass header.d=evil.test; dmarc=fail" });
+    const sm = account.messages.get(spoof);
+    if (sm) sm.from = "Boss <boss@pubk.test>";
+    const { upserts } = await drain(h, conn, null);
+    const by = (id: string) => upserts.find((u) => u.message_id === id) as MessageMeta;
+    expect(by(bulk)).toMatchObject({ is_bulk: true, is_auto: false, is_calendar: false });
+    expect(by(auto)).toMatchObject({ is_bulk: false, is_auto: true, is_calendar: false });
+    expect(by(cal)).toMatchObject({ is_bulk: false, is_auto: false, is_calendar: true });
+    expect(by(ics)).toMatchObject({ is_calendar: true });
+    expect(by(gen)).toMatchObject({ is_auto: false, is_generated: true, is_auth_pass: false });
+    expect(by(authed)).toMatchObject({ is_auth_pass: true });
+    expect(by(spoof)).toMatchObject({ is_auth_pass: false });
+    expect(JSON.stringify(upserts)).not.toContain("CANARY-SELECTOR");
+    expect(by(seedMessage(1, EXEC).id)).toMatchObject({ is_bulk: false, is_auto: false, is_calendar: false });
+    expect(JSON.stringify(upserts)).not.toContain("CANARY-UNSUB-TOKEN");
   });
 });
 
@@ -461,9 +499,13 @@ describe("rate limits (T-063 review)", () => {
       acct.messages.set(m.id, m);
     }
     // The first message read is rate-limited for good (its five attempts are instant in tests); every other read takes
-    // 20 ms, so the page has failed long before the other workers could get through the remaining 24 messages.
+    // 200 ms, so the page fails while the first few workers are still reading. The invariant is checked directly, not by
+    // a timing threshold (the old "< 8 reads" bound flaked on a loaded single-core machine): only reads already in flight
+    // can land after the reject, and the page never reads through all 24 other messages.
     let target: string | undefined;
     let others = 0;
+    let rejected = false;
+    let startedAfterReject = 0;
     server.use(
       http.get("https://gmail.googleapis.com/gmail/v1/users/me/messages/:id", async ({ params }) => {
         target ??= String(params.id);
@@ -471,14 +513,19 @@ describe("rate limits (T-063 review)", () => {
           return HttpResponse.json({ error: { code: 403, status: "PERMISSION_DENIED", errors: [{ reason: "rateLimitExceeded" }] } }, { status: 403 });
         }
         others += 1;
-        await delay(20);
+        if (rejected) startedAfterReject += 1;
+        await delay(200);
         return undefined;
       }),
     );
     await expect(h.mail.sync("PKG", conn, null, { pageSize: 100 })).rejects.toMatchObject({ info: { kind: "rate_limited" } });
-    await delay(700); // let any worker that kept going show up in the count
-    // Only the reads already in flight when the page failed: far fewer than the 24 other messages on the page.
-    expect(others).toBeLessThan(8);
+    rejected = true;
+    await delay(1000); // let any worker that kept going show up in the count
+    // Reads already in flight when the page failed may reach the server after the reject (a loaded machine delays the
+    // token step before the HTTP call), but no worker takes a NEW item: at most concurrency - 1 = 3 late arrivals. A
+    // worker that kept going would start many more (24 reads at 200 ms each, 4 at a time).
+    expect(startedAfterReject).toBeLessThan(4);
+    expect(others).toBeLessThan(24);
   });
 
   it("a daily quota 403 is not retried in the run", async () => {

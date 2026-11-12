@@ -149,6 +149,17 @@ describe("lane config schema", () => {
     expect(parseLaneConfig({}).assistant.max_snippet_chars).toBe(300);
   });
 
+  it("news (T-234 part 4): off by default, generic topics and official domains, bounded values, strict", () => {
+    const n = parseLaneConfig({}).news;
+    expect(n).toMatchObject({ enabled: false, time: "06:00", max_searches: 6, monthly_cap_usd: 20, cost_per_1000_searches_usd: 10, blocked_domains: [] });
+    expect(n.topics).toHaveLength(6);
+    expect(n.preferred_domains).toEqual(["acquisition.gov", "federalregister.gov", "gsa.gov", "sam.gov", "defense.gov"]);
+    expect(parseLaneConfig({ news: { enabled: true, monthly_cap_usd: 5 } }).news).toMatchObject({ enabled: true, monthly_cap_usd: 5 });
+    for (const bad of [{ monthly_cap_usd: 0 }, { monthly_cap_usd: 5000 }, { time: "6:00" }, { max_searches: 11 }, { topics: [] }, { topics: ["<script>"] }, { blocked_domains: ["https://x.test/p"] }, { preferred_domains: ["x y.test"] }, { allowed_domains: ["x.test"] }, { cost_per_1000_searches_usd: -1 }]) {
+      expect(() => parseLaneConfig({ news: bad })).toThrow(z.ZodError);
+    }
+  });
+
   it("refuses input nested deeper than the limit without recursing further", () => {
     let deep: unknown = "x";
     for (let i = 0; i < 10_000; i++) deep = [deep];
@@ -226,5 +237,22 @@ describe("briefing schedule (D-32, T-231c)", () => {
   it("accepts custom days and rejects out-of-range, duplicate or empty lists", () => {
     expect(laneConfigSchema.shape.briefing.parse({ days: [0, 6] }).days).toEqual([0, 6]);
     for (const days of [[7], [-1], [1, 1], [], [1.5]]) expect(laneConfigSchema.shape.briefing.safeParse({ days }).success).toBe(false);
+  });
+});
+
+describe("briefing exclusions: subject prefixes (T-234 part 2 review)", () => {
+  const parse = (exclusions: unknown) => laneConfigSchema.shape.briefing.safeParse({ exclusions });
+  it("the defaults are valid prefixes (at least 4 characters, ending with a colon)", () => {
+    const x = laneConfigSchema.shape.briefing.parse({}).exclusions;
+    for (const p of [...x.calendar_subjects, ...x.auto_reply_subjects]) {
+      expect(p.length).toBeGreaterThanOrEqual(4);
+      expect(p.endsWith(":")).toBe(true);
+    }
+  });
+  it.each(["calendar_subjects", "auto_reply_subjects"])("%s rejects a short entry and an entry without a trailing colon", (key) => {
+    expect(parse({ [key]: ["Re:"] }).success).toBe(false); // 3 characters
+    expect(parse({ [key]: ["Accepted"] }).success).toBe(false); // no colon
+    expect(parse({ [key]: ["Hi"] }).success).toBe(false);
+    expect(parse({ [key]: ["Canceled:"] }).success).toBe(true);
   });
 });

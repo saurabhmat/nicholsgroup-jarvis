@@ -111,7 +111,15 @@ insert into security_definer_ok values
   ('act.stuck_actions', 'lists executing actions older than the lane threshold with their claim state; service_role only, lane-scoped (T-192)'),
   ('act.reconcile_verified', 'reconciler: executing -> verified; service_role only, conditional on executing + due + claim, never creates a claim (T-192)'),
   ('act.action_state', 'status and failure code of one action, lane-scoped; service_role only; lets a late execute see it was finished by the reconciler (T-192)'),
-  ('act.reconcile_failed', 'reconciler: executing -> failed (mismatch / outcome_unknown); service_role only, conditional on executing + due + claim (T-192)');
+  ('act.reconcile_failed', 'reconciler: executing -> failed (mismatch / outcome_unknown); service_role only, conditional on executing + due + claim (T-192)'),
+  ('act.withdraw_proposed', 'withdraws a still-pending job proposal (proposed -> invalidated); service_role only (T-234)'),
+  ('brief.news_digests_guard', 'insert/update trigger: lane enabled, a refresh needs an owner with the briefing view, pending -> final only, identity fixed, item shape and https links (T-234 part 4)'),
+  ('brief.news_reserve', 'news gates before any model call: web category, news.enabled, once-a-day schedule, 1-per-hour refresh, monthly cap from lane_config; service_role and the definer wrappers only (T-234 part 4)'),
+  ('core.news_begin_refresh', 'owner Refresh: aal2 + lane owner + briefing view, then brief.news_reserve (rate limit and cap in SQL) (T-234 part 4)'),
+  ('core.news_finish_own', 'owner Refresh result: aal2 + lane owner + briefing view, own pending refresh row only (T-234 part 4)'),
+  ('core.news_spend', 'news spend and last status (no items): aal2, lane owner or admin_technical (T-234 part 4)'),
+  ('brief.news_cap', 'the lane''s monthly news cap read from lane_config; no API role may execute it (T-234 part 4)'),
+  ('core.news_enabled', 'is news configured for the lane (boolean only): aal2 + briefing view, else false (T-234 part 4)');
 
 -- App functions authenticated may execute (callable through the API). Each one is reviewed.
 create temp table authenticated_exec_ok (name text primary key, why text not null) on commit drop;
@@ -120,6 +128,7 @@ insert into authenticated_exec_ok values
   ('core.briefing_events', 'Home calendar; invoker, RLS on cal.event_index applies (T-231a)'),
   ('core.briefing_threads', 'Home attention and money threads; invoker, RLS on comms.message_index applies (T-231b)'),
   ('core.briefing_latest', 'Home AI briefing: the caller''s own latest; invoker, RLS on brief.briefings applies (T-231c)'),
+  ('core.briefing_last_failure', 'Home briefing failure reason: the caller''s newest failed attempt; invoker, RLS on brief.briefings applies (T-234)'),
   ('core.briefing_save_own', 'Run now: saves the caller''s own briefing; checks aal2, owner role and the briefing view itself (T-231c)'),
   ('core.home_finance', 'Home finance figures; invoker over fin tables (T-233)'),
   ('core.home_finance_context', 'Home finance context; definer, checks the finance view at aal2 itself (T-233)'),
@@ -173,7 +182,14 @@ insert into authenticated_exec_ok values
   ('core.act_reject', 'approvals: wrapper over act.reject; invoker (T-232)'),
   ('core.act_list', 'approvals: the lane''s actions; invoker, RLS applies (T-232)'),
   ('core.act_get', 'approvals: one action; invoker, RLS applies (T-232)'),
-  ('core.act_pending_count', 'approvals: pending count for Home; invoker, RLS applies (T-232)');
+  ('core.act_pending_count', 'approvals: pending count for Home; invoker, RLS applies (T-232)'),
+  ('core.act_reply_state', 'reply drawer: pending proposal, in-doubt block and last verified reply for one thread; invoker, RLS applies (T-234)'),
+  ('act.is_unknown_failure', 'pure helper: is a failure code one after which the email may exist (T-234)'),
+  ('core.news_latest', 'Home GovCon news: the newest digest; invoker, RLS on brief.news_digests applies (T-234 part 4)'),
+  ('core.news_begin_refresh', 'owner Refresh: checks aal2, owner role and the briefing view itself; rate limit and cap in SQL (T-234 part 4)'),
+  ('core.news_finish_own', 'owner Refresh result; checks aal2, owner role, view and own pending row itself (T-234 part 4)'),
+  ('core.news_spend', 'news spend and last status; checks aal2 and owner/admin_technical itself (T-234 part 4)'),
+  ('core.news_enabled', 'is news configured for the lane; boolean only, checks aal2 and the briefing view itself (T-234 part 4)');
 
 create temp view app_objects as
   select c.oid, format('%s.%s', n.nspname, c.relname) as name, c.relkind

@@ -1118,3 +1118,29 @@ Logged, not fixed:
 - **Code L5.** An empty subject replies as "Re:".
 - **Code L6.** Home's draft status does not follow the proposal (approved, rejected, expired).
 - **Code L7.** Proposals run one after another (at most 3 per run).
+
+## T-234 part 1 review: logged, not fixed
+- **Home dropped the per-account cash list ("(shared)" flags).** The Finance page's "Cash by account" card is still an empty-state placeholder, so the list is shown nowhere until the Finance page is built. Home tiles keep the caveats (unmapped accounts/invoices, payroll) but not the per-account lines. Pending the Finance page.
+- **Run now single-flight ceiling (T-234 part 0).** The ceiling lets a second run overlap after 150 s; every write of the late run is guarded by the abort signal, so at worst two rows (newest wins).
+- **Coverage on Settings shows mailbox addresses** to callers with the comms or calendar view: the same audience that saw them on Home before.
+- **Part 4 (GovCon news):** news URLs come from untrusted web results; validate each as `https:` (parse with `URL`) before it is used in an `href`. `GovConNews` currently renders `n.url` as given.
+
+## T-234 part 3 review fixes: open items
+- Draft limiter is in memory per process (serverless instances each count): the model call is also bounded by provider limits; a SQL-backed limiter needs a migration. (security L2)
+- `check_sent_first` blocks any approval in the same thread for 24 h after an unknown-outcome failure; there is no owner "I checked Sent, nothing is there" override yet. (product decision)
+- Only the user's own sessionStorage holds drafts; sign-out clears them, but a shared browser profile that never signs out keeps them until the tab closes or the TTL passes.
+
+## T-234 parts 2–5: re-check items logged, not fixed (Nov 12, 2026)
+Every BLOCKER, HIGH and MEDIUM from the part 2–5 reviews and re-checks is fixed (commits bbf0242, 25e0ba6, c214a84, ea93130, b9a8f0c, b5030ae, d1461db, and the part 5 review fixes). Left as accepted risk:
+- **Part 2 re-check L1, DKIM relaxed alignment.** A signature from a subdomain of the From domain counts as an auth pass (DMARC relaxed). Anyone who can sign for a delegated subdomain (an ESP subdomain or a dangling CNAME) passes. A priority entry that is a full address gets only domain-level assurance.
+- **Part 3 re-check L1, the `confirmResend` audit.** The confirm flag comes from the owner's client and is not audited separately. The resend shows only as a new proposal in the history. Owner-only; the in-flight guards are in SQL.
+- **Part 3 re-check L2, sign-out by expiry.** A session that ends without the Sign out button (expiry, revocation, another tab) leaves drafts in sessionStorage until their TTL. They are keyed per user, and Home clears them when a different user signs in on the tab (part 5 review fixes).
+- **Part 3 re-check L3, approved-but-never-executed rows.** Such a row blocks the thread (`check_sent_first`) until it is resumed or expires (72 h). T-192 reconciles only `executing` rows.
+- **Part 3 re-check L4, the reply guard keys.** The guard is keyed by `connection_id`. If a reconnect created a new connection row for the same mailbox, an in-flight action on the old row would not block the new one. Reconnect upserts the same row today; re-check if that changes.
+- **Part 4 re-check L1 / L4, the owner and refresh bookkeeping.** By calling `news_begin_refresh` / `news_finish_own` directly, an owner can choose a small reserve on a refresh they start themselves (no model call runs), or close the app's own pending refresh first. That refresh is then booked at its reserve, and the `preferred` flag on items written that way is the owner's word. Owner-only; the cap and the 1/hour limit still hold.
+- **Part 4 re-check L5 / L6, link host labels.** `registrableHost` is a short heuristic: shared hosting such as github.io or vercel.app shows as "via github.io". The special-use and wildcard-DNS host lists are not exhaustive. Links are grounded to the search results and open only in the viewer's browser; Jarvis never fetches them.
+- **Part 4 re-check L7, spend from failed refreshes.** An owner whose refreshes keep failing can use the month's cap at about one reserve every 5 minutes. The cap bounds it.
+- **Part 4 re-check L8, viewers can see news cost.** Viewers with the briefing view can read `est_cost` and `reserved` on news rows (RLS select). If news spend should be owner-only, switch to a column-level select grant.
+- **Part 4, the first live web-search call.** The response shapes are tested against fakes only. The first real call after H-049 is a manual check: record the response as a fixture (H-049 step).
+- **Part 5 security L2, keep-alive.** A visible Home tab refreshes every 5 minutes, which renews the session cookies, so an unattended visible tab never idles out. There is no idle-timeout rule today; if one is added, the auto-refresh must not count as activity.
+- **Part 5 code L6, refresh during an action.** No pause while a server action ("Run now", news Refresh) is in flight. Component state survives a refresh, so the effect is a redundant re-read.

@@ -14,6 +14,10 @@ const ids = z.array(id).max(500).default([]);
 /** Free-text labels (GoHighLevel tags, pipeline stage names): any printable text, no control characters. */
 const tags = z.array(z.string().min(1).max(100).regex(/^[^\u0000-\u001f\u007f]+$/)).max(500).default([]);
 /** Case-insensitive substring patterns (briefing rules): plain text, never a regular expression. */
+const prefixPatterns = z
+  .array(z.string().min(4).max(100).regex(/^[^\u0000-\u001f\u007f]+$/).refine((v) => v.trim().endsWith(":"), "a subject prefix must end with a colon"))
+  .max(100)
+  .describe("subject prefixes: at least 4 characters, ending with a colon");
 const patterns = z.array(z.string().min(2).max(100).regex(/^[^\u0000-\u001f\u007f]+$/)).max(100);
 /** Nesting beyond this is never a valid config; the scan refuses it instead of recursing. */
 const MAX_DEPTH = 16;
@@ -79,6 +83,41 @@ export const DEFAULT_QBO_SYNC_INTERVAL_HOURS = 4;
 /** `lane_config.finance.qbo_sync`: one definition, also parsed alone by the connectors' reader so unrelated finance settings cannot stop the poll. */
 export const qboSyncSchema = z
   .strictObject({ interval_hours: z.union([z.literal(1), z.literal(2), z.literal(3), z.literal(4), z.literal(6), z.literal(8), z.literal(12)]).default(DEFAULT_QBO_SYNC_INTERVAL_HOURS) })
+  .prefault({});
+
+/** GovCon news card (T-234 part 4). The six topics are generic government-contracting subjects, not company data. */
+export const DEFAULT_NEWS_TOPICS = [
+  "FAR and DFARS changes",
+  "CMMC (cybersecurity maturity model certification)",
+  "GSA and SAM.gov updates",
+  "small-business contracting",
+  "major bid protests and contract awards",
+  "federal IT acquisition",
+] as const;
+/** Official sources the prompt prefers (a preference only: trade press is allowed, nothing is restricted by domain). */
+export const DEFAULT_NEWS_PREFERRED_DOMAINS = ["acquisition.gov", "federalregister.gov", "gsa.gov", "sam.gov", "defense.gov"] as const;
+const hostname = z.string().max(253).regex(/^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?(?:\.[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?)+$/);
+const newsTopic = z.string().min(3).max(120).regex(/^[^\u0000-\u001f\u007f<>]+$/);
+
+export const newsSchema = z
+  .strictObject({
+    // Off unless true. It also needs the `web` category in lane_policies.llm_allowed_categories (a human SQL step in production).
+    enabled: z.boolean().default(false),
+    // The daily fetch time (America/New_York wall clock); the job fetches once per day from this time on.
+    time: hhmm.default("06:00"),
+    topics: z.array(newsTopic).min(1).max(10).default([...DEFAULT_NEWS_TOPICS]),
+    preferred_domains: z.array(hostname).max(20).default([...DEFAULT_NEWS_PREFERRED_DOMAINS]),
+    // Never used with an allow list (the API refuses both together; trade press must stay allowed).
+    blocked_domains: z.array(hostname).max(64).default([]),
+    // Searches per fetch (the API's max_uses).
+    max_searches: z.int().min(1).max(10).default(6),
+    // Spend guard (USD, estimate): a fetch is refused before the model call when month-to-date plus the worst case for one call exceeds it.
+    monthly_cap_usd: z.number().min(1).max(1000).default(20),
+    // Prices for the estimate. NOT verified against the vendor price list (backlog Needs human): check before relying on the cap.
+    cost_per_1000_searches_usd: z.number().min(0).max(1000).default(10),
+    input_usd_per_mtok: z.number().min(0).max(1000).default(3),
+    output_usd_per_mtok: z.number().min(0).max(1000).default(15),
+  })
   .prefault({});
 
 export const laneConfigSchema = z.strictObject({
@@ -170,6 +209,19 @@ export const laneConfigSchema = z.strictObject({
           // Bank mail kept even when it matches an alert pattern.
           bank_keep_subjects: patterns.default(["statement", "payment due", "due date", "is due", "minimum payment"]),
           automated_senders: patterns.default(["no-reply", "noreply", "do-not-reply", "donotreply", "notifications", "notification", "alerts", "bounce", "mailer-daemon"]),
+          // T-234 part 2. Bulk/marketing mail is recognised by its headers at sync time (List-Unsubscribe, Precedence bulk/list/junk,
+          // List-Id: stored as the boolean is_bulk, never the headers). These are the org's OWN newsletter senders, which look like
+          // colleagues but are bulk: same sender syntax as above ("name@", "example.com", a word). Empty by default (company data).
+          org_newsletter_senders: patterns.default([]),
+          // Calendar invitations and updates: text/calendar mail is flagged at sync (is_calendar); these subject PREFIXES (case-insensitive,
+          // at the start of the subject, so "Re: Invitation: ..." from a person is not caught) cover mail whose parts are not visible.
+          calendar_subjects: prefixPatterns.default(["Invitation:", "Updated invitation:", "Updated invitation with note:", "Canceled event:", "Cancelled event:", "Canceled:", "Accepted:", "Declined:", "Tentatively accepted:", "New event:"]),
+          // True auto-replies are recognised by Auto-Submitted: auto-replied, X-Autoreply / X-Autorespond and Precedence auto_reply at sync
+          // (is_auto: a hard exclusion); these subject PREFIXES (>= 4 characters, ending with ":") catch the rest. A subject-prefix-only
+          // match is a SOFT exclusion: a priority sender whose mail passed authentication skips it ("Canceled: PO 4471").
+          auto_reply_subjects: prefixPatterns.default(["Automatic reply:", "Auto-reply:", "Autoreply:", "Auto reply:", "Out of office:", "Out of Office Autoreply:", "Automatic response:"]),
+          // Bot/CI subjects (whole words). Applied only to automated senders (no-reply, notifications ... or bot_senders), never to a person.
+          bot_subjects: patterns.default(["[github]", "dependabot", "pull request", "workflow run", "build #", "pipeline #", "deployment ready", "preview deployment", "check suite"]),
         })
         .prefault({}),
       security_subjects: patterns.default(["new sign-in", "new sign in", "security alert", "critical vulnerability", "suspicious", "unusual sign-in", "password was changed", "password changed"]),
@@ -254,6 +306,7 @@ export const laneConfigSchema = z.strictObject({
       path: ["reconcile_give_up_minutes"],
     })
     .prefault({}),
+  news: newsSchema,
   assistant: z
     .strictObject({
       messages_per_hour: z.int().min(1).max(1000).default(30),

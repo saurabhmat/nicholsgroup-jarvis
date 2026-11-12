@@ -457,6 +457,11 @@ isOneToOne: false
 "act_reject":
 { Args: { "p_id": string,"p_lane": string,"p_reason": string }; Returns: undefined
                            },
+"act_reply_state":
+{ Args: { "p_connection": string,"p_lane": string,"p_message_id": string,"p_thread_id": string }; Returns: {
+              "already_sent_at": string,"blocked": boolean,"pending_id": string
+            }[]
+                           },
 "act_stuck_actions":
 { Args: { "p_lane": string,"p_limit"?: number }; Returns: {
               "action": Json,"claim_external_id": string,"claim_outcome": string,"give_up": boolean
@@ -464,6 +469,9 @@ isOneToOne: false
                            },
 "act_supersede":
 { Args: { "p_derived": boolean,"p_hash": string,"p_lane": string,"p_old": string,"p_payload": Json,"p_proposer_user": string,"p_rationale": string,"p_source_refs": Json,"p_target": Json,"p_version": number }; Returns: string
+                           },
+"act_withdraw_proposed":
+{ Args: { "p_id": string,"p_lane": string,"p_reason": string }; Returns: boolean
                            },
 "ai_chat_turn":
 { Args: { "p_lane": string }; Returns: Json
@@ -558,6 +566,11 @@ isOneToOne: false
               "all_day": boolean,"attendees": Json,"calendar_id": string,"connection_id": string,"end_at": string,"end_date": string,"event_id": string,"location": string,"online_meeting_url": string,"organizer_email": string,"organizer_name": string,"source_url": string,"start_at": string,"start_date": string,"status": string,"timezone": string,"title": string
             }[]
                            },
+"briefing_last_failure":
+{ Args: { "p_lane": string }; Returns: {
+              "prepared_at": string,"reason": string
+            }[]
+                           },
 "briefing_latest":
 { Args: { "p_lane": string }; Returns: {
               "content": Json,"coverage": Json,"id": string,"last_failed_at": string,"last_run_at": string,"model": string,"prepared_at": string,"source_refs": Json,"status": string,"trigger": string,"window_from": string,"window_to": string
@@ -571,7 +584,7 @@ isOneToOne: false
                            },
 "briefing_threads":
 { Args: { "p_lane": string,"p_since": string }; Returns: {
-              "connection_id": string,"from_address": string,"from_name": string,"inbound_count": number,"is_important": boolean,"labels": (string)[],"last_at": string,"last_is_owner": boolean,"message_id": string,"owner_replied": boolean,"received_at": string,"source_url": string,"subject": string,"thread_key": string,"unread_count": number
+              "connection_id": string,"from_address": string,"from_name": string,"inbound_count": number,"is_auth_pass": boolean,"is_auto": boolean,"is_bulk": boolean,"is_calendar": boolean,"is_generated": boolean,"is_important": boolean,"labels": (string)[],"last_at": string,"last_is_owner": boolean,"message_id": string,"owner_replied": boolean,"received_at": string,"source_url": string,"subject": string,"thread_key": string,"unread_count": number
             }[]
                            },
 "briefings_purge":
@@ -638,7 +651,7 @@ isOneToOne: false
                            },
 "inbox_message_ref":
 { Args: { "p_lane": string,"p_message_id": string }; Returns: {
-              "cc_recipients": Json,"connection_id": string,"from_address": string,"from_name": string,"has_attachments": boolean,"is_important": boolean,"is_read": boolean,"message_id": string,"provider": string,"received_at": string,"source_url": string,"subject": string,"to_recipients": Json
+              "cc_recipients": Json,"connection_id": string,"from_address": string,"from_name": string,"has_attachments": boolean,"is_important": boolean,"is_read": boolean,"message_id": string,"provider": string,"received_at": string,"source_url": string,"subject": string,"thread_id": string,"to_recipients": Json
             }[]
                            },
 "inbox_messages":
@@ -663,6 +676,34 @@ isOneToOne: false
                            },
 "mfa_verification_attempt":
 { Args: { "event": Json }; Returns: Json
+                           },
+"news_begin_refresh":
+{ Args: { "p_lane": string,"p_reserve": number }; Returns: Json
+                           },
+"news_begin_scheduled":
+{ Args: { "p_lane": string,"p_reserve": number }; Returns: Json
+                           },
+"news_enabled":
+{ Args: { "p_lane": string }; Returns: boolean
+                           },
+"news_finish":
+{ Args: { "p_est_cost": number,"p_failure_code": string,"p_id": string,"p_items": Json,"p_lane": string,"p_searches": number,"p_status": string }; Returns: undefined
+                           },
+"news_finish_own":
+{ Args: { "p_est_cost": number,"p_failure_code": string,"p_id": string,"p_items": Json,"p_lane": string,"p_searches": number,"p_status": string }; Returns: undefined
+                           },
+"news_latest":
+{ Args: { "p_lane": string }; Returns: {
+              "day": string,"fetched_at": string,"id": string,"items": Json,"last_failed_at": string,"last_failure_code": string,"next_refresh_at": string,"pending_since": string,"searches": number,"status": string,"trigger": string
+            }[]
+                           },
+"news_purge":
+{ Args: { "p_keep_days": number,"p_lane": string }; Returns: number
+                           },
+"news_spend":
+{ Args: { "p_lane": string }; Returns: {
+              "cap_usd": number,"last_failure_code": string,"last_fetch_at": string,"last_status": string,"month_fetches": number,"month_spend": number,"news_enabled": boolean,"web_allowed": boolean
+            }[]
                            },
 "oauth_state_bind":
 { Args: { "p_account_ref": string,"p_lane": string,"p_state_hash": string,"p_toolkit": string,"p_user": string }; Returns: undefined

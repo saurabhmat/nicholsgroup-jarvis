@@ -8,7 +8,7 @@ import type { AuditEntry } from "@nichols/core/audit";
 import { createAudit } from "@nichols/core/audit";
 import { emailWriteCapability } from "./capability";
 import { approveAndExecute, editEmailProposal, executeApproved, listApprovals, pendingApprovalCount, proposeEmailAction, rejectAction } from "./email";
-import { ApprovalsError, NOT_ENABLED_MESSAGE, NOT_LIVE_MESSAGE } from "./errors";
+import { ApprovalsError, CHECK_SENT_FIRST_MESSAGE, NOT_ENABLED_MESSAGE, NOT_LIVE_MESSAGE, toApprovalsError } from "./errors";
 import { hashOfRow } from "./rows";
 import type { ApprovalsDeps, CapabilityFacts, Rpc } from "./types";
 
@@ -19,7 +19,7 @@ const CANARY = "BODY-CANARY-7f3a-not-real";
 
 type Row = Record<string, unknown> & { id: string; status: string; payload: Record<string, unknown> };
 
-function world(over: { facts?: Partial<CapabilityFacts>; mailboxes?: string[]; writer?: "ok" | "unknown" | "mismatch" | "refused"; auditFailOnce?: string; markVerifiedThrows?: boolean } = {}) {
+function world(over: { facts?: Partial<CapabilityFacts>; mailboxes?: string[]; writer?: "ok" | "unknown" | "mismatch" | "refused" | "timeout" | "plain_throw" | "no_id" | "rate_limited"; auditFailOnce?: string; markVerifiedThrows?: boolean } = {}) {
   let auditFailPending = over.auditFailOnce;
   const rows = new Map<string, Row>();
   const audits: AuditEntry[] = [];
@@ -88,6 +88,15 @@ function world(over: { facts?: Partial<CapabilityFacts>; mailboxes?: string[]; w
         return { data: [...rows.values()].filter((r) => r.lane_id === a.p_lane && r.status === "proposed").length, error: null };
       case "act_expire_stale":
         return { data: 0, error: null };
+      case "act_withdraw_proposed": {
+        // twin of act.withdraw_proposed: only a pending JOB proposal; body purged
+        const r = get(a.p_id);
+        if (!r || r.status !== "proposed" || r.proposer_kind !== "job") return { data: false, error: null };
+        r.status = "invalidated";
+        r.withdraw_reason = a.p_reason;
+        purge(r);
+        return { data: true, error: null };
+      }
       case "act_approve": {
         const r = get(a.p_id);
         if (!r) return err("act: not_found", "P0002");
@@ -154,6 +163,10 @@ function world(over: { facts?: Partial<CapabilityFacts>; mailboxes?: string[]; w
       calls.writes += 1;
       if (over.writer === "unknown") throw new ConnectorError({ kind: "provider_error", message: OUTCOME_UNKNOWN_MESSAGE });
       if (over.writer === "refused") throw new ConnectorError({ kind: "forbidden", message: "no" });
+      if (over.writer === "timeout") throw new ConnectorError({ kind: "timeout", message: "timed out" });
+      if (over.writer === "rate_limited") throw new ConnectorError({ kind: "rate_limited", message: "slow down" });
+      if (over.writer === "plain_throw") throw new Error("socket reset");
+      if (over.writer === "no_id") return { outcome: "accepted" as const, external_id: null, executed_at: new Date().toISOString(), provider_tid: null };
       return { outcome: "accepted" as const, external_id: "gmail-msg-1", executed_at: new Date().toISOString(), provider_tid: null };
     },
     async verifyWrite() {
@@ -209,6 +222,51 @@ describe("proposeEmailAction", () => {
     expect(JSON.stringify(w.audits)).not.toContain(CANARY);
     expect(JSON.stringify(w.audits)).not.toContain("Quarterly update");
     expect(w.calls.writes).toBe(0);
+  });
+
+  it("a cutoff before the insert creates nothing", async () => {
+    const w = world();
+    const c = new AbortController();
+    c.abort();
+    await expect(proposeEmailAction(w.deps, "PKG", { ...input, signal: c.signal })).rejects.toMatchObject({ code: "unavailable" });
+    expect(w.rows.size).toBe(0);
+  });
+
+  it("a cutoff during the insert withdraws the new job proposal (audited as the service) and throws", async () => {
+    const w = world();
+    const c = new AbortController();
+    const slow: ApprovalsDeps = { ...w.deps, jobRpc: async () => async (fn, a) => (fn === "act_propose" ? (c.abort(), w.rpc(fn, a)) : w.rpc(fn, a)) };
+    await expect(proposeEmailAction(slow, "PKG", { ...input, signal: c.signal })).rejects.toMatchObject({ code: "unavailable" });
+    const rows = [...w.rows.values()];
+    expect(rows).toHaveLength(1);
+    expect(rows[0]).toMatchObject({ status: "invalidated", withdraw_reason: "briefing run timed out" });
+    expect(rows.filter((r) => r.status === "proposed")).toHaveLength(0);
+    expect(rows[0]?.payload.bodyText).toBeUndefined();
+    expect(w.audits.map((x) => x.action)).toEqual(["action.withdrawn"]);
+    expect(w.audits[0]).toMatchObject({ actor: { kind: "service" }, metadata: { reason: "briefing run timed out" } });
+    expect(JSON.stringify(w.audits)).not.toContain(CANARY);
+  });
+
+  it("a cutoff during the insert whose withdraw fails is audited as withdraw_failed (and still throws)", async () => {
+    const w = world();
+    const c = new AbortController();
+    const slow: ApprovalsDeps = { ...w.deps, jobRpc: async () => async (fn, a) => (fn === "act_propose" ? (c.abort(), w.rpc(fn, a)) : fn === "act_withdraw_proposed" ? { data: false, error: null } : w.rpc(fn, a)) };
+    await expect(proposeEmailAction(slow, "PKG", { ...input, signal: c.signal })).rejects.toMatchObject({ code: "unavailable" });
+    expect(w.audits.map((x) => x.action)).toEqual(["action.withdraw_failed"]);
+    const throwing: ApprovalsDeps = { ...w.deps, jobRpc: async () => async (fn, a) => { if (fn === "act_withdraw_proposed") throw new Error("down"); return fn === "act_propose" ? (c2.abort(), w.rpc(fn, a)) : w.rpc(fn, a); } };
+    const c2 = new AbortController();
+    await expect(proposeEmailAction(throwing, "PKG", { ...input, signal: c2.signal })).rejects.toMatchObject({ code: "unavailable" });
+    expect(w.audits.map((x) => x.action)).toEqual(["action.withdraw_failed", "action.withdraw_failed"]);
+  });
+
+  it("a cutoff during the 'proposed' audit write withdraws the proposal too", async () => {
+    const w = world();
+    const c = new AbortController();
+    const slowAudit: ApprovalsDeps = { ...w.deps, audit: { log: async (e: AuditEntry) => { await w.deps.audit.log(e); if (e.action === "action.proposed") c.abort(); } } as never };
+    await expect(proposeEmailAction(slowAudit, "PKG", { ...input, signal: c.signal })).rejects.toMatchObject({ code: "unavailable" });
+    expect([...w.rows.values()].filter((r) => r.status === "proposed")).toHaveLength(0);
+    expect([...w.rows.values()][0]).toMatchObject({ status: "invalidated", withdraw_reason: "briefing run timed out" });
+    expect(w.audits.map((x) => x.action)).toEqual(["action.proposed", "action.withdrawn"]);
   });
 
   it("refuses a sender other than the connection's mailbox, and a mailbox that is not the lane's", async () => {
@@ -549,5 +607,32 @@ describe("job proposals (T-231d security review L3, L4)", () => {
   it("a job never addresses one of the lane's own mailboxes", async () => {
     const w = world();
     await expect(proposeEmailAction(w.deps, "PKG", { ...input, compose: { ...compose, to: [MAILBOX] } })).rejects.toMatchObject({ code: "invalid" });
+  });
+});
+
+describe("toApprovalsError: the reply guards (T-234 part 3)", () => {
+  it("maps the database's check_sent_first to a fixed message, and reply_already_pending to its own code", () => {
+    const e = toApprovalsError({ code: "P0001", message: "act: check_sent_first" });
+    expect(e.code).toBe("check_sent_first");
+    expect(e.message).toBe("An earlier reply to this conversation may already have gone out. Check your Sent folder first.");
+    expect(e.message).toBe(CHECK_SENT_FIRST_MESSAGE);
+    expect(toApprovalsError({ code: "23505", message: "act: reply_already_pending" }).code).toBe("reply_already_pending");
+  });
+});
+
+describe("send-stage failures are unknown unless the provider certainly did nothing (T-234 part 3 re-check M2)", () => {
+  const run = async (writer: "timeout" | "plain_throw" | "no_id" | "rate_limited" | "refused") => {
+    const w = world({ writer });
+    const { id, hash } = await proposeEmailAction(w.deps, "PKG", input);
+    return approveAndExecute(w.deps, w.ctx, { actionId: id, hashSeen: hash });
+  };
+  it("a timeout, a plain runtime error or an accepted send without an id may have gone out: unknown, never execution_error", async () => {
+    await expect(run("timeout")).resolves.toMatchObject({ status: "failed", failureCode: "outcome_unknown" });
+    await expect(run("plain_throw")).resolves.toMatchObject({ status: "failed", failureCode: "outcome_unknown" });
+    await expect(run("no_id")).resolves.toMatchObject({ status: "failed", failureCode: "verification_unavailable" });
+  });
+  it("a kind the provider certainly did not act on stays a definite failure", async () => {
+    await expect(run("refused")).resolves.toMatchObject({ status: "failed", failureCode: "execution_refused" });
+    await expect(run("rate_limited")).resolves.toMatchObject({ status: "failed", failureCode: "execution_error" });
   });
 });

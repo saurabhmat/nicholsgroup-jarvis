@@ -50,8 +50,11 @@ export const GOOGLE_AUTHORIZATION_PARAMS = { access_type: "offline", prompt: "co
 export const GMAIL_RATE_LIMIT = { requests: 20, perMs: 1000 } as const;
 /** Refresh the access token when it has less than this left. */
 export const REFRESH_SKEW_MS = 5 * 60_000;
-/** metadataHeaders requested by sync: the five the index needs, plus Content-Type to tell mixed (attachments) mail. */
-export const METADATA_HEADERS = ["From", "To", "Cc", "Subject", "Date", "Content-Type"] as const;
+/**
+ * metadataHeaders requested by sync: the five the index needs, plus Content-Type to tell mixed (attachments) mail, plus
+ * the headers that classify bulk, auto-reply and calendar mail (T-234 part 2; only booleans derived from them are stored).
+ */
+export const METADATA_HEADERS = ["From", "To", "Cc", "Subject", "Date", "Content-Type", "List-Unsubscribe", "List-Id", "Precedence", "Auto-Submitted", "X-Autoreply", "X-Autorespond", "Content-Class", "Sender", "Authentication-Results"] as const;
 /** First sync loads this many days of mail (the lane policy's retention purges older rows anyway). */
 export const DEFAULT_FULL_SYNC_DAYS = 90;
 /** Largest body text returned when the caller gives no maxChars. */

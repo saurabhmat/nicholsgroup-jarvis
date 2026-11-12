@@ -11,7 +11,9 @@ const m = vi.hoisted(() => ({
   composio: null as unknown,
   quickbooks: null as unknown,
   brain: null as unknown,
+  news: null as unknown,
   origin: null as unknown,
+  coverage: { items: [], unavailable: false } as unknown,
   // T-230 A: records when each loader starts, the guards it got, and lets a test hold every loader open.
   started: [] as string[],
   seenGuards: [] as unknown[],
@@ -32,11 +34,14 @@ vi.mock("@/lib/quickbooks-connection", () => ({ quickbooksSectionFor: (g: unknow
 vi.mock("@/lib/google-connection", () => ({ googleSectionFor: (g: unknown) => loader("google", () => m.google)(g) }));
 vi.mock("@/lib/composio-availability", () => ({ availability: () => ({}), missingSettings: () => ({}) }));
 vi.mock("@/lib/composio-connection", () => ({ composioSectionFor: (g: unknown) => loader("composio", () => m.composio)(g) }));
+vi.mock("@/lib/news-settings", () => ({ newsSectionFor: async () => m.news }));
+vi.mock("@/lib/coverage", () => ({ coverageFor: (g: unknown) => loader("coverage", () => m.coverage)(g) }));
+vi.mock("next/headers", () => ({ cookies: async () => ({ get: () => undefined }) }));
 vi.mock("@/lib/origin-notice-server", () => ({ currentOriginNotice: async () => m.origin }));
 vi.mock("@/lib/onboarding-progress", () => ({ onboardingFor: () => loader("brain", () => m.brain)() }));
 vi.mock("./connections-section", () => ({
-  ConnectionsSection: ({ google, quickbooks, composio }: { google: unknown; quickbooks: unknown; composio: unknown }) => (
-    <div data-testid="connections-section" data-google={String(Boolean(google))} data-quickbooks={String(Boolean(quickbooks))} data-composio={String(Boolean(composio))} />
+  ConnectionsSection: ({ google, quickbooks, composio, coverage }: { google: unknown; quickbooks: unknown; composio: unknown; coverage?: unknown }) => (
+    <div data-testid="connections-section" data-coverage={String(Boolean(coverage))} data-google={String(Boolean(google))} data-quickbooks={String(Boolean(quickbooks))} data-composio={String(Boolean(composio))} />
   ),
 }));
 // The shared module page is async (a server component); here only whether it is asked to draw the placeholder matters.
@@ -53,8 +58,9 @@ const view = (done: number) => ({
 });
 
 beforeEach(() => {
-  m.result = m.google = m.composio = m.brain = m.origin = null;
+  m.result = m.google = m.composio = m.brain = m.origin = m.news = null;
   m.quickbooks = null;
+  m.coverage = { items: [], unavailable: false };
   m.started = [];
   m.seenGuards = [];
   m.gate = null;
@@ -171,6 +177,39 @@ describe("layout (T-230 B)", () => {
   });
 });
 
+describe("Coverage (T-234 part 1: moved here from Home)", () => {
+  const item = { stream: "mail", account: "a@pubk.test", connectionId: "c", provider: "google", status: "active", configured: true, lastSyncAt: null, errorKind: null, state: "ok", reason: null };
+  it("a viewer with coverage rows gets Connections (with Coverage) and the sub-nav entry, and no placeholder", async () => {
+    m.coverage = { items: [item], unavailable: false };
+    expect(await draw()).toBe("false");
+    expect(screen.getByTestId("connections-section").getAttribute("data-coverage")).toBe("true");
+    expect(navLabelsOf()).toEqual(["Connections|#connections"]);
+  });
+  it("an outage is shown in Coverage, not hidden", async () => {
+    m.coverage = { items: [], unavailable: true };
+    await draw();
+    expect(screen.getByTestId("connections-section").getAttribute("data-coverage")).toBe("true");
+  });
+  it("no coverage rows and no providers: no Connections section", async () => {
+    await draw();
+    expect(screen.queryByTestId("connections-section")).toBeNull();
+  });
+});
+describe("GovCon news status (T-234 part 4)", () => {
+  const view = { webAllowed: true, enabled: true, capUsd: 20, monthSpendUsd: 1.5, monthFetches: 3, lastStatus: "ok", lastFailure: null, lastFetchAt: "2026-11-12T11:00:00Z" };
+  it("owner / admin_technical: a News section with its own nav entry; nobody else gets one", async () => {
+    m.news = view;
+    await draw();
+    expect(screen.getByTestId("news-section")).toBeTruthy();
+    expect(within(screen.getByTestId("settings-nav")).getByRole("link", { name: "GovCon news" }).getAttribute("href")).toBe("#news");
+    cleanup();
+    m.news = null;
+    await draw();
+    expect(screen.queryByTestId("news-section")).toBeNull();
+  });
+});
+const navLabelsOf = () => within(screen.getByTestId("settings-nav")).getAllByRole("link").map((a) => `${a.textContent ?? ""}|${a.getAttribute("href") ?? ""}`);
+
 describe("loading (T-230 A)", () => {
   it("starts every independent loader at once, with the one guards object, instead of one after the other", async () => {
     let release = () => {};
@@ -178,7 +217,7 @@ describe("loading (T-230 A)", () => {
     m.quickbooks = { connections: [] };
     const drawing = SettingsPage(props);
     await new Promise((r) => setTimeout(r, 10));
-    expect(m.started.sort()).toEqual(["brain", "composio", "google", "quickbooks", "result"]); // all five under way before any answers
+    expect(m.started.sort()).toEqual(["brain", "composio", "coverage", "google", "quickbooks", "result"]); // all six under way before any answers
     expect(m.seenGuards.filter((g) => g !== undefined).every((g) => g === m.sharedGuards)).toBe(true);
     release();
     render(await drawing);

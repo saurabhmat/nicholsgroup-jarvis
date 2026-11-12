@@ -88,6 +88,13 @@ export const MessageMetaSchema = z.strictObject({
   is_starred: z.boolean(),
   is_important: z.boolean(),
   has_attachments: z.boolean(),
+  // Flags derived from headers at sync time (T-234 part 2): bulk/list mail, calendar notification, auto-reply. Booleans only; the
+  // headers themselves are never kept. Optional: absent = false (a provider that cannot tell, and records from before the flags).
+  is_bulk: z.boolean().optional(),
+  is_calendar: z.boolean().optional(),
+  is_auto: z.boolean().optional(),
+  is_generated: z.boolean().optional(),
+  is_auth_pass: z.boolean().optional(),
   folder: id512.nullable(),
   labels: z.array(labelSchema).max(50),
   source_updated_at: InstantSchema.nullable(),

@@ -2,14 +2,18 @@
 // bodies. Every pattern comes from lane_config.briefing. Sender patterns are anchored ("name@" = local part, "x.com" =
 // domain or subdomain, a word = in the local part); subject patterns match whole words. Order of the top list
 // (acceptance order):
-//   1. lane_config priority_senders (address or @domain): not subject to exclusions except one-time codes
+//   1. lane_config priority_senders (address or @domain) that PASSED AUTHENTICATION (isAuthPass, derived at sync from Google's
+//      own Authentication-Results): not subject to the soft exclusions. A priority sender without an auth pass (spoofed From,
+//      or a row synced before the column existed: needs the resync, backlog H-048) is ranked as an ordinary sender.
+//      Hard exclusions for everyone: one-time codes and the header flags calendar / true auto-reply.
 //   2. threads waiting on the owner: last message from a real person, not the owner, and either the owner already wrote
 //      in the thread or the message was read and left unanswered
 //   3. unread mail from real people (not automated, not excluded)
 //   4. security alerts (new sign-in, critical vulnerability, ...) from lane_config security_senders domains only
 //   5. repeated bot/CI failures (one item per sender domain); within a tier, older first (age)
-// Excluded before ranking: excluded labels (promotions, social, forums), newsletters, social networks, OTP codes, bank
-// transaction alerts (statements and due dates are kept), single bot/CI messages.
+// Excluded before ranking: OTP codes, calendar invitations/updates, auto-replies, bulk/marketing mail (header flag or the org's
+// own newsletter senders), excluded labels (promotions, social, forums), newsletters, social networks, bank transaction alerts
+// (statements and due dates are kept), single bot/CI messages (and automated senders' CI-style subjects).
 
 export type ThreadRow = {
   connectionId: string;
@@ -26,6 +30,14 @@ export type ThreadRow = {
   ownerReplied: boolean;
   unreadCount: number;
   inboundCount: number;
+  /** Flags derived from headers at sync time (T-234 part 2; never the headers themselves). Absent = false (older rows). */
+  isBulk?: boolean;
+  isCalendar?: boolean;
+  isAuto?: boolean;
+  /** Auto-Submitted other than no / auto-replied (e.g. auto-generated): a soft signal. */
+  isGenerated?: boolean;
+  /** Google's Authentication-Results passed for the From domain (dmarc, or aligned dkim). False on rows synced before the column. */
+  isAuthPass?: boolean;
 };
 
 export type AttentionRules = {
@@ -43,6 +55,10 @@ export type AttentionRules = {
     bank_alert_subjects: readonly string[];
     bank_keep_subjects: readonly string[];
     automated_senders: readonly string[];
+    org_newsletter_senders: readonly string[];
+    calendar_subjects: readonly string[];
+    auto_reply_subjects: readonly string[];
+    bot_subjects: readonly string[];
   };
   money: { invoice: readonly string[]; bill: readonly string[]; renewal: readonly string[]; failed_payment: readonly string[] };
 };
@@ -69,10 +85,18 @@ const escapeRe = (v: string) => v.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 export function subjectHas(subject: string | null | undefined, words: readonly string[]): boolean {
   if (!subject) return false;
   const s = lower(subject);
-  return words.some((w) => new RegExp(`(^|[^a-z0-9])${escapeRe(lower(w))}($|[^a-z0-9])`).test(s));
+  // A pattern ending in "#" ("build #") may be followed by digits ("Build #1234 failed").
+  return words.some((w) => new RegExp(`(^|[^a-z0-9])${escapeRe(lower(w))}${w.endsWith("#") ? "($|[^a-z])" : "($|[^a-z0-9])"}`).test(s));
 }
 
-/** Anchored sender match: "name@" = local part exactly, "x.com" = domain or a subdomain, a word = in the local part. */
+/** Case-insensitive prefix match on the trimmed subject ("Invitation:" matches "Invitation: Standup", not "Re: Invitation: ..."). */
+export function subjectStarts(subject: string | null | undefined, prefixes: readonly string[]): boolean {
+  if (!subject) return false;
+  const s = lower(subject).trimStart();
+  return prefixes.some((p) => s.startsWith(lower(p)));
+}
+
+/** Anchored sender match: "name@" = local part exactly, "name@x.com" = that address, "x.com" = domain or a subdomain, a word = in the local part. */
 export function senderHas(address: string | null | undefined, patterns: readonly string[]): boolean {
   if (!address) return false;
   const a = lower(address);
@@ -82,6 +106,7 @@ export function senderHas(address: string | null | undefined, patterns: readonly
   return patterns.some((raw) => {
     const p = lower(raw);
     if (p.endsWith("@")) return local === p.slice(0, -1);
+    if (p.includes("@")) return a === p; // a full address ("weekly@example.com")
     if (p.includes(".") && !p.includes("@")) return domain === p || domain.endsWith(`.${p}`);
     return local.includes(p);
   });
@@ -98,26 +123,54 @@ export function isPrioritySender(address: string | null, senders: readonly strin
   });
 }
 
-export type Classified = { excluded: string | null; automated: boolean; bot: boolean; security: boolean };
+/** A priority sender whose mail passed authentication. Only this gets priority treatment; a spoofed From does not. */
+export const isTrustedPriority = (t: ThreadRow, r: AttentionRules): boolean => t.isAuthPass === true && isPrioritySender(t.fromAddress, r.prioritySenders);
 
-/** Why a thread is left out (null = kept), and the sender class. Security alerts from trusted senders are never excluded. */
+/** `hard`: the exclusion comes from a header flag or a one-time code, so nobody (not even an authenticated priority sender) skips it. */
+export type Classified = { excluded: string | null; hard: boolean; automated: boolean; bot: boolean; security: boolean };
+
+/**
+ * Why a thread is left out (null = kept), and the sender class. Security alerts from trusted senders are never excluded.
+ * Order: one-time codes, calendar invitations/updates, auto-replies, bulk mail (header flag or the org's own newsletter
+ * senders), labels, newsletters, social, bank alerts, bot/CI. The same function feeds Home and the AI briefing input.
+ */
 export function classify(t: ThreadRow, r: AttentionRules): Classified {
   const x = r.exclusions;
   const security = subjectHas(t.subject, r.securitySubjects) && senderHas(t.fromAddress, r.securitySenders);
   const bot = senderHas(t.fromAddress, x.bot_senders);
-  const automated = bot || senderHas(t.fromAddress, x.automated_senders);
-  if (security) return { excluded: null, automated, bot, security };
+  const automated = bot || t.isGenerated === true || senderHas(t.fromAddress, x.automated_senders);
+  if (security) return { excluded: null, hard: false, automated, bot, security };
+  // Hard: one-time codes and the header flags (calendar part, true auto-reply). Soft: everything else, including a subject-prefix-only
+  // calendar/auto-reply match and auto-generated mail; an authenticated priority sender skips the soft ones.
   let excluded: string | null = null;
+  let hard = true;
   if (subjectHas(t.subject, x.otp_subjects)) excluded = "otp";
+  else if (t.isCalendar === true) excluded = "calendar";
+  else if (t.isAuto === true) excluded = "auto_reply";
+  else {
+    hard = false;
+    if (subjectStarts(t.subject, x.calendar_subjects)) excluded = "calendar";
+    else if (subjectStarts(t.subject, x.auto_reply_subjects)) excluded = "auto_reply";
+    else if (t.isGenerated === true) excluded = "generated";
+    else excluded = classifyBulkAndBelow(t, x, bot, automated);
+  }
+  return { excluded, hard: excluded !== null && hard, automated, bot, security };
+}
+
+function classifyBulkAndBelow(t: ThreadRow, x: AttentionRules["exclusions"], bot: boolean, automated: boolean): string | null {
+  let excluded: string | null = null;
+  if (t.isBulk === true || senderHas(t.fromAddress, x.org_newsletter_senders)) excluded = "bulk";
   else if (t.labels.some((l) => x.labels.some((e) => lower(e) === lower(l)))) excluded = "label";
   else if (senderHas(t.fromAddress, x.newsletter_senders)) excluded = "newsletter";
   else if (senderHas(t.fromAddress, x.social_senders)) excluded = "social";
   else if (subjectHas(t.subject, x.bank_alert_subjects) && !subjectHas(t.subject, x.bank_keep_subjects)) excluded = "bank_alert";
   else if (bot) excluded = "bot";
-  return { excluded, automated, bot, security };
+  else if (automated && subjectHas(t.subject, x.bot_subjects)) excluded = "bot_subject";
+  return excluded;
 }
 
-function age(iso: string, now: Date): string {
+/** "3h", "2d", "under an hour". */
+export function ageLabel(iso: string, now: Date): string {
   const h = Math.max(0, Math.round((now.getTime() - Date.parse(iso)) / 3_600_000));
   if (h < 1) return "under an hour";
   if (h < 48) return `${String(h)}h`;
@@ -132,7 +185,7 @@ export function rankAttention(rows: ThreadRow[], r: AttentionRules, now: Date, l
   const failures = new Map<string, ThreadRow[]>();
   for (const t of rows) {
     const c = classify(t, r);
-    const priority = isPrioritySender(t.fromAddress, r.prioritySenders);
+    const priority = isTrustedPriority(t, r);
     if (c.excluded === "bot" && !priority) {
       if (subjectHas(t.subject, r.exclusions.bot_failure_words)) {
         const k = domainOf(t.fromAddress ?? "") || "unknown";
@@ -140,11 +193,11 @@ export function rankAttention(rows: ThreadRow[], r: AttentionRules, now: Date, l
       }
       continue;
     }
-    // Priority senders skip the exclusions, except one-time codes.
-    if (c.excluded && !(priority && c.excluded !== "otp")) continue;
+    // Authenticated priority senders skip the soft exclusions; the hard ones (codes, calendar and auto-reply header flags) hold for everyone.
+    if (c.excluded && !(priority && !c.hard)) continue;
     if (t.lastIsOwner) continue; // the owner answered last: not waiting on anyone
     const unread = t.unreadCount > 0;
-    const ago = age(t.receivedAt, now);
+    const ago = ageLabel(t.receivedAt, now);
     const person = !c.automated;
     let item: { tier: number; kind: AttentionKind; reason: string } | null = null;
     if (priority) item = { tier: 0, kind: "priority", reason: `Priority sender${unread ? ", unread" : ", not answered"} · ${ago}` };
@@ -165,16 +218,27 @@ export function rankAttention(rows: ThreadRow[], r: AttentionRules, now: Date, l
 
 const MONEY_ORDER: MoneyKind[] = ["failed_payment", "invoice", "bill", "renewal"];
 
-/** Money card: invoices, bills, renewals and failed payments by subject pattern (failed payments first); excluded mail left out. */
+/**
+ * Money card: invoices, bills, renewals and failed payments by subject pattern (failed payments first). Money mail is
+ * usually bulk or machine-generated (billing systems), so a match is kept despite the bulk, auto-generated, label and
+ * bot_subject exclusions. Still left out: one-time codes, calendar notices, true auto-replies and the newsletter sender lists.
+ */
 export function moneyThreads(rows: ThreadRow[], r: AttentionRules, limit = 6): MoneyThread[] {
   const out: MoneyThread[] = [];
   for (const t of rows) {
-    const c = classify(t, r);
-    // Billing systems are automated senders (kept); promotions, newsletters, OTPs, card alerts and CI mail are not money.
-    if (c.excluded) continue;
     if (t.lastIsOwner) continue; // already answered
     const kind = MONEY_ORDER.find((k) => subjectHas(t.subject, r.money[k]));
-    if (kind) out.push({ key: `${t.connectionId}:${t.threadKey}`, kind, thread: t });
+    if (!kind) continue;
+    const c = classify(t, r);
+    // A subject-prefix-only calendar/auto-reply match is soft: an authenticated priority sender skips it.
+    if ((c.excluded === "otp" || c.excluded === "calendar" || c.excluded === "auto_reply") && !(isTrustedPriority(t, r) && !c.hard)) continue;
+    if (senderHas(t.fromAddress, r.exclusions.newsletter_senders) || senderHas(t.fromAddress, r.exclusions.org_newsletter_senders)) continue;
+    // Spam and trash are never money (T-234 part 2 security re-check M2).
+    if (t.labels.some((l) => /^(spam|trash)$/i.test(l))) continue;
+    // A money subject overrides the bulk / generated / label / bot exclusions only for an AUTHENTICATED sender (real billing
+    // systems sign with DKIM aligned to their From domain); unauthenticated "Invoice overdue, pay here" mail stays out.
+    if (c.excluded !== null && t.isAuthPass !== true) continue;
+    out.push({ key: `${t.connectionId}:${t.threadKey}`, kind, thread: t });
   }
   return out.sort((a, b) => MONEY_ORDER.indexOf(a.kind) - MONEY_ORDER.indexOf(b.kind) || b.thread.receivedAt.localeCompare(a.thread.receivedAt)).slice(0, limit);
 }
@@ -213,6 +277,11 @@ export function parseThreads(data: unknown): ThreadRow[] {
         ownerReplied: r.owner_replied === true,
         unreadCount: num(r.unread_count),
         inboundCount: num(r.inbound_count),
+        isBulk: r.is_bulk === true,
+        isCalendar: r.is_calendar === true,
+        isAuto: r.is_auto === true,
+        isGenerated: r.is_generated === true,
+        isAuthPass: r.is_auth_pass === true,
       },
     ];
   });

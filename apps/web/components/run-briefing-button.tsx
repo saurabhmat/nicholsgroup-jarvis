@@ -2,12 +2,14 @@
 // "Run now" (T-231c): prepares a new briefing on the server; the page refreshes when it is saved. Codes only.
 import { useActionState } from "react";
 import { buttonVariants } from "@nichols/ui";
+import { FailureReason } from "./briefing-failure";
 import { runBriefingNow, type RunNowState } from "@/app/[laneId]/briefing-actions";
 
 const MESSAGES: Record<string, string> = {
   forbidden: "Only the owner can prepare the briefing.",
   not_configured: "The AI is not set up for this deployment yet.",
   too_soon: "A briefing was prepared in the last 2 minutes.",
+  busy: "A briefing is already being prepared.",
   unavailable: "The briefing could not be prepared. Try again in a minute.",
 };
 
@@ -19,8 +21,18 @@ export function RunBriefingButton({ laneId }: { laneId: string }) {
         {pending ? "Preparing…" : "Run now"}
       </button>
       {state && "error" in state ? (
-        <span role="status" className="text-small text-muted-foreground">
-          {MESSAGES[state.error]}
+        state.reason ? (
+          <span role="status">
+            <FailureReason code={state.reason} hint={state.hint ?? null} prefix="Not prepared" />
+          </span>
+        ) : (
+          <span role="status" className="text-small text-muted-foreground">
+            {MESSAGES[state.error]}
+          </span>
+        )
+      ) : state?.reason ? (
+        <span role="status">
+          <FailureReason code={state.reason} hint={state.hint ?? null} prefix="Not prepared" />
         </span>
       ) : null}
     </form>

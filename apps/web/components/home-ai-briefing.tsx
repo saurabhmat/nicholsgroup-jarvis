@@ -1,113 +1,156 @@
-// AI briefing on Home (T-231c): Today's briefing (3-5 lines) with "prepared at" and the review window, Deadlines and
-// follow-ups, Top 3 priorities, and the what/why/next notes merged into "Needs your attention". All model text is plain
-// text (React escapes it); sources and links come from the stored refs (metadata), never from the model.
-import { Badge, PageSection } from "@nichols/ui";
+// AI briefing on Home (T-231c; T-234 part 2: merged into "Needs your attention"): the summary (first 2 lines of the briefing, the rest
+// behind "More"), "Prepared <time> · Run now", the Top 3 priorities as a compact numbered row, the deadlines list (folded), and the
+// why/next notes shown on the attention items. All model text is plain text (React escapes it); sources and links come from the
+// stored refs (metadata), never from the model.
+import Link from "next/link";
+import { Badge } from "@nichols/ui";
+import { inboxHref } from "@/lib/inbox-links";
 import { formatDateTimeIn, maskFigures, type AttentionNote, type BriefRef } from "@nichols/briefing/domain";
+import type { FailureCode } from "@nichols/briefing/domain";
 import type { SavedBriefingView } from "@/lib/briefing";
+import { FailureReason } from "./briefing-failure";
 import { RunBriefingButton } from "./run-briefing-button";
+import { PersistedDetails } from "./home-scope";
 
 const STATUS: Record<SavedBriefingView["status"], { label: string; variant: "success" | "outline" | "alert" }> = {
   ready: { label: "Ready", variant: "success" },
-  partial: { label: "Partial: see Coverage", variant: "outline" },
+  partial: { label: "Partial: see Settings → Connections", variant: "outline" },
   failed: { label: "Could not be prepared", variant: "alert" },
 };
 
-export function AiBriefing({ laneId, brief, fallbackLines, tz, canRun }: { laneId: string; brief: SavedBriefingView | null; fallbackLines: string[]; tz: string; canRun: boolean }) {
+/** The summary is the first two lines of the briefing (1-2 sentences); the rest sits behind "More from the briefing". */
+const SUMMARY_LINES = 2;
+
+/**
+ * The top of "Needs your attention" (T-234 part 2): the AI summary, "Prepared <time> · Run now", and the Top 3 priorities as a
+ * compact numbered row. Without an AI briefing (none yet, failed, or not configured) the rule-based sentence takes its place with
+ * "AI summary unavailable: <reason>".
+ * `failure`: why the newest attempt (or the AI setup) failed, a fixed code; `failureHint`: the admin hint, set server-side only for owner or admin_technical.
+ */
+export function AiBriefing({ laneId, brief, fallbackLines, tz, canRun, failure = null, failureHint = null }: { laneId: string; brief: SavedBriefingView | null; fallbackLines: string[]; tz: string; canRun: boolean; failure?: FailureCode | null; failureHint?: string | null }) {
   const lines = brief && brief.status !== "failed" && brief.content.lines.length > 0 ? brief.content.lines : null;
+  const priorities = brief && brief.status !== "failed" ? brief.content.priorities : [];
   return (
-    <section aria-label="Today's briefing" className="relative overflow-hidden rounded-card border border-border bg-card p-5 text-card-foreground shadow-card sm:p-6">
-      <span aria-hidden className="absolute inset-x-0 top-0 h-1 bg-gold" />
-      <div className="flex flex-wrap items-baseline justify-between gap-2">
-        <h2 className="font-heading text-card-title font-semibold text-foreground">Today&apos;s briefing</h2>
-        <div className="flex flex-wrap items-center gap-3">
-          {brief ? (
-            <span data-testid="briefing-prepared" className="text-small text-muted-foreground">
-              {brief.status === "failed" ? "Last attempt" : "Prepared"} {formatDateTimeIn(brief.preparedAt, tz)}
-              {brief.status === "failed" ? null : ` · mail reviewed ${formatDateTimeIn(brief.windowFrom, tz)} – ${formatDateTimeIn(brief.windowTo, tz)}`}
-            </span>
-          ) : (
-            <span className="text-small text-muted-foreground">From your connected sources</span>
-          )}
-          {brief ? <Badge variant={STATUS[brief.status].variant}>{STATUS[brief.status].label}</Badge> : null}
-          {canRun ? <RunBriefingButton laneId={laneId} /> : null}
-        </div>
-      </div>
-      {brief && brief.status !== "failed" && brief.lastFailedAt ? (
-        <p data-testid="briefing-last-failed" className="mt-2 text-small text-muted-foreground">
-          A newer attempt at {formatDateTimeIn(brief.lastFailedAt, tz)} could not be prepared; this is the last good briefing.
-        </p>
-      ) : null}
+    <div data-testid="ai-briefing" className="flex flex-col gap-3 border-b border-border pb-4">
       {lines ? (
-        <ul data-testid="briefing" className="mt-3 flex max-w-4xl list-disc flex-col gap-1 pl-5 text-body leading-relaxed text-foreground">
-          {lines.map((l, i) => (
-            <li key={String(i)}>{l}</li>
-          ))}
-        </ul>
+        <div className="max-w-4xl">
+          <p data-testid="briefing" className="text-body leading-relaxed text-foreground">
+            {lines.slice(0, SUMMARY_LINES).join(" ")}
+          </p>
+          {lines.length > SUMMARY_LINES ? (
+            <PersistedDetails id="briefing-more" testId="briefing-more" className="mt-1 text-small" summaryClassName="cursor-pointer text-primary" summary="More from the briefing">
+              <ul className="mt-2 flex list-disc flex-col gap-1 pl-5 text-body leading-relaxed text-foreground">
+                {lines.slice(SUMMARY_LINES).map((l, i) => (
+                  <li key={String(i)}>{l}</li>
+                ))}
+              </ul>
+            </PersistedDetails>
+          ) : null}
+        </div>
       ) : fallbackLines.length > 0 ? (
-        <p data-testid="briefing" className="mt-3 max-w-4xl text-body leading-relaxed text-foreground">
+        <p data-testid="briefing" className="max-w-4xl text-body leading-relaxed text-foreground">
           {fallbackLines.join(" ")}
         </p>
       ) : (
-        <p className="mt-3 text-body text-muted-foreground">Your briefing appears here once this company&apos;s sources are connected.</p>
+        <p className="text-body text-muted-foreground">Your briefing appears here once this company&apos;s sources are connected.</p>
+      )}
+      <div className="flex flex-wrap items-center gap-x-3 gap-y-2">
+        {brief ? (
+          <span data-testid="briefing-prepared" className="text-small text-muted-foreground" title={brief.status === "failed" ? undefined : `Mail reviewed ${formatDateTimeIn(brief.windowFrom, tz)} – ${formatDateTimeIn(brief.windowTo, tz)}`}>
+            {brief.status === "failed" ? "Last attempt" : "Prepared at"} {formatDateTimeIn(brief.preparedAt, tz)}
+          </span>
+        ) : (
+          <span className="text-small text-muted-foreground">From your connected sources</span>
+        )}
+        {brief && brief.status === "partial" ? <Badge variant={STATUS.partial.variant}>{STATUS.partial.label}</Badge> : null}
+        {canRun ? <RunBriefingButton laneId={laneId} /> : null}
+      </div>
+      {brief && brief.status !== "failed" && brief.lastFailedAt ? (
+        <p data-testid="briefing-last-failed" className="text-small text-muted-foreground">
+          A newer attempt at {formatDateTimeIn(brief.lastFailedAt, tz)} could not be prepared; this is the last good briefing.
+        </p>
+      ) : null}
+      {!lines && (failure || (brief && (brief.status === "failed" || brief.lastFailedAt))) ? (
+        <p>
+          <FailureReason code={failure} hint={failureHint} />
+        </p>
+      ) : lines && failure ? (
+        <p>
+          <FailureReason code={failure} hint={failureHint} prefix="Newest attempt not prepared" />
+        </p>
+      ) : null}
+      {priorities.length > 0 ? (
+        <div data-testid="priorities-row" className="flex flex-col gap-1">
+          <span className="text-small font-medium text-muted-foreground">Top {priorities.length === 1 ? "priority" : String(priorities.length)}</span>
+          <ol data-testid="priorities" className="grid gap-x-4 gap-y-1 text-small sm:grid-cols-3">
+            {priorities.map((p, i) => (
+              <li key={String(i)} className="flex min-w-0 gap-2" title={p.reason}>
+                <span aria-hidden className="font-semibold text-muted-foreground">
+                  {String(i + 1)}.
+                </span>
+                <span className="min-w-0 break-words text-foreground">{p.text}</span>
+              </li>
+            ))}
+          </ol>
+        </div>
+      ) : null}
+    </div>
+  );
+}
+
+/** "Open thread" goes to the thread in Jarvis (the stored provider link is not used: it left Jarvis for a Google page). */
+const refLink = (laneId: string, r: BriefRef | undefined) =>
+  r ? (
+    <Link href={inboxHref(laneId, r.messageId)} className="text-small text-primary underline-offset-2 hover:underline">
+      Open thread
+    </Link>
+  ) : null;
+
+/** Deadlines and follow-ups from today's briefing (folded under "Drafts and deadlines" on Home). */
+export function Deadlines({ laneId, brief, tz }: { laneId: string; brief: SavedBriefingView | null; tz: string }) {
+  if (!brief || brief.status === "failed") return null;
+  const byRef = new Map(brief.refs.map((r) => [r.ref, r]));
+  const { deadlines } = brief.content;
+  return (
+    <section aria-label="Deadlines and follow-ups" className="flex flex-col gap-2">
+      <h3 className="text-body font-semibold text-foreground">Deadlines and follow-ups</h3>
+      {deadlines.length === 0 ? (
+        <p className="text-body text-muted-foreground">No deadlines or follow-ups in what was read.</p>
+      ) : (
+        <ul data-testid="deadlines" className="flex flex-col divide-y divide-border">
+          {deadlines.map((d, i) => {
+            const r = d.ref ? byRef.get(d.ref) : undefined;
+            return (
+              <li key={String(i)} className="flex flex-col gap-1 py-2 text-body">
+                <span className="text-foreground">
+                  {d.text}
+                  {d.due ? <span className="text-muted-foreground"> · due {d.due}</span> : null}
+                </span>
+                {r ? (
+                  <span className="flex flex-wrap items-baseline gap-2 text-small text-muted-foreground">
+                    {[r.mailbox, r.fromName ?? r.fromAddress, r.subject ? maskFigures(r.subject) : null, r.receivedAt ? formatDateTimeIn(r.receivedAt, tz) : null].filter(Boolean).join(" · ")}
+                    {refLink(laneId, r)}
+                  </span>
+                ) : null}
+              </li>
+            );
+          })}
+        </ul>
       )}
     </section>
   );
 }
 
-const refLink = (r: BriefRef | undefined) =>
-  r?.sourceUrl ? (
-    <a href={r.sourceUrl} target="_blank" rel="noopener noreferrer" className="text-small text-primary underline-offset-2 hover:underline">
-      Open thread
-    </a>
-  ) : null;
-
-export function DeadlinesAndPriorities({ brief, tz }: { brief: SavedBriefingView | null; tz: string }) {
-  if (!brief || brief.status === "failed") return null;
+/** Provider message -> the email.send proposal the briefing prepared (T-231d), for the Reply action. */
+export function repliesByMessage(brief: SavedBriefingView | null): Map<string, string> {
+  const out = new Map<string, string>();
+  if (!brief || brief.status === "failed") return out;
   const byRef = new Map(brief.refs.map((r) => [r.ref, r]));
-  const { deadlines, priorities } = brief.content;
-  return (
-    <>
-      <PageSection title="Top 3 priorities" note="From today's briefing">
-        {priorities.length === 0 ? (
-          <p className="text-body text-muted-foreground">No priorities could be drawn from what was read.</p>
-        ) : (
-          <ol data-testid="priorities" className="flex list-decimal flex-col gap-2 pl-5 text-body">
-            {priorities.map((p, i) => (
-              <li key={String(i)}>
-                <span className="font-medium text-foreground">{p.text}</span>
-                <span className="block text-small text-muted-foreground">{p.reason}</span>
-              </li>
-            ))}
-          </ol>
-        )}
-      </PageSection>
-      <PageSection title="Deadlines and follow-ups" note="From today's briefing">
-        {deadlines.length === 0 ? (
-          <p className="text-body text-muted-foreground">No deadlines or follow-ups in what was read.</p>
-        ) : (
-          <ul data-testid="deadlines" className="flex flex-col divide-y divide-border">
-            {deadlines.map((d, i) => {
-              const r = d.ref ? byRef.get(d.ref) : undefined;
-              return (
-                <li key={String(i)} className="flex flex-col gap-1 py-2 text-body">
-                  <span className="text-foreground">
-                    {d.text}
-                    {d.due ? <span className="text-muted-foreground"> · due {d.due}</span> : null}
-                  </span>
-                  {r ? (
-                    <span className="flex flex-wrap items-baseline gap-2 text-small text-muted-foreground">
-                      {[r.mailbox, r.fromName ?? r.fromAddress, r.subject ? maskFigures(r.subject) : null, r.receivedAt ? formatDateTimeIn(r.receivedAt, tz) : null].filter(Boolean).join(" · ")}
-                      {refLink(r)}
-                    </span>
-                  ) : null}
-                </li>
-              );
-            })}
-          </ul>
-        )}
-      </PageSection>
-    </>
-  );
+  for (const d of brief.content.replies) {
+    const r = byRef.get(d.ref);
+    if (r && d.proposalId) out.set(`${r.connectionId}:${r.messageId}`, d.proposalId);
+  }
+  return out;
 }
 
 /** The AI note for one attention thread (matched by provider message id), shown under the rule-based item. */

@@ -1,4 +1,5 @@
 // iPhone "More" tab: the menu entries that have no tab of their own, and sign-out. A tab page, so no back link.
+import { SignOutForm } from "@/components/sign-out-form";
 import Link from "next/link";
 import { Button, laneHref, MORE_ITEMS, navItem, PageHeader } from "@nichols/ui";
 import { OnboardingMoreRow } from "@/components/onboarding-entry";
@@ -31,11 +32,11 @@ async function More({ params }: { params: Promise<{ laneId: string }> }) {
         })}
       </ul>
       <ThemeToggle />
-      <form action={signOut}>
+      <SignOutForm action={signOut}>
         <Button type="submit" variant="outline">
           Sign out
         </Button>
-      </form>
+      </SignOutForm>
     </div>
   );
 }

@@ -6,6 +6,8 @@ import { laneConfigSchema, type LaneConfig } from "@nichols/core/lane-config";
 import type { LaneClient } from "@nichols/core/lane-router";
 import {
   analyzeDay,
+  FAILURE_CODES,
+  type FailureCode,
   BUSINESS_TZ,
   coverageLine,
   dayWindow,
@@ -243,6 +245,21 @@ export function parseSavedBriefing(data: unknown): SavedBriefingView | null {
       notes: strs(c.notes),
     },
   };
+}
+
+/**
+ * Why the caller's newest briefing attempt failed: a fixed code from the stored "fail:<code>" note (core.briefing_last_failure),
+ * or null when the newest attempt did not fail, predates codes or the lookup failed. Never raw text.
+ */
+export async function lastFailureReason(client: Db, laneId: string): Promise<FailureCode | null> {
+  try {
+    const { data, error } = await client.schema("core").rpc("briefing_last_failure", { p_lane: laneId });
+    if (error || !Array.isArray(data)) return null;
+    const reason = (data[0] as { reason?: unknown } | undefined)?.reason;
+    return typeof reason === "string" && (FAILURE_CODES as readonly string[]).includes(reason) ? (reason as FailureCode) : null;
+  } catch {
+    return null;
+  }
 }
 
 /** The caller's latest prepared briefing (null when none, or on error: Home then shows the rule-based sections only). */

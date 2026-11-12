@@ -2,8 +2,10 @@
 // copy-ready text and a Copy button; each also sits in Approvals as an email.send proposal (editable there, never sent
 // without approval). Further threads needing a reply are listed by name. Recipient, subject and links come from the
 // stored refs (mail metadata), never from the model; model text is plain text (React escapes it).
+// T-234 part 2: shown folded under "Needs your attention" ("Drafts and deadlines"), so the sections drop their own card look.
 import Link from "next/link";
 import { Badge, laneHref, PageSection } from "@nichols/ui";
+import { inboxHref } from "@/lib/inbox-links";
 import { formatDateTimeIn, maskFigures, type BriefRef } from "@nichols/briefing/domain";
 import type { SavedBriefingView } from "@/lib/briefing";
 import { CopyTextButton } from "./copy-text-button";
@@ -13,13 +15,16 @@ export const REPLY_STATUS = {
   awaiting_input: { label: "Awaiting your input", variant: "outline" },
 } as const;
 
+/** Plain (no card) look for a section nested in another card. */
+const EMBEDDED = "gap-2 rounded-none border-0 bg-transparent p-0 shadow-none sm:p-0";
+
 export function ReplyDrafts({ laneId, brief, tz }: { laneId: string; brief: SavedBriefingView | null; tz: string }) {
   if (!brief || brief.status === "failed") return null;
   const { replies, moreReplies, notes } = brief.content;
   if (replies.length === 0 && moreReplies.length === 0) {
     // Say why there are none when the lane does not keep drafts (D-19), so an empty card is never read as "nothing to answer".
     return notes.includes("reply_drafts_off") ? (
-      <PageSection title="Reply drafts" note="From today's briefing">
+      <PageSection title="Reply drafts" note="From today's briefing" headingLevel="h3" className={EMBEDDED}>
         <p className="text-body text-muted-foreground">Reply drafts are off for this company (outbound drafts are not stored).</p>
       </PageSection>
     ) : null;
@@ -28,7 +33,7 @@ export function ReplyDrafts({ laneId, brief, tz }: { laneId: string; brief: Save
   const nameOf = (r: BriefRef | undefined) => r?.fromName ?? r?.fromAddress ?? "Unknown sender";
   const more = moreReplies.flatMap((ref) => (byRef.has(ref) ? [nameOf(byRef.get(ref))] : []));
   return (
-    <PageSection title="Reply drafts" note="From today's briefing · never sent without your approval">
+    <PageSection title="Reply drafts" note="From today's briefing · never sent without your approval" headingLevel="h3" className={EMBEDDED}>
       <ul data-testid="reply-drafts" className="flex flex-col divide-y divide-border">
         {replies.map((d) => {
           const r = byRef.get(d.ref);
@@ -41,12 +46,12 @@ export function ReplyDrafts({ laneId, brief, tz }: { laneId: string; brief: Save
               </div>
               <span className="text-small text-muted-foreground">
                 {[`To ${r?.fromAddress ?? "unknown"}`, r?.mailbox ? `from ${r.mailbox}` : null, r?.receivedAt ? `received ${formatDateTimeIn(r.receivedAt, tz)}` : null].filter(Boolean).join(" · ")}
-                {r?.sourceUrl ? (
+                {r ? (
                   <>
                     {" · "}
-                    <a href={r.sourceUrl} target="_blank" rel="noopener noreferrer" className="text-primary underline-offset-2 hover:underline">
+                    <Link href={inboxHref(laneId, r.messageId)} className="text-primary underline-offset-2 hover:underline">
                       Open thread
-                    </a>
+                    </Link>
                   </>
                 ) : null}
               </span>

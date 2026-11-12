@@ -57,7 +57,10 @@ describe("toRows / loadInbox", () => {
 });
 
 describe("openMessage", () => {
-  const ref = { connection_id: "00000000-0000-4000-8000-000000000001", provider: "google", from_name: "Ann", from_address: "ann@example.test", to_recipients: [{ address: "me@example.test", name: "Me" }], cc_recipients: [], subject: "Hello", received_at: "2026-11-06T12:00:00Z", source_url: "https://mail.google.com/mail/u/x/#all/1" };
+  const ref = { connection_id: "00000000-0000-4000-8000-000000000001", provider: "google", from_name: "Ann", from_address: "ann@example.test", to_recipients: [{ address: "me@example.test", name: "Me" }], cc_recipients: [], subject: "Hello", received_at: "2026-11-06T12:00:00Z", source_url: "https://mail.google.com/mail/u/x/#all/1", thread_id: "18c2f0a1b2c3d4e5" };
+  const coverage = [{ stream: "mail", account: "robert@pubk.test", connection_id: ref.connection_id, provider: "google", status: "ok", configured: true, last_sync_at: "2026-11-06T12:00:00Z" }];
+  /** Answers the message ref and the Coverage read (which names the mailbox). */
+  const both = (cov: unknown = coverage) => client((fn) => (fn === "briefing_coverage" ? { data: cov, error: null } : { data: [ref], error: null }));
 
   it("a malformed id never reaches the database or Google", async () => {
     const calls: unknown[] = [];
@@ -77,7 +80,28 @@ describe("openMessage", () => {
     const read = vi.fn(async () => ({ text: "Body text", truncated: false }));
     const view = await openMessage(client(() => ({ data: [ref], error: null })) as never, "PKG", "m1", read);
     expect(read).toHaveBeenCalledWith("PKG", ref.connection_id, "m1");
-    expect(view).toMatchObject({ state: "ok", text: "Body text", meta: { subject: "Hello", to: ["Me <me@example.test>"], sourceUrl: ref.source_url } });
+    expect(view).toMatchObject({ state: "ok", text: "Body text", meta: { subject: "Hello", to: ["Me <me@example.test>"] } });
+  });
+
+  it("Open in Gmail is built from the mailbox and the thread id (authuser, encoded), never from the stored URL", async () => {
+    const read = vi.fn(async () => ({ text: "x", truncated: false }));
+    const view = await openMessage(both() as never, "PKG", "m1", read);
+    expect(view).toMatchObject({ meta: { mailbox: "robert@pubk.test", gmailUrl: "https://mail.google.com/mail/?authuser=robert%40pubk.test#all/18c2f0a1b2c3d4e5" } });
+  });
+
+  it("no Gmail link without a usable thread id, or when the mailbox cannot be told; the message still opens", async () => {
+    const read = vi.fn(async () => ({ text: "x", truncated: false }));
+    const odd = client((fn) => (fn === "briefing_coverage" ? { data: coverage, error: null } : { data: [{ ...ref, thread_id: "../#x" }], error: null }));
+    expect(await openMessage(odd as never, "PKG", "m1", read)).toMatchObject({ state: "ok", meta: { gmailUrl: null, mailbox: "robert@pubk.test" } });
+    expect(await openMessage(both([]) as never, "PKG", "m1", read)).toMatchObject({ state: "ok", meta: { gmailUrl: null, mailbox: null } });
+    const down = client((fn) => (fn === "briefing_coverage" ? { data: null, error: { message: "x" } } : { data: [ref], error: null }));
+    expect(await openMessage(down as never, "PKG", "m1", read)).toMatchObject({ state: "ok", meta: { gmailUrl: null } });
+  });
+
+  it("another connection's mailbox is never used", async () => {
+    const read = vi.fn(async () => ({ text: "x", truncated: false }));
+    const other = [{ ...coverage[0], connection_id: "00000000-0000-4000-8000-000000000002" }];
+    expect(await openMessage(both(other) as never, "PKG", "m1", read)).toMatchObject({ meta: { mailbox: null, gmailUrl: null } });
   });
 
   it("a row from another provider is not_found", async () => {
@@ -86,10 +110,10 @@ describe("openMessage", () => {
     expect(read).not.toHaveBeenCalled();
   });
 
-  it("'Open in Gmail' only links to Gmail; spoofing characters are removed from subject and text", async () => {
+  it("spoofing characters are removed from subject and text", async () => {
     const read = vi.fn(async () => ({ text: "Pay \u202Etxt.exe\u202C now\u0007\n\tok", truncated: false }));
     const view = await openMessage(client(() => ({ data: [{ ...ref, subject: "Re\u2066: hi", source_url: "https://evil.example.test/x" }], error: null })) as never, "PKG", "m1", read);
-    expect(view).toMatchObject({ state: "ok", text: "Pay txt.exe now\n\tok", meta: { subject: "Re: hi", sourceUrl: null } });
+    expect(view).toMatchObject({ state: "ok", text: "Pay txt.exe now\n\tok", meta: { subject: "Re: hi" } });
     expect(displayText("a\u200Fb")).toBe("ab");
   });
 

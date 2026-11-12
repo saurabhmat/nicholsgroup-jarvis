@@ -54,7 +54,15 @@ export type ProposeEmailInput = {
   proposerUserId?: string;
   /** True when recipients, thread or text were taken from retrieved content (shown as a banner next to the recipients). */
   derivedFromRetrieved: boolean;
+  /**
+   * A caller's cutoff (the briefing's Run-now time bound). Checked immediately before the insert; if it fires while the insert
+   * is running, the new (job) proposal is withdrawn again (act.withdraw_proposed), audited as the service, and the call throws.
+   */
+  signal?: AbortSignal;
 };
+
+/** Reason written to the status history and audit when a cutoff withdraws a job proposal. */
+export const WITHDRAW_REASON_TIMEOUT = "briefing run timed out";
 
 export type ProposeResult = { id: string; hash: string };
 export type ApproveResult =
@@ -124,6 +132,7 @@ export async function proposeEmailAction(deps: ApprovalsPublicDeps, laneId: Lane
   }
   const p = await buildProposal(deps, laneId, input.actionType, input.connectionId, input.compose);
   const rpc = await deps.jobRpc(laneId);
+  if (input.signal?.aborted) throw new ApprovalsError("unavailable"); // right before the insert
   const { data, error } = await rpc("act_propose", {
     p_lane: laneId,
     p_type: input.actionType,
@@ -140,6 +149,21 @@ export async function proposeEmailAction(deps: ApprovalsPublicDeps, laneId: Lane
   });
   if (error) throw toApprovalsError(error);
   if (typeof data !== "string" || !UUID.test(data)) throw new ApprovalsError("unavailable");
+  // The cutoff may fire while the insert runs, or while the "proposed" audit below runs: either way withdraw the new proposal
+  // so no orphan pending proposal outlives a "timed out" run, and say so in the audit (withdrawn / withdraw_failed).
+  const withdrawIfAborted = async (): Promise<void> => {
+    if (!input.signal?.aborted) return;
+    let withdrawn = false;
+    try {
+      const w = await rpc("act_withdraw_proposed", { p_lane: laneId, p_id: data, p_reason: WITHDRAW_REASON_TIMEOUT });
+      withdrawn = !w.error && w.data === true;
+    } catch {
+      withdrawn = false;
+    }
+    await audit(deps, laneId, { kind: "service" }, withdrawn ? "action.withdrawn" : "action.withdraw_failed", data, { reason: WITHDRAW_REASON_TIMEOUT, action_type: input.actionType });
+    throw new ApprovalsError("unavailable");
+  };
+  await withdrawIfAborted();
   // Only a person's own proposal is audited as that person; a job's is the service's, for the owner (T-231d security L3).
   await audit(deps, laneId, input.proposerKind === "user" && input.proposerUserId ? { kind: "user", userId: input.proposerUserId } : { kind: "service" }, "action.proposed", data, {
     ...(input.proposerKind !== "user" && input.proposerUserId ? { for_user: input.proposerUserId } : {}),
@@ -149,6 +173,7 @@ export async function proposeEmailAction(deps: ApprovalsPublicDeps, laneId: Lane
     proposer_kind: input.proposerKind,
     derived_from_retrieved: input.derivedFromRetrieved,
   });
+  await withdrawIfAborted(); // the cutoff fired during the audit write
   return { id: data, hash: p.hash };
 }
 
@@ -157,6 +182,13 @@ async function getRow(rpc: Rpc, laneId: LaneId, actionId: string): Promise<Actio
   if (error) throw toApprovalsError(error);
   if (!Array.isArray(data) || data.length === 0) throw new ApprovalsError("not_found");
   return firstRow(data);
+}
+
+/** One action as the signed-in user may see it (RLS): `not_found` when it does not exist or is not theirs to see. */
+export async function getApproval(ctx: UserCtx, actionId: string): Promise<ActionRow> {
+  checkLane(ctx.laneId);
+  checkId(actionId);
+  return getRow(ctx.rpc, ctx.laneId, actionId);
 }
 
 async function requireOwner(ctx: UserCtx): Promise<void> {
@@ -227,6 +259,9 @@ export async function rejectAction(deps: ApprovalsPublicDeps, ctx: UserCtx, acti
 }
 
 type FailureOutcome = "mismatch" | "error" | "outcome_unknown";
+/** Connector error kinds after which the provider certainly created nothing (the writer classifies them before or instead of the request). */
+const DEFINITE_SEND_KINDS: ReadonlySet<string> = new Set(["forbidden", "invalid_input", "lane_mismatch", "unsupported_op", "reconnect_required", "connection_unavailable", "rate_limited", "not_found"]);
+
 function failureOf(e: unknown, stage: "before" | "send" | "verify"): { code: string; outcome: FailureOutcome } {
   if (e instanceof TamperError) return { code: "payload_changed", outcome: "error" };
   if (isConnectorError(e)) {
@@ -234,11 +269,18 @@ function failureOf(e: unknown, stage: "before" | "send" | "verify"): { code: str
     if (e.info.message === VERIFICATION_MISMATCH_MESSAGE) return { code: "verification_mismatch", outcome: "mismatch" };
     // The email may already be in the mailbox: never report a plain failure for a read-back that could not run.
     if (stage === "verify") return { code: "verification_unavailable", outcome: "outcome_unknown" };
+    // During the send, only a kind the provider certainly did not act on is a definite failure; anything else (a
+    // timeout, a reset, a provider error) may have gone out, so it is unknown and blocks a resend (T-234 part 3
+    // security re-check M2: the reply guard treats execution_* as "nothing went out").
+    if (stage === "send" && !DEFINITE_SEND_KINDS.has(e.info.kind)) return { code: "outcome_unknown", outcome: "outcome_unknown" };
     if (e.info.kind === "reconnect_required" || e.info.kind === "connection_unavailable") return { code: "connection_unhealthy", outcome: "error" };
     if (["forbidden", "invalid_input", "lane_mismatch", "unsupported_op"].includes(e.info.kind)) return { code: "execution_refused", outcome: "error" };
     return { code: "execution_error", outcome: "error" };
   }
-  return stage === "verify" ? { code: "verification_unavailable", outcome: "outcome_unknown" } : { code: "execution_error", outcome: "error" };
+  if (stage === "verify") return { code: "verification_unavailable", outcome: "outcome_unknown" };
+  // A non-connector error during the send (a dropped socket, a runtime error after the request left) may have sent it.
+  if (stage === "send") return { code: "outcome_unknown", outcome: "outcome_unknown" };
+  return { code: "execution_error", outcome: "error" };
 }
 class TamperError extends Error {
   override readonly name = "TamperError";
@@ -330,10 +372,12 @@ export async function executeApproved(deps: ApprovalsDeps, laneId: LaneId, actio
     const conn = await deps.loadWriteConnection(laneId, row.connectionId);
     stage = "send";
     const res = await deps.writer.executeWrite(laneId, conn, action);
+    // executeWrite returned: the provider accepted the request. From here nothing is a definite "not sent"; a missing
+    // id is a read-back problem (verification_unavailable, outcome unknown), never execution_error (re-check M2).
+    stage = "verify";
     if (res.external_id === null) throw new ApprovalsError("unavailable");
     externalId = res.external_id;
     outcome = res.outcome;
-    stage = "verify";
     const sent = await job("act_claim_sent", { p_lane: laneId, p_id: actionId, p_external_id: externalId });
     if (sent.error) throw toApprovalsError(sent.error);
     await deps.writer.verifyWrite(laneId, conn, action, externalId);

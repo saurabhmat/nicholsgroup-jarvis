@@ -41,8 +41,8 @@ const CORE = {
 
 const AI = {
   ANTHROPIC_API_KEY: "fake-anthropic-do-not-leak-4",
-  ANTHROPIC_MODEL_ANALYSIS: "fake-analysis-model",
-  ANTHROPIC_MODEL_FAST: "fake-fast-model",
+  ANTHROPIC_MODEL_ANALYSIS: "claude-sonnet-test",
+  ANTHROPIC_MODEL_FAST: "claude-haiku-test",
 } as const;
 const JOBS = {
   INNGEST_EVENT_KEY: "fake-event-key-do-not-leak-2",
@@ -216,7 +216,7 @@ describe("production strictness (Anthropic, Inngest)", () => {
   it("accessors return values when configured; in production absent is not-configured, partial throws", async () => {
     const { getAnthropicEnv, getInngestEnv } = await import("./server");
     const ai = getAnthropicEnv({ ...CORE, ...AI });
-    expect(ai.configured && ai.ANTHROPIC_MODEL_FAST).toBe("fake-fast-model");
+    expect(ai.configured && ai.ANTHROPIC_MODEL_FAST).toBe("claude-haiku-test");
     expect(getInngestEnv({ ...CORE, ...JOBS }).configured).toBe(true);
     vi.stubEnv("APP_ENV", "production");
     expect(getAnthropicEnv({ ...PROD_CORE })).toEqual({
@@ -313,7 +313,7 @@ describe("server accessors and redaction", () => {
     const r = getAnthropicEnv({ ...CORE, ...AI });
     expect(inspect(r)).not.toContain("do-not-leak");
     expect(JSON.stringify(r)).not.toContain("do-not-leak");
-    expect(JSON.stringify(r)).toContain("fake-fast-model");
+    expect(JSON.stringify(r)).toContain("claude-haiku-test");
   });
 });
 

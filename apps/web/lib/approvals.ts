@@ -18,6 +18,9 @@ import {
 } from "@nichols/approvals/server";
 import { AuthError, authErrorResponse, type Guards } from "@nichols/core/auth";
 import { z } from "zod";
+import { isOutcomeUnknown } from "./outcome";
+import { draftReply, replyContext, ReplyError, saveReply, type ReplyDeps } from "./reply";
+import { flagRecipients, type RecipientFlag } from "./reply-flags";
 
 export const MAX_BODY_BYTES = 200_000;
 
@@ -26,6 +29,8 @@ export type ApprovalsApiDeps = {
   /** No write member (T-232 security review H1): approving goes through `approve`, which keeps the writer private. */
   approvals: ApprovalsPublicDeps;
   approve: (ctx: { laneId: ApprovalsCtx["laneId"]; userId: string; rpc: Rpc }, input: { actionId: string; hashSeen: string }) => Promise<ApproveResult>;
+  /** Reply from the dashboard (T-234 part 3): the live reader, the AI provider and the rate limit. Absent: the reply actions answer `unavailable`. */
+  reply?: ReplyDeps;
 };
 type ApprovalsCtx = Parameters<typeof listApprovals>[1];
 
@@ -41,6 +46,7 @@ const json = (status: number, body: Record<string, unknown>) => Response.json(bo
 
 const address = z.email().max(320);
 const uuid = z.uuid();
+const messageId = z.string().regex(/^[A-Za-z0-9_-]{1,128}$/);
 const body = z.discriminatedUnion("action", [
   z.strictObject({
     action: z.literal("save"),
@@ -53,6 +59,19 @@ const body = z.discriminatedUnion("action", [
   }),
   z.strictObject({ action: z.literal("approve"), id: uuid, hashSeen: z.string().regex(/^[0-9a-f]{64}$/) }),
   z.strictObject({ action: z.literal("reject"), id: uuid, reason: z.string().trim().min(1).max(500) }),
+  // Reply from the dashboard (T-234 part 3). The client names the message and sends only what the owner may edit: the thread,
+  // subject and sending mailbox are always re-derived on the server from the message's metadata.
+  z.strictObject({ action: z.literal("reply_context"), messageId }),
+  z.strictObject({ action: z.literal("draft_reply"), messageId }),
+  z.strictObject({
+    action: z.literal("propose_reply"),
+    messageId,
+    to: z.array(address).min(1).max(100),
+    cc: z.array(address).max(100),
+    bodyText: z.string().min(1).max(100_000),
+    /** The owner confirmed sending another reply to a conversation that already has a verified one. */
+    confirmResend: z.boolean().optional(),
+  }),
 ]);
 
 const STATUS: Record<string, number> = {
@@ -74,6 +93,17 @@ const STATUS: Record<string, number> = {
   already_proposed: 409,
   reply_subject_fixed: 400,
   unavailable: 503,
+  // reply actions (lib/reply.ts)
+  not_replyable: 409,
+  ai_not_allowed: 409,
+  ai_not_configured: 503,
+  ai_failed: 502,
+  rate_limited: 429,
+  body_unavailable: 502,
+  check_sent_first: 409,
+  already_replied: 409,
+  draft_exists: 409,
+  reply_already_pending: 409,
 };
 
 export async function handleApprovals(request: Request, laneId: string, deps: ApprovalsApiDeps): Promise<Response> {
@@ -114,12 +144,24 @@ export async function handleApprovals(request: Request, laneId: string, deps: Ap
         const facts = await deps.approvals.readFacts(laneId, row.connection_id);
         await g.requireStepUp(facts.stepUpMaxAgeS);
         const result = await deps.approve(ctx, { actionId: req.id, hashSeen: req.hashSeen });
-        return json(200, { ok: true, ...result });
+        // `outcome` is the owner's reading of the result: "sent", "failed" (nothing went out) or "unknown" (it MAY have: check Sent; never offer a blind retry).
+        const outcome = result.status === "verified" ? "sent" : result.status === "failed" ? (isOutcomeUnknown(result.failureCode) ? "unknown" : "failed") : "unknown";
+        return json(200, { ok: true, ...result, outcome });
+      }
+      case "reply_context":
+      case "draft_reply":
+      case "propose_reply": {
+        if (!deps.reply) return json(503, { error: "unavailable" });
+        if (req.action === "reply_context") return json(200, { ok: true, context: await replyContext(ctx, client, deps.approvals, deps.reply, req.messageId) });
+        if (req.action === "draft_reply") return json(200, { ok: true, draft: await draftReply(ctx, client, deps.approvals, deps.reply, req.messageId) });
+        const saved = await saveReply(ctx, client, deps.approvals, deps.reply, { messageId: req.messageId, to: req.to, cc: req.cc, bodyText: req.bodyText, confirmResend: req.confirmResend === true });
+        return json(200, { ok: true, id: saved.id, hash: saved.hash, unchanged: saved.unchanged });
       }
     }
   } catch (e) {
     if (e instanceof AuthError) return authErrorResponse(e) as Response;
-    if (e instanceof ApprovalsError) return json(STATUS[e.code] ?? 500, { error: e.code, message: e.message });
+    if (e instanceof ReplyError && e.retryAfterS !== null) return json(STATUS[e.code] ?? 500, { error: e.code, message: e.message, retryAfterS: e.retryAfterS });
+    if (e instanceof ApprovalsError || e instanceof ReplyError) return json(STATUS[e.code] ?? 500, { error: e.code, message: e.message });
     console.error("[approvals] unavailable:", e instanceof Error ? e.name : typeof e);
     return json(503, { error: "unavailable" });
   }
@@ -147,31 +189,14 @@ export type PendingCard = {
   recipientFlags: RecipientFlag[];
   capability: CardCapability;
 };
-export type RecipientFlag = { address: string; field: "to" | "cc" | "bcc"; flags: ("external" | "bcc")[] };
+export type { RecipientFlag };
 
 /** Flags every recipient whose domain is not one of the lane's own mailbox domains, and every bcc. */
 export function recipientFlags(payload: Record<string, unknown>, internalDomains: readonly string[]): RecipientFlag[] {
-  const internal = new Set(internalDomains.map((d) => d.toLowerCase()));
-  const out: RecipientFlag[] = [];
-  for (const field of ["to", "cc", "bcc"] as const) {
-    for (const address of strs(payload[field])) {
-      const domain = address.split("@")[1]?.toLowerCase() ?? "";
-      const flags: RecipientFlag["flags"] = [];
-      if (!internal.has(domain)) flags.push("external");
-      if (field === "bcc") flags.push("bcc");
-      if (flags.length > 0) out.push({ address, field, flags });
-    }
-  }
-  return out;
+  return flagRecipients({ to: strs(payload.to), cc: strs(payload.cc), bcc: strs(payload.bcc) }, internalDomains);
 }
-/**
- * Failure codes after which the email MAY have gone out (a verification mismatch means a message with our Message-ID exists) (T-192 and T-232): the owner must check the Sent folder (or Drafts)
- * before asking for it again. The reconciler's codes all start with `reconcile_`.
- */
-const OUTCOME_UNKNOWN_CODES: ReadonlySet<string> = new Set(["outcome_unknown", "verification_unavailable", "verification_mismatch", "marker_not_found", "ambiguous_match"]);
-export function isOutcomeUnknown(code: string | null): boolean {
-  return code !== null && (OUTCOME_UNKNOWN_CODES.has(code) || code.startsWith("reconcile_"));
-}
+/** Failure codes after which the email MAY have gone out: the owner must check the Sent folder before asking again (lib/outcome.ts). */
+export { isOutcomeUnknown };
 export type HistoryItem = {
   id: string;
   actionType: "email.send" | "email.save_draft";

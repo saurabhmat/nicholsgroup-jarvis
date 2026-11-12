@@ -1,34 +1,42 @@
 // @vitest-environment jsdom
-// T-231a: the Coverage strip always shows a line and each stream with a fixed reason; Today's calendar shows flags and
+// T-231a: Coverage (now in Settings -> Connections, T-234) shows each stream with a fixed reason; Today's calendar shows flags and
 // Join, never declined events; times are in the viewer's zone with the event's zone added when it differs.
 import { afterEach, describe, expect, it } from "vitest";
 import { cleanup, render, screen, within } from "@testing-library/react";
-import { analyzeDay, notableAhead, parseEvents, toCoverage, parseCoverageRows, coverageLine } from "@nichols/briefing/domain";
-import { AttentionSection, CoverageStrip, LookAhead, MoneyCard, TodayCalendar } from "./home-briefing";
-import type { BriefingView } from "@/lib/briefing";
+import { analyzeDay, notableAhead, parseEvents, toCoverage, parseCoverageRows } from "@nichols/briefing/domain";
+import { AttentionSection, LookAhead, TodayCalendar } from "./home-briefing";
+import { CoverageList } from "./coverage-list";
 
 afterEach(cleanup);
 const now = new Date("2026-11-12T13:00:00Z");
 const owners = new Set(["me@pubk.test"]);
 const internal = new Set(["pubk.test"]);
 
-describe("CoverageStrip", () => {
-  it("lists every stream with its state and reason, and links to Settings", () => {
-    const coverage = toCoverage(
+describe("CoverageList (Settings -> Connections)", () => {
+  it("lists every stream with its last sync, state and fixed reason", () => {
+    const items = toCoverage(
       parseCoverageRows([
         { stream: "mail", account: "me@pubk.test", connection_id: "c", provider: "google", status: "active", configured: true, last_sync_at: "2026-11-12T12:55:00Z" },
+        { stream: "calendar", account: "me@pubk.test", connection_id: "c", provider: "google", status: "reconnect_required", configured: true, last_sync_at: "2026-11-12T08:00:00Z", error_kind: "reconnect_required" },
         { stream: "mail", account: "ceo@pubk.test", connection_id: null, provider: null, status: "not_connected", configured: true, last_sync_at: null },
       ]),
       now,
       120,
     );
-    const view = { viewerTz: "America/New_York", coverage, coverageLine: coverageLine(coverage, true), calendar: { access: false }, config: {}, mailboxes: [] } as unknown as BriefingView;
-    render(<CoverageStrip laneId="PKG" view={view} now={now} />);
-    const items = screen.getAllByTestId("coverage-item");
-    expect(items.map((i) => i.getAttribute("data-state"))).toEqual(["ok", "not_connected"]);
-    expect(within(items[1] as HTMLElement).getByText("Not connected. Connect it in Settings.")).toBeTruthy();
-    expect(screen.getByTestId("coverage-line").textContent).toMatch(/ceo@pubk\.test: not connected/);
-    expect(screen.getByRole("link", { name: "Connections in Settings" }).getAttribute("href")).toBe("/PKG/settings#connections");
+    render(<CoverageList view={{ items, unavailable: false }} tz="America/New_York" now={now} />);
+    const rows = screen.getAllByTestId("coverage-item");
+    expect(rows.map((i) => i.getAttribute("data-state"))).toEqual(["ok", "error", "not_connected"]);
+    expect(within(rows[0] as HTMLElement).getByText("Synced 7:55 AM (5 min ago)")).toBeTruthy();
+    expect(within(rows[1] as HTMLElement).getByText("Access expired. Reconnect in Settings.")).toBeTruthy();
+    expect(within(rows[1] as HTMLElement).getByText("Error")).toBeTruthy();
+    expect(within(rows[2] as HTMLElement).getByText("Never synced")).toBeTruthy();
+    expect(within(rows[2] as HTMLElement).getByText("Not connected. Connect it in Settings.")).toBeTruthy();
+  });
+
+  it("an outage says so instead of an empty list", () => {
+    render(<CoverageList view={{ items: [], unavailable: true }} tz="America/New_York" now={now} />);
+    expect(screen.getByTestId("coverage-unavailable")).toBeTruthy();
+    expect(screen.queryByTestId("coverage-item")).toBeNull();
   });
 });
 
@@ -70,27 +78,60 @@ describe("LookAhead", () => {
   });
 });
 
-describe("AttentionSection and MoneyCard", () => {
+describe("AttentionSection (T-234 part 2)", () => {
   const thread = {
-    connectionId: "c1", threadKey: "t1", messageId: "m1", fromAddress: "boss@pubk.test", fromName: "Boss", subject: "Board deck", receivedAt: "2026-11-12T12:00:00Z",
+    connectionId: "c1", threadKey: "t1", messageId: "m1", fromAddress: "boss@pubk.test", fromName: "Boss", subject: "Board deck $1,200", receivedAt: "2026-11-12T10:00:00Z",
     sourceUrl: "https://mail.google.com/mail/u/me/#all/t1", labels: ["INBOX"], isImportant: false, lastIsOwner: false, ownerReplied: false, unreadCount: 1, inboundCount: 1,
   };
-  it("shows subject, reason, source (mailbox, sender, date) and a thread link", () => {
-    render(<AttentionSection tz="America/New_York" mail={{ access: true, attention: [{ key: "k", kind: "priority", reason: "Priority sender, unread · 1h", thread }], more: 2, money: [], mailboxOf: { c1: "me@pubk.test" } }} />);
+  const mail = (more = 0) => ({ access: true as const, attention: [{ key: "k", kind: "priority" as const, reason: "Priority sender, unread · 1h", thread }], more, money: [], mailboxOf: { c1: "me@pubk.test" } });
+  const note = { ref: "r1", what: "Deck", why: "Board meets Friday", next: "Send comments" };
+
+  it("shows title (masked), AI why and next, sender, mailbox, age and a status chip", () => {
+    render(<AttentionSection laneId="PKG" now={now} mail={mail()} notes={new Map([["c1:m1", note]])} />);
     const item = screen.getByTestId("attention-item");
-    expect(within(item).getByText("Board deck")).toBeTruthy();
-    expect(within(item).getByText("Priority sender, unread · 1h")).toBeTruthy();
-    expect(within(item).getByText("me@pubk.test · Boss <boss@pubk.test> · Thu, Nov 12, 7:00 AM")).toBeTruthy();
-    expect(within(item).getByRole("link", { name: "Open thread" }).getAttribute("href")).toBe(thread.sourceUrl);
-    expect(screen.getByText("2 more in the Inbox.")).toBeTruthy();
+    expect(within(item).getByText("Board deck [amount]")).toBeTruthy();
+    expect(within(item).getByText("Priority")).toBeTruthy();
+    expect(within(item).getByText("Board meets Friday")).toBeTruthy();
+    expect(within(item).getByText("Send comments")).toBeTruthy();
+    expect(within(item).queryByText("Deck")).toBeNull(); // "what" repeats the title
+    expect(within(item).getByTestId("attention-meta").textContent).toBe("Boss <boss@pubk.test> · to me@pubk.test · 3h ago");
   });
+
+  it("Open goes to the thread in Jarvis, never to a Google page (the old link used the stored provider URL)", () => {
+    render(<AttentionSection laneId="PKG" now={now} mail={mail()} />);
+    const open = screen.getByRole("link", { name: "Open" });
+    expect(open.getAttribute("href")).toBe("/PKG/inbox/m1");
+    expect(open.getAttribute("target")).toBeNull();
+    for (const a of screen.getAllByRole("link")) expect(a.getAttribute("href")).not.toMatch(/google\.com/);
+  });
+
+  it("Reply: other roles get a link to the thread in Jarvis; the owner gets the drawer button (T-234 part 3)", () => {
+    const { rerender } = render(<AttentionSection laneId="PKG" now={now} mail={mail()} />);
+    expect(screen.getByTestId("attention-reply").getAttribute("href")).toBe("/PKG/inbox/m1");
+    rerender(<AttentionSection laneId="PKG" now={now} mail={mail()} replies={new Map([["c1:m1", "00000000-0000-4000-8000-0000000000d1"]])} />);
+    expect(screen.getByTestId("attention-reply").getAttribute("href")).toBe("/PKG/inbox/m1");
+    expect(screen.getByTestId("attention-reply").getAttribute("data-has-draft")).toBe("true");
+    rerender(<AttentionSection laneId="PKG" now={now} mail={mail()} canReply />);
+    const reply = screen.getByTestId("attention-reply");
+    expect(reply.tagName).toBe("BUTTON");
+    expect(reply.getAttribute("href")).toBeNull();
+    expect(reply.getAttribute("aria-haspopup")).toBe("dialog");
+  });
+
+  it("a repeated-failures item has Open but no Reply", () => {
+    const m = { ...mail(), attention: [{ key: "failures:ci.test", kind: "repeated_failures" as const, reason: "3 failure alerts from ci.test", thread, count: 3 }] };
+    render(<AttentionSection laneId="PKG" now={now} mail={m} />);
+    expect(screen.queryByTestId("attention-reply")).toBeNull();
+    expect(screen.getByTestId("attention-open")).toBeTruthy();
+  });
+
+  it("links the rest to the Inbox", () => {
+    render(<AttentionSection laneId="PKG" now={now} mail={mail(2)} />);
+    expect(screen.getByRole("link", { name: "Inbox" }).getAttribute("href")).toBe("/PKG/inbox");
+  });
+
   it("says why there is no mail instead of 'nothing'", () => {
-    render(<AttentionSection tz="America/New_York" mail={{ access: false, unavailable: true }} />);
+    render(<AttentionSection laneId="PKG" now={now} mail={{ access: false, unavailable: true }} />);
     expect(screen.getByText("Mail could not be read")).toBeTruthy();
-  });
-  it("Money lists the kind and never an amount", () => {
-    render(<MoneyCard tz="America/New_York" mail={{ access: true, attention: [], more: 0, money: [{ key: "k", kind: "failed_payment", thread: { ...thread, subject: "Payment failed" } }], mailboxOf: {} }} />);
-    expect(screen.getByText("Failed payment")).toBeTruthy();
-    expect(screen.getByText("From mail subjects · no amounts")).toBeTruthy();
   });
 });

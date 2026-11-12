@@ -56,9 +56,15 @@ export async function MessagePage({ params }: { params: Promise<{ laneId: string
           ) : null}
           <dt className="text-muted-foreground">Received</dt>
           <dd>{WHEN.format(new Date(m.receivedAt))} ET</dd>
+          {m.mailbox ? (
+            <>
+              <dt className="text-muted-foreground">Mailbox</dt>
+              <dd className="min-w-0 break-words">{m.mailbox}</dd>
+            </>
+          ) : null}
         </dl>
-        {m.sourceUrl ? (
-          <a href={m.sourceUrl} target="_blank" rel="noopener noreferrer" className="self-start text-body font-medium text-primary hover:underline">
+        {m.gmailUrl ? (
+          <a href={m.gmailUrl} target="_blank" rel="noopener noreferrer" className="self-start text-body font-medium text-primary hover:underline">
             Open in Gmail
           </a>
         ) : null}

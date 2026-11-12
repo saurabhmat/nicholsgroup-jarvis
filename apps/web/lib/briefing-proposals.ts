@@ -7,12 +7,13 @@ import type { LaneId } from "@nichols/core";
 import { proposeBriefingReply } from "@nichols/approvals/wire";
 import type { ReplyProposal } from "./briefing-run";
 
-export function replyProposer(ownerUserId: string): (laneId: LaneId, reply: ReplyProposal) => Promise<string> {
-  return (laneId, reply) =>
+export function replyProposer(ownerUserId: string): (laneId: LaneId, reply: ReplyProposal, signal?: AbortSignal) => Promise<string> {
+  return (laneId, reply, signal) =>
     proposeBriefingReply(laneId, ownerUserId, {
       connectionId: reply.connectionId,
       compose: { to: reply.to, subject: reply.subject, bodyText: reply.bodyText, inReplyTo: reply.inReplyTo },
       rationale: reply.rationale.slice(0, 2000),
       sourceRefs: reply.sourceRefs,
+      ...(signal ? { signal } : {}),
     });
 }
