@@ -1,5 +1,6 @@
 // Entry point (T-023): signed-in users go to the first company they may open; a user with none sees a plain notice.
 // AAL2 only (T-019). The lane list comes from the server-side guards, never from the URL.
+import { SignOutForm } from "@/components/sign-out-form";
 import { Button, Card, CardContent, CardDescription, CardHeader, CardTitle } from "@nichols/ui";
 import { guards } from "@/lib/guards";
 import { redirect } from "next/navigation";
@@ -36,11 +37,11 @@ async function Entry() {
           <CardDescription>You are signed in, but your account has no company access yet. Ask an administrator.</CardDescription>
         </CardHeader>
         <CardContent>
-          <form action={signOut}>
+          <SignOutForm action={signOut}>
             <Button type="submit" variant="outline">
               Sign out
             </Button>
-          </form>
+          </SignOutForm>
         </CardContent>
       </Card>
     </main>

@@ -184,6 +184,13 @@ async function getRow(rpc: Rpc, laneId: LaneId, actionId: string): Promise<Actio
   return firstRow(data);
 }
 
+/** One action as the signed-in user may see it (RLS): `not_found` when it does not exist or is not theirs to see. */
+export async function getApproval(ctx: UserCtx, actionId: string): Promise<ActionRow> {
+  checkLane(ctx.laneId);
+  checkId(actionId);
+  return getRow(ctx.rpc, ctx.laneId, actionId);
+}
+
 async function requireOwner(ctx: UserCtx): Promise<void> {
   const { data, error } = await ctx.rpc("has_lane_role", { p_uid: ctx.userId, p_lane: ctx.laneId, p_roles: ["owner"] });
   if (error) throw toApprovalsError(error);

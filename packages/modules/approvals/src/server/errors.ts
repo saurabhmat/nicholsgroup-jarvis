@@ -18,6 +18,8 @@ export const APPROVALS_ERROR_CODES = [
   "in_progress",
   "already_proposed",
   "reply_subject_fixed",
+  "check_sent_first",
+  "reply_already_pending",
   "unavailable",
 ] as const;
 export type ApprovalsErrorCode = (typeof APPROVALS_ERROR_CODES)[number];
@@ -26,6 +28,9 @@ export type ApprovalsErrorCode = (typeof APPROVALS_ERROR_CODES)[number];
 export const NOT_ENABLED_MESSAGE = "Sending isn't enabled for this mailbox yet. Reconnect Google with send permission in Settings";
 /** Shown when everything is enabled but the company is not yet switched on (T-170 gate). */
 export const NOT_LIVE_MESSAGE = "Approvals are not live for this company yet.";
+
+/** Another email in the same conversation is approved, being sent, or may already have gone out (T-234 part 3). */
+export const CHECK_SENT_FIRST_MESSAGE = "An earlier reply to this conversation may already have gone out. Check your Sent folder first.";
 
 const MESSAGES: Record<ApprovalsErrorCode, string> = {
   invalid: "The approval request is not valid.",
@@ -45,6 +50,8 @@ const MESSAGES: Record<ApprovalsErrorCode, string> = {
   in_progress: "This approval is already being carried out.",
   already_proposed: "A reply to this message is already waiting for approval.",
   reply_subject_fixed: "The subject of a reply can't be changed: it keeps the reply in its thread.",
+  check_sent_first: CHECK_SENT_FIRST_MESSAGE,
+  reply_already_pending: "A reply to this message is already waiting for approval. Open it to edit it.",
   unavailable: "Approvals are unavailable right now.",
 };
 
@@ -73,6 +80,8 @@ export function toApprovalsError(error: { code?: string | undefined; message?: s
   if (has("not_editable")) return new ApprovalsError("not_editable");
   if (has("not_found") || code === "P0002") return new ApprovalsError("not_found");
   if (message.includes("does not allow storing outbound drafts")) return new ApprovalsError("drafts_not_allowed");
+  if (has("check_sent_first")) return new ApprovalsError("check_sent_first");
+  if (has("reply_already_pending")) return new ApprovalsError("reply_already_pending");
   if (has("already waiting for approval")) return new ApprovalsError("already_proposed");
   if (has("too many pending") || code === "54000") return new ApprovalsError("too_many_pending");
   if (code === "22023" || code === "22004" || code === "23514") return new ApprovalsError("invalid");

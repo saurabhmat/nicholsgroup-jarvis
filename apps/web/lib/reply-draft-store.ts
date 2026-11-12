@@ -1,11 +1,15 @@
-// The Reply drawer's unsent edits, per message, in sessionStorage (T-234 part 3; part 5 generalises the autosave and reuses this).
-// Survives a step-up redirect to /mfa and a reload; gone when the tab closes. Everything is in try/catch: private mode, a full
-// quota or a blocked storage only mean the edits are not kept, never a broken page. Cleared after a successful send or save.
-export type ReplyDraftFields = { to: string; cc: string; body: string };
+// Unsent drafts in sessionStorage (T-234 part 3 review fixes; part 5 reuses `draftNamespace` for other drafts).
+// Rules:
+//   * Everything is in try/catch: private mode, a full quota or a blocked storage only mean nothing is kept, never a broken page.
+//   * Keys carry lane + user + item id, so one person's draft is never offered to another person on a shared tab. The user id
+//     comes from the server's context and is only a key part: it never decides access.
+//   * Every entry has a time to live; an expired one is removed when read.
+//   * Nothing is written when the lane does not store outbound drafts (D-19, rule 6): callers check `storesDrafts` first.
+//   * `clearAllDrafts()` runs at sign-out and removes every namespace listed in DRAFT_NAMESPACES.
+export const DRAFT_NAMESPACES = ["reply-draft", "reply-ai"] as const;
+export type DraftNamespaceName = (typeof DRAFT_NAMESPACES)[number];
 
-const PREFIX = "nichols:reply-draft:";
-const MAX_BODY = 100_000;
-const key = (laneId: string, messageId: string) => `${PREFIX}${laneId}:${messageId}`;
+const ROOT = "nichols:";
 
 function storage(): Storage | null {
   try {
@@ -15,33 +19,142 @@ function storage(): Storage | null {
   }
 }
 
-export function saveReplyDraft(laneId: string, messageId: string, fields: ReplyDraftFields): boolean {
+export type DraftNamespace<T> = {
+  key: (laneId: string, userId: string, itemId: string) => string;
+  write: (laneId: string, userId: string, itemId: string, value: T) => boolean;
+  read: (laneId: string, userId: string, itemId: string) => T | null;
+  remove: (laneId: string, userId: string, itemId: string) => void;
+  clear: () => void;
+};
+
+/** A typed, expiring namespace. `validate` returns the clean value or null (anything else in storage is ignored). */
+export function draftNamespace<T>(name: string, opts: { ttlMs: number; validate: (v: unknown) => T | null; now?: () => number }): DraftNamespace<T> {
+  const prefix = `${ROOT}${name}:`;
+  const now = opts.now ?? Date.now;
+  const key = (laneId: string, userId: string, itemId: string) => `${prefix}${laneId}:${userId}:${itemId}`;
+  return {
+    key,
+    write(laneId, userId, itemId, value) {
+      try {
+        const s = storage();
+        if (!s) return false;
+        s.setItem(key(laneId, userId, itemId), JSON.stringify({ v: 1, t: now(), d: value }));
+        return true;
+      } catch {
+        return false;
+      }
+    },
+    read(laneId, userId, itemId) {
+      try {
+        const s = storage();
+        const k = key(laneId, userId, itemId);
+        const raw = s?.getItem(k);
+        if (!s || !raw) return null;
+        const e = JSON.parse(raw) as { v?: unknown; t?: unknown; d?: unknown };
+        if (e.v !== 1 || typeof e.t !== "number" || now() - e.t > opts.ttlMs || e.t > now() + 60_000) {
+          s.removeItem(k);
+          return null;
+        }
+        const clean = opts.validate(e.d);
+        if (clean === null) s.removeItem(k);
+        return clean;
+      } catch {
+        return null;
+      }
+    },
+    remove(laneId, userId, itemId) {
+      try {
+        storage()?.removeItem(key(laneId, userId, itemId));
+      } catch {
+        // nothing to remove
+      }
+    },
+    clear() {
+      clearPrefix(prefix);
+    },
+  };
+}
+
+function clearPrefix(prefix: string): void {
   try {
     const s = storage();
-    if (!s) return false;
-    s.setItem(key(laneId, messageId), JSON.stringify({ v: 1, to: fields.to.slice(0, 5000), cc: fields.cc.slice(0, 5000), body: fields.body.slice(0, MAX_BODY) }));
-    return true;
-  } catch {
-    return false;
-  }
-}
-
-export function loadReplyDraft(laneId: string, messageId: string): ReplyDraftFields | null {
-  try {
-    const raw = storage()?.getItem(key(laneId, messageId));
-    if (!raw) return null;
-    const v = JSON.parse(raw) as { v?: unknown; to?: unknown; cc?: unknown; body?: unknown };
-    if (v.v !== 1 || typeof v.to !== "string" || typeof v.cc !== "string" || typeof v.body !== "string") return null;
-    return { to: v.to, cc: v.cc, body: v.body };
-  } catch {
-    return null;
-  }
-}
-
-export function clearReplyDraft(laneId: string, messageId: string): void {
-  try {
-    storage()?.removeItem(key(laneId, messageId));
+    if (!s) return;
+    const doomed: string[] = [];
+    for (let i = 0; i < s.length; i++) {
+      const k = s.key(i);
+      if (k !== null && k.startsWith(prefix)) doomed.push(k);
+    }
+    for (const k of doomed) s.removeItem(k);
   } catch {
     // nothing to clear
   }
 }
+
+/** Sign-out: every draft of every namespace goes (the next person on this tab must not see them). */
+export function clearAllDrafts(): void {
+  for (const n of DRAFT_NAMESPACES) clearPrefix(`${ROOT}${n}:`);
+}
+
+/** A trailing-edge debounce with flush and cancel (the drawer writes 500 ms after the last keystroke and flushes on close). */
+export function debounced<A extends unknown[]>(fn: (...args: A) => void, ms: number): { call: (...args: A) => void; flush: () => void; cancel: () => void } {
+  let timer: ReturnType<typeof setTimeout> | null = null;
+  let last: A | null = null;
+  return {
+    call(...args) {
+      last = args;
+      if (timer !== null) clearTimeout(timer);
+      timer = setTimeout(() => {
+        timer = null;
+        const a = last;
+        last = null;
+        if (a) fn(...a);
+      }, ms);
+    },
+    flush() {
+      if (timer !== null) clearTimeout(timer);
+      timer = null;
+      const a = last;
+      last = null;
+      if (a) fn(...a);
+    },
+    cancel() {
+      if (timer !== null) clearTimeout(timer);
+      timer = null;
+      last = null;
+    },
+  };
+}
+
+// ------------------------------------------------------------------------------------------------------ the reply drawer's drafts
+
+export type ReplyDraftFields = { to: string; cc: string; body: string };
+export type StoredReplyDraft = ReplyDraftFields & { serverVersion: string };
+
+const MAX_BODY = 100_000;
+const str = (v: unknown, max: number): string | null => (typeof v === "string" ? v.slice(0, max) : null);
+
+/** The owner's unsent edits: 24 hours. `serverVersion` is the proposal hash the edits were made against ("none" without one). */
+export const replyDrafts = draftNamespace<StoredReplyDraft>("reply-draft", {
+  ttlMs: 24 * 3_600_000,
+  validate(v) {
+    const o = typeof v === "object" && v !== null ? (v as Record<string, unknown>) : null;
+    if (!o) return null;
+    const to = str(o.to, 5000);
+    const cc = str(o.cc, 5000);
+    const body = str(o.body, MAX_BODY);
+    const serverVersion = str(o.serverVersion, 128);
+    return to === null || cc === null || body === null || serverVersion === null ? null : { to, cc, body, serverVersion };
+  },
+});
+
+export type StoredAiDraft = { text: string; awaiting: boolean };
+/** The generated draft, kept per message for 30 minutes so reopening the drawer does not ask the AI again. */
+export const aiDrafts = draftNamespace<StoredAiDraft>("reply-ai", {
+  ttlMs: 30 * 60_000,
+  validate(v) {
+    const o = typeof v === "object" && v !== null ? (v as Record<string, unknown>) : null;
+    if (!o) return null;
+    const text = str(o.text, MAX_BODY);
+    return text === null || typeof o.awaiting !== "boolean" ? null : { text, awaiting: o.awaiting };
+  },
+});

@@ -69,6 +69,8 @@ const body = z.discriminatedUnion("action", [
     to: z.array(address).min(1).max(100),
     cc: z.array(address).max(100),
     bodyText: z.string().min(1).max(100_000),
+    /** The owner confirmed sending another reply to a conversation that already has a verified one. */
+    confirmResend: z.boolean().optional(),
   }),
 ]);
 
@@ -99,6 +101,9 @@ const STATUS: Record<string, number> = {
   rate_limited: 429,
   body_unavailable: 502,
   check_sent_first: 409,
+  already_replied: 409,
+  draft_exists: 409,
+  reply_already_pending: 409,
 };
 
 export async function handleApprovals(request: Request, laneId: string, deps: ApprovalsApiDeps): Promise<Response> {
@@ -149,12 +154,13 @@ export async function handleApprovals(request: Request, laneId: string, deps: Ap
         if (!deps.reply) return json(503, { error: "unavailable" });
         if (req.action === "reply_context") return json(200, { ok: true, context: await replyContext(ctx, client, deps.approvals, deps.reply, req.messageId) });
         if (req.action === "draft_reply") return json(200, { ok: true, draft: await draftReply(ctx, client, deps.approvals, deps.reply, req.messageId) });
-        const saved = await saveReply(ctx, client, deps.approvals, deps.reply, { messageId: req.messageId, to: req.to, cc: req.cc, bodyText: req.bodyText });
+        const saved = await saveReply(ctx, client, deps.approvals, deps.reply, { messageId: req.messageId, to: req.to, cc: req.cc, bodyText: req.bodyText, confirmResend: req.confirmResend === true });
         return json(200, { ok: true, id: saved.id, hash: saved.hash, unchanged: saved.unchanged });
       }
     }
   } catch (e) {
     if (e instanceof AuthError) return authErrorResponse(e) as Response;
+    if (e instanceof ReplyError && e.retryAfterS !== null) return json(STATUS[e.code] ?? 500, { error: e.code, message: e.message, retryAfterS: e.retryAfterS });
     if (e instanceof ApprovalsError || e instanceof ReplyError) return json(STATUS[e.code] ?? 500, { error: e.code, message: e.message });
     console.error("[approvals] unavailable:", e instanceof Error ? e.name : typeof e);
     return json(503, { error: "unavailable" });

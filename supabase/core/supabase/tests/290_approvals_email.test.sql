@@ -311,7 +311,7 @@ set local role authenticated;
 select throws_ok(format($$select core.act_approve('PKG', %L, %L)$$, (select id from ids where k = 'a10'), pg_temp.hash('a10')), '42501', 'act: step_up_required', 'a 1000 s old TOTP is refused even when the lane setting says a day');
 reset role;
 
--- T-231d: a job proposes at most one pending reply per message replied to; a user's own proposal is not limited.
+-- T-231d: a job proposes at most one pending reply per message replied to; the owner also has one pending proposal per message (T-234 part 3; an edit is a supersede).
 create function pg_temp.reply(p_msg text) returns jsonb language sql as $$
   select pg_temp.payload('act-pkg@example.test') || jsonb_build_object('inReplyTo', jsonb_build_object('threadId', 'thread-1', 'messageId', p_msg));
 $$;
@@ -319,7 +319,8 @@ select lives_ok($$select act.propose('PKG', 'email.send', '00000000-0000-4000-80
 select throws_ok($$select act.propose('PKG', 'email.send', '00000000-0000-4000-8000-000000002901', '{"mailbox":"act-pkg@example.test","thread_id":"thread-1"}', pg_temp.reply('msg-1'), 1, pg_temp.hash('r2'), null, '[]', 'job', pg_temp.uid('owner@example.test'), true)$$,
                  '23505', 'act: a reply to this message is already waiting for approval', 'a second job reply to the same message is refused');
 select lives_ok($$select act.propose('PKG', 'email.send', '00000000-0000-4000-8000-000000002901', '{"mailbox":"act-pkg@example.test","thread_id":"thread-1"}', pg_temp.reply('msg-2'), 1, pg_temp.hash('r3'), null, '[]', 'job', pg_temp.uid('owner@example.test'), true)$$, 'a job reply to another message is fine');
-select lives_ok($$select act.propose('PKG', 'email.send', '00000000-0000-4000-8000-000000002901', '{"mailbox":"act-pkg@example.test","thread_id":"thread-1"}', pg_temp.reply('msg-1'), 1, pg_temp.hash('r4'), null, '[]', 'user', pg_temp.uid('owner@example.test'), false)$$, 'a user''s own reply to msg-1 is not limited');
+select throws_ok($$select act.propose('PKG', 'email.send', '00000000-0000-4000-8000-000000002901', '{"mailbox":"act-pkg@example.test","thread_id":"thread-1"}', pg_temp.reply('msg-1'), 1, pg_temp.hash('r4'), null, '[]', 'user', pg_temp.uid('owner@example.test'), false)$$,
+                 '23505', 'act: reply_already_pending', 'a user''s own second proposal for msg-1 is refused while one is pending (T-234 part 3)');
 
 -- A rejected job reply is not proposed again for 7 days (T-231d security L1).
 insert into ids select 'rj', act.propose('PKG', 'email.send', '00000000-0000-4000-8000-000000002901', '{"mailbox":"act-pkg@example.test","thread_id":"thread-1"}', pg_temp.reply('msg-rj'), 1, pg_temp.hash('rj'), null, '[]', 'job', pg_temp.uid('owner@example.test'), true);

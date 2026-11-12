@@ -1124,3 +1124,8 @@ Logged, not fixed:
 - **Run now single-flight ceiling (T-234 part 0).** The ceiling lets a second run overlap after 150 s; every write of the late run is guarded by the abort signal, so at worst two rows (newest wins).
 - **Coverage on Settings shows mailbox addresses** to callers with the comms or calendar view: the same audience that saw them on Home before.
 - **Part 4 (GovCon news):** news URLs come from untrusted web results; validate each as `https:` (parse with `URL`) before it is used in an `href`. `GovConNews` currently renders `n.url` as given.
+
+## T-234 part 3 review fixes: open items
+- Draft limiter is in memory per process (serverless instances each count): the model call is also bounded by provider limits; a SQL-backed limiter needs a migration. (security L2)
+- `check_sent_first` blocks any approval in the same thread for 24 h after an unknown-outcome failure; there is no owner "I checked Sent, nothing is there" override yet. (product decision)
+- Only the user's own sessionStorage holds drafts; sign-out clears them, but a shared browser profile that never signs out keeps them until the tab closes or the TTL passes.

@@ -8,7 +8,7 @@ import type { AuditEntry } from "@nichols/core/audit";
 import { createAudit } from "@nichols/core/audit";
 import { emailWriteCapability } from "./capability";
 import { approveAndExecute, editEmailProposal, executeApproved, listApprovals, pendingApprovalCount, proposeEmailAction, rejectAction } from "./email";
-import { ApprovalsError, NOT_ENABLED_MESSAGE, NOT_LIVE_MESSAGE } from "./errors";
+import { ApprovalsError, CHECK_SENT_FIRST_MESSAGE, NOT_ENABLED_MESSAGE, NOT_LIVE_MESSAGE, toApprovalsError } from "./errors";
 import { hashOfRow } from "./rows";
 import type { ApprovalsDeps, CapabilityFacts, Rpc } from "./types";
 
@@ -603,5 +603,15 @@ describe("job proposals (T-231d security review L3, L4)", () => {
   it("a job never addresses one of the lane's own mailboxes", async () => {
     const w = world();
     await expect(proposeEmailAction(w.deps, "PKG", { ...input, compose: { ...compose, to: [MAILBOX] } })).rejects.toMatchObject({ code: "invalid" });
+  });
+});
+
+describe("toApprovalsError: the reply guards (T-234 part 3)", () => {
+  it("maps the database's check_sent_first to a fixed message, and reply_already_pending to its own code", () => {
+    const e = toApprovalsError({ code: "P0001", message: "act: check_sent_first" });
+    expect(e.code).toBe("check_sent_first");
+    expect(e.message).toBe("An earlier reply to this conversation may already have gone out. Check your Sent folder first.");
+    expect(e.message).toBe(CHECK_SENT_FIRST_MESSAGE);
+    expect(toApprovalsError({ code: "23505", message: "act: reply_already_pending" }).code).toBe("reply_already_pending");
   });
 });

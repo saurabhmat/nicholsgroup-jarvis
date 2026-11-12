@@ -13,9 +13,10 @@
 import { wrapUntrusted, UNTRUSTED_DATA_RULE, type LLMProvider } from "@nichols/ai";
 import {
   ApprovalsError,
+  toApprovalsError,
   capabilityOf,
   editEmailProposal,
-  listApprovals,
+  getApproval,
   proposeEmailAction,
   type ActionRow,
   type ApprovalsPublicDeps,
@@ -26,7 +27,6 @@ import { checkContent, extractJson, maskContent, maskFigures, type BriefRef } fr
 import type { LaneClient } from "@nichols/core/lane-router";
 import { displayText, isMessageId } from "./inbox";
 import { reSubject } from "./briefing-run";
-import { isOutcomeUnknown } from "./outcome";
 import { REPLY_MESSAGES, type ReplyErrorCode } from "./reply-messages";
 
 export { REPLY_ERROR_CODES, REPLY_MESSAGES, type ReplyErrorCode } from "./reply-messages";
@@ -34,9 +34,12 @@ export { REPLY_ERROR_CODES, REPLY_MESSAGES, type ReplyErrorCode } from "./reply-
 export class ReplyError extends Error {
   override readonly name = "ReplyError";
   readonly code: ReplyErrorCode;
-  constructor(code: ReplyErrorCode) {
+  /** rate_limited only: whole seconds until the next draft is allowed. */
+  readonly retryAfterS: number | null;
+  constructor(code: ReplyErrorCode, retryAfterS: number | null = null) {
     super(REPLY_MESSAGES[code]);
     this.code = code;
+    this.retryAfterS = retryAfterS;
   }
 }
 
@@ -47,21 +50,30 @@ export type ReplyDeps = {
   readBody: (laneId: string, connectionId: string, messageId: string) => Promise<{ text: string; truncated: boolean }>;
   /** The AI provider (the mock in tests). */
   llm: () => { configured: true; provider: LLMProvider } | { configured: false };
-  /** true = allowed. At most one draft per thread per user per minute. */
-  limiter: { take: (key: string) => boolean };
+  /** At most one draft per thread per user per minute. `wait` = whole seconds until a draft is allowed (0 = now); `take` uses the slot (called only after a successful draft). */
+  limiter: { wait: (key: string) => number; take: (key: string) => boolean };
   now: () => number;
 };
 
 // ---------------------------------------------------------------------------------------------------------- limiter
 
-/** In-memory, per process: at most `max` takes per key in `windowMs`. (Per instance on serverless: a second instance has its own count; the model call is also bounded by the provider's own limits.) */
-export function createLimiter(opts: { windowMs: number; max: number; now?: () => number }): { take: (key: string) => boolean } {
+/** In-memory, per process: at most `max` takes per key in `windowMs`. (Per instance on serverless: a second instance has its own count; the model call is also bounded by the provider's own limits. Logged in docs/plan-review.md.) */
+export function createLimiter(opts: { windowMs: number; max: number; now?: () => number }): { wait: (key: string) => number; take: (key: string) => boolean } {
   const hits = new Map<string, number[]>();
   const now = opts.now ?? Date.now;
+  const recentOf = (key: string, t: number) => (hits.get(key) ?? []).filter((x) => t - x < opts.windowMs);
   return {
+    // Seconds until the next take is allowed (0 = allowed now). Does not use a slot.
+    wait(key) {
+      const t = now();
+      const recent = recentOf(key, t);
+      if (recent.length < opts.max) return 0;
+      const oldest = Math.min(...recent);
+      return Math.max(1, Math.ceil((oldest + opts.windowMs - t) / 1000));
+    },
     take(key) {
       const t = now();
-      const recent = (hits.get(key) ?? []).filter((x) => t - x < opts.windowMs);
+      const recent = recentOf(key, t);
       if (recent.length >= opts.max) {
         hits.set(key, recent);
         return false;
@@ -138,21 +150,43 @@ export function defaultRecipients(ref: MessageRef, ownMailboxes: readonly string
   return ownMailboxes.map((m) => m.toLowerCase()).includes(from) ? [] : [from];
 }
 
-// ---------------------------------------------------------------------------------------------------------- existing proposals
+// ---------------------------------------------------------------------------------------------------------- reply state
 
-const replyTargetOf = (r: ActionRow): string | null => {
-  const rep = r.payload.inReplyTo;
-  return typeof rep === "object" && rep !== null && typeof (rep as { messageId?: unknown }).messageId === "string" ? (rep as { messageId: string }).messageId : null;
+export type ReplyState = {
+  /** The newest pending (proposed, unexpired) email.send / save_draft for THIS message: the T-231d draft or an earlier save. */
+  pendingId: string | null;
+  /** Another action in this THREAD is approved or executing, or failed with an unknown outcome in the last 24 h: check Sent first (T-192). */
+  blocked: boolean;
+  /** When the newest verified email.send to this thread went out, if any. */
+  alreadySentAt: string | null;
 };
-const DAY_MS = 86_400_000;
 
-/** The pending email.send for this message (newest first from act_list) and whether an earlier send may have gone out. */
-export function findReplyState(rows: readonly ActionRow[], ref: MessageRef, now: number): { proposal: ActionRow | null; blocked: boolean } {
-  const mine = rows.filter((r) => r.actionType === "email.send" && r.connectionId === ref.connectionId && replyTargetOf(r) === ref.messageId);
-  const proposal = mine.find((r) => r.status === "proposed" && Date.parse(r.expiresAt) > now && r.payloadPurgedAt === null && typeof r.payload.bodyText === "string") ?? null;
-  // Approved or executing = in flight; failed with a code after which the email may exist = unknown. Never offer a blind second send (T-192).
-  const blocked = mine.some((r) => r.status === "approved" || r.status === "executing" || (r.status === "failed" && isOutcomeUnknown(r.failureCode) && now - Date.parse(r.updatedAt) < DAY_MS));
-  return { proposal, blocked };
+/**
+ * One database call under the owner's own RLS (core.act_reply_state): no row limit, per thread. A failure is `unavailable`
+ * (never "no state": a guess would allow a blind second send).
+ */
+export async function loadReplyState(ctx: UserCtx, ref: MessageRef): Promise<ReplyState> {
+  const { data, error } = await ctx.rpc("act_reply_state", { p_lane: ctx.laneId, p_connection: ref.connectionId, p_thread_id: ref.threadId, p_message_id: ref.messageId });
+  if (error) throw toApprovalsError(error);
+  const r = Array.isArray(data) ? (data[0] as Record<string, unknown> | undefined) : undefined;
+  if (!r || typeof r.blocked !== "boolean") throw new ApprovalsError("unavailable");
+  return {
+    pendingId: typeof r.pending_id === "string" ? r.pending_id : null,
+    blocked: r.blocked,
+    alreadySentAt: typeof r.already_sent_at === "string" ? r.already_sent_at : null,
+  };
+}
+
+/** The pending proposal row, or null when it is no longer pending / has no readable body (then the drawer starts a new one). */
+async function loadPending(ctx: UserCtx, state: ReplyState, now: number): Promise<ActionRow | null> {
+  if (!state.pendingId) return null;
+  try {
+    const r = await getApproval(ctx, state.pendingId);
+    return r.status === "proposed" && Date.parse(r.expiresAt) > now && r.payloadPurgedAt === null && typeof r.payload.bodyText === "string" ? r : null;
+  } catch (e) {
+    if (e instanceof ApprovalsError && e.code === "not_found") return null;
+    throw e;
+  }
 }
 
 // ---------------------------------------------------------------------------------------------------------- context
@@ -161,6 +195,8 @@ export const PREVIEW_CHARS = 2000;
 
 export type ReplyContext = {
   messageId: string;
+  /** The signed-in user's id (from the server session): part of the local draft's key only, never trusted for access. */
+  userId: string;
   /** "Sends as": the connection's mailbox. */
   mailbox: string;
   /** The fixed subject. */
@@ -173,6 +209,7 @@ export type ReplyContext = {
   proposal: null | {
     id: string;
     hash: string;
+    expiresAt: string;
     to: string[];
     cc: string[];
     bcc: string[];
@@ -187,6 +224,8 @@ export type ReplyContext = {
   aiAllowed: boolean;
   /** An earlier send may have gone out: Send and Save are off until the owner has checked the Sent folder. */
   blocked: boolean;
+  /** A reply to this conversation was already sent (verified): sending another needs an explicit second click. */
+  alreadySent: { at: string } | null;
   /** The start of the message replied to: plain text, untrusted, not stored. Null when it could not be read. */
   preview: { text: string; truncated: boolean } | null;
 };
@@ -195,14 +234,15 @@ const strs = (v: unknown): string[] => (Array.isArray(v) ? v.filter((x): x is st
 
 export async function replyContext(ctx: UserCtx, db: Db, approvals: ApprovalsPublicDeps, deps: ReplyDeps, messageId: string): Promise<ReplyContext> {
   const ref = await loadMessageRef(ctx, messageId);
-  const [facts, policy, rows, own] = await Promise.all([
+  const [facts, policy, state, own] = await Promise.all([
     approvals.readFacts(ctx.laneId, ref.connectionId),
     readReplyPolicy(db, ctx.laneId),
-    listApprovals(approvals, ctx, 100),
+    loadReplyState(ctx, ref),
     approvals.laneMailboxes(ctx.laneId).catch(() => [] as string[]),
   ]);
   if (facts.mailbox === null) throw new ApprovalsError("not_found");
-  const { proposal, blocked } = findReplyState(rows, ref, deps.now());
+  const proposal = await loadPending(ctx, state, deps.now());
+  const blocked = state.blocked;
   const cap = capabilityOf(ctx.laneId, facts, "email.send");
   let preview: ReplyContext["preview"] = null;
   try {
@@ -214,6 +254,7 @@ export async function replyContext(ctx: UserCtx, db: Db, approvals: ApprovalsPub
   }
   return {
     messageId: ref.messageId,
+    userId: ctx.userId,
     mailbox: facts.mailbox,
     subject: proposal && typeof proposal.payload.subject === "string" ? proposal.payload.subject : replySubject(ref.subject),
     replyingTo: displayText(ref.fromName && ref.fromAddress ? `${ref.fromName} <${ref.fromAddress}>` : (ref.fromAddress ?? ref.fromName ?? "Unknown sender")),
@@ -223,6 +264,7 @@ export async function replyContext(ctx: UserCtx, db: Db, approvals: ApprovalsPub
       ? {
           id: proposal.id,
           hash: proposal.payloadSha256,
+          expiresAt: proposal.expiresAt,
           to: strs(proposal.payload.to),
           cc: strs(proposal.payload.cc),
           bcc: strs(proposal.payload.bcc),
@@ -236,42 +278,57 @@ export async function replyContext(ctx: UserCtx, db: Db, approvals: ApprovalsPub
     storesDrafts: policy.storesDrafts,
     aiAllowed: policy.aiEmail,
     blocked,
+    alreadySent: state.alreadySentAt ? { at: state.alreadySentAt } : null,
     preview,
   };
 }
 
 // ---------------------------------------------------------------------------------------------------------- save (propose or edit)
 
-export type SaveInput = { messageId: string; to: readonly string[]; cc: readonly string[]; bodyText: string };
+export type SaveInput = { messageId: string; to: readonly string[]; cc: readonly string[]; bodyText: string; confirmResend?: boolean };
 
 /**
  * Creates the owner's email.send proposal for this message, or edits the pending one (supersede when the content changed, the
  * same id when it did not). Returns the id and the hash of exactly what was saved: approve with that hash.
+ * Refused: while an earlier action in the thread may have gone out (`check_sent_first`), and when a reply to the thread was
+ * already sent unless the owner confirmed (`already_replied`). Two simultaneous proposals: the database refuses the second
+ * (`reply_already_pending`) and this edits the one that won.
  */
 export async function saveReply(ctx: UserCtx, db: Db, approvals: ApprovalsPublicDeps, deps: Pick<ReplyDeps, "now">, input: SaveInput): Promise<{ id: string; hash: string; unchanged: boolean }> {
   const ref = await loadMessageRef(ctx, input.messageId);
   const policy = await readReplyPolicy(db, ctx.laneId);
   if (!policy.storesDrafts) throw new ApprovalsError("drafts_not_allowed");
-  const rows = await listApprovals(approvals, ctx, 100);
-  const { proposal, blocked } = findReplyState(rows, ref, deps.now());
-  if (blocked) throw new ReplyError("check_sent_first");
-  if (proposal) {
+  const state = await loadReplyState(ctx, ref);
+  if (state.blocked) throw new ReplyError("check_sent_first");
+  if (state.alreadySentAt !== null && input.confirmResend !== true) throw new ReplyError("already_replied");
+  const edit = (id: string) =>
     // The subject, thread, mailbox and bcc stay as stored: only what the owner may edit goes in.
-    return editEmailProposal(approvals, ctx, proposal.id, { to: [...input.to], cc: [...input.cc], bodyText: input.bodyText });
-  }
+    editEmailProposal(approvals, ctx, id, { to: [...input.to], cc: [...input.cc], bodyText: input.bodyText });
+  const pending = await loadPending(ctx, state, deps.now());
+  if (pending) return edit(pending.id);
   const own = await approvals.laneMailboxes(ctx.laneId).catch(() => [] as string[]);
   const sameAsDefault = JSON.stringify(input.to.map((a) => a.toLowerCase())) === JSON.stringify(defaultRecipients(ref, own));
-  const r = await proposeEmailAction(approvals, ctx.laneId, {
-    actionType: "email.send",
-    connectionId: ref.connectionId,
-    compose: { to: [...input.to], cc: [...input.cc], bcc: [], subject: replySubject(ref.subject), bodyText: input.bodyText, inReplyTo: { threadId: ref.threadId, messageId: ref.messageId } },
-    sourceRefs: [{ kind: "message", id: ref.messageId }],
-    proposerKind: "user",
-    proposerUserId: ctx.userId,
-    // The recipient came from the email unless the owner typed another.
-    derivedFromRetrieved: sameAsDefault,
-  });
-  return { id: r.id, hash: r.hash, unchanged: false };
+  try {
+    const r = await proposeEmailAction(approvals, ctx.laneId, {
+      actionType: "email.send",
+      connectionId: ref.connectionId,
+      compose: { to: [...input.to], cc: [...input.cc], bcc: [], subject: replySubject(ref.subject), bodyText: input.bodyText, inReplyTo: { threadId: ref.threadId, messageId: ref.messageId } },
+      sourceRefs: [{ kind: "message", id: ref.messageId }],
+      proposerKind: "user",
+      proposerUserId: ctx.userId,
+      // The recipient came from the email unless the owner typed another.
+      derivedFromRetrieved: sameAsDefault,
+    });
+    return { id: r.id, hash: r.hash, unchanged: false };
+  } catch (e) {
+    if (!(e instanceof ApprovalsError) || e.code !== "reply_already_pending") throw e;
+    // A second tab or a double click won the race: edit that proposal instead of making another.
+    const again = await loadReplyState(ctx, ref);
+    if (again.blocked) throw new ReplyError("check_sent_first");
+    const winner = await loadPending(ctx, again, deps.now());
+    if (!winner) throw e;
+    return edit(winner.id);
+  }
 }
 
 // ---------------------------------------------------------------------------------------------------------- AI draft
@@ -299,14 +356,34 @@ export function checkDraft(raw: unknown, ref: BriefRef, sources: string[]): Draf
   return { status: "ready", text: d.text };
 }
 
-/** The on-demand draft. Never stored here; the owner saves or sends it from the drawer. */
+// One model call per thread and user at a time: a second request while one runs is `rate_limited`.
+const drafting = new Set<string>();
+
+/**
+ * The on-demand draft. Never stored here; the owner saves or sends it from the drawer. The rate limit slot is used only after a
+ * draft succeeded (a failed body read or model call does not burn it); a pending proposal means no draft (open and edit it).
+ */
 export async function draftReply(ctx: UserCtx, db: Db, approvals: ApprovalsPublicDeps, deps: ReplyDeps, messageId: string): Promise<DraftResult> {
   const ref = await loadMessageRef(ctx, messageId);
   const policy = await readReplyPolicy(db, ctx.laneId);
   if (!policy.aiEmail) throw new ReplyError("ai_not_allowed");
   const llm = deps.llm();
   if (!llm.configured) throw new ReplyError("ai_not_configured");
-  if (!deps.limiter.take(`${ctx.laneId}:${ctx.userId}:${ref.threadId}`)) throw new ReplyError("rate_limited");
+  const state = await loadReplyState(ctx, ref);
+  if (state.pendingId !== null) throw new ReplyError("draft_exists");
+  const limitKey = `${ctx.laneId}:${ctx.userId}:${ref.threadId}`;
+  const wait = deps.limiter.wait(limitKey);
+  if (wait > 0) throw new ReplyError("rate_limited", wait);
+  if (drafting.has(limitKey)) throw new ReplyError("rate_limited", 5);
+  drafting.add(limitKey);
+  try {
+    return await draftOnce(ctx, approvals, deps, ref, llm.provider, limitKey);
+  } finally {
+    drafting.delete(limitKey);
+  }
+}
+
+async function draftOnce(ctx: UserCtx, approvals: ApprovalsPublicDeps, deps: ReplyDeps, ref: MessageRef, provider: LLMProvider, limitKey: string): Promise<DraftResult> {
   let body: string;
   try {
     body = (await deps.readBody(ctx.laneId, ref.connectionId, ref.messageId)).text.slice(0, MAX_BODY_CHARS);
@@ -331,7 +408,7 @@ export async function draftReply(ctx: UserCtx, db: Db, approvals: ApprovalsPubli
   const metaLine = wrapUntrusted(`from ${ref.fromName ?? ""} <${ref.fromAddress ?? "unknown"}>, subject "${ref.subject ? maskFigures(ref.subject).replace(/\s+/g, " ") : ""}"`, { source: "email-metadata", id: "r1" });
   const meta = `from ${ref.fromName ?? ""} <${ref.fromAddress ?? "unknown"}>, subject "${ref.subject ? maskFigures(ref.subject).replace(/\s+/g, " ") : ""}"`;
   try {
-    const res = await llm.provider.complete({
+    const res = await provider.complete({
       laneId: ctx.laneId,
       tier: "analysis",
       signal: AbortSignal.timeout(50_000),
@@ -343,7 +420,9 @@ export async function draftReply(ctx: UserCtx, db: Db, approvals: ApprovalsPubli
     const text = res.content.flatMap((b) => (b.type === "text" ? [b.text] : [])).join("");
     const raw = extractJson(text);
     if (raw === null) throw new ReplyError("ai_failed");
-    return checkDraft(raw, briefRef, [meta, body]);
+    const draft = checkDraft(raw, briefRef, [meta, body]);
+    deps.limiter.take(limitKey); // only a successful draft uses the slot
+    return draft;
   } catch (e) {
     if (e instanceof ReplyError) throw e;
     // The class only: never a provider message, the prompt or the message text.

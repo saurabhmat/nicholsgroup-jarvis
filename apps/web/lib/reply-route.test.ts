@@ -5,15 +5,16 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import { AuthError } from "@nichols/core/auth";
 import type { ApprovalsPublicDeps, CapabilityFacts } from "@nichols/approvals/server";
 
-const mod = vi.hoisted(() => ({ propose: vi.fn(), edit: vi.fn(), list: vi.fn() }));
+const mod = vi.hoisted(() => ({ propose: vi.fn(), edit: vi.fn(), list: vi.fn(), get: vi.fn(), pendingId: null as string | null }));
 vi.mock("@nichols/approvals/server", async (orig) => ({
   ...(await orig<typeof import("@nichols/approvals/server")>()),
   proposeEmailAction: mod.propose,
   editEmailProposal: mod.edit,
   listApprovals: mod.list,
+  getApproval: mod.get,
 }));
 
-import { ApprovalsError, NOT_ENABLED_MESSAGE } from "@nichols/approvals/server";
+import { ApprovalsError, CHECK_SENT_FIRST_MESSAGE, NOT_ENABLED_MESSAGE, toApprovalsError } from "@nichols/approvals/server";
 import { handleApprovals } from "./approvals";
 import { createLimiter } from "./reply";
 import { createMockProvider, textResult } from "@nichols/ai/testing";
@@ -30,6 +31,7 @@ function setup(opts: { role?: "ok" | "forbidden"; stepUp?: "ok" | "required"; po
   const rpc = async (fn: string) => {
     calls.push(fn);
     if (fn === "inbox_message_ref") return { data: [{ message_id: "m1", connection_id: CONN, provider: "google", from_name: "Dana", from_address: "dana@sender.example.test", subject: "Quarterly review", received_at: "2026-11-12T10:00:00Z", thread_id: "t-100" }], error: null };
+    if (fn === "act_reply_state") return { data: [{ pending_id: mod.pendingId, blocked: false, already_sent_at: null }], error: null };
     if (fn === "act_get") return { data: [{ connection_id: CONN }], error: null };
     return { data: null, error: null };
   };
@@ -73,6 +75,8 @@ beforeEach(() => {
   mod.propose.mockReset().mockResolvedValue({ id: ID, hash: SAVED_HASH });
   mod.edit.mockReset().mockResolvedValue({ id: ID, hash: SAVED_HASH, unchanged: false });
   mod.list.mockReset().mockResolvedValue([]);
+  mod.get.mockReset();
+  mod.pendingId = null;
 });
 
 describe("guard order", () => {
@@ -137,14 +141,15 @@ describe("save and approve use the same hash", () => {
 
   it("an edit of a pending proposal returns the NEW hash from the edit", async () => {
     const s = setup();
-    mod.list.mockResolvedValue([
+    mod.pendingId = ID;
+    mod.get.mockResolvedValue(
       {
         id: ID, laneId: "PKG", actionType: "email.send", connectionId: CONN, provider: "google", target: {}, payloadSchemaVersion: 1, payloadSha256: "a".repeat(64), rationale: null, sourceRefs: [],
         proposerKind: "job", proposerUserId: USER, derivedFromRetrieved: true, supersedesId: null, supersededById: null, status: "proposed", expiresAt: new Date(Date.now() + 3600_000).toISOString(),
         approvedBy: null, approvedAt: null, approvedHash: null, executedAt: null, verifiedAt: null, result: {}, failureCode: null, payloadPurgedAt: null, createdAt: "", updatedAt: "",
         payload: { to: ["dana@sender.example.test"], cc: [], bcc: [], subject: "Re: Quarterly review", bodyText: "old", inReplyTo: { threadId: "t-100", messageId: "m1" } },
       },
-    ]);
+    );
     mod.edit.mockResolvedValue({ id: "00000000-0000-4000-8000-0000000000ab", hash: "d".repeat(64), unchanged: false });
     const saved = await (await handleApprovals(post(SAVE), "PKG", s.deps)).json();
     expect(saved).toMatchObject({ id: "00000000-0000-4000-8000-0000000000ab", hash: "d".repeat(64) });
@@ -180,7 +185,25 @@ describe("fixed refusals", () => {
     expect((await handleApprovals(post({ action: "draft_reply", messageId: "m1" }), "PKG", limited.deps)).status).toBe(200);
     const again = await handleApprovals(post({ action: "draft_reply", messageId: "m1" }), "PKG", limited.deps);
     expect(again.status).toBe(429);
-    expect(await again.json()).toMatchObject({ error: "rate_limited" });
+    expect(await again.json()).toMatchObject({ error: "rate_limited", retryAfterS: 60 });
+  });
+
+  it("approve refused by the database with check_sent_first: 409 and the fixed message (the Approvals page card shows the same text)", async () => {
+    const s = setup({
+      approve: async () => {
+        throw toApprovalsError({ code: "P0001", message: "act: check_sent_first" });
+      },
+    });
+    const res = await handleApprovals(post({ action: "approve", id: ID, hashSeen: SAVED_HASH }), "PKG", s.deps);
+    expect(res.status).toBe(409);
+    expect(await res.json()).toEqual({ error: "check_sent_first", message: "An earlier reply to this conversation may already have gone out. Check your Sent folder first." });
+    expect(CHECK_SENT_FIRST_MESSAGE).toBe("An earlier reply to this conversation may already have gone out. Check your Sent folder first.");
+  });
+
+  it("propose_reply takes confirmResend as a boolean only; a reply already sent is refused (409 already_replied) without it", async () => {
+    const s = setup();
+    expect((await handleApprovals(post({ ...SAVE, confirmResend: "yes" }), "PKG", s.deps)).status).toBe(400);
+    expect((await handleApprovals(post({ ...SAVE, confirmResend: true }), "PKG", s.deps)).status).toBe(200);
   });
 
   it("without the reply dependencies the reply actions answer unavailable", async () => {

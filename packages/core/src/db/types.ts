@@ -457,6 +457,11 @@ isOneToOne: false
 "act_reject":
 { Args: { "p_id": string,"p_lane": string,"p_reason": string }; Returns: undefined
                            },
+"act_reply_state":
+{ Args: { "p_connection": string,"p_lane": string,"p_message_id": string,"p_thread_id": string }; Returns: {
+              "already_sent_at": string,"blocked": boolean,"pending_id": string
+            }[]
+                           },
 "act_stuck_actions":
 { Args: { "p_lane": string,"p_limit"?: number }; Returns: {
               "action": Json,"claim_external_id": string,"claim_outcome": string,"give_up": boolean

@@ -8,26 +8,29 @@
 //              code is needed: the fields are kept in sessionStorage across the step-up), the server sends it once and reads it back.
 //   Save draft keeps it in Approvals for later.   Copy always works.
 // While sending is not enabled (or the company does not store drafts) the buttons are off with the exact message.
+// Unsent edits and the generated AI draft are kept in sessionStorage only when the company stores outbound drafts (rule 6, D-19).
 import Link from "next/link";
 import { useRouter } from "next/navigation";
-import { useCallback, useEffect, useId, useRef, useState, type KeyboardEvent } from "react";
+import { useCallback, useEffect, useId, useRef, useState } from "react";
 import { createPortal } from "react-dom";
-import { Alert, AlertDescription, Badge, Button, cn } from "@nichols/ui";
+import { Alert, AlertDescription, AlertTitle, Badge, Button, cn } from "@nichols/ui";
 import { callApprovals, errorText, invalidAddresses, splitAddresses, stepUpHref, type DraftResult, type ReplyContext } from "@/lib/reply-client";
 import { flagRecipients } from "@/lib/reply-flags";
 import { DRAFTS_OFF_MESSAGE, REPLY_MESSAGES, resultMessage, UNKNOWN_MESSAGE, type ReplyOutcome } from "@/lib/reply-messages";
-import { clearReplyDraft, loadReplyDraft, saveReplyDraft, type ReplyDraftFields } from "@/lib/reply-draft-store";
+import { aiDrafts, debounced, replyDrafts, type ReplyDraftFields } from "@/lib/reply-draft-store";
 import { CapabilityMessage } from "./approval-card";
 import { CopyTextButton } from "./copy-text-button";
 
 const control =
   "min-h-11 w-full min-w-0 rounded-control border border-border bg-card px-3 py-2 text-body text-foreground placeholder:text-muted-foreground focus:outline-none focus:ring-2 focus:ring-ring disabled:opacity-60";
 const FOCUSABLE = 'a[href], button:not([disabled]), input:not([disabled]), textarea:not([disabled]), select:not([disabled]), [tabindex]:not([tabindex="-1"])';
+export const STALE_NOTE = "Your earlier unsaved edits were discarded because the draft changed.";
+const WRITE_DELAY_MS = 500;
 
 type Source = "restored" | "briefing" | "saved" | "ai" | "blank";
 type Loaded =
   | { ok: false; message: string }
-  | { ok: true; ctx: ReplyContext; fields: ReplyDraftFields; source: Source; awaiting: boolean; aiMessage: string | null };
+  | { ok: true; ctx: ReplyContext; fields: ReplyDraftFields; base: ReplyDraftFields; source: Source; awaiting: boolean; aiMessage: string | null; staleDiscarded: boolean };
 
 // One load per message at a time, so a double effect run (React strict mode) never asks the AI twice.
 const loading = new Map<string, Promise<Loaded>>();
@@ -42,25 +45,52 @@ function loadReply(laneId: string, messageId: string): Promise<Loaded> {
   return p;
 }
 
+const versionOf = (ctx: ReplyContext): string => ctx.proposal?.hash ?? "none";
+
+/** Asks for the AI draft. A success is kept for 30 minutes (only when the company stores drafts). */
+async function fetchDraft(laneId: string, ctx: ReplyContext): Promise<{ draft: DraftResult } | { message: string }> {
+  const d = await callApprovals(laneId, { action: "draft_reply", messageId: ctx.messageId });
+  const draft = d.status === 200 ? (d.data.draft as DraftResult | undefined) : undefined;
+  if (draft && (draft.status === "ready" || draft.status === "awaiting_input")) {
+    if (ctx.storesDrafts) aiDrafts.write(laneId, ctx.userId, ctx.messageId, { text: draft.status === "ready" ? draft.text : "", awaiting: draft.status === "awaiting_input" });
+    return { draft };
+  }
+  return { message: errorText(d) };
+}
+
 async function doLoad(laneId: string, messageId: string): Promise<Loaded> {
   const r = await callApprovals(laneId, { action: "reply_context", messageId });
   const ctx = r.status === 200 ? (r.data.context as ReplyContext | undefined) : undefined;
   if (!ctx || typeof ctx !== "object") return { ok: false, message: errorText(r) };
-  // Unsent edits kept in this tab (a step-up or a reload) win over everything else.
-  const stored = loadReplyDraft(laneId, messageId);
-  if (stored) return { ok: true, ctx, fields: stored, source: "restored", awaiting: false, aiMessage: null };
-  if (ctx.proposal) {
-    return { ok: true, ctx, fields: { to: ctx.proposal.to.join(", "), cc: ctx.proposal.cc.join(", "), body: ctx.proposal.bodyText }, source: ctx.proposal.origin === "briefing" ? "briefing" : "saved", awaiting: false, aiMessage: null };
-  }
   const blank = { to: ctx.defaults.to.join(", "), cc: ctx.defaults.cc.join(", "), body: "" };
-  if (!ctx.aiAllowed || ctx.blocked) return { ok: true, ctx, fields: blank, source: "blank", awaiting: false, aiMessage: null };
-  // No proposal and no stored edits: draft on demand (never stored; the owner saves or sends it).
-  const d = await callApprovals(laneId, { action: "draft_reply", messageId });
-  const draft = d.status === 200 ? (d.data.draft as DraftResult | undefined) : undefined;
-  if (draft && (draft.status === "ready" || draft.status === "awaiting_input")) {
-    return { ok: true, ctx, fields: { ...blank, body: draft.status === "ready" ? draft.text : "" }, source: draft.status === "ready" ? "ai" : "blank", awaiting: draft.status === "awaiting_input", aiMessage: null };
+  const fromProposal = ctx.proposal ? { to: ctx.proposal.to.join(", "), cc: ctx.proposal.cc.join(", "), body: ctx.proposal.bodyText } : null;
+  const base = fromProposal ?? blank;
+  // Unsent edits kept in this tab (a step-up or a reload) win, but only if they were made against the draft the server still has.
+  let staleDiscarded = false;
+  if (ctx.storesDrafts) {
+    const stored = replyDrafts.read(laneId, ctx.userId, messageId);
+    if (stored) {
+      if (stored.serverVersion === versionOf(ctx)) return { ok: true, ctx, fields: { to: stored.to, cc: stored.cc, body: stored.body }, base, source: "restored", awaiting: false, aiMessage: null, staleDiscarded: false };
+      replyDrafts.remove(laneId, ctx.userId, messageId);
+      staleDiscarded = true;
+    }
+  } else {
+    replyDrafts.remove(laneId, ctx.userId, messageId); // nothing is kept when the company does not store drafts
+    aiDrafts.remove(laneId, ctx.userId, messageId);
   }
-  return { ok: true, ctx, fields: blank, source: "blank", awaiting: false, aiMessage: errorText(d) };
+  if (fromProposal && ctx.proposal) {
+    return { ok: true, ctx, fields: fromProposal, base, source: ctx.proposal.origin === "briefing" ? "briefing" : "saved", awaiting: false, aiMessage: null, staleDiscarded };
+  }
+  if (!ctx.aiAllowed || ctx.blocked) return { ok: true, ctx, fields: blank, base, source: "blank", awaiting: false, aiMessage: null, staleDiscarded };
+  // The generated draft of the last 30 minutes is reused: reopening does not ask the AI again.
+  const cached = ctx.storesDrafts ? aiDrafts.read(laneId, ctx.userId, messageId) : null;
+  const got = cached ? { draft: { status: cached.awaiting ? ("awaiting_input" as const) : ("ready" as const), text: cached.text } } : await fetchDraft(laneId, ctx);
+  if ("draft" in got) {
+    const ready = got.draft.status === "ready";
+    const fields = { ...blank, body: ready ? got.draft.text : "" };
+    return { ok: true, ctx, fields, base: fields, source: ready ? "ai" : "blank", awaiting: !ready, aiMessage: null, staleDiscarded };
+  }
+  return { ok: true, ctx, fields: blank, base, source: "blank", awaiting: false, aiMessage: got.message, staleDiscarded };
 }
 
 const SOURCE_NOTE: Record<Source, string | null> = {
@@ -71,19 +101,48 @@ const SOURCE_NOTE: Record<Source, string | null> = {
   blank: null,
 };
 
+const sameList = (a: readonly string[], b: readonly string[]) => a.length === b.length && a.every((x, i) => x.toLowerCase() === (b[i] ?? "").toLowerCase());
+const when = (iso: string): string => {
+  const d = new Date(iso);
+  return Number.isNaN(d.getTime()) ? "an earlier date" : d.toLocaleDateString(undefined, { dateStyle: "medium" });
+};
+const whenTime = (iso: string): string => {
+  const d = new Date(iso);
+  return Number.isNaN(d.getTime()) ? "soon" : d.toLocaleString(undefined, { dateStyle: "medium", timeStyle: "short" });
+};
+
 export function ReplyDrawer({ laneId, messageId, onClose }: { laneId: string; messageId: string; onClose: () => void }) {
   const router = useRouter();
   const titleId = useId();
   const panel = useRef<HTMLDivElement>(null);
+  const resultRef = useRef<HTMLParagraphElement>(null);
+  const toRef = useRef<HTMLInputElement>(null);
+  const bodyRef = useRef<HTMLTextAreaElement>(null);
+  const closeRef = useRef<HTMLButtonElement>(null);
   const [loaded, setLoaded] = useState<Loaded | null>(null);
   const [to, setTo] = useState("");
   const [cc, setCc] = useState("");
   const [body, setBody] = useState("");
-  const [busy, setBusy] = useState<"save" | "send" | null>(null);
+  const [base, setBase] = useState<ReplyDraftFields>({ to: "", cc: "", body: "" });
+  const [info, setInfo] = useState<{ source: Source; awaiting: boolean; aiMessage: string | null; staleDiscarded: boolean }>({ source: "blank", awaiting: false, aiMessage: null, staleDiscarded: false });
+  const [busy, setBusy] = useState<"save" | "send" | "draft" | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [saved, setSaved] = useState<string | null>(null);
   const [result, setResult] = useState<{ outcome: ReplyOutcome; text: string } | null>(null);
+  const [ask, setAsk] = useState<"send" | "save" | null>(null);
+  const [confirmed, setConfirmed] = useState(false);
   const sending = useRef(false);
+  const working = useRef(false);
+  const pendingRefresh = useRef(false);
+  const refreshFn = useRef(router.refresh);
+  // Where the local copy of the edits goes: set after the load (user id and version come from the server's context).
+  const [target] = useState<{ current: { userId: string; version: string; keep: boolean } | null }>(() => ({ current: null }));
+  const [writer] = useState(() =>
+    debounced((f: ReplyDraftFields) => {
+      const t = target.current;
+      if (t?.keep) replyDrafts.write(laneId, t.userId, messageId, { ...f, serverVersion: t.version });
+    }, WRITE_DELAY_MS),
+  );
 
   useEffect(() => {
     let alive = true;
@@ -91,60 +150,115 @@ export function ReplyDrawer({ laneId, messageId, onClose }: { laneId: string; me
       if (!alive) return;
       setLoaded(l);
       if (l.ok) {
+        target.current = { userId: l.ctx.userId, version: versionOf(l.ctx), keep: l.ctx.storesDrafts };
         setTo(l.fields.to);
         setCc(l.fields.cc);
         setBody(l.fields.body);
+        setBase(l.base);
+        setInfo({ source: l.source, awaiting: l.awaiting, aiMessage: l.aiMessage, staleDiscarded: l.staleDiscarded });
       }
     });
     return () => {
       alive = false;
     };
-  }, [laneId, messageId]);
+  }, [laneId, messageId, target]);
 
-  // Focus moves in, the page behind does not scroll, and focus is trapped while the dialog is open (returned by the trigger).
+  // Focus moves in, the page behind does not scroll (focus is returned by the trigger). Edits not yet written are flushed on close,
+  // and a refresh that was held back while the drawer was open runs once it is gone.
   useEffect(() => {
     const prev = document.body.style.overflow;
     document.body.style.overflow = "hidden";
-    panel.current?.querySelector<HTMLElement>(FOCUSABLE)?.focus();
+    closeRef.current?.focus();
     return () => {
       document.body.style.overflow = prev;
+      writer.flush();
+      if (pendingRefresh.current) {
+        pendingRefresh.current = false;
+        refreshFn.current();
+      }
     };
-  }, []);
+  }, [writer]);
+
+  // After the load: the cursor goes to the message, or to To when there is no recipient yet.
+  const ctxLoaded = loaded?.ok ? loaded.ctx : null;
+  useEffect(() => {
+    if (!ctxLoaded) return;
+    const empty = splitAddresses(to).length === 0;
+    (empty ? toRef.current : bodyRef.current)?.focus();
+    // Only when the load completes (not on every keystroke).
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [ctxLoaded]);
+
+  // A result (sent, failed, unknown) or a saved draft: focus goes to that message so a screen reader reads it and a keyboard user is not lost.
+  useEffect(() => {
+    if (result || saved) (resultRef.current ?? closeRef.current)?.focus();
+  }, [result, saved]);
 
   const close = useCallback(() => {
-    if (!sending.current) onClose();
+    if (sending.current) return;
+    if (pendingRefresh.current) {
+      pendingRefresh.current = false;
+      refreshFn.current();
+    }
+    onClose();
   }, [onClose]);
+  const closeLatest = useRef(close);
+  useEffect(() => {
+    closeLatest.current = close;
+    refreshFn.current = router.refresh;
+  });
 
-  function onKeyDown(e: KeyboardEvent<HTMLDivElement>) {
-    if (e.key === "Escape") {
-      e.stopPropagation();
-      close();
-      return;
+  // Esc and the Tab trap live on the document while the drawer is open (focus may be on the body after a button turns off).
+  useEffect(() => {
+    function onKey(e: KeyboardEvent) {
+      if (e.key === "Escape") {
+        e.preventDefault();
+        closeLatest.current(); // ignored while a send is in progress
+        return;
+      }
+      if (e.key !== "Tab" || !panel.current) return;
+      const items = [...panel.current.querySelectorAll<HTMLElement>(FOCUSABLE)].filter((el) => !el.hasAttribute("disabled"));
+      const first = items[0];
+      const last = items[items.length - 1];
+      if (!first || !last) return;
+      const active = document.activeElement;
+      if (e.shiftKey && (active === first || !panel.current.contains(active))) {
+        e.preventDefault();
+        last.focus();
+      } else if (!e.shiftKey && (active === last || !panel.current.contains(active))) {
+        e.preventDefault();
+        first.focus();
+      }
     }
-    if (e.key !== "Tab" || !panel.current) return;
-    const items = [...panel.current.querySelectorAll<HTMLElement>(FOCUSABLE)].filter((el) => !el.hasAttribute("disabled"));
-    const first = items[0];
-    const last = items[items.length - 1];
-    if (!first || !last) return;
-    const active = document.activeElement;
-    if (e.shiftKey && (active === first || !panel.current.contains(active))) {
-      e.preventDefault();
-      last.focus();
-    } else if (!e.shiftKey && (active === last || !panel.current.contains(active))) {
-      e.preventDefault();
-      first.focus();
-    }
-  }
+    document.addEventListener("keydown", onKey);
+    return () => document.removeEventListener("keydown", onKey);
+  }, []);
 
-  // Autosave of unsent edits (per message, sessionStorage): only what the owner changed, so an untouched AI draft is not "restored".
+  // Autosave of unsent edits: only what the owner changed, written 500 ms after the last keystroke, and never when the company does not store drafts.
   const edit = (field: keyof ReplyDraftFields, value: string) => {
     const next = { to, cc, body, [field]: value };
     if (field === "to") setTo(value);
     else if (field === "cc") setCc(value);
     else setBody(value);
     setSaved(null);
-    saveReplyDraft(laneId, messageId, next);
+    writer.call(next);
   };
+
+  const dropLocalCopy = () => {
+    writer.cancel();
+    const t = target.current;
+    if (t) replyDrafts.remove(laneId, t.userId, messageId);
+  };
+
+  function discardEdits() {
+    dropLocalCopy();
+    setTo(base.to);
+    setCc(base.cc);
+    setBody(base.body);
+    setError(null);
+    const source: Source = ctx?.proposal ? (ctx.proposal.origin === "briefing" ? "briefing" : "saved") : base.body === "" ? "blank" : "ai";
+    setInfo((i) => ({ ...i, source, staleDiscarded: false }));
+  }
 
   const ctx = loaded?.ok ? loaded.ctx : null;
   const toList = splitAddresses(to);
@@ -154,6 +268,10 @@ export function ReplyDrawer({ laneId, messageId, onClose }: { laneId: string; me
   const refused = ctx ? (!ctx.storesDrafts ? DRAFTS_OFF_MESSAGE : ctx.blocked ? REPLY_MESSAGES.check_sent_first : null) : null;
   const saveDisabled = !ctx || busy !== null || refused !== null || finished;
   const sendDisabled = saveDisabled || !ctx.send.enabled;
+  // The same banner as the approval card: the recipients came from the email unless the owner changed them (recomputed as To changes).
+  const fromEmail = ctx ? (ctx.proposal ? ctx.proposal.derivedFromRetrieved && sameList(toList, ctx.proposal.to) : toList.length > 0 && sameList(toList, ctx.defaults.to)) : false;
+  const dirty = to !== base.to || cc !== base.cc || body !== base.body;
+  const canDraftAgain = !!ctx && ctx.aiAllowed && !ctx.proposal && !ctx.blocked && !finished && (info.source === "ai" || info.awaiting || info.aiMessage !== null);
 
   function invalid(): string | null {
     if (toList.length === 0) return "Add at least one recipient in To.";
@@ -163,64 +281,126 @@ export function ReplyDrawer({ laneId, messageId, onClose }: { laneId: string; me
     return null;
   }
 
-  async function persist(): Promise<{ id: string; hash: string } | null> {
-    const r = await callApprovals(laneId, { action: "propose_reply", messageId, to: toList, cc: ccList, bodyText: body });
-    if (r.status === 200 && typeof r.data.id === "string" && typeof r.data.hash === "string") return { id: r.data.id, hash: r.data.hash };
+  async function persist(confirmResend: boolean): Promise<{ id: string; hash: string } | null> {
+    const r = await callApprovals(laneId, { action: "propose_reply", messageId, to: toList, cc: ccList, bodyText: body, ...(confirmResend ? { confirmResend: true } : {}) });
+    if (r.status === 200 && typeof r.data.id === "string" && typeof r.data.hash === "string") {
+      if (target.current) target.current.version = r.data.hash; // later edits are made against this version
+      return { id: r.data.id, hash: r.data.hash };
+    }
     setError(errorText(r));
     return null;
   }
 
-  async function saveDraft() {
-    const bad = invalid();
-    if (bad) return setError(bad);
-    setBusy("save");
-    setError(null);
-    const p = await persist();
-    setBusy(null);
-    if (!p) return;
-    clearReplyDraft(laneId, messageId); // the server holds it now
-    setSaved(p.id);
-    router.refresh();
+  function requestSave() {
+    if (ctx?.alreadySent && !confirmed) return setAsk("save");
+    void saveDraft(confirmed);
+  }
+  function requestSend() {
+    if (ctx?.alreadySent && !confirmed) return setAsk("send");
+    void send(confirmed);
   }
 
-  async function send() {
-    if (sending.current) return;
+  async function saveDraft(confirmResend: boolean) {
+    if (working.current) return;
+    const bad = invalid();
+    if (bad) return setError(bad);
+    working.current = true;
+    setBusy("save");
+    setError(null);
+    try {
+      const p = await persist(confirmResend);
+      if (!p) return;
+      dropLocalCopy(); // the server holds it now
+      setBase({ to, cc, body });
+      setSaved(p.id);
+      pendingRefresh.current = true; // re-read the page once the drawer is closed, so this message is never unmounted
+    } finally {
+      working.current = false;
+      setBusy(null);
+    }
+  }
+
+  async function send(confirmResend: boolean) {
+    if (sending.current || working.current) return;
     const bad = invalid();
     if (bad) return setError(bad);
     sending.current = true;
+    working.current = true;
     setBusy("send");
     setError(null);
     try {
       // 1. The exact edited text becomes the proposal (a new version if it changed, the same one if not): its hash is what is approved.
-      const p = await persist();
+      const p = await persist(confirmResend);
       if (!p) return;
       // 2. Approve that hash and carry it out once.
       const a = await callApprovals(laneId, { action: "approve", id: p.id, hashSeen: p.hash });
       if (a.status === 403 && a.data.error === "step_up_required") {
-        saveReplyDraft(laneId, messageId, { to, cc, body });
+        // The server already holds exactly this text; the local copy matches that version.
+        writer.cancel();
+        if (target.current?.keep) replyDrafts.write(laneId, target.current.userId, messageId, { to, cc, body, serverVersion: p.hash });
         router.push(stepUpHref(laneId, messageId));
         return;
       }
       if (a.status === 200 && (a.data.outcome === "sent" || a.data.outcome === "failed" || a.data.outcome === "unknown")) {
         const outcome = a.data.outcome;
         setResult({ outcome, text: resultMessage(outcome, typeof a.data.failureCode === "string" ? a.data.failureCode : null) });
-        if (outcome === "sent") clearReplyDraft(laneId, messageId);
-        router.refresh();
+        if (outcome !== "failed") dropLocalCopy();
+        pendingRefresh.current = true;
         return;
       }
       // No answer (network, a timeout) or a server error: the request may have reached Gmail. Never a blind retry.
       if (a.status === 0 || a.status >= 500) {
         setResult({ outcome: "unknown", text: UNKNOWN_MESSAGE });
+        dropLocalCopy();
+        pendingRefresh.current = true;
         return;
       }
       setError(errorText(a));
     } finally {
       sending.current = false;
+      working.current = false;
       setBusy(null);
     }
   }
 
-  const note = loaded?.ok ? SOURCE_NOTE[loaded.source] : null;
+  async function draftAgain() {
+    if (!ctx || working.current) return;
+    working.current = true;
+    setBusy("draft");
+    setError(null);
+    try {
+      const got = await fetchDraft(laneId, ctx);
+      if ("draft" in got) {
+        const ready = got.draft.status === "ready";
+        setBody(ready ? got.draft.text : "");
+        setBase((b) => ({ ...b, body: ready ? got.draft.text : "" }));
+        setInfo((i) => ({ ...i, source: ready ? "ai" : "blank", awaiting: !ready, aiMessage: null }));
+      } else {
+        setInfo((i) => ({ ...i, aiMessage: got.message }));
+      }
+    } finally {
+      working.current = false;
+      setBusy(null);
+    }
+  }
+
+  const note = loaded?.ok ? SOURCE_NOTE[info.source] : null;
+  // One persistent live region: its text changes, so a screen reader announces each step (errors have their own role=alert).
+  const live = result
+    ? result.text
+    : saved
+      ? "Draft saved in Approvals."
+      : busy === "send"
+        ? "Sending."
+        : busy === "save"
+          ? "Saving the draft."
+          : busy === "draft"
+            ? "Drafting a reply."
+            : loaded === null
+              ? "Loading the message."
+              : loaded.ok
+                ? "The reply is ready to edit."
+                : "";
 
   const node = (
     <div className="fixed inset-0 z-50" data-testid="reply-overlay">
@@ -232,22 +412,22 @@ export function ReplyDrawer({ laneId, messageId, onClose }: { laneId: string; me
         aria-labelledby={titleId}
         aria-busy={busy !== null || loaded === null}
         data-testid="reply-drawer"
-        onKeyDown={onKeyDown}
         className="absolute inset-0 flex flex-col bg-background text-foreground shadow-card md:left-auto md:right-0 md:w-[480px] md:max-w-full md:border-l md:border-border"
       >
         <header className="flex items-center justify-between gap-3 border-b border-border px-4 py-3">
           <h2 id={titleId} className="text-card-title font-semibold">
             Reply
           </h2>
-          <Button variant="ghost" size="sm" onClick={close} disabled={busy === "send"} aria-label="Close reply">
+          <Button ref={closeRef} variant="ghost" size="sm" onClick={close} disabled={busy === "send"} aria-label="Close reply">
             Close
           </Button>
         </header>
+        <div data-testid="reply-live" role="status" aria-live="polite" className="sr-only">
+          {live}
+        </div>
         <div className="flex min-h-0 flex-1 flex-col gap-4 overflow-y-auto px-4 py-4">
           {loaded === null ? (
-            <p role="status" className="text-body text-muted-foreground">
-              Loading the message...
-            </p>
+            <p className="text-body text-muted-foreground">Loading the message...</p>
           ) : !loaded.ok ? (
             <Alert variant="alert" role="alert">
               <AlertDescription>{loaded.message}</AlertDescription>
@@ -272,20 +452,43 @@ export function ReplyDrawer({ laneId, messageId, onClose }: { laneId: string; me
               <p data-testid="sends-as" className="text-body font-medium text-foreground">
                 Sends as {ctx.mailbox}
               </p>
+              {ctx.alreadySent ? (
+                <Alert variant="alert" role="note" data-testid="reply-already-sent">
+                  <AlertTitle>You already replied to this conversation on {when(ctx.alreadySent.at)}</AlertTitle>
+                  <AlertDescription>Sending again needs a second click to confirm.</AlertDescription>
+                </Alert>
+              ) : null}
+              {ctx.proposal ? (
+                <p data-testid="reply-proposal-meta" className="text-small text-muted-foreground">
+                  Version {ctx.proposal.hash.slice(0, 8)} · Expires {whenTime(ctx.proposal.expiresAt)}
+                </p>
+              ) : null}
               {note ? (
                 <p data-testid="reply-source-note" className="text-small text-muted-foreground">
                   {note}
                 </p>
               ) : null}
-              {loaded.awaiting ? (
-                <p data-testid="reply-awaiting" role="status" className="text-small font-medium text-alert-foreground">
+              {info.staleDiscarded ? (
+                <p data-testid="reply-stale-note" className="text-small text-alert-foreground">
+                  {STALE_NOTE}
+                </p>
+              ) : null}
+              {info.awaiting ? (
+                <p data-testid="reply-awaiting" className="text-small font-medium text-alert-foreground">
                   Awaiting your input: the draft needed a figure or date that is not in the message, so it is left for you to write.
                 </p>
               ) : null}
-              {loaded.aiMessage ? (
-                <p data-testid="reply-ai-message" role="status" className="text-small text-muted-foreground">
-                  {loaded.aiMessage}
+              {info.aiMessage ? (
+                <p data-testid="reply-ai-message" className="text-small text-muted-foreground">
+                  {info.aiMessage}
                 </p>
+              ) : null}
+              {canDraftAgain ? (
+                <div>
+                  <Button variant="outline" size="sm" data-testid="reply-draft-again" disabled={busy !== null} onClick={() => void draftAgain()}>
+                    {busy === "draft" ? "Drafting..." : "Draft again"}
+                  </Button>
+                </div>
               ) : null}
               {ctx.proposal?.rationale ? (
                 <p className="text-small text-muted-foreground">
@@ -295,8 +498,14 @@ export function ReplyDrawer({ laneId, messageId, onClose }: { laneId: string; me
               <div className="grid gap-3">
                 <label className="grid gap-1 text-small font-medium text-foreground" htmlFor={`${titleId}-to`}>
                   To
-                  <input id={`${titleId}-to`} data-testid="reply-to" className={control} value={to} onChange={(e) => edit("to", e.target.value)} disabled={finished} inputMode="email" autoComplete="off" />
+                  <input id={`${titleId}-to`} ref={toRef} data-testid="reply-to" className={control} value={to} onChange={(e) => edit("to", e.target.value)} disabled={finished} inputMode="email" autoComplete="off" />
                 </label>
+                {fromEmail ? (
+                  <Alert variant="alert" role="note" data-testid="reply-derived-banner">
+                    <AlertTitle>Recipients came from an email</AlertTitle>
+                    <AlertDescription>Check the recipients before sending. Text inside an email never approves anything.</AlertDescription>
+                  </Alert>
+                ) : null}
                 <label className="grid gap-1 text-small font-medium text-foreground" htmlFor={`${titleId}-cc`}>
                   Cc
                   <input id={`${titleId}-cc`} data-testid="reply-cc" className={control} value={cc} onChange={(e) => edit("cc", e.target.value)} disabled={finished} autoComplete="off" />
@@ -322,18 +531,50 @@ export function ReplyDrawer({ laneId, messageId, onClose }: { laneId: string; me
                 </label>
                 <label className="grid gap-1 text-small font-medium text-foreground" htmlFor={`${titleId}-body`}>
                   Message (plain text)
-                  <textarea id={`${titleId}-body`} data-testid="reply-body" className={cn(control, "min-h-48 font-mono")} rows={10} value={body} onChange={(e) => edit("body", e.target.value)} disabled={finished} maxLength={100000} />
+                  <textarea id={`${titleId}-body`} ref={bodyRef} data-testid="reply-body" className={cn(control, "min-h-48 font-mono")} rows={10} value={body} onChange={(e) => edit("body", e.target.value)} disabled={finished} maxLength={100000} />
                 </label>
+                {dirty && !finished ? (
+                  <div>
+                    <Button variant="ghost" size="sm" data-testid="reply-discard" onClick={discardEdits} disabled={busy !== null}>
+                      Discard my edits
+                    </Button>
+                  </div>
+                ) : null}
               </div>
               {!ctx.send.enabled && ctx.send.message ? (
-                <p data-testid="send-disabled-reason" role="status" className="text-small text-alert-foreground">
+                <p data-testid="send-disabled-reason" className="text-small text-alert-foreground">
                   <CapabilityMessage message={ctx.send.message} href={ctx.send.settingsHref} />
                 </p>
               ) : null}
               {refused ? (
-                <p data-testid="reply-refused" role="status" className="text-small text-alert-foreground">
+                <p data-testid="reply-refused" className="text-small text-alert-foreground">
                   {refused}
                 </p>
+              ) : null}
+              {ask ? (
+                <Alert variant="alert" role="note" data-testid="reply-confirm-resend">
+                  <AlertTitle>You already replied to this conversation</AlertTitle>
+                  <AlertDescription>
+                    <span className="flex flex-wrap items-center gap-2">
+                      <Button
+                        size="sm"
+                        data-testid="reply-confirm-resend-button"
+                        onClick={() => {
+                          const what = ask;
+                          setAsk(null);
+                          setConfirmed(true);
+                          if (what === "send") void send(true);
+                          else void saveDraft(true);
+                        }}
+                      >
+                        {ask === "send" ? "Send another reply" : "Save another reply"}
+                      </Button>
+                      <Button variant="ghost" size="sm" onClick={() => setAsk(null)}>
+                        Cancel
+                      </Button>
+                    </span>
+                  </AlertDescription>
+                </Alert>
               ) : null}
               {error ? (
                 <Alert variant="alert" role="alert">
@@ -341,12 +582,12 @@ export function ReplyDrawer({ laneId, messageId, onClose }: { laneId: string; me
                 </Alert>
               ) : null}
               {result ? (
-                <p data-testid="reply-result" data-outcome={result.outcome} role="status" className={cn("text-small font-medium", result.outcome === "sent" ? "text-success" : "text-alert-foreground")}>
+                <p ref={resultRef} tabIndex={-1} data-testid="reply-result" data-outcome={result.outcome} className={cn("text-small font-medium outline-none focus-visible:ring-2 focus-visible:ring-ring", result.outcome === "sent" ? "text-success" : "text-alert-foreground")}>
                   {result.text}
                 </p>
               ) : null}
               {saved ? (
-                <p data-testid="reply-saved" role="status" className="text-small text-success">
+                <p ref={resultRef} tabIndex={-1} data-testid="reply-saved" className="text-small text-success outline-none focus-visible:ring-2 focus-visible:ring-ring">
                   Saved. It is waiting in{" "}
                   <Link href={`/${laneId}/approvals#action-${saved}`} className="underline">
                     Approvals
@@ -359,10 +600,10 @@ export function ReplyDrawer({ laneId, messageId, onClose }: { laneId: string; me
         </div>
         {ctx ? (
           <footer className="flex flex-col gap-2 border-t border-border bg-background px-4 py-3 md:flex-row md:flex-wrap md:items-center">
-            <Button data-testid="reply-send" disabled={sendDisabled} onClick={() => void send()}>
+            <Button data-testid="reply-send" disabled={sendDisabled} onClick={requestSend}>
               {busy === "send" ? "Sending..." : "Send"}
             </Button>
-            <Button variant="outline" data-testid="reply-save" disabled={saveDisabled} onClick={() => void saveDraft()}>
+            <Button variant="outline" data-testid="reply-save" disabled={saveDisabled} onClick={requestSave}>
               {busy === "save" ? "Saving..." : "Save draft"}
             </Button>
             <CopyTextButton text={body} />

@@ -5,8 +5,9 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import type { ReplyContext } from "@/lib/reply-client";
-import { loadReplyDraft, saveReplyDraft } from "@/lib/reply-draft-store";
+import { aiDrafts, clearAllDrafts, debounced, draftNamespace, replyDrafts } from "@/lib/reply-draft-store";
 import { ReplyAction, type ReplyTarget } from "./reply-action";
+import { STALE_NOTE } from "./reply-drawer";
 
 const nav = vi.hoisted(() => ({ push: vi.fn(), refresh: vi.fn() }));
 vi.mock("next/navigation", () => ({ useRouter: () => nav }));
@@ -18,6 +19,7 @@ const target: ReplyTarget = { laneId: "PKG", connectionId: "c1", messageId: "m1"
 
 const baseContext = (over: Partial<ReplyContext> = {}): ReplyContext => ({
   messageId: "m1",
+  userId: "u1",
   mailbox: "exec@pubkgroup.example.test",
   subject: "Re: Quarterly review",
   replyingTo: "Dana <dana@sender.example.test>",
@@ -28,6 +30,7 @@ const baseContext = (over: Partial<ReplyContext> = {}): ReplyContext => ({
   storesDrafts: true,
   aiAllowed: true,
   blocked: false,
+  alreadySent: null,
   preview: { text: "Please confirm. <img src=x onerror=alert(1)>", truncated: false },
   ...over,
 });
@@ -55,6 +58,7 @@ function open() {
   render(<ReplyAction target={target} canReply />);
   fireEvent.click(screen.getByTestId("attention-reply"));
 }
+const stored = () => replyDrafts.read("PKG", "u1", "m1");
 const field = (id: string) => screen.getByTestId(id) as HTMLInputElement & HTMLTextAreaElement;
 const ready = () => screen.findByTestId("sends-as");
 
@@ -83,7 +87,7 @@ describe("dialog behaviour", () => {
     expect(title?.textContent).toBe("Reply");
     await ready();
     expect(dialog.contains(document.activeElement)).toBe(true);
-    fireEvent.keyDown(dialog, { key: "Escape" });
+    fireEvent.keyDown(document.body, { key: "Escape" }); // the listener is on the document, not on the dialog
     expect(screen.queryByRole("dialog")).toBeNull();
     await waitFor(() => expect(document.activeElement).toBe(trigger));
   });
@@ -96,9 +100,9 @@ describe("dialog behaviour", () => {
     const items = [...dialog.querySelectorAll<HTMLElement>('a[href], button:not([disabled]), input:not([disabled]), textarea:not([disabled])')];
     const last = items[items.length - 1] as HTMLElement;
     last.focus();
-    fireEvent.keyDown(dialog, { key: "Tab" });
+    fireEvent.keyDown(document.body, { key: "Tab" });
     expect(document.activeElement).toBe(items[0]);
-    fireEvent.keyDown(dialog, { key: "Tab", shiftKey: true });
+    fireEvent.keyDown(document.body, { key: "Tab", shiftKey: true });
     expect(document.activeElement).toBe(last);
   });
 
@@ -147,7 +151,7 @@ describe("what the owner sees and may edit", () => {
 
   it("loads the pending proposal (the T-231d draft) and does not draft with the AI", async () => {
     const calls = fakeServer({
-      reply_context: () => ok({ context: baseContext({ proposal: { id: PID, hash: HASH, to: ["dana@sender.example.test"], cc: [], bcc: ["spy@elsewhere.example.test"], bodyText: "Prepared draft", origin: "briefing", derivedFromRetrieved: true, rationale: "note" } }) }),
+      reply_context: () => ok({ context: baseContext({ proposal: { id: PID, hash: HASH, expiresAt: "2026-11-14T12:00:00Z", to: ["dana@sender.example.test"], cc: [], bcc: ["spy@elsewhere.example.test"], bodyText: "Prepared draft", origin: "briefing", derivedFromRetrieved: true, rationale: "note" } }) }),
     });
     open();
     await ready();
@@ -167,7 +171,7 @@ describe("what the owner sees and may edit", () => {
     await waitFor(() => expect(field("reply-body").value).toBe("Thanks, noted."));
     expect(screen.getByTestId("reply-source-note").textContent).toMatch(/Drafted by AI/);
     expect(calls.map((c) => c.action)).toEqual(["reply_context", "draft_reply"]);
-    expect(loadReplyDraft("PKG", "m1")).toBeNull(); // not stored
+    expect(stored()).toBeNull(); // the edits are not stored
   });
 
   it("an awaiting-input draft is shown as such with an empty body; a refused draft shows the fixed message and the owner writes it", async () => {
@@ -177,10 +181,11 @@ describe("what the owner sees and may edit", () => {
     expect(screen.getByTestId("reply-awaiting").textContent).toMatch(/^Awaiting your input/);
     expect(field("reply-body").value).toBe("");
     cleanup();
-    fakeServer({ reply_context: () => ok({ context: baseContext() }), draft_reply: () => ({ status: 429, data: { error: "rate_limited", message: "A draft was just made for this thread. Wait a minute before asking for another." } }) });
+    window.sessionStorage.clear(); // the first draft was kept; this is a fresh open
+    fakeServer({ reply_context: () => ok({ context: baseContext() }), draft_reply: () => ({ status: 429, data: { error: "rate_limited", message: "A draft was just made for this thread. Wait a moment before asking for another.", retryAfterS: 42 } }) });
     open();
     await ready();
-    expect((await screen.findByTestId("reply-ai-message")).textContent).toMatch(/Wait a minute/);
+    expect((await screen.findByTestId("reply-ai-message")).textContent).toMatch(/Wait a moment.*Try again in 42 seconds/);
     expect(field("reply-body").disabled).toBe(false);
   });
 
@@ -231,7 +236,7 @@ describe("while sending is not enabled", () => {
     open();
     await ready();
     expect((screen.getByTestId("reply-send") as HTMLButtonElement).disabled).toBe(true);
-    expect(screen.getByTestId("reply-refused").textContent).toMatch(/Check the Sent folder/);
+    expect(screen.getByTestId("reply-refused").textContent).toBe("An earlier reply to this conversation may already have gone out. Check your Sent folder first.");
   });
 });
 
@@ -250,7 +255,7 @@ describe("Send", () => {
     fireEvent.click(screen.getByTestId("reply-send"));
   }
 
-  it("saves the exact edited text, approves the hash that save returned, shows Sent, clears the stored edits and refreshes", async () => {
+  it("saves the exact edited text, approves the hash that save returned, shows Sent and clears the stored edits", async () => {
     const calls = sendable();
     await fillAndSend();
     const result = await screen.findByTestId("reply-result");
@@ -260,8 +265,7 @@ describe("Send", () => {
       { action: "propose_reply", messageId: "m1", to: ["dana@sender.example.test"], cc: [], bodyText: "Hello Dana" },
       { action: "approve", id: PID, hashSeen: HASH },
     ]);
-    expect(loadReplyDraft("PKG", "m1")).toBeNull();
-    expect(nav.refresh).toHaveBeenCalled();
+    expect(stored()).toBeNull();
     expect((screen.getByTestId("reply-send") as HTMLButtonElement).disabled).toBe(true);
   });
 
@@ -283,11 +287,13 @@ describe("Send", () => {
     await fillAndSend("Typed before the code");
     await waitFor(() => expect(nav.push).toHaveBeenCalledTimes(1));
     expect(nav.push).toHaveBeenCalledWith(`/mfa?reauth=1&next=${encodeURIComponent("/PKG?reply=m1")}`);
-    expect(loadReplyDraft("PKG", "m1")).toEqual({ to: "dana@sender.example.test", cc: "", body: "Typed before the code" });
+    expect(stored()).toEqual({ to: "dana@sender.example.test", cc: "", body: "Typed before the code", serverVersion: HASH }); // the version the server now holds
     cleanup();
     // back from /mfa: /PKG?reply=m1 reopens the drawer for that message with the fields restored, and no new AI draft
     window.history.replaceState(null, "", "/PKG?reply=m1");
-    const calls = sendable();
+    const calls = fakeServer({
+      reply_context: () => ok({ context: baseContext({ aiAllowed: false, proposal: { id: PID, hash: HASH, expiresAt: "2026-11-14T12:00:00Z", to: ["dana@sender.example.test"], cc: [], bcc: [], bodyText: "Typed before the code", origin: "owner", derivedFromRetrieved: true, rationale: null } }) }),
+    });
     render(<ReplyAction target={target} canReply />);
     await ready();
     expect(screen.getByRole("dialog")).toBeTruthy();
@@ -304,13 +310,26 @@ describe("Send", () => {
     expect(screen.queryByRole("dialog")).toBeNull();
   });
 
-  it("an edit is autosaved per message in sessionStorage", async () => {
+  it("an edit is autosaved per lane + user + message, 500 ms after the last keystroke", async () => {
     sendable();
     open();
     await ready();
     fireEvent.change(field("reply-body"), { target: { value: "Half written" } });
-    expect(loadReplyDraft("PKG", "m1")?.body).toBe("Half written");
-    expect(loadReplyDraft("PKG", "m2")).toBeNull();
+    expect(stored()).toBeNull(); // debounced
+    await waitFor(() => expect(stored()?.body).toBe("Half written"), { timeout: 2000 });
+    expect(stored()?.serverVersion).toBe("none");
+    expect(replyDrafts.read("PKG", "u1", "m2")).toBeNull();
+    expect(replyDrafts.read("PKG", "other-user", "m1")).toBeNull(); // the key carries the user
+    expect(Object.keys(window.sessionStorage)).toEqual(["nichols:reply-draft:PKG:u1:m1"]);
+  });
+
+  it("a pending edit is written when the drawer is closed (not lost to the debounce)", async () => {
+    sendable();
+    open();
+    await ready();
+    fireEvent.change(field("reply-body"), { target: { value: "Typed then closed" } });
+    fireEvent.click(screen.getByRole("button", { name: "Close reply" }));
+    expect(stored()?.body).toBe("Typed then closed");
   });
 
   it("a failure that did not send says so and allows trying again; a verification problem never says 'failed'", async () => {
@@ -366,7 +385,7 @@ describe("Send", () => {
     });
     await fillAndSend();
     await waitFor(() => expect(screen.getByTestId("reply-send").textContent).toBe("Sending..."));
-    fireEvent.keyDown(screen.getByRole("dialog"), { key: "Escape" });
+    fireEvent.keyDown(document.body, { key: "Escape" });
     expect(screen.getByRole("dialog")).toBeTruthy();
     await act(async () => {
       release();
@@ -387,15 +406,365 @@ describe("non-owners", () => {
   });
 });
 
+const proposalCtx = (over: Record<string, unknown> = {}) =>
+  baseContext({
+    aiAllowed: false,
+    proposal: { id: PID, hash: HASH, expiresAt: "2026-11-14T12:00:00Z", to: ["dana@sender.example.test"], cc: [], bcc: [], bodyText: "Prepared draft", origin: "briefing", derivedFromRetrieved: true, rationale: null, ...over },
+  });
+
+describe("recipients came from an email (same banner as the approval card)", () => {
+  it("shows while To is still the sender's address, and goes away as To is changed; comes back when it is restored", async () => {
+    fakeServer({ reply_context: () => ok({ context: baseContext({ aiAllowed: false }) }) });
+    open();
+    await ready();
+    const banner = screen.getByTestId("reply-derived-banner");
+    expect(banner.textContent).toContain("Recipients came from an email");
+    expect(banner.textContent).toContain("Text inside an email never approves anything.");
+    fireEvent.change(field("reply-to"), { target: { value: "boss@pubkgroup.example.test" } });
+    expect(screen.queryByTestId("reply-derived-banner")).toBeNull();
+    fireEvent.change(field("reply-to"), { target: { value: "Dana@Sender.Example.Test" } });
+    expect(screen.getByTestId("reply-derived-banner")).toBeTruthy();
+  });
+
+  it("for an existing proposal it follows the proposal's flag while To is unchanged; shows the expiry and the short hash", async () => {
+    fakeServer({ reply_context: () => ok({ context: proposalCtx() }) });
+    open();
+    await ready();
+    expect(screen.getByTestId("reply-derived-banner")).toBeTruthy();
+    expect(screen.getByTestId("reply-proposal-meta").textContent).toContain(`Version ${HASH.slice(0, 8)}`);
+    expect(screen.getByTestId("reply-proposal-meta").textContent).toContain("Expires");
+    fireEvent.change(field("reply-to"), { target: { value: "other@elsewhere.example.test" } });
+    expect(screen.queryByTestId("reply-derived-banner")).toBeNull();
+    cleanup();
+    fakeServer({ reply_context: () => ok({ context: proposalCtx({ derivedFromRetrieved: false }) }) });
+    open();
+    await ready();
+    expect(screen.queryByTestId("reply-derived-banner")).toBeNull();
+  });
+
+  it("is not shown when there is no recipient to come from an email", async () => {
+    fakeServer({ reply_context: () => ok({ context: baseContext({ aiAllowed: false, defaults: { to: [], cc: [] } }) }) });
+    open();
+    await ready();
+    expect(screen.queryByTestId("reply-derived-banner")).toBeNull();
+  });
+});
+
+describe("focus and the live region", () => {
+  it("after the load the cursor is in the message; in To when there is no recipient yet", async () => {
+    fakeServer({ reply_context: () => ok({ context: baseContext({ aiAllowed: false }) }) });
+    open();
+    await ready();
+    await waitFor(() => expect(document.activeElement).toBe(field("reply-body")));
+    cleanup();
+    fakeServer({ reply_context: () => ok({ context: baseContext({ aiAllowed: false, defaults: { to: [], cc: [] } }) }) });
+    open();
+    await ready();
+    await waitFor(() => expect(document.activeElement).toBe(field("reply-to")));
+  });
+
+  it("when a result appears focus moves to the result message; Esc and Tab still work in the sent state", async () => {
+    fakeServer({
+      reply_context: () => ok({ context: baseContext({ aiAllowed: false }) }),
+      propose_reply: () => ok({ id: PID, hash: HASH, unchanged: false }),
+      approve: () => ok({ status: "verified", actionId: PID, outcome: "sent" }),
+    });
+    open();
+    await ready();
+    fireEvent.change(field("reply-body"), { target: { value: "Hello" } });
+    fireEvent.click(screen.getByTestId("reply-send"));
+    const result = await screen.findByTestId("reply-result");
+    await waitFor(() => expect(document.activeElement).toBe(result));
+    expect(result.getAttribute("tabindex")).toBe("-1");
+    // the fields are off now, so focus could be nowhere: the document-level listener still traps Tab
+    (document.activeElement as HTMLElement).blur();
+    fireEvent.keyDown(document.body, { key: "Tab" });
+    expect(screen.getByRole("dialog").contains(document.activeElement)).toBe(true);
+    fireEvent.keyDown(document.body, { key: "Escape" });
+    expect(screen.queryByRole("dialog")).toBeNull();
+  });
+
+  it("one persistent role=status region whose text changes (loading, ready, sent)", async () => {
+    fakeServer({
+      reply_context: () => ok({ context: baseContext({ aiAllowed: false }) }),
+      propose_reply: () => ok({ id: PID, hash: HASH, unchanged: false }),
+      approve: () => ok({ status: "verified", actionId: PID, outcome: "sent" }),
+    });
+    open();
+    const live = screen.getByTestId("reply-live");
+    expect(live.getAttribute("role")).toBe("status");
+    expect(live.textContent).toBe("Loading the message.");
+    await ready();
+    expect(screen.getByTestId("reply-live")).toBe(live); // the same element
+    expect(live.textContent).toBe("The reply is ready to edit.");
+    fireEvent.change(field("reply-body"), { target: { value: "Hello" } });
+    fireEvent.click(screen.getByTestId("reply-send"));
+    await screen.findByTestId("reply-result");
+    expect(live.textContent).toMatch(/^Sent/);
+  });
+});
+
+describe("the AI draft is kept and can be asked for again", () => {
+  const ai = () => {
+    let n = 0;
+    return fakeServer({
+      reply_context: () => ok({ context: baseContext() }),
+      draft_reply: () => ok({ draft: { status: "ready", text: `Draft number ${++n}` } }),
+    });
+  };
+
+  it("reopening the drawer reuses the draft of the last 30 minutes instead of asking the AI again", async () => {
+    const calls = ai();
+    open();
+    await ready();
+    await waitFor(() => expect(field("reply-body").value).toBe("Draft number 1"));
+    expect(aiDrafts.read("PKG", "u1", "m1")).toEqual({ text: "Draft number 1", awaiting: false });
+    fireEvent.click(screen.getByRole("button", { name: "Close reply" }));
+    cleanup();
+    open();
+    await ready();
+    await waitFor(() => expect(field("reply-body").value).toBe("Draft number 1"));
+    expect(calls.filter((c) => c.action === "draft_reply")).toHaveLength(1);
+    expect(screen.getByTestId("reply-source-note").textContent).toMatch(/Drafted by AI/);
+  });
+
+  it("an expired kept draft is not reused (30 minutes)", async () => {
+    const calls = ai();
+    const key = aiDrafts.key("PKG", "u1", "m1");
+    window.sessionStorage.setItem(key, JSON.stringify({ v: 1, t: Date.now() - 31 * 60_000, d: { text: "Old draft", awaiting: false } }));
+    open();
+    await ready();
+    await waitFor(() => expect(field("reply-body").value).toBe("Draft number 1"));
+    expect(calls.filter((c) => c.action === "draft_reply")).toHaveLength(1);
+  });
+
+  it("'Draft again' asks the AI again and replaces the text; the button is only there when an AI draft is shown", async () => {
+    const calls = ai();
+    open();
+    await ready();
+    await waitFor(() => expect(field("reply-body").value).toBe("Draft number 1"));
+    fireEvent.click(screen.getByTestId("reply-draft-again"));
+    await waitFor(() => expect(field("reply-body").value).toBe("Draft number 2"));
+    expect(calls.filter((c) => c.action === "draft_reply")).toHaveLength(2);
+    expect(aiDrafts.read("PKG", "u1", "m1")?.text).toBe("Draft number 2");
+    cleanup();
+    fakeServer({ reply_context: () => ok({ context: proposalCtx() }) });
+    open();
+    await ready();
+    expect(screen.queryByTestId("reply-draft-again")).toBeNull(); // a pending proposal: edit it, no AI draft
+  });
+
+  it("'Draft again' respects the limiter: it shows the remaining wait and keeps the text", async () => {
+    let n = 0;
+    fakeServer({
+      reply_context: () => ok({ context: baseContext() }),
+      draft_reply: () => (++n === 1 ? ok({ draft: { status: "ready", text: "First" } }) : { status: 429, data: { error: "rate_limited", message: "A draft was just made for this thread. Wait a moment before asking for another.", retryAfterS: 37 } }),
+    });
+    open();
+    await ready();
+    await waitFor(() => expect(field("reply-body").value).toBe("First"));
+    fireEvent.click(screen.getByTestId("reply-draft-again"));
+    expect((await screen.findByTestId("reply-ai-message")).textContent).toContain("Try again in 37 seconds.");
+    expect(field("reply-body").value).toBe("First");
+    expect(screen.getByTestId("reply-draft-again")).toBeTruthy(); // still available for later
+  });
+});
+
+describe("nothing is kept when the company does not store drafts (D-19)", () => {
+  it("typing and the AI draft write nothing to sessionStorage, and anything already there is removed", async () => {
+    window.sessionStorage.setItem(replyDrafts.key("PKG", "u1", "m1"), JSON.stringify({ v: 1, t: Date.now(), d: { to: "a@b.example.test", cc: "", body: "old text", serverVersion: "none" } }));
+    window.sessionStorage.setItem(aiDrafts.key("PKG", "u1", "m1"), JSON.stringify({ v: 1, t: Date.now(), d: { text: "old ai", awaiting: false } }));
+    fakeServer({
+      reply_context: () => ok({ context: baseContext({ storesDrafts: false }) }),
+      draft_reply: () => ok({ draft: { status: "ready", text: "Generated" } }),
+    });
+    open();
+    await ready();
+    await waitFor(() => expect(field("reply-body").value).toBe("Generated")); // the old stored text was not restored
+    fireEvent.change(field("reply-body"), { target: { value: "Typed text" } });
+    await new Promise((r) => setTimeout(r, 700)); // past the 500 ms debounce
+    fireEvent.click(screen.getByRole("button", { name: "Close reply" }));
+    expect(Object.keys(window.sessionStorage)).toEqual([]);
+  });
+});
+
+describe("unsent edits and the server's version", () => {
+  it("edits made against an older draft are discarded with a note, and the server's draft is shown", async () => {
+    window.sessionStorage.setItem(replyDrafts.key("PKG", "u1", "m1"), JSON.stringify({ v: 1, t: Date.now(), d: { to: "a@b.example.test", cc: "", body: "My old edits", serverVersion: "d".repeat(64) } }));
+    fakeServer({ reply_context: () => ok({ context: proposalCtx() }) });
+    open();
+    await ready();
+    expect(field("reply-body").value).toBe("Prepared draft");
+    expect(screen.getByTestId("reply-stale-note").textContent).toBe(STALE_NOTE);
+    expect(stored()).toBeNull();
+  });
+
+  it("edits made against the same version are restored", async () => {
+    window.sessionStorage.setItem(replyDrafts.key("PKG", "u1", "m1"), JSON.stringify({ v: 1, t: Date.now(), d: { to: "dana@sender.example.test", cc: "", body: "My edits", serverVersion: HASH } }));
+    fakeServer({ reply_context: () => ok({ context: proposalCtx() }) });
+    open();
+    await ready();
+    expect(field("reply-body").value).toBe("My edits");
+    expect(screen.queryByTestId("reply-stale-note")).toBeNull();
+  });
+
+  it("another user's stored edits (same message) are never offered", async () => {
+    window.sessionStorage.setItem(replyDrafts.key("PKG", "someone-else", "m1"), JSON.stringify({ v: 1, t: Date.now(), d: { to: "x@y.example.test", cc: "", body: "Not yours", serverVersion: "none" } }));
+    fakeServer({ reply_context: () => ok({ context: baseContext({ aiAllowed: false }) }) });
+    open();
+    await ready();
+    expect(field("reply-body").value).toBe("");
+  });
+
+  it("'Discard my edits' puts the server's draft back and removes the local copy", async () => {
+    fakeServer({ reply_context: () => ok({ context: proposalCtx() }) });
+    open();
+    await ready();
+    expect(screen.queryByTestId("reply-discard")).toBeNull(); // nothing changed yet
+    fireEvent.change(field("reply-body"), { target: { value: "Changed" } });
+    fireEvent.change(field("reply-to"), { target: { value: "x@y.example.test" } });
+    fireEvent.click(screen.getByTestId("reply-discard"));
+    expect(field("reply-body").value).toBe("Prepared draft");
+    expect(field("reply-to").value).toBe("dana@sender.example.test");
+    await new Promise((r) => setTimeout(r, 700));
+    expect(stored()).toBeNull(); // the debounced write was cancelled too
+    expect(screen.queryByTestId("reply-discard")).toBeNull();
+  });
+});
+
+describe("refresh and double clicks", () => {
+  const sendable = () =>
+    fakeServer({
+      reply_context: () => ok({ context: baseContext({ aiAllowed: false }) }),
+      propose_reply: () => ok({ id: PID, hash: HASH, unchanged: false }),
+      approve: () => ok({ status: "verified", actionId: PID, outcome: "sent" }),
+    });
+
+  it("router.refresh() waits until the drawer is closed, so the result message is never unmounted", async () => {
+    sendable();
+    open();
+    await ready();
+    fireEvent.change(field("reply-body"), { target: { value: "Hello" } });
+    fireEvent.click(screen.getByTestId("reply-send"));
+    await screen.findByTestId("reply-result");
+    expect(nav.refresh).not.toHaveBeenCalled();
+    fireEvent.click(screen.getByRole("button", { name: "Close reply" }));
+    expect(nav.refresh).toHaveBeenCalledTimes(1);
+  });
+
+  it("the same holds for Save draft", async () => {
+    sendable();
+    open();
+    await ready();
+    fireEvent.change(field("reply-body"), { target: { value: "Hello" } });
+    fireEvent.click(screen.getByTestId("reply-save"));
+    await screen.findByTestId("reply-saved");
+    expect(nav.refresh).not.toHaveBeenCalled();
+    fireEvent.keyDown(document.body, { key: "Escape" });
+    expect(nav.refresh).toHaveBeenCalledTimes(1);
+  });
+
+  it("a double click on Send saves and approves once", async () => {
+    const calls = sendable();
+    open();
+    await ready();
+    fireEvent.change(field("reply-body"), { target: { value: "Hello" } });
+    const send = screen.getByTestId("reply-send");
+    fireEvent.click(send);
+    fireEvent.click(send);
+    await screen.findByTestId("reply-result");
+    expect(calls.filter((c) => c.action === "propose_reply")).toHaveLength(1);
+    expect(calls.filter((c) => c.action === "approve")).toHaveLength(1);
+  });
+});
+
+describe("a reply was already sent to this conversation", () => {
+  it("says so with the date; Send needs a second click ('Send another reply') that sends confirmResend", async () => {
+    const calls = fakeServer({
+      reply_context: () => ok({ context: baseContext({ aiAllowed: false, alreadySent: { at: "2026-11-10T09:00:00Z" } }) }),
+      propose_reply: () => ok({ id: PID, hash: HASH, unchanged: false }),
+      approve: () => ok({ status: "verified", actionId: PID, outcome: "sent" }),
+    });
+    open();
+    await ready();
+    expect(screen.getByTestId("reply-already-sent").textContent).toContain("You already replied to this conversation on");
+    fireEvent.change(field("reply-body"), { target: { value: "One more thing" } });
+    fireEvent.click(screen.getByTestId("reply-send"));
+    expect(calls.some((c) => c.action === "propose_reply")).toBe(false); // the first click only asks
+    fireEvent.click(await screen.findByTestId("reply-confirm-resend-button"));
+    await screen.findByTestId("reply-result");
+    expect(calls.find((c) => c.action === "propose_reply")).toMatchObject({ confirmResend: true, bodyText: "One more thing" });
+  });
+
+  it("without the confirmation no confirmResend is ever sent", async () => {
+    const calls = fakeServer({
+      reply_context: () => ok({ context: baseContext({ aiAllowed: false }) }),
+      propose_reply: () => ok({ id: PID, hash: HASH, unchanged: false }),
+      approve: () => ok({ status: "verified", actionId: PID, outcome: "sent" }),
+    });
+    open();
+    await ready();
+    fireEvent.change(field("reply-body"), { target: { value: "First reply" } });
+    fireEvent.click(screen.getByTestId("reply-send"));
+    await screen.findByTestId("reply-result");
+    expect(calls.find((c) => c.action === "propose_reply")).not.toHaveProperty("confirmResend");
+  });
+});
+
 describe("reply-draft-store", () => {
   it("survives a blocked sessionStorage without throwing", () => {
     const spy = vi.spyOn(Storage.prototype, "setItem").mockImplementation(() => {
       throw new Error("quota");
     });
-    expect(saveReplyDraft("PKG", "m1", { to: "a", cc: "", body: "b" })).toBe(false);
+    expect(replyDrafts.write("PKG", "u1", "m1", { to: "a", cc: "", body: "b", serverVersion: "none" })).toBe(false);
     spy.mockRestore();
-    expect(loadReplyDraft("PKG", "m1")).toBeNull();
-    window.sessionStorage.setItem("nichols:reply-draft:PKG:m1", "{not json");
-    expect(loadReplyDraft("PKG", "m1")).toBeNull();
+    expect(replyDrafts.read("PKG", "u1", "m1")).toBeNull();
+    window.sessionStorage.setItem(replyDrafts.key("PKG", "u1", "m1"), "{not json");
+    expect(replyDrafts.read("PKG", "u1", "m1")).toBeNull();
+    const get = vi.spyOn(Storage.prototype, "getItem").mockImplementation(() => {
+      throw new Error("blocked");
+    });
+    expect(replyDrafts.read("PKG", "u1", "m1")).toBeNull();
+    get.mockRestore();
+  });
+
+  it("expires after its time to live and ignores entries of the wrong shape", () => {
+    let t = 1_000_000;
+    const ns = draftNamespace<{ x: string }>("test-ns", { ttlMs: 1000, now: () => t, validate: (v) => (typeof v === "object" && v !== null && typeof (v as { x?: unknown }).x === "string" ? { x: (v as { x: string }).x } : null) });
+    expect(ns.write("PKG", "u", "i", { x: "a" })).toBe(true);
+    expect(ns.read("PKG", "u", "i")).toEqual({ x: "a" });
+    t += 1001;
+    expect(ns.read("PKG", "u", "i")).toBeNull();
+    expect(window.sessionStorage.getItem(ns.key("PKG", "u", "i"))).toBeNull(); // removed when found expired
+    window.sessionStorage.setItem(ns.key("PKG", "u", "j"), JSON.stringify({ v: 1, t, d: { y: 1 } }));
+    expect(ns.read("PKG", "u", "j")).toBeNull();
+  });
+
+  it("clearAllDrafts (sign-out) removes every draft namespace and nothing else", () => {
+    replyDrafts.write("PKG", "u1", "m1", { to: "a", cc: "", body: "b", serverVersion: "none" });
+    aiDrafts.write("PKG", "u1", "m1", { text: "t", awaiting: false });
+    window.sessionStorage.setItem("unrelated", "keep");
+    clearAllDrafts();
+    expect(Object.keys(window.sessionStorage)).toEqual(["unrelated"]);
+  });
+
+  it("debounced: one call after the delay with the last arguments; flush runs it now; cancel drops it", () => {
+    vi.useFakeTimers();
+    const fn = vi.fn();
+    const d = debounced(fn, 500);
+    d.call("a");
+    d.call("b");
+    vi.advanceTimersByTime(499);
+    expect(fn).not.toHaveBeenCalled();
+    vi.advanceTimersByTime(2);
+    expect(fn.mock.calls).toEqual([["b"]]);
+    d.call("c");
+    d.flush();
+    expect(fn.mock.calls).toEqual([["b"], ["c"]]);
+    d.call("d");
+    d.cancel();
+    vi.advanceTimersByTime(1000);
+    expect(fn).toHaveBeenCalledTimes(2);
+    vi.useRealTimers();
   });
 });

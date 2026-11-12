@@ -7,16 +7,16 @@ import { createMockProvider, textResult } from "@nichols/ai/testing";
 import { LLMProviderError } from "@nichols/ai/types";
 import type { ActionRow, ApprovalsPublicDeps, CapabilityFacts, UserCtx } from "@nichols/approvals/server";
 
-const mod = vi.hoisted(() => ({ propose: vi.fn(), edit: vi.fn(), list: vi.fn() }));
+const mod = vi.hoisted(() => ({ propose: vi.fn(), edit: vi.fn(), get: vi.fn() }));
 vi.mock("@nichols/approvals/server", async (orig) => ({
   ...(await orig<typeof import("@nichols/approvals/server")>()),
   proposeEmailAction: mod.propose,
   editEmailProposal: mod.edit,
-  listApprovals: mod.list,
+  getApproval: mod.get,
 }));
 
 import { ApprovalsError, NOT_ENABLED_MESSAGE, NOT_LIVE_MESSAGE } from "@nichols/approvals/server";
-import { checkDraft, createLimiter, defaultRecipients, draftReply, findReplyState, PREVIEW_CHARS, replyContext, ReplyError, replySubject, saveReply, type ReplyDeps } from "./reply";
+import { checkDraft, createLimiter, defaultRecipients, draftReply, PREVIEW_CHARS, replyContext, ReplyError, replySubject, saveReply, type ReplyDeps } from "./reply";
 import { REPLY_MESSAGES } from "./reply-messages";
 
 const USER = "00000000-0000-4000-8000-0000000000a1";
@@ -41,6 +41,17 @@ const refRow = (over: Record<string, unknown> = {}) => ({
   ...over,
 });
 
+// What core.act_reply_state answers (the SQL itself is pgTAP 304): the tests set it per case.
+const state = { pending_id: null as string | null, blocked: false, already_sent_at: null as string | null };
+const setState = (over: Partial<typeof state> & { pending?: ActionRow }) => {
+  const { pending, ...rest } = over;
+  Object.assign(state, { pending_id: null, blocked: false, already_sent_at: null }, rest);
+  if (pending) {
+    state.pending_id = pending.id;
+    mod.get.mockResolvedValue(pending);
+  }
+};
+
 function ctxWith(rows: Record<string, unknown>[] | null = [refRow()]): { ctx: UserCtx; calls: { fn: string; args: Record<string, unknown> }[] } {
   const calls: { fn: string; args: Record<string, unknown>[] | Record<string, unknown> }[] = [];
   const ctx: UserCtx = {
@@ -48,6 +59,7 @@ function ctxWith(rows: Record<string, unknown>[] | null = [refRow()]): { ctx: Us
     userId: USER,
     rpc: async (fn, args) => {
       calls.push({ fn, args } as never);
+      if (fn === "act_reply_state") return { data: [{ ...state }], error: null };
       return fn === "inbox_message_ref" ? { data: rows, error: null } : { data: null, error: null };
     },
   };
@@ -114,7 +126,8 @@ function deps(over: Partial<ReplyDeps> = {}, replies: Parameters<typeof createMo
 beforeEach(() => {
   mod.propose.mockReset().mockResolvedValue({ id: PID, hash: HASH });
   mod.edit.mockReset().mockResolvedValue({ id: PID, hash: "b".repeat(64), unchanged: false });
-  mod.list.mockReset().mockResolvedValue([]);
+  mod.get.mockReset().mockResolvedValue(row());
+  setState({});
 });
 
 describe("replySubject and recipients", () => {
@@ -154,9 +167,17 @@ describe("replyContext: everything comes from metadata", () => {
 
   it("loads the pending proposal for this message (the T-231d draft) and ignores other messages' proposals", async () => {
     const { ctx } = ctxWith();
-    mod.list.mockResolvedValue([row({ id: "00000000-0000-4000-8000-0000000000bb", payload: { ...row().payload, inReplyTo: { threadId: "t-9", messageId: "m9" } } }), row()]);
-    const c = await replyContext(ctx, db(), approvals(), deps().d, "m1");
-    expect(c.proposal).toMatchObject({ id: PID, hash: HASH, to: ["dana@sender.example.test"], bodyText: "Draft text", origin: "briefing", derivedFromRetrieved: true });
+    setState({ pending: row() });
+    const { ctx: c1, calls } = ctxWith();
+    const c = await replyContext(c1, db(), approvals(), deps().d, "m1");
+    expect(c.proposal).toMatchObject({ id: PID, hash: HASH, expiresAt: "2026-11-14T12:00:00Z", to: ["dana@sender.example.test"], bodyText: "Draft text", origin: "briefing", derivedFromRetrieved: true });
+    expect(c.userId).toBe(USER);
+    void ctx;
+    // one state call (no list scan), with this message's connection, THREAD and message id
+    const st = calls.filter((x) => x.fn === "act_reply_state");
+    expect(st).toHaveLength(1);
+    expect(st[0]?.args).toEqual({ p_lane: "PKG", p_connection: CONN, p_thread_id: "t-100", p_message_id: "m1" });
+    expect(calls.some((x) => x.fn === "act_list")).toBe(false);
   });
 
   it("says the exact not-enabled / not-live message when sending is off", async () => {
@@ -185,28 +206,31 @@ describe("replyContext: everything comes from metadata", () => {
     expect(reads).not.toHaveBeenCalled();
   });
 
-  it("blocked after a send whose result is in doubt (never a blind second send)", async () => {
+  it("reports blocked (an earlier action in the thread may have gone out) and the date of an earlier verified reply", async () => {
     const { ctx } = ctxWith();
-    for (const r of [
-      row({ status: "executing" }),
-      row({ status: "approved" }),
-      row({ status: "failed", failureCode: "verification_mismatch", payloadPurgedAt: "2026-11-12T14:00:00Z", updatedAt: "2026-11-12T14:00:00Z", payload: { ...row().payload, bodyText: undefined } }),
-    ]) {
-      mod.list.mockResolvedValue([r]);
-      expect((await replyContext(ctx, db(), approvals(), deps().d, "m1")).blocked).toBe(true);
-    }
-    // a definite failure, or an old unknown one, does not block
-    mod.list.mockResolvedValue([row({ status: "failed", failureCode: "execution_error", updatedAt: "2026-11-12T14:00:00Z" })]);
-    expect((await replyContext(ctx, db(), approvals(), deps().d, "m1")).blocked).toBe(false);
-    mod.list.mockResolvedValue([row({ status: "failed", failureCode: "outcome_unknown", updatedAt: "2026-11-01T14:00:00Z" })]);
-    expect((await replyContext(ctx, db(), approvals(), deps().d, "m1")).blocked).toBe(false);
+    setState({ blocked: true });
+    expect((await replyContext(ctx, db(), approvals(), deps().d, "m1")).blocked).toBe(true);
+    setState({ already_sent_at: "2026-11-10T09:00:00Z" });
+    const c = await replyContext(ctx, db(), approvals(), deps().d, "m1");
+    expect(c.blocked).toBe(false);
+    expect(c.alreadySent).toEqual({ at: "2026-11-10T09:00:00Z" });
+    setState({});
+    expect((await replyContext(ctx, db(), approvals(), deps().d, "m1")).alreadySent).toBeNull();
   });
 
-  it("findReplyState ignores expired and purged proposals", () => {
-    const ref = { messageId: "m1", connectionId: CONN, threadId: "t-100", fromName: null, fromAddress: null, subject: null, receivedAt: "" };
-    expect(findReplyState([row({ expiresAt: "2026-11-12T14:00:00Z" })], ref, NOW).proposal).toBeNull();
-    expect(findReplyState([row({ payloadPurgedAt: "2026-11-12T14:00:00Z" })], ref, NOW).proposal).toBeNull();
-    expect(findReplyState([row()], ref, NOW).proposal?.id).toBe(PID);
+  it("a pending proposal that is expired, purged or gone is not offered (a new one starts)", async () => {
+    for (const r of [row({ expiresAt: "2026-11-12T14:00:00Z" }), row({ payloadPurgedAt: "2026-11-12T14:00:00Z" }), row({ status: "approved" })]) {
+      setState({ pending: r });
+      expect((await replyContext(ctxWith().ctx, db(), approvals(), deps().d, "m1")).proposal).toBeNull();
+    }
+    setState({ pending: row() });
+    mod.get.mockRejectedValue(new ApprovalsError("not_found"));
+    expect((await replyContext(ctxWith().ctx, db(), approvals(), deps().d, "m1")).proposal).toBeNull();
+  });
+
+  it("an unreadable state is unavailable, never 'nothing in the way'", async () => {
+    const ctx: UserCtx = { laneId: "PKG", userId: USER, rpc: async (fn) => (fn === "act_reply_state" ? { data: null, error: { code: "XX000", message: "boom" } } : { data: [refRow()], error: null }) };
+    await expect(replyContext(ctx, db(), approvals(), deps().d, "m1")).rejects.toMatchObject({ code: "unavailable" });
   });
 });
 
@@ -235,7 +259,7 @@ describe("saveReply: server-derived payload", () => {
   });
 
   it("an existing pending proposal is edited (supersede or unchanged), never duplicated; only To, Cc and Body are passed", async () => {
-    mod.list.mockResolvedValue([row()]);
+    setState({ pending: row() });
     const out = await saveReply(ctxWith().ctx, db(), approvals(), { now: () => NOW }, { messageId: "m1", to: ["dana@sender.example.test"], cc: [], bodyText: "Edited" });
     expect(out).toEqual({ id: PID, hash: "b".repeat(64), unchanged: false });
     expect(mod.propose).not.toHaveBeenCalled();
@@ -245,7 +269,7 @@ describe("saveReply: server-derived payload", () => {
   });
 
   it("unchanged content reuses the proposal id and hash", async () => {
-    mod.list.mockResolvedValue([row()]);
+    setState({ pending: row() });
     mod.edit.mockResolvedValue({ id: PID, hash: HASH, unchanged: true });
     const out = await saveReply(ctxWith().ctx, db(), approvals(), { now: () => NOW }, { messageId: "m1", to: ["dana@sender.example.test"], cc: [], bodyText: "Draft text" });
     expect(out).toEqual({ id: PID, hash: HASH, unchanged: true });
@@ -260,9 +284,52 @@ describe("saveReply: server-derived payload", () => {
   });
 
   it("refuses while an earlier send may have gone out", async () => {
-    mod.list.mockResolvedValue([row({ status: "executing" })]);
+    setState({ blocked: true });
     await expect(saveReply(ctxWith().ctx, db(), approvals(), { now: () => NOW }, { messageId: "m1", to: ["a@b.example.test"], cc: [], bodyText: "x" })).rejects.toMatchObject({ code: "check_sent_first" });
     expect(mod.propose).not.toHaveBeenCalled();
+  });
+
+  it("already replied: refused without the owner's confirmation, allowed with confirmResend", async () => {
+    setState({ already_sent_at: "2026-11-10T09:00:00Z" });
+    const input = { messageId: "m1", to: ["dana@sender.example.test"], cc: [], bodyText: "Another" };
+    await expect(saveReply(ctxWith().ctx, db(), approvals(), { now: () => NOW }, input)).rejects.toMatchObject({ code: "already_replied" });
+    expect(mod.propose).not.toHaveBeenCalled();
+    await expect(saveReply(ctxWith().ctx, db(), approvals(), { now: () => NOW }, { ...input, confirmResend: false })).rejects.toMatchObject({ code: "already_replied" });
+    await saveReply(ctxWith().ctx, db(), approvals(), { now: () => NOW }, { ...input, confirmResend: true });
+    expect(mod.propose).toHaveBeenCalledTimes(1);
+  });
+
+  it("blocked wins over a confirmation (check Sent first, even if the owner confirmed)", async () => {
+    setState({ blocked: true, already_sent_at: "2026-11-10T09:00:00Z" });
+    await expect(saveReply(ctxWith().ctx, db(), approvals(), { now: () => NOW }, { messageId: "m1", to: ["a@b.example.test"], cc: [], bodyText: "x", confirmResend: true })).rejects.toMatchObject({ code: "check_sent_first" });
+  });
+
+  it("reply_already_pending (two simultaneous proposals): the one that won is loaded and edited", async () => {
+    mod.propose.mockRejectedValue(new ApprovalsError("reply_already_pending"));
+    mod.edit.mockResolvedValue({ id: PID, hash: "b".repeat(64), unchanged: false });
+    mod.get.mockResolvedValue(row({ proposerKind: "user" }));
+    // the first state read shows nothing pending; the re-read after the refusal shows the winner
+    let reads = 0;
+    const ctx: UserCtx = {
+      laneId: "PKG",
+      userId: USER,
+      rpc: async (fn) => {
+        if (fn === "act_reply_state") return { data: [{ pending_id: reads++ === 0 ? null : PID, blocked: false, already_sent_at: null }], error: null };
+        return { data: [refRow()], error: null };
+      },
+    };
+    const out = await saveReply(ctx, db(), approvals(), { now: () => NOW }, { messageId: "m1", to: ["dana@sender.example.test"], cc: [], bodyText: "Mine" });
+    expect(out.id).toBe(PID);
+    expect(mod.propose).toHaveBeenCalledTimes(1);
+    expect(mod.edit).toHaveBeenCalledTimes(1);
+    expect((mod.edit.mock.calls[0] as unknown[])[2]).toBe(PID);
+  });
+
+  it("reply_already_pending with nothing to edit afterwards is passed on, other errors are not swallowed", async () => {
+    mod.propose.mockRejectedValue(new ApprovalsError("reply_already_pending"));
+    await expect(saveReply(ctxWith().ctx, db(), approvals(), { now: () => NOW }, { messageId: "m1", to: ["a@b.example.test"], cc: [], bodyText: "x" })).rejects.toMatchObject({ code: "reply_already_pending" });
+    mod.propose.mockRejectedValue(new ApprovalsError("too_many_pending"));
+    await expect(saveReply(ctxWith().ctx, db(), approvals(), { now: () => NOW }, { messageId: "m1", to: ["a@b.example.test"], cc: [], bodyText: "x" })).rejects.toMatchObject({ code: "too_many_pending" });
   });
 
   it("an unknown message or a message without a thread creates nothing", async () => {
@@ -299,7 +366,7 @@ describe("draftReply: the on-demand AI draft", () => {
     expect(user).toContain("untrusted_data");
     expect(user).toContain("confirm the review meeting");
     expect(JSON.stringify(req?.system)).toMatch(/untrusted/i);
-    expect(calls.map((c) => c.fn)).toEqual(["inbox_message_ref"]); // no write of any kind
+    expect(calls.map((c) => c.fn)).toEqual(["inbox_message_ref", "act_reply_state"]); // reads only, no write of any kind
     expect(mod.propose).not.toHaveBeenCalled();
   });
 
@@ -320,22 +387,57 @@ describe("draftReply: the on-demand AI draft", () => {
     expect(await draftReply(ctxWith().ctx, db(), approvals(), d, "m1")).toEqual({ status: "ready", text: "Confirmed for Nov 20, agenda noted: https://acme.example.test/agenda" });
   });
 
-  it("is limited to one draft per thread per user per minute (a second call never reaches the model)", async () => {
+  it("is limited to one draft per thread per user per minute (a second call never reaches the model) and says how long to wait", async () => {
     const { d, provider } = deps();
     await draftReply(ctxWith().ctx, db(), approvals(), d, "m1");
-    await expect(draftReply(ctxWith().ctx, db(), approvals(), d, "m1")).rejects.toMatchObject({ code: "rate_limited" });
+    const err = await draftReply(ctxWith().ctx, db(), approvals(), d, "m1").catch((e: unknown) => e);
+    expect(err).toMatchObject({ code: "rate_limited", retryAfterS: 60 });
     expect(provider.calls).toHaveLength(1);
     // another thread is a different key
     await draftReply(ctxWith([refRow({ message_id: "m2", thread_id: "t-200" })]).ctx, db(), approvals(), d, "m2");
     expect(provider.calls).toHaveLength(2);
   });
 
-  it("the limiter frees the key after the window", () => {
+  it("a failed draft does not use the slot: a failed body read, a model failure and unusable output can all be retried at once", async () => {
+    const limiter = createLimiter({ windowMs: 60_000, max: 1, now: () => NOW });
+    const bad = deps({ limiter, readBody: async () => { throw new Error("x"); } });
+    await expect(draftReply(ctxWith().ctx, db(), approvals(), bad.d, "m1")).rejects.toMatchObject({ code: "body_unavailable" });
+    const failing = deps({ limiter }, [new LLMProviderError("rate_limited", { status: 429 })]);
+    await expect(draftReply(ctxWith().ctx, db(), approvals(), failing.d, "m1")).rejects.toMatchObject({ code: "ai_failed" });
+    const junk = deps({ limiter }, [textResult("no json")]);
+    await expect(draftReply(ctxWith().ctx, db(), approvals(), junk.d, "m1")).rejects.toMatchObject({ code: "ai_failed" });
+    expect(limiter.wait(`PKG:${USER}:t-100`)).toBe(0);
+    const good = deps({ limiter });
+    expect((await draftReply(ctxWith().ctx, db(), approvals(), good.d, "m1")).status).toBe("ready");
+    expect(limiter.wait(`PKG:${USER}:t-100`)).toBe(60); // only the success used it
+  });
+
+  it("is refused while a proposal is pending for the message (open and edit it): no body read, no model call", async () => {
+    setState({ pending: row() });
+    const { d, provider, reads } = deps();
+    await expect(draftReply(ctxWith().ctx, db(), approvals(), d, "m1")).rejects.toMatchObject({ code: "draft_exists" });
+    expect(provider.calls).toHaveLength(0);
+    expect(reads).toHaveLength(0);
+  });
+
+  it("a message id from another lane (not visible to this user) is not_found and nothing is read", async () => {
+    const { d, provider, reads } = deps();
+    await expect(draftReply(ctxWith([]).ctx, db(), approvals(), d, "m1")).rejects.toMatchObject({ code: "not_found" });
+    expect(reads).toHaveLength(0);
+    expect(provider.calls).toHaveLength(0);
+  });
+
+  it("the limiter frees the key after the window, and wait() reports the seconds left without using a slot", () => {
     let t = 0;
     const l = createLimiter({ windowMs: 1000, max: 1, now: () => t });
+    expect(l.wait("k")).toBe(0);
+    expect(l.wait("k")).toBe(0);
     expect(l.take("k")).toBe(true);
     expect(l.take("k")).toBe(false);
+    t = 400;
+    expect(l.wait("k")).toBe(1);
     t = 1001;
+    expect(l.wait("k")).toBe(0);
     expect(l.take("k")).toBe(true);
   });
 

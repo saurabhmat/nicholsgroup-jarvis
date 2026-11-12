@@ -3,6 +3,7 @@
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 import type { ReactNode } from "react";
+import { clearAllDrafts } from "@/lib/reply-draft-store";
 import { ThemeToggle } from "./theme-toggle";
 import { AppShell, type OnboardingProgress, type ShellBrand, type ShellLane, type ShellLink } from "@nichols/ui";
 
@@ -19,5 +20,10 @@ export function Shell(props: {
   children: ReactNode;
 }) {
   const pathname = usePathname();
-  return <AppShell {...props} pathname={pathname} Link={NextLink} menuExtra={<ThemeToggle />} />;
+  // Sign-out first removes this tab's unsent drafts (T-234 part 3).
+  const signOut = async (formData: FormData) => {
+    clearAllDrafts();
+    await props.signOut(formData);
+  };
+  return <AppShell {...props} signOut={signOut} pathname={pathname} Link={NextLink} menuExtra={<ThemeToggle />} />;
 }
