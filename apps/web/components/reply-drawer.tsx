@@ -159,7 +159,7 @@ export function ReplyDrawer({ laneId, messageId, restored = false, onClose }: { 
   const pendingRefresh = useRef(false);
   const refreshFn = useRef(router.refresh);
   // Where the local copy of the edits goes: set after the load (user id and version come from the server's context).
-  const [target] = useState<{ current: { userId: string; version: string; keep: boolean } | null }>(() => ({ current: null }));
+  const [target] = useState<{ current: { userId: string; version: string; keep: boolean; messageId: string } | null }>(() => ({ current: null }));
   const [writer] = useState(() =>
     debounced((f: ReplyDraftFields) => {
       const t = target.current;
@@ -176,7 +176,7 @@ export function ReplyDrawer({ laneId, messageId, restored = false, onClose }: { 
       if (!alive) return;
       setLoaded(l);
       if (l.ok) {
-        target.current = { userId: l.ctx.userId, version: versionOf(l.ctx), keep: l.ctx.storesDrafts };
+        target.current = { userId: l.ctx.userId, version: versionOf(l.ctx), keep: l.ctx.storesDrafts, messageId: l.ctx.messageId }; // the server-validated id keys the origin entry (one key for write and remove)
         setTo(l.fields.to);
         setCc(l.fields.cc);
         setBody(l.fields.body);
@@ -371,7 +371,7 @@ export function ReplyDrawer({ laneId, messageId, restored = false, onClose }: { 
       if (!p) return;
       dropLocalCopy(); // the server holds it now
       // The reopened proposal is the owner's own, so remember which text came from the AI: its commitments keep their warning.
-      if (target.current?.keep && info.aiText !== "") replyOrigins.write(laneId, target.current.userId, messageId, { text: info.aiText });
+      if (target.current?.keep && info.aiText !== "") replyOrigins.write(laneId, target.current.userId, target.current.messageId, { text: info.aiText });
       setBase({ to, cc, body });
       setSaved(p.id);
       pendingRefresh.current = true; // re-read the page once the drawer is closed, so this message is never unmounted
@@ -407,7 +407,7 @@ export function ReplyDrawer({ laneId, messageId, restored = false, onClose }: { 
         setResult({ outcome, text: resultMessage(outcome, typeof a.data.failureCode === "string" ? a.data.failureCode : null) });
         if (outcome !== "failed") {
           dropLocalCopy();
-          if (target.current) replyOrigins.remove(laneId, target.current.userId, messageId);
+          if (target.current) replyOrigins.remove(laneId, target.current.userId, target.current.messageId);
         }
         pendingRefresh.current = true;
         return;
@@ -416,7 +416,7 @@ export function ReplyDrawer({ laneId, messageId, restored = false, onClose }: { 
       if (a.status === 0 || a.status >= 500) {
         setResult({ outcome: "unknown", text: UNKNOWN_MESSAGE });
         dropLocalCopy();
-        if (target.current) replyOrigins.remove(laneId, target.current.userId, messageId);
+        if (target.current) replyOrigins.remove(laneId, target.current.userId, target.current.messageId);
         pendingRefresh.current = true;
         return;
       }
