@@ -31,20 +31,34 @@ export function ReplyAction({ target, canReply = false }: { target: ReplyTarget;
   return <ReplyTrigger target={target} />;
 }
 
+/** This page load is a reload or back/forward (not a fresh navigation). Unknown counts as fresh. */
+function reloaded(): boolean {
+  try {
+    const nav = performance.getEntriesByType("navigation")[0] as PerformanceNavigationTiming | undefined;
+    return nav?.type === "reload" || nav?.type === "back_forward";
+  } catch {
+    return false;
+  }
+}
+
 function ReplyTrigger({ target }: { target: ReplyTarget }) {
   // The message the drawer was opened for is captured here: a page refresh that changes this thread's latest message never
   // changes the open drawer's message, and the drawer lives in this component, above the refreshed list data.
   const [openFor, setOpenFor] = useState<string | null>(null);
+  // True when the drawer was reopened from the marker after a reload: it then never starts an AI draft by itself.
+  const [restored, setRestored] = useState(false);
   const trigger = useRef<HTMLButtonElement>(null);
   const scope = useHomeScope();
   const laneId = scope?.laneId;
   const userId = scope?.userId;
+  // The drawer itself writes the open marker once its context says the lane stores drafts (reply-drawer.tsx).
   const show = (id: string) => {
+    setRestored(false);
     setOpenFor(id);
-    if (laneId && userId) openDrawer.write(laneId, userId, "current", { messageId: id });
   };
   const hide = () => {
     setOpenFor(null);
+    setRestored(false);
     if (laneId && userId) openDrawer.remove(laneId, userId, "current");
   };
 
@@ -61,10 +75,23 @@ function ReplyTrigger({ target }: { target: ReplyTarget }) {
     [laneId, userId],
   );
 
-  // A full reload with the drawer open: reopen it for the same message when that item is on the page (its fields come back from sessionStorage).
+  // A reload or back/forward with the drawer open: reopen it for the same message when that item is on the page (its fields come
+  // back from sessionStorage). A fresh navigation (a link, the address bar) never reopens it: the marker is removed instead.
+  // (In `next dev` a Fast Refresh remount of this component also runs the cleanup above and drops the marker: dev only.)
   useEffect(() => {
     if (!laneId || !userId) return;
-    if (openDrawer.read(laneId, userId, "current")?.messageId === target.messageId) queueMicrotask(() => setOpenFor(target.messageId));
+    const marker = openDrawer.read(laneId, userId, "current");
+    if (!marker) return;
+    if (!reloaded()) {
+      openDrawer.remove(laneId, userId, "current");
+      return;
+    }
+    if (marker.messageId === target.messageId) {
+      queueMicrotask(() => {
+        setRestored(true);
+        setOpenFor(target.messageId);
+      });
+    }
   }, [laneId, userId, target.messageId]);
 
   // Back from the step-up: /<lane>?reply=<message id> reopens this message's drawer (its fields come back from sessionStorage).
@@ -79,8 +106,6 @@ function ReplyTrigger({ target }: { target: ReplyTarget }) {
     } catch {
       // no window or an odd URL: the owner just clicks Reply again
     }
-    // `show` only closes over the scope ids; it runs once per message id.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [target.messageId]);
 
   return (
@@ -92,6 +117,7 @@ function ReplyTrigger({ target }: { target: ReplyTarget }) {
         <ReplyDrawer
           laneId={target.laneId}
           messageId={openFor}
+          restored={restored}
           onClose={() => {
             hide();
             // Focus goes back to the button that opened the drawer.

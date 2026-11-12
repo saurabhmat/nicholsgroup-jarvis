@@ -12,16 +12,26 @@
 // The "Updated" text changes silently (no live region); its title holds the absolute time.
 import { useRouter } from "next/navigation";
 import { useEffect, useRef, useState } from "react";
-import { isRefreshHeld, subscribeRefreshGate } from "@/lib/refresh-gate";
+import { isRefreshHeld, lastRefreshAttempt, requestRefresh, subscribeRefreshGate } from "@/lib/refresh-gate";
 
 export const REFRESH_INTERVAL_MS = 5 * 60_000;
 const LABEL_TICK_MS = 30_000;
+const SLACK_MS = 5_000; // a tick fires a moment before the previous refresh's render time + the interval
 const TEXT_FIELD = 'input:not([type="button"]):not([type="submit"]):not([type="checkbox"]):not([type="radio"]):not([type="reset"]):not([type="file"]), textarea, select, [contenteditable]:not([contenteditable="false"])';
 
 /** A text field (or select, or editable region) has the focus: the owner may be typing. */
 export function textFieldFocused(): boolean {
   const a = document.activeElement;
   return a instanceof HTMLElement && a !== document.body && a.matches(TEXT_FIELD);
+}
+
+/** The absolute time in the viewer's zone (falls back to the browser's zone for a zone name this runtime does not know). */
+function timeLabel(ms: number, tz?: string): string {
+  try {
+    return new Date(ms).toLocaleTimeString(undefined, tz ? { timeZone: tz } : undefined);
+  } catch {
+    return new Date(ms).toLocaleTimeString();
+  }
 }
 
 export function updatedLabel(updatedAtMs: number, nowMs: number): string {
@@ -32,12 +42,11 @@ export function updatedLabel(updatedAtMs: number, nowMs: number): string {
   return `Updated ${String(h)} h ago`;
 }
 
-export function HomeAutoRefresh({ renderedAt, intervalMs = REFRESH_INTERVAL_MS, labelTickMs = LABEL_TICK_MS }: { renderedAt: string; intervalMs?: number; labelTickMs?: number }) {
+export function HomeAutoRefresh({ renderedAt, tz, intervalMs = REFRESH_INTERVAL_MS, labelTickMs = LABEL_TICK_MS }: { renderedAt: string; tz?: string; intervalMs?: number; labelTickMs?: number }) {
   const router = useRouter();
   const renderedMs = Date.parse(renderedAt);
   const serverMs = Number.isNaN(renderedMs) ? 0 : renderedMs;
   const refreshRef = useRef(router.refresh);
-  const lastAttempt = useRef(0);
   const updatedRef = useRef(serverMs);
   // The server render time is the last successful update; the first client render shows it too (no hydration mismatch).
   const [nowMs, setNowMs] = useState(serverMs);
@@ -54,20 +63,19 @@ export function HomeAutoRefresh({ renderedAt, intervalMs = REFRESH_INTERVAL_MS, 
       setNowMs(Date.now());
     });
     const canRefresh = () => document.visibilityState === "visible" && !isRefreshHeld() && !textFieldFocused();
-    const doRefresh = () => {
-      lastAttempt.current = Date.now();
-      refreshRef.current();
-    };
-    // Focus, visibility and the end of a pause: refresh only when the data is older than the interval.
+    // The timer, focus, visibility and the end of a pause all ask the same question: is the data (or the last attempt) older than
+    // the interval? The attempt time is shared with the drawer's own refresh (lib/refresh-gate.ts).
     const catchUp = () => {
       if (!canRefresh()) return;
-      if (Date.now() - Math.max(updatedRef.current, lastAttempt.current) >= intervalMs) doRefresh();
+      if (Date.now() - Math.max(updatedRef.current, lastRefreshAttempt()) >= intervalMs - SLACK_MS) requestRefresh(refreshRef.current);
     };
-    const tick = window.setInterval(() => {
-      if (canRefresh()) doRefresh();
-    }, intervalMs);
+    const tick = window.setInterval(catchUp, intervalMs);
     const label = window.setInterval(() => setNowMs(Date.now()), labelTickMs);
-    const onFocusOut = () => window.setTimeout(catchUp, 0); // activeElement is settled after the event
+    let focusTimer: number | undefined;
+    const onFocusOut = () => {
+      window.clearTimeout(focusTimer);
+      focusTimer = window.setTimeout(catchUp, 0); // activeElement is settled after the event
+    };
     document.addEventListener("visibilitychange", catchUp);
     window.addEventListener("focus", catchUp);
     document.addEventListener("focusout", onFocusOut);
@@ -75,6 +83,7 @@ export function HomeAutoRefresh({ renderedAt, intervalMs = REFRESH_INTERVAL_MS, 
     return () => {
       window.clearInterval(tick);
       window.clearInterval(label);
+      window.clearTimeout(focusTimer);
       document.removeEventListener("visibilitychange", catchUp);
       window.removeEventListener("focus", catchUp);
       document.removeEventListener("focusout", onFocusOut);
@@ -84,7 +93,7 @@ export function HomeAutoRefresh({ renderedAt, intervalMs = REFRESH_INTERVAL_MS, 
 
   const shown = Math.max(nowMs, serverMs);
   return (
-    <span data-testid="home-updated" className="text-small text-muted-foreground" title={mounted && serverMs ? `Data read at ${new Date(serverMs).toLocaleTimeString()}` : undefined}>
+    <span data-testid="home-updated" className="text-small text-muted-foreground" title={mounted && serverMs ? `Data read at ${timeLabel(serverMs, tz)}` : undefined}>
       {updatedLabel(serverMs, shown)}
     </span>
   );

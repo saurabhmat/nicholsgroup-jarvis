@@ -4,7 +4,7 @@
 // afterwards), the "Updated" text moves on, and nothing but router.refresh() is ever called (no fetch).
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { act, cleanup, fireEvent, render, screen } from "@testing-library/react";
-import { holdRefresh, resetRefreshGate } from "@/lib/refresh-gate";
+import { holdRefresh, requestRefresh, resetRefreshGate } from "@/lib/refresh-gate";
 import { HomeAutoRefresh, updatedLabel } from "./home-auto-refresh";
 
 const nav = vi.hoisted(() => ({ refresh: vi.fn(), push: vi.fn() }));
@@ -64,6 +64,31 @@ describe("interval", () => {
     expect(nav.refresh).toHaveBeenCalled();
     expect(fetchSpy).not.toHaveBeenCalled();
     expect(nav.push).not.toHaveBeenCalled();
+  });
+});
+
+describe("one refresh per interval", () => {
+  it("a tick within 5 minutes of a catch-up refresh does nothing", async () => {
+    draw();
+    const release = holdRefresh("drawer");
+    await advance(6 * MIN); // the 5-minute tick was skipped (held); the data is 6 minutes old
+    act(() => release()); // catch-up refresh at 6 min
+    expect(nav.refresh).toHaveBeenCalledTimes(1);
+    await advance(4 * MIN); // the tick at 10 min is 4 minutes after the catch-up
+    expect(nav.refresh).toHaveBeenCalledTimes(1);
+    await advance(5 * MIN); // the tick at 15 min, 9 minutes after the catch-up
+    expect(nav.refresh).toHaveBeenCalledTimes(2);
+  });
+
+  it("a refresh the drawer made counts: the release catch-up and the next tick leave it alone", async () => {
+    draw();
+    const release = holdRefresh("drawer");
+    await advance(6 * MIN);
+    requestRefresh(nav.refresh); // the drawer's own refresh on close
+    act(() => release());
+    expect(nav.refresh).toHaveBeenCalledTimes(1);
+    await advance(4 * MIN);
+    expect(nav.refresh).toHaveBeenCalledTimes(1);
   });
 });
 

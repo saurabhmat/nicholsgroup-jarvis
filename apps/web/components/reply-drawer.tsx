@@ -17,9 +17,10 @@ import { Alert, AlertDescription, AlertTitle, Badge, Button, cn } from "@nichols
 import { callApprovals, errorText, invalidAddresses, splitAddresses, stepUpHref, type DraftResult, type ReplyContext } from "@/lib/reply-client";
 import { flagRecipients } from "@/lib/reply-flags";
 import { DRAFTS_OFF_MESSAGE, REPLY_MESSAGES, resultMessage, UNKNOWN_MESSAGE, type ReplyOutcome } from "@/lib/reply-messages";
-import { holdRefresh } from "@/lib/refresh-gate";
-import { aiDrafts, debounced, replyDrafts, type ReplyDraftFields } from "@/lib/reply-draft-store";
+import { holdRefresh, requestRefresh } from "@/lib/refresh-gate";
+import { aiDrafts, debounced, openDrawer, replyDrafts, type ReplyDraftFields } from "@/lib/reply-draft-store";
 import { CapabilityMessage } from "./approval-card";
+import { useHomeScope } from "./home-scope";
 import { CopyTextButton } from "./copy-text-button";
 
 const control =
@@ -31,16 +32,16 @@ const WRITE_DELAY_MS = 500;
 type Source = "restored" | "briefing" | "saved" | "ai" | "blank";
 type Loaded =
   | { ok: false; message: string }
-  | { ok: true; ctx: ReplyContext; fields: ReplyDraftFields; base: ReplyDraftFields; source: Source; awaiting: boolean; aiMessage: string | null; staleDiscarded: boolean };
+  | { ok: true; ctx: ReplyContext; fields: ReplyDraftFields; base: ReplyDraftFields; source: Source; awaiting: boolean; aiMessage: string | null; staleDiscarded: boolean; offerDraft: boolean };
 
 // One load per message at a time, so a double effect run (React strict mode) never asks the AI twice.
 const loading = new Map<string, Promise<Loaded>>();
 
-function loadReply(laneId: string, messageId: string): Promise<Loaded> {
-  const k = `${laneId}:${messageId}`;
+function loadReply(laneId: string, messageId: string, restored: boolean): Promise<Loaded> {
+  const k = `${laneId}:${messageId}:${String(restored)}`;
   let p = loading.get(k);
   if (!p) {
-    p = doLoad(laneId, messageId).finally(() => loading.delete(k));
+    p = doLoad(laneId, messageId, restored).finally(() => loading.delete(k));
     loading.set(k, p);
   }
   return p;
@@ -59,7 +60,7 @@ async function fetchDraft(laneId: string, ctx: ReplyContext): Promise<{ draft: D
   return { message: errorText(d) };
 }
 
-async function doLoad(laneId: string, messageId: string): Promise<Loaded> {
+async function doLoad(laneId: string, messageId: string, restored: boolean): Promise<Loaded> {
   const r = await callApprovals(laneId, { action: "reply_context", messageId });
   const ctx = r.status === 200 ? (r.data.context as ReplyContext | undefined) : undefined;
   if (!ctx || typeof ctx !== "object") return { ok: false, message: errorText(r) };
@@ -71,7 +72,7 @@ async function doLoad(laneId: string, messageId: string): Promise<Loaded> {
   if (ctx.storesDrafts) {
     const stored = replyDrafts.read(laneId, ctx.userId, messageId);
     if (stored) {
-      if (stored.serverVersion === versionOf(ctx)) return { ok: true, ctx, fields: { to: stored.to, cc: stored.cc, body: stored.body }, base, source: "restored", awaiting: false, aiMessage: null, staleDiscarded: false };
+      if (stored.serverVersion === versionOf(ctx)) return { ok: true, ctx, fields: { to: stored.to, cc: stored.cc, body: stored.body }, base, source: "restored", awaiting: false, aiMessage: null, staleDiscarded: false, offerDraft: false };
       replyDrafts.remove(laneId, ctx.userId, messageId);
       staleDiscarded = true;
     }
@@ -80,18 +81,20 @@ async function doLoad(laneId: string, messageId: string): Promise<Loaded> {
     aiDrafts.remove(laneId, ctx.userId, messageId);
   }
   if (fromProposal && ctx.proposal) {
-    return { ok: true, ctx, fields: fromProposal, base, source: ctx.proposal.origin === "briefing" ? "briefing" : "saved", awaiting: false, aiMessage: null, staleDiscarded };
+    return { ok: true, ctx, fields: fromProposal, base, source: ctx.proposal.origin === "briefing" ? "briefing" : "saved", awaiting: false, aiMessage: null, staleDiscarded, offerDraft: false };
   }
-  if (!ctx.aiAllowed || ctx.blocked) return { ok: true, ctx, fields: blank, base, source: "blank", awaiting: false, aiMessage: null, staleDiscarded };
+  if (!ctx.aiAllowed || ctx.blocked) return { ok: true, ctx, fields: blank, base, source: "blank", awaiting: false, aiMessage: null, staleDiscarded, offerDraft: false };
   // The generated draft of the last 30 minutes is reused: reopening does not ask the AI again.
   const cached = ctx.storesDrafts ? aiDrafts.read(laneId, ctx.userId, messageId) : null;
+  // Reopened from the marker after a reload: never start an AI draft by itself. The owner gets a "Draft with AI" button instead.
+  if (restored && !cached) return { ok: true, ctx, fields: blank, base, source: "blank", awaiting: false, aiMessage: null, staleDiscarded, offerDraft: true };
   const got = cached ? { draft: { status: cached.awaiting ? ("awaiting_input" as const) : ("ready" as const), text: cached.text } } : await fetchDraft(laneId, ctx);
   if ("draft" in got) {
     const ready = got.draft.status === "ready";
     const fields = { ...blank, body: ready ? got.draft.text : "" };
-    return { ok: true, ctx, fields, base: fields, source: ready ? "ai" : "blank", awaiting: !ready, aiMessage: null, staleDiscarded };
+    return { ok: true, ctx, fields, base: fields, source: ready ? "ai" : "blank", awaiting: !ready, aiMessage: null, staleDiscarded, offerDraft: false };
   }
-  return { ok: true, ctx, fields: blank, base, source: "blank", awaiting: false, aiMessage: got.message, staleDiscarded };
+  return { ok: true, ctx, fields: blank, base, source: "blank", awaiting: false, aiMessage: got.message, staleDiscarded, offerDraft: false };
 }
 
 const SOURCE_NOTE: Record<Source, string | null> = {
@@ -112,8 +115,10 @@ const whenTime = (iso: string): string => {
   return Number.isNaN(d.getTime()) ? "soon" : d.toLocaleString(undefined, { dateStyle: "medium", timeStyle: "short" });
 };
 
-export function ReplyDrawer({ laneId, messageId, onClose }: { laneId: string; messageId: string; onClose: () => void }) {
+export function ReplyDrawer({ laneId, messageId, restored = false, onClose }: { laneId: string; messageId: string; restored?: boolean; onClose: () => void }) {
   const router = useRouter();
+  const inHome = useHomeScope() !== null; // the open marker belongs to Home (where the trigger clears it)
+  const inHomeRef = useRef(inHome);
   const titleId = useId();
   const panel = useRef<HTMLDivElement>(null);
   const resultRef = useRef<HTMLParagraphElement>(null);
@@ -125,7 +130,7 @@ export function ReplyDrawer({ laneId, messageId, onClose }: { laneId: string; me
   const [cc, setCc] = useState("");
   const [body, setBody] = useState("");
   const [base, setBase] = useState<ReplyDraftFields>({ to: "", cc: "", body: "" });
-  const [info, setInfo] = useState<{ source: Source; awaiting: boolean; aiMessage: string | null; staleDiscarded: boolean }>({ source: "blank", awaiting: false, aiMessage: null, staleDiscarded: false });
+  const [info, setInfo] = useState<{ source: Source; awaiting: boolean; aiMessage: string | null; staleDiscarded: boolean; offerDraft: boolean }>({ source: "blank", awaiting: false, aiMessage: null, staleDiscarded: false, offerDraft: false });
   const [busy, setBusy] = useState<"save" | "send" | "draft" | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [saved, setSaved] = useState<string | null>(null);
@@ -147,7 +152,7 @@ export function ReplyDrawer({ laneId, messageId, onClose }: { laneId: string; me
 
   useEffect(() => {
     let alive = true;
-    void loadReply(laneId, messageId).then((l) => {
+    void loadReply(laneId, messageId, restored).then((l) => {
       if (!alive) return;
       setLoaded(l);
       if (l.ok) {
@@ -156,18 +161,31 @@ export function ReplyDrawer({ laneId, messageId, onClose }: { laneId: string; me
         setCc(l.fields.cc);
         setBody(l.fields.body);
         setBase(l.base);
-        setInfo({ source: l.source, awaiting: l.awaiting, aiMessage: l.aiMessage, staleDiscarded: l.staleDiscarded });
+        setInfo({ source: l.source, awaiting: l.awaiting, aiMessage: l.aiMessage, staleDiscarded: l.staleDiscarded, offerDraft: l.offerDraft });
+        // The open marker (so a reload reopens this drawer) is an id only, and only written when the lane stores drafts.
+        if (l.ctx.storesDrafts && inHomeRef.current) openDrawer.write(laneId, l.ctx.userId, "current", { messageId });
       }
     });
     return () => {
       alive = false;
     };
+    // `restored` only matters for the first load of this drawer instance.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [laneId, messageId, target]);
 
-  // The Home auto-refresh stays paused while this drawer is open (T-234 part 5) and, separately, while a send is in progress.
-  useEffect(() => holdRefresh("drawer"), []);
-  const sendingNow = busy === "send";
-  useEffect(() => (sendingNow ? holdRefresh("sending") : undefined), [sendingNow]);
+  // A page that is going away (tab closed, reload, switched away on a phone) never runs the close flush: write the pending edits now.
+  useEffect(() => {
+    const flush = () => writer.flush();
+    const onHidden = () => {
+      if (document.visibilityState === "hidden") writer.flush();
+    };
+    window.addEventListener("pagehide", flush);
+    document.addEventListener("visibilitychange", onHidden);
+    return () => {
+      window.removeEventListener("pagehide", flush);
+      document.removeEventListener("visibilitychange", onHidden);
+    };
+  }, [writer]);
 
   // Focus moves in, the page behind does not scroll (focus is returned by the trigger). Edits not yet written are flushed on close,
   // and a refresh that was held back while the drawer was open runs once it is gone.
@@ -180,10 +198,17 @@ export function ReplyDrawer({ laneId, messageId, onClose }: { laneId: string; me
       writer.flush();
       if (pendingRefresh.current) {
         pendingRefresh.current = false;
-        refreshFn.current();
+        requestRefresh(refreshFn.current);
       }
     };
   }, [writer]);
+
+  // The Home auto-refresh stays paused while this drawer is open (T-234 part 5) and, separately, while a send is in progress.
+  // Declared AFTER the effect above on purpose: cleanups run in declaration order, so the drawer's own refresh is recorded
+  // before the hold is released and the release catch-up sees it (no second refresh).
+  useEffect(() => holdRefresh("drawer"), []);
+  const sendingNow = busy === "send";
+  useEffect(() => (sendingNow ? holdRefresh("sending") : undefined), [sendingNow]);
 
   // After the load: the cursor goes to the message, or to To when there is no recipient yet.
   const ctxLoaded = loaded?.ok ? loaded.ctx : null;
@@ -204,7 +229,7 @@ export function ReplyDrawer({ laneId, messageId, onClose }: { laneId: string; me
     if (sending.current) return;
     if (pendingRefresh.current) {
       pendingRefresh.current = false;
-      refreshFn.current();
+      requestRefresh(refreshFn.current);
     }
     onClose();
   }, [onClose]);
@@ -277,7 +302,7 @@ export function ReplyDrawer({ laneId, messageId, onClose }: { laneId: string; me
   // The same banner as the approval card: the recipients came from the email unless the owner changed them (recomputed as To changes).
   const fromEmail = ctx ? (ctx.proposal ? ctx.proposal.derivedFromRetrieved && sameList(toList, ctx.proposal.to) : toList.length > 0 && sameList(toList, ctx.defaults.to)) : false;
   const dirty = to !== base.to || cc !== base.cc || body !== base.body;
-  const canDraftAgain = !!ctx && ctx.aiAllowed && !ctx.proposal && !ctx.blocked && !finished && (info.source === "ai" || info.awaiting || info.aiMessage !== null);
+  const canDraftAgain = !!ctx && ctx.aiAllowed && !ctx.proposal && !ctx.blocked && !finished && (info.source === "ai" || info.awaiting || info.aiMessage !== null || info.offerDraft);
 
   function invalid(): string | null {
     if (toList.length === 0) return "Add at least one recipient in To.";
@@ -380,7 +405,7 @@ export function ReplyDrawer({ laneId, messageId, onClose }: { laneId: string; me
         const ready = got.draft.status === "ready";
         setBody(ready ? got.draft.text : "");
         setBase((b) => ({ ...b, body: ready ? got.draft.text : "" }));
-        setInfo((i) => ({ ...i, source: ready ? "ai" : "blank", awaiting: !ready, aiMessage: null }));
+        setInfo((i) => ({ ...i, source: ready ? "ai" : "blank", awaiting: !ready, aiMessage: null, offerDraft: false }));
       } else {
         setInfo((i) => ({ ...i, aiMessage: got.message }));
       }
@@ -492,7 +517,7 @@ export function ReplyDrawer({ laneId, messageId, onClose }: { laneId: string; me
               {canDraftAgain ? (
                 <div>
                   <Button variant="outline" size="sm" data-testid="reply-draft-again" disabled={busy !== null} onClick={() => void draftAgain()}>
-                    {busy === "draft" ? "Drafting..." : "Draft again"}
+                    {busy === "draft" ? "Drafting..." : info.offerDraft ? "Draft with AI" : "Draft again"}
                   </Button>
                 </div>
               ) : null}

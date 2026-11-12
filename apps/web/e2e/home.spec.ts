@@ -81,6 +81,19 @@ test("owner: today's calendar, Next 7 days, the KPI strip and the rule-based att
   // survives a full reload (sessionStorage, per company and user).
   await expect(page.getByTestId("home-updated")).toHaveText(/^Updated (just now|\d+ min ago)$/);
   await expect(page.getByTestId("home-updated")).toHaveAttribute("title", /^Data read at /);
+  // A real router.refresh() (Next's own app router, as the 5-minute timer calls it): the expanded section stays open and the
+  // data-read time moves on. (The Reply drawer is not covered here: the owner persona's Reply needs a live Google mailbox.)
+  const readAt = await page.getByTestId("home-updated").getAttribute("title");
+  await page.waitForTimeout(1100); // the title has a seconds resolution
+  const refreshed = await page.evaluate(() => {
+    const r = (window as unknown as { next?: { router?: { refresh?: () => void } } }).next?.router;
+    if (!r?.refresh) return false;
+    r.refresh();
+    return true;
+  });
+  expect(refreshed, "window.next.router.refresh must exist in this Next build").toBe(true);
+  await expect(page.getByTestId("home-updated")).not.toHaveAttribute("title", readAt ?? "");
+  await expect(page.getByRole("button", { name: /Next 7 days/ })).toHaveAttribute("aria-expanded", "true");
   await page.reload();
   await expect(page.getByRole("button", { name: /Next 7 days/ })).toHaveAttribute("aria-expanded", "true");
   await expect(page.getByTestId("home-updated")).toHaveText("Updated just now");

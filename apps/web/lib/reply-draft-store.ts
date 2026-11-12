@@ -5,6 +5,9 @@
 //     comes from the server's context and is only a key part: it never decides access.
 //   * Every entry has a time to live; an expired one is removed when read.
 //   * Nothing is written when the lane does not store outbound drafts (D-19, rule 6): callers check `storesDrafts` first.
+//   * The view-state namespaces (home-open, drawer-open) hold ids and flags only, never message content; drawer-open is written
+//     only when the lane stores drafts (the drawer does it after its context loads).
+//   * `noteSignedInUser()` clears every namespace when this tab sees a different user than last time (a sign-out that did not run).
 //   * `clearAllDrafts()` runs at sign-out and removes every namespace listed in DRAFT_NAMESPACES.
 export const DRAFT_NAMESPACES = ["reply-draft", "reply-ai", "home-open", "drawer-open"] as const;
 export type DraftNamespaceName = (typeof DRAFT_NAMESPACES)[number];
@@ -95,6 +98,21 @@ export function clearAllDrafts(): void {
   for (const n of DRAFT_NAMESPACES) clearPrefix(`${ROOT}${n}:`);
 }
 
+const LAST_USER_KEY = `${ROOT}last-user`;
+
+/** A different verified user than the one this tab last showed Home to: every draft namespace goes (an id is the only thing kept). */
+export function noteSignedInUser(userId: string): void {
+  try {
+    const s = storage();
+    if (!s) return;
+    const last = s.getItem(LAST_USER_KEY);
+    if (last !== null && last !== userId) clearAllDrafts();
+    s.setItem(LAST_USER_KEY, userId);
+  } catch {
+    // storage blocked: nothing is kept anyway
+  }
+}
+
 /** A trailing-edge debounce with flush and cancel (the drawer writes 500 ms after the last keystroke and flushes on close). */
 export function debounced<A extends unknown[]>(fn: (...args: A) => void, ms: number): { call: (...args: A) => void; flush: () => void; cancel: () => void } {
   let timer: ReturnType<typeof setTimeout> | null = null;
@@ -164,9 +182,9 @@ export const aiDrafts = draftNamespace<StoredAiDraft>("reply-ai", {
 /** Which expanded sections the owner left open on Home (item id = the section id): kept for the tab session, 12 hours at most. */
 export const expandedSections = draftNamespace<boolean>("home-open", { ttlMs: 12 * 3_600_000, validate: (v) => (typeof v === "boolean" ? v : null) });
 
-/** The message whose Reply drawer is open (item id "current"): so a full reload reopens it. An id only, never content. */
+/** The message whose Reply drawer is open (item id "current"): so a reload reopens it (30 minutes at most). An id only, never content. */
 export const openDrawer = draftNamespace<{ messageId: string }>("drawer-open", {
-  ttlMs: 12 * 3_600_000,
+  ttlMs: 30 * 60_000,
   validate(v) {
     const id = typeof v === "object" && v !== null ? str((v as Record<string, unknown>).messageId, 256) : null;
     return id ? { messageId: id } : null;

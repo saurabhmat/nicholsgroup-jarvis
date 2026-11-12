@@ -30,8 +30,20 @@ export function subscribeRefreshGate(fn: () => void): () => void {
   };
 }
 
+// The time of the last refresh ATTEMPT, shared by the timer and the drawer, so a catch-up right after the drawer's own refresh
+// (or a second one within the interval) does not refresh again.
+let lastAttemptMs = 0;
+export const lastRefreshAttempt = (): number => lastAttemptMs;
+
+/** Every router.refresh() on Home goes through here: it records the attempt time. */
+export function requestRefresh(refresh: () => void): void {
+  lastAttemptMs = Date.now();
+  refresh();
+}
+
 /** Tests only. */
 export function resetRefreshGate(): void {
+  lastAttemptMs = 0;
   holds.clear();
   listeners.clear();
 }

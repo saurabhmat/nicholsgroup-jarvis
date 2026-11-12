@@ -43,9 +43,9 @@ import { kpiTiles } from "@/lib/home-kpi-tiles";
 export async function HomePage({ params }: { params: Promise<{ laneId: string }> }) {
   const lane = await loadLane((await params).laneId);
   const now = new Date();
-  // The verified user id is only a sessionStorage key part for view state (expanded sections, the open drawer); memoised per request.
-  const g0 = await guards();
-  const userId = (await g0.requireLane(lane.laneId as Parameters<typeof g0.requireLane>[0])).session.userId;
+  // The verified user id (from loadLane's lane check) is only a sessionStorage key part for view state (expanded sections, the open drawer).
+  const userId = lane.userId;
+  const tz = viewerZone((await cookies()).get("tz")?.value);
   const heading = homeHeading(); // no first name in the session yet: "Good morning"
   // T-230 A: the header renders as soon as the lane is verified; the data sections and the setup banner stream in behind it
   // (each in its own boundary, so the slow setup lookup never holds back today's figures, and neither holds the header).
@@ -59,7 +59,7 @@ export async function HomePage({ params }: { params: Promise<{ laneId: string }>
         accent={heading.accent}
         actions={
           <>
-            <HomeAutoRefresh renderedAt={now.toISOString()} />
+            <HomeAutoRefresh renderedAt={now.toISOString()} tz={tz} />
             <Suspense fallback={null}>
               <HomeCoverageDot laneId={lane.laneId} />
             </Suspense>

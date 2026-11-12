@@ -7,8 +7,9 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import type { ReplyContext } from "@/lib/reply-client";
-import { openDrawer, replyDrafts } from "@/lib/reply-draft-store";
+import { noteSignedInUser, openDrawer, replyDrafts } from "@/lib/reply-draft-store";
 import { heldKinds, resetRefreshGate } from "@/lib/refresh-gate";
+import { AttentionSection } from "./home-briefing";
 import { CollapsibleSection } from "./collapsible-section";
 import { HomeAutoRefresh } from "./home-auto-refresh";
 import { HomeScope, PersistedDetails } from "./home-scope";
@@ -62,8 +63,14 @@ function Home({ at, subject, other = [] as string[] }: { at: string; subject: st
   );
 }
 
+/** What the browser says about how this page was loaded (jsdom has no navigation entry). */
+function navigationType(type: "navigate" | "reload" | "back_forward" | null) {
+  vi.spyOn(performance, "getEntriesByType").mockImplementation(((kind: string) => (kind === "navigation" && type ? [{ type }] : [])) as unknown as typeof performance.getEntriesByType);
+}
+
 beforeEach(() => {
   calls.length = 0;
+  navigationType("reload");
   nav.refresh.mockReset();
   window.sessionStorage.clear();
   window.history.replaceState(null, "", "/PKG");
@@ -80,6 +87,7 @@ beforeEach(() => {
 afterEach(() => {
   cleanup();
   vi.unstubAllGlobals();
+  vi.restoreAllMocks();
   vi.useRealTimers();
 });
 
@@ -138,7 +146,8 @@ describe("a full reload", () => {
     await openAndType("Typed before the reload");
     await waitFor(() => expect(replyDrafts.read("PKG", "u1", "m1")?.body).toBe("Typed before the reload"), { timeout: 2000 }); // debounced 500 ms
     expect(openDrawer.read("PKG", "u1", "current")).toEqual({ messageId: "m1" });
-    // A reload tears the page down: no React cleanup runs, only the tab's sessionStorage remains.
+    // A reload tears the page down: no React cleanup runs, only the tab's sessionStorage remains. A test can only unmount, and
+    // the unmount cleanup removes the marker, so the marker is put back by hand to stand for what a real reload leaves behind.
     first.unmount();
     window.sessionStorage.setItem(openDrawer.key("PKG", "u1", "current"), JSON.stringify({ v: 1, t: Date.now(), d: { messageId: "m1" } }));
     render(<Home at={iso(t + 1000)} subject="S" />);
@@ -159,6 +168,78 @@ describe("a full reload", () => {
     const { unmount } = render(<Home at={iso(Date.now())} subject="S" />);
     await openAndType("x");
     unmount();
+    expect(openDrawer.read("PKG", "u1", "current")).toBeNull();
+  });
+
+  it("a reload never starts an AI draft by itself: it shows 'Draft with AI' and the button asks once", async () => {
+    window.sessionStorage.setItem(openDrawer.key("PKG", "u1", "current"), JSON.stringify({ v: 1, t: Date.now(), d: { messageId: "m1" } }));
+    const ai = { ...ctx, aiAllowed: true };
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (_u: string, init: { body: string }) => {
+        const a = (JSON.parse(init.body) as { action: string }).action;
+        calls.push(a);
+        return { status: 200, json: async () => (a === "reply_context" ? { ok: true, context: ai } : { ok: true, draft: { status: "ready", text: "AI text" } }) } as Response;
+      }),
+    );
+    render(<Home at={iso(Date.now())} subject="S" />);
+    await screen.findByTestId("sends-as");
+    expect(calls).toEqual(["reply_context"]); // no draft_reply on a marker restore
+    expect(body().value).toBe("");
+    const btn = screen.getByTestId("reply-draft-again");
+    expect(btn.textContent).toBe("Draft with AI");
+    fireEvent.click(btn);
+    await waitFor(() => expect(body().value).toBe("AI text"));
+    expect(calls).toEqual(["reply_context", "draft_reply"]);
+  });
+
+  it("a fresh navigation does not reopen the drawer and removes the marker", async () => {
+    navigationType("navigate");
+    window.sessionStorage.setItem(openDrawer.key("PKG", "u1", "current"), JSON.stringify({ v: 1, t: Date.now(), d: { messageId: "m1" } }));
+    render(<Home at={iso(Date.now())} subject="S" />);
+    await act(async () => {});
+    expect(screen.queryByTestId("reply-drawer")).toBeNull();
+    expect(openDrawer.read("PKG", "u1", "current")).toBeNull();
+  });
+
+  it("back/forward reopens like a reload; the marker lives 30 minutes", async () => {
+    navigationType("back_forward");
+    window.sessionStorage.setItem(openDrawer.key("PKG", "u1", "current"), JSON.stringify({ v: 1, t: Date.now(), d: { messageId: "m1" } }));
+    render(<Home at={iso(Date.now())} subject="S" />);
+    await screen.findByTestId("sends-as");
+    cleanup();
+    window.sessionStorage.setItem(openDrawer.key("PKG", "u1", "current"), JSON.stringify({ v: 1, t: Date.now() - 31 * MIN, d: { messageId: "m1" } }));
+    expect(openDrawer.read("PKG", "u1", "current")).toBeNull();
+  });
+
+  it("the marker is written only when the lane stores drafts", async () => {
+    vi.stubGlobal("fetch", vi.fn(async () => ({ status: 200, json: async () => ({ ok: true, context: { ...ctx, storesDrafts: false } }) }) as Response));
+    render(<Home at={iso(Date.now())} subject="S" />);
+    fireEvent.click(screen.getByTestId("attention-reply"));
+    await screen.findByTestId("sends-as");
+    expect(openDrawer.read("PKG", "u1", "current")).toBeNull();
+  });
+
+  it("pending edits are written when the page is hidden or going away", async () => {
+    render(<Home at={iso(Date.now())} subject="S" />);
+    await openAndType("Written on pagehide");
+    expect(replyDrafts.read("PKG", "u1", "m1")).toBeNull(); // still inside the 500 ms debounce
+    fireEvent(window, new Event("pagehide"));
+    expect(replyDrafts.read("PKG", "u1", "m1")?.body).toBe("Written on pagehide");
+    fireEvent.change(body(), { target: { value: "Written when hidden" } });
+    Object.defineProperty(document, "visibilityState", { configurable: true, get: () => "hidden" });
+    try {
+      document.dispatchEvent(new Event("visibilitychange"));
+      expect(replyDrafts.read("PKG", "u1", "m1")?.body).toBe("Written when hidden");
+    } finally {
+      Object.defineProperty(document, "visibilityState", { configurable: true, get: () => "visible" });
+    }
+  });
+
+  it("a different signed-in user clears every stored draft and view-state entry", () => {
+    noteSignedInUser("u1");
+    window.sessionStorage.setItem(openDrawer.key("PKG", "u1", "current"), JSON.stringify({ v: 1, t: Date.now(), d: { messageId: "m1" } }));
+    render(<HomeScope laneId="PKG" userId="u2"><p>x</p></HomeScope>);
     expect(openDrawer.read("PKG", "u1", "current")).toBeNull();
   });
 
@@ -209,6 +290,63 @@ describe("no refresh while the drawer is open", () => {
     });
     expect(nav.refresh).toHaveBeenCalledTimes(1);
     expect(calls.every((a) => a === "reply_context" || a === "draft_reply")).toBe(true); // the only fetches are the drawer's own reads
+  });
+});
+
+describe("the list keys (the real attention list)", () => {
+  const thread = (messageId: string) => ({
+    connectionId: "c1", threadKey: "t1", messageId, fromAddress: "boss@pubk.test", fromName: "Boss", subject: "Board deck", receivedAt: "2026-11-12T10:00:00Z",
+    sourceUrl: "https://mail.google.com/mail/u/me/#all/t1", labels: ["INBOX"], isImportant: false, lastIsOwner: false, ownerReplied: false, unreadCount: 1, inboundCount: 1,
+  });
+  const mail = (messageId: string) => ({ access: true as const, attention: [{ key: "c1:t1", kind: "priority" as const, reason: "Priority sender", thread: thread(messageId) }], more: 0, money: [], mailboxOf: { c1: "me@pubk.test" } });
+  const list = (messageId: string) => (
+    <HomeScope laneId="PKG" userId="u1">
+      <AttentionSection laneId="PKG" now={new Date("2026-11-12T13:00:00Z")} mail={mail(messageId)} canReply />
+    </HomeScope>
+  );
+
+  it("a new latest message in the same thread keeps the item mounted and the open drawer with its edits", async () => {
+    const { rerender } = render(list("m1"));
+    const item = screen.getByTestId("attention-item");
+    await openAndType("Half-written reply");
+    const drawer = screen.getByTestId("reply-drawer");
+    rerender(list("m2")); // same connection + thread, new latest messageId (what a refresh brings)
+    expect(screen.getByTestId("attention-item")).toBe(item); // the key is connectionId:threadKey, not the message id
+    expect(screen.getByTestId("reply-drawer")).toBe(drawer);
+    expect(body().value).toBe("Half-written reply");
+    expect(calls.filter((a) => a === "reply_context")).toHaveLength(1); // still the message it was opened for
+  });
+});
+
+describe("the drawer's own refresh and the auto-refresh", () => {
+  it("a save (refresh on close) followed by the release catch-up refreshes only once", async () => {
+    vi.useFakeTimers({ toFake: ["setInterval", "clearInterval", "setTimeout", "clearTimeout", "Date"] });
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (_u: string, init: { body: string }) => {
+        const a = (JSON.parse(init.body) as { action: string }).action;
+        return { status: 200, json: async () => (a === "reply_context" ? { ok: true, context: ctx } : { ok: true, id: "p1", hash: "h".repeat(64) }) } as Response;
+      }),
+    );
+    render(<Home at={iso(Date.now())} subject="S" />);
+    fireEvent.click(screen.getByTestId("attention-reply"));
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(1);
+    });
+    fireEvent.change(body(), { target: { value: "Reply" } });
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(6 * MIN); // the data is stale while the drawer holds the refresh
+    });
+    expect(nav.refresh).not.toHaveBeenCalled();
+    fireEvent.click(screen.getByTestId("reply-save"));
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(1);
+    });
+    fireEvent.click(screen.getByLabelText("Close reply"));
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(10);
+    });
+    expect(nav.refresh).toHaveBeenCalledTimes(1);
   });
 });
 

@@ -7,7 +7,7 @@ import { cleanup, render, screen, within } from "@testing-library/react";
 import type { HomeView } from "@/lib/home";
 
 const m = vi.hoisted(() => ({ coverage: { items: [], unavailable: false } as unknown, view: null as unknown, progress: null as unknown, finance: { state: "not_connected", asOf: null, lastSyncAt: null, connectionStatus: null, cash: { reason: null, total: null, asOf: null, accounts: [], unmapped: 0 }, ar: { reason: null, over30: null, invoices: 0, unmapped: 0 }, pnl: { reason: null, income: null, expenses: null, net: null, start: null, end: null, method: null, partial: false, asOf: null } } as unknown }));
-vi.mock("@/lib/lane-page", () => ({ loadLane: async () => ({ laneId: "PKG", name: "Pub K Group", lanes: [] }) }));
+vi.mock("@/lib/lane-page", () => ({ loadLane: async () => ({ laneId: "PKG", name: "Pub K Group", lanes: [], userId: "u1" }) }));
 vi.mock("@/lib/guards", () => ({ guards: async () => ({ requireLane: async () => ({ client: {}, session: { userId: "u1" } }), requireRole: async () => { throw new Error("not admin"); } }) }));
 vi.mock("@/lib/briefing-setup", () => ({ aiSetupFailure: () => null }));
 vi.mock("next/headers", () => ({ cookies: async () => ({ get: () => undefined }) }));
