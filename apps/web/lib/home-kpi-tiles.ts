@@ -1,4 +1,4 @@
-// The five Home KPI tiles (T-234 part 1): Cash (book balance), AR > 30 days, P&L MTD, MRR, Paid subscribers. Figures
+// The Home KPI tiles (T-234 part 1, T-235 part 4: only what is connected). Up to five: Cash (book balance), AR > 30 days, P&L MTD, MRR, Paid subscribers. Figures
 // come only from SQL: the three QuickBooks tiles from `core.home_finance` (T-233, via financeCards: formatted, never
 // computed here). MRR (Stripe) and Paid subscribers (GoHighLevel) have no read yet, so they are always the
 // not-connected / waiting state, never a number. The list is fixed by the brief and kept as data so the page maps over it.
@@ -40,6 +40,8 @@ export function kpiTiles(finance: HomeFinanceView, feeds: HomeView["feeds"]): Kp
       return { ...base(k), connect: false, ...(c.statusText ? { note: c.statusText } : {}) };
     });
   }
-  const other = homeKpis(feeds).map((k): KpiTile => (k.connect ? { key: k.key, label: k.label, bookBalance: false, flags: [], connect: true } : { key: k.key, label: k.label, bookBalance: false, flags: [], connect: false, note: k.statusText }));
-  return [...qb, ...other];
+  const other = homeKpis(feeds).filter((k) => k.connected).map((k): KpiTile => (k.connect ? { key: k.key, label: k.label, bookBalance: false, flags: [], connect: true } : { key: k.key, label: k.label, bookBalance: false, flags: [], connect: false, note: k.statusText }));
+  // T-235 part 4: a tile exists only for a connected source. A tile that would say "Not connected" is dropped; with
+  // none left the strip shows one slim banner instead (kpi-strip.tsx). Stripe and GoHighLevel have no connector yet.
+  return [...qb, ...other].filter((t) => !t.connect);
 }

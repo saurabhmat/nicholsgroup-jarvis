@@ -25,6 +25,15 @@ vi.mock("@/lib/home-finance", async (orig) => ({ ...(await orig<typeof import("@
 vi.mock("@/lib/home", async (orig) => ({ ...(await orig<typeof import("@/lib/home")>()), homeFor: async () => m.view }));
 
 import { HomePage } from "./home-page";
+import { toHomeFinance } from "@/lib/home-finance";
+
+const okRow = {
+  state: "ok", as_of: "2026-11-11T20:00:00Z", last_sync_at: "2026-11-11T19:55:00Z", connection_status: "active",
+  cash_reason: null, cash_total: 1314.66, cash_as_of: "2026-11-10T20:00:00Z", cash_accounts: [], cash_unmapped: 0,
+  ar_reason: null, ar_over_30: 160.25, ar_invoices: 3, ar_unmapped: 0,
+  pnl_reason: null, pnl_income: 500, pnl_expenses: 200, pnl_net: 300, pnl_start: "2026-11-01", pnl_end: "2026-11-11", pnl_method: "accrual", pnl_partial: false, pnl_as_of: "2026-11-11T20:00:00Z",
+};
+const allFeeds = [{ provider: "quickbooks", status: "active" }, { provider: "stripe", status: "active" }, { provider: "ghl", status: "active" }];
 
 const view = (over: Partial<HomeView> = {}): HomeView => ({ calendar: "not_connected", meetings: [], upcoming: [], feeds: [], unreadImportant: null, attention: [], ...over });
 
@@ -53,8 +62,10 @@ async function draw() {
   render(<>{await resolve(await HomePage({ params: Promise.resolve({ laneId: "PKG" }) }), fallbacks)}</>);
   return fallbacks;
 }
+const defaultFinance = m.finance;
 afterEach(() => {
   cleanup();
+  m.finance = defaultFinance;
   m.progress = null;
   m.coverage = { items: [], unavailable: false };
 });
@@ -62,8 +73,9 @@ afterEach(() => {
 describe("Home layout (T-234 part 1)", () => {
   const follows = (a: Element, b: Element) => Boolean(a.compareDocumentPosition(b) & Node.DOCUMENT_POSITION_FOLLOWING);
 
-  it("row 1: attention 2/3 | calendar column (Next 7 days under it); row 2: five KPIs; row 3: news 2/3 | projects 1/3; in this DOM order (= the phone's single column)", async () => {
-    m.view = view();
+  it("row 1: attention 2/3 | calendar column (Next 7 days under it); row 2: five KPIs (all sources connected); row 3: news 2/3 | projects 1/3; in this DOM order (= the phone's single column)", async () => {
+    m.finance = toHomeFinance([okRow]);
+    m.view = view({ feeds: allFeeds as HomeView["feeds"] });
     await draw();
     const row1 = screen.getByTestId("home-row-attention");
     expect(row1.className).toMatch(/lg:grid-cols-3/);
@@ -109,14 +121,20 @@ describe("Home layout (T-234 part 1)", () => {
     expect(within(attention).getByTestId("ai-briefing")).toBeTruthy();
   });
 
-  it("KPI tiles: Cash book balance, AR, P&L from the finance read; MRR and Paid subscribers not connected", async () => {
-    m.view = view();
+  it("KPI tiles: Cash book balance, AR, P&L from the finance read; MRR and Paid subscribers only when their feeds are connected", async () => {
+    m.finance = toHomeFinance([okRow]);
+    m.view = view({ feeds: [{ provider: "quickbooks", status: "active" }] as HomeView["feeds"] });
     await draw();
     const tiles = screen.getAllByTestId("kpi-tile");
-    expect(tiles.map((t) => t.getAttribute("data-kpi"))).toEqual(["cash", "ar30", "pnl", "mrr", "subscribers"]);
-    expect(tiles.slice(0, 3).every((t) => t.getAttribute("data-status") === "not_connected")).toBe(true); // finance mock: QuickBooks not connected
-    expect(tiles.slice(3).every((t) => t.getAttribute("data-status") === "no_data")).toBe(true); // this mock sees no feeds: "Not available yet", never "Not connected"
+    expect(tiles.map((t) => t.getAttribute("data-kpi"))).toEqual(["cash", "ar30", "pnl"]);
     expect(within(tiles[0] as HTMLElement).getByText("Book balance")).toBeTruthy();
+  });
+
+  it("nothing connected: no tiles; a caller who cannot connect (not owner / admin in this mock) sees no banner either", async () => {
+    m.view = view();
+    await draw();
+    expect(screen.queryAllByTestId("kpi-tile")).toHaveLength(0);
+    expect(screen.queryByTestId("home-kpis-banner")).toBeNull(); // the banner for owner / admin is in home-widgets.test.tsx
   });
 
   it("the header status dot shows only when a source is stale or in error, inside the header, linking to Settings -> Connections", async () => {
@@ -133,6 +151,7 @@ describe("Home layout (T-234 part 1)", () => {
   });
 
   it("cards use the shared card look: 12px radius token, subtle shadow", async () => {
+    m.finance = toHomeFinance([okRow]);
     m.view = view();
     await draw();
     for (const el of [screen.getByRole("region", { name: "Needs your attention" }), screen.getByRole("region", { name: "GovCon news" }), screen.getAllByTestId("kpi-tile")[0] as HTMLElement]) {

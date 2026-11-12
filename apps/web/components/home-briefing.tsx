@@ -9,11 +9,13 @@ import { ReplyAction } from "./reply-action";
 import { inboxHref } from "@/lib/inbox-links";
 import {
   ageLabel,
+  aheadSummaryText,
   attendeeSummary,
+  eventChips,
   formatDayIn,
   formatTimeIn,
   maskFigures,
-  timeWithZone,
+  otherZoneTime,
   type AttentionNote,
   type AttentionThread,
   type DayEvent,
@@ -22,21 +24,32 @@ import {
 } from "@nichols/briefing/domain";
 import type { BriefingView, CalendarSection, MailSection } from "@/lib/briefing";
 
-function Flags({ e }: { e: DayEvent }) {
-  const flags: { text: string; variant: "alert" | "outline" | "gold" }[] = [];
-  if (e.clashesWith.length > 0) flags.push({ text: `Clashes with ${e.clashesWith.join(", ")}`, variant: "alert" });
-  if (e.backToBack) flags.push({ text: "Back-to-back", variant: "outline" });
-  if (e.rsvpPending) flags.push({ text: "RSVP pending", variant: "gold" });
-  if (e.external.length > 0) flags.push({ text: "External", variant: "outline" });
-  if (flags.length === 0) return null;
+const CHIP_VARIANT = { clash: "alert", rsvp: "gold", back_to_back: "outline", external: "outline" } as const;
+
+/** At most two chips, by priority (Clash, RSVP pending, Back-to-back, External); the detail is a tooltip and screen-reader text. */
+function Chips({ e }: { e: DayEvent }) {
+  const chips = eventChips(e);
+  if (chips.length === 0) return null;
   return (
-    <span className="flex flex-wrap gap-2">
-      {flags.map((f) => (
-        <Badge key={f.text} variant={f.variant}>
-          {f.text}
+    <span data-testid="event-chips" className="flex flex-wrap gap-1.5">
+      {chips.map((c) => (
+        <Badge key={c.key} variant={CHIP_VARIANT[c.key]} title={c.detail}>
+          {c.label}
+          {c.key === "clash" ? <span className="sr-only"> ({c.detail})</span> : null}
         </Badge>
       ))}
     </span>
+  );
+}
+
+/** The title, a link to the event in the calendar (https only, new tab) when there is one; no separate "Open in Calendar". */
+function EventTitle({ title, url }: { title: string; url: string | null }) {
+  return url ? (
+    <a href={url} target="_blank" rel="noopener noreferrer" className="truncate font-medium text-foreground underline-offset-2 hover:underline">
+      {title}
+    </a>
+  ) : (
+    <span className="truncate font-medium text-foreground">{title}</span>
   );
 }
 
@@ -55,30 +68,37 @@ export function TodayCalendar({ calendar, tz, now }: { calendar: CalendarSection
       {calendar.today.map((e) => {
         const past = !e.allDay && Date.parse(e.endAt) <= now.getTime();
         const who = attendeeSummary(e, owners);
+        const own = e.allDay ? null : otherZoneTime(e.startAt, tz, e.timezone);
         return (
-          <li key={e.key} data-testid="calendar-event" className={`flex flex-col gap-1 py-3 text-body ${past ? "opacity-60" : ""}`}>
-            <span className="tabular-nums text-muted-foreground">
-              {e.allDay ? "All day" : `${timeWithZone(e.startAt, tz, e.timezone)} – ${formatTimeIn(e.endAt, tz)}`}
+          <li key={e.key} data-testid="calendar-event" className={`flex gap-3 py-3 text-body ${past ? "opacity-60" : ""}`}>
+            <span data-testid="event-time" className="flex w-24 shrink-0 flex-col tabular-nums">
+              {e.allDay ? (
+                <span className="font-semibold text-foreground">All day</span>
+              ) : (
+                <>
+                  <time dateTime={e.startAt} className="font-semibold text-foreground">
+                    {formatTimeIn(e.startAt, tz)}
+                  </time>
+                  {own ? <span data-testid="event-zone" className="text-small text-muted-foreground">{own}</span> : null}
+                  <span className="text-small text-muted-foreground">
+                    to{" "}
+                    <time dateTime={e.endAt}>{formatTimeIn(e.endAt, tz)}</time>
+                  </span>
+                </>
+              )}
             </span>
-            <span className="flex min-w-0 flex-col gap-1">
-              <span className="truncate font-medium text-foreground">{e.title}</span>
-              {e.location ? <span className="truncate text-muted-foreground">{e.location}</span> : null}
+            <span className="flex min-w-0 flex-1 flex-col gap-1">
+              <span className="flex min-w-0 items-start justify-between gap-2">
+                <EventTitle title={e.title} url={e.calendarUrl} />
+                {e.meetingUrl && !past ? (
+                  <a href={e.meetingUrl} target="_blank" rel="noopener noreferrer" className={`${buttonVariants({ variant: "outline", size: "sm" })} shrink-0`}>
+                    Join
+                  </a>
+                ) : null}
+              </span>
+              {e.location ? <span className="truncate text-small text-muted-foreground">{e.location}</span> : null}
               {who ? <span className="truncate text-small text-muted-foreground">With {who}</span> : null}
-              <Flags e={e} />
-              {e.meetingUrl || e.calendarUrl ? (
-                <span className="flex gap-3">
-                  {e.meetingUrl && !past ? (
-                    <a href={e.meetingUrl} target="_blank" rel="noopener noreferrer" className="text-primary underline-offset-2 hover:underline">
-                      Join
-                    </a>
-                  ) : null}
-                  {e.calendarUrl ? (
-                    <a href={e.calendarUrl} target="_blank" rel="noopener noreferrer" className="text-primary underline-offset-2 hover:underline">
-                      Open in Calendar
-                    </a>
-                  ) : null}
-                </span>
-              ) : null}
+              <Chips e={e} />
             </span>
           </li>
         );
@@ -91,42 +111,43 @@ export function LookAhead({ events, tz }: { events: NotableEvent[]; tz: string }
   if (events.length === 0) return <p className="text-body text-muted-foreground">Nothing notable in the next 7 days (no holidays, external meetings or open invitations).</p>;
   return (
     <ul data-testid="look-ahead" className="flex flex-col divide-y divide-border">
-      {events.map((e) => (
-        <li key={e.key} className="flex flex-col gap-1 py-3 text-body">
-          <span className="tabular-nums text-muted-foreground">
-            {formatDayIn(e.allDay && e.startDate ? `${e.startDate}T12:00:00Z` : e.startAt, tz)}
-            {e.allDay ? null : (
-              <>
-                <br />
-                {timeWithZone(e.startAt, tz, e.timezone)}
-              </>
-            )}
-          </span>
-          <span className="flex min-w-0 flex-col gap-1">
-            {e.calendarUrl ? (
-              <a href={e.calendarUrl} target="_blank" rel="noopener noreferrer" className="truncate font-medium text-foreground underline-offset-2 hover:underline">
-                {e.title}
-              </a>
-            ) : (
-              <span className="truncate font-medium text-foreground">{e.title}</span>
-            )}
-            <span className="text-small text-muted-foreground">{e.why.join(" · ")}</span>
-          </span>
-        </li>
-      ))}
+      {events.map((e) => {
+        const own = e.allDay ? null : otherZoneTime(e.startAt, tz, e.timezone);
+        return (
+          <li key={e.key} className="flex gap-3 py-3 text-body">
+            <span className="flex w-24 shrink-0 flex-col tabular-nums">
+              <span className="font-semibold text-foreground">{formatDayIn(e.allDay && e.startDate ? `${e.startDate}T12:00:00Z` : e.startAt, tz)}</span>
+              {e.allDay ? null : (
+                <>
+                  <time dateTime={e.startAt} className="text-small text-muted-foreground">
+                    {formatTimeIn(e.startAt, tz)}
+                  </time>
+                  {own ? <span className="text-small text-muted-foreground">{own}</span> : null}
+                </>
+              )}
+            </span>
+            <span className="flex min-w-0 flex-1 flex-col gap-1">
+              <EventTitle title={e.title} url={e.calendarUrl} />
+              <span className="text-small text-muted-foreground">{e.why.join(" · ")}</span>
+            </span>
+          </li>
+        );
+      })}
     </ul>
   );
 }
 
-/** Right column of row 1: Today's calendar, with "Next 7 days" collapsed below it (expands on click). */
+/** Right column of row 1: Today's calendar, with "Next 7 days" collapsed below it (one-line summary in its header; expands on click). */
 export function CalendarSections({ view, now }: { view: BriefingView; now: Date }) {
+  const c = view.calendar;
+  const summary = c.access && c.aheadSummary ? aheadSummaryText(c.aheadSummary) : undefined;
   return (
     <>
       <PageSection title="Today's calendar" note={`Times in ${view.viewerTz.replace(/_/g, " ")}`}>
         <TodayCalendar calendar={view.calendar} tz={view.viewerTz} now={now} />
       </PageSection>
-      <CollapsibleSection title="Next 7 days" testId="next-7-days" persistId="next-7-days">
-        {view.calendar.access ? <LookAhead events={view.calendar.ahead} tz={view.viewerTz} /> : <p className="text-body text-muted-foreground">No calendar to look ahead in. See Settings → Connections.</p>}
+      <CollapsibleSection title="Next 7 days" testId="next-7-days" persistId="next-7-days" {...(summary ? { note: summary } : {})}>
+        {c.access ? <LookAhead events={c.ahead} tz={view.viewerTz} /> : <p className="text-body text-muted-foreground">No calendar to look ahead in. See Settings → Connections.</p>}
       </CollapsibleSection>
     </>
   );

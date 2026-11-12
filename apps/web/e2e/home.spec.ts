@@ -97,14 +97,12 @@ test("owner: today's calendar, Next 7 days, the KPI strip and the rule-based att
   await page.reload();
   await expect(page.getByRole("button", { name: /Next 7 days/ })).toHaveAttribute("aria-expanded", "true");
   await expect(page.getByTestId("home-updated")).toHaveText("Updated just now");
-  const tiles = page.getByTestId("kpi-tile");
-  await expect(tiles).toHaveCount(5);
-  const boxes = await tiles.evaluateAll((els) => els.map((e) => e.getBoundingClientRect()));
-  if (info.project.name === "desktop") {
-    // equal heights in one row (a Not connected tile is as tall as one with a figure)
-    expect(new Set(boxes.map((b) => Math.round(b.height))).size).toBe(1);
-    expect(new Set(boxes.map((b) => Math.round(b.y))).size).toBe(1);
-  }
+  // T-235 part 4: nothing finance-related is connected in this fixture, so no tiles: one slim banner for the owner.
+  await expect(page.getByTestId("kpi-tile")).toHaveCount(0);
+  const banner = page.getByTestId("home-kpis-banner");
+  await expect(banner).toContainText("Connect QuickBooks, Stripe and GoHighLevel to see cash, AR, P&L, MRR and subscribers");
+  await expect(banner.getByRole("link", { name: /Settings/ })).toHaveAttribute("href", "/PKG/settings#connections");
+  if (info.project.name === "desktop") expect((await banner.boundingBox())?.height ?? 999).toBeLessThan(64); // one line
 });
 
 test("a finance-only viewer sees no meetings and no mail counts", async ({ page }, info) => {
@@ -122,18 +120,15 @@ test("a finance-only viewer sees no meetings and no mail counts", async ({ page 
   await expect(body).not.toContainText("Synthetic subject");
 });
 
-test("phone: the KPI tiles are one column (same x, stacked downwards)", async ({ page }, info) => {
+test("phone: the KPI banner fits 390 px (no horizontal scroll)", async ({ page }, info) => {
   test.skip(info.project.name === "desktop", "phone viewport only");
   test.setTimeout(150_000);
   await signIn(page, personas(info).member);
   await page.goto("/PKG");
-  const tiles = page.getByTestId("kpi-tile");
-  await expect(tiles.first()).toBeVisible({ timeout: 30_000 }); // 5 tiles, or 2 for a role without the finance view
-  expect(await tiles.count()).toBeGreaterThanOrEqual(2);
-  const boxes = await tiles.evaluateAll((els) => els.map((e) => e.getBoundingClientRect()));
-  expect(new Set(boxes.map((b) => Math.round(b.x))).size).toBe(1);
-  boxes.forEach((b, i) => {
-    const prev = boxes[i - 1];
-    if (prev) expect(b.y).toBeGreaterThan(prev.y);
-  });
+  await expect(page.getByRole("heading", { level: 1 })).toBeVisible({ timeout: 30_000 });
+  // Nothing connected: the member (owner) sees the slim banner, never five empty tiles; tiles, if any, are one column.
+  await expect(page.getByTestId("kpi-tile")).toHaveCount(0);
+  await expect(page.getByTestId("home-kpis-banner")).toBeVisible();
+  const overflow = await page.evaluate(() => document.documentElement.scrollWidth - document.documentElement.clientWidth);
+  expect(overflow).toBeLessThanOrEqual(0);
 });

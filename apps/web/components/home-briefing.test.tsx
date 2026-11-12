@@ -3,8 +3,9 @@
 // Join, never declined events; times are in the viewer's zone with the event's zone added when it differs.
 import { afterEach, describe, expect, it } from "vitest";
 import { cleanup, render, screen, within } from "@testing-library/react";
-import { analyzeDay, notableAhead, parseEvents, toCoverage, parseCoverageRows } from "@nichols/briefing/domain";
-import { AttentionSection, LookAhead, TodayCalendar } from "./home-briefing";
+import { aheadSummaryText, analyzeDay, notableAhead, parseEvents, summarizeAhead, toCoverage, parseCoverageRows } from "@nichols/briefing/domain";
+import type { BriefingView } from "@/lib/briefing";
+import { AttentionSection, CalendarSections, LookAhead, TodayCalendar } from "./home-briefing";
 import { CoverageList } from "./coverage-list";
 
 afterEach(cleanup);
@@ -40,27 +41,81 @@ describe("CoverageList (Settings -> Connections)", () => {
   });
 });
 
-describe("TodayCalendar", () => {
-  it("shows flags, the other zone, Join; hides declined", () => {
-    const events = parseEvents([
-      {
-        calendar_id: "primary", event_id: "a", title: "Board prep", start_at: "2026-11-12T14:00:00Z", end_at: "2026-11-12T15:00:00Z", timezone: "America/Los_Angeles",
-        online_meeting_url: "https://meet.example.test/a", attendees: [{ email: "me@pubk.test", response: "needs_action" }, { email: "guest@acme.test", name: "Guest" }],
-      },
-      { calendar_id: "primary", event_id: "b", title: "Overlap", start_at: "2026-11-12T14:30:00Z", end_at: "2026-11-12T15:30:00Z", attendees: [] },
-      { calendar_id: "primary", event_id: "c", title: "Said no", start_at: "2026-11-12T18:00:00Z", end_at: "2026-11-12T19:00:00Z", attendees: [{ email: "me@pubk.test", response: "declined" }] },
-    ]);
-    render(<TodayCalendar calendar={{ access: true, today: analyzeDay(events, owners, internal), ahead: [], owners: [...owners] }} tz="America/New_York" now={now} />);
+describe("TodayCalendar (T-235 part 3: compact)", () => {
+  const events = parseEvents([
+    {
+      calendar_id: "primary", event_id: "a", title: "Board prep", start_at: "2026-11-12T14:00:00Z", end_at: "2026-11-12T15:00:00Z", timezone: "America/Los_Angeles",
+      online_meeting_url: "https://meet.example.test/a", source_url: "https://calendar.example.test/a",
+      attendees: [
+        { email: "me@pubk.test", response: "needs_action" },
+        { email: "dana.whitfield@acme.test" },
+        { email: "guest@acme.test", name: "Guest Person" },
+        { email: "raj@acme.test", name: "raj@acme.test" },
+        { email: "room1@resource.calendar.google.com", name: "Room 1" },
+        { email: "ann_lee@acme.test" },
+        { email: "cy@acme.test", name: "Cy Wu" },
+      ],
+    },
+    { calendar_id: "primary", event_id: "b", title: "Overlap", start_at: "2026-11-12T14:30:00Z", end_at: "2026-11-12T15:30:00Z", attendees: [] },
+    { calendar_id: "primary", event_id: "c", title: "Said no", start_at: "2026-11-12T18:00:00Z", end_at: "2026-11-12T19:00:00Z", attendees: [{ email: "me@pubk.test", response: "declined" }] },
+    { calendar_id: "primary", event_id: "d", title: "Plain", start_at: "2026-11-12T20:00:00Z", end_at: "2026-11-12T21:00:00Z", online_meeting_url: "http://insecure.example.test/x", source_url: "javascript:alert(1)", attendees: [] },
+  ]);
+  const view = () => render(<TodayCalendar calendar={{ access: true, today: analyzeDay(events, owners, internal), ahead: [], owners: [...owners] }} tz="America/New_York" now={now} />);
+
+  it("two columns: the start time bold in the viewer zone, the event's own zone small below; hides declined", () => {
+    view();
     const rows = screen.getAllByTestId("calendar-event");
-    expect(rows).toHaveLength(2);
+    expect(rows).toHaveLength(3);
     expect(screen.queryByText("Said no")).toBeNull();
     const first = within(rows[0] as HTMLElement);
-    expect(first.getByText("9:00 AM (6:00 AM PST) – 10:00 AM")).toBeTruthy();
-    expect(first.getByText("Clashes with Overlap")).toBeTruthy();
-    expect(first.getByText("RSVP pending")).toBeTruthy();
-    expect(first.getByText("External")).toBeTruthy();
-    expect(first.getByText("With Guest")).toBeTruthy();
-    expect(first.getByRole("link", { name: "Join" }).getAttribute("href")).toBe("https://meet.example.test/a");
+    const start = first.getByText("9:00 AM");
+    expect(start.tagName).toBe("TIME");
+    expect(start.getAttribute("datetime")).toBe("2026-11-12T14:00:00.000Z");
+    expect(start.className).toMatch(/font-semibold/);
+    expect(first.getByTestId("event-zone").textContent).toBe("6:00 AM PST");
+    expect(first.getByText("10:00 AM")).toBeTruthy();
+    expect(within(rows[2] as HTMLElement).queryByTestId("event-zone")).toBeNull(); // no own zone: nothing extra
+    expect(screen.getAllByRole("list")).toHaveLength(1); // list semantics
+  });
+
+  it("attendees are names (never emails): a name, else the capitalised local part; at most 3 then '+N more'; resources and the owner left out", () => {
+    view();
+    const text = (screen.getAllByTestId("calendar-event")[0] as HTMLElement).textContent ?? "";
+    expect(text).toContain("With Dana Whitfield, Guest Person, Raj +2 more"); // raj's 'name' is an address: local part instead
+    expect(text).not.toMatch(/@/);
+    expect(text).not.toContain("Room 1");
+  });
+
+  it("at most two chips, by priority (Clash, RSVP pending, then Back-to-back, External); Clash names the other event in a tooltip", () => {
+    view();
+    const first = within(screen.getAllByTestId("calendar-event")[0] as HTMLElement);
+    const chips = first.getByTestId("event-chips");
+    expect(within(chips).getByText("Clash").getAttribute("title")).toBe("Clashes with Overlap");
+    expect(within(chips).getByText("RSVP pending")).toBeTruthy();
+    expect(first.queryByText("External")).toBeNull(); // third by priority: dropped
+    expect(chips.children).toHaveLength(2);
+    expect(first.queryByText(/^Clashes with/)).toBeNull(); // shortened
+  });
+
+  it("the title links to the event (https, new tab, noopener); there is no separate 'Open in Calendar'", () => {
+    view();
+    const first = within(screen.getAllByTestId("calendar-event")[0] as HTMLElement);
+    const link = first.getByRole("link", { name: "Board prep" });
+    expect(link.getAttribute("href")).toBe("https://calendar.example.test/a");
+    expect(link.getAttribute("target")).toBe("_blank");
+    expect(link.getAttribute("rel")).toBe("noopener noreferrer");
+    expect(screen.queryByText("Open in Calendar")).toBeNull();
+    const plain = within(screen.getAllByTestId("calendar-event")[2] as HTMLElement);
+    expect(plain.queryByRole("link")).toBeNull(); // javascript: and http: URLs never become links
+  });
+
+  it("Join is a small button-styled link, only with an https meeting URL", () => {
+    view();
+    const join = within(screen.getAllByTestId("calendar-event")[0] as HTMLElement).getByRole("link", { name: "Join" });
+    expect(join.getAttribute("href")).toBe("https://meet.example.test/a");
+    expect(join.getAttribute("rel")).toBe("noopener noreferrer");
+    expect(join.className).toMatch(/h-\d|px-/); // buttonVariants size sm
+    expect(screen.getAllByRole("link", { name: "Join" })).toHaveLength(1); // the others have no (https) meeting URL
   });
 
   it("says why there is no calendar instead of showing an empty day", () => {
@@ -69,12 +124,47 @@ describe("TodayCalendar", () => {
   });
 });
 
-describe("LookAhead", () => {
-  it("lists notable events with the reason", () => {
-    const ahead = notableAhead(parseEvents([{ calendar_id: "primary", event_id: "x", title: "Client call", start_at: "2026-11-14T15:00:00Z", end_at: "2026-11-14T16:00:00Z", attendees: [{ email: "c@acme.test" }] }]), owners, internal);
+describe("Next 7 days summary and LookAhead", () => {
+  const ev = (id: string, s: string, e: string, extra: Record<string, unknown> = {}) => ({ calendar_id: "primary", event_id: id, title: `E${id}`, start_at: s, end_at: e, attendees: [], ...extra });
+
+  it("summary text: counts meetings and clashing pairs, singular and plural, none", () => {
+    expect(aheadSummaryText(summarizeAhead([], owners))).toBe("No meetings");
+    const one = parseEvents([ev("1", "2026-11-14T15:00:00Z", "2026-11-14T16:00:00Z")]);
+    expect(aheadSummaryText(summarizeAhead(one, owners))).toBe("1 meeting");
+    const many = parseEvents([
+      ev("1", "2026-11-14T15:00:00Z", "2026-11-14T16:00:00Z"),
+      ev("2", "2026-11-14T15:30:00Z", "2026-11-14T16:30:00Z"),
+      ev("3", "2026-11-15T15:00:00Z", "2026-11-15T16:00:00Z"),
+      ev("4", "2026-11-15T15:00:00Z", "2026-11-15T16:00:00Z", { all_day: true, start_date: "2026-11-15", end_date: "2026-11-16" }),
+      ev("5", "2026-11-16T15:00:00Z", "2026-11-16T16:00:00Z", { attendees: [{ email: "me@pubk.test", response: "declined" }] }),
+    ]);
+    expect(aheadSummaryText(summarizeAhead(many, owners))).toBe("3 meetings, 1 clash");
+    const two = parseEvents([ev("1", "2026-11-14T15:00:00Z", "2026-11-14T16:00:00Z"), ev("2", "2026-11-14T15:30:00Z", "2026-11-14T16:30:00Z"), ev("3", "2026-11-14T15:45:00Z", "2026-11-14T16:45:00Z")]);
+    expect(aheadSummaryText(summarizeAhead(two, owners))).toBe("3 meetings, 3 clashes");
+  });
+
+  it("the header of the collapsed Next 7 days shows the summary", () => {
+    const view = {
+      viewerTz: "America/New_York",
+      calendar: { access: true as const, today: [], ahead: [], aheadSummary: { meetings: 12, clashes: 2 }, owners: [] },
+    } as unknown as BriefingView;
+    render(<CalendarSections view={view} now={now} />);
+    const button = screen.getByRole("button", { name: /Next 7 days/ });
+    expect(button.textContent).toContain("12 meetings, 2 clashes");
+    expect(button.getAttribute("aria-expanded")).toBe("false");
+  });
+
+  it("lists notable events with names (never addresses), a time column and a title link", () => {
+    const ahead = notableAhead(
+      parseEvents([{ calendar_id: "primary", event_id: "x", title: "Client call", start_at: "2026-11-14T15:00:00Z", end_at: "2026-11-14T16:00:00Z", source_url: "https://calendar.example.test/x", attendees: [{ email: "c.client@acme.test" }] }]),
+      owners,
+      internal,
+    );
     render(<LookAhead events={ahead} tz="America/New_York" />);
-    expect(screen.getByText("External: c@acme.test")).toBeTruthy();
-    expect(screen.getByText(/Sat, Nov 14/)).toBeTruthy();
+    expect(screen.getByText("External: C Client")).toBeTruthy();
+    expect(screen.getByText("Sat, Nov 14")).toBeTruthy();
+    expect(screen.getByText("10:00 AM").tagName).toBe("TIME");
+    expect(screen.getByRole("link", { name: "Client call" }).getAttribute("href")).toBe("https://calendar.example.test/x");
   });
 });
 

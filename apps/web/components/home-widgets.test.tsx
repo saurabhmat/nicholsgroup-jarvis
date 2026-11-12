@@ -22,31 +22,78 @@ const okRow = {
 };
 const tilesOf = () => screen.getAllByTestId("kpi-tile");
 
-describe("KPI strip", () => {
-  it("five tiles in one row from lg, in the brief's order; Cash carries Book balance; MRR and Paid subscribers are not connected, never a figure", () => {
-    render(<KpiStrip laneId="PKG" canConnect tiles={kpiTiles(toHomeFinance([okRow]), [{ provider: "quickbooks", status: "active" }])} />);
-    expect(screen.getByTestId("home-kpis").className).toMatch(/lg:grid-cols-5/);
-    expect(screen.getByTestId("home-kpis").className).toMatch(/(^| )grid-cols-1( |$)/); // one column on a phone
-    expect(screen.getByTestId("home-kpis").className).not.toMatch(/(^| )grid-cols-2( |$)/);
+const ALL_FEEDS = [{ provider: "quickbooks", status: "active" }, { provider: "stripe", status: "active" }, { provider: "ghl", status: "active" }];
+const BANNER = "Connect QuickBooks, Stripe and GoHighLevel to see cash, AR, P&L, MRR and subscribers";
+
+describe("KPI strip (T-235 part 4: only what is connected)", () => {
+  it("everything connected: five tiles fill one row from lg, in the brief's order; Cash carries Book balance; no banner", () => {
+    render(<KpiStrip laneId="PKG" canConnect tiles={kpiTiles(toHomeFinance([okRow]), ALL_FEEDS)} />);
+    const strip = screen.getByTestId("home-kpis");
+    expect(strip.className).toMatch(/lg:grid-cols-5/);
+    expect(strip.className).toMatch(/(^| )grid-cols-1( |$)/); // one column on a phone
+    expect(strip.className).not.toMatch(/(^| )grid-cols-2( |$)/);
     expect(tilesOf().map((t) => t.getAttribute("data-kpi"))).toEqual(["cash", "ar30", "pnl", "mrr", "subscribers"]);
-    const [cash, ar, pnl, mrr, subs] = tilesOf() as HTMLElement[];
+    const [cash, ar, pnl, mrr] = tilesOf() as HTMLElement[];
     expect(within(cash as HTMLElement).getByText("Book balance")).toBeTruthy();
     expect(within(cash as HTMLElement).getByText("$1,314.66")).toBeTruthy();
     expect(within(ar as HTMLElement).getByText("$160.25")).toBeTruthy();
     expect(within(pnl as HTMLElement).getByText("$300.00")).toBeTruthy();
-    for (const t of [mrr, subs] as HTMLElement[]) {
-      expect(t.getAttribute("data-status")).toBe("not_connected");
-      // The dash is visible only; screen readers get "No figure" as text (an aria-label on a <p> is an axe violation).
-      expect(t.querySelector("[data-slot=kpi-value] [aria-hidden]")?.textContent).toBe("—");
-      expect(t.querySelector("[data-slot=kpi-value] .sr-only")?.textContent).toBe("No figure");
-      expect(t.querySelector("[data-slot=kpi-value]")?.hasAttribute("aria-label")).toBe(false);
-      expect(within(t).getByRole("link", { name: "Connect" }).getAttribute("href")).toBe("/PKG/settings#connections");
-      expect(t.textContent).toContain("Not connected");
-    }
+    // connected but no figure yet: the dash is visible only; screen readers get "No figure" (an aria-label on a <p> is an axe violation)
+    expect(mrr?.querySelector("[data-slot=kpi-value] [aria-hidden]")?.textContent).toBe("—");
+    expect(mrr?.querySelector("[data-slot=kpi-value] .sr-only")?.textContent).toBe("No figure");
+    expect(mrr?.querySelector("[data-slot=kpi-value]")?.hasAttribute("aria-label")).toBe(false);
+    expect(screen.queryByTestId("home-kpis-banner")).toBeNull();
+    expect(screen.queryByText("Not connected")).toBeNull();
   });
 
-  it("a not-connected tile has the same height classes as a tile with a figure (equal heights)", () => {
-    render(<KpiStrip laneId="PKG" tiles={kpiTiles(toHomeFinance([okRow]), [])} />);
+  it("QuickBooks only: three tiles that fill the row equally; no empty MRR or subscriber tile", () => {
+    render(<KpiStrip laneId="PKG" canConnect tiles={kpiTiles(toHomeFinance([okRow]), [{ provider: "quickbooks", status: "active" }])} />);
+    expect(tilesOf().map((t) => t.getAttribute("data-kpi"))).toEqual(["cash", "ar30", "pnl"]);
+    expect(screen.getByTestId("home-kpis").className).toMatch(/lg:grid-cols-3/);
+    expect(screen.queryByTestId("home-kpis-banner")).toBeNull();
+  });
+
+  it("nothing connected: one slim banner with the exact text and a Settings link, no tiles", () => {
+    render(<KpiStrip laneId="PKG" canConnect tiles={kpiTiles(toHomeFinance([{ state: "not_connected" }]), [{ provider: "quickbooks", status: "active" }])} />);
+    expect(screen.queryAllByTestId("kpi-tile")).toHaveLength(0);
+    const banner = screen.getByTestId("home-kpis-banner");
+    expect(banner.textContent).toContain(BANNER);
+    expect(within(banner).getByRole("link", { name: /Settings/ }).getAttribute("href")).toBe("/PKG/settings#connections");
+    expect(banner.className).not.toMatch(/min-h|h-\d/); // slim: no fixed tile height
+    expect(document.body.textContent).not.toMatch(/\$/);
+  });
+
+  it("nothing connected and a caller who cannot see feeds: the same banner (never 'Not available yet' tiles)", () => {
+    render(<KpiStrip laneId="PKG" canConnect tiles={kpiTiles(toHomeFinance([{ state: "not_connected" }]), [])} />);
+    expect(screen.getByTestId("home-kpis-banner")).toBeTruthy();
+    expect(screen.queryAllByTestId("kpi-tile")).toHaveLength(0);
+  });
+
+  it("a role that cannot connect (no canConnect) sees no banner and no tiles when nothing is connected", () => {
+    const { container } = render(<KpiStrip laneId="PKG" tiles={kpiTiles(toHomeFinance([{ state: "not_connected" }]), [])} />);
+    expect(container.textContent).toBe("");
+  });
+
+  it("a role without the finance view gets no finance tile or figure, and no banner about finance; Stripe and GHL tiles only when connected", () => {
+    const { container } = render(<KpiStrip laneId="PKG" tiles={kpiTiles({ state: "no_access" }, [])} />);
+    expect(container.textContent).toBe("");
+    cleanup();
+    render(<KpiStrip laneId="PKG" canConnect tiles={kpiTiles({ state: "no_access" }, ALL_FEEDS)} />);
+    expect(tilesOf().map((t) => t.getAttribute("data-kpi"))).toEqual(["mrr", "subscribers"]);
+    expect(screen.getByTestId("home-kpis").className).toMatch(/lg:grid-cols-2/);
+    expect(document.body.textContent).not.toMatch(/Cash|Book balance|AR > 30|P&L|\$/);
+  });
+
+  it("a QuickBooks outage still shows its three tiles as plain notes (the connection is unknown, not absent)", () => {
+    render(<KpiStrip laneId="PKG" tiles={kpiTiles({ state: "unavailable" }, [{ provider: "stripe", status: "active" }, { provider: "ghl", status: "active" }])} />);
+    expect(screen.getAllByText("Could not load. Reload in a minute.")).toHaveLength(3);
+    const [, , , mrr] = tilesOf() as HTMLElement[];
+    expect(mrr?.getAttribute("data-status")).toBe("no_data"); // connected feed, no read yet: waiting
+    expect(mrr?.textContent).toContain("Waiting for the Stripe sync");
+  });
+
+  it("tiles have the same height classes whether or not they carry a figure (equal heights)", () => {
+    render(<KpiStrip laneId="PKG" tiles={kpiTiles(toHomeFinance([okRow]), ALL_FEEDS)} />);
     const classes = tilesOf().map((t) => t.className);
     for (const c of classes) {
       expect(c).toContain(TILE_HEIGHT);
@@ -54,42 +101,7 @@ describe("KPI strip", () => {
     }
     expect(new Set(classes).size).toBe(1);
     expect(screen.getByTestId("home-kpis").className).toMatch(/items-stretch/);
-    // the same three rows everywhere: label, figure, note
     for (const t of tilesOf()) expect([...t.children].map((c) => c.tagName)).toHaveLength(3);
-  });
-
-  it("QuickBooks not connected: the three QuickBooks tiles offer Connect; no figure anywhere", () => {
-    render(<KpiStrip laneId="PKG" canConnect tiles={kpiTiles(toHomeFinance([{ state: "not_connected" }]), [{ provider: "quickbooks", status: "active" }])} />);
-    expect(tilesOf().every((t) => t.getAttribute("data-status") === "not_connected")).toBe(true);
-    expect(screen.getAllByRole("link", { name: "Connect" })).toHaveLength(5);
-    expect(document.body.textContent).not.toMatch(/\$/);
-  });
-
-  it("a role without the finance view gets no finance tile, figure or value: only MRR and Paid subscribers, in a two-column strip", () => {
-    render(<KpiStrip laneId="PKG" canConnect tiles={kpiTiles({ state: "no_access" }, [{ provider: "quickbooks", status: "active" }])} />);
-    expect(tilesOf().map((t) => t.getAttribute("data-kpi"))).toEqual(["mrr", "subscribers"]);
-    expect(screen.getByTestId("home-kpis").className).toMatch(/lg:grid-cols-2/);
-    expect(document.body.textContent).not.toMatch(/Cash|Book balance|AR > 30|P&L|\$/);
-  });
-
-  it("a caller who cannot see feeds never gets 'Not connected · Connect'; an outage and a connected feed are plain notes", () => {
-    render(<KpiStrip laneId="PKG" canConnect tiles={kpiTiles({ state: "no_access" }, [])} />);
-    expect(screen.queryByRole("link", { name: "Connect" })).toBeNull();
-    expect(document.body.textContent).not.toContain("Not connected");
-    expect(screen.getAllByText("Not available yet")).toHaveLength(2);
-    cleanup();
-    render(<KpiStrip laneId="PKG" tiles={kpiTiles({ state: "unavailable" }, [{ provider: "stripe", status: "active" }, { provider: "ghl", status: "active" }])} />);
-    expect(screen.getAllByText("Could not load. Reload in a minute.")).toHaveLength(3);
-    const [, , , mrr] = tilesOf() as HTMLElement[];
-    expect(mrr?.getAttribute("data-status")).toBe("no_data"); // connected feed, no read yet: waiting, not "not connected"
-    expect(mrr?.textContent).toContain("Waiting for the Stripe sync");
-  });
-
-  it("the Connect link is offered only to owner / admin_technical (canConnect); others see 'Not connected' without a link", () => {
-    const tiles = kpiTiles(toHomeFinance([{ state: "not_connected" }]), [{ provider: "quickbooks", status: "active" }]);
-    render(<KpiStrip laneId="PKG" tiles={tiles} />);
-    expect(screen.queryByRole("link", { name: "Connect" })).toBeNull();
-    expect(screen.getAllByText("Not connected")).toHaveLength(5);
   });
 
   it("figures carry their caveats (rule 7): unmapped accounts and invoices, payroll, and the P&L month", () => {

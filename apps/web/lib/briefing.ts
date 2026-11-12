@@ -14,6 +14,7 @@ import {
   dayWindow,
   localDate,
   notableAhead,
+  summarizeAhead,
   PUBLIC_MAIL_DOMAINS,
   splitByDay,
   parseCoverageRows,
@@ -38,7 +39,7 @@ const DAY_MS = 86_400_000;
 
 export type BriefingConfig = LaneConfig["briefing"];
 
-export type CalendarSection = { access: true; today: DayEvent[]; ahead: NotableEvent[]; owners: string[] } | { access: false; unavailable?: true };
+export type CalendarSection = { access: true; today: DayEvent[]; ahead: NotableEvent[]; /** All meetings in the next 7 days (not only the notable ones), for the header summary. */ aheadSummary?: { meetings: number; clashes: number }; owners: string[] } | { access: false; unavailable?: true };
 
 /** "Needs your attention" + Money from mail metadata; `access: false` when the caller may not read the lane's mail. */
 export type MailSection =
@@ -114,7 +115,7 @@ export async function loadBriefing(client: Db, laneId: string, now: Date, viewer
   if (calendarAccess && events.error) calendar = { access: false, unavailable: true };
   else if (calendarAccess) {
     const split = splitByDay(parseEvents(events.data), from, to, localDate(from, viewerTz), 7);
-    calendar = { access: true, today: analyzeDay(split.today, owners, internal), ahead: notableAhead(split.later, owners, internal), owners: [...owners] };
+    calendar = { access: true, today: analyzeDay(split.today, owners, internal), ahead: notableAhead(split.later, owners, internal), aheadSummary: summarizeAhead(split.later, owners), owners: [...owners] };
   }
   let mail: MailSection = { access: false };
   if (mailAccess && threads.error) mail = { access: false, unavailable: true };

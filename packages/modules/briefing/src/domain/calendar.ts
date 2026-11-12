@@ -145,7 +145,10 @@ export function notableAhead(events: BriefEvent[], owners: ReadonlySet<string>, 
     if (isHoliday(e)) why.push("Holiday");
     else if (e.allDay) why.push("All day");
     const ext = externalAttendees(e, owners, internalDomains);
-    if (ext.length > 0) why.push(`External: ${ext.slice(0, 2).join(", ")}${ext.length > 2 ? ` +${String(ext.length - 2)}` : ""}`);
+    if (ext.length > 0) {
+      const names = ext.slice(0, 2).map((a) => attendeeName(a, e));
+      why.push(`External: ${names.join(", ")}${ext.length > 2 ? ` +${String(ext.length - 2)}` : ""}`);
+    }
     if (resp === "needs_action") why.push("RSVP pending");
     if (why.length > 0) out.push({ ...e, why });
     if (out.length >= limit) break;
@@ -153,12 +156,68 @@ export function notableAhead(events: BriefEvent[], owners: ReadonlySet<string>, 
   return out;
 }
 
-/** "Anna Lee, bob@x.com +3" (names first; at most `max`). */
+/** Calendar resources (rooms) and Google's own addresses are not people. */
+const isResource = (email: string) => email.endsWith("calendar.google.com");
+
+/** "dana.whitfield@x.com" -> "Dana Whitfield". Never the address itself. */
+export function nameFromEmail(email: string): string {
+  const local = (email.split("@")[0] ?? "").replace(/\+.*$/, "");
+  const words = local.split(/[._\-\s]+/).filter((w) => w !== "");
+  if (words.length === 0) return "Guest";
+  return words.map((w) => w.charAt(0).toUpperCase() + w.slice(1).toLowerCase()).join(" ");
+}
+
+/** The display name of an attendee address on an event: its name when it has one (and it is not itself an address), else the capitalised local part. */
+function attendeeName(email: string, e: BriefEvent): string {
+  const a = e.attendees.find((x) => x.email === email);
+  const n = a?.name?.trim();
+  return n && !n.includes("@") ? n : nameFromEmail(email);
+}
+
+/** Attendee names (never addresses), the owner's mailboxes and resources excluded: at most `max`, plus how many more. */
+export function attendeeNames(e: BriefEvent, owners: ReadonlySet<string>, max = 3): { names: string[]; more: number } {
+  const others = e.attendees.filter((a) => !owners.has(a.email) && !isResource(a.email));
+  return { names: others.slice(0, max).map((a) => attendeeName(a.email, e)), more: Math.max(0, others.length - max) };
+}
+
+/** "Anna Lee, Bob Smith, Cy Wu +2 more" (names, never addresses; at most `max`). */
 export function attendeeSummary(e: BriefEvent, owners: ReadonlySet<string>, max = 3): string | null {
-  const others = e.attendees.filter((a) => !owners.has(a.email) && !a.email.endsWith("calendar.google.com"));
-  if (others.length === 0) return null;
-  const shown = others.slice(0, max).map((a) => a.name ?? a.email);
-  return others.length > max ? `${shown.join(", ")} +${String(others.length - max)}` : shown.join(", ");
+  const { names, more } = attendeeNames(e, owners, max);
+  if (names.length === 0) return null;
+  return more > 0 ? `${names.join(", ")} +${String(more)} more` : names.join(", ");
+}
+
+export type EventChip = { key: "clash" | "rsvp" | "back_to_back" | "external"; label: string; /** Longer text for a tooltip / screen readers. */ detail: string };
+
+/** At most `max` chips, by priority: Clash, RSVP pending, Back-to-back, External. */
+export function eventChips(e: DayEvent, max = 2): EventChip[] {
+  const all: EventChip[] = [];
+  if (e.clashesWith.length > 0) all.push({ key: "clash", label: "Clash", detail: `Clashes with ${e.clashesWith.join(", ")}` });
+  if (e.rsvpPending) all.push({ key: "rsvp", label: "RSVP pending", detail: "You have not answered this invitation" });
+  if (e.backToBack) all.push({ key: "back_to_back", label: "Back-to-back", detail: "Starts right after the previous meeting" });
+  if (e.external.length > 0) all.push({ key: "external", label: "External", detail: "Has attendees outside your company" });
+  return all.slice(0, max);
+}
+
+/** Meetings (timed, not declined) in the events and the number of clashing pairs among them. All-day events are not meetings. */
+export function summarizeAhead(events: BriefEvent[], owners: ReadonlySet<string>): { meetings: number; clashes: number } {
+  const timed = events.filter((e) => !e.allDay && ownResponse(e, owners) !== "declined");
+  let clashes = 0;
+  for (let i = 0; i < timed.length; i++) {
+    for (let j = i + 1; j < timed.length; j++) {
+      const a = timed[i] as BriefEvent;
+      const b = timed[j] as BriefEvent;
+      if (Date.parse(a.startAt) < Date.parse(b.endAt) && Date.parse(b.startAt) < Date.parse(a.endAt)) clashes++;
+    }
+  }
+  return { meetings: timed.length, clashes };
+}
+
+/** "12 meetings, 2 clashes" / "1 meeting" / "No meetings". */
+export function aheadSummaryText(s: { meetings: number; clashes: number }): string {
+  if (s.meetings === 0) return "No meetings";
+  const m = `${String(s.meetings)} ${s.meetings === 1 ? "meeting" : "meetings"}`;
+  return s.clashes > 0 ? `${m}, ${String(s.clashes)} ${s.clashes === 1 ? "clash" : "clashes"}` : m;
 }
 
 /** Mail providers whose domain says nothing about who is a colleague (never treated as internal). */

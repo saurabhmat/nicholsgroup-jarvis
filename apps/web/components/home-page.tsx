@@ -171,5 +171,5 @@ async function HomeSections({ laneId, now }: { laneId: string; now: Date }) {
 /** Row 2 in its own boundary: a slow QuickBooks read (core.home_finance) never holds the rest of Home back (T-230 A). */
 async function KpiSection({ laneId, feeds, canConnect }: { laneId: string; feeds: HomeView["feeds"]; canConnect: boolean }) {
   const finance = await timed("load.home_finance", async () => homeFinanceFor(await guards(), laneId));
-  return <KpiStrip laneId={laneId} tiles={kpiTiles(finance, feeds)} canConnect={canConnect} />;
+  return <KpiStrip laneId={laneId} tiles={kpiTiles(finance, feeds)} canConnect={canConnect && finance.state !== "no_access"} />; // the banner talks about finance: not for a role without that view
 }

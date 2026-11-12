@@ -177,6 +177,8 @@ export type HomeKpi = {
   statusText: string;
   /** True when the source is not connected (or needs reconnecting): the tile offers a Connect link instead of waiting. */
   connect: boolean;
+  /** A feed of this source exists (not disconnected): only then does Home show its tile (T-235 part 4). */
+  connected: boolean;
 };
 
 /**
@@ -195,12 +197,14 @@ export function homeKpis(feeds: HomeView["feeds"]): HomeKpi[] {
       label: "MRR",
       statusText: text(["stripe"], "Stripe", "Waiting for the Stripe sync", "Stripe not connected yet"),
       connect: visible && !(of("stripe").length > 0 && !broken(["stripe"])),
+      connected: of("stripe").length > 0,
     },
     {
       key: "subscribers",
       label: "Paid subscribers",
       statusText: text(["ghl", "gohighlevel"], "GoHighLevel", "Waiting for the GoHighLevel sync", "GoHighLevel not connected yet"),
       connect: visible && !(of("ghl", "gohighlevel").length > 0 && !broken(["ghl", "gohighlevel"])),
+      connected: of("ghl", "gohighlevel").length > 0,
     },
   ];
 }

@@ -10,8 +10,25 @@ export const TILE_HEIGHT = "min-h-[9rem]";
 // Static class names (Tailwind needs them whole): the strip fits its tiles, five in the normal case.
 const COLS: Record<number, string> = { 1: "sm:grid-cols-1 lg:grid-cols-1", 2: "sm:grid-cols-2 lg:grid-cols-2", 3: "sm:grid-cols-3 lg:grid-cols-3", 4: "sm:grid-cols-2 lg:grid-cols-4", 5: "sm:grid-cols-3 lg:grid-cols-5" };
 
-/** `canConnect`: only owner / admin_technical get the Connect link (others see the note without it). One column on a phone. */
+export const NONE_CONNECTED_TEXT = "Connect QuickBooks, Stripe and GoHighLevel to see cash, AR, P&L, MRR and subscribers";
+
+/**
+ * Tiles only for connected sources, filling the row equally (one column on a phone). With none: one slim banner with a
+ * Settings link for owner / admin_technical (`canConnect`); any other role sees nothing (they cannot connect anything and a
+ * banner they cannot act on is noise; a role without finance access must not be told about finance figures at all).
+ */
 export function KpiStrip({ laneId, tiles, canConnect = false }: { laneId: string; tiles: KpiTile[]; canConnect?: boolean }) {
+  if (tiles.length === 0) {
+    if (!canConnect) return null;
+    return (
+      <section aria-label="Key figures" data-testid="home-kpis-banner" className="flex flex-wrap items-center gap-x-2 gap-y-1 rounded-card border border-border bg-card px-4 py-2 text-small text-foreground shadow-card">
+        <span className="min-w-0">{NONE_CONNECTED_TEXT}</span>
+        <Link href={`${laneHref(laneId, "settings")}#connections`} className="shrink-0 font-medium text-primary underline underline-offset-2">
+          <span aria-hidden>{"\u2192 "}</span>Settings
+        </Link>
+      </section>
+    );
+  }
   return (
     <section aria-label="Key figures" data-testid="home-kpis" className={`grid grid-cols-1 items-stretch gap-4 ${COLS[tiles.length] ?? COLS[5] ?? ""}`}>
       {tiles.map((t) => (

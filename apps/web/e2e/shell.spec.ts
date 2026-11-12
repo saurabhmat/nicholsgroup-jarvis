@@ -58,7 +58,7 @@ test("a member sees the shell, a switcher with only the allowed lane, and a 404 
     await expect(page.getByRole("heading", { name: title, level: 2 })).toBeVisible();
   }
   await expect(page.getByRole("button", { name: /Next 7 days/ })).toHaveAttribute("aria-expanded", "false"); // T-234: collapsed by default
-  await expect(page.getByTestId("kpi-tile")).toHaveCount(5);
+  await expect(page.getByTestId("home-kpis-banner")).toBeVisible(); // T-235: nothing connected -> one banner, not five empty tiles
   await expect(page.getByRole("link", { name: "Ask Jarvis" })).toHaveAttribute("href", "/PKG/assistant");
   if (isMobile) {
     const band = page.locator("[data-slot=mobile-header]");
