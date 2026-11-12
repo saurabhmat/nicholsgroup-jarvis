@@ -1,16 +1,17 @@
 -- T-235 part 1: automatic AI summary. brief.briefing_runs tracks every attempt to prepare a briefing (one row per claim) so the
 -- app can start a background run when the owner opens Home and the latest briefing is old, without a Run button, and still
 -- hold a hard cost bound: at most 6 runs per lane per New York day (auto + regenerate + manual + schedule all count; claims closed
--- as 'lost', i.e. that never produced a result because the app crashed or released them, do NOT count), one run at a time per
+-- as 'lost' count too: a released or crashed run may already have paid for a model call), one run at a time per
 -- lane, a 10-minute pause after an auto/regenerate/manual attempt, and one Regenerate per 30 minutes.
 --
 -- Claim kinds: auto (Home opened, latest briefing older than 3 hours), regenerate (the owner's menu item), manual (kept for
 -- older rows and direct owner saves), schedule (the 06:30 job; counts toward the cap but is never blocked by it or by auto runs).
 -- The claim functions RETURN a gate code instead of raising ({id, gate}), so the closing of a lost claim (open for more than
--- 10 minutes -> lost) is committed even when the claim is then refused (T-234 part 4 re-check M1). A lost claim is not counted
+-- 10 minutes -> lost) is committed even when the claim is then refused (T-234 part 4 re-check M1). A lost claim IS counted
 -- toward the cap; this is bounded by the one-running gate (2 min) and the 10-minute auto pause, so a crash loop cannot run away.
 -- The run state and the cap are lane-wide by design (one cost cap per lane, whichever owner opens Home).
--- A schedule claim is idempotent per lane + owner + New York day: an Inngest retry reuses it instead of adding a row.
+-- A schedule claim: a running one is reused by an Inngest retry; a day with a finished run answers 'done'; a retry after a
+-- failure adds a new, counted claim.
 -- The run's save marks the claim finished: core.briefing_save_own (owner) and core.briefing_save (job) close the caller's open
 -- claims. While an owner's claim is open, core.briefing_save_own skips its 2-minute cooldown (the claim gates are stricter and
 -- already passed); without a claim the 2-minute cooldown is unchanged.
@@ -90,17 +91,25 @@ begin
     raise exception 'lane is not enabled' using errcode = '22023';
   end if;
   perform pg_catalog.pg_advisory_xact_lock(pg_catalog.hashtextextended('brief.briefing_runs:' || p_lane, 0));
-  -- A claim open for more than 10 minutes was lost (crash, timeout): close it as lost (not counted toward the cap). Committed
+  -- A claim open for more than 10 minutes was lost (crash, timeout): close it as lost (still counted toward the cap). Committed
   -- step: every refusal below returns normally instead of raising.
   update brief.briefing_runs r set status = 'lost', finished_at = pg_catalog.clock_timestamp()
    where r.lane_id = p_lane and r.status = 'running' and r.started_at < pg_catalog.clock_timestamp() - interval '10 minutes';
   if p_kind = 'schedule' then
-    -- Idempotent per lane + owner + New York day (an Inngest retry reuses the claim, open or finished).
+    -- Per lane + owner + New York day (T-235 part 1 re-check M1): an Inngest retry reuses a claim that is still RUNNING; a
+    -- day that already has a finished ('done') schedule run answers gate 'done' (the job skips); after a failed or lost run a
+    -- retry inserts a NEW claim, so every model attempt counts toward the cap.
     select r.id into v_id from brief.briefing_runs r
-     where r.lane_id = p_lane and r.owner_user_id = p_uid and r.kind = 'schedule' and r.day = v_today and r.status <> 'lost'
+     where r.lane_id = p_lane and r.owner_user_id = p_uid and r.kind = 'schedule' and r.day = v_today and r.status = 'running'
      order by r.started_at limit 1;
     if v_id is not null then
       return pg_catalog.jsonb_build_object('id', v_id, 'gate', null);
+    end if;
+    select r.id into v_id from brief.briefing_runs r
+     where r.lane_id = p_lane and r.owner_user_id = p_uid and r.kind = 'schedule' and r.day = v_today and r.status = 'done'
+     order by r.started_at limit 1;
+    if v_id is not null then
+      return pg_catalog.jsonb_build_object('id', v_id, 'gate', 'done');
     end if;
   else
     if p_kind = 'auto' and exists (select 1 from brief.briefings b where b.lane_id = p_lane and b.owner_user_id = p_uid and b.status <> 'failed'
@@ -110,7 +119,9 @@ begin
     if exists (select 1 from brief.briefing_runs r where r.lane_id = p_lane and r.status = 'running' and r.started_at > pg_catalog.clock_timestamp() - interval '2 minutes') then
       return pg_catalog.jsonb_build_object('id', null, 'gate', 'running');
     end if;
-    if (select count(*) from brief.briefing_runs r where r.lane_id = p_lane and r.day = v_today and r.status <> 'lost') >= 6 then
+    -- Every claim of the day counts, lost ones too (T-235 part 1 re-check H1): a released or crashed run may already have
+    -- paid for a model call, so the 6 per lane and day stay a hard bound.
+    if (select count(*) from brief.briefing_runs r where r.lane_id = p_lane and r.day = v_today) >= 6 then
       return pg_catalog.jsonb_build_object('id', null, 'gate', 'cap_reached');
     end if;
     if p_kind = 'regenerate' and exists (select 1 from brief.briefing_runs r where r.lane_id = p_lane and r.kind = 'regenerate'
@@ -127,7 +138,7 @@ begin
 end;
 $$;
 comment on function brief.briefing_claim(text, uuid, text) is
-  'T-235: claims one briefing run: stale (auto: latest briefing older than 3 h), one running per lane (2 min), 6 per lane and New York day (lost claims not counted), Regenerate once per 30 min, 10 min pause after an auto/regenerate/manual attempt. A schedule claim is never gated and is idempotent per owner and day. Returns {id, gate}. Definer wrappers only.';
+  'T-235: claims one briefing run: stale (auto: latest briefing older than 3 h), one running per lane (2 min), 6 per lane and New York day (every claim counts, lost ones too), Regenerate once per 30 min, 10 min pause after an auto/regenerate/manual attempt. A schedule claim is never gated by the cap; a running one is reused, a finished day answers gate done, a failed retry adds a counted claim. Returns {id, gate}. Definer wrappers only.';
 revoke all on function brief.briefing_claim(text, uuid, text) from public, anon, authenticated, service_role;
 
 -- The owner's wrappers: AAL2 + lane owner + briefing view (same checks as core.briefing_save_own).
@@ -178,7 +189,7 @@ revoke all on function core.briefing_claim_regenerate(text) from public, anon, s
 grant execute on function core.briefing_claim_regenerate(text) to authenticated;
 
 -- The app could not start a claimed run (an error between the claim and the background run): the caller releases their OWN open
--- claim, closed as 'lost' (not counted toward the cap), so no claim leaks. Owner, AAL2, briefing view; only the caller's own row.
+-- claim, closed as 'lost' (it still counts toward the daily cap: a model call may have been paid), so no claim leaks. Owner, AAL2, briefing view; only the caller's own row.
 create or replace function core.briefing_claim_release(p_lane text, p_claim uuid)
 returns boolean
 language plpgsql
@@ -202,14 +213,17 @@ begin
 end;
 $$;
 comment on function core.briefing_claim_release(text, uuid) is
-  'T-235: the claiming owner (AAL2, briefing view) releases their own open claim when the run could not be started; closed as lost, not counted toward the daily cap.';
+  'T-235: the claiming owner (AAL2, briefing view) releases their own open claim; closed as lost, still counted toward the daily cap (re-check H1).';
 revoke all on function core.briefing_claim_release(text, uuid) from public, anon, service_role;
 grant execute on function core.briefing_claim_release(text, uuid) to authenticated;
 
 -- The 06:30 job (service_role): records the run; counts toward the cap, is never refused by it. The owner must still hold the
 -- owner role and the briefing view (the same re-check as the briefings guard).
-create or replace function core.briefing_claim_schedule(p_lane text, p_owner uuid)
-returns uuid
+-- Returns {id, gate} (gate 'done' when today already has a finished scheduled run). The return type changed from uuid, so the
+-- function is dropped first (re-runnable; grants follow below).
+drop function if exists core.briefing_claim_schedule(text, uuid);
+create function core.briefing_claim_schedule(p_lane text, p_owner uuid)
+returns jsonb
 language plpgsql
 security definer
 set search_path = ''
@@ -221,7 +235,7 @@ begin
     raise exception 'not allowed' using errcode = '42501';
   end if;
   v_res := brief.briefing_claim(p_lane, p_owner, 'schedule');
-  return (v_res ->> 'id')::uuid;
+  return v_res;
 end;
 $$;
 comment on function core.briefing_claim_schedule(text, uuid) is
@@ -249,13 +263,13 @@ begin
   return query
   select exists (select 1 from brief.briefing_runs r where r.lane_id = p_lane and r.status = 'running' and r.started_at > pg_catalog.clock_timestamp() - interval '2 minutes'),
          (select max(r.started_at) from brief.briefing_runs r where r.lane_id = p_lane and r.kind = 'regenerate'),
-         (select count(*)::integer from brief.briefing_runs r where r.lane_id = p_lane and r.day = v_today and r.status <> 'lost'),
+         (select count(*)::integer from brief.briefing_runs r where r.lane_id = p_lane and r.day = v_today),
          (select max(b.prepared_at) from brief.briefings b where b.lane_id = p_lane and b.owner_user_id = v_uid and b.status <> 'failed'),
          (select max(b.prepared_at) from brief.briefings b where b.lane_id = p_lane and b.owner_user_id = v_uid);
 end;
 $$;
 comment on function core.briefing_run_state(text) is
-  'T-235: for the lane owner (AAL2, briefing view): a run is open (2 min), the last Regenerate, runs today (New York day, lost claims not counted; lane-wide by design), the caller''s newest non-failed and newest briefing times. No row for anyone else.';
+  'T-235: for the lane owner (AAL2, briefing view): a run is open (2 min), the last Regenerate, runs today (New York day, every claim incl. lost; lane-wide by design), the caller''s newest non-failed and newest briefing times. No row for anyone else.';
 revoke all on function core.briefing_run_state(text) from public, anon, service_role;
 grant execute on function core.briefing_run_state(text) to authenticated;
 

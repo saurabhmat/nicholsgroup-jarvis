@@ -566,7 +566,7 @@ isOneToOne: false
 { Args: { "p_claim": string,"p_lane": string }; Returns: boolean
                            },
 "briefing_claim_schedule":
-{ Args: { "p_lane": string,"p_owner": string }; Returns: string
+{ Args: { "p_lane": string,"p_owner": string }; Returns: Json
                            },
 "briefing_coverage":
 { Args: { "p_lane": string }; Returns: {

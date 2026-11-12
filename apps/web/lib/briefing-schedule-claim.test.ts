@@ -18,7 +18,7 @@ const client = {
 
 beforeEach(() => {
   vi.clearAllMocks();
-  m.rpc.mockResolvedValue({ data: "claim-1", error: null });
+  m.rpc.mockResolvedValue({ data: { id: "claim-1", gate: null }, error: null });
   m.run.mockResolvedValue({ id: "b1", status: "ready" });
 });
 
@@ -27,6 +27,11 @@ describe("runScheduled", () => {
     await expect(runScheduled(async () => client as never, "PKG", "owner-1", new Date())).resolves.toBe("b1");
     expect(m.rpc).toHaveBeenCalledWith("briefing_claim_schedule", { p_lane: "PKG", p_owner: "owner-1" });
     expect(m.rpc.mock.invocationCallOrder[0]).toBeLessThan(m.run.mock.invocationCallOrder[0] ?? 0);
+  });
+  it("a day with a finished scheduled run answers 'done': a retry skips the model call (re-check M1)", async () => {
+    m.rpc.mockResolvedValueOnce({ data: { id: "claim-0", gate: "done" }, error: null });
+    await expect(runScheduled(async () => client as never, "PKG", "owner-1", new Date())).resolves.toBe("claim-0");
+    expect(m.run).not.toHaveBeenCalled();
   });
   it("a claim that cannot be recorded (error or throw) never stops the briefing", async () => {
     const err = vi.spyOn(console, "error").mockImplementation(() => undefined);

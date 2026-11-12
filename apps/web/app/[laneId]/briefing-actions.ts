@@ -11,7 +11,7 @@
 // (while cookies are available, 1.5 s limit; every lane client it needs is resolved through requireLane in that window, never
 // the current lane's client for another lane) -> the run goes into Next's after(): the action returns {started: true} at once
 // and the page is never blocked. Whatever fails between the claim and after() releases the claim (core.briefing_claim_release,
-// closed as lost, not counted toward the cap), so no claim leaks. The run reuses runBriefingBounded: a 60 s abort whose timer
+// closed as lost; it still counts toward the daily cap), so no claim leaks. The run reuses runBriefingBounded: a 60 s abort whose timer
 // starts at the action's start (the brain load is inside the budget), single-flight, coded failure reasons; its save through
 // core.briefing_save_own closes the claim. Home's maxDuration (90 s) covers the action and the after().
 // The run state and the cap are lane-wide by design: one cost cap per lane, whichever owner opens Home.
