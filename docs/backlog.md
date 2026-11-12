@@ -1109,7 +1109,7 @@ Spec: `docs/specs/brain-and-employees.md`, `docs/specs/brain-interview.md`; seed
 ## Phase B1 — Rollout and specs
 
 ### T-235 Home polish (from Saurabh's production review)
-- status: approved
+- status: done
 - depends: T-234
 - note: approved by Saurabh Nov 12, 2026 (autonomous run). Brief verbatim in `.agent/tasks/T-235-brief.md`. Branch agent/T-235 from agent/T-234; full reviews; commit per part; production SQL (schema-qualified, one script) in the checkpoint.
 - acceptance: (1) briefing via structured output + Zod + one retry, failure reason logged without content; Run now removed; auto-generation on schedule and on owner visit when older than 3 h (max 6/day per lane, non-blocking, never from auto-refresh), "Updating summary..." with the previous summary visible; owner "Regenerate" in a menu (1 per 30 min); "Summary at <time>". (2) "Today at a glance" panel and the new attention row layout (avatar, name, domain, age; subject; why -> next; max 2 chips; Reply + Open; whole row opens; mailbox hidden with one mailbox; "View all in Inbox (N)"). (3) compact calendar (time column, names not emails, max 2 chips, small Join, title links to the event; Next 7 days summary line). (4) KPI tiles only for connected sources, one banner when none. (5) typography and spacing per the brief, docs/design/README.md updated; slim news and projects cards when off. (6) unit + e2e, axe light/dark, iPhone no sideways scroll, before/after screenshots at 1440, 1920 and iPhone.
