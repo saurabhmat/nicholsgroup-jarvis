@@ -4,6 +4,7 @@
 // text is rendered as React text only. States: "News not configured" (off; a Settings hint for admins), "No news yet today",
 // "News could not be fetched: <fixed reason>"; the owner also gets Refresh (once an hour; "Monthly news budget reached" when capped).
 import Link from "next/link";
+import { httpsUrl } from "@nichols/briefing/domain";
 import { laneHref, PageSection } from "@nichols/ui";
 import { NewsRefresh } from "./news-refresh";
 import { newsFailureText, registrableHost, type NewsCard, type NewsItem } from "@/lib/news-types";
@@ -30,7 +31,7 @@ export function newsTime(iso: string, tz: string, now: Date): string {
 }
 
 const storyDate = (iso: string | null, tz: string) => (iso ? new Intl.DateTimeFormat("en-US", { timeZone: safeZone(tz), month: "short", day: "numeric" }).format(new Date(iso)) : null);
-const httpsOnly = (u: string) => /^https:\/\//i.test(u);
+const httpsOnly = (u: string) => httpsUrl(u) !== null;
 
 /** Source name, where the link REALLY goes (its registrable host; "via host" when outside the lane's preferred domains) and the date. */
 export function newsMeta(n: NewsItem, tz: string): string {

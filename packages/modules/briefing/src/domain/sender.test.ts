@@ -6,11 +6,15 @@ describe("senderParts", () => {
     expect(senderParts("Dana Whitfield", "Dana@www.acme.test")).toMatchObject({ name: "Dana Whitfield", company: "acme.test", initials: "DW" });
     expect(senderParts("Dana Whitfield", "dana@www.acme.test").company).toBe("acme.test");
   });
-  it("the organisation part of the display name wins", () => {
-    expect(senderParts("Dana Whitfield (Acme Corp)", "dana@acme.test")).toMatchObject({ name: "Dana Whitfield", company: "Acme Corp" });
-    expect(senderParts("Dana Whitfield | Acme Corp", "dana@acme.test")).toMatchObject({ name: "Dana Whitfield", company: "Acme Corp" });
-    expect(senderParts("Dana Whitfield - Acme Corp", null)).toMatchObject({ name: "Dana Whitfield", company: "Acme Corp" });
-    expect(senderParts("Jean-Luc Picard", "jl@starfleet.test")).toMatchObject({ name: "Jean-Luc Picard", company: "starfleet.test" }); // a hyphen inside a name is not a separator
+  it("the company slot is ALWAYS the address domain, never parsed from the display name (rule 9)", () => {
+    expect(senderParts("Dana Whitfield (Acme Corp)", "dana@acme.test")).toMatchObject({ name: "Dana Whitfield (Acme Corp)", company: "acme.test" });
+    expect(senderParts("CEO (nicholsgroup.com)", "x@evil.test").company).toBe("evil.test");
+    expect(senderParts("Billing - paypal.com", "x@evil.test").company).toBe("evil.test");
+    expect(senderParts("Dana Whitfield | Acme Corp", null).company).toBeNull();
+    expect(senderParts("Jean-Luc Picard", "jl@starfleet.test")).toMatchObject({ name: "Jean-Luc Picard", company: "starfleet.test" });
+  });
+  it("the domain is taken from the LAST @", () => {
+    expect(senderParts("x", '"a@paypal.com"@evil.test').company).toBe("evil.test");
   });
   it("no name: the local part, capitalised (a role mailbox unchanged); no address: Unknown sender", () => {
     expect(senderParts(null, "dana.whitfield@acme.test")).toMatchObject({ name: "Dana Whitfield", initials: "DW" });

@@ -69,11 +69,25 @@ test("owner: today's calendar, Next 7 days, the KPI strip and the rule-based att
   await expect(attention.getByTestId("attention-company").first()).toContainText("example.test");
   await expect(attention.getByTestId("attention-mailbox")).toHaveCount(0);
   await expect(attention.getByRole("region", { name: "Today at a glance" })).toBeVisible();
-  await expect(attention.getByTestId("attention-view-all")).toContainText(/^View all in Inbox \(\d+\)/);
+  await expect(attention.getByTestId("attention-view-all")).toContainText(/^View all in Inbox · \d+ need attention/);
   // T-234 part 2: each item has Reply and Open; Open goes to the thread in Jarvis (never a Google page).
   const firstItem = attention.getByTestId("attention-item").first();
   await expect(firstItem.getByRole("link", { name: "Reply" })).toBeVisible();
   await expect(firstItem.getByTestId("attention-open")).toHaveAttribute("href", /^\/PKG\/inbox\/[A-Za-z0-9_-]+$/);
+  // Reply sits above the stretched link: for the owner (a button) a click opens the drawer and the URL is unchanged; for a role
+  // that cannot send, Reply is a plain link to the same thread as Open.
+  const homeUrl = page.url();
+  const replyEl = firstItem.getByTestId("attention-reply");
+  if ((await replyEl.evaluate((n) => n.tagName)) === "BUTTON") {
+    await replyEl.click();
+    await expect(page.getByRole("dialog")).toBeVisible();
+    expect(page.url()).toBe(homeUrl);
+    await page.keyboard.press("Escape");
+  } else {
+    await replyEl.click();
+    await expect(page).toHaveURL(/\/PKG\/inbox\/[A-Za-z0-9_-]+$/);
+    await page.goBack();
+  }
   // The whole row opens the thread (stretched link): clicking the subject text, not the Open link, navigates.
   await firstItem.getByTestId("attention-subject").click();
   await expect(page).toHaveURL(/\/PKG\/inbox\/[A-Za-z0-9_-]+$/);
@@ -133,8 +147,14 @@ test("phone: the KPI banner fits 390 px (no horizontal scroll)", async ({ page }
   test.skip(info.project.name === "desktop", "phone viewport only");
   test.setTimeout(150_000);
   await signIn(page, personas(info).member);
+  seed();
   await page.goto("/PKG");
   await expect(page.getByRole("heading", { level: 1 })).toBeVisible({ timeout: 30_000 });
+  // T-235: Reply and Open are at least 44 px high on a phone.
+  const row = page.getByTestId("attention-item").first();
+  await expect(row).toBeVisible({ timeout: 30_000 });
+  for (const el of [row.getByTestId("attention-reply"), row.getByTestId("attention-open")]) expect((await el.boundingBox())?.height ?? 0).toBeGreaterThanOrEqual(44);
+  expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
   // Nothing connected: the member (owner) sees the slim banner, never five empty tiles; tiles, if any, are one column.
   await expect(page.getByTestId("kpi-tile")).toHaveCount(0);
   await expect(page.getByTestId("home-kpis-banner")).toBeVisible();

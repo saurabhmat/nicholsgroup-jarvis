@@ -87,7 +87,7 @@ export function parseEvents(rows: unknown): BriefEvent[] {
   });
 }
 
-const domainOf = (email: string) => email.split("@")[1]?.toLowerCase() ?? "";
+const domainOf = (email: string) => (email.lastIndexOf("@") < 0 ? "" : email.slice(email.lastIndexOf("@") + 1).toLowerCase());
 
 export function ownResponse(e: BriefEvent, owners: ReadonlySet<string>): Attendee["response"] | "organizer" | null {
   const me = e.attendees.find((a) => owners.has(a.email));
@@ -108,7 +108,15 @@ export const isHoliday = (e: BriefEvent): boolean => /#holiday@group\.v\.calenda
  * events), RSVP-pending when the owner has not answered, and external attendees.
  */
 export function analyzeDay(events: BriefEvent[], owners: ReadonlySet<string>, internalDomains: ReadonlySet<string>): DayEvent[] {
-  const visible = events.filter((e) => ownResponse(e, owners) !== "declined");
+  // The same invitation can arrive once per connected calendar: show it once (same title and times), as summarizeAhead counts it.
+  const seen = new Set<string>();
+  const visible = events.filter((e) => {
+    if (ownResponse(e, owners) === "declined") return false;
+    const k = `${e.title}\u0000${e.startAt}\u0000${e.endAt}`;
+    if (seen.has(k)) return false;
+    seen.add(k);
+    return true;
+  });
   const timed = visible.filter((e) => !e.allDay).sort((a, b) => a.startAt.localeCompare(b.startAt) || a.endAt.localeCompare(b.endAt));
   return visible.map((e) => {
     const s = Date.parse(e.startAt);

@@ -73,6 +73,10 @@ describe("links and text", () => {
       expect(a.getAttribute("rel")).toBe("noopener noreferrer");
     }
   });
+  it("a story URL with credentials ('https://defense.gov@evil.test') is not rendered as a link", () => {
+    render_(card({ items: [{ headline: "Sneaky", why: "w", source: "S", publishedAt: null, url: "https://defense.gov@evil.test/x", preferred: false }] }));
+    expect(screen.queryByText("Sneaky")).toBeNull();
+  });
   it("shows where the link really goes (registrable host), 'via <host>' outside the preferred domains, whatever the model called the source", () => {
     const items = [
       { headline: "Official", why: "w", source: "Acquisition.gov", publishedAt: "2026-11-12T09:00:00Z", url: "https://www.acquisition.gov/far", preferred: true },

@@ -39,6 +39,12 @@ describe("calendar analysis", () => {
     expect(a && attendeeSummary(a, owners)).toBe("X Person");
   });
 
+  it("the same invitation from two calendars (same title and times) shows once and does not clash with itself", () => {
+    const day = analyzeDay(parseEvents([ev({ title: "Sync", event_id: "a", calendar_id: "c1" }), ev({ title: "Sync", event_id: "b", calendar_id: "c2" })]), owners, internal);
+    expect(day).toHaveLength(1);
+    expect(day[0]?.clashesWith).toEqual([]);
+  });
+
   it("all-day events never clash and are not back-to-back", () => {
     const day = analyzeDay(parseEvents([ev({ title: "Offsite", all_day: true, start_at: "2026-11-12T05:00:00Z", end_at: "2026-11-13T05:00:00Z" }), ev({ title: "A" })]), owners, internal);
     expect(day.find((e) => e.title === "Offsite")?.clashesWith).toEqual([]);

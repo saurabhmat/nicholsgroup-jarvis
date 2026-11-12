@@ -2,27 +2,18 @@
 // palette slot for the avatar. Pure; the inputs are untrusted message metadata and the outputs are plain text.
 import { nameFromEmail } from "./calendar";
 
-export type SenderParts = { name: string; /** Organisation from the display name, else the address domain without "www."; null when neither exists. */ company: string | null; initials: string; /** 0..palette-1 from a hash of the address (or the name): the same sender always gets the same colour. */ slot: number };
-
-/** "Dana Whitfield (Acme)", "Dana Whitfield | Acme", "Dana Whitfield - Acme": the part after the separator is the organisation. */
-const ORG = [/^(.+?)\s*\(([^()]{2,40})\)\s*$/, /^(.+?)\s+[|–—-]\s+(.{2,40})$/];
+export type SenderParts = { name: string; /** The domain of the sender ADDRESS (last "@", without "www."), never from the display name; null when there is no address. */ company: string | null; initials: string; /** 0..palette-1 from a hash of the address (or the name): the same sender always gets the same colour. */ slot: number };
 
 export function senderParts(fromName: string | null, fromAddress: string | null, palette = 4): SenderParts {
   const address = fromAddress?.trim().toLowerCase() || null;
+  // The display name is untrusted text (rule 9): it is shown as the name and never as the company or domain.
   let name = fromName?.trim().replace(/^["']|["']$/g, "") ?? "";
-  let org: string | null = null;
-  for (const re of ORG) {
-    const m = re.exec(name);
-    if (m?.[1] && m[2]) {
-      name = m[1].trim();
-      org = m[2].trim();
-      break;
-    }
-  }
   if (name.includes("@")) name = nameFromEmail(name);
   if (name === "") name = address ? nameFromEmail(address) : "Unknown sender";
-  const domain = address?.split("@")[1]?.replace(/^www\./, "") ?? "";
-  const company = org ?? (domain !== "" ? domain : null);
+  // The domain of the ADDRESS, from the last "@" ("a@paypal.com"@evil.test is evil.test), never parsed from the display name.
+  const at = address?.lastIndexOf("@") ?? -1;
+  const domain = address && at >= 0 ? address.slice(at + 1).replace(/^www\./, "") : "";
+  const company = domain !== "" ? domain : null;
   const words = name.split(/\s+/).flatMap((w) => Array.from(w).find((c) => /\p{L}/u.test(c)) ?? []);
   const initials = (words.length > 1 ? `${words[0] ?? ""}${words[words.length - 1] ?? ""}` : (words[0] ?? "?")).toUpperCase();
   const seed = address ?? name.toLowerCase();

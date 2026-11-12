@@ -12,8 +12,6 @@ import {
   aheadSummaryText,
   attendeeSummary,
   attentionChips,
-  BUSINESS_TZ,
-  formatDateTimeIn,
   senderParts,
   eventChips,
   formatDayIn,
@@ -43,6 +41,15 @@ function Chips({ e }: { e: DayEvent }) {
     </span>
   );
 }
+
+/** The host of an already-validated https URL, so the Join button says where it goes. */
+const hostOf = (u: string) => {
+  try {
+    return new URL(u).hostname.replace(/^www\./, "");
+  } catch {
+    return "the meeting host";
+  }
+};
 
 /** The title, a link to the event in the calendar (https only, new tab) when there is one; no separate "Open in Calendar". */
 function EventTitle({ title, url }: { title: string; url: string | null }) {
@@ -93,7 +100,7 @@ export function TodayCalendar({ calendar, tz, now }: { calendar: CalendarSection
               <span className="flex min-w-0 items-start justify-between gap-2">
                 <EventTitle title={e.title} url={e.calendarUrl} />
                 {e.meetingUrl && !past ? (
-                  <a href={e.meetingUrl} target="_blank" rel="noopener noreferrer" aria-label={`Join ${e.title}`} className={`${buttonVariants({ variant: "outline", size: "sm" })} shrink-0`}>
+                  <a href={e.meetingUrl} target="_blank" rel="noopener noreferrer" aria-label={`Join ${e.title} on ${hostOf(e.meetingUrl)}`} title={`Join on ${hostOf(e.meetingUrl)}`} className={`${buttonVariants({ variant: "outline", size: "sm" })} shrink-0`}>
                     Join
                   </a>
                 ) : null}
@@ -173,10 +180,17 @@ const CHIP_TONE = { alert: "alert", gold: "gold", outline: "outline" } as const;
  * and Reply sits above it (`relative z-[1]`). The keyboard path is Tab: Reply, then Open. The Reply drawer is portaled to
  * <body>, so it is outside the row. Hover background on desktop only.
  *
- * Footer: "View all in Inbox (N) ->" where N = the items the rules ranked (the rows shown plus `mail.more`), i.e. the threads
- * that currently need attention, not every message in the Inbox.
+ * Footer: "View all in Inbox · N need attention ->" where N = the items the rules ranked (the rows shown plus `mail.more`), i.e.
+ * the threads that currently need attention, not the Inbox size. It links to the plain Inbox: the Inbox filters are
+ * All / Unread / Priority, none of which is "needs attention", so a filtered link would show a different list than N.
+ *
+ * Tooltips: the row is covered by the Open link's ::after, so a `title` on the subject or the age is never reached by the
+ * pointer; they are dropped. The full subject is in Open's aria-label, the full sender address is sr-only text, and the age
+ * reads "3h ago" to screen readers. Focus: the ::after carries the ring plus a transparent outline, which Windows High Contrast
+ * (forced-colors) paints, so the focus stays visible there. The divider lines sit on the <li> (no horizontal bleed); only the
+ * hover ground and the focus ring bleed 8 px each side, into the card padding.
  */
-export function AttentionSection({ laneId, mail, now, tz = BUSINESS_TZ, notes, replies, canReply = false }: { laneId: string; mail: MailSection; now: Date; tz?: string; notes?: Map<string, AttentionNote>; replies?: Map<string, string>; canReply?: boolean }) {
+export function AttentionSection({ laneId, mail, now, notes, replies, canReply = false }: { laneId: string; mail: MailSection; now: Date; /** Kept for callers; the age no longer shows a date tooltip. */ tz?: string; notes?: Map<string, AttentionNote>; replies?: Map<string, string>; canReply?: boolean }) {
   if (!mail.access) {
     return mail.unavailable ? (
       <EmptyState title="Mail could not be read" description="Reload in a minute. Settings → Connections shows the last sync." className="border-0 bg-transparent px-0 py-6" />
@@ -192,7 +206,7 @@ export function AttentionSection({ laneId, mail, now, tz = BUSINESS_TZ, notes, r
   const total = mail.attention.length + mail.more;
   return (
     <div className="flex flex-col gap-3">
-      <ol data-testid="attention-list" className="flex flex-col divide-y divide-border">
+      <ol role="list" data-testid="attention-list" className="flex flex-col divide-y divide-border">
         {mail.attention.map((a) => {
           const t = a.thread;
           const note = notes?.get(`${t.connectionId}:${t.messageId}`);
@@ -200,8 +214,10 @@ export function AttentionSection({ laneId, mail, now, tz = BUSINESS_TZ, notes, r
           const who = senderParts(t.fromName, t.fromAddress, AVATAR.length);
           const subject = a.kind === "repeated_failures" ? a.reason : t.subject ? maskFigures(t.subject) : "(No subject)";
           const chips = attentionChips(a.kind, t.unreadCount > 0);
+          const age = ageShort(t.receivedAt, now);
           return (
-            <li key={a.key} data-testid="attention-item" data-kind={a.kind} className="relative -mx-2 flex flex-col gap-3 rounded-control px-2 py-4 md:flex-row md:items-center md:gap-4 md:hover:bg-muted/60">
+            <li key={a.key} data-testid="attention-item" data-kind={a.kind} className="group relative py-1">
+              <div className="-mx-2 flex flex-col gap-3 rounded-control px-2 py-3 md:flex-row md:items-center md:gap-4 md:group-hover:bg-muted/60">
               <div className="flex min-w-0 flex-1 flex-col gap-1.5">
                 <div className="flex min-w-0 items-center gap-2">
                   <span aria-hidden data-testid="attention-avatar" className={`flex size-8 shrink-0 items-center justify-center rounded-full text-small font-semibold ${AVATAR[who.slot] ?? AVATAR[0]}`}>
@@ -210,13 +226,14 @@ export function AttentionSection({ laneId, mail, now, tz = BUSINESS_TZ, notes, r
                   <span className="min-w-0 truncate text-body">
                     <span data-testid="attention-sender" className="font-semibold text-foreground">{who.name}</span>
                     {who.company ? <span data-testid="attention-company" className="text-muted-foreground">{` \u00b7 ${who.company}`}</span> : null}
+                    {t.fromAddress ? <span className="sr-only">{`, from ${t.fromAddress}`}</span> : null}
                   </span>
-                  <time data-testid="attention-age" dateTime={t.receivedAt} title={formatDateTimeIn(t.receivedAt, tz)} className="ml-auto shrink-0 text-small text-muted-foreground">
-                    {ageShort(t.receivedAt, now)}
-                    <span className="sr-only"> ago</span>
+                  <time data-testid="attention-age" dateTime={t.receivedAt} className="ml-auto shrink-0 text-small text-muted-foreground">
+                    {age}
+                    <span className="sr-only">{age === "now" ? "" : " ago"}</span>
                   </time>
                 </div>
-                <p data-testid="attention-subject" title={subject} className="truncate text-body font-medium text-foreground">
+                <p data-testid="attention-subject" className="truncate text-body font-medium text-foreground">
                   {subject}
                 </p>
                 {note && (note.why || note.next) ? (
@@ -227,10 +244,15 @@ export function AttentionSection({ laneId, mail, now, tz = BUSINESS_TZ, notes, r
                         {note.why}
                       </>
                     ) : null}
-                    {note.why && note.next ? <span aria-hidden>{" \u2192 "}</span> : null}
+                    {note.why && note.next ? (
+                      <>
+                        <span aria-hidden>{" \u2192 "}</span>
+                        <span className="sr-only"> </span>
+                      </>
+                    ) : null}
                     {note.next ? (
                       <>
-                        <span className="sr-only">. Next step: </span>
+                        <span className="sr-only">Next step: </span>
                         {note.next}
                       </>
                     ) : null}
@@ -257,17 +279,18 @@ export function AttentionSection({ laneId, mail, now, tz = BUSINESS_TZ, notes, r
                   href={inboxHref(laneId, t.messageId)}
                   data-testid="attention-open"
                   aria-label={`Open: ${subject}`}
-                  className="inline-flex items-center px-2 text-small font-medium text-primary underline-offset-2 after:absolute after:inset-0 after:rounded-control after:content-[''] hover:underline focus-visible:outline-none focus-visible:after:ring-2 focus-visible:after:ring-ring"
+                  className="inline-flex items-center px-2 text-small font-medium text-primary underline-offset-2 after:absolute after:inset-y-0 after:-inset-x-2 after:rounded-control after:content-[''] hover:underline focus-visible:outline-none focus-visible:after:outline focus-visible:after:outline-2 focus-visible:after:outline-transparent focus-visible:after:ring-2 focus-visible:after:ring-ring"
                 >
                   Open
                 </Link>
+              </div>
               </div>
             </li>
           );
         })}
       </ol>
       <Link href={laneHref(laneId, "inbox")} data-testid="attention-view-all" className="self-start py-1 text-small font-medium text-primary underline-offset-2 hover:underline max-md:inline-flex max-md:min-h-11 max-md:items-center">
-        View all in Inbox ({total}) <span aria-hidden>{"\u2192"}</span>
+        View all in Inbox {"\u00b7"} {total} need attention <span aria-hidden>{"\u2192"}</span>
       </Link>
     </div>
   );
