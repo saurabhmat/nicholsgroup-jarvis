@@ -12,6 +12,7 @@ import { FailureReason } from "./briefing-failure";
 import type { ReactNode } from "react";
 import { newsTime } from "./home-news";
 import { PersistedDetails } from "./home-scope";
+import { fieldText, sentencesText } from "@/lib/home-text";
 
 const STATUS: Record<SavedBriefingView["status"], { label: string; variant: "success" | "outline" | "alert" }> = {
   ready: { label: "Ready", variant: "success" },
@@ -43,8 +44,16 @@ const TOP_PRIORITIES = 3;
  * `failure`: why the newest attempt (or the AI setup) failed, a fixed code; `failureHint`: the admin hint, set server-side only for owner or admin_technical.
  */
 export function AiBriefing({ brief, fallbackLines, tz, controls = null, now = new Date(), failure = null, failureHint = null }: { laneId?: string; brief: SavedBriefingView | null; fallbackLines: string[]; tz: string; controls?: ReactNode; now?: Date; failure?: FailureCode | null; failureHint?: string | null }) {
-  const lines = brief && brief.status !== "failed" && brief.content.lines.length > 0 ? brief.content.lines : null;
-  const priorities = brief && brief.status !== "failed" ? brief.content.priorities.slice(0, TOP_PRIORITIES) : [];
+  // T-237: a line or sentence holding a masked-figure placeholder is dropped, never shown; raw ISO times become the viewer's time.
+  const shownLines = brief && brief.status !== "failed" ? brief.content.lines.flatMap((l) => sentencesText(l, tz) ?? []) : [];
+  const lines = shownLines.length > 0 ? shownLines : null;
+  const shownFallback = fallbackLines.flatMap((l) => sentencesText(l, tz) ?? []);
+  const priorities = (brief && brief.status !== "failed" ? brief.content.priorities : [])
+    .flatMap((p) => {
+      const text = fieldText(p.text, tz);
+      return text ? [{ text, reason: fieldText(p.reason, tz) }] : [];
+    })
+    .slice(0, TOP_PRIORITIES);
   return (
     <section data-testid="ai-briefing" aria-labelledby="glance-title" className="mb-1 flex flex-col gap-3 rounded-control rounded-l-none border-l-[3px] border-l-gold bg-background px-4 py-3">
       <h3 id="glance-title" className="font-sans text-small font-semibold text-foreground">
@@ -65,9 +74,9 @@ export function AiBriefing({ brief, fallbackLines, tz, controls = null, now = ne
             </PersistedDetails>
           ) : null}
         </div>
-      ) : fallbackLines.length > 0 ? (
+      ) : shownFallback.length > 0 ? (
         <p data-testid="briefing" className="max-w-4xl text-body text-foreground">
-          {fallbackLines.slice(0, FALLBACK_LINES).join(" ")}
+          {shownFallback.slice(0, FALLBACK_LINES).join(" ")}
         </p>
       ) : (
         <p className="text-body text-muted-foreground">Your briefing appears here once this company&apos;s sources are connected.</p>
@@ -136,15 +145,19 @@ export function Deadlines({ laneId, brief, tz }: { laneId: string; brief: SavedB
         <ul data-testid="deadlines" className="flex flex-col divide-y divide-border">
           {deadlines.map((d, i) => {
             const r = d.ref ? byRef.get(d.ref) : undefined;
+            const text = fieldText(d.text, tz);
+            if (!text) return null; // a deadline whose text holds a masked-figure placeholder is dropped (T-237)
+            const due = fieldText(d.due, tz);
+            const subject = r?.subject ? fieldText(maskFigures(r.subject), tz) : null;
             return (
               <li key={String(i)} className="flex flex-col gap-1 py-2 text-body">
                 <span className="text-foreground">
-                  {d.text}
-                  {d.due ? <span className="text-muted-foreground"> · due {d.due}</span> : null}
+                  {text}
+                  {due ? <span className="text-muted-foreground"> · due {due}</span> : null}
                 </span>
                 {r ? (
                   <span className="flex flex-wrap items-baseline gap-2 text-small text-muted-foreground">
-                    {[r.mailbox, r.fromName || r.fromAddress ? senderLabel(r.fromName ?? null, r.fromAddress ?? null) : null, r.subject ? maskFigures(r.subject) : null, r.receivedAt ? formatDateTimeIn(r.receivedAt, tz) : null].filter(Boolean).join(" · ")}
+                    {[r.mailbox, r.fromName || r.fromAddress ? senderLabel(r.fromName ?? null, r.fromAddress ?? null) : null, subject, r.receivedAt ? formatDateTimeIn(r.receivedAt, tz) : null].filter(Boolean).join(" · ")}
                     {refLink(laneId, r)}
                   </span>
                 ) : null}

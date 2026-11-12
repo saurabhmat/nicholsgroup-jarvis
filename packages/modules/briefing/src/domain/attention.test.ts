@@ -83,17 +83,19 @@ describe("T-234 part 2 exclusions", () => {
     expect(kept({ fromAddress: "boss@pubk.test", subject: "Status", isGenerated: true })).toBe(false);
     expect(kept({ fromAddress: "person@acme.test", subject: "Status", isGenerated: true })).toBe(false);
   });
-  it("a spoofed priority sender (bulk, no auth pass) is excluded and not priority; with an auth pass it is kept as priority", () => {
+  it("a spoofed priority sender (bulk, no auth pass) is excluded; T-237: bulk mail stays out even with an auth pass, while an authenticated auto-generated one is kept as priority", () => {
     const spoof = { fromAddress: "boss@pubk.test", subject: "Wire request", isBulk: true };
     expect(rankAttention([t(spoof)], rules, now).top).toEqual([]);
-    const ok = rankAttention([t({ ...spoof, isAuthPass: true })], rules, now).top;
+    expect(rankAttention([t({ ...spoof, isAuthPass: true })], rules, now).top).toEqual([]);
+    const ok = rankAttention([t({ fromAddress: "boss@pubk.test", subject: "Wire request", isGenerated: true, isAuthPass: true })], rules, now).top;
     expect(ok).toHaveLength(1);
     expect(ok[0]?.kind).toBe("priority");
     // without the pass, an unflagged priority-address mail is an ordinary sender, not tier 0
     expect(rankAttention([t({ fromAddress: "boss@pubk.test", subject: "Hi" })], rules, now).top[0]?.kind).not.toBe("priority");
   });
-  it("an authenticated priority sender is kept despite bulk and a bot subject", () => {
-    expect(kept({ fromAddress: "boss@pubk.test", subject: "Update", isBulk: true, isAuthPass: true })).toBe(true);
+  it("an authenticated priority sender is kept despite an auto-generated flag and a bot subject (bulk is never kept: T-237)", () => {
+    expect(kept({ fromAddress: "boss@pubk.test", subject: "Update", isGenerated: true, isAuthPass: true })).toBe(true);
+    expect(kept({ fromAddress: "boss@pubk.test", subject: "Update", isBulk: true, isAuthPass: true })).toBe(false);
     expect(kept({ fromAddress: "noreply@bigclient.test", subject: "Build #1234 failed", isAuthPass: true })).toBe(true);
     expect(classify(t({ fromAddress: "noreply@ci.example.test", subject: "Build #1234 failed" }), rules).excluded).toBe("bot_subject");
   });
@@ -192,13 +194,31 @@ describe("rankAttention", () => {
     expect(top.map((i) => [i.thread.subject, i.kind, i.reason])).toEqual([["Question", "waiting", "Read, not answered · 5h"]]);
   });
 
-  it("authenticated priority senders skip the soft exclusions but not one-time codes", () => {
+  it("authenticated priority senders skip the soft exclusions (auto-generated) but not one-time codes", () => {
     const { top } = rankAttention(
-      [t({ fromAddress: "ceo@bigclient.test", subject: "Deck", labels: ["INBOX", "CATEGORY_PROMOTIONS"], isAuthPass: true }), t({ fromAddress: "ceo@bigclient.test", subject: "Your verification code", isAuthPass: true })],
+      [t({ fromAddress: "ceo@bigclient.test", subject: "Deck", isGenerated: true, isAuthPass: true }), t({ fromAddress: "ceo@bigclient.test", subject: "Your verification code", isAuthPass: true })],
       rules,
       now,
     );
     expect(top.map((i) => i.thread.subject)).toEqual(["Deck"]);
+  });
+
+  // T-237: promotional / newsletter / bulk mail is never in the top 5, whoever sends it.
+  it("promotional (CATEGORY_PROMOTIONS), newsletter and bulk mail never reach the top list, not even from an authenticated priority sender", () => {
+    const rows = [
+      t({ fromAddress: "ceo@bigclient.test", subject: "Promo", labels: ["INBOX", "CATEGORY_PROMOTIONS"], isAuthPass: true }),
+      t({ fromAddress: "ceo@bigclient.test", subject: "Bulk", isBulk: true, isAuthPass: true }),
+      t({ fromAddress: "newsletter@shop.test", subject: "Newsletter" }),
+      t({ fromAddress: "someone@else.test", subject: "Sale", labels: ["INBOX", "CATEGORY_PROMOTIONS"] }),
+      t({ fromAddress: "someone@else.test", subject: "Bulk 2", isBulk: true }),
+      t({ fromAddress: "colleague@pubk.test", subject: "A real question" }),
+    ];
+    const { top, more } = rankAttention(rows, rules, now);
+    expect(top.map((i) => i.thread.subject)).toEqual(["A real question"]);
+    expect(more).toBe(0);
+    // also with the priority sender configured: the promotional mail from it still stays out
+    const prio = { ...rules, prioritySenders: ["ceo@bigclient.test"] };
+    expect(rankAttention(rows, prio, now).top.map((i) => i.thread.subject)).toEqual(["A real question"]);
   });
 
   it("shows bot/CI mail only as one item when failures repeat", () => {

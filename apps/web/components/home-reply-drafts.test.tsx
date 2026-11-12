@@ -57,6 +57,7 @@ describe("ReplyDrafts", () => {
     expect(items[0]?.textContent).toContain("Ready for your review");
     expect(items[0]?.textContent).toContain("They asked to confirm");
     expect(items[0]?.textContent).not.toContain("1,200"); // subject masked on Home (rule 7)
+    expect(items[0]?.textContent).not.toMatch(/\[(amount|number)\]/); // T-237: and the placeholder is hidden, not shown
     expect(screen.getByTestId("reply-text").textContent).toBe("Thanks, confirmed.");
     expect(screen.getByRole("link", { name: "Review in Approvals" }).getAttribute("href")).toBe("/PKG/approvals#action-00000000-0000-4000-8000-0000000000d1");
     expect(items[1]?.textContent).toContain("Awaiting your input");

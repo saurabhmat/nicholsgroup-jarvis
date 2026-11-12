@@ -31,6 +31,16 @@ const card = (over: Partial<NewsCard> = {}): NewsCard => ({
 });
 const render_ = (c: NewsCard | null, laneId = "PKG") => render(<GovConNews laneId={laneId} card={c} now={NOW} />);
 
+describe("T-237: times are America/New_York, never ISO or a trailing Z", () => {
+  it("story dates, 'Updated' and the next-refresh time are shown in New York time by default", () => {
+    render_(card({ items: [{ headline: "H", why: "w", source: "S", publishedAt: "2026-11-12T03:30:00Z", url: "https://www.example.test/1", preferred: true }], updatedAt: "2026-11-12T11:05:00Z", canRefresh: true, nextRefreshAt: "2026-11-12T16:00:00Z" }));
+    expect(screen.getByTestId("news-meta").textContent).toContain("Nov 11"); // 03:30Z is 10:30 PM the evening before in New York
+    expect(screen.getByTestId("news-updated").textContent).toBe("Updated 6:05 AM");
+    expect(screen.getByTestId("news-footer").textContent).toContain("Next refresh available at 11:00 AM");
+    expect(screen.getByTestId("news-list").parentElement?.textContent).not.toMatch(/\dZ\b|\d{4}-\d{2}-\d{2}T/);
+  });
+});
+
 describe("T-237: at most three stories", () => {
   it("shows the first three of five, each with its source link", () => {
     const items = Array.from({ length: 5 }, (_, n) => ({ headline: `Story ${String(n)}`, why: "w", source: "S", publishedAt: null, url: `https://www.example.test/${String(n)}`, preferred: true }));

@@ -25,12 +25,13 @@ export function textFieldFocused(): boolean {
   return a instanceof HTMLElement && a !== document.body && a.matches(TEXT_FIELD);
 }
 
-/** The absolute time in the viewer's zone (falls back to the browser's zone for a zone name this runtime does not know). */
+/** The absolute time in the viewer's zone, America/New_York for a missing or unknown zone (T-237: never the browser's zone, never ISO). */
 function timeLabel(ms: number, tz?: string): string {
+  const fmt = (zone: string) => new Intl.DateTimeFormat("en-US", { hour: "numeric", minute: "2-digit", second: "2-digit", timeZone: zone }).format(new Date(ms));
   try {
-    return new Date(ms).toLocaleTimeString(undefined, tz ? { timeZone: tz } : undefined);
+    return fmt(tz || "America/New_York");
   } catch {
-    return new Date(ms).toLocaleTimeString();
+    return fmt("America/New_York");
   }
 }
 

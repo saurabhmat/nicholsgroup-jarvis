@@ -15,6 +15,35 @@ const brief = (over: Partial<SavedBriefingView["content"]> = {}, status: SavedBr
 });
 const base = { laneId: "PKG", fallbackLines: ["Rule-based: 2 unread."], tz: "America/New_York", now: new Date("2026-11-11T20:00:00Z") };
 
+describe("T-237: placeholders and raw times are never shown", () => {
+  const PH = /\[(amount|number)\]/;
+  it("a summary sentence holding a placeholder is dropped; a line that is only a placeholder sentence disappears", () => {
+    render(<AiBriefing {...base} brief={brief({ lines: ["Four meetings today. The invoice is [amount] over budget. Two threads wait.", "Account [number] is overdue."] })} />);
+    expect(screen.getByTestId("briefing").textContent).toBe("Four meetings today. Two threads wait.");
+    expect(document.body.textContent).not.toMatch(PH);
+  });
+  it("priorities: one holding a placeholder is dropped, a reason holding one is hidden, the rest stays", () => {
+    render(<AiBriefing {...base} brief={brief({ priorities: [{ text: "Pay [amount] now", reason: "r", refs: [] }, { text: "Call Ann", reason: "Owes [number]", refs: [] }, { text: "Review plan", reason: "Due Friday", refs: [] }] })} />);
+    const items = within(screen.getByTestId("priorities")).getAllByRole("listitem");
+    expect(items.map((i) => i.textContent)).toEqual(["Call Ann", "Review plan \u2013 Due Friday"]);
+    expect(document.body.textContent).not.toMatch(PH);
+  });
+  it("if every AI line holds a placeholder the rule-based sentences stand in; with none of those either, no empty paragraph", () => {
+    render(<AiBriefing {...base} brief={brief({ lines: ["All [amount] gone."], priorities: [] })} />);
+    expect(screen.getByTestId("briefing").textContent).toBe("Rule-based: 2 unread.");
+  });
+  it("deadlines: an item whose text holds a placeholder is dropped, a due text with one is hidden, ISO times and dates are shown as New York time", () => {
+    render(<Deadlines laneId="PKG" tz="America/New_York" brief={brief({ deadlines: [{ text: "Pay [amount]", due: null, ref: "r1" }, { text: "Send the plan", due: "2026-11-14", ref: "r1" }, { text: "Sign", due: "about [number]", ref: null }, { text: "Call", due: "2026-11-13T14:00:00Z", ref: null }] })} />);
+    const items = within(screen.getByTestId("deadlines")).getAllByRole("listitem");
+    expect(items).toHaveLength(3);
+    expect(items[0]?.textContent).toContain("Send the plan \u00b7 due Sat, Nov 14");
+    expect(items[1]?.textContent).toBe("Sign"); // the due text with a placeholder is hidden, the item stays
+    expect(items[2]?.textContent).toBe("Call \u00b7 due Fri, Nov 13, 9:00 AM");
+    expect(document.body.textContent).not.toMatch(PH);
+    expect(document.body.textContent).not.toMatch(/\dZ\b|T14:00/);
+  });
+});
+
 describe("AiBriefing: Today at a glance (T-235 part 2)", () => {
   it("is a cream panel with a 3px gold left edge, titled 'Today at a glance'", () => {
     render(<AiBriefing {...base} brief={brief()} />);

@@ -4,6 +4,7 @@
 // never show; clashes, back-to-backs and unanswered invitations are flagged.
 import Link from "next/link";
 import { Badge, buttonVariants, EmptyState, laneHref, PageSection } from "@nichols/ui";
+import { fieldText } from "@/lib/home-text";
 import { CollapsibleSection } from "./collapsible-section";
 import { ReplyAction } from "./reply-action";
 import { inboxHref } from "@/lib/inbox-links";
@@ -192,7 +193,7 @@ const CHIP_TONE = { alert: "alert", gold: "gold", outline: "outline" } as const;
  * (forced-colors) paints, so the focus stays visible there. The divider lines sit on the <li> (no horizontal bleed); only the
  * hover ground and the focus ring bleed 8 px each side, into the card padding.
  */
-export function AttentionSection({ laneId, mail, now, notes, replies, canReply = false }: { laneId: string; mail: MailSection; now: Date; notes?: Map<string, AttentionNote>; replies?: Map<string, string>; canReply?: boolean }) {
+export function AttentionSection({ laneId, mail, now, notes, replies, canReply = false, tz = "America/New_York" }: { laneId: string; mail: MailSection; now: Date; notes?: Map<string, AttentionNote>; replies?: Map<string, string>; canReply?: boolean; tz?: string }) {
   if (!mail.access) {
     return mail.unavailable ? (
       <EmptyState title="Mail could not be read" description="Reload in a minute. Settings → Connections shows the last sync." className="border-0 bg-transparent px-0 py-6" />
@@ -214,7 +215,10 @@ export function AttentionSection({ laneId, mail, now, notes, replies, canReply =
           const note = notes?.get(`${t.connectionId}:${t.messageId}`);
           const mailbox = mail.mailboxOf[t.connectionId];
           const who = senderParts(t.fromName, t.fromAddress, AVATAR.length);
-          const subject = a.kind === "repeated_failures" ? a.reason : t.subject ? maskFigures(t.subject) : "(No subject)";
+          // T-237: a subject that still holds a masked-figure placeholder (or is empty) is not shown; the row keeps sender, age, actions.
+          const subject = fieldText(a.kind === "repeated_failures" ? a.reason : t.subject ? maskFigures(t.subject) : null, tz);
+          const why = fieldText(note?.why, tz);
+          const next = fieldText(note?.next, tz);
           const chips = attentionChips(a.kind, t.unreadCount > 0);
           const age = ageShort(t.receivedAt, now);
           return (
@@ -235,27 +239,29 @@ export function AttentionSection({ laneId, mail, now, notes, replies, canReply =
                     <span className="sr-only">{age === "now" ? "" : " ago"}</span>
                   </time>
                 </div>
-                <p data-testid="attention-subject" className="truncate text-body text-foreground">
-                  {subject}
-                </p>
-                {note && (note.why || note.next) ? (
+                {subject ? (
+                  <p data-testid="attention-subject" className="truncate text-body text-foreground">
+                    {subject}
+                  </p>
+                ) : null}
+                {why || next ? (
                   <p data-testid="attention-note" className="line-clamp-2 text-small text-muted-foreground">
-                    {note.why ? (
+                    {why ? (
                       <>
                         <span className="sr-only">Why it matters: </span>
-                        {note.why}
+                        {why}
                       </>
                     ) : null}
-                    {note.why && note.next ? (
+                    {why && next ? (
                       <>
                         <span aria-hidden>{" \u2192 "}</span>
                         <span className="sr-only"> </span>
                       </>
                     ) : null}
-                    {note.next ? (
+                    {next ? (
                       <>
                         <span className="sr-only">Next step: </span>
-                        {note.next}
+                        {next}
                       </>
                     ) : null}
                   </p>
@@ -280,7 +286,7 @@ export function AttentionSection({ laneId, mail, now, notes, replies, canReply =
                 <Link
                   href={inboxHref(laneId, t.messageId)}
                   data-testid="attention-open"
-                  aria-label={`Open: ${subject}`}
+                  aria-label={subject ? `Open: ${subject}` : "Open message"}
                   className="inline-flex items-center px-2 text-small font-medium text-primary underline-offset-2 after:absolute after:inset-y-0 after:-inset-x-2 after:rounded-control after:content-[''] hover:underline focus-visible:outline-none focus-visible:after:outline focus-visible:after:outline-2 focus-visible:after:outline-transparent focus-visible:after:ring-2 focus-visible:after:ring-ring"
                 >
                   Open

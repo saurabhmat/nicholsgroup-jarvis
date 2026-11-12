@@ -191,6 +191,7 @@ describe("the Updated text", () => {
     await advance(2 * MIN + 30_000);
     expect(el.textContent).toBe("Updated 2 min ago");
     expect(el.getAttribute("title")).toMatch(/^Data read at /);
+    expect(el.getAttribute("title")).not.toMatch(/Z\b|\d{4}-\d{2}/); // T-237: a clock time, never ISO
   });
 
   it("goes back to just now when the server render is newer (after a refresh)", async () => {
