@@ -3,6 +3,8 @@
 import type { ReactNode } from "react";
 import { Suspense } from "react";
 import { BRAND } from "@/lib/brand";
+import { guards } from "@/lib/guards";
+import { firstNameFor } from "@/lib/first-name";
 import { loadLane } from "@/lib/lane-page";
 import { onboardingFor } from "@/lib/onboarding-progress";
 import { Shell } from "@/components/shell";
@@ -20,9 +22,10 @@ async function LaneShell({ children, params }: { children: ReactNode; params: Pr
   const laneId = (await params).laneId;
   // The badge's setup progress does its own owner/brain checks (null unless the owner has the brain view here), so it
   // does not wait for the lane check: both run at once. A failed setup lookup is "no entry" (null), so it can never win over the lane check's 404 or redirect. A refused lane still ends in the lane check's 404 or redirect.
-  const [lane, onboarding] = await Promise.all([loadLane(laneId), onboardingFor(laneId).catch(() => null)]);
+  // The first name (the user's own profile row, never throws) is read alongside, for the phone header band's "Good morning, {name}".
+  const [lane, onboarding, firstName] = await Promise.all([loadLane(laneId), onboardingFor(laneId).catch(() => null), guards().then((g) => firstNameFor(g, laneId)).catch(() => undefined)]);
   return (
-    <Shell brand={BRAND} lanes={lane.lanes} currentLaneId={lane.laneId} onboarding={onboarding ? { done: onboarding.done, total: onboarding.total } : null} signOut={signOut}>
+    <Shell brand={BRAND} lanes={lane.lanes} currentLaneId={lane.laneId} onboarding={onboarding ? { done: onboarding.done, total: onboarding.total } : null} signOut={signOut} {...(firstName ? { firstName } : {})}>
       {children}
     </Shell>
   );

@@ -15,7 +15,7 @@ import { eyebrowDate } from "@/lib/format-date";
 import { guards } from "@/lib/guards";
 import { cookies } from "next/headers";
 import { composeBriefing, homeFor, type HomeView } from "@/lib/home";
-import { briefingFor, lastFailureReason, latestBriefing, loadRunState, viewerZone } from "@/lib/briefing";
+import { briefingFor, lastFailureReason, latestBriefing, loadRunState } from "@/lib/briefing";
 import { aiSetupFailure } from "@/lib/briefing-setup";
 import { adminHint } from "@nichols/briefing/hints";
 import { AiBriefing, Deadlines, notesByMessage, repliesByMessage } from "./home-ai-briefing";
@@ -42,12 +42,16 @@ import { hasFinanceView, homeFinanceFor } from "@/lib/home-finance";
 import { homeFinanceDetailFor } from "@/lib/home-finance-detail";
 import { kpiTiles } from "@/lib/home-kpi-tiles";
 
+/** Home's display zone: always Eastern, never the tz cookie (the cookie is still refreshed for other pages). */
+const HOME_TZ = "America/New_York";
+
 export async function HomePage({ params }: { params: Promise<{ laneId: string }> }) {
   const lane = await loadLane((await params).laneId);
   const now = new Date();
   // The verified user id (from loadLane's lane check) is only a sessionStorage key part for view state (expanded sections, the open drawer).
   const userId = lane.userId;
-  const tz = viewerZone((await cookies()).get("tz")?.value);
+  // Home shows every time in America/New_York (T-237 brief), whatever zone the viewer's browser reports.
+  const tz = HOME_TZ;
   // The first name is the session user's own profile row (core.users.display_name); none readable: just "Good morning" (never invented).
   // It loads in its own Suspense boundary (HomeGreeting), so the header never waits on it.
   // T-230 A: the header renders as soon as the lane is verified; the data sections and the setup banner stream in behind it
@@ -122,7 +126,7 @@ async function SetupBanner({ laneId }: { laneId: string }) {
 
 async function HomeSections({ laneId, now }: { laneId: string; now: Date }) {
   const tzCookie = (await cookies()).get("tz")?.value;
-  const tz = viewerZone(tzCookie);
+  const tz = HOME_TZ;
   const g = await guards();
   // Home v1 counts and the T-231 briefing sections load in parallel. Each shows its own "unavailable" state; neither ever shows an empty day.
   const laneClient = async () => (await g.requireLane(laneId as Parameters<typeof g.requireLane>[0])).client;

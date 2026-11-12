@@ -69,6 +69,9 @@ describe("KPI row", () => {
     const link = screen.getByTestId("kpi-connect");
     expect(link.getAttribute("href")).toBe("/PKG/settings#connections");
     expect(link.textContent).toContain("Connect QuickBooks");
+    // A lone tile keeps one tile's width (auto-fill), and has the figure tiles' height.
+    expect(screen.getByTestId("home-kpis").className).toContain("auto-fill");
+    expect(link.className).toContain(TILE_HEIGHT);
   });
 
   it("not connected and the role cannot connect: nothing at all", () => {

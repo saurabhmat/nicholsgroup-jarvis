@@ -7,16 +7,16 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { cleanup, render, screen, within } from "@testing-library/react";
 import type { HomeView } from "@/lib/home";
 
-const m = vi.hoisted(() => ({ financeView: false, owner: false, mail: { access: false } as { access: boolean; attention?: unknown[]; more?: number; money?: unknown[]; mailboxOf?: Record<string, string> }, coverage: { items: [], unavailable: false } as unknown, view: null as unknown, progress: null as unknown, detail: { state: "no_access" } as unknown, userName: undefined as string | undefined, finance: { state: "not_connected", asOf: null, lastSyncAt: null, connectionStatus: null, cash: { reason: null, total: null, asOf: null, accounts: [], unmapped: 0 }, ar: { reason: null, over30: null, invoices: 0, unmapped: 0 }, pnl: { reason: null, income: null, expenses: null, net: null, start: null, end: null, method: null, partial: false, asOf: null } } as unknown }));
+const m = vi.hoisted(() => ({ financeView: false, owner: false, mail: { access: false } as { access: boolean; attention?: unknown[]; more?: number; money?: unknown[]; mailboxOf?: Record<string, string> }, coverage: { items: [], unavailable: false } as unknown, view: null as unknown, progress: null as unknown, detail: { state: "no_access" } as unknown, userName: undefined as string | undefined, cookieTz: undefined as string | undefined, briefingTz: [] as string[], finance: { state: "not_connected", asOf: null, lastSyncAt: null, connectionStatus: null, cash: { reason: null, total: null, asOf: null, accounts: [], unmapped: 0 }, ar: { reason: null, over30: null, invoices: 0, unmapped: 0 }, pnl: { reason: null, income: null, expenses: null, net: null, start: null, end: null, method: null, partial: false, asOf: null } } as unknown }));
 vi.mock("@/lib/lane-page", () => ({ loadLane: async () => ({ laneId: "PKG", name: "Pub K Group", lanes: [], userId: "u1" }) }));
 vi.mock("@/lib/guards", () => ({ guards: async () => ({ requireLane: async () => ({ client: {}, session: { userId: "u1" } }), requireRole: async (_l: string, roles: string[]) => { if (m.owner && roles.includes("owner")) return { client: {}, session: { userId: "u1" } }; throw new Error("not admin"); } }) }));
 vi.mock("@/app/[laneId]/briefing-actions", () => ({ ensureFreshBriefing: async () => ({ started: false, gate: "not_stale" }), regenerateBriefing: async () => ({ started: false, gate: "not_stale" }), briefingRunState: async () => null }));
 vi.mock("@/lib/briefing-setup", () => ({ aiSetupFailure: () => null }));
-vi.mock("next/headers", () => ({ cookies: async () => ({ get: () => undefined }) }));
+vi.mock("next/headers", () => ({ cookies: async () => ({ get: (n: string) => (n === "tz" && m.cookieTz ? { value: m.cookieTz } : undefined) }) }));
 vi.mock("next/navigation", () => ({ useRouter: () => ({ refresh: () => undefined }) }));
 vi.mock("@/lib/briefing", async (orig) => ({
   ...(await orig<typeof import("@/lib/briefing")>()),
-  briefingFor: async () => ({ viewerTz: "America/New_York", coverage: [], coverageLine: "Coverage: test.", calendar: { access: false }, mail: m.mail.access ? { access: true, attention: [], more: 0, money: [], mailboxOf: {} } : { access: false }, config: {}, mailboxes: [] }),
+  briefingFor: async (_c: unknown, _l: string, _n: Date, tz: string) => (m.briefingTz.push(tz), { viewerTz: "America/New_York", coverage: [], coverageLine: "Coverage: test.", calendar: { access: false }, mail: m.mail.access ? { access: true, attention: [], more: 0, money: [], mailboxOf: {} } : { access: false }, config: {}, mailboxes: [] }),
 }));
 vi.mock("@/lib/coverage", async (orig) => ({ ...(await orig<typeof import("@/lib/coverage")>()), coverageFor: async () => m.coverage }));
 vi.mock("@/lib/timed", () => ({ timed: async <T,>(_n: string, f: () => Promise<T>) => f() }));
@@ -75,11 +75,23 @@ afterEach(() => {
   m.finance = defaultFinance;
   m.detail = defaultDetail;
   m.userName = undefined;
+  m.cookieTz = undefined;
+  m.briefingTz = [];
   m.progress = null;
   m.owner = false;
   m.financeView = false;
   m.mail = { access: false };
   m.coverage = { items: [], unavailable: false };
+});
+
+describe("Home display zone (T-237 polish)", () => {
+  it("reads and shows everything in America/New_York even when the browser reports another zone (the cookie is not used on Home)", async () => {
+    m.cookieTz = "Asia/Tokyo";
+    m.view = view();
+    await draw();
+    expect(m.briefingTz.length).toBeGreaterThan(0);
+    expect(new Set(m.briefingTz)).toEqual(new Set(["America/New_York"]));
+  });
 });
 
 describe("Home layout (T-234 part 1)", () => {
@@ -115,7 +127,7 @@ describe("Home layout (T-234 part 1)", () => {
     expect(within(today).getByRole("heading", { name: "Today" })).toBeTruthy();
     expect(within(today).getByText("Eastern time")).toBeTruthy();
     const next7 = within(calendarSlot).getByTestId("next-7-days");
-    expect(follows(today, next7)).toBe(true);
+    expect(today.contains(next7)).toBe(true); // the footer row of the Today card
     expect(next7.getAttribute("data-open")).toBe("false"); // collapsed by default
     const kpis = within(kpiSlot).getByTestId("home-kpis");
     expect(kpis.className).toContain("auto-fit");

@@ -25,13 +25,14 @@ describe("Coverage status dot", () => {
     const at = (min: number) => ({ ...item("ok"), lastSyncAt: new Date(Date.parse("2026-11-12T15:00:00Z") - min * 60_000).toISOString() });
     render(<CoverageDot laneId="PKG" view={{ items: [at(2), at(7), item("not_connected")], unavailable: false }} now={new Date("2026-11-12T15:00:00Z")} />);
     const dot = screen.getByTestId("coverage-dot");
-    expect(dot.textContent).toBe("All sources synced \u00b7 7 min ago");
+    expect(dot.querySelector("[data-slot=sync-full]")?.textContent).toBe("All sources synced \u00b7 7 min ago");
+    expect(dot.textContent).toContain("Synced"); // the compact phone word
     expect(dot.getAttribute("data-status")).toBe("synced");
     expect(dot.getAttribute("href")).toBe("/PKG/settings#connections");
   });
   it("all sources fine but no sync time known: just 'All sources synced'", () => {
     render(<CoverageDot laneId="PKG" view={{ items: [item("ok")], unavailable: false }} />);
-    expect(screen.getByTestId("coverage-dot").textContent).toBe("All sources synced");
+    expect(screen.getByTestId("coverage-dot").querySelector("[data-slot=sync-full]")?.textContent).toBe("All sources synced");
   });
   it("syncedLabel uses only the sources that are ok: a stale source's older sync does not count, and an unparseable time is ignored", () => {
     const now = new Date("2026-11-12T15:00:00Z");

@@ -6,13 +6,16 @@ import { BookBalanceLabel, laneHref } from "@nichols/ui";
 import type { KpiTile } from "@/lib/home-kpi-tiles";
 
 export const TILE_HEIGHT = "min-h-[8rem]";
+// Several tiles share the row (auto-fit); a lone tile (Connect QuickBooks) keeps one tile's width (auto-fill keeps the empty tracks).
+const FIT_COLUMNS = "md:grid-cols-[repeat(auto-fit,minmax(12rem,1fr))]";
+const LONE_COLUMNS = "md:grid-cols-[repeat(auto-fill,minmax(12rem,1fr))]";
 const TONE = { danger: "text-danger", success: "text-success" } as const;
 
 /** No tiles: nothing (a role that cannot connect and has no finance view must not be told about finance figures). */
 export function KpiStrip({ laneId, tiles }: { laneId: string; tiles: KpiTile[] }) {
   if (tiles.length === 0) return null;
   return (
-    <section aria-labelledby="kpi-heading" data-testid="home-kpis" className="grid grid-cols-2 items-stretch gap-3 md:grid-cols-[repeat(auto-fit,minmax(12rem,1fr))] md:gap-5">
+    <section aria-labelledby="kpi-heading" data-testid="home-kpis" className={`grid grid-cols-2 items-stretch gap-3 md:gap-5 ${tiles.length === 1 ? LONE_COLUMNS : FIT_COLUMNS}`}>
       <h2 id="kpi-heading" className="sr-only">Key figures</h2>
       {tiles.map((t) => (t.connect ? <ConnectTile key={t.key} laneId={laneId} tile={t} /> : <Tile key={t.key} tile={t} />))}
     </section>
@@ -20,16 +23,18 @@ export function KpiStrip({ laneId, tiles }: { laneId: string; tiles: KpiTile[] }
 }
 
 function ConnectTile({ laneId, tile }: { laneId: string; tile: KpiTile }) {
+  // Same shape as a figure tile: label, a short line, then the link text (the whole tile is the link).
   return (
     <Link
       href={`${laneHref(laneId, "settings")}#connections`}
       data-testid="kpi-connect"
       className={`flex h-full min-w-0 flex-col justify-between gap-2 rounded-card border border-border bg-card p-5 text-card-foreground shadow-card hover:bg-muted/40 ${TILE_HEIGHT}`}
     >
-      <p className="font-sans text-card-title font-semibold text-primary">
+      <p className="font-sans text-label font-medium uppercase tracking-wide text-muted-foreground">QuickBooks</p>
+      <p className="text-small text-muted-foreground">Cash, bills and net income show here once connected.</p>
+      <p className="font-sans text-small font-semibold text-primary">
         {tile.label} <span aria-hidden>{"\u2192"}</span>
       </p>
-      <p className="text-small text-muted-foreground">Cash, receivables, bills and net income appear here once it is connected.</p>
     </Link>
   );
 }

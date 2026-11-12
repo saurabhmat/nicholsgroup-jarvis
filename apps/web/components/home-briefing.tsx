@@ -1,11 +1,11 @@
 // Home briefing sections (T-231a): Today's calendar, the 7-day look-ahead (collapsed under it, T-234) and the attention list, from synced metadata only.
 // Coverage moved to Settings -> Connections (coverage-list.tsx) and the Money card was removed from Home (T-234 part 1).
-// Times are in the viewer's zone; an event's own zone is added when its clock differs. Declined and cancelled events
+// Home shows every time in America/New_York (the page passes it); an event's own zone is added when its clock differs. Declined and cancelled events
 // never show; clashes, back-to-backs and unanswered invitations are flagged.
 import Link from "next/link";
 import { Badge, buttonVariants, EmptyState, laneHref, PageSection } from "@nichols/ui";
 import { fieldText } from "@/lib/home-text";
-import { CollapsibleSection } from "./collapsible-section";
+import { DisclosureFooter } from "./collapsible-section";
 import { ReplyAction } from "./reply-action";
 import { inboxHref } from "@/lib/inbox-links";
 import {
@@ -55,11 +55,11 @@ const hostOf = (u: string) => {
 /** The title, a link to the event in the calendar (https only, new tab) when there is one; no separate "Open in Calendar". */
 function EventTitle({ title, url }: { title: string; url: string | null }) {
   return url ? (
-    <a href={url} target="_blank" rel="noopener noreferrer" className="truncate font-medium text-foreground underline-offset-2 hover:underline">
+    <a href={url} target="_blank" rel="noopener noreferrer" className="line-clamp-2 font-medium text-foreground underline-offset-2 hover:underline">
       {title}
     </a>
   ) : (
-    <span className="truncate font-medium text-foreground">{title}</span>
+    <span className="line-clamp-2 font-medium text-foreground">{title}</span>
   );
 }
 
@@ -155,16 +155,14 @@ const EASTERN_ZONES: ReadonlySet<string> = new Set(["America/New_York", "US/East
 /** Right column of row 1: Today's calendar, with "Next 7 days" collapsed below it (one-line summary in its header; expands on click). */
 export function CalendarSections({ view, now }: { view: BriefingView; now: Date }) {
   const c = view.calendar;
-  const summary = c.access && c.aheadSummary ? aheadSummaryText(c.aheadSummary) : undefined;
+  const summary = c.access && c.aheadSummary ? aheadSummaryText(c.aheadSummary).replace(", ", " \u00b7 ") : undefined;
   return (
-    <>
-      <PageSection title="Today" ariaLabel="Today's calendar" note={EASTERN_ZONES.has(view.viewerTz) ? "Eastern time" : `Times in ${view.viewerTz.replace(/_/g, " ")}`}>
-        <TodayCalendar calendar={view.calendar} tz={view.viewerTz} now={now} />
-      </PageSection>
-      <CollapsibleSection title="Next 7 days" testId="next-7-days" persistId="next-7-days" {...(summary ? { note: summary } : {})}>
+    <PageSection title="Today" ariaLabel="Today's calendar" note={EASTERN_ZONES.has(view.viewerTz) ? "Eastern time" : `Times in ${view.viewerTz.replace(/_/g, " ")}`}>
+      <TodayCalendar calendar={view.calendar} tz={view.viewerTz} now={now} />
+      <DisclosureFooter title="Next 7 days" testId="next-7-days" persistId="next-7-days" {...(summary ? { note: summary } : {})}>
         {c.access ? <LookAhead events={c.ahead} tz={view.viewerTz} /> : <p className="text-body text-muted-foreground">No calendar to look ahead in. See Settings → Connections.</p>}
-      </CollapsibleSection>
-    </>
+      </DisclosureFooter>
+    </PageSection>
   );
 }
 
@@ -243,7 +241,7 @@ export function AttentionSection({ laneId, mail, now, notes, replies, canReply =
                   </time>
                 </div>
                 {subject ? (
-                  <p data-testid="attention-subject" className="truncate text-body text-foreground">
+                  <p data-testid="attention-subject" className="text-body text-foreground">
                     {subject}
                   </p>
                 ) : null}

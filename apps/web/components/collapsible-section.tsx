@@ -27,3 +27,30 @@ export function CollapsibleSection({ title, note, children, testId, persistId }:
     </Card>
   );
 }
+
+/**
+ * The same disclosure as a footer row inside another card (T-237 polish: "Next 7 days" lives at the foot of the Today card):
+ * title left, summary and a chevron right, the body expands in place under the row. Same open-state hook (sessionStorage via persistId),
+ * same `data-testid` / `data-open` / aria-expanded contract as CollapsibleSection. The chevron is decorative; the summary is read as part of the button.
+ */
+export function DisclosureFooter({ title, note, children, testId, persistId }: { title: string; note?: string; children: ReactNode; testId?: string; persistId?: string }) {
+  const [open, setOpen] = usePersistedOpen(persistId);
+  const bodyId = useId();
+  const titleId = useId();
+  return (
+    <div role="region" aria-labelledby={titleId} data-testid={testId} data-open={open ? "true" : "false"} className="min-w-0 border-t border-border pt-3">
+      <h3 className="text-body font-semibold text-foreground">
+        <button type="button" aria-expanded={open} aria-controls={bodyId} onClick={() => setOpen(!open)} className="flex min-h-11 w-full items-center justify-between gap-2 text-left sm:min-h-0">
+          <span id={titleId}>{title}</span>
+          <span className="flex items-center gap-1 text-small font-normal text-muted-foreground">
+            {note ? <span>{note}</span> : null}
+            <span aria-hidden className={`inline-block transition-transform ${open ? "rotate-90" : ""}`}>{"›"}</span>
+          </span>
+        </button>
+      </h3>
+      <div id={bodyId} hidden={!open} className="mt-3">
+        {children}
+      </div>
+    </div>
+  );
+}

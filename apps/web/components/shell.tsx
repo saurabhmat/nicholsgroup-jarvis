@@ -16,6 +16,8 @@ export function Shell(props: {
   approvalsCount?: number;
   /** Setup progress; null for users without the brain view. */
   onboarding?: OnboardingProgress | null;
+  /** The session user's first name for the phone header band's Home title. */
+  firstName?: string;
   signOut: (formData: FormData) => void | Promise<void>;
   children: ReactNode;
 }) {

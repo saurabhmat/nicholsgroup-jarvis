@@ -94,7 +94,7 @@ export function HomeAutoRefresh({ renderedAt, tz, intervalMs = REFRESH_INTERVAL_
 
   const shown = Math.max(nowMs, serverMs);
   return (
-    <span data-testid="home-updated" className="text-small text-muted-foreground" title={mounted && serverMs ? `Data read at ${timeLabel(serverMs, tz)}` : undefined}>
+    <span data-testid="home-updated" className="text-small text-muted-foreground max-md:hidden" title={mounted && serverMs ? `Data read at ${timeLabel(serverMs, tz)}` : undefined}>
       {updatedLabel(serverMs, shown)}
     </span>
   );

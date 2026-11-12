@@ -38,7 +38,9 @@ export function CoverageDot({ laneId, view, now = new Date() }: { laneId: string
     return (
       <Link href={`${laneHref(laneId, "settings")}#connections`} data-testid="coverage-dot" data-status="synced" className={DOT_LINK}>
         <span aria-hidden className="size-2.5 rounded-full bg-success" />
-        {text}
+        {/* Phone: one compact word; the full text stays for screen readers (and shows from md). */}
+        <span data-slot="sync-full" className="max-md:sr-only">{text}</span>
+        <span aria-hidden className="md:hidden">Synced</span>
       </Link>
     );
   }

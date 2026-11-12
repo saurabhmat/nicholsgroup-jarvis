@@ -147,15 +147,16 @@ describe("Next 7 days summary and LookAhead", () => {
     expect(aheadSummaryText(summarizeAhead(two, owners))).toBe("3 meetings, 3 clashes");
   });
 
-  it("the header of the collapsed Next 7 days shows the summary", () => {
+  it("the footer row of the collapsed Next 7 days shows the summary, inside the Today card", () => {
     const view = {
       viewerTz: "America/New_York",
       calendar: { access: true as const, today: [], ahead: [], aheadSummary: { meetings: 12, clashes: 2 }, owners: [] },
     } as unknown as BriefingView;
     render(<CalendarSections view={view} now={now} />);
     const button = screen.getByRole("button", { name: /Next 7 days/ });
-    expect(button.textContent).toContain("12 meetings, 2 clashes");
+    expect(button.textContent).toContain("12 meetings \u00b7 2 clashes");
     expect(button.getAttribute("aria-expanded")).toBe("false");
+    expect(screen.getByRole("region", { name: "Today's calendar" }).contains(button)).toBe(true);
   });
 
   it.each([["America/New_York", "Eastern time"], ["US/Eastern", "Eastern time"], ["America/Los_Angeles", "Times in America/Los Angeles"]])("the Today note for %s reads '%s'", (tz, note) => {
@@ -210,7 +211,7 @@ describe("AttentionSection (T-234 part 2, T-235 part 2: scannable rows)", () => 
     expect(subject.textContent).toBe("Board deck");
     expect(subject.getAttribute("title")).toBeNull();
     expect(within(item).getByText(", from boss@www.acme.test").className).toMatch(/sr-only/); // the full address is reachable
-    expect(subject.className).toMatch(/\btruncate\b/);
+    expect(subject.className).not.toMatch(/\btruncate\b/); // phone: the subject wraps (T-237 polish)
   });
 
   it("T-237: a subject holding a masked-figure placeholder is hidden (never '[amount]'); so are the AI why/next lines that hold one; a missing subject shows no line", () => {
