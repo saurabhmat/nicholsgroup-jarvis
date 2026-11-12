@@ -4,7 +4,7 @@
 -- (0, 1, 30, 31, 60, 61, 90, 91 days, null due date, not yet due), exclusions, oldest three (order, ties, limit, no ids,
 -- null customer), and denial: another lane (rows exist, caller is not a member), AAL1, no finance view, outsider, anon.
 begin;
-select plan(50);
+select plan(53);
 \ir helpers/lane_rls.psql
 
 update core.lanes set enabled = true where code in ('APK', 'NC');
@@ -115,6 +115,8 @@ insert into fin.bills (id, lane_id, connection_id, source_id, issue_date, due_da
   -- Unmapped: one open (counted, not summed), one voided (not counted).
   (pg_temp.iid(50), 'PKG', '00000000-0000-4000-8000-000000003701', 'b-50', pg_temp.d(30), pg_temp.d(-2), 5000.00, 5000.00, 'unmapped', false, false),
   (pg_temp.iid(51), 'PKG', '00000000-0000-4000-8000-000000003701', 'b-51', pg_temp.d(30), pg_temp.d(-2), 5000.00, 5000.00, 'unmapped', true,  false),
+  -- Unmapped but overdue (outside the window): not counted in unmapped_bills.
+  (pg_temp.iid(53), 'PKG', '00000000-0000-4000-8000-000000003701', 'b-53', pg_temp.d(30), pg_temp.d(1), 5000.00, 5000.00, 'unmapped', false, false),
   -- Another lane, entity PKG, due in the window.
   (pg_temp.iid(52), 'APK', '00000000-0000-4000-8000-000000003702', 'b-52', pg_temp.d(30), pg_temp.d(-2), 5555.00, 5555.00, 'PKG', false, false);
 
@@ -128,7 +130,7 @@ select ok((select as_of < now() - interval '2 hours 50 minutes' and as_of > now(
 -- bills
 select is((select bills_due_14_total from core.home_finance_detail('PKG')), 19.00::numeric, 'bills due: today 1.00 + day 14 2.00 + day 3 16.00 (day 15, yesterday and no due date left out)');
 select is((select bills_due_14_count from core.home_finance_detail('PKG')), 3, 'bills due: three bills');
-select is((select unmapped_bills from core.home_finance_detail('PKG')), 1, 'bills: one open unmapped bill counted, the voided one is not');
+select is((select unmapped_bills from core.home_finance_detail('PKG')), 1, 'bills: one open unmapped bill due in the window counted (the voided and the overdue ones are not)');
 
 -- aging order and keys
 select is((select jsonb_array_length(aging) from core.home_finance_detail('PKG')), 5, 'aging: five buckets');
@@ -136,12 +138,14 @@ select is((select array(select e ->> 'bucket' from jsonb_array_elements(aging) e
           '{current,1_30,31_60,61_90,90_plus}', 'aging: bucket order');
 select is((select not exists (select 1 from jsonb_array_elements(aging) e where (select array_agg(k order by k) from jsonb_object_keys(e) k) <> array['bucket', 'count', 'total'])
            from core.home_finance_detail('PKG')), true, 'aging: keys are bucket, total, count only');
-select is((select (aging -> 0 ->> 'total') || '/' || (aging -> 0 ->> 'count') from core.home_finance_detail('PKG')), '7.00/3', 'aging current: 0 days, no due date and not yet due');
+select is((select (aging -> 0 ->> 'total') || '/' || (aging -> 0 ->> 'count') from core.home_finance_detail('PKG')), '5.00/2', 'aging current: 0 days and not yet due (the no-due-date invoice issued 100 days ago is not current)');
 select is((select (aging -> 1 ->> 'total') || '/' || (aging -> 1 ->> 'count') from core.home_finance_detail('PKG')), '30.00/2', 'aging 1_30: 1 and 30 days');
 select is((select (aging -> 2 ->> 'total') || '/' || (aging -> 2 ->> 'count') from core.home_finance_detail('PKG')), '300.00/2', 'aging 31_60: 31 and 60 days');
 select is((select (aging -> 3 ->> 'total') || '/' || (aging -> 3 ->> 'count') from core.home_finance_detail('PKG')), '3000.00/2', 'aging 61_90: 61 and 90 days');
-select is((select (aging -> 4 ->> 'total') || '/' || (aging -> 4 ->> 'count') from core.home_finance_detail('PKG')), '30023.00/5', 'aging 90_plus: 91, 200 and the three 300-day invoices');
+select is((select (aging -> 4 ->> 'total') || '/' || (aging -> 4 ->> 'count') from core.home_finance_detail('PKG')), '30025.00/6', 'aging 90_plus: 91, 200, the three 300-day invoices and the no-due-date invoice issued 100 days ago (issue date is used)');
 select is((select jsonb_typeof(aging -> 0 -> 'total') from core.home_finance_detail('PKG')), 'number', 'aging: total is a JSON number');
+select is((select (select sum((e ->> 'total')::numeric) from jsonb_array_elements(aging) e where e ->> 'bucket' in ('31_60', '61_90', '90_plus'))
+           from core.home_finance_detail('PKG')), (select ar_over_30 from core.home_finance('PKG')), '31_60 + 61_90 + 90_plus equals home_finance ar_over_30 (same date rule, same boundary)');
 select is((select unmapped_invoices from core.home_finance_detail('PKG')), 1, 'invoices: one open unmapped invoice counted, the voided one is not');
 
 -- oldest: 300 days (9.00, then the two 7.00 ties by id) beat the 200-day one; limit 3
@@ -160,9 +164,9 @@ update fin.invoices set balance = 0 where id in (pg_temp.iid(12), pg_temp.iid(13
 select pg_temp.claims('owner@example.test', 'aal2');
 set local role authenticated;
 select is((select array(select (e ->> 'days_overdue') || ':' || (e ->> 'balance') from jsonb_array_elements(oldest) e)::text from core.home_finance_detail('PKG')),
-          '{200:20000.00,91:10000.00,90:2000.00}', 'oldest: next by days overdue; paid invoices drop out');
+          '{200:20000.00,100:2.00,91:10000.00}', 'oldest: next by days overdue; paid invoices drop out');
 reset role;
-update fin.invoices set balance = 0 where id <> pg_temp.iid(1) and lane_id = 'PKG' and customer_name like 'Synthetic Co%' and id <> pg_temp.iid(2) and id <> pg_temp.iid(3);
+update fin.invoices set balance = 0 where id <> pg_temp.iid(1) and lane_id = 'PKG' and customer_name like 'Synthetic Co%' and id <> pg_temp.iid(3);
 select pg_temp.claims('owner@example.test', 'aal2');
 set local role authenticated;
 select is((select oldest from core.home_finance_detail('PKG')), '[]'::jsonb, 'oldest: nothing overdue gives an empty array (due today and not yet due are not overdue)');
@@ -183,6 +187,8 @@ reset role;
 select pg_temp.claims('owner@example.test', 'aal2');
 set local role authenticated;
 select is((select state from core.home_finance_detail('APK')), 'no_access', 'another lane: no_access');
+select is((select count(*)::int from fin.invoices where lane_id = 'APK'), 0, 'RLS: the owner sees no APK invoices');
+select is((select count(*)::int from fin.bills where lane_id = 'APK'), 0, 'RLS: the owner sees no APK bills');
 select is((select bills_due_14_total is null and bills_due_14_count is null and aging = '[]'::jsonb and oldest = '[]'::jsonb and as_of is null
                   and unmapped_invoices = 0 and unmapped_bills = 0 from core.home_finance_detail('APK')), true, 'another lane: nothing at all');
 select is((select bills_due_14_total from core.home_finance_detail('PKG')), 19.00::numeric, 'PKG never includes the other lane''s 5555.00 bill');

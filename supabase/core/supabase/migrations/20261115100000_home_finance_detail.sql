@@ -10,9 +10,11 @@
 -- (balance > 0), not voided, not deleted rows of the own entity are summed; rows with entity_code 'unmapped' are counted
 -- in unmapped_* and never summed. Invoices are USD only (as in home_finance); fin.bills has no currency column.
 --   * bills_due_14_*: open bills with due_date from today to today + 14 inclusive. Overdue bills (due before today) are NOT included.
---   * aging: five buckets in the order current, 1_30, 31_60, 61_90, 90_plus over open invoices; days past due = today - due_date.
---     A null due_date, or a due_date of today or later, is 'current'. Buckets with no invoice are present with total 0.00, count 0.
---   * oldest: up to three open invoices with the largest days past due (> 0 only), ties by larger balance then id. The
+--   * aging: five buckets in the order current, 1_30, 31_60, 61_90, 90_plus over open invoices. The due date is
+--     coalesce(due_date, issue_date), exactly as core.home_finance's AR over 30 days; days past due = today - that date.
+--     A date of today or later is 'current'. So 31_60 + 61_90 + 90_plus always equals home_finance's ar_over_30 (more than 30 days).
+--     Buckets with no invoice are present with total 0.00, count 0.
+--   * oldest: up to three open invoices (same due date rule) with the largest days past due (> 0 only), ties by larger balance then id. The
 --     output carries the customer name (may be null) and amounts only: no invoice, source or customer ids.
 -- Money is numeric(18,2); figures come from SQL only (rule 7).
 
@@ -76,17 +78,18 @@ begin
   where b.lane_id = p_lane and b.entity_code = c.own_entity and not b.voided and not b.deleted and b.balance > 0
     and b.due_date between v_today and v_today + 14;
 
-  select (pg_catalog.count(*) filter (where b.entity_code = 'unmapped'))::integer into v_un_bills
+  select (pg_catalog.count(*))::integer into v_un_bills
   from fin.bills b
-  where b.lane_id = p_lane and not b.voided and not b.deleted and b.balance > 0;
+  where b.lane_id = p_lane and b.entity_code = 'unmapped' and not b.voided and not b.deleted and b.balance > 0
+    and b.due_date between v_today and v_today + 14;
 
   -- AR aging over open own-entity invoices.
   with open_inv as (
     select i.balance,
-           case when i.due_date is null or i.due_date >= v_today then 'current'
-                when v_today - i.due_date <= 30 then '1_30'
-                when v_today - i.due_date <= 60 then '31_60'
-                when v_today - i.due_date <= 90 then '61_90'
+           case when coalesce(i.due_date, i.issue_date) >= v_today then 'current'
+                when v_today - coalesce(i.due_date, i.issue_date) <= 30 then '1_30'
+                when v_today - coalesce(i.due_date, i.issue_date) <= 60 then '31_60'
+                when v_today - coalesce(i.due_date, i.issue_date) <= 90 then '61_90'
                 else '90_plus' end as bucket
     from fin.invoices i
     where i.lane_id = p_lane and i.entity_code = c.own_entity and not i.voided and not i.deleted
@@ -104,11 +107,11 @@ begin
            'customer', t.customer_name, 'balance', t.balance, 'days_overdue', t.days_overdue) order by t.rn), '[]'::jsonb)
   into v_oldest
   from (
-    select i.customer_name, i.balance::numeric(18,2) as balance, (v_today - i.due_date)::integer as days_overdue,
-           pg_catalog.row_number() over (order by v_today - i.due_date desc, i.balance desc, i.id) as rn
+    select i.customer_name, i.balance::numeric(18,2) as balance, (v_today - coalesce(i.due_date, i.issue_date))::integer as days_overdue,
+           pg_catalog.row_number() over (order by v_today - coalesce(i.due_date, i.issue_date) desc, i.balance desc, i.id) as rn
     from fin.invoices i
     where i.lane_id = p_lane and i.entity_code = c.own_entity and not i.voided and not i.deleted
-      and i.balance > 0 and i.currency_code = 'USD' and i.due_date < v_today
+      and i.balance > 0 and i.currency_code = 'USD' and coalesce(i.due_date, i.issue_date) < v_today
   ) t
   where t.rn <= 3;
 
@@ -120,6 +123,6 @@ begin
 end;
 $$;
 comment on function core.home_finance_detail(text) is
-  'Home finance detail (T-237): own-entity bills due in the next 14 days (overdue bills excluded), AR aging buckets and the three oldest overdue invoices (customer name, balance, days only). Figures from fin.* only; same gating and state values as home_finance. Invoker: RLS applies.';
+  'Home finance detail (T-237): own-entity bills due in the next 14 days (overdue bills excluded; unmapped_bills counts the same window), AR aging buckets by coalesce(due_date, issue_date) like home_finance and the three oldest overdue invoices (customer name, balance, days only). Figures from fin.* only; same gating and state values as home_finance. Invoker: RLS applies.';
 revoke all on function core.home_finance_detail(text) from public, anon;
 grant execute on function core.home_finance_detail(text) to authenticated, service_role;
