@@ -12,7 +12,8 @@ const TONE = { danger: "text-danger", success: "text-success" } as const;
 export function KpiStrip({ laneId, tiles }: { laneId: string; tiles: KpiTile[] }) {
   if (tiles.length === 0) return null;
   return (
-    <section aria-label="Key figures" data-testid="home-kpis" className="grid grid-cols-2 items-stretch gap-3 md:grid-cols-[repeat(auto-fit,minmax(12rem,1fr))] md:gap-5">
+    <section aria-labelledby="kpi-heading" data-testid="home-kpis" className="grid grid-cols-2 items-stretch gap-3 md:grid-cols-[repeat(auto-fit,minmax(12rem,1fr))] md:gap-5">
+      <h2 id="kpi-heading" className="sr-only">Key figures</h2>
       {tiles.map((t) => (t.connect ? <ConnectTile key={t.key} laneId={laneId} tile={t} /> : <Tile key={t.key} tile={t} />))}
     </section>
   );
@@ -25,7 +26,6 @@ function ConnectTile({ laneId, tile }: { laneId: string; tile: KpiTile }) {
       data-testid="kpi-connect"
       className={`flex h-full min-w-0 flex-col justify-between gap-2 rounded-card border border-border bg-card p-5 text-card-foreground shadow-card hover:bg-muted/40 ${TILE_HEIGHT}`}
     >
-      <h2 className="font-sans text-label font-medium uppercase tracking-wide text-muted-foreground">Key figures</h2>
       <p className="font-sans text-card-title font-semibold text-primary">
         {tile.label} <span aria-hidden>{"\u2192"}</span>
       </p>
@@ -39,7 +39,7 @@ function Tile({ tile }: { tile: KpiTile }) {
   return (
     <div data-slot="kpi-tile" data-testid="kpi-tile" data-kpi={tile.key} data-status={has ? "ok" : "no_data"} className={`flex h-full min-w-0 flex-col justify-between gap-2 rounded-card border border-border bg-card p-5 text-card-foreground shadow-card ${TILE_HEIGHT}`}>
       <div className="flex min-h-10 flex-col gap-1">
-        <h2 className="font-sans text-label font-medium uppercase tracking-wide text-muted-foreground">{tile.label}</h2>
+        <p data-slot="kpi-label" className="font-sans text-label font-medium uppercase tracking-wide text-muted-foreground">{tile.label}</p>
         {tile.bookBalance ? <BookBalanceLabel /> : null}
         {tile.qualifier ? <p className="text-small text-muted-foreground">{tile.qualifier}</p> : null}
       </div>

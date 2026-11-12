@@ -7,7 +7,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { cleanup, render, screen, within } from "@testing-library/react";
 import type { HomeView } from "@/lib/home";
 
-const m = vi.hoisted(() => ({ owner: false, mail: { access: false } as { access: boolean; attention?: unknown[]; more?: number; money?: unknown[]; mailboxOf?: Record<string, string> }, coverage: { items: [], unavailable: false } as unknown, view: null as unknown, progress: null as unknown, detail: { state: "no_access" } as unknown, userName: undefined as string | undefined, finance: { state: "not_connected", asOf: null, lastSyncAt: null, connectionStatus: null, cash: { reason: null, total: null, asOf: null, accounts: [], unmapped: 0 }, ar: { reason: null, over30: null, invoices: 0, unmapped: 0 }, pnl: { reason: null, income: null, expenses: null, net: null, start: null, end: null, method: null, partial: false, asOf: null } } as unknown }));
+const m = vi.hoisted(() => ({ financeView: false, owner: false, mail: { access: false } as { access: boolean; attention?: unknown[]; more?: number; money?: unknown[]; mailboxOf?: Record<string, string> }, coverage: { items: [], unavailable: false } as unknown, view: null as unknown, progress: null as unknown, detail: { state: "no_access" } as unknown, userName: undefined as string | undefined, finance: { state: "not_connected", asOf: null, lastSyncAt: null, connectionStatus: null, cash: { reason: null, total: null, asOf: null, accounts: [], unmapped: 0 }, ar: { reason: null, over30: null, invoices: 0, unmapped: 0 }, pnl: { reason: null, income: null, expenses: null, net: null, start: null, end: null, method: null, partial: false, asOf: null } } as unknown }));
 vi.mock("@/lib/lane-page", () => ({ loadLane: async () => ({ laneId: "PKG", name: "Pub K Group", lanes: [], userId: "u1" }) }));
 vi.mock("@/lib/guards", () => ({ guards: async () => ({ requireLane: async () => ({ client: {}, session: { userId: "u1" } }), requireRole: async (_l: string, roles: string[]) => { if (m.owner && roles.includes("owner")) return { client: {}, session: { userId: "u1" } }; throw new Error("not admin"); } }) }));
 vi.mock("@/app/[laneId]/briefing-actions", () => ({ ensureFreshBriefing: async () => ({ started: false, gate: "not_stale" }), regenerateBriefing: async () => ({ started: false, gate: "not_stale" }), briefingRunState: async () => null }));
@@ -24,7 +24,7 @@ vi.mock("@/lib/onboarding-progress", () => ({
   onboardingFor: async () => m.progress,
 }));
 vi.mock("@/lib/first-name", async (orig) => ({ ...(await orig<typeof import("@/lib/first-name")>()), firstNameFor: async () => m.userName }));
-vi.mock("@/lib/home-finance", async (orig) => ({ ...(await orig<typeof import("@/lib/home-finance")>()), homeFinanceFor: async () => m.finance }));
+vi.mock("@/lib/home-finance", async (orig) => ({ ...(await orig<typeof import("@/lib/home-finance")>()), homeFinanceFor: async () => m.finance, hasFinanceView: async () => m.financeView }));
 vi.mock("@/lib/home-finance-detail", async (orig) => ({ ...(await orig<typeof import("@/lib/home-finance-detail")>()), homeFinanceDetailFor: async () => m.detail }));
 vi.mock("@/lib/home", async (orig) => ({ ...(await orig<typeof import("@/lib/home")>()), homeFor: async () => m.view }));
 
@@ -42,7 +42,7 @@ const allFeeds = [{ provider: "quickbooks", status: "active" }, { provider: "str
 
 const view = (over: Partial<HomeView> = {}): HomeView => ({ calendar: "not_connected", meetings: [], upcoming: [], feeds: [], unreadImportant: null, attention: [], ...over });
 
-type El = ReactElement<{ children?: ReactNode; fallback?: ReactNode; actions?: ReactNode }>;
+type El = ReactElement<{ children?: ReactNode; fallback?: ReactNode; actions?: ReactNode; title?: ReactNode }>;
 /** Server components are async functions, which a client render cannot run: resolve them (and their Suspense children) up front. Fallbacks are collected. */
 async function resolve(node: ReactNode, fallbacks: ReactNode[]): Promise<ReactNode> {
   if (Array.isArray(node)) return Promise.all(node.map((n) => resolve(n, fallbacks)));
@@ -57,7 +57,8 @@ async function resolve(node: ReactNode, fallbacks: ReactNode[]): Promise<ReactNo
   }
   // PageHeader's `actions` is a prop, not children: resolve it too (the status dot lives there).
   const actions = el.props.actions;
-  const extra = actions === undefined ? undefined : { actions: await resolve(actions, fallbacks) };
+  const title = el.props.title;
+  const extra = actions === undefined && title === undefined ? undefined : { ...(actions === undefined ? {} : { actions: await resolve(actions, fallbacks) }), ...(title === undefined ? {} : { title: await resolve(title, fallbacks) }) };
   if (el.props.children === undefined) return extra ? cloneElement(el, extra) : el;
   return cloneElement(el, extra, await resolve(el.props.children, fallbacks));
 }
@@ -76,6 +77,7 @@ afterEach(() => {
   m.userName = undefined;
   m.progress = null;
   m.owner = false;
+  m.financeView = false;
   m.mail = { access: false };
   m.coverage = { items: [], unavailable: false };
 });
@@ -161,6 +163,22 @@ describe("Home layout (T-234 part 1)", () => {
     await draw();
     expect(screen.queryByTestId("home-finance")).toBeNull();
     expect(screen.queryAllByTestId("kpi-tile")).toHaveLength(0);
+  });
+
+  it("a finance outage is shown only to a caller with the finance view; anyone else sees no finance section and no 'Could not load' tile", async () => {
+    m.view = view();
+    m.finance = { state: "unavailable" };
+    m.detail = { state: "unavailable" };
+    m.financeView = false;
+    await draw();
+    expect(screen.queryByTestId("home-finance")).toBeNull();
+    expect(screen.queryAllByTestId("kpi-tile")).toHaveLength(0);
+    expect(screen.queryByText(/Could not load/)).toBeNull();
+    cleanup();
+    m.financeView = true;
+    await draw();
+    expect(screen.getByTestId("finance-unavailable")).toBeTruthy();
+    expect(screen.getAllByText("Could not load. Reload in a minute.").length).toBeGreaterThan(0);
   });
 
   it("the briefing, Money and Coverage cards are gone from Home; the briefing's summary lives inside 'Needs your attention'", async () => {

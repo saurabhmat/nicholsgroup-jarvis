@@ -1164,3 +1164,13 @@ Every BLOCKER, HIGH and MEDIUM from the T-235 reviews and re-checks is fixed. Th
 - **A context-window stop gets different codes:** briefing `output_invalid`, news `output_truncated`. Neither is retried. Cosmetic.
 - **Gmail body reads in the scheduled briefing do not take the abort signal** (existed before T-236). A stall of more than 120 s leaves the claim `running` until it is treated as lost.
 - **`retryMaxTokens` exists twice** (news-domain.ts and briefing-run.ts, the same 1.5x / 32000 rule). Small; leave until a third user appears.
+
+## T-237: logged, not fixed (Nov 12, 2026)
+
+- **Flaky test: connectors QuickBooks reports.** It asserts `not.toContain('25.00')` against a mocked `Header.Time`, so it fails whenever the clock's seconds are 25. Pre-existing; use a time whose digits cannot collide with the figure.
+- **Flaky test: quickbooks `sync.test`** hits its 5 s timeout under load (it passes alone). Raise the timeout or split it.
+- **Aging colours** on Home's Finance section differ slightly from the PNG (the tokens are the design system's chart tokens, not sampled from the picture).
+- **"N min ago" sync label** is computed at render, so it can be up to 5 minutes stale until the auto-refresh re-reads the page. Accepted.
+- **Priority-sender change (needs Saurabh's confirmation).** Bulk and newsletter mail is now excluded from the top 5 even when the sender is a configured priority sender. Confirm that is wanted.
+- **"Income" instead of "Revenue" (rule 8, needs confirmation).** The Finance section labels the QuickBooks figure "Income", because Stripe is the source of revenue. The design PNG says "Revenue". Confirm the wording.
+- **Approvals banner shows the count only.** The design's per-type breakdown ("2 payments, 1 email") has no source yet (the waiting count has no per-type read); add one with a later SQL change if wanted.

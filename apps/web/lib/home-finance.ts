@@ -234,3 +234,20 @@ export async function homeFinanceFor(g: Pick<Guards, "requireLane">, laneId: str
     return { state: "unavailable" };
   }
 }
+
+type Rpc = { schema(name: string): { rpc(fn: string, args: Record<string, unknown>): PromiseLike<{ data: unknown; error: unknown }> } };
+
+/**
+ * Whether the signed-in user holds the lane's `finance` view: the existing core.allowed_lanes read (own uid, AAL2), the same check the
+ * database applies. Used only to decide whether a finance OUTAGE may be shown (a role without the view must not learn that finance
+ * exists or is down). Any failure answers false: fail closed.
+ */
+export async function hasFinanceView(g: Pick<Guards, "requireLane">, laneId: string): Promise<boolean> {
+  try {
+    const { client, session } = await g.requireLane(laneId as Parameters<Guards["requireLane"]>[0]);
+    const { data, error } = await (client as unknown as Rpc).schema("core").rpc("allowed_lanes", { p_uid: session.userId, p_view: "finance" });
+    return !error && Array.isArray(data) && data.includes(laneId);
+  } catch {
+    return false;
+  }
+}

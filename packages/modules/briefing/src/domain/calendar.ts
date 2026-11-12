@@ -202,19 +202,30 @@ export function attendeeNames(e: BriefEvent, owners: ReadonlySet<string>, max = 
   return { names: uniq.slice(0, max), more: Math.max(0, uniq.length - max) };
 }
 
-/** Display names for addresses, each person once: the same name (case and whitespace insensitive) or the same address is never listed twice (T-237; the organizer is an attendee entry too). */
+/** True when the entry has a real display name (not an address, not just the local part made readable). */
+function hasRealName(email: string, e: BriefEvent): boolean {
+  const n = e.attendees.find((x) => x.email === email)?.name?.trim();
+  return Boolean(n) && !(n as string).includes("@");
+}
+
+/**
+ * Display names for addresses, each person once (T-237). The same address (any case) is one person. Two entries with a real display
+ * name are one person only when the name (case and whitespace insensitive) AND the email domain both match, so two "Sam"s at different
+ * domains stay two and an external who is named like an internal colleague is never merged into them. A name made from the address's
+ * local part is no evidence of identity: it dedupes by full address only. The organizer is an attendee entry too.
+ */
 function uniqueNames(emails: readonly string[], e: BriefEvent): string[] {
-  const seenNames = new Set<string>();
-  const seenEmails = new Set<string>();
+  const seen = new Set<string>();
   const out: string[] = [];
   for (const email of emails) {
     const addr = email.trim().toLowerCase();
-    const name = attendeeName(email, e);
-    const key = name.replace(/\s+/g, " ").trim().toLowerCase();
-    if (seenEmails.has(addr) || seenNames.has(key)) continue;
-    seenEmails.add(addr);
-    seenNames.add(key);
-    out.push(name.replace(/\s+/g, " ").trim());
+    const name = attendeeName(email, e).replace(/\s+/g, " ").trim();
+    const domain = addr.slice(addr.lastIndexOf("@") + 1);
+    const key = hasRealName(email, e) ? `n:${name.toLowerCase()}|${domain}` : `a:${addr}`;
+    if (seen.has(`a:${addr}`) || seen.has(key)) continue;
+    seen.add(`a:${addr}`);
+    seen.add(key);
+    out.push(name);
   }
   return out;
 }

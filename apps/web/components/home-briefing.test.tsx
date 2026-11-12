@@ -158,6 +158,12 @@ describe("Next 7 days summary and LookAhead", () => {
     expect(button.getAttribute("aria-expanded")).toBe("false");
   });
 
+  it.each([["America/New_York", "Eastern time"], ["US/Eastern", "Eastern time"], ["America/Los_Angeles", "Times in America/Los Angeles"]])("the Today note for %s reads '%s'", (tz, note) => {
+    const view = { viewerTz: tz, calendar: { access: true as const, today: [], ahead: [], aheadSummary: { meetings: 0, clashes: 0 }, owners: [] } } as unknown as BriefingView;
+    render(<CalendarSections view={view} now={now} />);
+    expect(screen.getByText(note)).toBeTruthy();
+  });
+
   it("lists notable events with names (never addresses), a time column and a title link", () => {
     const ahead = notableAhead(
       parseEvents([{ calendar_id: "primary", event_id: "x", title: "Client call", start_at: "2026-11-14T15:00:00Z", end_at: "2026-11-14T16:00:00Z", source_url: "https://calendar.example.test/x", attendees: [{ email: "c.client@acme.test" }] }]),

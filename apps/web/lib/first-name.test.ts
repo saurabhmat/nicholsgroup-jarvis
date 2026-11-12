@@ -12,11 +12,16 @@ describe("firstNameOf", () => {
 });
 
 describe("firstNameFor", () => {
-  const g = { requireLane: async () => ({ client: {} }) } as never;
+  const g = { requireLane: async () => ({ client: {}, session: { userId: "u1" } }) } as never;
   it("returns the first name from the loaded profile", async () => {
-    expect(await firstNameFor(g, "PKG", "u1", async (_c, id) => (id === "u1" ? "Dana" : undefined))).toBe("Dana");
+    expect(await firstNameFor(g, "PKG", async (_c, id) => (id === "u1" ? "Dana" : undefined))).toBe("Dana");
+  });
+  it("reads the verified session user's row, whoever else is named", async () => {
+    const seen: string[] = [];
+    await firstNameFor(g, "PKG", async (_c, id) => { seen.push(id); return undefined; });
+    expect(seen).toEqual(["u1"]);
   });
   it("never throws: a failed read leaves no name", async () => {
-    expect(await firstNameFor(g, "PKG", "u1", async () => { throw new Error("x"); })).toBeUndefined();
+    expect(await firstNameFor(g, "PKG", async () => { throw new Error("x"); })).toBeUndefined();
   });
 });

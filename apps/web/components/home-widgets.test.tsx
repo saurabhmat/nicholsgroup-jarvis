@@ -3,7 +3,7 @@
 // default, the news empty state and the projects card.
 import { afterEach, describe, expect, it } from "vitest";
 import { cleanup, fireEvent, render, screen } from "@testing-library/react";
-import { CoverageDot } from "./coverage-dot";
+import { CoverageDot, syncedLabel } from "./coverage-dot";
 import { CollapsibleSection } from "./collapsible-section";
 import { GovConNews } from "./home-news";
 import { ProjectsGlance } from "./home-projects";
@@ -32,6 +32,18 @@ describe("Coverage status dot", () => {
   it("all sources fine but no sync time known: just 'All sources synced'", () => {
     render(<CoverageDot laneId="PKG" view={{ items: [item("ok")], unavailable: false }} />);
     expect(screen.getByTestId("coverage-dot").textContent).toBe("All sources synced");
+  });
+  it("syncedLabel uses only the sources that are ok: a stale source's older sync does not count, and an unparseable time is ignored", () => {
+    const now = new Date("2026-11-12T15:00:00Z");
+    const at = (state: CoverageItem["state"], iso: string | null) => ({ ...item(state), lastSyncAt: iso });
+    expect(syncedLabel([at("ok", "2026-11-12T14:58:00Z"), at("stale", "2026-11-10T00:00:00Z"), at("ok", "2026-11-12T14:55:00Z")], now)).toBe("All sources synced \u00b7 5 min ago");
+    expect(syncedLabel([at("ok", "not a date")], now)).toBe("All sources synced");
+    expect(syncedLabel([at("ok", "not a date"), at("ok", "2026-11-12T14:58:00Z")], now)).toBe("All sources synced \u00b7 2 min ago");
+  });
+  it("a mix of ok and stale sources is a sync issue, never the all-synced label", () => {
+    render(<CoverageDot laneId="PKG" view={{ items: [{ ...item("ok"), lastSyncAt: "2026-11-12T14:58:00Z" }, item("stale")], unavailable: false }} now={new Date("2026-11-12T15:00:00Z")} />);
+    expect(screen.getByTestId("coverage-dot").textContent).toBe("Sync issue");
+    expect(screen.getByTestId("coverage-dot").getAttribute("aria-label")).toBe("1 source is stale or in error. Open Settings, Connections.");
   });
   it.each([
     ["only a source that was never connected", [item("not_connected")]],

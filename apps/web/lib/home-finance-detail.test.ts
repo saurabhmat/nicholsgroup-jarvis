@@ -54,3 +54,13 @@ describe("homeFinanceDetailFor", () => {
     expect(await homeFinanceDetailFor(g, "PKG", async () => { throw new Error("x"); })).toEqual({ state: "unavailable" });
   });
 });
+
+describe("oldest unpaid invoices mapper (T-237 review)", () => {
+  it("excludes rows with fewer than one day overdue (0, a fraction, negative) and keeps whole days", () => {
+    // (only the first three rows are read)
+    const none = toHomeFinanceDetail([{ ...row, oldest: [{ customer: "A", balance: 1, days_overdue: 0 }, { customer: "B", balance: 1, days_overdue: 0.9 }, { customer: "C", balance: 1, days_overdue: -3 }] }]);
+    expect(none.state === "ok" && none.oldest).toEqual([]);
+    const v = toHomeFinanceDetail([{ ...row, oldest: [{ customer: "A", balance: 1, days_overdue: 0 }, { customer: "D", balance: 2, days_overdue: 1 }, { customer: "E", balance: 3, days_overdue: "7.8" }] }]);
+    expect(v.state === "ok" && v.oldest).toEqual([{ customer: "D", balance: 2, daysOverdue: 1 }, { customer: "E", balance: 3, daysOverdue: 7 }]);
+  });
+});

@@ -22,11 +22,11 @@ export async function loadFirstName(client: Db, userId: string): Promise<string 
   return firstNameOf((data as { display_name?: unknown } | null)?.display_name);
 }
 
-/** Never throws: any failure leaves the heading without a name. */
-export async function firstNameFor(g: Pick<Guards, "requireLane">, laneId: string, userId: string, load = loadFirstName): Promise<string | undefined> {
+/** Never throws: any failure leaves the heading without a name. The profile read is always for the SESSION user that the lane guard verified (never a caller-supplied id). */
+export async function firstNameFor(g: Pick<Guards, "requireLane">, laneId: string, load = loadFirstName): Promise<string | undefined> {
   try {
-    const { client } = await g.requireLane(laneId as Parameters<Guards["requireLane"]>[0]);
-    return await load(client, userId);
+    const { client, session } = await g.requireLane(laneId as Parameters<Guards["requireLane"]>[0]);
+    return await load(client, session.userId);
   } catch {
     return undefined;
   }

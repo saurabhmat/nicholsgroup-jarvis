@@ -38,7 +38,7 @@ import { OnboardingBanner } from "./onboarding-entry";
 import { HomeSkeleton, KpiStripSkeleton } from "./page-skeleton";
 import { onboardingFor } from "@/lib/onboarding-progress";
 import { timed } from "@/lib/timed";
-import { homeFinanceFor } from "@/lib/home-finance";
+import { hasFinanceView, homeFinanceFor } from "@/lib/home-finance";
 import { homeFinanceDetailFor } from "@/lib/home-finance-detail";
 import { kpiTiles } from "@/lib/home-kpi-tiles";
 
@@ -48,8 +48,8 @@ export async function HomePage({ params }: { params: Promise<{ laneId: string }>
   // The verified user id (from loadLane's lane check) is only a sessionStorage key part for view state (expanded sections, the open drawer).
   const userId = lane.userId;
   const tz = viewerZone((await cookies()).get("tz")?.value);
-  // The first name is the user's own profile row (core.users.display_name); none readable: just "Good morning" (never invented).
-  const heading = homeHeading(await timed("load.first_name", async () => firstNameFor(await guards(), lane.laneId, userId)));
+  // The first name is the session user's own profile row (core.users.display_name); none readable: just "Good morning" (never invented).
+  // It loads in its own Suspense boundary (HomeGreeting), so the header never waits on it.
   // T-230 A: the header renders as soon as the lane is verified; the data sections and the setup banner stream in behind it
   // (each in its own boundary, so the slow setup lookup never holds back today's figures, and neither holds the header).
   return (
@@ -58,8 +58,11 @@ export async function HomePage({ params }: { params: Promise<{ laneId: string }>
       <PageHeader
         className="mb-2"
         eyebrow={`${eyebrowDate(now)} · ${lane.name}`}
-        title={heading.lead}
-        accent={heading.accent}
+        title={
+          <Suspense fallback={homeHeading(undefined).lead}>
+            <HomeGreeting laneId={lane.laneId} />
+          </Suspense>
+        }
         actions={
           <>
             <HomeAutoRefresh renderedAt={now.toISOString()} tz={tz} />
@@ -89,6 +92,24 @@ export async function HomePage({ params }: { params: Promise<{ laneId: string }>
       </div>
     </div>
     </HomeScope>
+  );
+}
+
+/** The greeting text: "Good morning" at once, with the first name once the profile row is read. */
+async function HomeGreeting({ laneId }: { laneId: string }) {
+  const heading = homeHeading(await timed("load.first_name", async () => firstNameFor(await guards(), laneId)));
+  return (
+    <>
+      {heading.lead}
+      {heading.accent ? (
+        <>
+          {" "}
+          <em data-slot="accent" className="font-normal italic text-accent-italic">
+            {heading.accent}
+          </em>
+        </>
+      ) : null}
+    </>
   );
 }
 
@@ -182,7 +203,12 @@ const GRID_FULL = "md:col-span-3 md:col-start-1";
 /** Both finance reads, once per request (React `cache`): the KPI row and the Finance section share them. */
 const loadFinance = cache(async (laneId: string) => {
   const g = await guards();
-  return Promise.all([timed("load.home_finance", async () => homeFinanceFor(g, laneId)), timed("load.home_finance_detail", async () => homeFinanceDetailFor(g, laneId))]);
+  const [finance, detail] = await Promise.all([timed("load.home_finance", async () => homeFinanceFor(g, laneId)), timed("load.home_finance_detail", async () => homeFinanceDetailFor(g, laneId))]);
+  // An outage is shown only to a caller who holds the lane's finance view; anyone else sees no finance UI at all (the check runs only during an outage).
+  if ((finance.state === "unavailable" || detail.state === "unavailable") && !(await hasFinanceView(g, laneId))) {
+    return [finance.state === "unavailable" ? ({ state: "no_access" } as const) : finance, detail.state === "unavailable" ? ({ state: "no_access" } as const) : detail] as const;
+  }
+  return [finance, detail] as const;
 });
 
 async function KpiSection({ laneId, feeds, canConnect }: { laneId: string; feeds: HomeView["feeds"]; canConnect: boolean }) {

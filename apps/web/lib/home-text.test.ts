@@ -38,3 +38,16 @@ describe("localizeTimes", () => {
     expect(localizeTimes("due 2026-11-13.", "America/Los_Angeles")).toBe("due Fri, Nov 13.");
   });
 });
+
+describe("localizeTimes (T-237 review)", () => {
+  it("leaves a date inside a longer token alone", () => {
+    expect(localizeTimes("Invoice INV-2026-11-12 and 2026-11-12-draft, due 2026-11-13", "America/New_York")).toBe("Invoice INV-2026-11-12 and 2026-11-12-draft, due Fri, Nov 13");
+    expect(localizeTimes("INV-2026-11-12T14:00:00Z", "America/New_York")).toBe("INV-2026-11-12T14:00:00Z");
+  });
+  it("a zone-less ISO date-time is New York wall time, shown like the others (no raw ISO)", () => {
+    expect(localizeTimes("Call 2026-11-12T14:00:00 now", "America/New_York")).toBe("Call Thu, Nov 12, 2:00 PM now");
+    expect(localizeTimes("Call 2026-07-01T14:00:00.", "America/New_York")).toBe("Call Wed, Jul 1, 2:00 PM.");
+    expect(localizeTimes("2026-11-12T14:00", "America/Los_Angeles")).toBe("Thu, Nov 12, 11:00 AM");
+    expect(localizeTimes("2026-11-12T14:00:00", "America/New_York")).not.toMatch(/\d{4}-\d{2}-\d{2}T/);
+  });
+});

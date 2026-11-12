@@ -149,13 +149,16 @@ export function LookAhead({ events, tz }: { events: NotableEvent[]; tz: string }
   );
 }
 
+/** IANA names of US Eastern time: the Today note says "Eastern time" for all of them. */
+const EASTERN_ZONES: ReadonlySet<string> = new Set(["America/New_York", "US/Eastern"]);
+
 /** Right column of row 1: Today's calendar, with "Next 7 days" collapsed below it (one-line summary in its header; expands on click). */
 export function CalendarSections({ view, now }: { view: BriefingView; now: Date }) {
   const c = view.calendar;
   const summary = c.access && c.aheadSummary ? aheadSummaryText(c.aheadSummary) : undefined;
   return (
     <>
-      <PageSection title="Today" ariaLabel="Today's calendar" note={view.viewerTz === "America/New_York" ? "Eastern time" : `Times in ${view.viewerTz.replace(/_/g, " ")}`}>
+      <PageSection title="Today" ariaLabel="Today's calendar" note={EASTERN_ZONES.has(view.viewerTz) ? "Eastern time" : `Times in ${view.viewerTz.replace(/_/g, " ")}`}>
         <TodayCalendar calendar={view.calendar} tz={view.viewerTz} now={now} />
       </PageSection>
       <CollapsibleSection title="Next 7 days" testId="next-7-days" persistId="next-7-days" {...(summary ? { note: summary } : {})}>
