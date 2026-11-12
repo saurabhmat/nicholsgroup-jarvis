@@ -52,7 +52,7 @@ export type ReplyProposal = {
 
 const MASKED = /\[(?:amount|number)\]/;
 const NO_REPLY = /^(?:no-?reply|do-?not-?reply|mailer-daemon|notifications?)[@+.]/i;
-const reSubject = (s: string | null) => {
+export const reSubject = (s: string | null) => {
   const t = (s ?? "").replace(/[\r\n]+/g, " ").trim();
   return /^re:/i.test(t) ? t : `Re: ${t}`.trim();
 };

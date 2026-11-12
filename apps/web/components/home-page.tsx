@@ -85,11 +85,13 @@ async function HomeSections({ laneId, now }: { laneId: string; now: Date }) {
   const g = await guards();
   // Home v1 counts and the T-231 briefing sections load in parallel. Each shows its own "unavailable" state; neither ever shows an empty day.
   const laneClient = async () => (await g.requireLane(laneId as Parameters<typeof g.requireLane>[0])).client;
-  const [view, brief, saved, isAdmin] = await Promise.all([
+  const [view, brief, saved, isAdmin, isOwner] = await Promise.all([
     timed("load.home", async () => homeFor(g, laneId, now)),
     timed("load.briefing", async () => briefingFor(await laneClient(), laneId, now, tz)),
     timed("load.briefing_latest", async () => latestBriefing(await laneClient(), laneId)),
     g.requireRole(laneId as Parameters<typeof g.requireLane>[0], ["owner", "admin_technical"]).then(() => true, () => false),
+    // Reply is a drawer only for the owner (T-234 part 3): it proposes and sends through approvals, which are owner-only.
+    g.requireRole(laneId as Parameters<typeof g.requireLane>[0], ["owner"]).then(() => true, () => false),
   ]);
   // Why there is no AI summary: the AI setup itself (names only), else the stored code of the newest failed attempt.
   const setup = aiSetupFailure();
@@ -110,7 +112,7 @@ async function HomeSections({ laneId, now }: { laneId: string; now: Date }) {
         <div data-testid="home-attention-slot" className="flex min-w-0 flex-col gap-4 lg:col-span-2">
           <PageSection title="Needs your attention" note="Top 5 · metadata only">
             <AiBriefing laneId={laneId} brief={saved} fallbackLines={view.unavailable ? [] : composeBriefing(view, now)} tz={brief.viewerTz} canRun={brief.mail.access} failure={failure} failureHint={failureHint} />
-            <AttentionSection laneId={laneId} mail={brief.mail} now={now} notes={notesByMessage(saved)} replies={repliesByMessage(saved)} />
+            <AttentionSection laneId={laneId} mail={brief.mail} now={now} notes={notesByMessage(saved)} replies={repliesByMessage(saved)} canReply={isOwner} />
             {saved && saved.status !== "failed" ? (
               // Folded so the card stays short: reply drafts (with Copy) and deadlines from the briefing.
               <details data-testid="attention-extras" className="border-t border-border pt-3">

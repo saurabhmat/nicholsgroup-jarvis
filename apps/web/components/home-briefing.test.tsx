@@ -105,12 +105,17 @@ describe("AttentionSection (T-234 part 2)", () => {
     for (const a of screen.getAllByRole("link")) expect(a.getAttribute("href")).not.toMatch(/google\.com/);
   });
 
-  it("Reply: with a T-231d draft it goes to that proposal in Approvals; without one, to the thread", () => {
+  it("Reply: other roles get a link to the thread in Jarvis; the owner gets the drawer button (T-234 part 3)", () => {
     const { rerender } = render(<AttentionSection laneId="PKG" now={now} mail={mail()} />);
     expect(screen.getByTestId("attention-reply").getAttribute("href")).toBe("/PKG/inbox/m1");
     rerender(<AttentionSection laneId="PKG" now={now} mail={mail()} replies={new Map([["c1:m1", "00000000-0000-4000-8000-0000000000d1"]])} />);
-    expect(screen.getByTestId("attention-reply").getAttribute("href")).toBe("/PKG/approvals#action-00000000-0000-4000-8000-0000000000d1");
+    expect(screen.getByTestId("attention-reply").getAttribute("href")).toBe("/PKG/inbox/m1");
     expect(screen.getByTestId("attention-reply").getAttribute("data-has-draft")).toBe("true");
+    rerender(<AttentionSection laneId="PKG" now={now} mail={mail()} canReply />);
+    const reply = screen.getByTestId("attention-reply");
+    expect(reply.tagName).toBe("BUTTON");
+    expect(reply.getAttribute("href")).toBeNull();
+    expect(reply.getAttribute("aria-haspopup")).toBe("dialog");
   });
 
   it("a repeated-failures item has Open but no Reply", () => {

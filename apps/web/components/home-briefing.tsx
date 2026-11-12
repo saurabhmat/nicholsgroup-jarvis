@@ -146,9 +146,9 @@ const senderOf = (t: ThreadRow) => (t.fromName && t.fromAddress ? `${t.fromName}
 /**
  * "Needs your attention" items (T-234 part 2): the top 5 by rules. Each shows the title (figures masked, rule 7), the AI's
  * why-it-matters and next step when today's briefing has them, then sender, mailbox and age with a status chip, and two
- * actions: Reply (the hook part 3 turns into the drawer) and Open (the thread in Jarvis, never a Google page).
+ * actions: Reply (the owner's drawer, T-234 part 3; a link to the thread for other roles) and Open (the thread in Jarvis, never a Google page).
  */
-export function AttentionSection({ laneId, mail, now, notes, replies }: { laneId: string; mail: MailSection; now: Date; notes?: Map<string, AttentionNote>; replies?: Map<string, string> }) {
+export function AttentionSection({ laneId, mail, now, notes, replies, canReply = false }: { laneId: string; mail: MailSection; now: Date; notes?: Map<string, AttentionNote>; replies?: Map<string, string>; canReply?: boolean }) {
   if (!mail.access) {
     return mail.unavailable ? (
       <EmptyState title="Mail could not be read" description="Reload in a minute. Settings → Connections shows the last sync." className="border-0 bg-transparent px-0 py-6" />
@@ -171,7 +171,7 @@ export function AttentionSection({ laneId, mail, now, notes, replies }: { laneId
               <span className="flex flex-wrap items-start justify-between gap-x-3 gap-y-2">
                 <span className="min-w-0 flex-1 break-words font-medium text-foreground">{a.kind === "repeated_failures" ? a.reason : t.subject ? maskFigures(t.subject) : "(No subject)"}</span>
                 <span className="flex shrink-0 items-center gap-2">
-                  {a.kind === "repeated_failures" ? null : <ReplyAction target={{ laneId, connectionId: t.connectionId, messageId: t.messageId, threadKey: t.threadKey, proposalId: replies?.get(`${t.connectionId}:${t.messageId}`) ?? null }} />}
+                  {a.kind === "repeated_failures" ? null : <ReplyAction canReply={canReply} target={{ laneId, connectionId: t.connectionId, messageId: t.messageId, threadKey: t.threadKey, proposalId: replies?.get(`${t.connectionId}:${t.messageId}`) ?? null }} />}
                   <Link href={inboxHref(laneId, t.messageId)} data-testid="attention-open" className={buttonVariants({ variant: "outline", size: "sm" })}>
                     Open
                   </Link>
