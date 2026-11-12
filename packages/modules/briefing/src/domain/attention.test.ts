@@ -120,11 +120,19 @@ describe("T-234 part 2 exclusions", () => {
   it("security alerts from trusted senders are still never excluded", () => {
     expect(classify(t({ fromAddress: "no-reply@accounts.google.com", subject: "Security alert: new sign-in", isBulk: true }), rules)).toMatchObject({ excluded: null, security: true });
   });
-  it("money mail survives the bulk, auto-generated, label and bot_subject exclusions", () => {
+  it("authenticated money mail survives the bulk, auto-generated, label and bot_subject exclusions", () => {
     for (const flags of [{ isBulk: true }, { isGenerated: true }, { labels: ["INBOX", "CATEGORY_PROMOTIONS"] }]) {
-      expect(moneyThreads([t({ fromAddress: "billing@pubk.test", subject: "Invoice 1042 is attached", ...flags })], rules)).toHaveLength(1);
+      expect(moneyThreads([t({ fromAddress: "billing@pubk.test", subject: "Invoice 1042 is attached", isAuthPass: true, ...flags })], rules)).toHaveLength(1);
     }
-    expect(moneyThreads([t({ fromAddress: "noreply@billing.example.test", subject: "Payment failed for your subscription", isBulk: true })], rules)[0]?.kind).toBe("failed_payment");
+    expect(moneyThreads([t({ fromAddress: "noreply@billing.example.test", subject: "Payment failed for your subscription", isBulk: true, isAuthPass: true })], rules)[0]?.kind).toBe("failed_payment");
+  });
+  it("unauthenticated bulk/label money mail stays out, and spam or trash is never money (security re-check M2)", () => {
+    expect(moneyThreads([t({ fromAddress: "billing@pubk.test", subject: "Invoice overdue, pay here", isBulk: true })], rules)).toEqual([]);
+    expect(moneyThreads([t({ subject: "Invoice overdue", labels: ["CATEGORY_PROMOTIONS"] })], rules)).toEqual([]);
+    expect(moneyThreads([t({ subject: "Invoice 1042", labels: ["INBOX", "SPAM"], isAuthPass: true })], rules)).toEqual([]);
+    expect(moneyThreads([t({ subject: "Invoice 1042", labels: ["TRASH"], isAuthPass: true })], rules)).toEqual([]);
+    // Ordinary (not excluded) money mail needs no auth pass.
+    expect(moneyThreads([t({ subject: "Invoice 1042 is attached" })], rules)).toHaveLength(1);
   });
   it("but codes, calendar notices, true auto-replies and the newsletter sender lists stay out of the money list", () => {
     const inv = "Invoice 1042 is attached";
@@ -215,14 +223,15 @@ describe("moneyThreads", () => {
       t({ subject: "Invoice #1042 from Vendor" }),
       t({ subject: "Your payment failed", fromAddress: "billing@saas.test" }),
       t({ subject: "Your plan renews on Dec 1", fromAddress: "no-reply@saas.test" }),
-      t({ subject: "Invoice sale! 50% off", labels: ["CATEGORY_PROMOTIONS"] }),
+      t({ subject: "Invoice sale! 50% off", labels: ["CATEGORY_PROMOTIONS"] }), // unauthenticated promotion: out
+      t({ subject: "Invoice 77 from SaaS", labels: ["CATEGORY_PROMOTIONS"], isAuthPass: true }),
       t({ subject: "Card transaction alert: purchase" }),
       t({ subject: "Lunch?" }),
     ];
     expect(moneyThreads(rows, rules).map((m) => [m.kind, m.thread.subject])).toEqual([
       ["failed_payment", "Your payment failed"],
       ["invoice", "Invoice #1042 from Vendor"],
-      ["invoice", "Invoice sale! 50% off"], // a label exclusion does not hide a money match
+      ["invoice", "Invoice 77 from SaaS"], // a label exclusion does not hide an authenticated money match
       ["renewal", "Your plan renews on Dec 1"],
     ]);
   });

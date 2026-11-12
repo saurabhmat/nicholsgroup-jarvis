@@ -35,9 +35,29 @@ describe("deriveMailFlags", () => {
     expect(pass(["mx.google.com; dkim=pass header.d=notpubk.test; dmarc=fail"])).toBe(false);
     expect(pass(["mx.google.com; dkim=fail header.d=pubk.test; spf=pass; dmarc=fail"])).toBe(false);
     expect(pass(["mx.evil.test; dmarc=pass header.from=pubk.test"])).toBe(false); // non-Google authserv-id is ignored
-    expect(pass(["mx.evil.test; dmarc=pass", "mx.google.com; dmarc=pass"])).toBe(true); // the Google one is found
-    expect(pass(["mx.google.com; dmarc=fail", "mx.google.com; dmarc=pass"])).toBe(false); // only the FIRST Google header counts
+    // Only the TOPMOST header counts, and only when it is Google's (security re-check M1): a lower one may be the sender's.
+    expect(pass(["mx.evil.test; spf=fail", "mx.google.com; dmarc=pass header.from=pubk.test"])).toBe(false);
+    expect(pass(["mx.google.com; dmarc=fail header.from=pubk.test", "mx.google.com; dmarc=pass header.from=pubk.test"])).toBe(false);
+    expect(pass(["mx.google.com.evil; dmarc=pass header.from=pubk.test"])).toBe(false);
     expect(pass([])).toBe(false);
+    expect(pass([`mx.google.com; dmarc=pass header.from=pubk.test; ${"x".repeat(5000)}`])).toBe(false); // oversized
+  });
+  it("auth pass cannot be forged through comments, quoted strings or another domain's dmarc (security re-check H1)", () => {
+    const pass = (ar: string[], from = "ceo@priority.test") => deriveMailFlags(h({}), undefined, { fromAddress: from, authResults: ar }).is_auth_pass;
+    // A ";dmarc=pass" smuggled in the envelope sender, echoed in the SPF comment and smtp.mailfrom.
+    expect(pass(['mx.google.com; dkim=fail header.d=evil.test; spf=pass (google.com: domain of "a;dmarc=pass"@evil.test designates 1.2.3.4) smtp.mailfrom="a;dmarc=pass"@evil.test; dmarc=fail header.from=priority.test'])).toBe(false);
+    expect(pass(['mx.google.com; spf=pass smtp.mailfrom="x;dkim=pass header.d=priority.test x"@evil.test; dmarc=fail header.from=priority.test'])).toBe(false);
+    // dmarc=pass for ANOTHER domain is not a pass for this From.
+    expect(pass(["mx.google.com; dmarc=pass header.from=evil.test"])).toBe(false);
+    expect(pass(["mx.google.com; dmarc=pass"])).toBe(false); // no header.from: no pass
+    // header.d inside a comment is not read.
+    expect(pass(["mx.google.com; dkim=pass (header.d=priority.test) header.i=@evil.test"])).toBe(false);
+    // Unbalanced comment or quote: fail closed.
+    expect(pass(["mx.google.com; dmarc=pass header.from=priority.test (oops"])).toBe(false);
+    expect(pass(['mx.google.com; dmarc=pass header.from=priority.test "oops'])).toBe(false);
+    // Google's real shape still passes (comments removed, header.from exact).
+    expect(pass(["mx.google.com; dkim=pass header.i=@priority.test header.s=s1 header.b=AbC; spf=pass (google.com: domain of x@priority.test designates 1.2.3.4 as permitted sender) smtp.mailfrom=x@priority.test; dmarc=pass (p=REJECT sp=REJECT dis=NONE) header.from=priority.test"])).toBe(true);
+    expect(pass(["mx.google.com 1; dmarc=pass (p=NONE) header.from=priority.test"])).toBe(true); // with a version number
     expect(deriveMailFlags(h({}), undefined, { fromAddress: null, authResults: ["mx.google.com; dmarc=pass"] }).is_auth_pass).toBe(false);
     expect(deriveMailFlags(h({ "authentication-results": "mx.google.com; dmarc=pass" })).is_auth_pass).toBe(false); // needs the context
   });

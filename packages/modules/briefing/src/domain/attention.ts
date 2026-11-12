@@ -233,6 +233,11 @@ export function moneyThreads(rows: ThreadRow[], r: AttentionRules, limit = 6): M
     // A subject-prefix-only calendar/auto-reply match is soft: an authenticated priority sender skips it.
     if ((c.excluded === "otp" || c.excluded === "calendar" || c.excluded === "auto_reply") && !(isTrustedPriority(t, r) && !c.hard)) continue;
     if (senderHas(t.fromAddress, r.exclusions.newsletter_senders) || senderHas(t.fromAddress, r.exclusions.org_newsletter_senders)) continue;
+    // Spam and trash are never money (T-234 part 2 security re-check M2).
+    if (t.labels.some((l) => /^(spam|trash)$/i.test(l))) continue;
+    // A money subject overrides the bulk / generated / label / bot exclusions only for an AUTHENTICATED sender (real billing
+    // systems sign with DKIM aligned to their From domain); unauthenticated "Invoice overdue, pay here" mail stays out.
+    if (c.excluded !== null && t.isAuthPass !== true) continue;
     out.push({ key: `${t.connectionId}:${t.threadKey}`, kind, thread: t });
   }
   return out.sort((a, b) => MONEY_ORDER.indexOf(a.kind) - MONEY_ORDER.indexOf(b.kind) || b.thread.receivedAt.localeCompare(a.thread.receivedAt)).slice(0, limit);
