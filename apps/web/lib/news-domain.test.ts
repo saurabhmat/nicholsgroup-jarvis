@@ -62,11 +62,11 @@ describe("prompt", () => {
 
 describe("cost", () => {
   it("the reserve is the worst case of one fetch (calls x searches x price + tokens), in cents, within the SQL limit", () => {
-    // T-236: the first attempt AND its one retry after a cut-off reply. 6 calls x 50k in x $3 = 0.90; out: 3 x 8000 + 3 x 12000
-    // = 60000 x $15 = 0.90; 6 x 6 searches x $10/1000 = 0.36 -> 2.16
-    expect(reserveUsd(cfg)).toBe(2.16);
-    // no resumes = 2 calls: 0.30 in + (8000 + 12000) x 15 = 0.30 out + 0.12 searches
-    expect(reserveUsd(cfg, 0)).toBe(0.72);
+    // T-236: one attempt (the retry after a cut-off reply is not reserved, see reserveUsd). 3 calls x 50k in x $3 = 0.45;
+    // 3 x 8000 out x $15 = 0.36; 3 x 6 searches x $10/1000 = 0.18 -> 0.99
+    expect(reserveUsd(cfg)).toBe(0.99);
+    // no resumes = one call: 0.15 in + 0.12 out + 0.06 searches
+    expect(reserveUsd(cfg, 0)).toBe(0.33);
     expect(reserveUsd(cfg, 5)).toBeGreaterThan(reserveUsd(cfg));
     expect(reserveUsd(newsConfigFrom({ news: { input_usd_per_mtok: 1000 } }))).toBe(100);
   });
@@ -267,15 +267,16 @@ describe("T-236: output limit, forgiving validation, drop reasons", () => {
           item(6, { published_at: null }),
           item(1, { headline: "Other headline" }),
           item(7, { headline: "   " }),
+          { ...item(8), source_url: "https://news.blocked.example.com/story" },
         ],
       },
-      ev(7),
-      base,
+      collectEvidence(webSearchResult({ text: "x", hits: [...Array.from({ length: 7 }, (_, i) => ({ url: U(i + 1) })), { url: "https://news.blocked.example.com/story" }] })),
+      newsConfigFrom({ news: { enabled: true, blocked_domains: ["blocked.example.com"] } }),
       now,
     );
     expect(r.items.map((i) => i.source_url)).toEqual([U(1), U(5)]);
-    expect(r.reasons).toEqual({ invalid_shape: 1, bad_link: 1, ungrounded: 1, bad_date: 1, undated_extra: 1, duplicate: 1, empty_text: 1 });
-    expect(r.dropped).toBe(7);
+    expect(r.reasons).toEqual({ invalid_shape: 1, bad_link: 1, ungrounded: 1, blocked_domain: 1, bad_date: 1, undated_extra: 1, duplicate: 1, empty_text: 1 });
+    expect(r.dropped).toBe(8);
   });
   it("a long list is not refused: at most 6 stories are kept, the rest counted as over_limit", () => {
     const r = validateNews({ items: Array.from({ length: 45 }, (_, i) => item(i + 1)) }, ev(45), base, now);

@@ -35,7 +35,7 @@ const NEWS_MAX_CANDIDATES = 20;
 export const NEWS_MAX_RESUMES = 2;
 /** The output limit of the retry after a cut-off reply: 1.5x the lane's news.max_tokens, at most 32000. */
 export const retryMaxTokens = (cfg: NewsConfig): number => Math.min(32_000, Math.ceil(cfg.max_tokens * 1.5));
-/** Worst-case input tokens of ONE model call (every search result page read): a planning number, not a measure. The reserve is 2 x (1 + resumes) x this (a first attempt and its one retry). */
+/** Worst-case input tokens of ONE model call (every search result page read): a planning number, not a measure. The reserve is (1 + resumes) x this. */
 export const NEWS_WORST_INPUT_TOKENS_PER_CALL = 50_000;
 /** Tolerance for a date slightly ahead of now (clock skew, time zones). */
 const FUTURE_SLACK_MS = 3_600_000;
@@ -79,14 +79,16 @@ export const buildNewsUser = (now: Date) => `Prepare today's digest now. Today i
 const cents = (usd: number) => Math.ceil(usd * 100 - 1e-9) / 100;
 
 /**
- * The most one fetch can cost, in USD rounded up to cents: the first attempt (one call plus its resumes) and the one retry after
- * a cut-off reply (the same again, at the retry's higher output limit). It is reserved before the first call.
+ * The most one attempt (one call plus its resumes) can cost, in USD rounded up to cents. It is reserved before the first call.
+ * Decision (T-236 security review M1): the rare retry after a cut-off reply is NOT reserved. SQL books every attempt at no less
+ * than its reserve (core.news_finish*), so reserving the retry would double what every ordinary fetch costs against the monthly
+ * cap. The retry's real cost is still booked in full (the estimate replaces the reserve when higher), so the cap can be passed by
+ * at most one retry's cost, once.
  */
 export function reserveUsd(cfg: NewsConfig, maxResumes: number = NEWS_MAX_RESUMES): number {
   const calls = 1 + maxResumes;
-  const outTokens = calls * cfg.max_tokens + calls * retryMaxTokens(cfg);
-  const tokens = (2 * calls * NEWS_WORST_INPUT_TOKENS_PER_CALL * cfg.input_usd_per_mtok + outTokens * cfg.output_usd_per_mtok) / 1_000_000;
-  const searches = (2 * calls * cfg.max_searches * cfg.cost_per_1000_searches_usd) / 1000;
+  const tokens = (calls * NEWS_WORST_INPUT_TOKENS_PER_CALL * cfg.input_usd_per_mtok + calls * cfg.max_tokens * cfg.output_usd_per_mtok) / 1_000_000;
+  const searches = (calls * cfg.max_searches * cfg.cost_per_1000_searches_usd) / 1000;
   return Math.min(100, Math.max(0.01, cents(tokens + searches)));
 }
 

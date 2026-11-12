@@ -1,5 +1,5 @@
-// T-236: contract tests against the REAL Anthropic API. Skipped unless AI_CONTRACT=1 (they cost money: one structured-output
-// call and one web-search fetch, about $0.30-$1 together). Inputs are synthetic only (rule 10): a made-up company, made-up mail
+// T-236: contract tests against the REAL Anthropic API. Skipped unless AI_CONTRACT=1 (they cost money: two structured-output
+// calls and one web-search fetch, about $0.30-$1 together). Inputs are synthetic only (rule 10): a made-up company, made-up mail
 // metadata on example.test, and generic public news topics. Nothing is stored and no lane data is read.
 //   AI_CONTRACT=1 ANTHROPIC_API_KEY=... ANTHROPIC_MODEL_ANALYSIS=... ANTHROPIC_MODEL_FAST=... pnpm --filter @nichols/web test:ai-contract
 // What it proves: the API accepts our request shapes (output_config.format with our JSON schema; web_search with our options),
@@ -58,5 +58,27 @@ describe.skipIf(!ON)("AI contract (real API, AI_CONTRACT=1)", () => {
     expect(r.failureCode).not.toBe("output_truncated");
     expect(r.failureCode).not.toBe("output_unusable");
     expect(r.status).not.toBe("failed");
+    expect(r.items).toBeGreaterThan(0);
   }, 180_000);
+
+  it("briefing retry shape: two user turns in a row, effort low, 1.5x the limit, is accepted and parses", async () => {
+    if (!p.configured) throw new Error(`AI not configured: ${p.missing.join(", ")}`);
+    const maxTokens = Math.ceil(laneConfigSchema.parse({}).briefing.max_tokens * 1.5);
+    const res = await p.provider.complete({
+      laneId: "PKG" as never,
+      tier: "analysis",
+      system: "You write a short daily briefing for a synthetic test company. Use only the facts given.",
+      messages: [
+        { role: "user", content: "Now: 2026-11-12T13:00:00Z.\n[r1] from dana@acme.example.test, subject 'Contract renewal date', unread\nWrite the briefing JSON now." },
+        { role: "user", content: "Your previous reply was cut off at the length limit and could not be used. Write the complete briefing JSON again, shorter. One JSON object only." },
+      ],
+      maxTokens,
+      effort: "low",
+      outputSchema: BRIEFING_OUTPUT_SCHEMA,
+    });
+    console.info("[contract] briefing-retry", { stopReason: res.stopReason, outputTokens: res.usage.outputTokens, maxTokens });
+    expect(res.stopReason).toBe("end_turn");
+    const parsed = parseBriefingOutput(res.content.flatMap((b) => (b.type === "text" ? [b.text] : [])).join(""));
+    expect(parsed.ok ? [] : parsed.issues).toEqual([]);
+  }, 150_000);
 });

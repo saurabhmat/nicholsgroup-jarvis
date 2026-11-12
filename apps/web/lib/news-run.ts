@@ -103,6 +103,9 @@ export async function runNewsFetch(deps: NewsRunDeps, input: { laneId: string; l
       system: buildNewsSystem({ laneName: input.laneName, cfg, now, retry }),
       messages: [{ role: "user", content: buildNewsUser(now) }],
       maxTokens: retry ? retryMaxTokens(cfg) : cfg.max_tokens,
+      // The retry after a cut-off reply runs at effort "low" (less thinking: fewer tokens and a shorter call). Best effort: it
+      // starts only in the first 30 s and the Refresh bound (70 s) still applies.
+      ...(retry ? { effort: "low" as const } : {}),
       serverTools: { webSearch: { maxUses: cfg.max_searches, maxResumes: NEWS_MAX_RESUMES, ...(cfg.blocked_domains.length ? { blockedDomains: cfg.blocked_domains } : {}) } },
       ...(deps.signal ? { signal: deps.signal } : {}),
     });

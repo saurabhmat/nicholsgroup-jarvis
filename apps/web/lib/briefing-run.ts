@@ -264,13 +264,15 @@ export async function runBriefing(deps: RunDeps, input: { laneId: LaneId; ownerU
     const messages = withUserContext([{ role: "user", content: user }], prompt.userContext);
     const limit = view.config.max_tokens;
     let attempt = 0;
-    const ask = async (msgs: typeof messages, maxTokens: number) => {
-      const res = await deps.provider.complete({ laneId, tier: "analysis", ...(deps.signal ? { signal: deps.signal } : {}), system: prompt.system, messages: msgs, maxTokens, outputSchema: BRIEFING_OUTPUT_SCHEMA });
+    const ask = async (msgs: typeof messages, maxTokens: number, short = false) => {
+      // The retry after a cut-off reply runs at effort "low": less thinking, so it fits the output limit and the time bound.
+      const res = await deps.provider.complete({ laneId, tier: "analysis", ...(deps.signal ? { signal: deps.signal } : {}), system: prompt.system, messages: msgs, maxTokens, outputSchema: BRIEFING_OUTPUT_SCHEMA, ...(short ? { effort: "low" as const } : {}) });
       model = res.model;
       // Codes and counts only (never content).
       console.info("[briefing] briefing.model_call", { laneId, attempt: ++attempt, stopReason: res.stopReason, outputTokens: res.usage.outputTokens, maxTokens });
-      // A reply cut off at the limit is never parsed (it would be half a JSON object).
-      if (res.status === "max_tokens") throw new BriefingTruncatedError();
+      // A reply cut off at the output limit is never parsed (it would be half a JSON object). A context-window stop is not
+      // fixed by a higher output limit: no retry, the usual "could not be read" code (review L3).
+      if (res.status === "max_tokens") throw res.stopReason === "max_tokens" ? new BriefingTruncatedError() : new BriefingOutputError();
       if (res.status !== "completed") throw new BriefingOutputError();
       return res.content.flatMap((b) => (b.type === "text" ? [b.text] : [])).join("");
     };
@@ -286,12 +288,13 @@ export async function runBriefing(deps: RunDeps, input: { laneId: LaneId; ownerU
         throw e;
       }
       retried = true;
-      text = await ask([...messages, { role: "user", content: SHORTER }], retryMaxTokens(limit));
+      // Two user turns in a row: the API merges consecutive same-role turns (covered by the opt-in contract test).
+      text = await ask([...messages, { role: "user", content: SHORTER }], retryMaxTokens(limit), true);
     }
     let parsed = parseBriefingOutput(text);
     if (!parsed.ok) {
       // Codes only (schema paths and Zod issue codes): never a value, a prompt or the reply.
-      console.error("[briefing] briefing.model_output_invalid", { laneId, attempt: 1, issues: parsed.issues });
+      console.error("[briefing] briefing.model_output_invalid", { laneId, attempt, issues: parsed.issues });
       // The retry only when it can still finish inside the run's bound; otherwise fail now with the usual code.
       // One retry in all: none after a retry for a cut-off reply, and none once it could not finish inside the run's bound.
       if (retried || clock() - runStartedMs > RETRY_ONLY_BEFORE_MS) {

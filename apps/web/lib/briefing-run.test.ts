@@ -518,6 +518,8 @@ describe("a reply cut off at the output limit (T-236)", () => {
     expect(res.status).toBe("ready");
     expect(provider.calls).toHaveLength(2);
     expect(provider.calls[1]?.maxTokens).toBe(12000);
+    expect(provider.calls[0]?.effort).toBeUndefined();
+    expect(provider.calls[1]?.effort).toBe("low");
     const msgs = provider.calls[1]?.messages ?? [];
     expect(msgs.some((m) => m.role === "assistant")).toBe(false); // the half reply is not sent back
     expect(String(msgs[msgs.length - 1]?.content)).toContain("cut off");
@@ -541,10 +543,16 @@ describe("a reply cut off at the output limit (T-236)", () => {
     expect(res).toMatchObject({ status: "failed", reason: "output_truncated" });
     expect(provider.calls).toHaveLength(1);
   });
-  it("one retry in all: a malformed reply after the cut-off retry is output_invalid, no third call", async () => {
+  it("one retry in all: a malformed reply after the cut-off retry is output_invalid, no third call, logged as attempt 2", async () => {
     const { res, provider } = await run([cut(), textResult("not json")]);
     expect(res).toMatchObject({ status: "failed", reason: "output_invalid" });
     expect(provider.calls).toHaveLength(2);
+    expect(JSON.stringify(err.mock.calls)).toContain('"attempt":2');
+  });
+  it("a context-window stop is not retried: output_invalid after one call", async () => {
+    const { res, provider } = await run([textResult("{", { status: "max_tokens", stopReason: "model_context_window_exceeded" } as never), jsonResult(GOOD)]);
+    expect(res).toMatchObject({ status: "failed", reason: "output_invalid" });
+    expect(provider.calls).toHaveLength(1);
   });
   it("valid output still goes through grounding: an invented figure becomes Awaiting your input", async () => {
     const bad = { ...FULL, attention: [{ ref: "r1", what: "Renewal of $1,200.", why: "Costs $9,999.", next: "Confirm." }] };

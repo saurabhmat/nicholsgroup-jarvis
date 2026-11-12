@@ -161,6 +161,8 @@ describe("T-236: a reply cut off at the output limit", () => {
     expect(h.provider.calls).toHaveLength(2);
     expect(h.provider.calls[1]?.maxTokens).toBe(12000);
     expect(h.provider.calls[1]?.system).toContain("at most 4 stories");
+    expect(h.provider.calls[0]?.effort).toBeUndefined();
+    expect(h.provider.calls[1]?.effort).toBe("low");
     const fin = h.calls.finish[0]?.r;
     // (40000 + 1000) in x 3/M + (8000 + 500) out x 15/M + (4 + 3) searches x 10/1000 = 0.123 + 0.1275 + 0.07 = 0.3205 -> 0.33
     expect(fin?.estCostUsd).toBe(0.33);
@@ -187,6 +189,11 @@ describe("T-236: a reply cut off at the output limit", () => {
     expect(r).toMatchObject({ status: "failed", failureCode: "output_truncated" });
     expect(provider.calls).toHaveLength(1);
     expect(logged()).toContain("news.retry_skipped");
+  });
+  it("a context-window stop is not retried (a higher output limit cannot fix it)", async () => {
+    const h = harness([{ ...(cut() as object), stopReason: "model_context_window_exceeded" } as never, good()]);
+    expect(await h.run()).toMatchObject({ failureCode: "output_truncated" });
+    expect(h.provider.calls).toHaveLength(1);
   });
   it("a retry that throws keeps the first call's cost (never $0 after a call ran)", async () => {
     const h = harness([cut(), new LLMProviderError("rate_limited")]);
