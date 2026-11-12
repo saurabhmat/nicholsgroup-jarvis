@@ -109,6 +109,9 @@ describe("Home layout (T-234 part 1)", () => {
     expect(newsSlot.className).toMatch(/md:col-start-3/);
     expect(within(attentionSlot).getByRole("region", { name: "Needs your attention" })).toBeTruthy();
     const today = within(calendarSlot).getByRole("region", { name: "Today's calendar" });
+    // T-237 part E: the visible heading is "Today" with an "Eastern time" note; the region keeps its accessible name.
+    expect(within(today).getByRole("heading", { name: "Today" })).toBeTruthy();
+    expect(within(today).getByText("Eastern time")).toBeTruthy();
     const next7 = within(calendarSlot).getByTestId("next-7-days");
     expect(follows(today, next7)).toBe(true);
     expect(next7.getAttribute("data-open")).toBe("false"); // collapsed by default

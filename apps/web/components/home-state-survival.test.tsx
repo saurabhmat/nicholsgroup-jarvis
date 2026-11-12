@@ -24,6 +24,7 @@ const ctx: ReplyContext = {
   mailbox: "exec@pubkgroup.example.test",
   subject: "Re: Quarterly review",
   replyingTo: "Dana <dana@sender.example.test>",
+  receivedAt: "2026-11-10T21:12:00Z",
   defaults: { to: ["dana@sender.example.test"], cc: [] },
   internalDomains: ["pubkgroup.example.test"],
   proposal: null,

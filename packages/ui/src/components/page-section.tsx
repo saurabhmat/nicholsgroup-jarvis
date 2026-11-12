@@ -5,6 +5,8 @@ import { EmptyState } from "./empty-state";
 export type PageSectionProps = {
   /** Card title, as in the prototype ("Today's briefing"). */
   title: string;
+  /** Accessible name of the region when it should differ from the visible title (a short heading such as "Today"). */
+  ariaLabel?: string;
   /** Short note beside the title (for example the sources line). */
   note?: string;
   /** Heading level; defaults to h2 (the page header holds the h1). */
@@ -18,9 +20,9 @@ export type PageSectionProps = {
 };
 
 /** A titled card for one page section. With no children it shows the T-022 empty state (no data, no sample label). */
-export function PageSection({ title, note, headingLevel: Heading = "h2", emptyTitle, emptyDescription, children, className }: PageSectionProps) {
+export function PageSection({ title, ariaLabel, note, headingLevel: Heading = "h2", emptyTitle, emptyDescription, children, className }: PageSectionProps) {
   return (
-    <section data-slot="page-section" aria-label={title} className={cn("flex min-w-0 flex-col gap-4 rounded-card border border-border bg-card p-6 text-body text-card-foreground shadow-card", className)}>
+    <section data-slot="page-section" aria-label={ariaLabel ?? title} className={cn("flex min-w-0 flex-col gap-4 rounded-card border border-border bg-card p-6 text-body text-card-foreground shadow-card", className)}>
       <div className="flex flex-wrap items-baseline justify-between gap-2">
         <Heading className="font-heading text-card-title font-semibold text-foreground">{title}</Heading>
         {note ? <p className="text-small text-muted-foreground">{note}</p> : null}

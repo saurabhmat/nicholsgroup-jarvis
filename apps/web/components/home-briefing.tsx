@@ -155,7 +155,7 @@ export function CalendarSections({ view, now }: { view: BriefingView; now: Date 
   const summary = c.access && c.aheadSummary ? aheadSummaryText(c.aheadSummary) : undefined;
   return (
     <>
-      <PageSection title="Today's calendar" note={`Times in ${view.viewerTz.replace(/_/g, " ")}`}>
+      <PageSection title="Today" ariaLabel="Today's calendar" note={view.viewerTz === "America/New_York" ? "Eastern time" : `Times in ${view.viewerTz.replace(/_/g, " ")}`}>
         <TodayCalendar calendar={view.calendar} tz={view.viewerTz} now={now} />
       </PageSection>
       <CollapsibleSection title="Next 7 days" testId="next-7-days" persistId="next-7-days" {...(summary ? { note: summary } : {})}>

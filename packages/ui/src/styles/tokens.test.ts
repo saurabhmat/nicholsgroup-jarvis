@@ -263,7 +263,7 @@ describe("components use tokens only", () => {
     expect(users.sort()).toEqual(["book-balance.tsx", "kpi-card.tsx"]);
   });
 
-  it("uppercase exists nowhere else in the web app (apps/web/components and apps/web/app), except the KPI strip tile label", () => {
+  it("uppercase exists nowhere else in the web app (apps/web/components and apps/web/app), except the KPI strip tile label and the T-237 section labels", () => {
     const webRoot = join(here, "..", "..", "..", "..", "apps", "web");
     const files: string[] = [];
     const walk = (dir: string) => {
@@ -276,7 +276,9 @@ describe("components use tokens only", () => {
     walk(join(webRoot, "components"));
     walk(join(webRoot, "app"));
     expect(files.length).toBeGreaterThan(10);
-    const ALLOWED = ["components/kpi-strip.tsx"]; // the Home KPI tile label is a KPI label
+    // The Home KPI tile label is a KPI label. T-237 (docs/design/home/*.png): the Finance column titles and the Reply drawer's
+    // "Draft by Jarvis" caption are small uppercase section labels too (text-label size).
+    const ALLOWED = ["components/kpi-strip.tsx", "components/home-finance-section.tsx", "components/reply-drawer.tsx"];
     const users = files.filter((f) => /\buppercase\b/.test(readFileSync(f, "utf8"))).map((f) => f.slice(webRoot.length + 1));
     expect(users.filter((f) => !ALLOWED.includes(f))).toEqual([]);
   });
