@@ -76,9 +76,11 @@ test("a member sees the shell, a switcher with only the allowed lane, and a 404 
 
   await page.goto("/PKG");
   await expect(page.getByRole("heading", { name: /^Good (morning|afternoon|evening)/, level: 1 })).toBeVisible();
-  for (const title of ["Needs your attention", "Today's calendar"]) {
-    await expect(page.getByRole("heading", { name: title, level: 2 })).toBeVisible();
+  // T-237 part E: the calendar card's heading reads "Today" (its region keeps the name "Today's calendar").
+  for (const title of ["Needs your attention", "Today"]) {
+    await expect(page.getByRole("heading", { name: title, level: 2, exact: true })).toBeVisible();
   }
+  await expect(page.getByRole("region", { name: "Today's calendar" })).toBeVisible();
   // T-235 part 5: news off and no project board are slim one-line cards (labelled regions, no heading).
   await expect(page.getByRole("region", { name: "GovCon news" })).toContainText("GovCon news is off");
   await expect(page.getByRole("region", { name: "Projects at a glance" })).toContainText("No project board connected");
