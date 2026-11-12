@@ -556,6 +556,15 @@ isOneToOne: false
               "body_md": string,"id": string,"is_mine": boolean,"key": string,"title": string,"updated_at": string,"version": number
             }[]
                            },
+"briefing_claim_auto":
+{ Args: { "p_lane": string }; Returns: Json
+                           },
+"briefing_claim_regenerate":
+{ Args: { "p_lane": string }; Returns: Json
+                           },
+"briefing_claim_schedule":
+{ Args: { "p_lane": string,"p_owner": string }; Returns: string
+                           },
 "briefing_coverage":
 { Args: { "p_lane": string }; Returns: {
               "account": string,"configured": boolean,"connection_id": string,"error_kind": string,"last_sync_at": string,"provider": string,"status": string,"stream": string
@@ -574,6 +583,11 @@ isOneToOne: false
 "briefing_latest":
 { Args: { "p_lane": string }; Returns: {
               "content": Json,"coverage": Json,"id": string,"last_failed_at": string,"last_run_at": string,"model": string,"prepared_at": string,"source_refs": Json,"status": string,"trigger": string,"window_from": string,"window_to": string
+            }[]
+                           },
+"briefing_run_state":
+{ Args: { "p_lane": string }; Returns: {
+              "last_attempt_at": string,"last_regenerate_at": string,"latest_prepared_at": string,"running": boolean,"runs_today": number
             }[]
                            },
 "briefing_save":

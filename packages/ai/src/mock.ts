@@ -24,6 +24,9 @@ export function textResult(text: string, over: Partial<Extract<LLMResult, { stat
   };
 }
 
+/** A completed reply whose text is the JSON of `value` (what a structured-output request returns). */
+export const jsonResult = (value: unknown): LLMResult => textResult(JSON.stringify(value));
+
 /**
  * A completed web-search reply: one search, its hits (or an error object), then the answer text with citations. Search
  * results and citations are shaped exactly like the real provider's output for a request that opted in.

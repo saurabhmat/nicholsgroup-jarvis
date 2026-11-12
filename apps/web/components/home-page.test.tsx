@@ -96,7 +96,7 @@ describe("Home layout (T-234 part 1)", () => {
     });
   });
 
-  it("the briefing, Money and Coverage cards are gone from Home; the briefing's summary and Run now live inside 'Needs your attention'", async () => {
+  it("the briefing, Money and Coverage cards are gone from Home; the briefing's summary lives inside 'Needs your attention'", async () => {
     m.view = view();
     await draw();
     expect(screen.queryByRole("region", { name: "Today's briefing" })).toBeNull();

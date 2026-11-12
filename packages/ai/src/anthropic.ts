@@ -218,7 +218,17 @@ export function buildParams(req: LLMRequest, model: string, resume?: InternalBlo
   }
   if (req.thinking === "adaptive") params.thinking = { type: "adaptive" };
   else if (req.thinking === "off") params.thinking = { type: "between_tools" };
-  if (req.effort) params.output_config = { effort: req.effort };
+  const out = req.outputSchema;
+  if (out !== undefined) {
+    // Structured output: a named object schema; never together with server tools (isolation, plan-review 11).
+    if (typeof out.name !== "string" || !/^[a-z][a-z0-9_]{0,63}$/.test(out.name) || typeof out.schema !== "object" || out.schema === null || Array.isArray(out.schema) || out.schema.type !== "object") {
+      throw new LLMProviderError("invalid_request");
+    }
+    if (web) throw new LLMProviderError("invalid_request");
+  }
+  if (req.effort || out) {
+    params.output_config = { ...(req.effort ? { effort: req.effort } : {}), ...(out ? { format: { type: "json_schema" as const, schema: out.schema } } : {}) };
+  }
   if (req.tools?.length) {
     params.tools = req.tools.map((t) => ({
       name: t.name,

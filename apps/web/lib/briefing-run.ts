@@ -16,9 +16,10 @@
 import { wrapUntrusted, UNTRUSTED_DATA_RULE, type LLMProvider } from "@nichols/ai";
 import { assemblePrompt, BRAIN_RULES, withUserContext } from "@nichols/ai/prompts";
 import type { LaneId } from "@nichols/core";
-import { BRIEFING_RULES, checkContent, classifyFailure, extractJson, failureNote, maskContent, maskFigures, type BriefContent, type BriefRef, type FailureCode } from "@nichols/briefing/domain";
+import { BRIEFING_RULES, checkContent, classifyFailure, failureNote, maskContent, maskFigures, type BriefContent, type BriefRef, type FailureCode } from "@nichols/briefing/domain";
 import type { BrainPromptContext } from "@nichols/brain/server";
 import { loadBriefing, type BriefingView } from "./briefing";
+import { BRIEFING_OUTPUT_SCHEMA, correctionMessage, parseBriefingOutput } from "./briefing-output";
 
 type Db = Parameters<typeof loadBriefing>[0];
 
@@ -244,12 +245,28 @@ export async function runBriefing(deps: RunDeps, input: { laneId: LaneId; ownerU
   let content: BriefContent;
   let model: string | null = deps.provider.modelFor("analysis");
   try {
-    const res = await deps.provider.complete({ laneId, tier: "analysis", ...(deps.signal ? { signal: deps.signal } : {}), system: prompt.system, messages: withUserContext([{ role: "user", content: user }], prompt.userContext), maxTokens: 3000 });
-    model = res.model;
-    const text = res.content.flatMap((b) => (b.type === "text" ? [b.text] : [])).join("");
-    if (res.status !== "completed") throw new BriefingOutputError();
-    const raw = extractJson(text);
-    if (raw === null) throw new BriefingOutputError();
+    const messages = withUserContext([{ role: "user", content: user }], prompt.userContext);
+    const ask = async (msgs: typeof messages) => {
+      const res = await deps.provider.complete({ laneId, tier: "analysis", ...(deps.signal ? { signal: deps.signal } : {}), system: prompt.system, messages: msgs, maxTokens: 3000, outputSchema: BRIEFING_OUTPUT_SCHEMA });
+      model = res.model;
+      if (res.status !== "completed") throw new BriefingOutputError();
+      return res.content.flatMap((b) => (b.type === "text" ? [b.text] : [])).join("");
+    };
+    let text = await ask(messages);
+    let parsed = parseBriefingOutput(text);
+    if (!parsed.ok) {
+      // Codes only (schema paths and Zod issue codes): never a value, a prompt or the reply.
+      console.error("[briefing] briefing.model_output_invalid", { laneId, attempt: 1, issues: parsed.issues });
+      // One retry: the previous reply and the validation problems (no new email content).
+      const retry: typeof messages = [...messages, ...(text.trim() ? [{ role: "assistant" as const, content: text }] : []), { role: "user", content: correctionMessage(parsed.issues) }];
+      text = await ask(retry);
+      parsed = parseBriefingOutput(text);
+      if (!parsed.ok) {
+        console.error("[briefing] briefing.model_output_invalid", { laneId, attempt: 2, issues: parsed.issues });
+        throw new BriefingOutputError();
+      }
+    }
+    const raw: unknown = parsed.value;
     content = maskContent(checkContent(raw, refs, sourcesFor, allSources, { replies: policy.storeDrafts }));
     if (!policy.storeDrafts) notes.push("reply_drafts_off");
   } catch (e) {

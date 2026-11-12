@@ -1,10 +1,10 @@
 // Home (D-20 batch 1, p3 and p6; T-234 part 1 layout, on the T-230 tokens). Three aligned rows:
-//   1. "Needs your attention" (2/3; T-234 part 2: AI summary + Run now + Top 3, top 5 items with Reply/Open, drafts and deadlines folded) |
+//   1. "Needs your attention" (2/3; T-234 part 2: AI summary + Top 3, top 5 items with Reply/Open, drafts and deadlines folded) |
 //      right column: Today's calendar with "Next 7 days" collapsed below it.
 //   2. KPI strip: five equal compact tiles (Cash book balance, AR > 30 days, P&L MTD, MRR, Paid subscribers).
 //   3. GovCon news (2/3; the stored digest, read only) | Projects at a glance (1/3).
 // T-234 part 5: HomeAutoRefresh (header) re-reads this page every 5 minutes with router.refresh() only. A render of this page
-// reads stored data and starts nothing: no AI briefing (Run now is a button), no news fetch (stored digest; Refresh is a button),
+// reads stored data and starts nothing: no AI briefing (the summary starts from the client's one call on mount, never from a render), no news fetch (stored digest; Refresh is a button),
 // no sync (the sync jobs run in Inngest). Client state (drawer, fields, expanded sections) lives in client components below.
 // One column on a phone, in the same order: attention, calendar, KPIs, news, projects. Coverage is no longer a card here: a
 // small status dot in the header shows only when a source is stale or in error and links to Settings -> Connections.
@@ -17,7 +17,7 @@ import { eyebrowDate } from "@/lib/format-date";
 import { guards } from "@/lib/guards";
 import { cookies } from "next/headers";
 import { composeBriefing, homeFor, type HomeView } from "@/lib/home";
-import { briefingFor, lastFailureReason, latestBriefing, viewerZone } from "@/lib/briefing";
+import { briefingFor, lastFailureReason, latestBriefing, loadRunState, viewerZone } from "@/lib/briefing";
 import { aiSetupFailure } from "@/lib/briefing-setup";
 import { adminHint } from "@nichols/briefing/hints";
 import { AiBriefing, Deadlines, notesByMessage, repliesByMessage } from "./home-ai-briefing";
@@ -32,6 +32,7 @@ import { TimezoneCookie } from "./timezone-cookie";
 import { loadLane } from "@/lib/lane-page";
 import { HomeScope, PersistedDetails } from "./home-scope";
 import { HomeAutoRefresh } from "./home-auto-refresh";
+import { BriefingAuto } from "./briefing-auto";
 import { ApprovalsWaiting } from "./approvals-waiting";
 import { OnboardingBanner } from "./onboarding-entry";
 import { HomeSkeleton, KpiStripSkeleton } from "./page-skeleton";
@@ -97,7 +98,7 @@ async function HomeSections({ laneId, now }: { laneId: string; now: Date }) {
   const g = await guards();
   // Home v1 counts and the T-231 briefing sections load in parallel. Each shows its own "unavailable" state; neither ever shows an empty day.
   const laneClient = async () => (await g.requireLane(laneId as Parameters<typeof g.requireLane>[0])).client;
-  const [view, brief, saved, isAdmin, isOwner, newsCard] = await Promise.all([
+  const [view, brief, saved, isAdmin, isOwner, newsCard, runState] = await Promise.all([
     timed("load.home", async () => homeFor(g, laneId, now)),
     timed("load.briefing", async () => briefingFor(await laneClient(), laneId, now, tz)),
     timed("load.briefing_latest", async () => latestBriefing(await laneClient(), laneId)),
@@ -112,6 +113,8 @@ async function HomeSections({ laneId, now }: { laneId: string; now: Date }) {
       ]);
       return loadNewsCard(await laneClient(), laneId, { isOwner: owner, isAdmin: admin }, now).catch(() => null);
     }),
+    // The owner's run state (a run open, the last Regenerate, runs today): SQL answers nothing for anyone else (T-235 part 1).
+    timed("load.briefing_run_state", async () => loadRunState(await laneClient(), laneId)),
   ]);
   // Why there is no AI summary: the AI setup itself (names only), else the stored code of the newest failed attempt.
   const setup = aiSetupFailure();
@@ -131,7 +134,7 @@ async function HomeSections({ laneId, now }: { laneId: string; now: Date }) {
       <div data-testid="home-row-attention" className="grid items-start gap-4 lg:grid-cols-3">
         <div data-testid="home-attention-slot" className="flex min-w-0 flex-col gap-4 lg:col-span-2">
           <PageSection title="Needs your attention" note="Top 5 · metadata only">
-            <AiBriefing laneId={laneId} brief={saved} fallbackLines={view.unavailable ? [] : composeBriefing(view, now)} tz={brief.viewerTz} canRun={brief.mail.access} failure={failure} failureHint={failureHint} />
+            <AiBriefing laneId={laneId} brief={saved} fallbackLines={view.unavailable ? [] : composeBriefing(view, now)} tz={brief.viewerTz} controls={isOwner ? <BriefingAuto laneId={laneId} preparedAt={saved && saved.status !== "failed" ? saved.preparedAt : null} initial={runState} tz={brief.viewerTz} /> : null} now={now} failure={failure} failureHint={failureHint} />
             <AttentionSection laneId={laneId} mail={brief.mail} now={now} notes={notesByMessage(saved)} replies={repliesByMessage(saved)} canReply={isOwner} />
             {saved && saved.status !== "failed" ? (
               // Folded so the card stays short: reply drafts (with Copy) and deadlines from the briefing.

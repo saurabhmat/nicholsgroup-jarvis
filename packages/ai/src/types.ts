@@ -59,6 +59,14 @@ export type LLMSystemBlock = { text: string; cache?: CacheTtl };
 export type LLMWebSearch = { maxUses: number; allowedDomains?: string[]; blockedDomains?: string[]; maxResumes?: number };
 export type LLMServerTools = { webSearch?: LLMWebSearch };
 
+/**
+ * Opt-in structured output (Messages API `output_config.format`, type json_schema; verified against @anthropic-ai/sdk 1.6.0).
+ * The reply is JSON text that matches `schema`, returned as a normal text block; callers still validate it (Zod) because a
+ * refusal or truncation is not schema-bound. The tool is never forced (current models answer 400 to a forced tool_choice).
+ * `name` labels the schema in logs and tests; it is not sent. Not combinable with `serverTools`.
+ */
+export type LLMOutputSchema = { name: string; schema: Record<string, unknown> };
+
 export type LLMRequest = {
   laneId: LaneId;
   tier: ModelTier;
@@ -75,6 +83,8 @@ export type LLMRequest = {
   tools?: LLMTool[];
   /** Server-side tools, off unless set. Without it a server-side block in a reply fails closed. */
   serverTools?: LLMServerTools;
+  /** Structured JSON output; see LLMOutputSchema. */
+  outputSchema?: LLMOutputSchema;
   /** Force streaming. Streaming is used automatically for large maxTokens. */
   stream?: boolean;
   signal?: AbortSignal;

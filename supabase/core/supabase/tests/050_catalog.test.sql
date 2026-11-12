@@ -35,6 +35,7 @@ insert into private_table_ok values
 create temp table custom_policy_ok (name text primary key, why text not null) on commit drop;
 insert into custom_policy_ok values
   ('brief.briefings', 'standard expression (briefing view) AND owner_user_id = auth.uid(): a prepared briefing is its owner''s alone (T-231c)'),
+  ('brief.briefing_runs', 'standard expression (briefing view) AND owner_user_id = auth.uid(): a run claim is its owner''s alone; written only by definer functions (T-235)'),
   ('core.memberships', 'own rows, plus lanes with the memberships view'),
   ('core.users', 'own row, plus members of lanes with the memberships view'),
   ('core.lanes', 'standard expression on code (the lane id) instead of lane_id'),
@@ -119,7 +120,13 @@ insert into security_definer_ok values
   ('core.news_finish_own', 'owner Refresh result: aal2 + lane owner + briefing view, own pending refresh row only (T-234 part 4)'),
   ('core.news_spend', 'news spend and last status (no items): aal2, lane owner or admin_technical (T-234 part 4)'),
   ('brief.news_cap', 'the lane''s monthly news cap read from lane_config; no API role may execute it (T-234 part 4)'),
-  ('core.news_enabled', 'is news configured for the lane (boolean only): aal2 + briefing view, else false (T-234 part 4)');
+  ('core.news_enabled', 'is news configured for the lane (boolean only): aal2 + briefing view, else false (T-234 part 4)'),
+  ('brief.briefing_claim', 'briefing run gates: stale (3 h), one running per lane, 6 per lane and New York day, Regenerate once per 30 min, 10 min pause; no API role may execute it (T-235)'),
+  ('brief.briefing_runs_close', 'marks the owner''s open run claims finished; called by the briefing saves; service_role only (T-235)'),
+  ('core.briefing_claim_auto', 'Home auto-summary claim: aal2 + lane owner + briefing view, then brief.briefing_claim (T-235)'),
+  ('core.briefing_claim_regenerate', 'owner Regenerate claim: aal2 + lane owner + briefing view, then brief.briefing_claim (30-min limit, daily cap) (T-235)'),
+  ('core.briefing_claim_schedule', 'the 06:30 job records its run; service_role only, owner role and view re-checked; never gated (T-235)'),
+  ('core.briefing_run_state', 'Home: a run is open, last Regenerate, runs today, newest briefing times; aal2 + lane owner + briefing view, else no row (T-235)');
 
 -- App functions authenticated may execute (callable through the API). Each one is reviewed.
 create temp table authenticated_exec_ok (name text primary key, why text not null) on commit drop;
@@ -189,7 +196,10 @@ insert into authenticated_exec_ok values
   ('core.news_begin_refresh', 'owner Refresh: checks aal2, owner role and the briefing view itself; rate limit and cap in SQL (T-234 part 4)'),
   ('core.news_finish_own', 'owner Refresh result; checks aal2, owner role, view and own pending row itself (T-234 part 4)'),
   ('core.news_spend', 'news spend and last status; checks aal2 and owner/admin_technical itself (T-234 part 4)'),
-  ('core.news_enabled', 'is news configured for the lane; boolean only, checks aal2 and the briefing view itself (T-234 part 4)');
+  ('core.news_enabled', 'is news configured for the lane; boolean only, checks aal2 and the briefing view itself (T-234 part 4)'),
+  ('core.briefing_claim_auto', 'Home auto-summary claim; checks aal2, owner role and the briefing view itself; gates in SQL (T-235)'),
+  ('core.briefing_claim_regenerate', 'owner Regenerate claim; checks aal2, owner role and the briefing view itself; 30-min limit and daily cap in SQL (T-235)'),
+  ('core.briefing_run_state', 'Home run state for the owner; checks aal2, owner role and the briefing view itself, else no row (T-235)');
 
 create temp view app_objects as
   select c.oid, format('%s.%s', n.nspname, c.relname) as name, c.relkind

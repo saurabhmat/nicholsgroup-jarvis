@@ -4,6 +4,7 @@
 // viewer's zone (the `tz` cookie set by the browser; America/New_York when absent or invalid).
 import { laneConfigSchema, type LaneConfig } from "@nichols/core/lane-config";
 import type { LaneClient } from "@nichols/core/lane-router";
+import { briefingRunStateFrom, type BriefingRunStateView } from "./briefing-runs";
 import {
   analyzeDay,
   FAILURE_CODES,
@@ -268,6 +269,16 @@ export async function latestBriefing(client: Db, laneId: string): Promise<SavedB
     const { data, error } = await client.schema("core").rpc("briefing_latest", { p_lane: laneId });
     if (error) return null;
     return parseSavedBriefing(data);
+  } catch {
+    return null;
+  }
+}
+
+/** The owner's run state for the card (null for anyone else or on error: no controls). */
+export async function loadRunState(client: Db, laneId: string): Promise<BriefingRunStateView | null> {
+  try {
+    const { data, error } = await client.schema("core").rpc("briefing_run_state", { p_lane: laneId });
+    return error ? null : briefingRunStateFrom(data);
   } catch {
     return null;
   }

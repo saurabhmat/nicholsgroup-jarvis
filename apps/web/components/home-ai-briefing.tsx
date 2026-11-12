@@ -1,5 +1,5 @@
 // AI briefing on Home (T-231c; T-234 part 2: merged into "Needs your attention"): the summary (first 2 lines of the briefing, the rest
-// behind "More"), "Prepared <time> · Run now", the Top 3 priorities as a compact numbered row, the deadlines list (folded), and the
+// behind "More"), "Summary at <time>" plus the owner's controls (T-235: Updating summary…, the ⋯ menu; no Run button), the Top 3 priorities as a compact numbered row, the deadlines list (folded), and the
 // why/next notes shown on the attention items. All model text is plain text (React escapes it); sources and links come from the
 // stored refs (metadata), never from the model.
 import Link from "next/link";
@@ -9,7 +9,8 @@ import { formatDateTimeIn, maskFigures, type AttentionNote, type BriefRef } from
 import type { FailureCode } from "@nichols/briefing/domain";
 import type { SavedBriefingView } from "@/lib/briefing";
 import { FailureReason } from "./briefing-failure";
-import { RunBriefingButton } from "./run-briefing-button";
+import type { ReactNode } from "react";
+import { newsTime } from "./home-news";
 import { PersistedDetails } from "./home-scope";
 
 const STATUS: Record<SavedBriefingView["status"], { label: string; variant: "success" | "outline" | "alert" }> = {
@@ -22,12 +23,12 @@ const STATUS: Record<SavedBriefingView["status"], { label: string; variant: "suc
 const SUMMARY_LINES = 2;
 
 /**
- * The top of "Needs your attention" (T-234 part 2): the AI summary, "Prepared <time> · Run now", and the Top 3 priorities as a
+ * The top of "Needs your attention" (T-234 part 2): the AI summary, "Summary at <time>" with the owner's `controls` (T-235), and the Top 3 priorities as a
  * compact numbered row. Without an AI briefing (none yet, failed, or not configured) the rule-based sentence takes its place with
  * "AI summary unavailable: <reason>".
  * `failure`: why the newest attempt (or the AI setup) failed, a fixed code; `failureHint`: the admin hint, set server-side only for owner or admin_technical.
  */
-export function AiBriefing({ laneId, brief, fallbackLines, tz, canRun, failure = null, failureHint = null }: { laneId: string; brief: SavedBriefingView | null; fallbackLines: string[]; tz: string; canRun: boolean; failure?: FailureCode | null; failureHint?: string | null }) {
+export function AiBriefing({ brief, fallbackLines, tz, controls = null, now = new Date(), failure = null, failureHint = null }: { laneId?: string; brief: SavedBriefingView | null; fallbackLines: string[]; tz: string; controls?: ReactNode; now?: Date; failure?: FailureCode | null; failureHint?: string | null }) {
   const lines = brief && brief.status !== "failed" && brief.content.lines.length > 0 ? brief.content.lines : null;
   const priorities = brief && brief.status !== "failed" ? brief.content.priorities : [];
   return (
@@ -57,13 +58,13 @@ export function AiBriefing({ laneId, brief, fallbackLines, tz, canRun, failure =
       <div className="flex flex-wrap items-center gap-x-3 gap-y-2">
         {brief ? (
           <span data-testid="briefing-prepared" className="text-small text-muted-foreground" title={brief.status === "failed" ? undefined : `Mail reviewed ${formatDateTimeIn(brief.windowFrom, tz)} – ${formatDateTimeIn(brief.windowTo, tz)}`}>
-            {brief.status === "failed" ? "Last attempt" : "Prepared at"} {formatDateTimeIn(brief.preparedAt, tz)}
+            {brief.status === "failed" ? "Last attempt" : "Summary at"} {brief.status === "failed" ? formatDateTimeIn(brief.preparedAt, tz) : newsTime(brief.preparedAt, tz, now)}
           </span>
         ) : (
           <span className="text-small text-muted-foreground">From your connected sources</span>
         )}
         {brief && brief.status === "partial" ? <Badge variant={STATUS.partial.variant}>{STATUS.partial.label}</Badge> : null}
-        {canRun ? <RunBriefingButton laneId={laneId} /> : null}
+        {controls}
       </div>
       {brief && brief.status !== "failed" && brief.lastFailedAt ? (
         <p data-testid="briefing-last-failed" className="text-small text-muted-foreground">

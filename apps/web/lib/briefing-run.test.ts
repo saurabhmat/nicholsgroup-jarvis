@@ -2,7 +2,7 @@
 // reaches the model only when the lane policy allows it; model text is checked against the refs; a model failure saves a
 // "failed" briefing with codes only.
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { createMockProvider, textResult } from "@nichols/ai/testing";
+import { createMockProvider, textResult, jsonResult } from "@nichols/ai/testing";
 import { LLMProviderError } from "@nichols/ai/types";
 import type { LaneId } from "@nichols/core";
 import { policyFrom, runBriefing, runBriefingBounded, refsFrom, type RunDeps, type SavedBriefing } from "./briefing-run";
@@ -31,10 +31,21 @@ const client = fakeClient({
   },
 });
 
+/** Fixtures list only the fields they care about; the structured-output schema needs all six. */
+const FULL = { lines: [], attention: [], deadlines: [], priorities: [], replies: [], more_replies: [] };
+const complete = (reply: string): string => {
+  try {
+    const o: unknown = JSON.parse(reply);
+    return typeof o === "object" && o !== null && !Array.isArray(o) ? JSON.stringify({ ...FULL, ...o }) : reply;
+  } catch {
+    return reply;
+  }
+};
+
 function deps(over: Partial<RunDeps> & { reply?: string | LLMProviderError } = {}) {
   const saved: SavedBriefing[] = [];
   const reads: string[] = [];
-  const provider = createMockProvider([typeof over.reply === "object" ? over.reply : textResult(over.reply ?? "{}")]);
+  const provider = createMockProvider([typeof over.reply === "object" ? over.reply : textResult(complete(over.reply ?? "{}"))]);
   const d: RunDeps = {
     client,
     provider,
@@ -150,7 +161,7 @@ describe("runBriefing", () => {
 
 describe("runBriefingBounded (Run now: inline, bounded, single-flight)", () => {
   const slowProvider = (ms: number, reply = "{}") => {
-    const inner = createMockProvider([textResult(reply)]);
+    const inner = createMockProvider([textResult(complete(reply))]);
     return { ...inner, complete: async (...a: Parameters<typeof inner.complete>) => (await new Promise((r) => setTimeout(r, ms)), inner.complete(...a)) } as typeof inner;
   };
 
@@ -393,5 +404,73 @@ describe("exclusions reach neither the attention list nor the AI input (T-234 pa
     const sent = JSON.stringify(provider.calls[0]?.messages);
     for (const gone of ["This week at Pub K", "Updated invitation", "Proposal", "one-time code", "Pull request"]) expect(sent).not.toContain(gone);
     expect(sent).toContain("Capture plan review");
+  });
+});
+
+describe("structured output and the one retry (T-235 part 1)", () => {
+  const GOOD = { ...FULL, lines: ["A renewal needs your confirmation."] };
+  const run = async (replies: ReturnType<typeof textResult>[]) => {
+    const provider = createMockProvider(replies);
+    const { d, saved } = deps({ provider });
+    const res = await runBriefing(d, input);
+    return { res, saved, provider };
+  };
+  let err: ReturnType<typeof vi.spyOn>;
+  const quiet = () => {
+    err = vi.spyOn(console, "error").mockImplementation(() => undefined);
+  };
+  afterEach(() => err?.mockRestore());
+
+  it("sends the JSON schema with the request and never forces a tool", async () => {
+    const { provider } = await run([jsonResult(GOOD)]);
+    expect(provider.calls).toHaveLength(1);
+    expect(provider.calls[0]?.outputSchema).toMatchObject({ name: "briefing", schema: { type: "object", additionalProperties: false } });
+    expect(provider.calls[0]).not.toHaveProperty("tools");
+  });
+  it("accepts a fenced reply and a reply with leading prose, without a retry", async () => {
+    for (const text of ["```json\n" + JSON.stringify(GOOD) + "\n```", "Sure, here it is:\n" + JSON.stringify(GOOD)]) {
+      const { res, provider, saved } = await run([textResult(text)]);
+      expect(res.status).toBe("ready");
+      expect(provider.calls).toHaveLength(1);
+      expect(saved[0]?.content.lines).toEqual(GOOD.lines);
+    }
+  });
+  it("a malformed reply is retried once with the validation problems, and the retry succeeds", async () => {
+    quiet();
+    const { res, provider } = await run([textResult('{"lines": ["SECRET-PARTIAL"]}'), jsonResult(GOOD)]);
+    expect(res.status).toBe("ready");
+    expect(provider.calls).toHaveLength(2);
+    const msgs = provider.calls[1]?.messages ?? [];
+    const last = msgs[msgs.length - 1];
+    const prev = msgs[msgs.length - 2];
+    expect(prev).toMatchObject({ role: "assistant", content: '{"lines": ["SECRET-PARTIAL"]}' });
+    expect(last?.role).toBe("user");
+    expect(String(last?.content)).toContain("attention: invalid_type");
+    expect(String(last?.content)).not.toContain("SECRET-PARTIAL"); // the correction names paths and codes, never values
+    expect(provider.calls[1]?.outputSchema).toBeDefined();
+  });
+  it("prose without JSON is retried; a retry that also fails saves output_invalid and logs codes only", async () => {
+    quiet();
+    const { res, saved, provider } = await run([textResult("I cannot do that, SECRET-PROSE"), textResult('{"lines": "SECRET-WRONG-TYPE"}')]);
+    expect(res).toEqual({ id: "id-1", status: "failed", reason: "output_invalid" });
+    expect(provider.calls).toHaveLength(2); // exactly one retry
+    expect(saved[0]?.content.notes).toContain("fail:output_invalid");
+    const logged = JSON.stringify(err.mock.calls);
+    expect(logged).toContain("briefing.model_output_invalid");
+    expect(logged).toContain("not_json");
+    expect(logged).toContain("invalid_type");
+    expect(logged).not.toContain("SECRET");
+  });
+  it("a refusal or truncated reply is not retried", async () => {
+    quiet();
+    const { res, provider } = await run([textResult("{", { status: "max_tokens", stopReason: "max_tokens" } as never)]);
+    expect(res).toMatchObject({ status: "failed", reason: "output_invalid" });
+    expect(provider.calls).toHaveLength(1);
+  });
+  it("valid output still goes through grounding: an invented figure becomes Awaiting your input", async () => {
+    const bad = { ...FULL, attention: [{ ref: "r1", what: "Renewal of $1,200.", why: "Costs $9,999.", next: "Confirm." }] };
+    const { saved } = await run([jsonResult(bad)]);
+    expect(saved[0]?.content.attention[0]?.why).toBe("Awaiting your input");
+    expect(saved[0]?.content.notes).toContain("ungrounded:r1.why");
   });
 });

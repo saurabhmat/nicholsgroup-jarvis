@@ -1,11 +1,10 @@
 // @vitest-environment jsdom
-// T-234 part 2: the top of "Needs your attention": AI summary, prepared line, Run now, Top 3 row; the rule-based fallback with the
+// T-234 part 2 / T-235 part 1: the top of "Needs your attention": AI summary, "Summary at" line, the owner's controls slot (no Run button), Top 3 row; the rule-based fallback with the
 // fixed reason; the admin hint only when the server passed one.
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it } from "vitest";
 import { cleanup, render, screen, within } from "@testing-library/react";
 import type { SavedBriefingView } from "@/lib/briefing";
 
-vi.mock("@/app/[laneId]/briefing-actions", () => ({ runBriefingNow: async () => null }));
 import { AiBriefing, Deadlines, repliesByMessage } from "./home-ai-briefing";
 
 afterEach(cleanup);
@@ -14,15 +13,16 @@ const brief = (over: Partial<SavedBriefingView["content"]> = {}, status: SavedBr
   id: "b1", status, trigger: "manual", preparedAt: "2026-11-11T12:00:00Z", windowFrom: "2026-11-10T12:00:00Z", windowTo: "2026-11-11T12:00:00Z", lastFailedAt: null, lastRunAt: null, refs: [ref],
   content: { lines: ["First sentence.", "Second sentence.", "Third line."], attention: [], deadlines: [{ text: "Send the plan", due: "2026-11-14", ref: "r1" }], priorities: [{ text: "Confirm renewal", reason: "Due Friday", refs: [] }, { text: "Review plan", reason: "x", refs: [] }, { text: "Call Ann", reason: "y", refs: [] }], replies: [{ ref: "r1", status: "ready", context: "", text: "ok", proposalId: "00000000-0000-4000-8000-0000000000d1" }], moreReplies: [], notes: [], ...over },
 });
-const base = { laneId: "PKG", fallbackLines: ["Rule-based: 2 unread."], tz: "America/New_York", canRun: true };
+const base = { laneId: "PKG", fallbackLines: ["Rule-based: 2 unread."], tz: "America/New_York", now: new Date("2026-11-11T20:00:00Z") };
 
 describe("AiBriefing", () => {
-  it("shows a 1-2 sentence summary, the prepared line with Run now, and Top 3 as a numbered row", () => {
+  it("shows a 1-2 sentence summary, \"Summary at <time>\" (no Run button), and Top 3 as a numbered row", () => {
     render(<AiBriefing {...base} brief={brief()} />);
     expect(screen.getByTestId("briefing").textContent).toBe("First sentence. Second sentence.");
     expect(within(screen.getByTestId("briefing-more")).getByText("Third line.")).toBeTruthy();
-    expect(screen.getByTestId("briefing-prepared").textContent).toBe("Prepared at Wed, Nov 11, 7:00 AM");
-    expect(screen.getByTestId("run-briefing")).toBeTruthy();
+    expect(screen.getByTestId("briefing-prepared").textContent).toBe("Summary at 7:00 AM");
+    expect(screen.queryByText("Run now")).toBeNull();
+    expect(screen.queryByTestId("run-briefing")).toBeNull();
     const items = within(screen.getByTestId("priorities")).getAllByRole("listitem");
     expect(items.map((i) => i.textContent)).toEqual(["1.Confirm renewal", "2.Review plan", "3.Call Ann"]);
     expect(screen.queryByTestId("briefing-failure")).toBeNull();
@@ -48,9 +48,19 @@ describe("AiBriefing", () => {
     expect(screen.getByTestId("briefing-failure-hint").textContent).toBe("Set ANTHROPIC_API_KEY");
   });
 
-  it("no Run now for a caller who cannot run it", () => {
-    render(<AiBriefing {...base} canRun={false} brief={brief()} />);
-    expect(screen.queryByTestId("run-briefing")).toBeNull();
+  it("the summary time is today's clock time, or the date and time on another day, in the viewer's zone", () => {
+    const { rerender } = render(<AiBriefing {...base} brief={brief()} />);
+    expect(screen.getByTestId("briefing-prepared").textContent).toBe("Summary at 7:00 AM");
+    rerender(<AiBriefing {...base} now={new Date("2026-11-12T20:00:00Z")} brief={brief()} />);
+    expect(screen.getByTestId("briefing-prepared").textContent).toBe("Summary at Nov 11, 7:00 AM");
+  });
+
+  it("the owner's controls render next to the time; without them (a non-owner) there are none", () => {
+    const { rerender } = render(<AiBriefing {...base} brief={brief()} controls={<span data-testid="ctl">controls</span>} />);
+    expect(screen.getByTestId("ctl")).toBeTruthy();
+    rerender(<AiBriefing {...base} brief={brief()} />);
+    expect(screen.queryByTestId("ctl")).toBeNull();
+    expect(screen.getByTestId("briefing").textContent).toBe("First sentence. Second sentence.");
   });
 });
 
