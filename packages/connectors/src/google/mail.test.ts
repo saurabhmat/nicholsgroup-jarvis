@@ -499,9 +499,13 @@ describe("rate limits (T-063 review)", () => {
       acct.messages.set(m.id, m);
     }
     // The first message read is rate-limited for good (its five attempts are instant in tests); every other read takes
-    // 20 ms, so the page has failed long before the other workers could get through the remaining 24 messages.
+    // 200 ms, so the page fails while the first few workers are still reading. The invariant is checked directly, not by
+    // a timing threshold (the old "< 8 reads" bound flaked on a loaded single-core machine): no read STARTS after the
+    // sync rejected, and the page never reads through all 24 other messages.
     let target: string | undefined;
     let others = 0;
+    let rejected = false;
+    let startedAfterReject = 0;
     server.use(
       http.get("https://gmail.googleapis.com/gmail/v1/users/me/messages/:id", async ({ params }) => {
         target ??= String(params.id);
@@ -509,14 +513,16 @@ describe("rate limits (T-063 review)", () => {
           return HttpResponse.json({ error: { code: 403, status: "PERMISSION_DENIED", errors: [{ reason: "rateLimitExceeded" }] } }, { status: 403 });
         }
         others += 1;
-        await delay(20);
+        if (rejected) startedAfterReject += 1;
+        await delay(200);
         return undefined;
       }),
     );
     await expect(h.mail.sync("PKG", conn, null, { pageSize: 100 })).rejects.toMatchObject({ info: { kind: "rate_limited" } });
-    await delay(700); // let any worker that kept going show up in the count
-    // Only the reads already in flight when the page failed: far fewer than the 24 other messages on the page.
-    expect(others).toBeLessThan(8);
+    rejected = true;
+    await delay(1000); // let any worker that kept going show up in the count
+    expect(startedAfterReject).toBe(0);
+    expect(others).toBeLessThan(24);
   });
 
   it("a daily quota 403 is not retried in the run", async () => {
