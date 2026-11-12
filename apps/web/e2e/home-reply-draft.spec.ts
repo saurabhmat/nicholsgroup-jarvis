@@ -50,9 +50,11 @@ test("the Reply drawer keeps an open draft through the router refresh and a relo
   await expect(dialog.getByTestId("reply-full-thread")).toHaveAttribute("href", /^\/PKG\/inbox\/[A-Za-z0-9_-]+$/);
   const body = dialog.getByTestId("reply-body");
   await body.fill(TYPED);
-  await expect(dialog.getByTestId("reply-autosave")).toHaveText("Saved just now", { timeout: 10_000 });
+  await expect(dialog.getByTestId("reply-autosave")).toContainText("Saved just now", { timeout: 10_000 });
 
   // A real Next router refresh (what the 5-minute timer calls): the drawer stays open and the text stays.
+  // Wait for the RSC response itself (not a fixed pause), then assert.
+  const rsc = page.waitForResponse((r) => r.url().includes("_rsc") || r.request().headers()["rsc"] === "1", { timeout: 30_000 });
   const refreshed = await page.evaluate(() => {
     const r = (window as unknown as { next?: { router?: { refresh?: () => void } } }).next?.router;
     if (!r?.refresh) return false;
@@ -60,7 +62,7 @@ test("the Reply drawer keeps an open draft through the router refresh and a relo
     return true;
   });
   expect(refreshed, "window.next.router.refresh must exist in this Next build").toBe(true);
-  await page.waitForTimeout(1500);
+  expect((await rsc).ok()).toBe(true);
   await expect(page.getByRole("dialog")).toBeVisible();
   await expect(page.getByTestId("reply-body")).toHaveValue(TYPED);
 

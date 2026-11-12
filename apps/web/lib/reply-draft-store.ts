@@ -9,7 +9,7 @@
 //     only when the lane stores drafts (the drawer does it after its context loads).
 //   * `noteSignedInUser()` clears every namespace when this tab sees a different user than last time (a sign-out that did not run).
 //   * `clearAllDrafts()` runs at sign-out and removes every namespace listed in DRAFT_NAMESPACES.
-export const DRAFT_NAMESPACES = ["reply-draft", "reply-ai", "home-open", "drawer-open"] as const;
+export const DRAFT_NAMESPACES = ["reply-draft", "reply-ai", "reply-origin", "home-open", "drawer-open"] as const;
 export type DraftNamespaceName = (typeof DRAFT_NAMESPACES)[number];
 
 const ROOT = "nichols:";
@@ -174,6 +174,19 @@ export const aiDrafts = draftNamespace<StoredAiDraft>("reply-ai", {
     if (!o) return null;
     const text = str(o.text, MAX_BODY);
     return text === null || typeof o.awaiting !== "boolean" ? null : { text, awaiting: o.awaiting };
+  },
+});
+
+/**
+ * The AI text a message's reply body started from (for the "commitment Jarvis suggested" warning), kept per message for 24 hours so
+ * the warning survives a reload, Save draft and the 30-minute expiry of `aiDrafts`. Only when the lane stores drafts (rule 6).
+ * An owner-saved proposal opened in a NEW session (nothing recorded here) has no known AI origin, so no warning is shown.
+ */
+export const replyOrigins = draftNamespace<{ text: string }>("reply-origin", {
+  ttlMs: 24 * 3_600_000,
+  validate(v) {
+    const text = typeof v === "object" && v !== null ? str((v as Record<string, unknown>).text, MAX_BODY) : null;
+    return text === null || text === "" ? null : { text };
   },
 });
 

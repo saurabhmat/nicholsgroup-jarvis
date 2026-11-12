@@ -824,9 +824,118 @@ describe("the redesigned drawer (T-237 part E)", () => {
     open();
     await ready();
     const warn = await screen.findByTestId("reply-commitment");
-    expect(warn.textContent).toBe('Check before sending: "Thursday noon ET" is a commitment Jarvis suggested.');
+    expect(warn.textContent).toBe('Check before sending: "Thursday noon ET", "We will confirm" are commitments Jarvis suggested.');
     fireEvent.change(field("reply-body"), { target: { value: "We will look into it. I can call tomorrow." } });
     expect(screen.queryByTestId("reply-commitment")).toBeNull();
+  });
+
+  it("two commitments: one notice that lists both, and one is dropped when the owner removes it", async () => {
+    fakeServer({
+      reply_context: () => ok({ context: baseContext() }),
+      draft_reply: () => ok({ draft: { status: "ready", text: "Reply by Friday noon ET and within 2 days." } }),
+    });
+    open();
+    await ready();
+    const warn = await screen.findByTestId("reply-commitment");
+    expect(warn.textContent).toBe('Check before sending: "Friday noon ET", "within 2 days" are commitments Jarvis suggested.');
+    expect(screen.getAllByTestId("reply-commitment")).toHaveLength(1);
+    fireEvent.change(field("reply-body"), { target: { value: "Reply within 2 days." } });
+    expect(screen.getByTestId("reply-commitment").textContent).toBe('Check before sending: "within 2 days" is a commitment Jarvis suggested.');
+  });
+
+  it("a draft with CRLF line endings is checked the same way", async () => {
+    fakeServer({
+      reply_context: () => ok({ context: baseContext() }),
+      draft_reply: () => ok({ draft: { status: "ready", text: "Hi,\r\nThe fee is [amount].\r\nBy Friday noon ET.\r\nBest" } }),
+    });
+    open();
+    await ready();
+    await waitFor(() => expect(field("reply-body").value).toBe("Hi,\nBy Friday noon ET.\nBest")); // a textarea normalises line endings to LF
+    expect((await screen.findByTestId("reply-commitment")).textContent).toBe('Check before sending: "Friday noon ET" is a commitment Jarvis suggested.');
+  });
+
+  it("the warning survives a reload that restores the unsent edits, even after the 30-minute draft cache expired", async () => {
+    fakeServer({
+      reply_context: () => ok({ context: baseContext() }),
+      draft_reply: () => ok({ draft: { status: "ready", text: "We will confirm by Thursday noon ET." } }),
+    });
+    open();
+    await ready();
+    await screen.findByTestId("reply-commitment");
+    fireEvent.change(field("reply-body"), { target: { value: "We will confirm by Thursday noon ET. Thanks, Sam." } });
+    await waitFor(() => expect(stored()?.body).toMatch(/Thanks, Sam/));
+    cleanup();
+    window.sessionStorage.removeItem(aiDrafts.key("PKG", "u1", "m1")); // the cache is gone
+    open();
+    await ready();
+    await waitFor(() => expect(field("reply-body").value).toMatch(/Thanks, Sam/));
+    expect(screen.getByTestId("reply-source-note").textContent).toBe("Your unsent edits were restored.");
+    expect((await screen.findByTestId("reply-commitment")).textContent).toContain('"Thursday noon ET"');
+  });
+
+  it("the warning survives Save draft: the saved proposal reopens with it; a proposal with no recorded origin shows none", async () => {
+    const saved = { id: PID, hash: HASH, expiresAt: "2026-11-14T12:00:00Z", to: ["dana@sender.example.test"], cc: [] as string[], bcc: [] as string[], bodyText: "We will confirm by Thursday noon ET.", origin: "owner" as const, derivedFromRetrieved: true, rationale: null };
+    let proposal: typeof saved | null = null;
+    fakeServer({
+      reply_context: () => ok({ context: baseContext({ proposal }) }),
+      draft_reply: () => ok({ draft: { status: "ready", text: "We will confirm by Thursday noon ET." } }),
+      propose_reply: () => {
+        proposal = saved;
+        return ok({ id: PID, hash: HASH, unchanged: false });
+      },
+    });
+    open();
+    await ready();
+    await screen.findByTestId("reply-commitment");
+    fireEvent.click(screen.getByTestId("reply-save"));
+    await screen.findByTestId("reply-saved");
+    cleanup();
+    window.sessionStorage.removeItem(aiDrafts.key("PKG", "u1", "m1"));
+    open();
+    await ready();
+    expect(field("reply-body").value).toBe("We will confirm by Thursday noon ET.");
+    expect(screen.getByTestId("reply-source-note").textContent).toBe("Your saved draft.");
+    expect((await screen.findByTestId("reply-commitment")).textContent).toContain('"Thursday noon ET"');
+    // A new session (nothing recorded): no warning. Documented limit.
+    cleanup();
+    window.sessionStorage.clear();
+    open();
+    await ready();
+    expect(field("reply-body").value).toBe("We will confirm by Thursday noon ET.");
+    expect(screen.queryByTestId("reply-commitment")).toBeNull();
+  });
+
+  it("nothing about the AI text is kept when the company does not store drafts", async () => {
+    fakeServer({
+      reply_context: () => ok({ context: baseContext({ storesDrafts: false }) }),
+      draft_reply: () => ok({ draft: { status: "ready", text: "We will confirm by Thursday noon ET." } }),
+    });
+    open();
+    await ready();
+    await screen.findByTestId("reply-commitment");
+    expect(Object.keys(window.sessionStorage).filter((k) => k.startsWith("nichols:reply-"))).toEqual([]);
+  });
+
+  it("the autosave label is not a live region and explains itself", async () => {
+    fakeServer({ reply_context: () => ok({ context: baseContext({ aiAllowed: false }) }) });
+    open();
+    await ready();
+    fireEvent.change(field("reply-body"), { target: { value: "x" } });
+    const label = await screen.findByTestId("reply-autosave");
+    expect(label.getAttribute("role")).toBeNull();
+    expect(label.getAttribute("aria-live")).toBeNull();
+    expect(label.getAttribute("title")).toBe("Kept on this device until you send or save");
+    expect(document.getElementById(label.getAttribute("aria-describedby") ?? "")?.textContent).toMatch(/Kept on this device until you send or save/);
+    expect(label.textContent).toMatch(/^Saved just now/);
+  });
+
+  it("the caption describes the textarea, and the already-replied date is Eastern with ET", async () => {
+    fakeServer({ reply_context: () => ok({ context: baseContext({ aiAllowed: false, alreadySent: { at: "2026-11-10T03:30:00Z" } }) }) });
+    open();
+    await ready();
+    const cap = document.getElementById(field("reply-body").getAttribute("aria-describedby") ?? "");
+    expect(cap?.getAttribute("data-testid")).toBe("reply-draft-label");
+    expect(screen.getByTestId("reply-already-sent").textContent).toContain("Nov 9, 2026 ET");
   });
 
   it("autosave status: nothing until a write succeeds, then Saved just now; nothing at all when drafts are not stored", async () => {
@@ -842,11 +951,11 @@ describe("the redesigned drawer (T-237 part E)", () => {
       await act(async () => {
         await vi.advanceTimersByTimeAsync(600);
       });
-      expect(screen.getByTestId("reply-autosave").textContent).toBe("Saved just now");
+      expect(screen.getByTestId("reply-autosave").textContent).toMatch(/^Saved just now/);
       await act(async () => {
         await vi.advanceTimersByTimeAsync(3 * 60_000);
       });
-      expect(screen.getByTestId("reply-autosave").textContent).toBe("Saved 3 min ago");
+      expect(screen.getByTestId("reply-autosave").textContent).toMatch(/^Saved 3 min ago/);
     } finally {
       vi.useRealTimers();
     }

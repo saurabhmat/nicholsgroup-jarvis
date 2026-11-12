@@ -11,15 +11,15 @@
 // Unsent edits and the generated AI draft are kept in sessionStorage only when the company stores outbound drafts (rule 6, D-19).
 import Link from "next/link";
 import { useRouter } from "next/navigation";
-import { useCallback, useEffect, useId, useRef, useState } from "react";
+import { useCallback, useEffect, useId, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { Alert, AlertDescription, AlertTitle, Badge, Button, cn } from "@nichols/ui";
 import { callApprovals, errorText, invalidAddresses, splitAddresses, stepUpHref, type DraftResult, type ReplyContext } from "@/lib/reply-client";
 import { flagRecipients } from "@/lib/reply-flags";
-import { commitmentToCheck, savedLabel, senderName, stripPlaceholders, threadTime } from "@/lib/reply-text";
+import { commitmentNotice, commitmentsToCheck, etDate, etDateTime, savedLabel, senderName, stripPlaceholders, threadTime } from "@/lib/reply-text";
 import { DRAFTS_OFF_MESSAGE, REPLY_MESSAGES, resultMessage, UNKNOWN_MESSAGE, type ReplyOutcome } from "@/lib/reply-messages";
 import { holdRefresh, requestRefresh } from "@/lib/refresh-gate";
-import { aiDrafts, debounced, openDrawer, replyDrafts, type ReplyDraftFields } from "@/lib/reply-draft-store";
+import { aiDrafts, debounced, openDrawer, replyDrafts, replyOrigins, type ReplyDraftFields } from "@/lib/reply-draft-store";
 import { CapabilityMessage } from "./approval-card";
 import { useHomeScope } from "./home-scope";
 import { CopyTextButton } from "./copy-text-button";
@@ -30,6 +30,7 @@ const row = "grid grid-cols-[3.5rem_minmax(0,1fr)] items-center gap-3 text-small
 const FOCUSABLE = 'a[href], button:not([disabled]), input:not([disabled]), textarea:not([disabled]), select:not([disabled]), [tabindex]:not([tabindex="-1"])';
 export const STALE_NOTE = "Your earlier unsaved edits were discarded because the draft changed.";
 const WRITE_DELAY_MS = 500;
+const KEPT_NOTE = "Kept on this device until you send or save";
 
 type Source = "restored" | "briefing" | "saved" | "ai" | "blank";
 type Loaded =
@@ -49,6 +50,9 @@ function loadReply(laneId: string, messageId: string, restored: boolean): Promis
   return p;
 }
 
+/** The recorded AI origin of this message's reply body (only when the lane stores drafts); "" when none is known. */
+const originOf = (laneId: string, ctx: ReplyContext): string => (ctx.storesDrafts ? (replyOrigins.read(laneId, ctx.userId, ctx.messageId)?.text ?? "") : "");
+
 const versionOf = (ctx: ReplyContext): string => ctx.proposal?.hash ?? "none";
 
 /** Asks for the AI draft. A success is kept for 30 minutes (only when the company stores drafts). */
@@ -56,7 +60,11 @@ async function fetchDraft(laneId: string, ctx: ReplyContext): Promise<{ draft: D
   const d = await callApprovals(laneId, { action: "draft_reply", messageId: ctx.messageId });
   const draft = d.status === 200 ? (d.data.draft as DraftResult | undefined) : undefined;
   if (draft && (draft.status === "ready" || draft.status === "awaiting_input")) {
-    if (ctx.storesDrafts) aiDrafts.write(laneId, ctx.userId, ctx.messageId, { text: draft.status === "ready" ? draft.text : "", awaiting: draft.status === "awaiting_input" });
+    if (ctx.storesDrafts) {
+      aiDrafts.write(laneId, ctx.userId, ctx.messageId, { text: draft.status === "ready" ? draft.text : "", awaiting: draft.status === "awaiting_input" });
+      // The AI text the body starts from: kept longer than the draft cache so the commitment warning survives Save draft and a reload.
+      if (draft.status === "ready" && draft.text !== "") replyOrigins.write(laneId, ctx.userId, ctx.messageId, { text: draft.text });
+    }
     return { draft };
   }
   return { message: errorText(d) };
@@ -76,7 +84,7 @@ async function doLoad(laneId: string, messageId: string, restored: boolean): Pro
     if (stored) {
       if (stored.serverVersion === versionOf(ctx)) {
         // The AI text the restored body started from (for the commitment check): the briefing's draft or the generated draft of the last 30 minutes.
-        const aiText = ctx.proposal?.origin === "briefing" ? stripPlaceholders(ctx.proposal.bodyText).text : (aiDrafts.read(laneId, ctx.userId, messageId)?.text ?? "");
+        const aiText = ctx.proposal?.origin === "briefing" ? stripPlaceholders(ctx.proposal.bodyText).text : (originOf(laneId, ctx) || (aiDrafts.read(laneId, ctx.userId, messageId)?.text ?? ""));
         return { ok: true, ctx, fields: { to: stored.to, cc: stored.cc, body: stored.body }, base, source: "restored", awaiting: false, aiMessage: null, staleDiscarded: false, offerDraft: false, aiText: stripPlaceholders(aiText).text, removed: 0 };
       }
       replyDrafts.remove(laneId, ctx.userId, messageId);
@@ -85,13 +93,14 @@ async function doLoad(laneId: string, messageId: string, restored: boolean): Pro
   } else {
     replyDrafts.remove(laneId, ctx.userId, messageId); // nothing is kept when the company does not store drafts
     aiDrafts.remove(laneId, ctx.userId, messageId);
+    replyOrigins.remove(laneId, ctx.userId, messageId);
   }
   if (fromProposal && ctx.proposal) {
     // The briefing's draft may hold masked figures: those sentences never reach the textarea. The owner's own saved draft is shown as written.
     const briefing = ctx.proposal.origin === "briefing";
     const s = briefing ? stripPlaceholders(fromProposal.body) : { text: fromProposal.body, removed: 0 };
     const fields = { ...fromProposal, body: s.text };
-    return { ok: true, ctx, fields, base: briefing ? fields : base, source: briefing ? "briefing" : "saved", awaiting: false, aiMessage: null, staleDiscarded, offerDraft: false, aiText: briefing ? s.text : "", removed: s.removed };
+    return { ok: true, ctx, fields, base: briefing ? fields : base, source: briefing ? "briefing" : "saved", awaiting: false, aiMessage: null, staleDiscarded, offerDraft: false, aiText: briefing ? s.text : stripPlaceholders(originOf(laneId, ctx)).text, removed: s.removed };
   }
   if (!ctx.aiAllowed || ctx.blocked) return { ok: true, ctx, fields: blank, base, source: "blank", awaiting: false, aiMessage: null, staleDiscarded, offerDraft: false, aiText: "", removed: 0 };
   // The generated draft of the last 30 minutes is reused: reopening does not ask the AI again.
@@ -117,14 +126,9 @@ const SOURCE_NOTE: Record<Source, string | null> = {
 };
 
 const sameList = (a: readonly string[], b: readonly string[]) => a.length === b.length && a.every((x, i) => x.toLowerCase() === (b[i] ?? "").toLowerCase());
-const when = (iso: string): string => {
-  const d = new Date(iso);
-  return Number.isNaN(d.getTime()) ? "an earlier date" : d.toLocaleDateString(undefined, { dateStyle: "medium" });
-};
-const whenTime = (iso: string): string => {
-  const d = new Date(iso);
-  return Number.isNaN(d.getTime()) ? "soon" : d.toLocaleString(undefined, { dateStyle: "medium", timeStyle: "short" });
-};
+// Eastern time with "ET", whatever the browser's zone (like the thread time).
+const when = (iso: string): string => etDate(iso) ?? "an earlier date";
+const whenTime = (iso: string): string => etDateTime(iso) ?? "soon";
 
 export function ReplyDrawer({ laneId, messageId, restored = false, onClose }: { laneId: string; messageId: string; restored?: boolean; onClose: () => void }) {
   const router = useRouter();
@@ -366,6 +370,8 @@ export function ReplyDrawer({ laneId, messageId, restored = false, onClose }: { 
       const p = await persist(confirmResend);
       if (!p) return;
       dropLocalCopy(); // the server holds it now
+      // The reopened proposal is the owner's own, so remember which text came from the AI: its commitments keep their warning.
+      if (target.current?.keep && info.aiText !== "") replyOrigins.write(laneId, target.current.userId, messageId, { text: info.aiText });
       setBase({ to, cc, body });
       setSaved(p.id);
       pendingRefresh.current = true; // re-read the page once the drawer is closed, so this message is never unmounted
@@ -399,7 +405,10 @@ export function ReplyDrawer({ laneId, messageId, restored = false, onClose }: { 
       if (a.status === 200 && (a.data.outcome === "sent" || a.data.outcome === "failed" || a.data.outcome === "unknown")) {
         const outcome = a.data.outcome;
         setResult({ outcome, text: resultMessage(outcome, typeof a.data.failureCode === "string" ? a.data.failureCode : null) });
-        if (outcome !== "failed") dropLocalCopy();
+        if (outcome !== "failed") {
+          dropLocalCopy();
+          if (target.current) replyOrigins.remove(laneId, target.current.userId, messageId);
+        }
         pendingRefresh.current = true;
         return;
       }
@@ -407,6 +416,7 @@ export function ReplyDrawer({ laneId, messageId, restored = false, onClose }: { 
       if (a.status === 0 || a.status >= 500) {
         setResult({ outcome: "unknown", text: UNKNOWN_MESSAGE });
         dropLocalCopy();
+        if (target.current) replyOrigins.remove(laneId, target.current.userId, messageId);
         pendingRefresh.current = true;
         return;
       }
@@ -444,7 +454,8 @@ export function ReplyDrawer({ laneId, messageId, restored = false, onClose }: { 
   const who = ctx ? senderName(ctx.replyingTo) : null;
   const sentAt = ctx ? threadTime(ctx.receivedAt) : null;
   const saveStatus = ctx?.storesDrafts ? savedLabel(savedAt, clock) : null;
-  const commitment = commitmentToCheck(body, info.aiText);
+  const commitments = useMemo(() => commitmentsToCheck(body, info.aiText), [body, info.aiText]);
+  const commitment = commitmentNotice(commitments);
   // One persistent live region: its text changes, so a screen reader announces each step (errors have their own role=alert).
   const live = result
     ? result.text
@@ -507,7 +518,7 @@ export function ReplyDrawer({ laneId, messageId, restored = false, onClose }: { 
                     <span className="font-semibold text-foreground">{who ?? ctx.replyingTo}</span>
                     {sentAt ? ` · ${sentAt}` : ""}
                   </p>
-                  <Link href={`/${laneId}/inbox/${encodeURIComponent(messageId)}`} data-testid="reply-full-thread" className="font-medium text-foreground underline underline-offset-2">
+                  <Link href={`/${laneId}/inbox/${encodeURIComponent(ctx.messageId)}`} data-testid="reply-full-thread" className="font-medium text-foreground underline underline-offset-2">
                     Full thread
                   </Link>
                 </div>
@@ -602,16 +613,22 @@ export function ReplyDrawer({ laneId, messageId, restored = false, onClose }: { 
                   A reply keeps its subject so it stays in the same conversation.
                 </p>
                 <div className="mt-1 flex items-baseline justify-between gap-3">
-                  <span data-testid="reply-draft-label" className="text-label font-semibold uppercase tracking-wide text-muted-foreground">
+                  <span id={`${titleId}-caption`} data-testid="reply-draft-label" className="text-label font-semibold uppercase tracking-wide text-muted-foreground">
                     {info.source === "ai" || info.source === "briefing" ? "Draft by Jarvis · edit freely" : "Your reply"}
                   </span>
                   {saveStatus ? (
-                    <span data-testid="reply-autosave" role="status" className="text-small text-success">
+                    // Not a live region: the label ticks every 20 s and must not be announced each time. The title and the hidden note
+                    // say what it means (kept on this device, not the same as Save draft).
+                    <span data-testid="reply-autosave" title={KEPT_NOTE} aria-describedby={`${titleId}-autosave-note`} className="text-small text-success">
                       {saveStatus}
+                      <span id={`${titleId}-autosave-note`} className="sr-only">
+                        {" "}
+                        ({KEPT_NOTE})
+                      </span>
                     </span>
                   ) : null}
                 </div>
-                <textarea id={`${titleId}-body`} ref={bodyRef} aria-label="Message (plain text)" data-testid="reply-body" className={cn(control, "min-h-64 font-sans")} rows={12} value={body} onChange={(e) => edit("body", e.target.value)} disabled={finished} maxLength={100000} />
+                <textarea ref={bodyRef} aria-label="Message (plain text)" aria-describedby={`${titleId}-caption`} data-testid="reply-body" className={cn(control, "min-h-64 font-sans")} rows={12} value={body} onChange={(e) => edit("body", e.target.value)} disabled={finished} maxLength={100000} />
                 {info.removed > 0 ? (
                   <p data-testid="reply-removed-note" className="text-small text-muted-foreground">
                     Jarvis left out {info.removed} {info.removed === 1 ? "line" : "lines"} with figures; add them yourself if needed.
@@ -619,7 +636,7 @@ export function ReplyDrawer({ laneId, messageId, restored = false, onClose }: { 
                 ) : null}
                 {commitment ? (
                   <p data-testid="reply-commitment" role="note" className="rounded-control border border-gold bg-alert-surface px-3 py-2 text-small text-alert-foreground">
-                    Check before sending: &quot;{commitment}&quot; is a commitment Jarvis suggested.
+                    {commitment}
                   </p>
                 ) : null}
                 {dirty && !finished ? (

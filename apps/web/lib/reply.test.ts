@@ -189,6 +189,15 @@ describe("replyContext: everything comes from metadata", () => {
     expect(notLive.send).toMatchObject({ enabled: false, message: NOT_LIVE_MESSAGE });
   });
 
+  it("receivedAt is the message's instant, or null when it is empty, missing or not a string", async () => {
+    const at = async (v: unknown) => (await replyContext(ctxWith([refRow({ received_at: v })]).ctx, db(), approvals(), deps().d, "m1")).receivedAt;
+    expect(await at("2026-11-12T10:00:00Z")).toBe("2026-11-12T10:00:00Z");
+    expect(await at("")).toBeNull();
+    expect(await at(null)).toBeNull();
+    expect(await at(undefined)).toBeNull();
+    expect(await at(12345)).toBeNull();
+  });
+
   it("an unreadable message body only drops the preview", async () => {
     const { ctx } = ctxWith();
     const c = await replyContext(ctx, db(), approvals(), deps({ readBody: async () => { throw new Error("boom"); } }).d, "m1");
