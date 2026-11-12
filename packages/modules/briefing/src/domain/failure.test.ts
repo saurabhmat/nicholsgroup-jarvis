@@ -41,6 +41,7 @@ describe("failure reasons", () => {
     for (const c of ["rate_limited", "overloaded", "connection", "server_error", "unknown"]) expect(classifyFailure(new Named("LLMProviderError", c))).toBe("provider_error");
     expect(classifyFailure(new Named("EnvValidationError"))).toBe("model_setting_invalid");
     expect(classifyFailure(new Named("BriefingOutputError"))).toBe("output_invalid");
+    expect(classifyFailure(new Named("BriefingTruncatedError"))).toBe("output_truncated"); // T-236
     expect(classifyFailure(new Named("BriefingTimeoutError"))).toBe("timeout");
     expect(classifyFailure("weird")).toBe("provider_error");
     expect(classifyFailure(null)).toBe("provider_error");

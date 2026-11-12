@@ -111,6 +111,9 @@ export const newsSchema = z
     blocked_domains: z.array(hostname).max(64).default([]),
     // Searches per fetch (the API's max_uses).
     max_searches: z.int().min(1).max(10).default(6),
+    // T-236: the model's output limit for one news call (thinking and the cited answer count toward it). A reply cut off at this
+    // limit is never parsed: it is retried once with 1.5x the limit and fewer stories, then recorded as output_truncated.
+    max_tokens: z.int().min(2000).max(32000).default(8000),
     // Spend guard (USD, estimate): a fetch is refused before the model call when month-to-date plus the worst case for one call exceeds it.
     monthly_cap_usd: z.number().min(1).max(1000).default(20),
     // Prices for the estimate. NOT verified against the vendor price list (backlog Needs human): check before relying on the cap.
@@ -187,6 +190,9 @@ export const laneConfigSchema = z.strictObject({
       days: z.array(z.int().min(0).max(6)).min(1).max(7).refine((d) => new Set(d).size === d.length, "days must be unique").default([1, 2, 3, 4, 5]),
       // The AI briefing job's daily schedule (T-231c). Off unless set to true: Home still prepares a summary on its own when it is older than 3 hours (T-235).
       schedule_enabled: z.boolean().default(false),
+      // T-236: the model's output limit for one briefing call (thinking counts toward it on current models). A reply cut off at
+      // this limit is never parsed: it is retried once with 1.5x the limit, then recorded as output_truncated.
+      max_tokens: z.int().min(2000).max(32000).default(8000),
       // A mail or calendar stream counts as stale when it last synced longer ago than this.
       coverage_stale_minutes: z.int().min(15).max(10080).default(120),
       // Domains that count as internal for "external attendees" (the lane's mailbox domains always count).

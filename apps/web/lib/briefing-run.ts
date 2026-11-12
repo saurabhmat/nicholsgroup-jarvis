@@ -121,6 +121,18 @@ export class BriefingOutputError extends Error {
     this.name = "BriefingOutputError";
   }
 }
+/** The reply stopped at the output limit (stopReason max_tokens) on its last allowed attempt: never parsed (T-236). */
+export class BriefingTruncatedError extends Error {
+  constructor() {
+    super("briefing output cut off");
+    this.name = "BriefingTruncatedError";
+  }
+}
+/** The output limit of the one retry after a cut-off reply: 1.5x briefing.max_tokens, at most 32000. */
+export const retryMaxTokens = (maxTokens: number): number => Math.min(32_000, Math.ceil(maxTokens * 1.5));
+const SHORTER =
+  "Your previous reply was cut off at the length limit and could not be used. Write the complete briefing JSON again, shorter: at most 3 lines, 3 priorities and 3 reply drafts, each draft a few sentences. One JSON object only.";
+
 export class BriefingTimeoutError extends Error {
   constructor() {
     super("briefing timed out");
@@ -250,25 +262,45 @@ export async function runBriefing(deps: RunDeps, input: { laneId: LaneId; ownerU
   let model: string | null = deps.provider.modelFor("analysis");
   try {
     const messages = withUserContext([{ role: "user", content: user }], prompt.userContext);
-    const ask = async (msgs: typeof messages) => {
-      const res = await deps.provider.complete({ laneId, tier: "analysis", ...(deps.signal ? { signal: deps.signal } : {}), system: prompt.system, messages: msgs, maxTokens: 3000, outputSchema: BRIEFING_OUTPUT_SCHEMA });
+    const limit = view.config.max_tokens;
+    let attempt = 0;
+    const ask = async (msgs: typeof messages, maxTokens: number) => {
+      const res = await deps.provider.complete({ laneId, tier: "analysis", ...(deps.signal ? { signal: deps.signal } : {}), system: prompt.system, messages: msgs, maxTokens, outputSchema: BRIEFING_OUTPUT_SCHEMA });
       model = res.model;
+      // Codes and counts only (never content).
+      console.info("[briefing] briefing.model_call", { laneId, attempt: ++attempt, stopReason: res.stopReason, outputTokens: res.usage.outputTokens, maxTokens });
+      // A reply cut off at the limit is never parsed (it would be half a JSON object).
+      if (res.status === "max_tokens") throw new BriefingTruncatedError();
       if (res.status !== "completed") throw new BriefingOutputError();
       return res.content.flatMap((b) => (b.type === "text" ? [b.text] : [])).join("");
     };
-    let text = await ask(messages);
+    let text: string;
+    let retried = false;
+    try {
+      text = await ask(messages, limit);
+    } catch (e) {
+      if (!(e instanceof BriefingTruncatedError)) throw e;
+      // One retry with 1.5x the limit and a request for a shorter briefing, only while it can still finish inside the bound.
+      if (clock() - runStartedMs > RETRY_ONLY_BEFORE_MS) {
+        console.error("[briefing] briefing.retry_skipped", { laneId, elapsedMs: clock() - runStartedMs });
+        throw e;
+      }
+      retried = true;
+      text = await ask([...messages, { role: "user", content: SHORTER }], retryMaxTokens(limit));
+    }
     let parsed = parseBriefingOutput(text);
     if (!parsed.ok) {
       // Codes only (schema paths and Zod issue codes): never a value, a prompt or the reply.
       console.error("[briefing] briefing.model_output_invalid", { laneId, attempt: 1, issues: parsed.issues });
       // The retry only when it can still finish inside the run's bound; otherwise fail now with the usual code.
-      if (clock() - runStartedMs > RETRY_ONLY_BEFORE_MS) {
-        console.error("[briefing] briefing.retry_skipped", { laneId, elapsedMs: clock() - runStartedMs });
+      // One retry in all: none after a retry for a cut-off reply, and none once it could not finish inside the run's bound.
+      if (retried || clock() - runStartedMs > RETRY_ONLY_BEFORE_MS) {
+        if (!retried) console.error("[briefing] briefing.retry_skipped", { laneId, elapsedMs: clock() - runStartedMs });
         throw new BriefingOutputError();
       }
       // One retry: the previous reply and the validation problems (no new email content).
       const retry: typeof messages = [...messages, ...(text.trim() ? [{ role: "assistant" as const, content: text }] : []), { role: "user", content: correctionMessage(parsed.issues) }];
-      text = await ask(retry);
+      text = await ask(retry, limit);
       parsed = parseBriefingOutput(text);
       if (!parsed.ok) {
         console.error("[briefing] briefing.model_output_invalid", { laneId, attempt: 2, issues: parsed.issues });

@@ -41,7 +41,7 @@ export const NEWS_REFRESH_INTERVAL_MS = 60 * 60_000;
 export const NEWS_REFRESH_TIMEOUT_MS = 70_000;
 
 /** Why a stored attempt failed (brief.news_digests.failure_code): fixed codes only, never a vendor message. */
-export const NEWS_FAILURE_CODES = ["model_failed", "model_busy", "timed_out", "model_refused", "output_unusable", "no_valid_items", "search_failed", "incomplete"] as const;
+export const NEWS_FAILURE_CODES = ["model_failed", "model_busy", "timed_out", "model_refused", "output_unusable", "no_valid_items", "search_failed", "incomplete", "output_truncated"] as const;
 export type NewsFailureCode = (typeof NEWS_FAILURE_CODES)[number];
 
 const FAILURE_TEXT: Record<NewsFailureCode, string> = {
@@ -53,6 +53,7 @@ const FAILURE_TEXT: Record<NewsFailureCode, string> = {
   no_valid_items: "no stories could be verified",
   search_failed: "web search was unavailable",
   incomplete: "the search did not finish",
+  output_truncated: "the AI answer was too long",
 };
 
 /** A fixed reason for any stored code; an unknown code (newer or tampered data) gets a generic one. */

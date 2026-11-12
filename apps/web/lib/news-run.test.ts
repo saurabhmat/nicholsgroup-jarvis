@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { LLMProviderError } from "@nichols/ai";
 import { createMockProvider, textResult, webSearchResult } from "@nichols/ai/testing";
 import { newsConfigFrom, reserveUsd } from "./news-domain";
@@ -92,7 +92,7 @@ describe("runNewsFetch", () => {
     const base = textResult("x");
     expect(await harness([{ ...base, status: "refused", stopReason: "refusal", refusal: { category: null } } as never]).run()).toMatchObject({ failureCode: "model_refused" });
     expect(await harness([{ ...base, status: "paused", stopReason: "pause_turn" } as never]).run()).toMatchObject({ failureCode: "incomplete" });
-    expect(await harness([{ ...base, status: "max_tokens", stopReason: "max_tokens" } as never]).run()).toMatchObject({ failureCode: "output_unusable" });
+    expect(await harness([{ ...base, status: "max_tokens", stopReason: "model_context_window_exceeded" } as never]).run()).toMatchObject({ failureCode: "output_truncated" });
     expect(await harness([webSearchResult({ text: "Sorry, here is prose only.", hits: [{ url: URLS[0] as string }] })]).run()).toMatchObject({ failureCode: "output_unusable" });
   });
   it("every search failing is search_failed", async () => {
@@ -133,3 +133,81 @@ describe("gateCodeFrom", () => {
     expect(gateCodeFrom(null)).toBeNull();
   });
 });
+
+describe("T-236: a reply cut off at the output limit", () => {
+  const cut = (outputTokens = 8000) =>
+    ({ ...webSearchResult({ text: '{"items":[{"headline":"SECRET-HALF', hits: URLS.map((url) => ({ url })), searches: 4 }), status: "max_tokens", stopReason: "max_tokens", usage: { inputTokens: 40_000, outputTokens, cacheReadInputTokens: 0, cacheCreationInputTokens: 0, webSearchRequests: 4 } }) as never;
+  let info: ReturnType<typeof vi.spyOn>;
+  let err: ReturnType<typeof vi.spyOn>;
+  beforeEach(() => {
+    info = vi.spyOn(console, "info").mockImplementation(() => undefined);
+    err = vi.spyOn(console, "error").mockImplementation(() => undefined);
+  });
+  afterEach(() => {
+    info.mockRestore();
+    err.mockRestore();
+  });
+  const logged = () => JSON.stringify([...info.mock.calls, ...err.mock.calls]);
+
+  it("the first call uses news.max_tokens (default 8000)", async () => {
+    const h = harness([good()]);
+    await h.run();
+    expect(h.provider.calls[0]?.maxTokens).toBe(8000);
+  });
+  it("is never parsed: one retry with 1.5x the limit asking for at most 4 stories; both calls are in the cost and the searches", async () => {
+    const h = harness([cut(), good(4)]);
+    const r = await h.run();
+    expect(r).toMatchObject({ status: "ok", items: 4 });
+    expect(h.provider.calls).toHaveLength(2);
+    expect(h.provider.calls[1]?.maxTokens).toBe(12000);
+    expect(h.provider.calls[1]?.system).toContain("at most 4 stories");
+    const fin = h.calls.finish[0]?.r;
+    // (40000 + 1000) in x 3/M + (8000 + 500) out x 15/M + (4 + 3) searches x 10/1000 = 0.123 + 0.1275 + 0.07 = 0.3205 -> 0.33
+    expect(fin?.estCostUsd).toBe(0.33);
+    expect(fin?.searches).toBe(7);
+  });
+  it("cut off twice: failed output_truncated after exactly two calls, with the cost of both", async () => {
+    const h = harness([cut(), cut(12000)]);
+    expect(await h.run()).toMatchObject({ status: "failed", failureCode: "output_truncated", items: 0 });
+    expect(h.provider.calls).toHaveLength(2);
+    // 80000 in x 3/M + 20000 out x 15/M + 8 searches x 10/1000 = 0.24 + 0.30 + 0.08 = 0.62
+    expect(h.calls.finish[0]?.r.estCostUsd).toBe(0.62);
+    expect(logged()).toContain('"stopReason":"max_tokens"');
+    expect(logged()).toContain('"outputTokens":12000');
+    expect(logged()).not.toContain("SECRET");
+  });
+  it("no retry once 30 s of the fetch have passed: output_truncated after one call", async () => {
+    const provider = createMockProvider([cut(), good()]);
+    const finished: NewsFinish[] = [];
+    let t = 0;
+    const r = await runNewsFetch(
+      { provider, begin: async () => "d", finish: async (_id, f) => void finished.push(f), clock: () => (t += 31_000) },
+      { laneId: "PKG", laneName: "Pub K", cfg, now: NOW },
+    );
+    expect(r).toMatchObject({ status: "failed", failureCode: "output_truncated" });
+    expect(provider.calls).toHaveLength(1);
+    expect(logged()).toContain("news.retry_skipped");
+  });
+  it("a retry that throws keeps the first call's cost (never $0 after a call ran)", async () => {
+    const h = harness([cut(), new LLMProviderError("rate_limited")]);
+    const r = await h.run();
+    expect(r).toMatchObject({ status: "failed", failureCode: "model_busy" });
+    expect(h.calls.finish[0]?.r.estCostUsd).toBeGreaterThanOrEqual(reserveUsd(cfg));
+  });
+  it("forgiving: bad stories are dropped, the rest stored; the log has counts and reason codes only", async () => {
+    const text = JSON.stringify({
+      items: [
+        { headline: "SECRET-H1", why: "w", source_name: "FR", source_url: URLS[0], published_at: "2026-11-12T08:00:00Z" },
+        { headline: "SECRET-H2", why: "w", source_name: "FR", source_url: "https://invented.example.com/SECRET", published_at: "2026-11-12T08:00:00Z" },
+        { headline: "SECRET-H3", why: "w", source_name: "FR", source_url: URLS[1] },
+        { headline: "SECRET-H4", why: "w", source_name: "FR", source_url: URLS[2] },
+      ],
+    });
+    const h = harness([webSearchResult({ text, hits: URLS.map((url) => ({ url })) })]);
+    expect(await h.run()).toMatchObject({ status: "partial", items: 2 });
+    expect(logged()).toContain('"reasons":{"ungrounded":1,"undated_extra":1}');
+    expect(logged()).not.toContain("SECRET");
+    expect(logged()).not.toContain("federalregister");
+  });
+});
+

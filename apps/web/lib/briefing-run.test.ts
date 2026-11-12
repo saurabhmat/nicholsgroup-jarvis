@@ -1,7 +1,7 @@
 // T-231c: one briefing run with the mock provider and a fake lane client. Bodies are read live and never saved; email
 // reaches the model only when the lane policy allows it; model text is checked against the refs; a model failure saves a
 // "failed" briefing with codes only.
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createMockProvider, textResult, jsonResult } from "@nichols/ai/testing";
 import { LLMProviderError } from "@nichols/ai/types";
 import type { LaneId } from "@nichols/core";
@@ -481,11 +481,70 @@ describe("structured output and the one retry (T-235 part 1)", () => {
     expect((await runBriefing(d, input)).status).toBe("ready");
     expect(provider.calls).toHaveLength(2);
   });
-  it("a refusal or truncated reply is not retried", async () => {
+  it("a refusal is not retried", async () => {
     quiet();
-    const { res, provider } = await run([textResult("{", { status: "max_tokens", stopReason: "max_tokens" } as never)]);
+    const { res, provider } = await run([textResult("x", { status: "refused", stopReason: "refusal", refusal: { category: null } } as never)]);
     expect(res).toMatchObject({ status: "failed", reason: "output_invalid" });
     expect(provider.calls).toHaveLength(1);
+  });
+});
+
+describe("a reply cut off at the output limit (T-236)", () => {
+  const GOOD = { ...FULL, lines: ["A renewal needs your confirmation."] };
+  const cut = (text = '{"lines": ["SECRET-HALF') => textResult(text, { status: "max_tokens", stopReason: "max_tokens", usage: { inputTokens: 900, outputTokens: 8000, cacheReadInputTokens: 0, cacheCreationInputTokens: 0 } } as never);
+  let err: ReturnType<typeof vi.spyOn>;
+  let info: ReturnType<typeof vi.spyOn>;
+  beforeEach(() => {
+    err = vi.spyOn(console, "error").mockImplementation(() => undefined);
+    info = vi.spyOn(console, "info").mockImplementation(() => undefined);
+  });
+  afterEach(() => {
+    err.mockRestore();
+    info.mockRestore();
+  });
+  const run = async (replies: ReturnType<typeof textResult>[], clock?: () => number) => {
+    const provider = createMockProvider(replies);
+    const { d, saved } = deps({ provider });
+    if (clock) d.clock = clock;
+    return { res: await runBriefing(d, input), saved, provider };
+  };
+
+  it("the first call uses briefing.max_tokens (default 8000)", async () => {
+    const { provider } = await run([jsonResult(GOOD)]);
+    expect(provider.calls[0]?.maxTokens).toBe(8000);
+  });
+  it("is never parsed: one retry with 1.5x the limit and a request for a shorter briefing, without the cut-off text", async () => {
+    const { res, provider, saved } = await run([cut(), jsonResult(GOOD)]);
+    expect(res.status).toBe("ready");
+    expect(provider.calls).toHaveLength(2);
+    expect(provider.calls[1]?.maxTokens).toBe(12000);
+    const msgs = provider.calls[1]?.messages ?? [];
+    expect(msgs.some((m) => m.role === "assistant")).toBe(false); // the half reply is not sent back
+    expect(String(msgs[msgs.length - 1]?.content)).toContain("cut off");
+    expect(JSON.stringify(msgs)).not.toContain("SECRET-HALF");
+    expect(saved[0]?.content.lines).toEqual(GOOD.lines);
+  });
+  it("cut off twice: saved as output_truncated after exactly two calls; the log has stopReason and token counts, never content", async () => {
+    const { res, saved, provider } = await run([cut(), cut('{"lines": ["SECRET-AGAIN')]);
+    expect(res).toEqual({ id: "id-1", status: "failed", reason: "output_truncated" });
+    expect(provider.calls).toHaveLength(2);
+    expect(saved[0]?.content.notes).toContain("fail:output_truncated");
+    const logged = JSON.stringify([...info.mock.calls, ...err.mock.calls]);
+    expect(logged).toContain("briefing.model_call");
+    expect(logged).toContain('"stopReason":"max_tokens"');
+    expect(logged).toContain('"outputTokens":8000');
+    expect(logged).not.toContain("SECRET");
+  });
+  it("no retry once more than 40 s of the run have elapsed: output_truncated after one call", async () => {
+    let t = 1_000_000;
+    const { res, provider } = await run([cut(), jsonResult(GOOD)], () => (t += 45_000));
+    expect(res).toMatchObject({ status: "failed", reason: "output_truncated" });
+    expect(provider.calls).toHaveLength(1);
+  });
+  it("one retry in all: a malformed reply after the cut-off retry is output_invalid, no third call", async () => {
+    const { res, provider } = await run([cut(), textResult("not json")]);
+    expect(res).toMatchObject({ status: "failed", reason: "output_invalid" });
+    expect(provider.calls).toHaveLength(2);
   });
   it("valid output still goes through grounding: an invented figure becomes Awaiting your input", async () => {
     const bad = { ...FULL, attention: [{ ref: "r1", what: "Renewal of $1,200.", why: "Costs $9,999.", next: "Confirm." }] };

@@ -2,7 +2,7 @@
 // hint. Codes and hints name variables and settings only: never an environment value, a provider message or a secret.
 // The code is stored as a note "fail:<code>" in the briefing's content.notes (codes only).
 
-export const FAILURE_CODES = ["model_setting_invalid", "key_missing", "model_not_allowed", "timeout", "provider_error", "output_invalid", "sdk_override_set"] as const;
+export const FAILURE_CODES = ["model_setting_invalid", "key_missing", "model_not_allowed", "timeout", "provider_error", "output_invalid", "output_truncated", "sdk_override_set"] as const;
 export type FailureCode = (typeof FAILURE_CODES)[number];
 
 export const FAILURE_TEXT: Readonly<Record<FailureCode, string>> = {
@@ -12,6 +12,7 @@ export const FAILURE_TEXT: Readonly<Record<FailureCode, string>> = {
   timeout: "Timed out",
   provider_error: "Provider error",
   output_invalid: "The AI reply could not be read",
+  output_truncated: "The AI reply was too long",
   sdk_override_set: "AI provider override is set",
 };
 
@@ -48,6 +49,7 @@ export function classifyFailure(e: unknown): FailureCode {
     return "provider_error";
   }
   if (name === "BriefingOutputError") return "output_invalid";
+  if (name === "BriefingTruncatedError") return "output_truncated";
   if (name === "BriefingTimeoutError") return "timeout";
   return "provider_error";
 }
