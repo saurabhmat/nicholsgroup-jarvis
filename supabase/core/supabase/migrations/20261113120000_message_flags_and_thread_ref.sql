@@ -1,21 +1,27 @@
 -- T-234 part 2: Needs your attention exclusions and the thread view.
 --
--- 1. comms.message_index gets three BOOLEAN flags derived from message headers at sync time: is_bulk (List-Unsubscribe, List-Id,
---    Precedence bulk/list/junk), is_calendar (text/calendar, Exchange calendarmessage, Google Calendar notification) and is_auto
---    (Auto-Submitted other than "no", X-Autoreply, Precedence auto_reply). Only the booleans are stored, never a header value or a
---    body (rule 6). Existing rows read false until the message is next synced (no backfill is possible without re-reading Gmail).
+-- 1. comms.message_index gets five BOOLEAN flags derived from message headers at sync time: is_bulk (List-Unsubscribe, List-Id,
+--    Precedence bulk/list/junk), is_calendar (text/calendar, Exchange calendarmessage, Google Calendar notification), is_auto
+--    (true auto-replies only: Auto-Submitted auto-replied, X-Autoreply, X-Autorespond, Precedence auto_reply), is_generated
+--    (Auto-Submitted with any other value except "no": a soft signal) and is_auth_pass (Google's own Authentication-Results
+--    shows dmarc=pass, or dkim=pass aligned with the From domain: priority-sender treatment needs it). Only the booleans are
+--    stored, never a header value or a body (rule 6). Existing rows read false until the message is next synced (no backfill is possible without re-reading Gmail): one full Gmail resync is REQUIRED after this runs, or old mail has no flags and no auth pass (so no priority treatment).
 --    No new table: the table's lane_id and RLS policies are unchanged and apply to the new columns.
 -- 2. core.comms_mail_apply_page writes the flags (same signature; absent flags = false).
 -- 3. core.briefing_threads returns the flags of the thread's latest inbound message (return type changes: dropped and recreated).
 -- 4. core.inbox_message_ref also returns thread_id, so the thread view can build the Gmail link (return type changes: recreated).
 
 alter table comms.message_index
-  add column is_bulk boolean not null default false,
-  add column is_calendar boolean not null default false,
-  add column is_auto boolean not null default false;
+  add column if not exists is_bulk boolean not null default false,
+  add column if not exists is_calendar boolean not null default false,
+  add column if not exists is_auto boolean not null default false,
+  add column if not exists is_generated boolean not null default false,
+  add column if not exists is_auth_pass boolean not null default false;
 comment on column comms.message_index.is_bulk is 'T-234: bulk or list mail (List-Unsubscribe, List-Id, Precedence bulk/list/junk). Derived at sync; the headers are not stored.';
 comment on column comms.message_index.is_calendar is 'T-234: calendar invitation or update (text/calendar part, calendarmessage class, Google Calendar sender). Derived at sync.';
-comment on column comms.message_index.is_auto is 'T-234: auto-reply (Auto-Submitted, X-Autoreply, Precedence auto_reply). Derived at sync.';
+comment on column comms.message_index.is_auto is 'T-234: true auto-reply (Auto-Submitted auto-replied, X-Autoreply, X-Autorespond, Precedence auto_reply). Derived at sync.';
+comment on column comms.message_index.is_generated is 'T-234: Auto-Submitted with a value other than no or auto-replied (e.g. auto-generated); a soft signal. Derived at sync.';
+comment on column comms.message_index.is_auth_pass is 'T-234: Google''s own Authentication-Results shows dmarc=pass, or dkim=pass aligned with the From domain. Derived at sync (false on rows synced earlier until the resync); the header is not stored.';
 
 create or replace function core.comms_mail_apply_page(
   p_lane text,
@@ -91,18 +97,18 @@ begin
          pg_catalog.jsonb_to_record(e.v)
            as r(message_id text, thread_id text, source_url text, from_address text, from_name text,
                 to_recipients jsonb, cc_recipients jsonb, subject text, received_at timestamptz, is_read boolean,
-                is_starred boolean, is_important boolean, has_attachments boolean, is_bulk boolean, is_calendar boolean, is_auto boolean, folder text, labels jsonb,
+                is_starred boolean, is_important boolean, has_attachments boolean, is_bulk boolean, is_calendar boolean, is_auto boolean, is_generated boolean, is_auth_pass boolean, folder text, labels jsonb,
                 source_updated_at timestamptz)
     order by r.message_id, e.n desc
   ), written as (
     insert into comms.message_index as t
       (lane_id, connection_id, provider, message_id, thread_id, source_url, from_address, from_name, to_recipients,
-       cc_recipients, subject, received_at, is_read, is_starred, is_important, has_attachments, is_bulk, is_calendar, is_auto, folder, labels,
+       cc_recipients, subject, received_at, is_read, is_starred, is_important, has_attachments, is_bulk, is_calendar, is_auto, is_generated, is_auth_pass, folder, labels,
        source_updated_at)
     select p_lane, p_connection_id, 'google', i.message_id, i.thread_id, i.source_url, i.from_address, i.from_name,
            coalesce(i.to_recipients, '[]'::jsonb), coalesce(i.cc_recipients, '[]'::jsonb), i.subject, i.received_at,
            coalesce(i.is_read, false), coalesce(i.is_starred, false), coalesce(i.is_important, false),
-           coalesce(i.has_attachments, false), coalesce(i.is_bulk, false), coalesce(i.is_calendar, false), coalesce(i.is_auto, false), i.folder,
+           coalesce(i.has_attachments, false), coalesce(i.is_bulk, false), coalesce(i.is_calendar, false), coalesce(i.is_auto, false), coalesce(i.is_generated, false), coalesce(i.is_auth_pass, false), i.folder,
            coalesce(array(select pg_catalog.jsonb_array_elements_text(coalesce(i.labels, '[]'::jsonb))), '{}'::text[]),
            i.source_updated_at
     from incoming i
@@ -112,6 +118,7 @@ begin
       subject = excluded.subject, received_at = excluded.received_at, is_read = excluded.is_read,
       is_starred = excluded.is_starred, is_important = excluded.is_important, has_attachments = excluded.has_attachments,
       is_bulk = excluded.is_bulk, is_calendar = excluded.is_calendar, is_auto = excluded.is_auto,
+      is_generated = excluded.is_generated, is_auth_pass = excluded.is_auth_pass,
       folder = excluded.folder, labels = excluded.labels, source_updated_at = excluded.source_updated_at,
       deleted = case when p_revive then false else t.deleted end
     -- A missing incoming version counts as oldest: it never replaces a row that has one.
@@ -138,7 +145,7 @@ comment on function core.comms_mail_apply_page(text, uuid, jsonb, jsonb, text, t
   'Applies one Gmail metadata page (chunk) atomically (T-063): advisory lock, cursor compare-and-swap (D0409 on conflict), removals, then upserts (stale versions skipped; T-234: with the header-derived flags), then the cursor. Service_role only, lane-checked against a usable Google connection.';
 -- create or replace keeps the existing grants (service_role only).
 
-drop function core.briefing_threads(text, timestamptz);
+drop function if exists core.briefing_threads(text, timestamptz);
 create function core.briefing_threads(p_lane text, p_since timestamptz)
 returns table (
   connection_id uuid,
@@ -158,7 +165,9 @@ returns table (
   last_at timestamptz,
   is_bulk boolean,
   is_calendar boolean,
-  is_auto boolean
+  is_auto boolean,
+  is_generated boolean,
+  is_auth_pass boolean
 )
 language plpgsql
 stable
@@ -178,7 +187,7 @@ begin
   return query
   with msgs as (
     select m.connection_id, coalesce(m.thread_id, 'm:' || m.message_id) as tkey, m.message_id, m.from_address, m.from_name,
-           m.subject, m.received_at, m.source_url, m.labels, m.is_important, m.is_read, m.folder, m.is_bulk, m.is_calendar, m.is_auto,
+           m.subject, m.received_at, m.source_url, m.labels, m.is_important, m.is_read, m.folder, m.is_bulk, m.is_calendar, m.is_auto, m.is_generated, m.is_auth_pass,
            ('SENT' = any (m.labels)) as is_sent
     from comms.message_index m
     -- Unsent drafts are neither inbound mail nor a reply: left out.
@@ -206,7 +215,7 @@ begin
     order by g.connection_id, g.tkey, g.received_at desc, g.message_id
   )
   select t.connection_id, t.tkey, i.message_id, i.from_address, i.from_name, i.subject, i.received_at, i.source_url, i.labels,
-         i.is_important, l.is_sent, t.owner_replied, t.unread_count, t.inbound_count, t.last_at, i.is_bulk, i.is_calendar, i.is_auto
+         i.is_important, l.is_sent, t.owner_replied, t.unread_count, t.inbound_count, t.last_at, i.is_bulk, i.is_calendar, i.is_auto, i.is_generated, i.is_auth_pass
   from threads t
   join last_in i on i.connection_id = t.connection_id and i.tkey = t.tkey
   join last_msg l on l.connection_id = t.connection_id and l.tkey = t.tkey
@@ -221,7 +230,7 @@ comment on function core.briefing_threads(text, timestamptz) is
 revoke all on function core.briefing_threads(text, timestamptz) from public, anon;
 grant execute on function core.briefing_threads(text, timestamptz) to authenticated, service_role;
 
-drop function core.inbox_message_ref(text, text);
+drop function if exists core.inbox_message_ref(text, text);
 create function core.inbox_message_ref(p_lane text, p_message_id text)
 returns table (
   message_id text,

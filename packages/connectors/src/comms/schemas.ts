@@ -93,6 +93,8 @@ export const MessageMetaSchema = z.strictObject({
   is_bulk: z.boolean().optional(),
   is_calendar: z.boolean().optional(),
   is_auto: z.boolean().optional(),
+  is_generated: z.boolean().optional(),
+  is_auth_pass: z.boolean().optional(),
   folder: id512.nullable(),
   labels: z.array(labelSchema).max(50),
   source_updated_at: InstantSchema.nullable(),

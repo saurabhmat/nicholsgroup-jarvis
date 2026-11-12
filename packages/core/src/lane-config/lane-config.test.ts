@@ -228,3 +228,20 @@ describe("briefing schedule (D-32, T-231c)", () => {
     for (const days of [[7], [-1], [1, 1], [], [1.5]]) expect(laneConfigSchema.shape.briefing.safeParse({ days }).success).toBe(false);
   });
 });
+
+describe("briefing exclusions: subject prefixes (T-234 part 2 review)", () => {
+  const parse = (exclusions: unknown) => laneConfigSchema.shape.briefing.safeParse({ exclusions });
+  it("the defaults are valid prefixes (at least 4 characters, ending with a colon)", () => {
+    const x = laneConfigSchema.shape.briefing.parse({}).exclusions;
+    for (const p of [...x.calendar_subjects, ...x.auto_reply_subjects]) {
+      expect(p.length).toBeGreaterThanOrEqual(4);
+      expect(p.endsWith(":")).toBe(true);
+    }
+  });
+  it.each(["calendar_subjects", "auto_reply_subjects"])("%s rejects a short entry and an entry without a trailing colon", (key) => {
+    expect(parse({ [key]: ["Re:"] }).success).toBe(false); // 3 characters
+    expect(parse({ [key]: ["Accepted"] }).success).toBe(false); // no colon
+    expect(parse({ [key]: ["Hi"] }).success).toBe(false);
+    expect(parse({ [key]: ["Canceled:"] }).success).toBe(true);
+  });
+});

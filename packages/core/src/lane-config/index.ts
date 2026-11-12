@@ -14,6 +14,10 @@ const ids = z.array(id).max(500).default([]);
 /** Free-text labels (GoHighLevel tags, pipeline stage names): any printable text, no control characters. */
 const tags = z.array(z.string().min(1).max(100).regex(/^[^\u0000-\u001f\u007f]+$/)).max(500).default([]);
 /** Case-insensitive substring patterns (briefing rules): plain text, never a regular expression. */
+const prefixPatterns = z
+  .array(z.string().min(4).max(100).regex(/^[^\u0000-\u001f\u007f]+$/).refine((v) => v.trim().endsWith(":"), "a subject prefix must end with a colon"))
+  .max(100)
+  .describe("subject prefixes: at least 4 characters, ending with a colon");
 const patterns = z.array(z.string().min(2).max(100).regex(/^[^\u0000-\u001f\u007f]+$/)).max(100);
 /** Nesting beyond this is never a valid config; the scan refuses it instead of recursing. */
 const MAX_DEPTH = 16;
@@ -176,10 +180,11 @@ export const laneConfigSchema = z.strictObject({
           org_newsletter_senders: patterns.default([]),
           // Calendar invitations and updates: text/calendar mail is flagged at sync (is_calendar); these subject PREFIXES (case-insensitive,
           // at the start of the subject, so "Re: Invitation: ..." from a person is not caught) cover mail whose parts are not visible.
-          calendar_subjects: patterns.default(["Invitation:", "Updated invitation:", "Updated invitation with note:", "Canceled event:", "Cancelled event:", "Canceled:", "Accepted:", "Declined:", "Tentatively accepted:", "New event:"]),
-          // Auto-replies are recognised by Auto-Submitted (not "no"), X-Autoreply / X-Autorespond and Precedence auto_reply at sync (is_auto);
-          // these subject PREFIXES catch the rest.
-          auto_reply_subjects: patterns.default(["Automatic reply:", "Auto-reply:", "Autoreply:", "Auto reply:", "Out of office:", "Out of Office Autoreply:", "Automatic response:"]),
+          calendar_subjects: prefixPatterns.default(["Invitation:", "Updated invitation:", "Updated invitation with note:", "Canceled event:", "Cancelled event:", "Canceled:", "Accepted:", "Declined:", "Tentatively accepted:", "New event:"]),
+          // True auto-replies are recognised by Auto-Submitted: auto-replied, X-Autoreply / X-Autorespond and Precedence auto_reply at sync
+          // (is_auto: a hard exclusion); these subject PREFIXES (>= 4 characters, ending with ":") catch the rest. A subject-prefix-only
+          // match is a SOFT exclusion: a priority sender whose mail passed authentication skips it ("Canceled: PO 4471").
+          auto_reply_subjects: prefixPatterns.default(["Automatic reply:", "Auto-reply:", "Autoreply:", "Auto reply:", "Out of office:", "Out of Office Autoreply:", "Automatic response:"]),
           // Bot/CI subjects (whole words). Applied only to automated senders (no-reply, notifications ... or bot_senders), never to a person.
           bot_subjects: patterns.default(["[github]", "dependabot", "pull request", "workflow run", "build #", "pipeline #", "deployment ready", "preview deployment", "check suite"]),
         })

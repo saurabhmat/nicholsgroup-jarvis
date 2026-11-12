@@ -170,7 +170,12 @@ export function createGmailProvider(deps: GmailProviderDeps): MailProvider<"goog
 
   function toMeta(conn: LaneBoundConnection<"google">, m: MetaResponse): MessageMeta | null {
     const headers = new Map<string, string>();
-    for (const h of m.payload?.headers ?? []) if (!headers.has(h.name.toLowerCase())) headers.set(h.name.toLowerCase(), h.value);
+    const authResults: string[] = [];
+    for (const h of m.payload?.headers ?? []) {
+      const name = h.name.toLowerCase();
+      if (name === "authentication-results") authResults.push(h.value);
+      if (!headers.has(name)) headers.set(name, h.value);
+    }
     const labelIds = m.labelIds ?? [];
     const has = (l: string) => labelIds.includes(l);
     const fromList = parseAddressList(headers.get("from"), 1, MAX_SINGLE_HEADER);
@@ -194,7 +199,7 @@ export function createGmailProvider(deps: GmailProviderDeps): MailProvider<"goog
       is_starred: has("STARRED"),
       is_important: has("IMPORTANT"),
       has_attachments: /^\s*multipart\/mixed\b/i.test(headers.get("content-type") ?? ""),
-      ...deriveMailFlags(headers, m.payload ? { mimeType: m.payload.mimeType, parts: m.payload.parts } : undefined),
+      ...deriveMailFlags(headers, m.payload ? { mimeType: m.payload.mimeType, parts: m.payload.parts } : undefined, { fromAddress: fromList[0]?.address ?? null, authResults }),
       folder: has("INBOX") ? "INBOX" : null,
       labels,
       source_updated_at: received,

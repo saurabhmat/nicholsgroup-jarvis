@@ -64,10 +64,38 @@ describe("T-234 part 2 exclusions", () => {
     expect(classify(t({ subject: "Canceled event: Standup @ Thu Nov 13" }), rules).excluded).toBe("calendar");
     expect(classify(t({ subject: "Invitation: Standup @ Thu Nov 13" }), rules).excluded).toBe("calendar");
   });
-  it("a priority sender cannot bring back a calendar notification, an auto-reply or a code", () => {
-    expect(kept({ fromAddress: "boss@pubk.test", subject: "Invitation: board call", isCalendar: true })).toBe(false);
-    expect(kept({ fromAddress: "boss@pubk.test", subject: "Out of office", isAuto: true })).toBe(false);
-    expect(kept({ fromAddress: "boss@pubk.test", subject: "Capture review" })).toBe(true);
+  it("a priority sender cannot bring back a calendar notification, an auto-reply or a code (header flags are hard)", () => {
+    expect(kept({ fromAddress: "boss@pubk.test", subject: "Invitation: board call", isCalendar: true, isAuthPass: true })).toBe(false);
+    expect(kept({ fromAddress: "boss@pubk.test", subject: "Out of office", isAuto: true, isAuthPass: true })).toBe(false);
+    expect(kept({ fromAddress: "boss@pubk.test", subject: "Your one-time code is 123456", isAuthPass: true })).toBe(false);
+    expect(kept({ fromAddress: "boss@pubk.test", subject: "Capture review", isAuthPass: true })).toBe(true);
+  });
+  it("a subject prefix alone is a soft exclusion: an authenticated priority sender keeps 'Canceled: PO 4471'; anyone else is excluded", () => {
+    for (const subject of ["Canceled: PO 4471", "Accepted: revised teaming agreement"]) {
+      expect(kept({ fromAddress: "boss@pubk.test", subject, isAuthPass: true })).toBe(true);
+      expect(kept({ fromAddress: "boss@pubk.test", subject })).toBe(false); // no auth pass
+      expect(kept({ fromAddress: "person@acme.test", subject })).toBe(false);
+    }
+  });
+  it("auto-generated mail (soft): excluded for others, kept from an authenticated priority sender", () => {
+    expect(classify(t({ subject: "Status", isGenerated: true }), rules)).toMatchObject({ excluded: "generated", hard: false, automated: true });
+    expect(kept({ fromAddress: "boss@pubk.test", subject: "Status", isGenerated: true, isAuthPass: true })).toBe(true);
+    expect(kept({ fromAddress: "boss@pubk.test", subject: "Status", isGenerated: true })).toBe(false);
+    expect(kept({ fromAddress: "person@acme.test", subject: "Status", isGenerated: true })).toBe(false);
+  });
+  it("a spoofed priority sender (bulk, no auth pass) is excluded and not priority; with an auth pass it is kept as priority", () => {
+    const spoof = { fromAddress: "boss@pubk.test", subject: "Wire request", isBulk: true };
+    expect(rankAttention([t(spoof)], rules, now).top).toEqual([]);
+    const ok = rankAttention([t({ ...spoof, isAuthPass: true })], rules, now).top;
+    expect(ok).toHaveLength(1);
+    expect(ok[0]?.kind).toBe("priority");
+    // without the pass, an unflagged priority-address mail is an ordinary sender, not tier 0
+    expect(rankAttention([t({ fromAddress: "boss@pubk.test", subject: "Hi" })], rules, now).top[0]?.kind).not.toBe("priority");
+  });
+  it("an authenticated priority sender is kept despite bulk and a bot subject", () => {
+    expect(kept({ fromAddress: "boss@pubk.test", subject: "Update", isBulk: true, isAuthPass: true })).toBe(true);
+    expect(kept({ fromAddress: "noreply@bigclient.test", subject: "Build #1234 failed", isAuthPass: true })).toBe(true);
+    expect(classify(t({ fromAddress: "noreply@ci.example.test", subject: "Build #1234 failed" }), rules).excluded).toBe("bot_subject");
   });
   it("auto-replies are excluded by flag and by subject prefix", () => {
     expect(classify(t({ subject: "Re: Proposal", isAuto: true }), rules).excluded).toBe("auto_reply");
@@ -92,8 +120,16 @@ describe("T-234 part 2 exclusions", () => {
   it("security alerts from trusted senders are still never excluded", () => {
     expect(classify(t({ fromAddress: "no-reply@accounts.google.com", subject: "Security alert: new sign-in", isBulk: true }), rules)).toMatchObject({ excluded: null, security: true });
   });
-  it("excluded mail does not reach the money list either", () => {
-    expect(moneyThreads([t({ fromAddress: "billing@pubk.test", subject: "Invoice 1042 is attached", isBulk: true })], rules)).toEqual([]);
+  it("money mail survives the bulk, auto-generated, label and bot_subject exclusions", () => {
+    for (const flags of [{ isBulk: true }, { isGenerated: true }, { labels: ["INBOX", "CATEGORY_PROMOTIONS"] }]) {
+      expect(moneyThreads([t({ fromAddress: "billing@pubk.test", subject: "Invoice 1042 is attached", ...flags })], rules)).toHaveLength(1);
+    }
+    expect(moneyThreads([t({ fromAddress: "noreply@billing.example.test", subject: "Payment failed for your subscription", isBulk: true })], rules)[0]?.kind).toBe("failed_payment");
+  });
+  it("but codes, calendar notices, true auto-replies and the newsletter sender lists stay out of the money list", () => {
+    const inv = "Invoice 1042 is attached";
+    expect(moneyThreads([t({ subject: inv, isCalendar: true }), t({ subject: inv, isAuto: true }), t({ subject: "Invoice: your verification code is 1" }), t({ subject: inv, fromAddress: "newsletter@shop.test" })], rules)).toEqual([]);
+    expect(moneyThreads([t({ fromAddress: "weekly@pubk.test", subject: inv })], orgRules)).toEqual([]);
   });
 });
 
@@ -123,7 +159,7 @@ describe("rankAttention", () => {
       t({ fromAddress: "friend@acme.test", subject: "Unread", receivedAt: "2026-11-11T12:00:00Z" }),
       t({ fromAddress: "colleague@acme.test", subject: "Waiting", ownerReplied: true, unreadCount: 0, receivedAt: "2026-11-09T12:00:00Z" }),
       t({ fromAddress: "no-reply@accounts.google.com", subject: "Security alert", unreadCount: 0 }),
-      t({ fromAddress: "ceo@bigclient.test", subject: "Priority", unreadCount: 0 }),
+      t({ fromAddress: "ceo@bigclient.test", subject: "Priority", unreadCount: 0, isAuthPass: true }),
       t({ fromAddress: "x@acme.test", subject: "Answered", lastIsOwner: true, ownerReplied: true }),
       t({ fromAddress: "no-reply@saas.test", subject: "Weekly report" }),
     ];
@@ -148,9 +184,9 @@ describe("rankAttention", () => {
     expect(top.map((i) => [i.thread.subject, i.kind, i.reason])).toEqual([["Question", "waiting", "Read, not answered · 5h"]]);
   });
 
-  it("priority senders skip exclusions except one-time codes", () => {
+  it("authenticated priority senders skip the soft exclusions but not one-time codes", () => {
     const { top } = rankAttention(
-      [t({ fromAddress: "ceo@bigclient.test", subject: "Deck", labels: ["INBOX", "CATEGORY_PROMOTIONS"] }), t({ fromAddress: "ceo@bigclient.test", subject: "Your verification code" })],
+      [t({ fromAddress: "ceo@bigclient.test", subject: "Deck", labels: ["INBOX", "CATEGORY_PROMOTIONS"], isAuthPass: true }), t({ fromAddress: "ceo@bigclient.test", subject: "Your verification code", isAuthPass: true })],
       rules,
       now,
     );
@@ -174,7 +210,7 @@ describe("rankAttention", () => {
 });
 
 describe("moneyThreads", () => {
-  it("finds invoices, bills, renewals and failed payments (failed first); skips promotions and card alerts", () => {
+  it("finds invoices, bills, renewals and failed payments (failed first); keeps promotions-labelled billing mail, skips card alerts", () => {
     const rows = [
       t({ subject: "Invoice #1042 from Vendor" }),
       t({ subject: "Your payment failed", fromAddress: "billing@saas.test" }),
@@ -186,6 +222,7 @@ describe("moneyThreads", () => {
     expect(moneyThreads(rows, rules).map((m) => [m.kind, m.thread.subject])).toEqual([
       ["failed_payment", "Your payment failed"],
       ["invoice", "Invoice #1042 from Vendor"],
+      ["invoice", "Invoice sale! 50% off"], // a label exclusion does not hide a money match
       ["renewal", "Your plan renews on Dec 1"],
     ]);
   });
