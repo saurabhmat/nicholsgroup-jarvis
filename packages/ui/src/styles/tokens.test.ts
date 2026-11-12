@@ -106,6 +106,7 @@ describe("light design tokens (docs/plan-review.md §7, v2; final with D-20)", (
     ["--sidebar-strong", "--sidebar-switcher"],
     ["--gold", "--sidebar"],
     ["--muted-foreground", "--muted"],
+    ["--foreground", "--muted"], // avatar initials on the muted slot (T-235 part 2)
     ["--destructive-foreground", "--destructive"],
   ])("text %s on %s meets WCAG AA (4.5:1)", (fg, bg) => {
     expect(contrast(hex(fg), hex(bg))).toBeGreaterThanOrEqual(4.5);
@@ -178,6 +179,7 @@ describe("dark design tokens (docs/design/README.md, Nov 4, 2026)", () => {
     ["--muted-foreground", "--background"],
     ["--muted-foreground", "--card"],
     ["--muted-foreground", "--muted"],
+    ["--foreground", "--muted"], // avatar initials on the muted slot (T-235 part 2)
     ["--primary-foreground", "--primary"],
     ["--primary", "--primary-tint"],
     ["--foreground", "--primary-tint"],

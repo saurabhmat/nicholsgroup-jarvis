@@ -8,19 +8,21 @@ import { CollapsibleSection } from "./collapsible-section";
 import { ReplyAction } from "./reply-action";
 import { inboxHref } from "@/lib/inbox-links";
 import {
-  ageLabel,
+  ageShort,
   aheadSummaryText,
   attendeeSummary,
+  attentionChips,
+  BUSINESS_TZ,
+  formatDateTimeIn,
+  senderParts,
   eventChips,
   formatDayIn,
   formatTimeIn,
   maskFigures,
   otherZoneTime,
   type AttentionNote,
-  type AttentionThread,
   type DayEvent,
   type NotableEvent,
-  type ThreadRow,
 } from "@nichols/briefing/domain";
 import type { BriefingView, CalendarSection, MailSection } from "@/lib/briefing";
 
@@ -155,23 +157,26 @@ export function CalendarSections({ view, now }: { view: BriefingView; now: Date 
   );
 }
 
-const KIND_LABEL: Record<AttentionThread["kind"], string> = {
-  priority: "Priority",
-  security: "Security",
-  waiting: "Waiting on you",
-  unread: "Unread",
-  repeated_failures: "Repeated failures",
-};
-
-/** Sender text is untrusted metadata: rendered as plain text. */
-const senderOf = (t: ThreadRow) => (t.fromName && t.fromAddress ? `${t.fromName} <${t.fromAddress}>` : (t.fromAddress ?? t.fromName ?? "Unknown sender"));
+/** Avatar colours: text and ground are token pairs checked for 4.5:1 in light and dark (tokens.test.ts). */
+const AVATAR = ["bg-primary-tint text-primary", "bg-alert-surface text-alert-foreground", "bg-success-surface text-success", "bg-muted text-foreground"] as const;
+const CHIP_TONE = { alert: "alert", gold: "gold", outline: "outline" } as const;
 
 /**
- * "Needs your attention" items (T-234 part 2): the top 5 by rules. Each shows the title (figures masked, rule 7), the AI's
- * why-it-matters and next step when today's briefing has them, then sender, mailbox and age with a status chip, and two
- * actions: Reply (the owner's drawer, T-234 part 3; a link to the thread for other roles) and Open (the thread in Jarvis, never a Google page).
+ * "Needs your attention" rows (T-234 part 2, T-235 part 2: scannable). Line 1: initials avatar (decorative), sender name (semibold),
+ * company or domain (muted), age right-aligned (`<time>`, full date in the title). Line 2: subject, one line with an ellipsis
+ * (figures masked, rule 7). Line 3: the AI's "why it matters -> next step", only when today's briefing has it. Then at most two
+ * chips and, only when the lane has several mailboxes, "to <mailbox>". Actions on the right, vertically centred (stacked under
+ * the text on a phone, 44 px targets): Reply (the owner's drawer, T-234 part 3; a link to the thread for other roles) and Open
+ * (the thread in Jarvis, never a Google page).
+ *
+ * The whole row opens the thread with the "stretched link" pattern, not a button holding buttons: Open's ::after covers the row
+ * and Reply sits above it (`relative z-[1]`). The keyboard path is Tab: Reply, then Open. The Reply drawer is portaled to
+ * <body>, so it is outside the row. Hover background on desktop only.
+ *
+ * Footer: "View all in Inbox (N) ->" where N = the items the rules ranked (the rows shown plus `mail.more`), i.e. the threads
+ * that currently need attention, not every message in the Inbox.
  */
-export function AttentionSection({ laneId, mail, now, notes, replies, canReply = false }: { laneId: string; mail: MailSection; now: Date; notes?: Map<string, AttentionNote>; replies?: Map<string, string>; canReply?: boolean }) {
+export function AttentionSection({ laneId, mail, now, tz = BUSINESS_TZ, notes, replies, canReply = false }: { laneId: string; mail: MailSection; now: Date; tz?: string; notes?: Map<string, AttentionNote>; replies?: Map<string, string>; canReply?: boolean }) {
   if (!mail.access) {
     return mail.unavailable ? (
       <EmptyState title="Mail could not be read" description="Reload in a minute. Settings → Connections shows the last sync." className="border-0 bg-transparent px-0 py-6" />
@@ -182,51 +187,88 @@ export function AttentionSection({ laneId, mail, now, notes, replies, canReply =
   if (mail.attention.length === 0) {
     return <p className="text-body text-muted-foreground">Nothing needs you in the mail that was read (newsletters, calendar invitations, auto-replies, codes and automated alerts are left out). Settings → Connections shows what was read.</p>;
   }
+  // "to <mailbox>" only tells something when the lane reads more than one mailbox.
+  const showMailbox = new Set(Object.values(mail.mailboxOf)).size > 1;
+  const total = mail.attention.length + mail.more;
   return (
-    <div className="flex flex-col gap-2">
+    <div className="flex flex-col gap-3">
       <ol data-testid="attention-list" className="flex flex-col divide-y divide-border">
         {mail.attention.map((a) => {
           const t = a.thread;
           const note = notes?.get(`${t.connectionId}:${t.messageId}`);
           const mailbox = mail.mailboxOf[t.connectionId];
+          const who = senderParts(t.fromName, t.fromAddress, AVATAR.length);
+          const subject = a.kind === "repeated_failures" ? a.reason : t.subject ? maskFigures(t.subject) : "(No subject)";
+          const chips = attentionChips(a.kind, t.unreadCount > 0);
           return (
-            <li key={a.key} data-testid="attention-item" data-kind={a.kind} className="flex flex-col gap-1.5 py-3">
-              <span className="flex flex-wrap items-start justify-between gap-x-3 gap-y-2">
-                <span className="min-w-0 flex-1 break-words font-medium text-foreground">{a.kind === "repeated_failures" ? a.reason : t.subject ? maskFigures(t.subject) : "(No subject)"}</span>
-                <span className="flex shrink-0 items-center gap-2">
-                  {a.kind === "repeated_failures" ? null : <ReplyAction canReply={canReply} target={{ laneId, connectionId: t.connectionId, messageId: t.messageId, threadKey: t.threadKey, proposalId: replies?.get(`${t.connectionId}:${t.messageId}`) ?? null }} />}
-                  <Link href={inboxHref(laneId, t.messageId)} data-testid="attention-open" className={buttonVariants({ variant: "outline", size: "sm" })}>
-                    Open
-                  </Link>
-                </span>
-              </span>
-              {note ? (
-                <dl data-testid="attention-note" className="grid grid-cols-[auto_1fr] gap-x-3 gap-y-0.5 text-small">
-                  <dt className="text-muted-foreground">Why</dt>
-                  <dd className="text-foreground">{note.why}</dd>
-                  <dt className="text-muted-foreground">Next</dt>
-                  <dd className="text-foreground">{note.next}</dd>
-                </dl>
-              ) : null}
-              <span className="flex flex-wrap items-center gap-x-2 gap-y-1 text-small text-muted-foreground">
-                <Badge variant={a.kind === "priority" || a.kind === "security" ? "alert" : "outline"}>{KIND_LABEL[a.kind]}</Badge>
-                <span data-testid="attention-meta" className="min-w-0 break-words">
-                  {[senderOf(t), mailbox ? `to ${mailbox}` : null, `${ageLabel(t.receivedAt, now)} ago`].filter(Boolean).join(" · ")}
-                </span>
-              </span>
+            <li key={a.key} data-testid="attention-item" data-kind={a.kind} className="relative -mx-2 flex flex-col gap-3 rounded-control px-2 py-4 md:flex-row md:items-center md:gap-4 md:hover:bg-muted/60">
+              <div className="flex min-w-0 flex-1 flex-col gap-1.5">
+                <div className="flex min-w-0 items-center gap-2">
+                  <span aria-hidden data-testid="attention-avatar" className={`flex size-8 shrink-0 items-center justify-center rounded-full text-small font-semibold ${AVATAR[who.slot] ?? AVATAR[0]}`}>
+                    {who.initials}
+                  </span>
+                  <span className="min-w-0 truncate text-body">
+                    <span data-testid="attention-sender" className="font-semibold text-foreground">{who.name}</span>
+                    {who.company ? <span data-testid="attention-company" className="text-muted-foreground">{` \u00b7 ${who.company}`}</span> : null}
+                  </span>
+                  <time data-testid="attention-age" dateTime={t.receivedAt} title={formatDateTimeIn(t.receivedAt, tz)} className="ml-auto shrink-0 text-small text-muted-foreground">
+                    {ageShort(t.receivedAt, now)}
+                    <span className="sr-only"> ago</span>
+                  </time>
+                </div>
+                <p data-testid="attention-subject" title={subject} className="truncate text-body font-medium text-foreground">
+                  {subject}
+                </p>
+                {note && (note.why || note.next) ? (
+                  <p data-testid="attention-note" className="line-clamp-2 text-small text-muted-foreground">
+                    {note.why ? (
+                      <>
+                        <span className="sr-only">Why it matters: </span>
+                        {note.why}
+                      </>
+                    ) : null}
+                    {note.why && note.next ? <span aria-hidden>{" \u2192 "}</span> : null}
+                    {note.next ? (
+                      <>
+                        <span className="sr-only">. Next step: </span>
+                        {note.next}
+                      </>
+                    ) : null}
+                  </p>
+                ) : null}
+                {chips.length > 0 || (showMailbox && mailbox) ? (
+                  <div className="flex flex-wrap items-center gap-x-2 gap-y-1">
+                    {chips.map((c) => (
+                      <Badge key={c.key} variant={CHIP_TONE[c.tone]} data-testid="attention-chip">
+                        {c.label}
+                      </Badge>
+                    ))}
+                    {showMailbox && mailbox ? <span data-testid="attention-mailbox" className="text-small text-muted-foreground">to {mailbox}</span> : null}
+                  </div>
+                ) : null}
+              </div>
+              <div data-testid="attention-actions" className="flex shrink-0 items-center gap-3 max-md:[&_a]:min-h-11 max-md:[&_button]:min-h-11">
+                {a.kind === "repeated_failures" ? null : (
+                  <span className="relative z-[1] inline-flex">
+                    <ReplyAction canReply={canReply} target={{ laneId, connectionId: t.connectionId, messageId: t.messageId, threadKey: t.threadKey, proposalId: replies?.get(`${t.connectionId}:${t.messageId}`) ?? null }} />
+                  </span>
+                )}
+                <Link
+                  href={inboxHref(laneId, t.messageId)}
+                  data-testid="attention-open"
+                  aria-label={`Open: ${subject}`}
+                  className="inline-flex items-center px-2 text-small font-medium text-primary underline-offset-2 after:absolute after:inset-0 after:rounded-control after:content-[''] hover:underline focus-visible:outline-none focus-visible:after:ring-2 focus-visible:after:ring-ring"
+                >
+                  Open
+                </Link>
+              </div>
             </li>
           );
         })}
       </ol>
-      {mail.more > 0 ? (
-        <p className="text-small text-muted-foreground">
-          {mail.more} more in the{" "}
-          <Link href={laneHref(laneId, "inbox")} className="text-primary underline-offset-2 hover:underline">
-            Inbox
-          </Link>
-          .
-        </p>
-      ) : null}
+      <Link href={laneHref(laneId, "inbox")} data-testid="attention-view-all" className="self-start py-1 text-small font-medium text-primary underline-offset-2 hover:underline max-md:inline-flex max-md:min-h-11 max-md:items-center">
+        View all in Inbox ({total}) <span aria-hidden>{"\u2192"}</span>
+      </Link>
     </div>
   );
 }

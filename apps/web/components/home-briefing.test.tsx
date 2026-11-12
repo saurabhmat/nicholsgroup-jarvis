@@ -2,7 +2,7 @@
 // T-231a: Coverage (now in Settings -> Connections, T-234) shows each stream with a fixed reason; Today's calendar shows flags and
 // Join, never declined events; times are in the viewer's zone with the event's zone added when it differs.
 import { afterEach, describe, expect, it } from "vitest";
-import { cleanup, render, screen, within } from "@testing-library/react";
+import { act, cleanup, render, screen, within } from "@testing-library/react";
 import { aheadSummaryText, analyzeDay, notableAhead, parseEvents, summarizeAhead, toCoverage, parseCoverageRows } from "@nichols/briefing/domain";
 import type { BriefingView } from "@/lib/briefing";
 import { AttentionSection, CalendarSections, LookAhead, TodayCalendar } from "./home-briefing";
@@ -170,31 +170,146 @@ describe("Next 7 days summary and LookAhead", () => {
   });
 });
 
-describe("AttentionSection (T-234 part 2)", () => {
+describe("AttentionSection (T-234 part 2, T-235 part 2: scannable rows)", () => {
   const thread = {
-    connectionId: "c1", threadKey: "t1", messageId: "m1", fromAddress: "boss@pubk.test", fromName: "Boss", subject: "Board deck $1,200", receivedAt: "2026-11-12T10:00:00Z",
+    connectionId: "c1", threadKey: "t1", messageId: "m1", fromAddress: "boss@www.acme.test", fromName: "Dana Whitfield", subject: "Board deck $1,200", receivedAt: "2026-11-12T10:00:00Z",
     sourceUrl: "https://mail.google.com/mail/u/me/#all/t1", labels: ["INBOX"], isImportant: false, lastIsOwner: false, ownerReplied: false, unreadCount: 1, inboundCount: 1,
   };
-  const mail = (more = 0) => ({ access: true as const, attention: [{ key: "k", kind: "priority" as const, reason: "Priority sender, unread · 1h", thread }], more, money: [], mailboxOf: { c1: "me@pubk.test" } });
+  const first = <T,>(l: readonly T[]): T => {
+    const x = l[0];
+    if (x === undefined) throw new Error("empty");
+    return x;
+  };
+  const mail = (more = 0, mailboxOf: Record<string, string> = { c1: "me@pubk.test" }) => ({ access: true as const, attention: [{ key: "k", kind: "priority" as const, reason: "Priority sender, unread · 1h", thread }], more, money: [], mailboxOf });
   const note = { ref: "r1", what: "Deck", why: "Board meets Friday", next: "Send comments" };
 
-  it("shows title (masked), AI why and next, sender, mailbox, age and a status chip", () => {
-    render(<AttentionSection laneId="PKG" now={now} mail={mail()} notes={new Map([["c1:m1", note]])} />);
+  it("line 1: initials avatar (hidden from assistive tech), name, domain, age as <time> with the full date; line 2: the masked subject with a title", () => {
+    render(<AttentionSection laneId="PKG" now={now} mail={mail()} />);
     const item = screen.getByTestId("attention-item");
-    expect(within(item).getByText("Board deck [amount]")).toBeTruthy();
-    expect(within(item).getByText("Priority")).toBeTruthy();
-    expect(within(item).getByText("Board meets Friday")).toBeTruthy();
-    expect(within(item).getByText("Send comments")).toBeTruthy();
-    expect(within(item).queryByText("Deck")).toBeNull(); // "what" repeats the title
-    expect(within(item).getByTestId("attention-meta").textContent).toBe("Boss <boss@pubk.test> · to me@pubk.test · 3h ago");
+    const avatar = within(item).getByTestId("attention-avatar");
+    expect(avatar.textContent).toBe("DW");
+    expect(avatar.getAttribute("aria-hidden")).toBe("true");
+    expect(within(item).getByTestId("attention-sender").textContent).toBe("Dana Whitfield");
+    expect(within(item).getByTestId("attention-sender").className).toMatch(/font-semibold/);
+    expect(within(item).getByTestId("attention-company").textContent).toBe(" \u00b7 acme.test"); // no www.
+    const age = within(item).getByTestId("attention-age");
+    expect(age.tagName).toBe("TIME");
+    expect(age.getAttribute("datetime")).toBe("2026-11-12T10:00:00Z");
+    expect(age.textContent).toBe("3h ago"); // "3h" visible, " ago" for screen readers
+    expect(age.getAttribute("title")).toBe("Thu, Nov 12, 5:00 AM"); // viewer zone (America/New_York)
+    expect(age.className).toMatch(/ml-auto/);
+    const subject = within(item).getByTestId("attention-subject");
+    expect(subject.textContent).toBe("Board deck [amount]");
+    expect(subject.getAttribute("title")).toBe("Board deck [amount]");
+    expect(subject.className).toMatch(/\btruncate\b/);
+    expect(item.textContent).not.toMatch(/1,200/);
+  });
+
+  it("the organisation in the display name replaces the domain", () => {
+    const m = mail();
+    render(<AttentionSection laneId="PKG" now={now} mail={{ ...m, attention: [{ ...first(m.attention), thread: { ...thread, fromName: "Dana Whitfield (Acme Corp)" } }] }} />);
+    expect(screen.getByTestId("attention-sender").textContent).toBe("Dana Whitfield");
+    expect(screen.getByTestId("attention-company").textContent).toBe(" \u00b7 Acme Corp");
+  });
+
+  it("line 3 (why -> next) only when the briefing has a note, at most two lines", () => {
+    const { rerender } = render(<AttentionSection laneId="PKG" now={now} mail={mail()} />);
+    expect(screen.queryByTestId("attention-note")).toBeNull();
+    rerender(<AttentionSection laneId="PKG" now={now} mail={mail()} notes={new Map([["c1:m1", note]])} />);
+    const n = screen.getByTestId("attention-note");
+    expect(n.textContent).toBe("Why it matters: Board meets Friday \u2192 . Next step: Send comments");
+    expect(n.className).toMatch(/line-clamp-2/);
+    expect(n.className).toMatch(/text-muted-foreground/);
+    expect(screen.queryByText("Deck")).toBeNull(); // "what" repeats the title
+  });
+
+  it("at most two chips, in priority order (Priority sender, Waiting on you, Unread, Security alert)", () => {
+    const m = mail();
+    const { rerender } = render(<AttentionSection laneId="PKG" now={now} mail={m} />);
+    expect(screen.getAllByTestId("attention-chip").map((c) => c.textContent)).toEqual(["Priority sender", "Unread"]);
+    rerender(<AttentionSection laneId="PKG" now={now} mail={{ ...m, attention: [{ ...first(m.attention), kind: "waiting" }] }} />);
+    expect(screen.getAllByTestId("attention-chip").map((c) => c.textContent)).toEqual(["Waiting on you", "Unread"]);
+    rerender(<AttentionSection laneId="PKG" now={now} mail={{ ...m, attention: [{ ...first(m.attention), kind: "security", thread: { ...thread, unreadCount: 3 } }] }} />);
+    expect(screen.getAllByTestId("attention-chip").map((c) => c.textContent)).toEqual(["Unread", "Security alert"]);
+    rerender(<AttentionSection laneId="PKG" now={now} mail={{ ...m, attention: [{ ...first(m.attention), kind: "waiting", thread: { ...thread, unreadCount: 0 } }] }} />);
+    expect(screen.getAllByTestId("attention-chip").map((c) => c.textContent)).toEqual(["Waiting on you"]);
+  });
+
+  it("the mailbox is hidden with one mailbox and shown with several", () => {
+    const { rerender } = render(<AttentionSection laneId="PKG" now={now} mail={mail()} />);
+    expect(screen.queryByTestId("attention-mailbox")).toBeNull();
+    expect(document.body.textContent).not.toContain("me@pubk.test");
+    rerender(<AttentionSection laneId="PKG" now={now} mail={mail(0, { c1: "me@pubk.test", c2: "ceo@pubk.test" })} />);
+    expect(screen.getByTestId("attention-mailbox").textContent).toBe("to me@pubk.test");
+  });
+
+  it("two connections on the same mailbox still count as one mailbox", () => {
+    render(<AttentionSection laneId="PKG" now={now} mail={mail(0, { c1: "me@pubk.test", c2: "me@pubk.test" })} />);
+    expect(screen.queryByTestId("attention-mailbox")).toBeNull();
+  });
+
+  it("the footer counts the ranked items: the rows shown plus the overflow", () => {
+    const { rerender } = render(<AttentionSection laneId="PKG" now={now} mail={mail()} />);
+    const link = screen.getByTestId("attention-view-all");
+    expect(link.textContent).toBe("View all in Inbox (1) \u2192");
+    expect(link.getAttribute("href")).toBe("/PKG/inbox");
+    rerender(<AttentionSection laneId="PKG" now={now} mail={mail(30)} />);
+    expect(screen.getByTestId("attention-view-all").textContent).toBe("View all in Inbox (31) \u2192");
   });
 
   it("Open goes to the thread in Jarvis, never to a Google page (the old link used the stored provider URL)", () => {
     render(<AttentionSection laneId="PKG" now={now} mail={mail()} />);
-    const open = screen.getByRole("link", { name: "Open" });
+    const open = screen.getByTestId("attention-open");
     expect(open.getAttribute("href")).toBe("/PKG/inbox/m1");
     expect(open.getAttribute("target")).toBeNull();
+    expect(open.textContent).toBe("Open");
+    expect(open.getAttribute("aria-label")).toBe("Open: Board deck [amount]");
     for (const a of screen.getAllByRole("link")) expect(a.getAttribute("href")).not.toMatch(/google\.com/);
+  });
+
+  it("the whole row opens the thread by a stretched link: Open's ::after covers the row, Reply sits above it, and the row is not a button", () => {
+    render(<AttentionSection laneId="PKG" now={now} mail={mail()} canReply />);
+    const item = screen.getByTestId("attention-item");
+    expect(item.tagName).toBe("LI");
+    expect(item.className).toMatch(/\brelative\b/); // the ::after's containing block
+    expect(item.getAttribute("role")).toBeNull();
+    expect(item.getAttribute("onclick")).toBeNull();
+    const open = screen.getByTestId("attention-open");
+    expect(open.className).toMatch(/after:absolute/);
+    expect(open.className).toMatch(/after:inset-0/);
+    const reply = screen.getByTestId("attention-reply");
+    const raised = reply.closest("span.relative");
+    expect(raised?.className).toMatch(/z-\[1\]/); // above the stretched ::after, so a click on Reply never reaches Open
+    expect(open.closest("span.relative")).toBeNull(); // Open itself is not raised
+    // The only link to the thread that covers the row is Open; Reply is a button (no nesting of interactive elements).
+    expect(within(item).getAllByRole("link")).toHaveLength(1);
+    expect(item.querySelectorAll("button button, a button, button a, a a")).toHaveLength(0);
+    // Hover background on desktop only.
+    expect(item.className).toMatch(/md:hover:bg-muted/);
+    expect(item.className).not.toMatch(/(^|\s)hover:bg/);
+  });
+
+  it("keyboard: the tab order inside a row is Reply, then Open (both natively focusable, none removed from the order)", () => {
+    // jsdom has no Tab key; the tab sequence of a page is the focusable elements in DOM order.
+    render(<AttentionSection laneId="PKG" now={now} mail={mail()} canReply />);
+    const focusable = [...screen.getByTestId("attention-item").querySelectorAll<HTMLElement>("a[href], button, [tabindex]")];
+    expect(focusable.map((e) => e.getAttribute("data-testid"))).toEqual(["attention-reply", "attention-open"]);
+    for (const e of focusable) expect(e.getAttribute("tabindex")).not.toBe("-1");
+    act(() => (focusable[0] as HTMLElement).focus());
+    expect(document.activeElement).toBe(screen.getByTestId("attention-reply"));
+    act(() => (focusable[1] as HTMLElement).focus());
+    expect(document.activeElement).toBe(screen.getByTestId("attention-open"));
+  });
+
+  it("the phone row stacks (actions under the text, 44 px targets); the desktop row is one line with the actions on the right, centred", () => {
+    render(<AttentionSection laneId="PKG" now={now} mail={mail()} />);
+    expect(screen.getByTestId("attention-item").className).toMatch(/flex-col/);
+    expect(screen.getByTestId("attention-item").className).toMatch(/md:flex-row/);
+    expect(screen.getByTestId("attention-item").className).toMatch(/md:items-center/);
+    expect(screen.getByTestId("attention-item").className).toMatch(/\bpy-4\b/);
+    expect(screen.getByTestId("attention-actions").className).toMatch(/max-md:\[&_a\]:min-h-11/);
+    expect(screen.getByTestId("attention-actions").className).toMatch(/max-md:\[&_button\]:min-h-11/);
+    expect(screen.getByTestId("attention-list").className).toMatch(/divide-y/);
   });
 
   it("Reply: other roles get a link to the thread in Jarvis; the owner gets the drawer button (T-234 part 3)", () => {
@@ -215,11 +330,7 @@ describe("AttentionSection (T-234 part 2)", () => {
     render(<AttentionSection laneId="PKG" now={now} mail={m} />);
     expect(screen.queryByTestId("attention-reply")).toBeNull();
     expect(screen.getByTestId("attention-open")).toBeTruthy();
-  });
-
-  it("links the rest to the Inbox", () => {
-    render(<AttentionSection laneId="PKG" now={now} mail={mail(2)} />);
-    expect(screen.getByRole("link", { name: "Inbox" }).getAttribute("href")).toBe("/PKG/inbox");
+    expect(screen.getByTestId("attention-subject").textContent).toBe("3 failure alerts from ci.test");
   });
 
   it("says why there is no mail instead of 'nothing'", () => {

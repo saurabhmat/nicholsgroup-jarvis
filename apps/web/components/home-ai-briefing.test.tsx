@@ -15,37 +15,82 @@ const brief = (over: Partial<SavedBriefingView["content"]> = {}, status: SavedBr
 });
 const base = { laneId: "PKG", fallbackLines: ["Rule-based: 2 unread."], tz: "America/New_York", now: new Date("2026-11-11T20:00:00Z") };
 
-describe("AiBriefing", () => {
-  it("shows a 1-2 sentence summary, \"Summary at <time>\" (no Run button), and Top 3 as a numbered row", () => {
+describe("AiBriefing: Today at a glance (T-235 part 2)", () => {
+  it("is a cream panel with a 3px gold left edge, titled 'Today at a glance'", () => {
     render(<AiBriefing {...base} brief={brief()} />);
-    expect(screen.getByTestId("briefing").textContent).toBe("First sentence. Second sentence.");
-    expect(within(screen.getByTestId("briefing-more")).getByText("Third line.")).toBeTruthy();
+    const panel = screen.getByTestId("ai-briefing");
+    expect(panel.className).toMatch(/border-l-\[3px\]/);
+    expect(panel.className).toMatch(/border-l-gold/);
+    expect(panel.className).toMatch(/bg-background/); // the cream ground token (AA pairs for muted text are in tokens.test.ts, light and dark)
+    expect(within(panel).getByRole("heading", { name: "Today at a glance" })).toBeTruthy();
+    expect(screen.getByRole("region", { name: "Today at a glance" })).toBe(panel);
+  });
+
+  it("shows at most three sentences, the rest behind 'More from the briefing', 'Summary at <time>' and no Run button", () => {
+    render(<AiBriefing {...base} brief={brief({ lines: ["One.", "Two.", "Three.", "Four.", "Five."] })} />);
+    expect(screen.getByTestId("briefing").textContent).toBe("One. Two. Three.");
+    const more = screen.getByTestId("briefing-more");
+    expect(within(more).getByText("Four.")).toBeTruthy();
+    expect(within(more).getByText("Five.")).toBeTruthy();
     expect(screen.getByTestId("briefing-prepared").textContent).toBe("Summary at 7:00 AM");
     expect(screen.queryByText("Run now")).toBeNull();
-    expect(screen.queryByTestId("run-briefing")).toBeNull();
-    const items = within(screen.getByTestId("priorities")).getAllByRole("listitem");
-    expect(items.map((i) => i.textContent)).toEqual(["1.Confirm renewal", "2.Review plan", "3.Call Ann"]);
-    expect(screen.queryByTestId("briefing-failure")).toBeNull();
   });
 
-  it("without an AI briefing: the rule-based sentence and 'AI summary unavailable: <reason>', no Top 3", () => {
-    render(<AiBriefing {...base} brief={null} failure="key_missing" />);
-    expect(screen.getByTestId("briefing").textContent).toBe("Rule-based: 2 unread.");
-    expect(screen.getByTestId("briefing-failure").textContent).toMatch(/^AI summary unavailable: /);
+  it("with three lines or fewer there is no 'More' disclosure", () => {
+    render(<AiBriefing {...base} brief={brief()} />);
+    expect(screen.getByTestId("briefing").textContent).toBe("First sentence. Second sentence. Third line.");
+    expect(screen.queryByTestId("briefing-more")).toBeNull();
+  });
+
+  it("Top priorities: a numbered list of three, the action bold and the reason muted", () => {
+    render(<AiBriefing {...base} brief={brief({ priorities: [{ text: "A", reason: "r1", refs: [] }, { text: "B", reason: "r2", refs: [] }, { text: "C", reason: "r3", refs: [] }, { text: "D", reason: "r4", refs: [] }] })} />);
+    const row = screen.getByTestId("priorities-row");
+    expect(within(row).getByRole("heading", { name: "Top priorities" })).toBeTruthy();
+    const list = within(row).getByTestId("priorities");
+    expect(list.tagName).toBe("OL");
+    const items = within(list).getAllByRole("listitem");
+    expect(items).toHaveLength(3);
+    expect(items.map((i) => i.textContent)).toEqual(["A \u2013 r1", "B \u2013 r2", "C \u2013 r3"]);
+    const bold = items[0]?.querySelector("span.font-semibold");
+    expect(bold?.textContent).toBe("A");
+    const muted = items[0]?.querySelector("span.text-muted-foreground");
+    expect(muted?.textContent).toBe(" \u2013 r1");
+  });
+
+  it("AI unavailable: the rule-based sentences (at most two) and exactly ONE muted reason line, no Top priorities", () => {
+    render(<AiBriefing {...base} fallbackLines={["Rule one.", "Rule two.", "Rule three."]} brief={null} failure="key_missing" />);
+    expect(screen.getByTestId("briefing").textContent).toBe("Rule one. Rule two.");
+    const lines = screen.getAllByTestId("briefing-failure");
+    expect(lines).toHaveLength(1);
+    expect(lines[0]?.textContent).toMatch(/^AI summary unavailable: /);
+    expect(lines[0]?.className).toMatch(/text-muted-foreground/);
     expect(screen.queryByTestId("priorities")).toBeNull();
+    expect(screen.queryByTestId("briefing-last-failed")).toBeNull();
   });
 
-  it("a failed newest attempt shows the rule-based list and the reason", () => {
+  it("a failed newest attempt: still one reason line", () => {
     render(<AiBriefing {...base} brief={brief({ lines: [], priorities: [] }, "failed")} failure="timeout" />);
     expect(screen.getByTestId("briefing").textContent).toBe("Rule-based: 2 unread.");
+    expect(screen.getAllByTestId("briefing-failure")).toHaveLength(1);
     expect(screen.getByTestId("briefing-failure").textContent).toMatch(/^AI summary unavailable: /);
   });
 
-  it("the admin hint renders only when the server passed one", () => {
+  it("a good briefing plus a newer failure: one muted line, never the failure line and the 'newer attempt' line together", () => {
+    render(<AiBriefing {...base} brief={{ ...brief(), lastFailedAt: "2026-11-11T13:00:00Z" }} failure="timeout" />);
+    expect(screen.getAllByTestId("briefing-failure")).toHaveLength(1);
+    expect(screen.queryByTestId("briefing-last-failed")).toBeNull();
+    cleanup();
+    render(<AiBriefing {...base} brief={{ ...brief(), lastFailedAt: "2026-11-11T13:00:00Z" }} />);
+    expect(screen.queryByTestId("briefing-failure")).toBeNull();
+    expect(screen.getByTestId("briefing-last-failed")).toBeTruthy();
+  });
+
+  it("the admin hint renders only when the server passed one, as a second small line inside the same muted line", () => {
     const { rerender } = render(<AiBriefing {...base} brief={null} failure="key_missing" />);
     expect(screen.queryByTestId("briefing-failure-hint")).toBeNull();
     rerender(<AiBriefing {...base} brief={null} failure="key_missing" failureHint="Set ANTHROPIC_API_KEY" />);
     expect(screen.getByTestId("briefing-failure-hint").textContent).toBe("Set ANTHROPIC_API_KEY");
+    expect(screen.getAllByTestId("briefing-failure")).toHaveLength(1);
   });
 
   it("the summary time is today's clock time, or the date and time on another day, in the viewer's zone", () => {
@@ -55,12 +100,11 @@ describe("AiBriefing", () => {
     expect(screen.getByTestId("briefing-prepared").textContent).toBe("Summary at Nov 11, 7:00 AM");
   });
 
-  it("the owner's controls render next to the time; without them (a non-owner) there are none", () => {
+  it("the owner's controls render inside the panel next to the time; without them (a non-owner) there are none", () => {
     const { rerender } = render(<AiBriefing {...base} brief={brief()} controls={<span data-testid="ctl">controls</span>} />);
-    expect(screen.getByTestId("ctl")).toBeTruthy();
+    expect(within(screen.getByTestId("ai-briefing")).getByTestId("ctl")).toBeTruthy();
     rerender(<AiBriefing {...base} brief={brief()} />);
     expect(screen.queryByTestId("ctl")).toBeNull();
-    expect(screen.getByTestId("briefing").textContent).toBe("First sentence. Second sentence.");
   });
 });
 

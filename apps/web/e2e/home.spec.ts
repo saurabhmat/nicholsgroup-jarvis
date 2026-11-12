@@ -65,11 +65,20 @@ test("owner: today's calendar, Next 7 days, the KPI strip and the rule-based att
   // not listed (nothing unread, nothing waiting).
   const attention = page.getByRole("region", { name: "Needs your attention" });
   await expect(attention.getByText("Synthetic subject 1")).toBeVisible();
-  await expect(attention.getByText("sender@example.test", { exact: false }).first()).toBeVisible();
+  // T-235 part 2: the sender's name and domain (never the raw "to <mailbox>" with one mailbox), the glance panel on top.
+  await expect(attention.getByTestId("attention-company").first()).toContainText("example.test");
+  await expect(attention.getByTestId("attention-mailbox")).toHaveCount(0);
+  await expect(attention.getByRole("region", { name: "Today at a glance" })).toBeVisible();
+  await expect(attention.getByTestId("attention-view-all")).toContainText(/^View all in Inbox \(\d+\)/);
   // T-234 part 2: each item has Reply and Open; Open goes to the thread in Jarvis (never a Google page).
   const firstItem = attention.getByTestId("attention-item").first();
   await expect(firstItem.getByRole("link", { name: "Reply" })).toBeVisible();
-  await expect(firstItem.getByRole("link", { name: "Open" })).toHaveAttribute("href", /^\/PKG\/inbox\/[A-Za-z0-9_-]+$/);
+  await expect(firstItem.getByTestId("attention-open")).toHaveAttribute("href", /^\/PKG\/inbox\/[A-Za-z0-9_-]+$/);
+  // The whole row opens the thread (stretched link): clicking the subject text, not the Open link, navigates.
+  await firstItem.getByTestId("attention-subject").click();
+  await expect(page).toHaveURL(/\/PKG\/inbox\/[A-Za-z0-9_-]+$/);
+  await page.goBack();
+  await expect(attention.getByText("Synthetic subject 1")).toBeVisible();
   await expect(attention.getByText("Synthetic subject 4")).toHaveCount(0);
   // T-234 part 1: Coverage is no longer on Home (Settings -> Connections); Next 7 days is collapsed until clicked; five KPI tiles.
   await expect(page.getByTestId("coverage-line")).toHaveCount(0);

@@ -4,5 +4,6 @@ export * from "./url";
 export * from "./coverage";
 export * from "./calendar";
 export * from "./attention";
+export * from "./sender";
 export * from "./compose";
 export * from "./failure";
