@@ -1,6 +1,7 @@
 // T-230 B: layout screenshots (not part of e2e:brain). Signs in as the owner persona (synthetic local seed) and saves PNGs.
 // Run: SHOTS=1 SHOTS_OUT=/abs/dir [SHOTS_SET=before] E2E_SPECS=e2e/screenshots.spec.ts pnpm e2e:brain --project=desktop
-// SHOTS_SET=before: Home and Settings at 1440 only. Default: the full set. LOCAL stack only.
+// SHOTS_SET=before: Home and Settings at 1440 only. SHOTS_SET=home (T-235): Home at 1440, 1920 and iPhone. Default: the full set.
+// LOCAL stack only.
 import { mkdirSync } from "node:fs";
 import { join } from "node:path";
 import { expect, test, type Page } from "@playwright/test";
@@ -13,6 +14,8 @@ test.setTimeout(600_000);
 
 const OUT = process.env.SHOTS_OUT ?? "";
 const BEFORE = process.env.SHOTS_SET === "before";
+const HOME_ONLY = process.env.SHOTS_SET === "home";
+const GREETING = /^Good (morning|afternoon|evening)/;
 const SIZES = [
   { key: "1440", width: 1440, height: 900 },
   { key: "1920", width: 1920, height: 1080 },
@@ -40,8 +43,9 @@ test("capture screenshots", async ({ page }, info) => {
   for (const s of sizes) {
     await page.setViewportSize({ width: s.width, height: s.height });
     await page.goto("/PKG");
-    await settle(page, /^Good morning/);
+    await settle(page, GREETING);
     await shot(`home-${s.key}-light`);
+    if (HOME_ONLY) continue;
     await page.goto("/PKG/settings");
     await settle(page, /^Settings/);
     await shot(`settings-${s.key}-light`);
@@ -57,11 +61,19 @@ test("capture screenshots", async ({ page }, info) => {
     await page.waitForTimeout(2500);
     await shot(`import-${s.key}-light`);
   }
+  if (HOME_ONLY) {
+    await page.setViewportSize({ width: 1440, height: 900 });
+    await page.emulateMedia({ colorScheme: "dark" });
+    await page.goto("/PKG");
+    await settle(page, GREETING);
+    await shot("home-1440-dark");
+    return;
+  }
   if (!BEFORE) {
     await page.setViewportSize({ width: 1440, height: 900 });
     await page.emulateMedia({ colorScheme: "dark" }); // theme follows the device setting
     await page.goto("/PKG");
-    await settle(page, /^Good morning/);
+    await settle(page, GREETING);
     await shot("home-1440-dark");
     await page.goto("/PKG/settings");
     await settle(page, /^Settings/);
