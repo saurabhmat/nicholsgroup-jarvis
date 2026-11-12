@@ -32,16 +32,16 @@ export function KpiStrip({ laneId, tiles, canConnect = false }: { laneId: string
   return (
     <section aria-label="Key figures" data-testid="home-kpis" className={`grid grid-cols-1 items-stretch gap-4 ${COLS[tiles.length] ?? COLS[5] ?? ""}`}>
       {tiles.map((t) => (
-        <Tile key={t.key} laneId={laneId} tile={t} canConnect={canConnect} />
+        <Tile key={t.key} tile={t} />
       ))}
     </section>
   );
 }
 
-function Tile({ laneId, tile, canConnect }: { laneId: string; tile: KpiTile; canConnect: boolean }) {
+function Tile({ tile }: { tile: KpiTile }) {
   const has = tile.value !== undefined && tile.value !== "";
   return (
-    <div data-slot="kpi-tile" data-testid="kpi-tile" data-kpi={tile.key} data-status={has ? "ok" : tile.connect ? "not_connected" : "no_data"} className={`flex h-full min-w-0 flex-col justify-between gap-2 rounded-card border border-border bg-card p-4 text-card-foreground shadow-card ${TILE_HEIGHT}`}>
+    <div data-slot="kpi-tile" data-testid="kpi-tile" data-kpi={tile.key} data-status={has ? "ok" : "no_data"} className={`flex h-full min-w-0 flex-col justify-between gap-2 rounded-card border border-border bg-card p-4 text-card-foreground shadow-card ${TILE_HEIGHT}`}>
       <div className="flex min-h-10 flex-col gap-0.5">
         <h2 className="font-sans text-small font-medium text-muted-foreground">{tile.label}</h2>
         {tile.bookBalance ? <BookBalanceLabel className="text-[0.6875rem]" /> : null}
@@ -64,21 +64,7 @@ function Tile({ laneId, tile, canConnect }: { laneId: string; tile: KpiTile; can
             {f}
           </p>
         ))}
-        {tile.connect && !has ? (
-          <p>
-            Not connected
-            {canConnect ? (
-              <>
-                {" \u00b7 "}
-                <Link href={`${laneHref(laneId, "settings")}#connections`} className="font-medium text-primary underline-offset-2 hover:underline">
-                  Connect
-                </Link>
-              </>
-            ) : null}
-          </p>
-        ) : tile.note ? (
-          <p>{tile.note}</p>
-        ) : null}
+        {tile.note ? <p>{tile.note}</p> : null}
       </div>
     </div>
   );

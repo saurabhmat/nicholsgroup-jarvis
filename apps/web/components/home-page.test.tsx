@@ -173,7 +173,7 @@ describe("Home layout (T-234 part 1)", () => {
     expect(screen.getByTestId("onboarding-banner").className).toMatch(/h-\[3\.25rem\]/);
   });
 
-  it("the streaming fallback of the cards has the same grid as the page (2/3 + 1/3, five KPI tiles, 2/3 + 1/3)", async () => {
+  it("the streaming fallback of the cards has the same grid as the page (2/3 + 1/3, one slim KPI bar, 2/3 + 1/3)", async () => {
     m.view = view();
     const fallbacks = await draw();
     cleanup();
@@ -181,7 +181,8 @@ describe("Home layout (T-234 part 1)", () => {
     expect(skeleton).toBeTruthy();
     render(<>{skeleton}</>);
     const root = screen.getByTestId("card-skeleton");
-    expect(root.querySelector(".lg\\:grid-cols-5")?.children).toHaveLength(5);
+    expect(root.querySelector(".lg\\:grid-cols-5")).toBeNull();
+    expect(screen.getByTestId("kpi-skeleton").className).toMatch(/\bh-10\b/);
     expect(root.querySelectorAll(".lg\\:grid-cols-3")).toHaveLength(2);
   });
 });

@@ -74,14 +74,13 @@ describe("KPI strip (T-235 part 4: only what is connected)", () => {
     expect(container.textContent).toBe("");
   });
 
-  it("a role without the finance view gets no finance tile or figure, and no banner about finance; Stripe and GHL tiles only when connected", () => {
+  it("a role without the finance view gets no finance tile or figure, no revenue tile (MRR, subscribers) even with connected feeds, and no banner", () => {
     const { container } = render(<KpiStrip laneId="PKG" tiles={kpiTiles({ state: "no_access" }, [])} />);
     expect(container.textContent).toBe("");
     cleanup();
-    render(<KpiStrip laneId="PKG" canConnect tiles={kpiTiles({ state: "no_access" }, ALL_FEEDS)} />);
-    expect(tilesOf().map((t) => t.getAttribute("data-kpi"))).toEqual(["mrr", "subscribers"]);
-    expect(screen.getByTestId("home-kpis").className).toMatch(/lg:grid-cols-2/);
-    expect(document.body.textContent).not.toMatch(/Cash|Book balance|AR > 30|P&L|\$/);
+    expect(kpiTiles({ state: "no_access" }, ALL_FEEDS)).toEqual([]);
+    render(<KpiStrip laneId="PKG" tiles={kpiTiles({ state: "no_access" }, ALL_FEEDS)} />);
+    expect(document.body.textContent).not.toMatch(/MRR|Paid subscribers|Cash|Book balance|AR > 30|P&L|\$/);
   });
 
   it("a QuickBooks outage still shows its three tiles as plain notes (the connection is unknown, not absent)", () => {
@@ -174,5 +173,15 @@ describe("News and Projects slots", () => {
     render(<ProjectsGlance />);
     expect(screen.getByRole("region", { name: "Projects at a glance" })).toBeTruthy();
     expect(screen.getByTestId("projects-notice").textContent).toMatch(/No project board connected/);
+  });
+});
+
+describe("KPI loading skeleton", () => {
+  it("is one slim bar (h-10), not five tall tiles", async () => {
+    const { KpiStripSkeleton } = await import("./page-skeleton");
+    render(<KpiStripSkeleton />);
+    const bar = screen.getByTestId("kpi-skeleton");
+    expect(bar.className).toMatch(/\bh-10\b/);
+    expect(bar.children).toHaveLength(0);
   });
 });

@@ -35,7 +35,7 @@ function Chips({ e }: { e: DayEvent }) {
       {chips.map((c) => (
         <Badge key={c.key} variant={CHIP_VARIANT[c.key]} title={c.detail}>
           {c.label}
-          {c.key === "clash" ? <span className="sr-only"> ({c.detail})</span> : null}
+          <span className="sr-only"> ({c.detail})</span>
         </Badge>
       ))}
     </span>
@@ -91,7 +91,7 @@ export function TodayCalendar({ calendar, tz, now }: { calendar: CalendarSection
               <span className="flex min-w-0 items-start justify-between gap-2">
                 <EventTitle title={e.title} url={e.calendarUrl} />
                 {e.meetingUrl && !past ? (
-                  <a href={e.meetingUrl} target="_blank" rel="noopener noreferrer" className={`${buttonVariants({ variant: "outline", size: "sm" })} shrink-0`}>
+                  <a href={e.meetingUrl} target="_blank" rel="noopener noreferrer" aria-label={`Join ${e.title}`} className={`${buttonVariants({ variant: "outline", size: "sm" })} shrink-0`}>
                     Join
                   </a>
                 ) : null}
@@ -116,7 +116,9 @@ export function LookAhead({ events, tz }: { events: NotableEvent[]; tz: string }
         return (
           <li key={e.key} className="flex gap-3 py-3 text-body">
             <span className="flex w-24 shrink-0 flex-col tabular-nums">
-              <span className="font-semibold text-foreground">{formatDayIn(e.allDay && e.startDate ? `${e.startDate}T12:00:00Z` : e.startAt, tz)}</span>
+              <time dateTime={e.allDay && e.startDate ? e.startDate : e.startAt} className="font-semibold text-foreground">
+                {formatDayIn(e.allDay && e.startDate ? `${e.startDate}T12:00:00Z` : e.startAt, tz)}
+              </time>
               {e.allDay ? null : (
                 <>
                   <time dateTime={e.startAt} className="text-small text-muted-foreground">

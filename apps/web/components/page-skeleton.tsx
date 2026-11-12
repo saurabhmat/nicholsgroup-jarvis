@@ -1,26 +1,20 @@
 // T-230 A/B: the neutral placeholder every [laneId] page shows while its data loads (loading.tsx and Suspense fallbacks).
 // Deliberately plain (muted blocks with the design tokens' colours and radii, no copy and no data). Part B: each variant
-// has the SAME grid as its page (Home: attention + calendar, five KPI tiles, news + projects; Settings: 200px sub-nav + sections;
+// has the SAME grid as its page (Home: attention + calendar, the KPI strip, news + projects; Settings: 200px sub-nav + sections;
 // Get started: 280px step rail + panel; list: a column of cards), so the skeleton-to-content swap does not jump.
 // The shell and menu stay; only the content area is replaced.
 import { cn } from "@nichols/ui";
 
-function Block({ className }: { className?: string }) {
-  return <div aria-hidden className={cn("rounded-control bg-muted motion-safe:animate-pulse", className)} />;
+function Block({ className, ...rest }: { className?: string; "data-testid"?: string }) {
+  return <div aria-hidden {...rest} className={cn("rounded-control bg-muted motion-safe:animate-pulse", className)} />;
 }
 
-/** The five-tile KPI strip as muted blocks (its own Suspense fallback on Home, same grid and height as the strip). */
+/** The KPI strip as one slim bar (its own Suspense fallback on Home). The strip is a banner or a row of tiles; a slim bar avoids a layout shift for the common "nothing connected" case. */
 export function KpiStripSkeleton() {
-  return (
-    <div aria-hidden data-testid="kpi-skeleton" className="grid grid-cols-1 gap-4 sm:grid-cols-3 lg:grid-cols-5">
-      {[0, 1, 2, 3, 4].map((i) => (
-        <Block key={i} className="h-[9rem] rounded-card" />
-      ))}
-    </div>
-  );
+  return <Block data-testid="kpi-skeleton" className="h-10 rounded-card" />;
 }
 
-/** The card grid of Home as muted blocks (T-234): attention 2/3 + calendar 1/3, five KPI tiles, news 2/3 + projects 1/3. */
+/** The card grid of Home as muted blocks (T-234): attention 2/3 + calendar 1/3, the KPI strip, news 2/3 + projects 1/3. */
 function Grid() {
   return (
     <>

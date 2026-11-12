@@ -7,11 +7,12 @@ import { PageSkeleton } from "./page-skeleton";
 afterEach(cleanup);
 
 describe("PageSkeleton", () => {
-  it("defaults to the Home grid: five KPI blocks in one row between two 2/3 + 1/3 rows", () => {
+  it("defaults to the Home grid: one slim KPI bar between two 2/3 + 1/3 rows", () => {
     render(<PageSkeleton />);
     const s = screen.getByTestId("page-skeleton");
     expect(s.dataset.variant).toBe("home");
-    expect(s.querySelector(".lg\\:grid-cols-5")?.children).toHaveLength(5);
+    expect(s.querySelector(".lg\\:grid-cols-5")).toBeNull();
+    expect(screen.getByTestId("kpi-skeleton").className).toMatch(/\bh-10\b/);
     expect(s.querySelector(".lg\\:col-span-2")).not.toBeNull();
   });
 

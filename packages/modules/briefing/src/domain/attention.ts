@@ -15,6 +15,8 @@
 // own newsletter senders), excluded labels (promotions, social, forums), newsletters, social networks, bank transaction alerts
 // (statements and due dates are kept), single bot/CI messages (and automated senders' CI-style subjects).
 
+import { httpsUrl } from "./url";
+
 export type ThreadRow = {
   connectionId: string;
   threadKey: string;
@@ -243,14 +245,6 @@ export function moneyThreads(rows: ThreadRow[], r: AttentionRules, limit = 6): M
   return out.sort((a, b) => MONEY_ORDER.indexOf(a.kind) - MONEY_ORDER.indexOf(b.kind) || b.thread.receivedAt.localeCompare(a.thread.receivedAt)).slice(0, limit);
 }
 
-const https = (v: unknown): string | null => {
-  if (typeof v !== "string") return null;
-  try {
-    return new URL(v).protocol === "https:" ? v : null;
-  } catch {
-    return null;
-  }
-};
 
 /** Parses core.briefing_threads rows. */
 export function parseThreads(data: unknown): ThreadRow[] {
@@ -270,7 +264,7 @@ export function parseThreads(data: unknown): ThreadRow[] {
         fromName: str(r.from_name),
         subject: str(r.subject),
         receivedAt: new Date(at).toISOString(),
-        sourceUrl: https(r.source_url),
+        sourceUrl: httpsUrl(r.source_url),
         labels: Array.isArray(r.labels) ? r.labels.filter((l): l is string => typeof l === "string") : [],
         isImportant: r.is_important === true,
         lastIsOwner: r.last_is_owner === true,

@@ -119,3 +119,16 @@ describe("coverage", () => {
     expect(coverageLine([], false)).toMatch(/does not include mail or calendar/);
   });
 });
+
+describe("provider URLs (rule 9)", () => {
+  it("keeps https links normalised and drops credentials, http and script URLs", () => {
+    const [a, b, c] = parseEvents([
+      ev({ title: "a", source_url: "https://calendar.google.com/e/1", online_meeting_url: "https://meet.google.com@evil.test/x" }),
+      ev({ title: "b", source_url: "http://calendar.google.com/e/1", online_meeting_url: "javascript:alert(1)" }),
+      ev({ title: "c", source_url: "https://u:p@calendar.google.com/e/1", online_meeting_url: "https://meet.google.com/abc" }),
+    ]);
+    expect([a?.calendarUrl, a?.meetingUrl]).toEqual(["https://calendar.google.com/e/1", null]);
+    expect([b?.calendarUrl, b?.meetingUrl]).toEqual([null, null]);
+    expect([c?.calendarUrl, c?.meetingUrl]).toEqual([null, "https://meet.google.com/abc"]);
+  });
+});

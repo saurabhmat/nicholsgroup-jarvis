@@ -94,7 +94,9 @@ describe("TodayCalendar (T-235 part 3: compact)", () => {
     expect(within(chips).getByText("RSVP pending")).toBeTruthy();
     expect(first.queryByText("External")).toBeNull(); // third by priority: dropped
     expect(chips.children).toHaveLength(2);
-    expect(first.queryByText(/^Clashes with/)).toBeNull(); // shortened
+    expect(first.queryByText(/^Clashes with/)).toBeNull(); // shortened visually
+    expect(chips.textContent).toContain("(Clashes with Overlap)"); // sr-only detail for every chip with a title
+    expect(chips.textContent).toContain("(You have not answered this invitation)");
   });
 
   it("the title links to the event (https, new tab, noopener); there is no separate 'Open in Calendar'", () => {
@@ -111,11 +113,11 @@ describe("TodayCalendar (T-235 part 3: compact)", () => {
 
   it("Join is a small button-styled link, only with an https meeting URL", () => {
     view();
-    const join = within(screen.getAllByTestId("calendar-event")[0] as HTMLElement).getByRole("link", { name: "Join" });
+    const join = within(screen.getAllByTestId("calendar-event")[0] as HTMLElement).getByRole("link", { name: "Join Board prep" });
     expect(join.getAttribute("href")).toBe("https://meet.example.test/a");
     expect(join.getAttribute("rel")).toBe("noopener noreferrer");
     expect(join.className).toMatch(/h-\d|px-/); // buttonVariants size sm
-    expect(screen.getAllByRole("link", { name: "Join" })).toHaveLength(1); // the others have no (https) meeting URL
+    expect(screen.getAllByRole("link", { name: /^Join / })).toHaveLength(1); // the others have no (https) meeting URL
   });
 
   it("says why there is no calendar instead of showing an empty day", () => {
@@ -162,7 +164,7 @@ describe("Next 7 days summary and LookAhead", () => {
     );
     render(<LookAhead events={ahead} tz="America/New_York" />);
     expect(screen.getByText("External: C Client")).toBeTruthy();
-    expect(screen.getByText("Sat, Nov 14")).toBeTruthy();
+    expect(screen.getByText("Sat, Nov 14").tagName).toBe("TIME");
     expect(screen.getByText("10:00 AM").tagName).toBe("TIME");
     expect(screen.getByRole("link", { name: "Client call" }).getAttribute("href")).toBe("https://calendar.example.test/x");
   });

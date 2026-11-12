@@ -2,6 +2,8 @@
 // Works on metadata from core.briefing_events only. "Owner" = the lane's own mailbox addresses (the connected accounts):
 // their attendee response decides RSVP-pending and declined (declined events are hidden, cancelled never arrive).
 
+import { httpsUrl } from "./url";
+
 export type Attendee = { email: string; name: string | null; response: "accepted" | "declined" | "tentative" | "needs_action" | null };
 
 export type BriefEvent = {
@@ -38,14 +40,6 @@ export type NotableEvent = BriefEvent & { why: string[] };
 /** Gap (minutes) under which two consecutive meetings count as back-to-back. */
 export const BACK_TO_BACK_MINUTES = 5;
 
-const https = (v: unknown): string | null => {
-  if (typeof v !== "string") return null;
-  try {
-    return new URL(v).protocol === "https:" ? v : null;
-  } catch {
-    return null;
-  }
-};
 const text = (v: unknown): string | null => (typeof v === "string" && v.trim() !== "" ? v : null);
 const instant = (v: unknown): string | null => {
   if (typeof v !== "string") return null;
@@ -83,8 +77,8 @@ export function parseEvents(rows: unknown): BriefEvent[] {
         endDate: typeof r.end_date === "string" ? r.end_date : null,
         timezone: text(r.timezone),
         location: text(r.location),
-        calendarUrl: https(r.source_url),
-        meetingUrl: https(r.online_meeting_url),
+        calendarUrl: httpsUrl(r.source_url),
+        meetingUrl: httpsUrl(r.online_meeting_url),
         organizerEmail: typeof r.organizer_email === "string" ? r.organizer_email.toLowerCase() : null,
         attendees: attendeesOf(r.attendees),
         calendarId,
@@ -103,7 +97,7 @@ export function ownResponse(e: BriefEvent, owners: ReadonlySet<string>): Attende
 }
 
 export function externalAttendees(e: BriefEvent, owners: ReadonlySet<string>, internalDomains: ReadonlySet<string>): string[] {
-  return e.attendees.filter((a) => !owners.has(a.email) && !internalDomains.has(domainOf(a.email)) && !a.email.endsWith("calendar.google.com")).map((a) => a.email);
+  return e.attendees.filter((a) => !owners.has(a.email) && !internalDomains.has(domainOf(a.email)) && !isResource(a.email)).map((a) => a.email);
 }
 
 /** Google's public holiday calendars. */
@@ -157,11 +151,18 @@ export function notableAhead(events: BriefEvent[], owners: ReadonlySet<string>, 
 }
 
 /** Calendar resources (rooms) and Google's own addresses are not people. */
-const isResource = (email: string) => email.endsWith("calendar.google.com");
+const isResource = (email: string) => {
+  const d = domainOf(email);
+  return d === "calendar.google.com" || d.endsWith(".calendar.google.com");
+};
+
+/** Shared mailboxes are not people: shown as the local part, unchanged. */
+const ROLE_MAILBOXES: ReadonlySet<string> = new Set(["info", "noreply", "no-reply", "sales", "support", "admin"]);
 
 /** "dana.whitfield@x.com" -> "Dana Whitfield". Never the address itself. */
 export function nameFromEmail(email: string): string {
   const local = (email.split("@")[0] ?? "").replace(/\+.*$/, "");
+  if (ROLE_MAILBOXES.has(local.toLowerCase())) return local;
   const words = local.split(/[._\-\s]+/).filter((w) => w !== "");
   if (words.length === 0) return "Guest";
   return words.map((w) => w.charAt(0).toUpperCase() + w.slice(1).toLowerCase()).join(" ");
@@ -201,7 +202,15 @@ export function eventChips(e: DayEvent, max = 2): EventChip[] {
 
 /** Meetings (timed, not declined) in the events and the number of clashing pairs among them. All-day events are not meetings. */
 export function summarizeAhead(events: BriefEvent[], owners: ReadonlySet<string>): { meetings: number; clashes: number } {
-  const timed = events.filter((e) => !e.allDay && ownResponse(e, owners) !== "declined");
+  const seen = new Set<string>();
+  // The same invitation can arrive once per connected calendar: count it once (same title and times).
+  const timed = events.filter((e) => {
+    if (e.allDay || ownResponse(e, owners) === "declined") return false;
+    const k = `${e.title}\u0000${e.startAt}\u0000${e.endAt}`;
+    if (seen.has(k)) return false;
+    seen.add(k);
+    return true;
+  });
   let clashes = 0;
   for (let i = 0; i < timed.length; i++) {
     for (let j = i + 1; j < timed.length; j++) {
