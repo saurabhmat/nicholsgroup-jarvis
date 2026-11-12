@@ -7,6 +7,28 @@ import { personas } from "./personas";
 test.describe.configure({ mode: "serial" });
 test.setTimeout(120_000);
 
+// T-235 part 5 review: the four main pages fit a 390 px phone (no sideways scroll). The phone project's member is finance_operator,
+// who can open Inbox, Finance, Approvals and Settings (the first three are visited by the test above; Settings by settings-google.spec.ts).
+test("phone: Settings, Approvals, Finance and Inbox do not scroll sideways at 390 px", async ({ page }, info) => {
+  test.skip(info.project.name === "desktop", "phone viewport only");
+  const { member } = personas(info);
+  await clearMailbox();
+  await signInWithEmailCode(page, member);
+  await nextTotpWindow(page);
+  await completeMfa(page, member);
+  await expectLaneHome(page);
+  for (const [path, heading] of [
+    ["settings", /Settings/],
+    ["approvals", /Approvals/],
+    ["finance", /Finance/],
+    ["inbox", /Inbox/],
+  ] as const) {
+    await page.goto(`/PKG/${path}`);
+    await expect(page.getByRole("heading", { level: 1 }).first()).toContainText(heading, { timeout: 30_000 });
+    expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth), `${path} scrolls sideways`).toBe(true);
+  }
+});
+
 test("a member sees the shell, a switcher with only the allowed lane, and a 404 for any other lane", async ({ page, isMobile }, info) => {
   const { member } = personas(info);
   await clearMailbox();
@@ -53,17 +75,27 @@ test("a member sees the shell, a switcher with only the allowed lane, and a 404 
   await expect(page.locator("[data-slot=side-menu], [data-slot=tab-bar]").getByLabel(/pending/)).toHaveCount(0); // no badge without a count
 
   await page.goto("/PKG");
-  await expect(page.getByRole("heading", { name: "Good morning", level: 1 })).toBeVisible();
-  for (const title of ["Needs your attention", "Today's calendar", "GovCon news", "Projects at a glance"]) {
+  await expect(page.getByRole("heading", { name: /^Good (morning|afternoon|evening)/, level: 1 })).toBeVisible();
+  for (const title of ["Needs your attention", "Today's calendar"]) {
     await expect(page.getByRole("heading", { name: title, level: 2 })).toBeVisible();
   }
+  // T-235 part 5: news off and no project board are slim one-line cards (labelled regions, no heading).
+  await expect(page.getByRole("region", { name: "GovCon news" })).toContainText("GovCon news is off");
+  await expect(page.getByRole("region", { name: "Projects at a glance" })).toContainText("No project board connected");
   await expect(page.getByRole("button", { name: /Next 7 days/ })).toHaveAttribute("aria-expanded", "false"); // T-234: collapsed by default
-  await expect(page.getByTestId("kpi-tile")).toHaveCount(5);
+  // T-235: nothing connected -> one banner, not five empty tiles. The banner is for roles that can connect sources: the desktop
+  // member is the owner (sees it); the phone member is finance-operator (by design: no banner and no empty tiles).
+  if (isMobile) {
+    await expect(page.getByTestId("home-kpis-banner")).toHaveCount(0);
+    await expect(page.getByTestId("kpi-tile")).toHaveCount(0);
+  } else {
+    await expect(page.getByTestId("home-kpis-banner")).toBeVisible();
+  }
   await expect(page.getByRole("link", { name: "Ask Jarvis" })).toHaveAttribute("href", "/PKG/assistant");
   if (isMobile) {
     const band = page.locator("[data-slot=mobile-header]");
     await expect(band).toContainText("Pub K Group");
-    await expect(band).toContainText("Good morning");
+    await expect(band).toContainText(/Good (morning|afternoon|evening)/);
     for (const link of await page.getByRole("navigation", { name: "Tabs" }).getByRole("link").all()) {
       await expect(link.locator("svg[aria-hidden=true]")).toHaveCount(1);
     }

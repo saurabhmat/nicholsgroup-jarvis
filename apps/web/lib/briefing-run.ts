@@ -16,9 +16,10 @@
 import { wrapUntrusted, UNTRUSTED_DATA_RULE, type LLMProvider } from "@nichols/ai";
 import { assemblePrompt, BRAIN_RULES, withUserContext } from "@nichols/ai/prompts";
 import type { LaneId } from "@nichols/core";
-import { BRIEFING_RULES, checkContent, classifyFailure, extractJson, failureNote, maskContent, maskFigures, type BriefContent, type BriefRef, type FailureCode } from "@nichols/briefing/domain";
+import { BRIEFING_RULES, checkContent, classifyFailure, failureNote, maskContent, maskFigures, type BriefContent, type BriefRef, type FailureCode } from "@nichols/briefing/domain";
 import type { BrainPromptContext } from "@nichols/brain/server";
 import { loadBriefing, type BriefingView } from "./briefing";
+import { BRIEFING_OUTPUT_SCHEMA, correctionMessage, parseBriefingOutput } from "./briefing-output";
 
 type Db = Parameters<typeof loadBriefing>[0];
 
@@ -27,11 +28,13 @@ export type RunDeps = {
   provider: LLMProvider;
   /** Live body of one message (the caller's own guarded reader). Throws when unreadable. */
   readBody: (laneId: LaneId, connectionId: string, messageId: string) => Promise<string>;
-  /** Aborted at the Run-now time bound: every write (save, proposals) and read checks it first (T-234 review H1). */
+  /** Aborted at the run's time bound: every write (save, proposals) and read checks it first (T-234 review H1). */
   signal?: AbortSignal;
   /** Told the review window as soon as it is known, so the timeout fallback row can use the same one. */
   onWindow?: (w: { windowFrom: string; windowTo: string }) => void;
   brain: BrainPromptContext | null;
+  /** Milliseconds clock (tests only); default Date.now. Used for the retry budget. */
+  clock?: () => number;
   /** lane_policies: what may go to the model (llm_allowed_categories); outbound drafts may be stored. */
   policy: BriefingPolicy;
   save: (laneId: LaneId, record: SavedBriefing) => Promise<string>;
@@ -190,6 +193,8 @@ function factsText(view: BriefingView, refs: BriefRef[], now: Date, policy: Brie
 /** Runs one briefing and saves it. Returns the saved id and the content. */
 export async function runBriefing(deps: RunDeps, input: { laneId: LaneId; ownerUserId: string; trigger: "manual" | "schedule"; now: Date; viewerTz: string }): Promise<{ id: string; status: SavedBriefing["status"]; reason?: FailureCode }> {
   const { laneId, now } = input;
+  const clock = deps.clock ?? Date.now;
+  const runStartedMs = clock();
   const view = await loadBriefing(deps.client, laneId, now, input.viewerTz);
   const { policy } = deps;
   // Without "email" the model gets no mail at all, so no refs either (nothing to attach notes or drafts to).
@@ -244,12 +249,33 @@ export async function runBriefing(deps: RunDeps, input: { laneId: LaneId; ownerU
   let content: BriefContent;
   let model: string | null = deps.provider.modelFor("analysis");
   try {
-    const res = await deps.provider.complete({ laneId, tier: "analysis", ...(deps.signal ? { signal: deps.signal } : {}), system: prompt.system, messages: withUserContext([{ role: "user", content: user }], prompt.userContext), maxTokens: 3000 });
-    model = res.model;
-    const text = res.content.flatMap((b) => (b.type === "text" ? [b.text] : [])).join("");
-    if (res.status !== "completed") throw new BriefingOutputError();
-    const raw = extractJson(text);
-    if (raw === null) throw new BriefingOutputError();
+    const messages = withUserContext([{ role: "user", content: user }], prompt.userContext);
+    const ask = async (msgs: typeof messages) => {
+      const res = await deps.provider.complete({ laneId, tier: "analysis", ...(deps.signal ? { signal: deps.signal } : {}), system: prompt.system, messages: msgs, maxTokens: 3000, outputSchema: BRIEFING_OUTPUT_SCHEMA });
+      model = res.model;
+      if (res.status !== "completed") throw new BriefingOutputError();
+      return res.content.flatMap((b) => (b.type === "text" ? [b.text] : [])).join("");
+    };
+    let text = await ask(messages);
+    let parsed = parseBriefingOutput(text);
+    if (!parsed.ok) {
+      // Codes only (schema paths and Zod issue codes): never a value, a prompt or the reply.
+      console.error("[briefing] briefing.model_output_invalid", { laneId, attempt: 1, issues: parsed.issues });
+      // The retry only when it can still finish inside the run's bound; otherwise fail now with the usual code.
+      if (clock() - runStartedMs > RETRY_ONLY_BEFORE_MS) {
+        console.error("[briefing] briefing.retry_skipped", { laneId, elapsedMs: clock() - runStartedMs });
+        throw new BriefingOutputError();
+      }
+      // One retry: the previous reply and the validation problems (no new email content).
+      const retry: typeof messages = [...messages, ...(text.trim() ? [{ role: "assistant" as const, content: text }] : []), { role: "user", content: correctionMessage(parsed.issues) }];
+      text = await ask(retry);
+      parsed = parseBriefingOutput(text);
+      if (!parsed.ok) {
+        console.error("[briefing] briefing.model_output_invalid", { laneId, attempt: 2, issues: parsed.issues });
+        throw new BriefingOutputError();
+      }
+    }
+    const raw: unknown = parsed.value;
     content = maskContent(checkContent(raw, refs, sourcesFor, allSources, { replies: policy.storeDrafts }));
     if (!policy.storeDrafts) notes.push("reply_drafts_off");
   } catch (e) {
@@ -267,10 +293,12 @@ export async function runBriefing(deps: RunDeps, input: { laneId: LaneId; ownerU
   return { id, status };
 }
 
-// ---------------------------------------------------------------- bounded, single-flight run (Run now, T-234 part 0)
+// ---------------------------------------------------------------- bounded, single-flight run (T-234 part 0; background since T-235)
 
-/** Default bound for a manual run: under the Home route's maxDuration (90 s) with room to save and refresh. */
-export const RUN_NOW_TIMEOUT_MS = 75_000;
+/** Bound for a background run (the abort timer starts before the brain context loads): well under Home's maxDuration (90 s). */
+export const BACKGROUND_RUN_TIMEOUT_MS = 60_000;
+/** No retry of an unusable reply once this much of the run has elapsed: the retry could not finish inside the bound. */
+export const RETRY_ONLY_BEFORE_MS = 40_000;
 
 const inFlight = new Map<string, symbol>();
 
@@ -333,7 +361,7 @@ export async function runBriefingBounded(
     () => undefined,
   );
   // Freed when the run settles, or at a hard ceiling (2 x the bound) if it never does, whichever comes first.
-  const ceiling = setTimeout(release, 2 * (opts.timeoutMs ?? RUN_NOW_TIMEOUT_MS));
+  const ceiling = setTimeout(release, 2 * (opts.timeoutMs ?? BACKGROUND_RUN_TIMEOUT_MS));
   ceiling.unref?.();
   void settled.finally(() => {
     clearTimeout(ceiling);
@@ -342,7 +370,7 @@ export async function runBriefingBounded(
   let timer: ReturnType<typeof setTimeout> | undefined;
   try {
     const limit = new Promise<"timeout">((resolve) => {
-      timer = setTimeout(() => resolve("timeout"), opts.timeoutMs ?? RUN_NOW_TIMEOUT_MS);
+      timer = setTimeout(() => resolve("timeout"), opts.timeoutMs ?? BACKGROUND_RUN_TIMEOUT_MS);
     });
     const first = await Promise.race([run, limit]);
     if (first !== "timeout") return first;

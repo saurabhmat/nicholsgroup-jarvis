@@ -185,7 +185,7 @@ export const laneConfigSchema = z.strictObject({
       // D-32: 06:30 America/New_York, Mon-Fri (0 = Sunday .. 6 = Saturday, New York dates).
       time: hhmm.default("06:30"),
       days: z.array(z.int().min(0).max(6)).min(1).max(7).refine((d) => new Set(d).size === d.length, "days must be unique").default([1, 2, 3, 4, 5]),
-      // The AI briefing job's daily schedule (T-231c). Off unless set to true: "Run now" on Home works either way.
+      // The AI briefing job's daily schedule (T-231c). Off unless set to true: Home still prepares a summary on its own when it is older than 3 hours (T-235).
       schedule_enabled: z.boolean().default(false),
       // A mail or calendar stream counts as stale when it last synced longer ago than this.
       coverage_stale_minutes: z.int().min(15).max(10080).default(120),

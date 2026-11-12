@@ -3,6 +3,7 @@
 import Link from "next/link";
 import { Suspense } from "react";
 import { Alert, AlertDescription, AlertTitle, Badge, cn, EmptyState, laneHref, PageHeader } from "@nichols/ui";
+import { senderLabel } from "@nichols/briefing/domain";
 import { guards } from "@/lib/guards";
 import { inboxFor, INBOX_FILTERS, type InboxFilter, type InboxRow } from "@/lib/inbox";
 import { loadLane } from "@/lib/lane-page";
@@ -89,7 +90,7 @@ async function InboxList({ laneId, searchParams }: { laneId: string; searchParam
 }
 
 function Row({ row, href, when: time }: { row: InboxRow; href: string; when: string }) {
-  const sender = row.fromName ?? row.fromAddress ?? "(unknown sender)";
+  const sender = row.fromName || row.fromAddress ? senderLabel(row.fromName, row.fromAddress) : "(unknown sender)";
   return (
     <li>
       {/* No prefetch: opening a message reads it live from Gmail; a list view must not read 50 bodies nobody opened. */}

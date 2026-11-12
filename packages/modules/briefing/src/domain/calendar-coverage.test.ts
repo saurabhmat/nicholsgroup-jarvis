@@ -39,6 +39,23 @@ describe("calendar analysis", () => {
     expect(a && attendeeSummary(a, owners)).toBe("X Person");
   });
 
+  it("the same invitation from two calendars (same title and times) shows once and does not clash with itself", () => {
+    const day = analyzeDay(parseEvents([ev({ title: "Sync", event_id: "a", calendar_id: "c1" }), ev({ title: "Sync", event_id: "b", calendar_id: "c2" })]), owners, internal);
+    expect(day).toHaveLength(1);
+    expect(day[0]?.clashesWith).toEqual([]);
+  });
+
+  it("two different events with the same title and time but different meeting links are both shown (and clash); one link on both is one event", () => {
+    const a = ev({ title: "Sync", event_id: "a", calendar_id: "c1", online_meeting_url: "https://meet.example.test/one" });
+    const b = ev({ title: "Sync", event_id: "b", calendar_id: "c2", online_meeting_url: "https://meet.example.test/two" });
+    const day = analyzeDay(parseEvents([a, b]), owners, internal);
+    expect(day).toHaveLength(2);
+    expect(day[0]?.clashesWith).toEqual(["Sync"]);
+    expect(analyzeDay(parseEvents([a, { ...b, online_meeting_url: "https://meet.example.test/one" }]), owners, internal)).toHaveLength(1);
+    // one calendar without a link is the same invitation as the one with a link
+    expect(analyzeDay(parseEvents([a, { ...b, online_meeting_url: null }]), owners, internal)).toHaveLength(1);
+  });
+
   it("all-day events never clash and are not back-to-back", () => {
     const day = analyzeDay(parseEvents([ev({ title: "Offsite", all_day: true, start_at: "2026-11-12T05:00:00Z", end_at: "2026-11-13T05:00:00Z" }), ev({ title: "A" })]), owners, internal);
     expect(day.find((e) => e.title === "Offsite")?.clashesWith).toEqual([]);
@@ -59,7 +76,7 @@ describe("calendar analysis", () => {
     );
     expect(ahead.map((e) => [e.title, e.why.join("|")])).toEqual([
       ["Thanksgiving", "Holiday"],
-      ["Client", "External: client@acme.test"],
+      ["Client", "External: Client"],
       ["Invite", "RSVP pending"],
     ]);
   });
@@ -117,5 +134,18 @@ describe("coverage", () => {
     expect(line).toContain("Mail ceo@pubk.test: not connected");
     expect(coverageLine([], true)).toMatch(/no mailbox or calendar is set up/);
     expect(coverageLine([], false)).toMatch(/does not include mail or calendar/);
+  });
+});
+
+describe("provider URLs (rule 9)", () => {
+  it("keeps https links normalised and drops credentials, http and script URLs", () => {
+    const [a, b, c] = parseEvents([
+      ev({ title: "a", source_url: "https://calendar.google.com/e/1", online_meeting_url: "https://meet.google.com@evil.test/x" }),
+      ev({ title: "b", source_url: "http://calendar.google.com/e/1", online_meeting_url: "javascript:alert(1)" }),
+      ev({ title: "c", source_url: "https://u:p@calendar.google.com/e/1", online_meeting_url: "https://meet.google.com/abc" }),
+    ]);
+    expect([a?.calendarUrl, a?.meetingUrl]).toEqual(["https://calendar.google.com/e/1", null]);
+    expect([b?.calendarUrl, b?.meetingUrl]).toEqual([null, null]);
+    expect([c?.calendarUrl, c?.meetingUrl]).toEqual([null, "https://meet.google.com/abc"]);
   });
 });

@@ -556,6 +556,18 @@ isOneToOne: false
               "body_md": string,"id": string,"is_mine": boolean,"key": string,"title": string,"updated_at": string,"version": number
             }[]
                            },
+"briefing_claim_auto":
+{ Args: { "p_lane": string }; Returns: Json
+                           },
+"briefing_claim_regenerate":
+{ Args: { "p_lane": string }; Returns: Json
+                           },
+"briefing_claim_release":
+{ Args: { "p_claim": string,"p_lane": string }; Returns: boolean
+                           },
+"briefing_claim_schedule":
+{ Args: { "p_lane": string,"p_owner": string }; Returns: Json
+                           },
 "briefing_coverage":
 { Args: { "p_lane": string }; Returns: {
               "account": string,"configured": boolean,"connection_id": string,"error_kind": string,"last_sync_at": string,"provider": string,"status": string,"stream": string
@@ -575,6 +587,14 @@ isOneToOne: false
 { Args: { "p_lane": string }; Returns: {
               "content": Json,"coverage": Json,"id": string,"last_failed_at": string,"last_run_at": string,"model": string,"prepared_at": string,"source_refs": Json,"status": string,"trigger": string,"window_from": string,"window_to": string
             }[]
+                           },
+"briefing_run_state":
+{ Args: { "p_lane": string }; Returns: {
+              "last_attempt_at": string,"last_regenerate_at": string,"latest_prepared_at": string,"running": boolean,"runs_today": number
+            }[]
+                           },
+"briefing_runs_purge":
+{ Args: { "p_keep_days": number,"p_lane": string }; Returns: number
                            },
 "briefing_save":
 { Args: { "p_content": Json,"p_coverage": Json,"p_lane": string,"p_model": string,"p_owner": string,"p_source_refs": Json,"p_status": string,"p_trigger": string,"p_window_from": string,"p_window_to": string }; Returns: string

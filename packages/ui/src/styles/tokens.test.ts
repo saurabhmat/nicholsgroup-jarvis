@@ -106,6 +106,7 @@ describe("light design tokens (docs/plan-review.md §7, v2; final with D-20)", (
     ["--sidebar-strong", "--sidebar-switcher"],
     ["--gold", "--sidebar"],
     ["--muted-foreground", "--muted"],
+    ["--foreground", "--muted"], // avatar initials on the muted slot (T-235 part 2)
     ["--destructive-foreground", "--destructive"],
   ])("text %s on %s meets WCAG AA (4.5:1)", (fg, bg) => {
     expect(contrast(hex(fg), hex(bg))).toBeGreaterThanOrEqual(4.5);
@@ -178,6 +179,7 @@ describe("dark design tokens (docs/design/README.md, Nov 4, 2026)", () => {
     ["--muted-foreground", "--background"],
     ["--muted-foreground", "--card"],
     ["--muted-foreground", "--muted"],
+    ["--foreground", "--muted"], // avatar initials on the muted slot (T-235 part 2)
     ["--primary-foreground", "--primary"],
     ["--primary", "--primary-tint"],
     ["--foreground", "--primary-tint"],
@@ -231,17 +233,57 @@ describe("components use tokens only", () => {
     expect(uses.length).toBe(0);
   });
 
-  it("defines the type scale once (15 / 13 / 18 / 32 px)", () => {
+  it("defines the type scale once (12 label / 15 body / 13 small / 20 card title / 32 page title; body line-height 1.55)", () => {
     expect(themeCss).toMatch(/--text-body:\s*0\.9375rem/);
     expect(themeCss).toMatch(/--text-small:\s*0\.8125rem/);
-    expect(themeCss).toMatch(/--text-card-title:\s*1\.125rem/);
+    expect(themeCss).toMatch(/--text-card-title:\s*1\.25rem/);
+    expect(themeCss).toMatch(/--text-label:\s*0\.75rem/);
+    expect(themeCss).toMatch(/--text-body--line-height:\s*1\.55/);
+    expect(themeCss).toMatch(/body \{[^}]*line-height:\s*1\.55/);
     expect(themeCss).toMatch(/--text-page-title:\s*2rem/);
   });
 
   it("no type-scale name is also a colour name (text-<name> would pick the colour: found with text-secondary)", () => {
-    for (const name of ["body", "small", "card-title", "page-title"]) {
+    for (const name of ["label", "body", "small", "card-title", "page-title"]) {
       expect(themeCss).not.toMatch(new RegExp(`--color-${name}\\s*:`));
     }
+  });
+
+  it("uppercase tracking-wide labels exist only on KPI labels (the KPI card label and the Book balance label)", () => {
+    const users = sources().filter(([, source]) => /\buppercase\b/.test(source)).map(([file]) => file);
+    expect(users.sort()).toEqual(["book-balance.tsx", "kpi-card.tsx"]);
+  });
+
+  it("uppercase exists nowhere else in the web app (apps/web/components and apps/web/app), except the KPI strip tile label", () => {
+    const webRoot = join(here, "..", "..", "..", "..", "apps", "web");
+    const files: string[] = [];
+    const walk = (dir: string) => {
+      for (const entry of readdirSync(dir, { withFileTypes: true })) {
+        const p = join(dir, entry.name);
+        if (entry.isDirectory()) walk(p);
+        else if (/\.tsx?$/.test(entry.name) && !/\.test\.tsx?$/.test(entry.name)) files.push(p);
+      }
+    };
+    walk(join(webRoot, "components"));
+    walk(join(webRoot, "app"));
+    expect(files.length).toBeGreaterThan(10);
+    const ALLOWED = ["components/kpi-strip.tsx"]; // the Home KPI tile label is a KPI label
+    const users = files.filter((f) => /\buppercase\b/.test(readFileSync(f, "utf8"))).map((f) => f.slice(webRoot.length + 1));
+    expect(users.filter((f) => !ALLOWED.includes(f))).toEqual([]);
+  });
+
+  it("cards are 24px padded (p-6), white, 12px radius, 1px border, with the soft shadow token", () => {
+    for (const f of ["card.tsx", "page-section.tsx"]) {
+      const src = sources().find(([file]) => file === f)?.[1] ?? "";
+      expect(src).toMatch(/\bp-6\b/);
+      expect(src).not.toMatch(/\bp-5\b|\bsm:p-6\b/);
+      expect(src).toMatch(/rounded-card border border-border bg-card/);
+    }
+    expect(tokens.get("--card-shadow")).toMatch(/0\.04.*0\.03/);
+  });
+
+  it.each(sources())("%s keeps Source Serif for titles only (no font-heading on body text sizes)", (_file, source) => {
+    expect(source).not.toMatch(/font-heading[^"]*\btext-(body|small|label)\b|\btext-(body|small|label)\b[^"]*font-heading/);
   });
 
   it.each(sources())("%s does not inject HTML", (_file, source) => {

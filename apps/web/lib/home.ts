@@ -4,6 +4,7 @@
 // The briefing (T-162), finance figures (T-095, needs D-8) and approvals (T-115) are not part of v1.
 import type { Guards } from "@nichols/core/auth";
 import type { LaneClient } from "@nichols/core/lane-router";
+import { httpsUrl } from "@nichols/briefing/domain";
 
 const BUSINESS_TZ = "America/New_York";
 const DAY_MS = 86_400_000;
@@ -177,6 +178,8 @@ export type HomeKpi = {
   statusText: string;
   /** True when the source is not connected (or needs reconnecting): the tile offers a Connect link instead of waiting. */
   connect: boolean;
+  /** A feed of this source exists (not disconnected): only then does Home show its tile (T-235 part 4). */
+  connected: boolean;
 };
 
 /**
@@ -195,26 +198,20 @@ export function homeKpis(feeds: HomeView["feeds"]): HomeKpi[] {
       label: "MRR",
       statusText: text(["stripe"], "Stripe", "Waiting for the Stripe sync", "Stripe not connected yet"),
       connect: visible && !(of("stripe").length > 0 && !broken(["stripe"])),
+      connected: of("stripe").length > 0,
     },
     {
       key: "subscribers",
       label: "Paid subscribers",
       statusText: text(["ghl", "gohighlevel"], "GoHighLevel", "Waiting for the GoHighLevel sync", "GoHighLevel not connected yet"),
       connect: visible && !(of("ghl", "gohighlevel").length > 0 && !broken(["ghl", "gohighlevel"])),
+      connected: of("ghl", "gohighlevel").length > 0,
     },
   ];
 }
 
 // ---------------------------------------------------------------------------------------------------------- mapping
 
-const https = (v: unknown): string | null => {
-  if (typeof v !== "string") return null;
-  try {
-    return new URL(v).protocol === "https:" ? v : null;
-  } catch {
-    return null;
-  }
-};
 const text = (v: unknown): string | null => (typeof v === "string" && v.trim() !== "" ? v : null);
 const instant = (v: unknown): string | null => {
   if (typeof v !== "string") return null;
@@ -235,8 +232,8 @@ export function toMeetings(rows: unknown): HomeMeeting[] {
         endAt,
         allDay: r.all_day === true,
         location: text(r.location),
-        calendarUrl: https(r.source_url),
-        meetingUrl: https(r.online_meeting_url),
+        calendarUrl: httpsUrl(r.source_url),
+        meetingUrl: httpsUrl(r.online_meeting_url),
       },
     ];
   });

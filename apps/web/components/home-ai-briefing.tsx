@@ -1,15 +1,16 @@
-// AI briefing on Home (T-231c; T-234 part 2: merged into "Needs your attention"): the summary (first 2 lines of the briefing, the rest
-// behind "More"), "Prepared <time> · Run now", the Top 3 priorities as a compact numbered row, the deadlines list (folded), and the
+// AI briefing on Home (T-231c; T-234 part 2: merged into "Needs your attention"; T-235 part 2: the "Today at a glance" panel): the summary (first 3 lines of the briefing, the rest
+// behind "More"), the Top 3 priorities, "Summary at <time>" plus the owner's controls (T-235: Updating summary…, the ⋯ menu; no Run button), the deadlines list (folded), and the
 // why/next notes shown on the attention items. All model text is plain text (React escapes it); sources and links come from the
 // stored refs (metadata), never from the model.
 import Link from "next/link";
 import { Badge } from "@nichols/ui";
 import { inboxHref } from "@/lib/inbox-links";
-import { formatDateTimeIn, maskFigures, type AttentionNote, type BriefRef } from "@nichols/briefing/domain";
+import { formatDateTimeIn, maskFigures, senderLabel, type AttentionNote, type BriefRef } from "@nichols/briefing/domain";
 import type { FailureCode } from "@nichols/briefing/domain";
 import type { SavedBriefingView } from "@/lib/briefing";
 import { FailureReason } from "./briefing-failure";
-import { RunBriefingButton } from "./run-briefing-button";
+import type { ReactNode } from "react";
+import { newsTime } from "./home-news";
 import { PersistedDetails } from "./home-scope";
 
 const STATUS: Record<SavedBriefingView["status"], { label: string; variant: "success" | "outline" | "alert" }> = {
@@ -18,28 +19,45 @@ const STATUS: Record<SavedBriefingView["status"], { label: string; variant: "suc
   failed: { label: "Could not be prepared", variant: "alert" },
 };
 
-/** The summary is the first two lines of the briefing (1-2 sentences); the rest sits behind "More from the briefing". */
-const SUMMARY_LINES = 2;
+/** "EST" / "PST" for the zone at that moment; the zone name when the runtime has no short name. */
+function zoneAbbr(tz: string, iso: string): string {
+  try {
+    return new Intl.DateTimeFormat("en-US", { timeZone: tz, timeZoneName: "short" }).formatToParts(new Date(iso)).find((p) => p.type === "timeZoneName")?.value ?? tz;
+  } catch {
+    return tz;
+  }
+}
+
+/** The summary is the first three lines of the briefing (2-3 sentences); the rest sits behind "More from the briefing". */
+const SUMMARY_LINES = 3;
+/** Without an AI briefing the rule-based sentences stand in for the summary: at most two. */
+const FALLBACK_LINES = 2;
+const TOP_PRIORITIES = 3;
 
 /**
- * The top of "Needs your attention" (T-234 part 2): the AI summary, "Prepared <time> · Run now", and the Top 3 priorities as a
- * compact numbered row. Without an AI briefing (none yet, failed, or not configured) the rule-based sentence takes its place with
- * "AI summary unavailable: <reason>".
+ * "Today at a glance" (T-235 part 2), the top of "Needs your attention": a cream panel with a 3px gold edge holding the AI summary
+ * (2-3 sentences), then "Top priorities" as a numbered list of three (bold action, muted reason), then "Summary at <time>" with the
+ * owner's `controls` (T-235 part 1: Updating summary..., the menu; no Run button). Without an AI briefing (none yet, failed, or not
+ * configured) the rule-based sentences stand in and exactly ONE muted line says "AI summary unavailable: <reason>"; the admin
+ * hint continues that same line, only when the server passed one (admins only).
  * `failure`: why the newest attempt (or the AI setup) failed, a fixed code; `failureHint`: the admin hint, set server-side only for owner or admin_technical.
  */
-export function AiBriefing({ laneId, brief, fallbackLines, tz, canRun, failure = null, failureHint = null }: { laneId: string; brief: SavedBriefingView | null; fallbackLines: string[]; tz: string; canRun: boolean; failure?: FailureCode | null; failureHint?: string | null }) {
+export function AiBriefing({ brief, fallbackLines, tz, controls = null, now = new Date(), failure = null, failureHint = null }: { laneId?: string; brief: SavedBriefingView | null; fallbackLines: string[]; tz: string; controls?: ReactNode; now?: Date; failure?: FailureCode | null; failureHint?: string | null }) {
   const lines = brief && brief.status !== "failed" && brief.content.lines.length > 0 ? brief.content.lines : null;
-  const priorities = brief && brief.status !== "failed" ? brief.content.priorities : [];
+  const priorities = brief && brief.status !== "failed" ? brief.content.priorities.slice(0, TOP_PRIORITIES) : [];
   return (
-    <div data-testid="ai-briefing" className="flex flex-col gap-3 border-b border-border pb-4">
+    <section data-testid="ai-briefing" aria-labelledby="glance-title" className="mb-1 flex flex-col gap-3 rounded-control rounded-l-none border-l-[3px] border-l-gold bg-background px-4 py-3">
+      <h3 id="glance-title" className="font-sans text-small font-semibold text-foreground">
+        Today at a glance
+      </h3>
       {lines ? (
         <div className="max-w-4xl">
-          <p data-testid="briefing" className="text-body leading-relaxed text-foreground">
+          <p data-testid="briefing" className="text-body text-foreground">
             {lines.slice(0, SUMMARY_LINES).join(" ")}
           </p>
           {lines.length > SUMMARY_LINES ? (
             <PersistedDetails id="briefing-more" testId="briefing-more" className="mt-1 text-small" summaryClassName="cursor-pointer text-primary" summary="More from the briefing">
-              <ul className="mt-2 flex list-disc flex-col gap-1 pl-5 text-body leading-relaxed text-foreground">
+              <ul className="mt-2 flex list-disc flex-col gap-1 pl-5 text-body text-foreground">
                 {lines.slice(SUMMARY_LINES).map((l, i) => (
                   <li key={String(i)}>{l}</li>
                 ))}
@@ -48,28 +66,13 @@ export function AiBriefing({ laneId, brief, fallbackLines, tz, canRun, failure =
           ) : null}
         </div>
       ) : fallbackLines.length > 0 ? (
-        <p data-testid="briefing" className="max-w-4xl text-body leading-relaxed text-foreground">
-          {fallbackLines.join(" ")}
+        <p data-testid="briefing" className="max-w-4xl text-body text-foreground">
+          {fallbackLines.slice(0, FALLBACK_LINES).join(" ")}
         </p>
       ) : (
         <p className="text-body text-muted-foreground">Your briefing appears here once this company&apos;s sources are connected.</p>
       )}
-      <div className="flex flex-wrap items-center gap-x-3 gap-y-2">
-        {brief ? (
-          <span data-testid="briefing-prepared" className="text-small text-muted-foreground" title={brief.status === "failed" ? undefined : `Mail reviewed ${formatDateTimeIn(brief.windowFrom, tz)} – ${formatDateTimeIn(brief.windowTo, tz)}`}>
-            {brief.status === "failed" ? "Last attempt" : "Prepared at"} {formatDateTimeIn(brief.preparedAt, tz)}
-          </span>
-        ) : (
-          <span className="text-small text-muted-foreground">From your connected sources</span>
-        )}
-        {brief && brief.status === "partial" ? <Badge variant={STATUS.partial.variant}>{STATUS.partial.label}</Badge> : null}
-        {canRun ? <RunBriefingButton laneId={laneId} /> : null}
-      </div>
-      {brief && brief.status !== "failed" && brief.lastFailedAt ? (
-        <p data-testid="briefing-last-failed" className="text-small text-muted-foreground">
-          A newer attempt at {formatDateTimeIn(brief.lastFailedAt, tz)} could not be prepared; this is the last good briefing.
-        </p>
-      ) : null}
+      {/* One muted line, never a stack: why there is no (new) AI summary. The admin hint continues the same line. */}
       {!lines && (failure || (brief && (brief.status === "failed" || brief.lastFailedAt))) ? (
         <p>
           <FailureReason code={failure} hint={failureHint} />
@@ -78,23 +81,36 @@ export function AiBriefing({ laneId, brief, fallbackLines, tz, canRun, failure =
         <p>
           <FailureReason code={failure} hint={failureHint} prefix="Newest attempt not prepared" />
         </p>
+      ) : brief && brief.status !== "failed" && brief.lastFailedAt ? (
+        <p data-testid="briefing-last-failed" className="text-small text-muted-foreground">
+          A newer attempt at {formatDateTimeIn(brief.lastFailedAt, tz)} could not be prepared; this is the last good briefing.
+        </p>
       ) : null}
       {priorities.length > 0 ? (
-        <div data-testid="priorities-row" className="flex flex-col gap-1">
-          <span className="text-small font-medium text-muted-foreground">Top {priorities.length === 1 ? "priority" : String(priorities.length)}</span>
-          <ol data-testid="priorities" className="grid gap-x-4 gap-y-1 text-small sm:grid-cols-3">
+        <div data-testid="priorities-row" className="flex flex-col gap-2">
+          <h4 className="font-sans text-small font-semibold text-foreground">{priorities.length === 1 ? "Top priority" : "Top priorities"}</h4>
+          <ol data-testid="priorities" className="flex list-decimal flex-col gap-2 pl-5 text-body marker:text-muted-foreground">
             {priorities.map((p, i) => (
-              <li key={String(i)} className="flex min-w-0 gap-2" title={p.reason}>
-                <span aria-hidden className="font-semibold text-muted-foreground">
-                  {String(i + 1)}.
-                </span>
-                <span className="min-w-0 break-words text-foreground">{p.text}</span>
+              <li key={String(i)} className="min-w-0 break-words">
+                <span className="font-semibold text-foreground">{p.text}</span>
+                {p.reason ? <span className="text-muted-foreground">{` \u2013 ${p.reason}`}</span> : null}
               </li>
             ))}
           </ol>
         </div>
       ) : null}
-    </div>
+      <div className="flex flex-wrap items-center gap-x-3 gap-y-2">
+        {brief ? (
+          <span data-testid="briefing-prepared" className="text-small text-muted-foreground" title={[brief.status === "failed" ? null : `Mail reviewed ${formatDateTimeIn(brief.windowFrom, tz)} – ${formatDateTimeIn(brief.windowTo, tz)}`, `Times in ${zoneAbbr(tz, brief.preparedAt)}`].filter(Boolean).join(" · ")}>
+            {brief.status === "failed" ? "Last attempt" : "Summary at"} {brief.status === "failed" ? formatDateTimeIn(brief.preparedAt, tz) : newsTime(brief.preparedAt, tz, now)}
+          </span>
+        ) : (
+          <span className="text-small text-muted-foreground">From your connected sources</span>
+        )}
+        {brief && brief.status === "partial" ? <Badge variant={STATUS.partial.variant}>{STATUS.partial.label}</Badge> : null}
+        {controls}
+      </div>
+    </section>
   );
 }
 
@@ -128,7 +144,7 @@ export function Deadlines({ laneId, brief, tz }: { laneId: string; brief: SavedB
                 </span>
                 {r ? (
                   <span className="flex flex-wrap items-baseline gap-2 text-small text-muted-foreground">
-                    {[r.mailbox, r.fromName ?? r.fromAddress, r.subject ? maskFigures(r.subject) : null, r.receivedAt ? formatDateTimeIn(r.receivedAt, tz) : null].filter(Boolean).join(" · ")}
+                    {[r.mailbox, r.fromName || r.fromAddress ? senderLabel(r.fromName ?? null, r.fromAddress ?? null) : null, r.subject ? maskFigures(r.subject) : null, r.receivedAt ? formatDateTimeIn(r.receivedAt, tz) : null].filter(Boolean).join(" · ")}
                     {refLink(laneId, r)}
                   </span>
                 ) : null}

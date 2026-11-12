@@ -1,6 +1,6 @@
 // briefing/jobs (T-231c): the scheduled side of the daily briefing. Every function takes the client it runs with: only
 // the Inngest route (in JOB_RUNNERS) creates the RLS-bypassing job client and passes it in (security review H2), so this
-// module neither creates nor re-exports a service client. "Run now" saves through core.briefing_save_own with the
+// module neither creates nor re-exports a service client. the owner's background run saves through core.briefing_save_own with the
 // owner's own client instead.
 import type { LaneId } from "@nichols/core";
 import type { LaneClient } from "@nichols/core/lane-router";
@@ -37,7 +37,7 @@ export async function saveBriefing(client: Rpc, laneId: LaneId, r: BriefingRecor
   return data;
 }
 
-/** "Run now": the signed-in owner saves their own briefing with their own client (AAL2, owner, briefing view, cooldown in SQL). */
+/** The owner's own run (auto summary, Regenerate): the signed-in owner saves their own briefing with their own client (AAL2, owner, briefing view, cooldown in SQL). */
 export async function saveOwnBriefing(client: Rpc, laneId: LaneId, r: Omit<BriefingRecord, "ownerUserId" | "trigger">): Promise<string> {
   const { data, error } = await client.schema("core").rpc("briefing_save_own", {
     p_lane: laneId,
@@ -65,6 +65,13 @@ export async function briefingOwners(client: Rpc, laneId: LaneId): Promise<strin
 export async function purgeBriefings(client: Rpc, laneId: LaneId, keepDays: number): Promise<number> {
   const { data, error } = await client.schema("core").rpc("briefings_purge", { p_lane: laneId, p_keep_days: keepDays });
   if (error || typeof data !== "number") throw new Error("briefing purge failed");
+  return data;
+}
+
+/** Run-claim retention (T-235; brief.briefing_runs_purge: floor 1 day, by New York day). `client` must be the job client. */
+export async function purgeBriefingRuns(client: Rpc, laneId: LaneId, keepDays: number): Promise<number> {
+  const { data, error } = await client.schema("core").rpc("briefing_runs_purge", { p_lane: laneId, p_keep_days: keepDays });
+  if (error || typeof data !== "number") throw new Error("briefing runs purge failed");
   return data;
 }
 

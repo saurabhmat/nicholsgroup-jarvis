@@ -4,8 +4,10 @@
 // viewer's zone (the `tz` cookie set by the browser; America/New_York when absent or invalid).
 import { laneConfigSchema, type LaneConfig } from "@nichols/core/lane-config";
 import type { LaneClient } from "@nichols/core/lane-router";
+import { briefingRunStateFrom, type BriefingRunStateView } from "./briefing-runs";
 import {
   analyzeDay,
+  domainOf,
   FAILURE_CODES,
   type FailureCode,
   BUSINESS_TZ,
@@ -13,6 +15,7 @@ import {
   dayWindow,
   localDate,
   notableAhead,
+  summarizeAhead,
   PUBLIC_MAIL_DOMAINS,
   splitByDay,
   parseCoverageRows,
@@ -37,7 +40,7 @@ const DAY_MS = 86_400_000;
 
 export type BriefingConfig = LaneConfig["briefing"];
 
-export type CalendarSection = { access: true; today: DayEvent[]; ahead: NotableEvent[]; owners: string[] } | { access: false; unavailable?: true };
+export type CalendarSection = { access: true; today: DayEvent[]; ahead: NotableEvent[]; /** All meetings in the next 7 days (not only the notable ones), for the header summary. */ aheadSummary?: { meetings: number; clashes: number }; owners: string[] } | { access: false; unavailable?: true };
 
 /** "Needs your attention" + Money from mail metadata; `access: false` when the caller may not read the lane's mail. */
 export type MailSection =
@@ -66,8 +69,6 @@ export function briefingConfigFrom(config: unknown): { briefing: BriefingConfig;
   const p = laneConfigSchema.shape.priority_senders.safeParse(c.priority_senders ?? []);
   return { briefing: b.success ? b.data : laneConfigSchema.shape.briefing.parse({}), mailboxes: m.success ? m.data.map((x) => x.toLowerCase()) : [], prioritySenders: p.success ? p.data : [] };
 }
-
-export const domainOf = (email: string) => email.split("@")[1]?.toLowerCase() ?? "";
 
 type Db = Pick<LaneClient, "schema">;
 
@@ -113,7 +114,7 @@ export async function loadBriefing(client: Db, laneId: string, now: Date, viewer
   if (calendarAccess && events.error) calendar = { access: false, unavailable: true };
   else if (calendarAccess) {
     const split = splitByDay(parseEvents(events.data), from, to, localDate(from, viewerTz), 7);
-    calendar = { access: true, today: analyzeDay(split.today, owners, internal), ahead: notableAhead(split.later, owners, internal), owners: [...owners] };
+    calendar = { access: true, today: analyzeDay(split.today, owners, internal), ahead: notableAhead(split.later, owners, internal), aheadSummary: summarizeAhead(split.later, owners), owners: [...owners] };
   }
   let mail: MailSection = { access: false };
   if (mailAccess && threads.error) mail = { access: false, unavailable: true };
@@ -159,7 +160,7 @@ export type SavedBriefingView = {
   refs: BriefRef[];
   /** Newest failed attempt after this briefing (Home says so); null when none. */
   lastFailedAt: string | null;
-  /** Newest attempt of any kind (the Run-now cooldown). */
+  /** Newest attempt of any kind (the owner save cooldown). */
   lastRunAt: string | null;
 };
 
@@ -268,6 +269,16 @@ export async function latestBriefing(client: Db, laneId: string): Promise<SavedB
     const { data, error } = await client.schema("core").rpc("briefing_latest", { p_lane: laneId });
     if (error) return null;
     return parseSavedBriefing(data);
+  } catch {
+    return null;
+  }
+}
+
+/** The owner's run state for the card (null for anyone else or on error: no controls). */
+export async function loadRunState(client: Db, laneId: string): Promise<BriefingRunStateView | null> {
+  try {
+    const { data, error } = await client.schema("core").rpc("briefing_run_state", { p_lane: laneId });
+    return error ? null : briefingRunStateFrom(data);
   } catch {
     return null;
   }

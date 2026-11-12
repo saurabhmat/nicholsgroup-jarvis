@@ -17,6 +17,7 @@ import {
   type Rpc,
 } from "@nichols/approvals/server";
 import { AuthError, authErrorResponse, type Guards } from "@nichols/core/auth";
+import { domainOf } from "@nichols/briefing/domain";
 import { z } from "zod";
 import { isOutcomeUnknown } from "./outcome";
 import { draftReply, replyContext, ReplyError, saveReply, type ReplyDeps } from "./reply";
@@ -230,7 +231,7 @@ export function toCard(row: ActionRow, facts: CapabilityFacts, laneId: string, i
     shortHash: row.payloadSha256.slice(0, 8),
     expiresAt: row.expiresAt,
     replyThread: typeof row.target.thread_id === "string",
-    recipientFlags: recipientFlags(row.payload, [...internalDomains, ...(facts.mailbox ? [facts.mailbox.split("@")[1] ?? ""] : [])]),
+    recipientFlags: recipientFlags(row.payload, [...internalDomains, ...(facts.mailbox ? [domainOf(facts.mailbox)] : [])]),
     capability: { enabled: cap.enabled, message: cap.message, settingsHref: cap.settingsHref },
   };
 }
@@ -266,7 +267,7 @@ export async function loadApprovals(
     const rows = await listApprovals(approvals, { laneId, userId: lane.session.userId, rpc: coreRpc(lane.client) }, 100);
     const facts = new Map<string, CapabilityFacts>();
     const pending: PendingCard[] = [];
-    const domains = (await approvals.laneMailboxes(laneId as Parameters<typeof approvals.laneMailboxes>[0]).catch(() => [] as string[])).map((m) => m.split("@")[1] ?? "");
+    const domains = (await approvals.laneMailboxes(laneId as Parameters<typeof approvals.laneMailboxes>[0]).catch(() => [] as string[])).map((m) => domainOf(m));
     for (const row of rows.filter((r) => r.status === "proposed" && new Date(r.expiresAt).getTime() > Date.now())) {
       let f = facts.get(row.connectionId);
       if (!f) {

@@ -55,7 +55,7 @@ export type ProposeEmailInput = {
   /** True when recipients, thread or text were taken from retrieved content (shown as a banner next to the recipients). */
   derivedFromRetrieved: boolean;
   /**
-   * A caller's cutoff (the briefing's Run-now time bound). Checked immediately before the insert; if it fires while the insert
+   * A caller's cutoff (the briefing's background time bound). Checked immediately before the insert; if it fires while the insert
    * is running, the new (job) proposal is withdrawn again (act.withdraw_proposed), audited as the service, and the call throws.
    */
   signal?: AbortSignal;

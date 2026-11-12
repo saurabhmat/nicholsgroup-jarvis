@@ -1,10 +1,11 @@
 // GovCon news card (T-234 part 4; the slot is from part 1). Shows the STORED digest only: rendering never fetches, and neither does
 // the 5-minute page refresh (rule 9: the stories come from untrusted web search results, validated before they were stored).
 // Items: headline (a link to the https source, new tab, noopener), a one-line "why it matters", source name and date. Model-derived
-// text is rendered as React text only. States: "News not configured" (off; a Settings hint for admins), "No news yet today",
+// text is rendered as React text only. States: a slim "GovCon news is off" line (a Settings link for admins), "No news yet today",
 // "News could not be fetched: <fixed reason>"; the owner also gets Refresh (once an hour; "Monthly news budget reached" when capped).
 import Link from "next/link";
-import { laneHref, PageSection } from "@nichols/ui";
+import { httpsUrl } from "@nichols/briefing/domain";
+import { laneHref, PageSection, SlimCard } from "@nichols/ui";
 import { NewsRefresh } from "./news-refresh";
 import { newsFailureText, registrableHost, type NewsCard, type NewsItem } from "@/lib/news-types";
 
@@ -30,7 +31,6 @@ export function newsTime(iso: string, tz: string, now: Date): string {
 }
 
 const storyDate = (iso: string | null, tz: string) => (iso ? new Intl.DateTimeFormat("en-US", { timeZone: safeZone(tz), month: "short", day: "numeric" }).format(new Date(iso)) : null);
-const httpsOnly = (u: string) => /^https:\/\//i.test(u);
 
 /** Source name, where the link REALLY goes (its registrable host; "via host" when outside the lane's preferred domains) and the date. */
 export function newsMeta(n: NewsItem, tz: string): string {
@@ -41,10 +41,27 @@ export function newsMeta(n: NewsItem, tz: string): string {
 
 export function GovConNews({ laneId = "", card = null, tz = BUSINESS_TZ, now = new Date() }: { laneId?: string; card?: NewsCard | null; tz?: string; now?: Date }) {
   const configured = card?.configured === true;
-  const items = configured ? card.items.filter((i) => httpsOnly(i.url)) : [];
+  // Render the NORMALISED url (credentials and odd forms stripped by httpsUrl), never the raw string; unusable ones are dropped.
+  const items = card?.configured ? card.items.flatMap((i) => { const url = httpsUrl(i.url); return url ? [{ ...i, url }] : []; }) : [];
   const reason = card?.failure ? newsFailureText(card.failure) : null;
   const refreshReason =
     !card || !card.canRefresh ? null : card.inFlight ? "A fetch is running." : card.budgetReached ? "Monthly news budget reached" : card.nextRefreshAt ? `Next refresh available at ${newsTime(card.nextRefreshAt, tz, now)}` : null;
+  if (!configured) {
+    // Off: one slim line (T-235 part 5), so it never takes 2/3 of a row. Only admins get the Settings link.
+    return (
+      <SlimCard title="GovCon news" data-testid="news-empty">
+        <span>GovCon news is off</span>
+        {card?.isAdmin && laneId ? (
+          <>
+            <span aria-hidden>{"\u00b7"}</span>
+            <Link data-testid="news-admin-hint" href={`${laneHref(laneId, "settings")}#news`} className="font-medium text-primary underline underline-offset-2">
+              Set up in Settings
+            </Link>
+          </>
+        ) : null}
+      </SlimCard>
+    );
+  }
   return (
     <PageSection title="GovCon news" note="Last 48 hours" className="h-full">
       {items.length > 0 ? (
@@ -67,19 +84,6 @@ export function GovConNews({ laneId = "", card = null, tz = BUSINESS_TZ, now = n
             {reason ? <span data-testid="news-last-failure">{`${card?.updatedAt ? " · " : ""}Last refresh failed: ${reason}`}</span> : null}
           </p>
         </>
-      ) : !configured ? (
-        <div data-testid="news-empty" className="flex flex-col gap-1">
-          <p className="text-body text-muted-foreground">News not configured</p>
-          {card?.isAdmin && laneId ? (
-            <p data-testid="news-admin-hint" className="text-small text-muted-foreground">
-              An admin can see what is needed in{" "}
-              <Link href={`${laneHref(laneId, "settings")}#news`} className="text-primary underline underline-offset-2">
-                Settings
-              </Link>
-              .
-            </p>
-          ) : null}
-        </div>
       ) : reason ? (
         <p data-testid="news-failed" role="status" className="text-body text-muted-foreground">
           {`News could not be fetched: ${reason}`}

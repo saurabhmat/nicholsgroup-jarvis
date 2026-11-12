@@ -32,14 +32,17 @@ const card = (over: Partial<NewsCard> = {}): NewsCard => ({
 const render_ = (c: NewsCard | null, laneId = "PKG") => render(<GovConNews laneId={laneId} card={c} now={NOW} />);
 
 describe("states", () => {
-  it("off (no card, or not configured): 'News not configured'; admins get a Settings hint, others do not", () => {
+  it("off (no card, or not configured): one slim line 'GovCon news is off'; only admins get 'Set up in Settings'", () => {
     render_(null);
-    expect(screen.getByTestId("news-empty").textContent).toContain("News not configured");
+    expect(screen.getByTestId("news-empty").textContent).toBe("GovCon news is off");
     expect(screen.queryByTestId("news-admin-hint")).toBeNull();
     cleanup();
     render_(card({ configured: false, items: [], isAdmin: true }));
-    expect(screen.getByTestId("news-empty").textContent).toContain("News not configured");
-    expect(within(screen.getByTestId("news-admin-hint")).getByRole("link").getAttribute("href")).toBe("/PKG/settings#news");
+    expect(screen.getByTestId("news-empty").textContent).toBe("GovCon news is off\u00b7Set up in Settings");
+    expect(screen.getByTestId("news-admin-hint").getAttribute("href")).toBe("/PKG/settings#news");
+    const slim = screen.getByRole("region", { name: "GovCon news" });
+    expect(slim.className).toMatch(/\bpy-3\b/); // slim: no 24px card padding, no body
+    expect(slim.querySelector("h2")).toBeNull();
     expect(screen.queryByTestId("news-refresh")).toBeNull();
   });
   it("configured, nothing stored: 'No news yet today'", () => {
@@ -64,6 +67,25 @@ describe("states", () => {
   });
 });
 
+describe("normalised links (T-235 part 5 review)", () => {
+  it("renders the url httpsUrl returns (trimmed, normalised), and drops items with credentials or without https", () => {
+    const base = card().items[0];
+    if (!base) throw new Error("no fixture item");
+    render_(
+      card({
+        items: [
+          { ...base, headline: "Padded and upper-case host", url: "  HTTPS://WWW.FederalRegister.gov/d/9  " },
+          { ...base, headline: "With credentials", url: "https://www.federalregister.gov@evil.test/d/9" },
+          { ...base, headline: "Not https", url: "http://example.test/x" },
+        ],
+      }),
+    );
+    const links = within(screen.getByTestId("news-list")).getAllByRole("link");
+    expect(links).toHaveLength(1);
+    expect(links[0]?.getAttribute("href")).toBe("https://www.federalregister.gov/d/9");
+  });
+});
+
 describe("links and text", () => {
   it("every headline is an https link that opens in a new tab with noopener noreferrer", () => {
     render_(card());
@@ -72,6 +94,10 @@ describe("links and text", () => {
       expect(a.getAttribute("target")).toBe("_blank");
       expect(a.getAttribute("rel")).toBe("noopener noreferrer");
     }
+  });
+  it("a story URL with credentials ('https://defense.gov@evil.test') is not rendered as a link", () => {
+    render_(card({ items: [{ headline: "Sneaky", why: "w", source: "S", publishedAt: null, url: "https://defense.gov@evil.test/x", preferred: false }] }));
+    expect(screen.queryByText("Sneaky")).toBeNull();
   });
   it("shows where the link really goes (registrable host), 'via <host>' outside the preferred domains, whatever the model called the source", () => {
     const items = [

@@ -65,6 +65,16 @@ export function timeWithZone(iso: string, viewerTz: string, otherTz: string | nu
   return `${base} (${formatTimeIn(iso, other)} ${zoneAbbrev(iso, other)})`;
 }
 
+/**
+ * The event's own wall-clock time with its zone ("9:00 AM EST"), or null when it is the same clock as the viewer's (or the
+ * zone is unknown). Shown small under the viewer-zone time (T-235 part 3).
+ */
+export function otherZoneTime(iso: string, viewerTz: string, otherTz: string | null): string | null {
+  const other = otherTz ? validTimeZone(otherTz) : null;
+  if (!other || offsetMinutes(iso, other) === offsetMinutes(iso, viewerTz)) return null;
+  return `${formatTimeIn(iso, other)} ${zoneAbbrev(iso, other)}`;
+}
+
 /** [start, end) of the calendar day containing `now` in a zone (DST-safe). */
 export function dayWindow(now: Date, tz: string): { from: Date; to: Date } {
   const parts = fmt(`p:${tz}`, () => new Intl.DateTimeFormat("en-US", { timeZone: tz, year: "numeric", month: "2-digit", day: "2-digit" })).formatToParts(now);

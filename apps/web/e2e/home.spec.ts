@@ -29,9 +29,9 @@ const cleanup = () =>
 const seed = () =>
   sql(`insert into core.connections (id, lane_id, provider, external_account_id, status) values ('${CID}', 'PKG', 'google', 'home-e2e@example.test', 'active');
        insert into cal.event_index (lane_id, connection_id, provider, calendar_id, event_id, title, location, online_meeting_url, start_at, end_at, all_day, start_date, end_date, status, attendees, source_updated_at)
-       select 'PKG', '${CID}', 'google', 'primary', 'e2e-m1', '${MEETING}', 'Synthetic room', 'https://meet.example.test/e2e',
-              now() + interval '20 minutes', now() + interval '30 minutes', false, null, null, 'confirmed', '[]', now()
-       union all
+       values ('PKG', '${CID}', 'google', 'primary', 'e2e-m1', '${MEETING}', 'Synthetic room', 'https://meet.example.test/e2e',
+               now() + interval '20 minutes', now() + interval '30 minutes', false, null, null, 'confirmed', '[]', now());
+       insert into cal.event_index (lane_id, connection_id, provider, calendar_id, event_id, title, location, online_meeting_url, start_at, end_at, all_day, start_date, end_date, status, attendees, source_updated_at)
        select 'PKG', '${CID}', 'google', 'primary', 'e2e-m2', '${ALL_DAY}', null, null,
               (d::timestamp at time zone 'America/New_York'), ((d + 1)::timestamp at time zone 'America/New_York'), true, d, d + 1, 'confirmed', '[]', now()
        from (select (now() at time zone 'America/New_York')::date as d) t;
@@ -65,12 +65,42 @@ test("owner: today's calendar, Next 7 days, the KPI strip and the rule-based att
   // not listed (nothing unread, nothing waiting).
   const attention = page.getByRole("region", { name: "Needs your attention" });
   await expect(attention.getByText("Synthetic subject 1")).toBeVisible();
-  await expect(attention.getByText("sender@example.test", { exact: false }).first()).toBeVisible();
+  // T-235 part 2: the sender's name and domain (never the raw "to <mailbox>" with one mailbox), the glance panel on top.
+  await expect(attention.getByTestId("attention-company").first()).toContainText("example.test");
+  await expect(attention.getByTestId("attention-mailbox")).toHaveCount(0);
+  await expect(attention.getByRole("region", { name: "Today at a glance" })).toBeVisible();
+  await expect(attention.getByTestId("attention-view-all")).toContainText(/^View all in Inbox · \d+ need attention/);
   // T-234 part 2: each item has Reply and Open; Open goes to the thread in Jarvis (never a Google page).
   const firstItem = attention.getByTestId("attention-item").first();
-  await expect(firstItem.getByRole("link", { name: "Reply" })).toBeVisible();
-  await expect(firstItem.getByRole("link", { name: "Open" })).toHaveAttribute("href", /^\/PKG\/inbox\/[A-Za-z0-9_-]+$/);
-  await expect(attention.getByText("Synthetic subject 4")).toHaveCount(0);
+  await expect(firstItem.getByTestId("attention-reply")).toBeVisible(); // the owner's Reply is a drawer button (T-235 part 3)
+  await expect(firstItem.getByTestId("attention-open")).toHaveAttribute("href", /^\/PKG\/inbox\/[A-Za-z0-9_-]+$/);
+  // Reply sits above the stretched link: for the owner (a button) a click opens the drawer and the URL is unchanged; for a role
+  // that cannot send, Reply is a plain link to the same thread as Open.
+  const homeUrl = page.url();
+  const replyEl = firstItem.getByTestId("attention-reply");
+  if ((await replyEl.evaluate((n) => n.tagName)) === "BUTTON") {
+    await replyEl.click();
+    await expect(page.getByRole("dialog")).toBeVisible();
+    expect(page.url()).toBe(homeUrl);
+    await page.keyboard.press("Escape");
+  } else {
+    await replyEl.click();
+    await expect(page).toHaveURL(/\/PKG\/inbox\/[A-Za-z0-9_-]+$/);
+    await page.goBack();
+  }
+  // The whole row opens the thread (stretched link): clicking the subject text, not the Open link, navigates.
+  // A real mouse click at the subject's position (the Open link's ::after overlay is the topmost element there, which is the
+  // point of the stretched link; Playwright's locator click would refuse because the overlay "intercepts" it).
+  const subjectBox = await firstItem.getByTestId("attention-subject").boundingBox();
+  if (!subjectBox) throw new Error("subject not laid out");
+  await page.mouse.click(subjectBox.x + subjectBox.width / 2, subjectBox.y + subjectBox.height / 2);
+  await expect(page).toHaveURL(/\/PKG\/inbox\/[A-Za-z0-9_-]+$/);
+  await page.goBack();
+  await expect(attention.getByText("Synthetic subject 1")).toBeVisible();
+  // The read message is still unanswered, so it counts as waiting on the owner (T-231b review rule), with that chip.
+  const readItem = attention.getByTestId("attention-item").filter({ hasText: "Synthetic subject 4" });
+  await expect(readItem).toHaveCount(1);
+  await expect(readItem).toContainText("Waiting on you");
   // T-234 part 1: Coverage is no longer on Home (Settings -> Connections); Next 7 days is collapsed until clicked; five KPI tiles.
   await expect(page.getByTestId("coverage-line")).toHaveCount(0);
   const next7 = page.getByRole("button", { name: /Next 7 days/ });
@@ -97,14 +127,12 @@ test("owner: today's calendar, Next 7 days, the KPI strip and the rule-based att
   await page.reload();
   await expect(page.getByRole("button", { name: /Next 7 days/ })).toHaveAttribute("aria-expanded", "true");
   await expect(page.getByTestId("home-updated")).toHaveText("Updated just now");
-  const tiles = page.getByTestId("kpi-tile");
-  await expect(tiles).toHaveCount(5);
-  const boxes = await tiles.evaluateAll((els) => els.map((e) => e.getBoundingClientRect()));
-  if (info.project.name === "desktop") {
-    // equal heights in one row (a Not connected tile is as tall as one with a figure)
-    expect(new Set(boxes.map((b) => Math.round(b.height))).size).toBe(1);
-    expect(new Set(boxes.map((b) => Math.round(b.y))).size).toBe(1);
-  }
+  // T-235 part 4: nothing finance-related is connected in this fixture, so no tiles: one slim banner for the owner.
+  await expect(page.getByTestId("kpi-tile")).toHaveCount(0);
+  const banner = page.getByTestId("home-kpis-banner");
+  await expect(banner).toContainText("Connect QuickBooks, Stripe and GoHighLevel to see cash, AR, P&L, MRR and subscribers");
+  await expect(banner.getByRole("link", { name: /Settings/ })).toHaveAttribute("href", "/PKG/settings#connections");
+  if (info.project.name === "desktop") expect((await banner.boundingBox())?.height ?? 999).toBeLessThan(64); // one line
 });
 
 test("a finance-only viewer sees no meetings and no mail counts", async ({ page }, info) => {
@@ -122,18 +150,27 @@ test("a finance-only viewer sees no meetings and no mail counts", async ({ page 
   await expect(body).not.toContainText("Synthetic subject");
 });
 
-test("phone: the KPI tiles are one column (same x, stacked downwards)", async ({ page }, info) => {
+test("phone: Home fits 390 px (no horizontal scroll), 44 px row targets, no empty KPI tiles", async ({ page }, info) => {
   test.skip(info.project.name === "desktop", "phone viewport only");
   test.setTimeout(150_000);
   await signIn(page, personas(info).member);
+  seed();
   await page.goto("/PKG");
-  const tiles = page.getByTestId("kpi-tile");
-  await expect(tiles.first()).toBeVisible({ timeout: 30_000 }); // 5 tiles, or 2 for a role without the finance view
-  expect(await tiles.count()).toBeGreaterThanOrEqual(2);
-  const boxes = await tiles.evaluateAll((els) => els.map((e) => e.getBoundingClientRect()));
-  expect(new Set(boxes.map((b) => Math.round(b.x))).size).toBe(1);
-  boxes.forEach((b, i) => {
-    const prev = boxes[i - 1];
-    if (prev) expect(b.y).toBeGreaterThan(prev.y);
-  });
+  await expect(page.getByRole("heading", { level: 1 })).toBeVisible({ timeout: 30_000 });
+  // T-235: Reply and Open are at least 44 px high on a phone. The phone project's member is finance_operator (personas.ts), who
+  // may have no comms view, so no attention rows and no Reply; the 44 px checks run only for the elements that exist
+  // (Open always with a row, Reply when the role can see the mail). The scroll checks below always run.
+  const row = page.getByTestId("attention-item").first();
+  if ((await page.getByTestId("attention-item").count()) > 0) {
+    for (const el of [row.getByTestId("attention-open"), row.getByTestId("attention-reply")]) {
+      if ((await el.count()) > 0) expect((await el.boundingBox())?.height ?? 0).toBeGreaterThanOrEqual(44);
+    }
+  }
+  expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
+  // Nothing connected: never five empty tiles. The "Connect …" banner is only for roles that can connect sources AND see finance
+  // (the owner; covered on desktop and in kpi-strip tests); the phone member (finance_operator) cannot connect, so no banner.
+  await expect(page.getByTestId("kpi-tile")).toHaveCount(0);
+  await expect(page.getByTestId("home-kpis-banner")).toHaveCount(0);
+  const overflow = await page.evaluate(() => document.documentElement.scrollWidth - document.documentElement.clientWidth);
+  expect(overflow).toBeLessThanOrEqual(0);
 });

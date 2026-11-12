@@ -93,6 +93,27 @@ describe("buildParams", () => {
   });
 });
 
+describe("structured output (T-235)", () => {
+  const schema = { type: "object", properties: { a: { type: "string" } }, required: ["a"], additionalProperties: false };
+  it("sends output_config.format json_schema, keeps effort, and never forces a tool", () => {
+    const p = buildParams({ ...base, effort: "high", outputSchema: { name: "x_schema", schema } }, "m");
+    expect(p.output_config).toEqual({ effort: "high", format: { type: "json_schema", schema } });
+    expect(p).not.toHaveProperty("tool_choice");
+    expect(buildParams({ ...base, outputSchema: { name: "x", schema } }, "m").output_config).toEqual({ format: { type: "json_schema", schema } });
+  });
+  it("fails closed: bad name, non-object schema, or combined with server tools", () => {
+    expect(() => buildParams({ ...base, outputSchema: { name: "Bad Name", schema } }, "m")).toThrow(LLMProviderError);
+    expect(() => buildParams({ ...base, outputSchema: { name: "x", schema: { type: "array" } } }, "m")).toThrow(LLMProviderError);
+    expect(() => buildParams({ ...base, outputSchema: { name: "x", schema }, serverTools: { webSearch: { maxUses: 1 } } }, "m")).toThrow(LLMProviderError);
+  });
+  it("the provider sends it and returns the JSON text", async () => {
+    const { client, seen } = fake(msg());
+    const p = createAnthropicProvider({ models, client, logger: () => {} });
+    await p.complete({ ...base, outputSchema: { name: "x", schema } });
+    expect(seen[0]?.params.output_config).toEqual({ format: { type: "json_schema", schema } });
+  });
+});
+
 describe("anthropic provider", () => {
   it("uses configured model per tier and maps a completed result", async () => {
     const { client, seen } = fake(msg());

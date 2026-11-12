@@ -24,7 +24,7 @@ import {
   type CapabilityFacts,
   type UserCtx,
 } from "@nichols/approvals/server";
-import { checkContent, extractJson, maskContent, maskFigures, type BriefRef } from "@nichols/briefing/domain";
+import { checkContent, domainOf, extractJson, maskContent, maskFigures, type BriefRef } from "@nichols/briefing/domain";
 import type { LaneClient } from "@nichols/core/lane-router";
 import { displayText, isMessageId } from "./inbox";
 import { reSubject } from "./briefing-run";
@@ -260,7 +260,7 @@ export async function replyContext(ctx: UserCtx, db: Db, approvals: ApprovalsPub
     subject: proposal && typeof proposal.payload.subject === "string" ? proposal.payload.subject : replySubject(ref.subject),
     replyingTo: displayText(ref.fromName && ref.fromAddress ? `${ref.fromName} <${ref.fromAddress}>` : (ref.fromAddress ?? ref.fromName ?? "Unknown sender")),
     defaults: { to: defaultRecipients(ref, own), cc: [] },
-    internalDomains: [...new Set([...own, facts.mailbox].map((m) => m.split("@")[1] ?? "").filter((d) => d !== ""))],
+    internalDomains: [...new Set([...own, facts.mailbox].map((m) => domainOf(m)).filter((d) => d !== ""))],
     proposal: proposal
       ? {
           id: proposal.id,

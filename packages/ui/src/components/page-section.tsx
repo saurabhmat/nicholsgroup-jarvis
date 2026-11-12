@@ -20,7 +20,7 @@ export type PageSectionProps = {
 /** A titled card for one page section. With no children it shows the T-022 empty state (no data, no sample label). */
 export function PageSection({ title, note, headingLevel: Heading = "h2", emptyTitle, emptyDescription, children, className }: PageSectionProps) {
   return (
-    <section data-slot="page-section" aria-label={title} className={cn("flex min-w-0 flex-col gap-4 rounded-card border border-border bg-card p-5 text-body text-card-foreground shadow-card sm:p-6", className)}>
+    <section data-slot="page-section" aria-label={title} className={cn("flex min-w-0 flex-col gap-4 rounded-card border border-border bg-card p-6 text-body text-card-foreground shadow-card", className)}>
       <div className="flex flex-wrap items-baseline justify-between gap-2">
         <Heading className="font-heading text-card-title font-semibold text-foreground">{title}</Heading>
         {note ? <p className="text-small text-muted-foreground">{note}</p> : null}

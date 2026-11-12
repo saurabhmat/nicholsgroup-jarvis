@@ -15,7 +15,8 @@ describe("FailureReason", () => {
   });
   it("shows the hint to an admin, naming the variable", () => {
     render(<FailureReason code="model_setting_invalid" hint="Check ANTHROPIC_MODEL_ANALYSIS (or the request size)" />);
-    expect(screen.getByTestId("briefing-failure-hint").textContent).toBe("Check ANTHROPIC_MODEL_ANALYSIS (or the request size)");
+    expect(screen.getByTestId("briefing-failure-hint").textContent).toBe(" · Check ANTHROPIC_MODEL_ANALYSIS (or the request size)");
+    expect(screen.getByTestId("briefing-failure-hint").className).not.toMatch(/\bblock\b/); // one line, never a stack (T-235)
   });
   it("an unknown or missing code reads generically", () => {
     render(<FailureReason code={null} />);

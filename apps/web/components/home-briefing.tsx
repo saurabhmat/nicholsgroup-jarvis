@@ -8,35 +8,57 @@ import { CollapsibleSection } from "./collapsible-section";
 import { ReplyAction } from "./reply-action";
 import { inboxHref } from "@/lib/inbox-links";
 import {
-  ageLabel,
+  ageShort,
+  aheadSummaryText,
   attendeeSummary,
+  attentionChips,
+  senderParts,
+  eventChips,
   formatDayIn,
   formatTimeIn,
   maskFigures,
-  timeWithZone,
+  otherZoneTime,
   type AttentionNote,
-  type AttentionThread,
   type DayEvent,
   type NotableEvent,
-  type ThreadRow,
 } from "@nichols/briefing/domain";
 import type { BriefingView, CalendarSection, MailSection } from "@/lib/briefing";
 
-function Flags({ e }: { e: DayEvent }) {
-  const flags: { text: string; variant: "alert" | "outline" | "gold" }[] = [];
-  if (e.clashesWith.length > 0) flags.push({ text: `Clashes with ${e.clashesWith.join(", ")}`, variant: "alert" });
-  if (e.backToBack) flags.push({ text: "Back-to-back", variant: "outline" });
-  if (e.rsvpPending) flags.push({ text: "RSVP pending", variant: "gold" });
-  if (e.external.length > 0) flags.push({ text: "External", variant: "outline" });
-  if (flags.length === 0) return null;
+const CHIP_VARIANT = { clash: "alert", rsvp: "gold", back_to_back: "outline", external: "outline" } as const;
+
+/** At most two chips, by priority (Clash, RSVP pending, Back-to-back, External); the detail is a tooltip and screen-reader text. */
+function Chips({ e }: { e: DayEvent }) {
+  const chips = eventChips(e);
+  if (chips.length === 0) return null;
   return (
-    <span className="flex flex-wrap gap-2">
-      {flags.map((f) => (
-        <Badge key={f.text} variant={f.variant}>
-          {f.text}
+    <span data-testid="event-chips" className="flex flex-wrap gap-2">
+      {chips.map((c) => (
+        <Badge key={c.key} variant={CHIP_VARIANT[c.key]} title={c.detail}>
+          {c.label}
+          <span className="sr-only"> ({c.detail})</span>
         </Badge>
       ))}
     </span>
+  );
+}
+
+/** The host of an already-validated https URL, so the Join button says where it goes. */
+const hostOf = (u: string) => {
+  try {
+    return new URL(u).hostname.replace(/^www\./, "");
+  } catch {
+    return "the meeting host";
+  }
+};
+
+/** The title, a link to the event in the calendar (https only, new tab) when there is one; no separate "Open in Calendar". */
+function EventTitle({ title, url }: { title: string; url: string | null }) {
+  return url ? (
+    <a href={url} target="_blank" rel="noopener noreferrer" className="truncate font-medium text-foreground underline-offset-2 hover:underline">
+      {title}
+    </a>
+  ) : (
+    <span className="truncate font-medium text-foreground">{title}</span>
   );
 }
 
@@ -55,30 +77,37 @@ export function TodayCalendar({ calendar, tz, now }: { calendar: CalendarSection
       {calendar.today.map((e) => {
         const past = !e.allDay && Date.parse(e.endAt) <= now.getTime();
         const who = attendeeSummary(e, owners);
+        const own = e.allDay ? null : otherZoneTime(e.startAt, tz, e.timezone);
         return (
-          <li key={e.key} data-testid="calendar-event" className={`flex flex-col gap-1 py-3 text-body ${past ? "opacity-60" : ""}`}>
-            <span className="tabular-nums text-muted-foreground">
-              {e.allDay ? "All day" : `${timeWithZone(e.startAt, tz, e.timezone)} – ${formatTimeIn(e.endAt, tz)}`}
+          <li key={e.key} data-testid="calendar-event" className={`flex gap-3 py-3 text-body ${past ? "opacity-60" : ""}`}>
+            <span data-testid="event-time" className="flex w-24 shrink-0 flex-col tabular-nums">
+              {e.allDay ? (
+                <span className="font-medium text-foreground">All day</span>
+              ) : (
+                <>
+                  <time dateTime={e.startAt} className="font-medium text-foreground">
+                    {formatTimeIn(e.startAt, tz)}
+                  </time>
+                  {own ? <span data-testid="event-zone" className="text-small text-muted-foreground">{own}</span> : null}
+                  <span className="text-small text-muted-foreground">
+                    to{" "}
+                    <time dateTime={e.endAt}>{formatTimeIn(e.endAt, tz)}</time>
+                  </span>
+                </>
+              )}
             </span>
-            <span className="flex min-w-0 flex-col gap-1">
-              <span className="truncate font-medium text-foreground">{e.title}</span>
-              {e.location ? <span className="truncate text-muted-foreground">{e.location}</span> : null}
+            <span className="flex min-w-0 flex-1 flex-col gap-1">
+              <span className="flex min-w-0 items-start justify-between gap-2">
+                <EventTitle title={e.title} url={e.calendarUrl} />
+                {e.meetingUrl && !past ? (
+                  <a href={e.meetingUrl} target="_blank" rel="noopener noreferrer" aria-label={`Join ${e.title} on ${hostOf(e.meetingUrl)}`} title={`Join on ${hostOf(e.meetingUrl)}`} className={`${buttonVariants({ variant: "outline", size: "sm" })} shrink-0`}>
+                    Join
+                  </a>
+                ) : null}
+              </span>
+              {e.location ? <span className="truncate text-small text-muted-foreground">{e.location}</span> : null}
               {who ? <span className="truncate text-small text-muted-foreground">With {who}</span> : null}
-              <Flags e={e} />
-              {e.meetingUrl || e.calendarUrl ? (
-                <span className="flex gap-3">
-                  {e.meetingUrl && !past ? (
-                    <a href={e.meetingUrl} target="_blank" rel="noopener noreferrer" className="text-primary underline-offset-2 hover:underline">
-                      Join
-                    </a>
-                  ) : null}
-                  {e.calendarUrl ? (
-                    <a href={e.calendarUrl} target="_blank" rel="noopener noreferrer" className="text-primary underline-offset-2 hover:underline">
-                      Open in Calendar
-                    </a>
-                  ) : null}
-                </span>
-              ) : null}
+              <Chips e={e} />
             </span>
           </li>
         );
@@ -91,62 +120,75 @@ export function LookAhead({ events, tz }: { events: NotableEvent[]; tz: string }
   if (events.length === 0) return <p className="text-body text-muted-foreground">Nothing notable in the next 7 days (no holidays, external meetings or open invitations).</p>;
   return (
     <ul data-testid="look-ahead" className="flex flex-col divide-y divide-border">
-      {events.map((e) => (
-        <li key={e.key} className="flex flex-col gap-1 py-3 text-body">
-          <span className="tabular-nums text-muted-foreground">
-            {formatDayIn(e.allDay && e.startDate ? `${e.startDate}T12:00:00Z` : e.startAt, tz)}
-            {e.allDay ? null : (
-              <>
-                <br />
-                {timeWithZone(e.startAt, tz, e.timezone)}
-              </>
-            )}
-          </span>
-          <span className="flex min-w-0 flex-col gap-1">
-            {e.calendarUrl ? (
-              <a href={e.calendarUrl} target="_blank" rel="noopener noreferrer" className="truncate font-medium text-foreground underline-offset-2 hover:underline">
-                {e.title}
-              </a>
-            ) : (
-              <span className="truncate font-medium text-foreground">{e.title}</span>
-            )}
-            <span className="text-small text-muted-foreground">{e.why.join(" · ")}</span>
-          </span>
-        </li>
-      ))}
+      {events.map((e) => {
+        const own = e.allDay ? null : otherZoneTime(e.startAt, tz, e.timezone);
+        return (
+          <li key={e.key} className="flex gap-3 py-3 text-body">
+            <span className="flex w-24 shrink-0 flex-col tabular-nums">
+              <time dateTime={e.allDay && e.startDate ? e.startDate : e.startAt} className="font-medium text-foreground">
+                {formatDayIn(e.allDay && e.startDate ? `${e.startDate}T12:00:00Z` : e.startAt, tz)}
+              </time>
+              {e.allDay ? null : (
+                <>
+                  <time dateTime={e.startAt} className="text-small text-muted-foreground">
+                    {formatTimeIn(e.startAt, tz)}
+                  </time>
+                  {own ? <span className="text-small text-muted-foreground">{own}</span> : null}
+                </>
+              )}
+            </span>
+            <span className="flex min-w-0 flex-1 flex-col gap-1">
+              <EventTitle title={e.title} url={e.calendarUrl} />
+              <span className="text-small text-muted-foreground">{e.why.join(" · ")}</span>
+            </span>
+          </li>
+        );
+      })}
     </ul>
   );
 }
 
-/** Right column of row 1: Today's calendar, with "Next 7 days" collapsed below it (expands on click). */
+/** Right column of row 1: Today's calendar, with "Next 7 days" collapsed below it (one-line summary in its header; expands on click). */
 export function CalendarSections({ view, now }: { view: BriefingView; now: Date }) {
+  const c = view.calendar;
+  const summary = c.access && c.aheadSummary ? aheadSummaryText(c.aheadSummary) : undefined;
   return (
     <>
       <PageSection title="Today's calendar" note={`Times in ${view.viewerTz.replace(/_/g, " ")}`}>
         <TodayCalendar calendar={view.calendar} tz={view.viewerTz} now={now} />
       </PageSection>
-      <CollapsibleSection title="Next 7 days" testId="next-7-days" persistId="next-7-days">
-        {view.calendar.access ? <LookAhead events={view.calendar.ahead} tz={view.viewerTz} /> : <p className="text-body text-muted-foreground">No calendar to look ahead in. See Settings → Connections.</p>}
+      <CollapsibleSection title="Next 7 days" testId="next-7-days" persistId="next-7-days" {...(summary ? { note: summary } : {})}>
+        {c.access ? <LookAhead events={c.ahead} tz={view.viewerTz} /> : <p className="text-body text-muted-foreground">No calendar to look ahead in. See Settings → Connections.</p>}
       </CollapsibleSection>
     </>
   );
 }
 
-const KIND_LABEL: Record<AttentionThread["kind"], string> = {
-  priority: "Priority",
-  security: "Security",
-  waiting: "Waiting on you",
-  unread: "Unread",
-  repeated_failures: "Repeated failures",
-};
-
-/** Sender text is untrusted metadata: rendered as plain text. */
-const senderOf = (t: ThreadRow) => (t.fromName && t.fromAddress ? `${t.fromName} <${t.fromAddress}>` : (t.fromAddress ?? t.fromName ?? "Unknown sender"));
+/** Avatar colours: text and ground are token pairs checked for 4.5:1 in light and dark (tokens.test.ts). */
+const AVATAR = ["bg-primary-tint text-primary", "bg-alert-surface text-alert-foreground", "bg-success-surface text-success", "bg-muted text-foreground"] as const;
+const CHIP_TONE = { alert: "alert", gold: "gold", outline: "outline" } as const;
 
 /**
- * "Needs your attention" items (T-234 part 2): the top 5 by rules. Each shows the title (figures masked, rule 7), the AI's
- * why-it-matters and next step when today's briefing has them, then sender, mailbox and age with a status chip, and two
- * actions: Reply (the owner's drawer, T-234 part 3; a link to the thread for other roles) and Open (the thread in Jarvis, never a Google page).
+ * "Needs your attention" rows (T-234 part 2, T-235 part 2: scannable). Line 1: initials avatar (decorative), sender name (semibold),
+ * company or domain (muted), age right-aligned (`<time>`, full date in the title). Line 2: subject, one line with an ellipsis
+ * (figures masked, rule 7). Line 3: the AI's "why it matters -> next step", only when today's briefing has it. Then at most two
+ * chips and, only when the lane has several mailboxes, "to <mailbox>". Actions on the right, vertically centred (stacked under
+ * the text on a phone, 44 px targets): Reply (the owner's drawer, T-234 part 3; a link to the thread for other roles) and Open
+ * (the thread in Jarvis, never a Google page).
+ *
+ * The whole row opens the thread with the "stretched link" pattern, not a button holding buttons: Open's ::after covers the row
+ * and Reply sits above it (`relative z-[1]`). The keyboard path is Tab: Reply, then Open. The Reply drawer is portaled to
+ * <body>, so it is outside the row. Hover background on desktop only.
+ *
+ * Footer: "View all in Inbox · N need attention ->" where N = the items the rules ranked (the rows shown plus `mail.more`), i.e.
+ * the threads that currently need attention, not the Inbox size. It links to the plain Inbox: the Inbox filters are
+ * All / Unread / Priority, none of which is "needs attention", so a filtered link would show a different list than N.
+ *
+ * Tooltips: the row is covered by the Open link's ::after, so a `title` on the subject or the age is never reached by the
+ * pointer; they are dropped. The full subject is in Open's aria-label, the full sender address is sr-only text, and the age
+ * reads "3h ago" to screen readers. Focus: the ::after carries the ring plus a transparent outline, which Windows High Contrast
+ * (forced-colors) paints, so the focus stays visible there. The divider lines sit on the <li> (no horizontal bleed); only the
+ * hover ground and the focus ring bleed 8 px each side, into the card padding.
  */
 export function AttentionSection({ laneId, mail, now, notes, replies, canReply = false }: { laneId: string; mail: MailSection; now: Date; notes?: Map<string, AttentionNote>; replies?: Map<string, string>; canReply?: boolean }) {
   if (!mail.access) {
@@ -159,51 +201,97 @@ export function AttentionSection({ laneId, mail, now, notes, replies, canReply =
   if (mail.attention.length === 0) {
     return <p className="text-body text-muted-foreground">Nothing needs you in the mail that was read (newsletters, calendar invitations, auto-replies, codes and automated alerts are left out). Settings → Connections shows what was read.</p>;
   }
+  // "to <mailbox>" only tells something when the lane reads more than one mailbox.
+  const showMailbox = new Set(Object.values(mail.mailboxOf)).size > 1;
+  const total = mail.attention.length + mail.more;
   return (
-    <div className="flex flex-col gap-2">
-      <ol data-testid="attention-list" className="flex flex-col divide-y divide-border">
+    <div className="flex flex-col gap-3">
+      <ol role="list" data-testid="attention-list" className="flex flex-col divide-y divide-border">
         {mail.attention.map((a) => {
           const t = a.thread;
           const note = notes?.get(`${t.connectionId}:${t.messageId}`);
           const mailbox = mail.mailboxOf[t.connectionId];
+          const who = senderParts(t.fromName, t.fromAddress, AVATAR.length);
+          const subject = a.kind === "repeated_failures" ? a.reason : t.subject ? maskFigures(t.subject) : "(No subject)";
+          const chips = attentionChips(a.kind, t.unreadCount > 0);
+          const age = ageShort(t.receivedAt, now);
           return (
-            <li key={a.key} data-testid="attention-item" data-kind={a.kind} className="flex flex-col gap-1.5 py-3">
-              <span className="flex flex-wrap items-start justify-between gap-x-3 gap-y-2">
-                <span className="min-w-0 flex-1 break-words font-medium text-foreground">{a.kind === "repeated_failures" ? a.reason : t.subject ? maskFigures(t.subject) : "(No subject)"}</span>
-                <span className="flex shrink-0 items-center gap-2">
-                  {a.kind === "repeated_failures" ? null : <ReplyAction canReply={canReply} target={{ laneId, connectionId: t.connectionId, messageId: t.messageId, threadKey: t.threadKey, proposalId: replies?.get(`${t.connectionId}:${t.messageId}`) ?? null }} />}
-                  <Link href={inboxHref(laneId, t.messageId)} data-testid="attention-open" className={buttonVariants({ variant: "outline", size: "sm" })}>
-                    Open
-                  </Link>
-                </span>
-              </span>
-              {note ? (
-                <dl data-testid="attention-note" className="grid grid-cols-[auto_1fr] gap-x-3 gap-y-0.5 text-small">
-                  <dt className="text-muted-foreground">Why</dt>
-                  <dd className="text-foreground">{note.why}</dd>
-                  <dt className="text-muted-foreground">Next</dt>
-                  <dd className="text-foreground">{note.next}</dd>
-                </dl>
-              ) : null}
-              <span className="flex flex-wrap items-center gap-x-2 gap-y-1 text-small text-muted-foreground">
-                <Badge variant={a.kind === "priority" || a.kind === "security" ? "alert" : "outline"}>{KIND_LABEL[a.kind]}</Badge>
-                <span data-testid="attention-meta" className="min-w-0 break-words">
-                  {[senderOf(t), mailbox ? `to ${mailbox}` : null, `${ageLabel(t.receivedAt, now)} ago`].filter(Boolean).join(" · ")}
-                </span>
-              </span>
+            <li key={a.key} data-testid="attention-item" data-kind={a.kind} className="group relative py-1">
+              <div className="-mx-2 flex flex-col gap-3 rounded-control px-2 py-3 md:flex-row md:items-center md:gap-4 md:group-hover:bg-muted/60">
+              <div className="flex min-w-0 flex-1 flex-col gap-2">
+                <div className="flex min-w-0 items-center gap-2">
+                  <span aria-hidden data-testid="attention-avatar" className={`flex size-8 shrink-0 items-center justify-center rounded-full text-small font-medium ${AVATAR[who.slot] ?? AVATAR[0]}`}>
+                    {who.initials}
+                  </span>
+                  <span className="min-w-0 truncate text-body">
+                    <span data-testid="attention-sender" className="font-medium text-foreground">{who.name}</span>
+                    {who.company ? <span data-testid="attention-company" className="text-muted-foreground">{` \u00b7 ${who.company}`}</span> : null}
+                    {t.fromAddress ? <span className="sr-only">{`, from ${t.fromAddress}`}</span> : null}
+                  </span>
+                  <time data-testid="attention-age" dateTime={t.receivedAt} className="ml-auto shrink-0 text-small text-muted-foreground">
+                    {age}
+                    <span className="sr-only">{age === "now" ? "" : " ago"}</span>
+                  </time>
+                </div>
+                <p data-testid="attention-subject" className="truncate text-body text-foreground">
+                  {subject}
+                </p>
+                {note && (note.why || note.next) ? (
+                  <p data-testid="attention-note" className="line-clamp-2 text-small text-muted-foreground">
+                    {note.why ? (
+                      <>
+                        <span className="sr-only">Why it matters: </span>
+                        {note.why}
+                      </>
+                    ) : null}
+                    {note.why && note.next ? (
+                      <>
+                        <span aria-hidden>{" \u2192 "}</span>
+                        <span className="sr-only"> </span>
+                      </>
+                    ) : null}
+                    {note.next ? (
+                      <>
+                        <span className="sr-only">Next step: </span>
+                        {note.next}
+                      </>
+                    ) : null}
+                  </p>
+                ) : null}
+                {chips.length > 0 || (showMailbox && mailbox) ? (
+                  <div className="flex flex-wrap items-center gap-x-2 gap-y-1">
+                    {chips.map((c) => (
+                      <Badge key={c.key} variant={CHIP_TONE[c.tone]} data-testid="attention-chip">
+                        {c.label}
+                      </Badge>
+                    ))}
+                    {showMailbox && mailbox ? <span data-testid="attention-mailbox" className="text-small text-muted-foreground">to {mailbox}</span> : null}
+                  </div>
+                ) : null}
+              </div>
+              <div data-testid="attention-actions" className="flex shrink-0 items-center gap-3 max-md:[&_a]:min-h-11 max-md:[&_button]:min-h-11">
+                {a.kind === "repeated_failures" ? null : (
+                  <span className="relative z-[1] inline-flex">
+                    <ReplyAction canReply={canReply} target={{ laneId, connectionId: t.connectionId, messageId: t.messageId, threadKey: t.threadKey, proposalId: replies?.get(`${t.connectionId}:${t.messageId}`) ?? null }} />
+                  </span>
+                )}
+                <Link
+                  href={inboxHref(laneId, t.messageId)}
+                  data-testid="attention-open"
+                  aria-label={`Open: ${subject}`}
+                  className="inline-flex items-center px-2 text-small font-medium text-primary underline-offset-2 after:absolute after:inset-y-0 after:-inset-x-2 after:rounded-control after:content-[''] hover:underline focus-visible:outline-none focus-visible:after:outline focus-visible:after:outline-2 focus-visible:after:outline-transparent focus-visible:after:ring-2 focus-visible:after:ring-ring"
+                >
+                  Open
+                </Link>
+              </div>
+              </div>
             </li>
           );
         })}
       </ol>
-      {mail.more > 0 ? (
-        <p className="text-small text-muted-foreground">
-          {mail.more} more in the{" "}
-          <Link href={laneHref(laneId, "inbox")} className="text-primary underline-offset-2 hover:underline">
-            Inbox
-          </Link>
-          .
-        </p>
-      ) : null}
+      <Link href={laneHref(laneId, "inbox")} data-testid="attention-view-all" className="self-start py-1 text-small font-medium text-primary underline-offset-2 hover:underline max-md:inline-flex max-md:min-h-11 max-md:items-center">
+        View all in Inbox {"\u00b7"} {total} need attention <span aria-hidden>{"\u2192"}</span>
+      </Link>
     </div>
   );
 }

@@ -2,7 +2,7 @@
 // `clientFor` (the job client: only the route creates it). Off unless lane_config.briefing.schedule_enabled is true.
 // Every run re-checks the owner's membership and views (briefing, comms, calendar). The job client reads the whole lane's
 // mail index: today an owner may see every mailbox in the lane (comms RLS is per lane, not per mailbox), so this equals
-// what the owner's own "Run now" sees. If RLS ever narrows to a mailbox or connection, this path must filter by owner.
+// what the owner's own Home sees. If RLS ever narrows to a mailbox or connection, this path must filter by owner.
 // The brain profile needs the owner's session, so a scheduled run goes without it (note "no_brain_in_schedule").
 import { getLLMProvider } from "@nichols/ai/config";
 import type { LaneId } from "@nichols/core";
@@ -42,6 +42,20 @@ export async function runScheduled(clientFor: ClientFor, laneId: string, ownerUs
   const c = await clientFor(laneId);
   const pol = await c.schema("core").from("lane_policies").select("llm_allowed_categories, store_outbound_drafts").eq("lane_id", laneId).maybeSingle();
   if (pol.error) throw new Error("lane policy unavailable");
+  // Tracking (T-235): the claim counts toward the lane's daily cap and is never refused by it; the job's save closes it. A day
+  // that already has a FINISHED scheduled run answers gate "done": an Inngest retry then skips instead of paying for another
+  // model call (re-check M1). A failure to record the claim must not stop the briefing.
+  const claim = await c.schema("core").rpc("briefing_claim_schedule", { p_lane: laneId, p_owner: ownerUserId }).then(
+    (r) => {
+      if (r.error) console.error("[briefing] schedule claim not recorded", { laneId });
+      return r.error ? null : (r.data as { id?: unknown; gate?: unknown } | null);
+    },
+    () => {
+      console.error("[briefing] schedule claim not recorded", { laneId });
+      return null;
+    },
+  );
+  if (claim?.gate === "done") return typeof claim.id === "string" ? claim.id : "done";
   const res = await runBriefing(
     {
       client: c,

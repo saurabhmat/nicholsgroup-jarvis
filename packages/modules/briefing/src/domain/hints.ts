@@ -8,9 +8,9 @@ const HINTS: Readonly<Record<Exclude<FailureCode, "sdk_override_set">, string>> 
   model_setting_invalid: "Check ANTHROPIC_MODEL_ANALYSIS (or the request size)",
   key_missing: "Check ANTHROPIC_API_KEY in the environment",
   model_not_allowed: "Check the AI categories in this company's lane policy (email, calendar)",
-  timeout: "The AI provider did not answer in time; try Run now again",
+  timeout: "The AI provider did not answer in time; it retries on the next Home visit or with Regenerate",
   provider_error: "Check the AI provider status and ANTHROPIC_API_KEY",
-  output_invalid: "The model's reply was not the expected format; try Run now again",
+  output_invalid: "The model's reply was not the expected format after one automatic retry; see the server log briefing.model_output_invalid (codes only)",
 };
 
 const OVERRIDE_NAME = /^ANTHROPIC_[A-Z0-9_]{1,60}$/;
