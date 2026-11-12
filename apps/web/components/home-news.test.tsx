@@ -67,6 +67,25 @@ describe("states", () => {
   });
 });
 
+describe("normalised links (T-235 part 5 review)", () => {
+  it("renders the url httpsUrl returns (trimmed, normalised), and drops items with credentials or without https", () => {
+    const base = card().items[0];
+    if (!base) throw new Error("no fixture item");
+    render_(
+      card({
+        items: [
+          { ...base, headline: "Padded and upper-case host", url: "  HTTPS://WWW.FederalRegister.gov/d/9  " },
+          { ...base, headline: "With credentials", url: "https://www.federalregister.gov@evil.test/d/9" },
+          { ...base, headline: "Not https", url: "http://example.test/x" },
+        ],
+      }),
+    );
+    const links = within(screen.getByTestId("news-list")).getAllByRole("link");
+    expect(links).toHaveLength(1);
+    expect(links[0]?.getAttribute("href")).toBe("https://www.federalregister.gov/d/9");
+  });
+});
+
 describe("links and text", () => {
   it("every headline is an https link that opens in a new tab with noopener noreferrer", () => {
     render_(card());

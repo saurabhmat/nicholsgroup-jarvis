@@ -1,5 +1,20 @@
 import { describe, expect, it } from "vitest";
-import { ageShort, attentionChips, senderParts } from "./sender";
+import { ageShort, attentionChips, senderLabel, senderParts } from "./sender";
+import { domainOf } from "./calendar";
+
+describe("domainOf and senderLabel", () => {
+  it("domainOf is the part after the LAST @, lower-cased", () => {
+    expect(domainOf("a@B.test")).toBe("b.test");
+    expect(domainOf("\"a@paypal.com\"@evil.test")).toBe("evil.test");
+    expect(domainOf("nope")).toBe("");
+  });
+  it("senderLabel is name · domain of the address, never a name alone when there is an address", () => {
+    expect(senderLabel("Dana Whitfield", "dana@www.acme.test")).toBe("Dana Whitfield · acme.test");
+    expect(senderLabel("CEO (paypal.com)", "x@evil.test")).toBe("CEO (paypal.com) · evil.test");
+    expect(senderLabel(null, "dana.w@acme.test")).toBe("Dana W · acme.test");
+    expect(senderLabel("Dana", null)).toBe("Dana");
+  });
+});
 
 describe("senderParts", () => {
   it("name, domain without www., two initials", () => {

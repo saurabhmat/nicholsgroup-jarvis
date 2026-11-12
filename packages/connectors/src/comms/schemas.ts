@@ -6,6 +6,7 @@
 //
 // Money is not involved. Times are ISO instants with offset; all-day events carry exclusive end dates.
 import { z } from "zod";
+import { isMailAddress } from "../google/headers";
 import { InstantSchema, OpNameSchema } from "../contract/schemas";
 
 /**
@@ -57,7 +58,7 @@ const httpsUrl = z
   .max(2048)
   .regex(/^https:\/\//)
   .refine((s) => !/[\u0000-\u001f\u007f\s]/.test(s), "control characters or whitespace");
-const address = z.string().min(3).max(320).refine(noCtrl, "control characters");
+const address = z.string().min(3).max(320).refine(noCtrl, "control characters").refine(isMailAddress, "not an email address");
 const dateOnly = z.iso.date();
 
 export const RecipientSchema = z.strictObject({

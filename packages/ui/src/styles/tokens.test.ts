@@ -254,6 +254,24 @@ describe("components use tokens only", () => {
     expect(users.sort()).toEqual(["book-balance.tsx", "kpi-card.tsx"]);
   });
 
+  it("uppercase exists nowhere else in the web app (apps/web/components and apps/web/app), except the KPI strip tile label", () => {
+    const webRoot = join(here, "..", "..", "..", "..", "apps", "web");
+    const files: string[] = [];
+    const walk = (dir: string) => {
+      for (const entry of readdirSync(dir, { withFileTypes: true })) {
+        const p = join(dir, entry.name);
+        if (entry.isDirectory()) walk(p);
+        else if (/\.tsx?$/.test(entry.name) && !/\.test\.tsx?$/.test(entry.name)) files.push(p);
+      }
+    };
+    walk(join(webRoot, "components"));
+    walk(join(webRoot, "app"));
+    expect(files.length).toBeGreaterThan(10);
+    const ALLOWED = ["components/kpi-strip.tsx"]; // the Home KPI tile label is a KPI label
+    const users = files.filter((f) => /\buppercase\b/.test(readFileSync(f, "utf8"))).map((f) => f.slice(webRoot.length + 1));
+    expect(users.filter((f) => !ALLOWED.includes(f))).toEqual([]);
+  });
+
   it("cards are 24px padded (p-6), white, 12px radius, 1px border, with the soft shadow token", () => {
     for (const f of ["card.tsx", "page-section.tsx"]) {
       const src = sources().find(([file]) => file === f)?.[1] ?? "";

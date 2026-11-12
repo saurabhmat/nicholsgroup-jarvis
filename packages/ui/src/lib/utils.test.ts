@@ -7,6 +7,11 @@ describe("cn", () => {
   });
 
   it("knows the type scale: sizes merge with each other, not with colours", () => {
+    // T-235 part 5 review: text-label was missing from the extension and was dropped as a colour.
+    expect(cn("text-label text-muted-foreground")).toBe("text-label text-muted-foreground");
+    expect(cn("text-muted-foreground text-label")).toBe("text-muted-foreground text-label");
+    expect(cn("text-card-title", "text-label")).toBe("text-label");
+    expect(cn("text-page-title text-foreground")).toBe("text-page-title text-foreground");
     expect(cn("text-body text-card-foreground")).toBe("text-body text-card-foreground");
     expect(cn("text-card-title text-muted-foreground")).toBe("text-card-title text-muted-foreground");
     expect(cn("text-body", "text-small")).toBe("text-small");

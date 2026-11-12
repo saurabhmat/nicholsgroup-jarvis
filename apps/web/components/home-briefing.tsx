@@ -190,7 +190,7 @@ const CHIP_TONE = { alert: "alert", gold: "gold", outline: "outline" } as const;
  * (forced-colors) paints, so the focus stays visible there. The divider lines sit on the <li> (no horizontal bleed); only the
  * hover ground and the focus ring bleed 8 px each side, into the card padding.
  */
-export function AttentionSection({ laneId, mail, now, notes, replies, canReply = false }: { laneId: string; mail: MailSection; now: Date; /** Kept for callers; the age no longer shows a date tooltip. */ tz?: string; notes?: Map<string, AttentionNote>; replies?: Map<string, string>; canReply?: boolean }) {
+export function AttentionSection({ laneId, mail, now, notes, replies, canReply = false }: { laneId: string; mail: MailSection; now: Date; notes?: Map<string, AttentionNote>; replies?: Map<string, string>; canReply?: boolean }) {
   if (!mail.access) {
     return mail.unavailable ? (
       <EmptyState title="Mail could not be read" description="Reload in a minute. Settings → Connections shows the last sync." className="border-0 bg-transparent px-0 py-6" />

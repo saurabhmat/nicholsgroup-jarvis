@@ -14,7 +14,7 @@ export function KpiStripSkeleton() {
   return <Block data-testid="kpi-skeleton" className="h-10 rounded-card" />;
 }
 
-/** The card grid of Home as muted blocks (T-234): attention 2/3 + calendar 1/3, the KPI strip, news 2/3 + projects 1/3. */
+/** The card grid of Home as muted blocks (T-234): attention 2/3 + calendar 1/3, the KPI strip, then news and projects as two slim blocks. */
 function Grid() {
   return (
     <>
@@ -23,9 +23,10 @@ function Grid() {
         <Block className="h-72 rounded-card" />
       </div>
       <KpiStripSkeleton />
-      <div className="grid gap-5 lg:grid-cols-3">
-        <Block className="h-56 rounded-card lg:col-span-2" />
-        <Block className="h-56 rounded-card" />
+      {/* The common real shape: GovCon news and Projects both slim (one line each), side by side from md. */}
+      <div data-testid="news-skeleton-row" className="grid gap-5 md:grid-cols-2">
+        <Block className="h-12 rounded-card" />
+        <Block className="h-12 rounded-card" />
       </div>
     </>
   );

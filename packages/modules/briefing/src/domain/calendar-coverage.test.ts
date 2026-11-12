@@ -45,6 +45,17 @@ describe("calendar analysis", () => {
     expect(day[0]?.clashesWith).toEqual([]);
   });
 
+  it("two different events with the same title and time but different meeting links are both shown (and clash); one link on both is one event", () => {
+    const a = ev({ title: "Sync", event_id: "a", calendar_id: "c1", online_meeting_url: "https://meet.example.test/one" });
+    const b = ev({ title: "Sync", event_id: "b", calendar_id: "c2", online_meeting_url: "https://meet.example.test/two" });
+    const day = analyzeDay(parseEvents([a, b]), owners, internal);
+    expect(day).toHaveLength(2);
+    expect(day[0]?.clashesWith).toEqual(["Sync"]);
+    expect(analyzeDay(parseEvents([a, { ...b, online_meeting_url: "https://meet.example.test/one" }]), owners, internal)).toHaveLength(1);
+    // one calendar without a link is the same invitation as the one with a link
+    expect(analyzeDay(parseEvents([a, { ...b, online_meeting_url: null }]), owners, internal)).toHaveLength(1);
+  });
+
   it("all-day events never clash and are not back-to-back", () => {
     const day = analyzeDay(parseEvents([ev({ title: "Offsite", all_day: true, start_at: "2026-11-12T05:00:00Z", end_at: "2026-11-13T05:00:00Z" }), ev({ title: "A" })]), owners, internal);
     expect(day.find((e) => e.title === "Offsite")?.clashesWith).toEqual([]);

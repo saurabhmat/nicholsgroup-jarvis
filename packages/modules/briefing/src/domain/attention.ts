@@ -15,6 +15,7 @@
 // own newsletter senders), excluded labels (promotions, social, forums), newsletters, social networks, bank transaction alerts
 // (statements and due dates are kept), single bot/CI messages (and automated senders' CI-style subjects).
 
+import { domainOf } from "./calendar";
 import { httpsUrl } from "./url";
 
 export type ThreadRow = {
@@ -114,7 +115,6 @@ export function senderHas(address: string | null | undefined, patterns: readonly
   });
 }
 
-const domainOf = (a: string) => (a.lastIndexOf("@") < 0 ? "" : a.slice(a.lastIndexOf("@") + 1).toLowerCase());
 
 export function isPrioritySender(address: string | null, senders: readonly string[]): boolean {
   if (!address) return false;

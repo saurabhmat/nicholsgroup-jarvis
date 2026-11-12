@@ -87,7 +87,8 @@ export function parseEvents(rows: unknown): BriefEvent[] {
   });
 }
 
-const domainOf = (email: string) => (email.lastIndexOf("@") < 0 ? "" : email.slice(email.lastIndexOf("@") + 1).toLowerCase());
+/** The domain of an address: everything after the LAST "@" (lower-case), "" when there is none. The one definition; never split on the first "@". */
+export const domainOf = (email: string): string => (email.lastIndexOf("@") < 0 ? "" : email.slice(email.lastIndexOf("@") + 1).toLowerCase());
 
 export function ownResponse(e: BriefEvent, owners: ReadonlySet<string>): Attendee["response"] | "organizer" | null {
   const me = e.attendees.find((a) => owners.has(a.email));
@@ -104,17 +105,25 @@ export function externalAttendees(e: BriefEvent, owners: ReadonlySet<string>, in
 export const isHoliday = (e: BriefEvent): boolean => /#holiday@group\.v\.calendar\.google\.com$/i.test(e.calendarId);
 
 /**
+ * Whether two events are one invitation seen through two connected calendars: same title and times, and not two
+ * different meeting links. (A calendar page link differs per account, so it is not compared: that would stop the merge.)
+ */
+function sameInvitation(a: BriefEvent, b: BriefEvent): boolean {
+  if (a.title !== b.title || a.startAt !== b.startAt || a.endAt !== b.endAt) return false;
+  return !(a.meetingUrl && b.meetingUrl && a.meetingUrl !== b.meetingUrl);
+}
+
+/**
  * Today's events: declined ones hidden; timed events get clash and back-to-back flags (against other visible timed
  * events), RSVP-pending when the owner has not answered, and external attendees.
  */
 export function analyzeDay(events: BriefEvent[], owners: ReadonlySet<string>, internalDomains: ReadonlySet<string>): DayEvent[] {
   // The same invitation can arrive once per connected calendar: show it once (same title and times), as summarizeAhead counts it.
-  const seen = new Set<string>();
+  const seen: BriefEvent[] = [];
   const visible = events.filter((e) => {
     if (ownResponse(e, owners) === "declined") return false;
-    const k = `${e.title}\u0000${e.startAt}\u0000${e.endAt}`;
-    if (seen.has(k)) return false;
-    seen.add(k);
+    if (seen.some((o) => sameInvitation(o, e))) return false;
+    seen.push(e);
     return true;
   });
   const timed = visible.filter((e) => !e.allDay).sort((a, b) => a.startAt.localeCompare(b.startAt) || a.endAt.localeCompare(b.endAt));
@@ -210,13 +219,12 @@ export function eventChips(e: DayEvent, max = 2): EventChip[] {
 
 /** Meetings (timed, not declined) in the events and the number of clashing pairs among them. All-day events are not meetings. */
 export function summarizeAhead(events: BriefEvent[], owners: ReadonlySet<string>): { meetings: number; clashes: number } {
-  const seen = new Set<string>();
-  // The same invitation can arrive once per connected calendar: count it once (same title and times).
+  const seen: BriefEvent[] = [];
+  // The same invitation can arrive once per connected calendar: count it once (same title and times, not different meeting links).
   const timed = events.filter((e) => {
     if (e.allDay || ownResponse(e, owners) === "declined") return false;
-    const k = `${e.title}\u0000${e.startAt}\u0000${e.endAt}`;
-    if (seen.has(k)) return false;
-    seen.add(k);
+    if (seen.some((o) => sameInvitation(o, e))) return false;
+    seen.push(e);
     return true;
   });
   let clashes = 0;

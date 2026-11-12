@@ -64,6 +64,8 @@ function splitList(list: string): string[] {
   return parts.map((p) => p.trim()).filter((p) => p !== "");
 }
 
+/** The one address-format rule (also used by the comms schemas): a local part without specials, "@", a host of letters, digits, dots, hyphens. */
+export const isMailAddress = (a: string): boolean => ADDR.test(a);
 const ADDR = /^[^\s@<>(),;:"\\]{1,64}@[A-Za-z0-9.-]{1,253}$/;
 
 export type ParsedAddress = { address: string; name?: string };

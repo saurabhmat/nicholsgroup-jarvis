@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { isMailAddress } from "../google/headers";
 import { UntrustedBody, isUntrustedBody } from "./ephemeral";
 import { COMMS_PROVIDER_KEYS, FORBIDDEN_EXECUTE_PATTERN } from "./provider";
 import { CommsCursorSchema, ProviderIdParamSchema, CalendarWriteIntentSchema, EventMetaSchema, MailSyncResultSchema, MailWriteIntentSchema, MessageMetaSchema, WatchInfoSchema } from "./schemas";
@@ -106,6 +107,17 @@ describe("write intents", () => {
     expect(MailWriteIntentSchema.safeParse({ action_type: "email.delete", compose }).success).toBe(false);
     expect(MailWriteIntentSchema.safeParse({ action_type: "email.send", compose: { ...compose, subject: "a\r\nBcc: x@y.test" } }).success).toBe(false);
     expect(MailWriteIntentSchema.safeParse({ action_type: "email.send", compose: { ...compose, attachments: [] } }).success).toBe(false);
+  });
+  it("recipients are checked with the same rule as Google's ADDR: a second @ and other specials are refused", () => {
+    for (const bad of ["a@b@example.test", "a@evil.test@example.test", "\"a@b\"@example.test", "a b@example.test", "a@exa_mple.test", "a@@example.test"]) {
+      expect(MailWriteIntentSchema.safeParse({ action_type: "email.send", compose: { ...compose, to: [bad] } }).success, bad).toBe(false);
+    }
+  });
+  it("message metadata addresses use the same rule as Google's ADDR (isMailAddress)", () => {
+    expect(isMailAddress("a@example.test")).toBe(true);
+    expect(isMailAddress("a@b@example.test")).toBe(false);
+    expect(MessageMetaSchema.safeParse({ ...msg, from_address: "a@b@example.test" }).success).toBe(false);
+    expect(MessageMetaSchema.safeParse({ ...msg, from_address: "not an address" }).success).toBe(false);
   });
   it("lower-cases and de-duplicates recipients", () => {
     const r = MailWriteIntentSchema.parse({ action_type: "email.send", compose: { ...compose, to: ["A@Example.test", "a@example.test"] } });

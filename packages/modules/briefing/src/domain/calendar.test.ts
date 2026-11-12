@@ -60,6 +60,11 @@ describe("summarizeAhead", () => {
     const b = row({ title: "Sync", event_id: "2", calendar_id: "c2" });
     expect(summarizeAhead(parseEvents([a, b]), owners)).toEqual({ meetings: 1, clashes: 0 });
   });
+  it("counts same-title same-time events with different meeting links as two (a clash)", () => {
+    const a = row({ title: "Sync", event_id: "1", calendar_id: "c1", online_meeting_url: "https://meet.example.test/one" });
+    const b = row({ title: "Sync", event_id: "2", calendar_id: "c2", online_meeting_url: "https://meet.example.test/two" });
+    expect(summarizeAhead(parseEvents([a, b]), owners)).toEqual({ meetings: 2, clashes: 1 });
+  });
   it("still counts real clashes", () => {
     const a = row({ title: "A" });
     const b = row({ title: "B", start_at: "2026-11-12T14:30:00Z", end_at: "2026-11-12T15:30:00Z" });

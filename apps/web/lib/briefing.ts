@@ -7,6 +7,7 @@ import type { LaneClient } from "@nichols/core/lane-router";
 import { briefingRunStateFrom, type BriefingRunStateView } from "./briefing-runs";
 import {
   analyzeDay,
+  domainOf,
   FAILURE_CODES,
   type FailureCode,
   BUSINESS_TZ,
@@ -68,8 +69,6 @@ export function briefingConfigFrom(config: unknown): { briefing: BriefingConfig;
   const p = laneConfigSchema.shape.priority_senders.safeParse(c.priority_senders ?? []);
   return { briefing: b.success ? b.data : laneConfigSchema.shape.briefing.parse({}), mailboxes: m.success ? m.data.map((x) => x.toLowerCase()) : [], prioritySenders: p.success ? p.data : [] };
 }
-
-export const domainOf = (email: string) => email.split("@")[1]?.toLowerCase() ?? "";
 
 type Db = Pick<LaneClient, "schema">;
 

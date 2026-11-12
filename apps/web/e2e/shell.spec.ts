@@ -7,6 +7,28 @@ import { personas } from "./personas";
 test.describe.configure({ mode: "serial" });
 test.setTimeout(120_000);
 
+// T-235 part 5 review: the four main pages fit a 390 px phone (no sideways scroll). The phone project's member is finance_operator,
+// who can open Inbox, Finance, Approvals and Settings (the first three are visited by the test above; Settings by settings-google.spec.ts).
+test("phone: Settings, Approvals, Finance and Inbox do not scroll sideways at 390 px", async ({ page }, info) => {
+  test.skip(info.project.name === "desktop", "phone viewport only");
+  const { member } = personas(info);
+  await clearMailbox();
+  await signInWithEmailCode(page, member);
+  await nextTotpWindow(page);
+  await completeMfa(page, member);
+  await expectLaneHome(page);
+  for (const [path, heading] of [
+    ["settings", /Settings/],
+    ["approvals", /Approvals/],
+    ["finance", /Finance/],
+    ["inbox", /Inbox/],
+  ] as const) {
+    await page.goto(`/PKG/${path}`);
+    await expect(page.getByRole("heading", { level: 1 }).first()).toContainText(heading, { timeout: 30_000 });
+    expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth), `${path} scrolls sideways`).toBe(true);
+  }
+});
+
 test("a member sees the shell, a switcher with only the allowed lane, and a 404 for any other lane", async ({ page, isMobile }, info) => {
   const { member } = personas(info);
   await clearMailbox();

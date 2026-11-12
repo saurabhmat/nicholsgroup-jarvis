@@ -81,7 +81,7 @@ Approved by Saurabh from production screenshots of Robert's 2000px screen (conte
 
 **Widths and spacing**
 - Side menu 240px (`--sidebar-width`), labels 14px (Tailwind `text-sm`, the only place it is still used). Main area `max-width: 1440px` (`--content-max-width`), 32px side padding (`md:px-8`), **left-aligned** next to the menu: no centred margins, so on a 2000px screen the free space is on the right. iPhone: 16px padding, unchanged.
-- Page rhythm: 16px (`gap-4`) between header, rows and cards; 8px extra under the page header.
+- Page rhythm: 16px (`gap-4`) on the other pages; Home uses 20px (`gap-5`) between header, rows and cards; 8px extra under the page header.
 
 **Type scale** (defined once in `theme.css`, classes `text-label`, `text-body`, `text-small`, `text-card-title`, `text-page-title`; `cn()` knows them). T-235 part 5 (Nov 12, 2026) tightened it: Source Serif 4 is used ONLY for the page title and card titles; everything else is Inter.
 

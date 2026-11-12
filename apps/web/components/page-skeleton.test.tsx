@@ -7,13 +7,17 @@ import { PageSkeleton } from "./page-skeleton";
 afterEach(cleanup);
 
 describe("PageSkeleton", () => {
-  it("defaults to the Home grid: one slim KPI bar between two 2/3 + 1/3 rows", () => {
+  it("defaults to the Home grid: a 2/3 + 1/3 row, one slim KPI bar, then two slim (h-12) blocks", () => {
     render(<PageSkeleton />);
     const s = screen.getByTestId("page-skeleton");
     expect(s.dataset.variant).toBe("home");
     expect(s.querySelector(".lg\\:grid-cols-5")).toBeNull();
     expect(screen.getByTestId("kpi-skeleton").className).toMatch(/\bh-10\b/);
     expect(s.querySelector(".lg\\:col-span-2")).not.toBeNull();
+    const row3 = screen.getByTestId("news-skeleton-row");
+    expect(row3.className).toMatch(/\bmd:grid-cols-2\b/);
+    expect(row3.children).toHaveLength(2);
+    expect([...row3.children].every((c) => /\bh-12\b/.test(c.className) && !/\bh-56\b/.test(c.className))).toBe(true);
   });
 
   it("Settings: a 200px sub-nav column beside the sections, no figure row", () => {

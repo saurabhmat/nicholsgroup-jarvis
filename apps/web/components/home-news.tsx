@@ -31,7 +31,6 @@ export function newsTime(iso: string, tz: string, now: Date): string {
 }
 
 const storyDate = (iso: string | null, tz: string) => (iso ? new Intl.DateTimeFormat("en-US", { timeZone: safeZone(tz), month: "short", day: "numeric" }).format(new Date(iso)) : null);
-const httpsOnly = (u: string) => httpsUrl(u) !== null;
 
 /** Source name, where the link REALLY goes (its registrable host; "via host" when outside the lane's preferred domains) and the date. */
 export function newsMeta(n: NewsItem, tz: string): string {
@@ -42,7 +41,8 @@ export function newsMeta(n: NewsItem, tz: string): string {
 
 export function GovConNews({ laneId = "", card = null, tz = BUSINESS_TZ, now = new Date() }: { laneId?: string; card?: NewsCard | null; tz?: string; now?: Date }) {
   const configured = card?.configured === true;
-  const items = card?.configured ? card.items.filter((i) => httpsOnly(i.url)) : [];
+  // Render the NORMALISED url (credentials and odd forms stripped by httpsUrl), never the raw string; unusable ones are dropped.
+  const items = card?.configured ? card.items.flatMap((i) => { const url = httpsUrl(i.url); return url ? [{ ...i, url }] : []; }) : [];
   const reason = card?.failure ? newsFailureText(card.failure) : null;
   const refreshReason =
     !card || !card.canRefresh ? null : card.inFlight ? "A fetch is running." : card.budgetReached ? "Monthly news budget reached" : card.nextRefreshAt ? `Next refresh available at ${newsTime(card.nextRefreshAt, tz, now)}` : null;

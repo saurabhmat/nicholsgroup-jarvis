@@ -5,7 +5,7 @@
 import Link from "next/link";
 import { Badge } from "@nichols/ui";
 import { inboxHref } from "@/lib/inbox-links";
-import { formatDateTimeIn, maskFigures, type AttentionNote, type BriefRef } from "@nichols/briefing/domain";
+import { formatDateTimeIn, maskFigures, senderLabel, type AttentionNote, type BriefRef } from "@nichols/briefing/domain";
 import type { FailureCode } from "@nichols/briefing/domain";
 import type { SavedBriefingView } from "@/lib/briefing";
 import { FailureReason } from "./briefing-failure";
@@ -87,9 +87,9 @@ export function AiBriefing({ brief, fallbackLines, tz, controls = null, now = ne
         </p>
       ) : null}
       {priorities.length > 0 ? (
-        <div data-testid="priorities-row" className="flex flex-col gap-1.5">
+        <div data-testid="priorities-row" className="flex flex-col gap-2">
           <h4 className="font-sans text-small font-semibold text-foreground">{priorities.length === 1 ? "Top priority" : "Top priorities"}</h4>
-          <ol data-testid="priorities" className="flex list-decimal flex-col gap-1.5 pl-5 text-body marker:text-muted-foreground">
+          <ol data-testid="priorities" className="flex list-decimal flex-col gap-2 pl-5 text-body marker:text-muted-foreground">
             {priorities.map((p, i) => (
               <li key={String(i)} className="min-w-0 break-words">
                 <span className="font-semibold text-foreground">{p.text}</span>
@@ -144,7 +144,7 @@ export function Deadlines({ laneId, brief, tz }: { laneId: string; brief: SavedB
                 </span>
                 {r ? (
                   <span className="flex flex-wrap items-baseline gap-2 text-small text-muted-foreground">
-                    {[r.mailbox, r.fromName ?? r.fromAddress, r.subject ? maskFigures(r.subject) : null, r.receivedAt ? formatDateTimeIn(r.receivedAt, tz) : null].filter(Boolean).join(" · ")}
+                    {[r.mailbox, r.fromName || r.fromAddress ? senderLabel(r.fromName ?? null, r.fromAddress ?? null) : null, r.subject ? maskFigures(r.subject) : null, r.receivedAt ? formatDateTimeIn(r.receivedAt, tz) : null].filter(Boolean).join(" · ")}
                     {refLink(laneId, r)}
                   </span>
                 ) : null}

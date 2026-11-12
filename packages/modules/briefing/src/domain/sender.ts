@@ -22,6 +22,12 @@ export function senderParts(fromName: string | null, fromAddress: string | null,
   return { name, company, initials, slot: h % Math.max(1, palette) };
 }
 
+/** "Name · domain" for a sender line, never a display name alone (the name is untrusted text; the domain is of the ADDRESS). Name only when there is no address. */
+export function senderLabel(fromName: string | null, fromAddress: string | null): string {
+  const { name, company } = senderParts(fromName, fromAddress);
+  return company ? `${name} · ${company}` : name;
+}
+
 /** The chips of an attention row, at most `max`, in priority order: Priority sender, Waiting on you, Unread, Security alert, then the rest. */
 export function attentionChips(kind: string, unread: boolean, max = 2): { key: string; label: string; tone: "alert" | "outline" | "gold" }[] {
   const all: { key: string; label: string; tone: "alert" | "outline" | "gold" }[] = [];
