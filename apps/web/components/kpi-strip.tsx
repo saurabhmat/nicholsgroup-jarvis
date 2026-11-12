@@ -35,8 +35,10 @@ function Tile({ laneId, tile, canConnect }: { laneId: string; tile: KpiTile; can
           {tile.value}
         </p>
       ) : (
-        <p data-slot="kpi-value" aria-label="No figure" className="font-heading text-card-title font-semibold text-muted-foreground">
+        <p data-slot="kpi-value" className="font-heading text-card-title font-semibold text-muted-foreground">
+          {/* aria-label is not allowed on a plain paragraph (axe aria-prohibited-attr): the dash is hidden, the words are read. */}
           <span aria-hidden>{"—"}</span>
+          <span className="sr-only">No figure</span>
         </p>
       )}
       <div data-slot="kpi-note" className="flex min-h-12 flex-col gap-0.5 text-small text-muted-foreground">

@@ -36,7 +36,10 @@ describe("KPI strip", () => {
     expect(within(pnl as HTMLElement).getByText("$300.00")).toBeTruthy();
     for (const t of [mrr, subs] as HTMLElement[]) {
       expect(t.getAttribute("data-status")).toBe("not_connected");
-      expect(t.querySelector("[data-slot=kpi-value]")?.textContent).toBe("—");
+      // The dash is visible only; screen readers get "No figure" as text (an aria-label on a <p> is an axe violation).
+      expect(t.querySelector("[data-slot=kpi-value] [aria-hidden]")?.textContent).toBe("—");
+      expect(t.querySelector("[data-slot=kpi-value] .sr-only")?.textContent).toBe("No figure");
+      expect(t.querySelector("[data-slot=kpi-value]")?.hasAttribute("aria-label")).toBe(false);
       expect(within(t).getByRole("link", { name: "Connect" }).getAttribute("href")).toBe("/PKG/settings#connections");
       expect(t.textContent).toContain("Not connected");
     }

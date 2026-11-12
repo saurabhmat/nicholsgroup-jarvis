@@ -73,7 +73,7 @@ export function GovConNews({ laneId = "", card = null, tz = BUSINESS_TZ, now = n
           {card?.isAdmin && laneId ? (
             <p data-testid="news-admin-hint" className="text-small text-muted-foreground">
               An admin can see what is needed in{" "}
-              <Link href={`${laneHref(laneId, "settings")}#news`} className="text-primary underline-offset-2 hover:underline">
+              <Link href={`${laneHref(laneId, "settings")}#news`} className="text-primary underline underline-offset-2">
                 Settings
               </Link>
               .
