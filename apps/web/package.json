@@ -11,6 +11,7 @@
     "check:env-build": "node scripts/check-env-build.mjs",
     "test": "vitest run",
     "test:bundle": "vitest run --config vitest.bundle.config.ts",
+    "test:ai-contract": "AI_CONTRACT=1 vitest run lib/ai-contract.test.ts",
     "test:e2e": "playwright test"
   },
   "dependencies": {
