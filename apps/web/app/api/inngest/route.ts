@@ -15,6 +15,7 @@ import {
   finQboReportsFunctions,
   finSyncFunction,
   inngestRoute,
+  newsDailyFunction,
   platformFunctions,
   qboWebhookSyncFunctions,
   retentionPurgeFunctions,
@@ -30,9 +31,10 @@ import { listHealthConnectionIds, listRenewConnectionIds, subscriptionRenewJob, 
 import { retentionPurgeJob, retentionRegistry } from "@nichols/connectors/retention";
 import { listQuickbooksConnectionIds, qboReportsJob } from "@nichols/connectors/reports";
 import { qboNormalizeJob } from "@nichols/connectors/normalize";
-import { purgeBriefings } from "@nichols/briefing/jobs";
+import { purgeBriefings, purgeNews } from "@nichols/briefing/jobs";
 import { expireStaleActions, reconcileStuckLane } from "@nichols/approvals/wire";
 import { dueOwners, runScheduled } from "@/lib/briefing-schedule";
+import { newsDue, runScheduledNews } from "@/lib/news-schedule";
 
 const importPurge = createImportPurge({ clientFor: (laneId) => getLaneJobClient(laneId) });
 // The brain tables in the retention catalog: kept until deleted, or cleaned by brain-import-purge (never by retention.purge).
@@ -42,6 +44,10 @@ for (const declaration of BRAIN_RETENTION) retentionRegistry.declare(declaration
 // the only briefing code that holds it (security review H2).
 if (!retentionRegistry.list().some((t) => t.id === "brief.briefings")) {
   retentionRegistry.register({ id: "brief.briefings", class: "policy", purge: async (laneId, keepDays) => purgeBriefings(await getLaneJobClient(laneId as LaneId), laneId as LaneId, Math.min(keepDays ?? 30, 30)) });
+}
+// brief.news_digests (T-234 part 4): kept 30 days by default (the SQL purge never deletes the current month, the spend ledger).
+if (!retentionRegistry.list().some((t) => t.id === "brief.news_digests")) {
+  retentionRegistry.register({ id: "brief.news_digests", class: "policy", purge: async (laneId, keepDays) => purgeNews(await getLaneJobClient(laneId as LaneId), laneId as LaneId, Math.min(keepDays ?? 30, 30)) });
 }
 const briefingClient = (laneId: string) => getLaneJobClient(laneId as LaneId);
 
@@ -115,6 +121,14 @@ export const { GET, POST, PUT } = inngestRoute((inngest) => [
     enabledLanes: () => getServerEnv().ENABLED_LANES,
     dueOwners: (laneId, now) => dueOwners(briefingClient, laneId, now),
     run: (laneId, owner, now) => runScheduled(briefingClient, laneId, owner, now),
+  }),
+  // news.daily (T-234 part 4): every 15 min; a lane fetches only when lane_config.news.enabled, its time (news.time, default 06:00 New
+  // York) has passed today and the SQL gates agree (web category, once a day, monthly cap). Needs a sync of this function in
+  // Inngest Cloud after the deploy (backlog H-051).
+  newsDailyFunction(inngest, {
+    enabledLanes: () => getServerEnv().ENABLED_LANES,
+    due: (laneId, now) => newsDue(briefingClient, laneId, now),
+    run: (laneId, now) => runScheduledNews(briefingClient, laneId, now),
   }),
   // action.expire (T-232): every 15 min, stale approval actions expire and lose their composed body (D-19).
   actionExpireFunction(inngest, {

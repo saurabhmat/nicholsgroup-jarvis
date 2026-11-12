@@ -2,7 +2,7 @@
 //   1. "Needs your attention" (2/3; T-234 part 2: AI summary + Run now + Top 3, top 5 items with Reply/Open, drafts and deadlines folded) |
 //      right column: Today's calendar with "Next 7 days" collapsed below it.
 //   2. KPI strip: five equal compact tiles (Cash book balance, AR > 30 days, P&L MTD, MRR, Paid subscribers).
-//   3. GovCon news (2/3; empty state until part 4) | Projects at a glance (1/3).
+//   3. GovCon news (2/3; the stored digest, read only) | Projects at a glance (1/3).
 // One column on a phone, in the same order: attention, calendar, KPIs, news, projects. Coverage is no longer a card here: a
 // small status dot in the header shows only when a source is stale or in error and links to Settings -> Connections.
 // T-231b: "Needs your attention" shows subject (figures masked), sender and mailbox to callers who may read the lane's mail
@@ -23,6 +23,7 @@ import { AttentionSection, CalendarSections } from "./home-briefing";
 import { HomeCoverageDot } from "./coverage-dot";
 import { KpiStrip } from "./kpi-strip";
 import { GovConNews } from "./home-news";
+import { loadNewsCard } from "@/lib/news";
 import { ProjectsGlance } from "./home-projects";
 import { TimezoneCookie } from "./timezone-cookie";
 import { loadLane } from "@/lib/lane-page";
@@ -85,13 +86,21 @@ async function HomeSections({ laneId, now }: { laneId: string; now: Date }) {
   const g = await guards();
   // Home v1 counts and the T-231 briefing sections load in parallel. Each shows its own "unavailable" state; neither ever shows an empty day.
   const laneClient = async () => (await g.requireLane(laneId as Parameters<typeof g.requireLane>[0])).client;
-  const [view, brief, saved, isAdmin, isOwner] = await Promise.all([
+  const [view, brief, saved, isAdmin, isOwner, newsCard] = await Promise.all([
     timed("load.home", async () => homeFor(g, laneId, now)),
     timed("load.briefing", async () => briefingFor(await laneClient(), laneId, now, tz)),
     timed("load.briefing_latest", async () => latestBriefing(await laneClient(), laneId)),
     g.requireRole(laneId as Parameters<typeof g.requireLane>[0], ["owner", "admin_technical"]).then(() => true, () => false),
     // Reply is a drawer only for the owner (T-234 part 3): it proposes and sends through approvals, which are owner-only.
     g.requireRole(laneId as Parameters<typeof g.requireLane>[0], ["owner"]).then(() => true, () => false),
+    // The stored GovCon news digest, read only: a render (or the 5-minute auto-refresh) never starts a fetch (T-234 part 4).
+    timed("load.news", async () => {
+      const [admin, owner] = await Promise.all([
+        g.requireRole(laneId as Parameters<typeof g.requireLane>[0], ["owner", "admin_technical"]).then(() => true, () => false),
+        g.requireRole(laneId as Parameters<typeof g.requireLane>[0], ["owner"]).then(() => true, () => false),
+      ]);
+      return loadNewsCard(await laneClient(), laneId, { isOwner: owner, isAdmin: admin }, now).catch(() => null);
+    }),
   ]);
   // Why there is no AI summary: the AI setup itself (names only), else the stored code of the newest failed attempt.
   const setup = aiSetupFailure();
@@ -136,7 +145,7 @@ async function HomeSections({ laneId, now }: { laneId: string; now: Date }) {
       {/* Row 3 */}
       <div data-testid="home-row-news" className="grid items-stretch gap-4 lg:grid-cols-3">
         <div data-testid="home-news-slot" className="min-w-0 lg:col-span-2">
-          <GovConNews />
+          <GovConNews laneId={laneId} card={newsCard} tz={brief.viewerTz} now={now} />
         </div>
         <div data-testid="home-projects-slot" className="min-w-0">
           <ProjectsGlance />

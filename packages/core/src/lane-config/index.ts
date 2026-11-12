@@ -85,6 +85,41 @@ export const qboSyncSchema = z
   .strictObject({ interval_hours: z.union([z.literal(1), z.literal(2), z.literal(3), z.literal(4), z.literal(6), z.literal(8), z.literal(12)]).default(DEFAULT_QBO_SYNC_INTERVAL_HOURS) })
   .prefault({});
 
+/** GovCon news card (T-234 part 4). The six topics are generic government-contracting subjects, not company data. */
+export const DEFAULT_NEWS_TOPICS = [
+  "FAR and DFARS changes",
+  "CMMC (cybersecurity maturity model certification)",
+  "GSA and SAM.gov updates",
+  "small-business contracting",
+  "major bid protests and contract awards",
+  "federal IT acquisition",
+] as const;
+/** Official sources the prompt prefers (a preference only: trade press is allowed, nothing is restricted by domain). */
+export const DEFAULT_NEWS_PREFERRED_DOMAINS = ["acquisition.gov", "federalregister.gov", "gsa.gov", "sam.gov", "defense.gov"] as const;
+const hostname = z.string().max(253).regex(/^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?(?:\.[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?)+$/);
+const newsTopic = z.string().min(3).max(120).regex(/^[^\u0000-\u001f\u007f<>]+$/);
+
+export const newsSchema = z
+  .strictObject({
+    // Off unless true. It also needs the `web` category in lane_policies.llm_allowed_categories (a human SQL step in production).
+    enabled: z.boolean().default(false),
+    // The daily fetch time (America/New_York wall clock); the job fetches once per day from this time on.
+    time: hhmm.default("06:00"),
+    topics: z.array(newsTopic).min(1).max(10).default([...DEFAULT_NEWS_TOPICS]),
+    preferred_domains: z.array(hostname).max(20).default([...DEFAULT_NEWS_PREFERRED_DOMAINS]),
+    // Never used with an allow list (the API refuses both together; trade press must stay allowed).
+    blocked_domains: z.array(hostname).max(64).default([]),
+    // Searches per fetch (the API's max_uses).
+    max_searches: z.int().min(1).max(10).default(6),
+    // Spend guard (USD, estimate): a fetch is refused before the model call when month-to-date plus the worst case for one call exceeds it.
+    monthly_cap_usd: z.number().min(1).max(1000).default(20),
+    // Prices for the estimate. NOT verified against the vendor price list (backlog Needs human): check before relying on the cap.
+    cost_per_1000_searches_usd: z.number().min(0).max(1000).default(10),
+    input_usd_per_mtok: z.number().min(0).max(1000).default(3),
+    output_usd_per_mtok: z.number().min(0).max(1000).default(15),
+  })
+  .prefault({});
+
 export const laneConfigSchema = z.strictObject({
   enabled_modules: z.array(z.enum(MODULES)).default([]),
   kpis: z.array(z.enum(KPI_IDS)).default([]),
@@ -271,6 +306,7 @@ export const laneConfigSchema = z.strictObject({
       path: ["reconcile_give_up_minutes"],
     })
     .prefault({}),
+  news: newsSchema,
   assistant: z
     .strictObject({
       messages_per_hour: z.int().min(1).max(1000).default(30),

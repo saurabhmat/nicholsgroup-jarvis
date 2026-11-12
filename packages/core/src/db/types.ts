@@ -677,6 +677,34 @@ isOneToOne: false
 "mfa_verification_attempt":
 { Args: { "event": Json }; Returns: Json
                            },
+"news_begin_refresh":
+{ Args: { "p_lane": string,"p_reserve": number }; Returns: string
+                           },
+"news_begin_scheduled":
+{ Args: { "p_lane": string,"p_reserve": number }; Returns: string
+                           },
+"news_enabled":
+{ Args: { "p_lane": string }; Returns: boolean
+                           },
+"news_finish":
+{ Args: { "p_est_cost": number,"p_failure_code": string,"p_id": string,"p_items": Json,"p_lane": string,"p_searches": number,"p_status": string }; Returns: undefined
+                           },
+"news_finish_own":
+{ Args: { "p_est_cost": number,"p_failure_code": string,"p_id": string,"p_items": Json,"p_lane": string,"p_searches": number,"p_status": string }; Returns: undefined
+                           },
+"news_latest":
+{ Args: { "p_lane": string }; Returns: {
+              "day": string,"fetched_at": string,"id": string,"items": Json,"last_failed_at": string,"last_failure_code": string,"last_refresh_at": string,"pending_since": string,"searches": number,"status": string,"trigger": string
+            }[]
+                           },
+"news_purge":
+{ Args: { "p_keep_days": number,"p_lane": string }; Returns: number
+                           },
+"news_spend":
+{ Args: { "p_lane": string }; Returns: {
+              "cap_usd": number,"last_failure_code": string,"last_fetch_at": string,"last_status": string,"month_fetches": number,"month_spend": number,"news_enabled": boolean,"web_allowed": boolean
+            }[]
+                           },
 "oauth_state_bind":
 { Args: { "p_account_ref": string,"p_lane": string,"p_state_hash": string,"p_toolkit": string,"p_user": string }; Returns: undefined
                            },

@@ -11,6 +11,7 @@ const m = vi.hoisted(() => ({
   composio: null as unknown,
   quickbooks: null as unknown,
   brain: null as unknown,
+  news: null as unknown,
   origin: null as unknown,
   coverage: { items: [], unavailable: false } as unknown,
   // T-230 A: records when each loader starts, the guards it got, and lets a test hold every loader open.
@@ -33,6 +34,7 @@ vi.mock("@/lib/quickbooks-connection", () => ({ quickbooksSectionFor: (g: unknow
 vi.mock("@/lib/google-connection", () => ({ googleSectionFor: (g: unknown) => loader("google", () => m.google)(g) }));
 vi.mock("@/lib/composio-availability", () => ({ availability: () => ({}), missingSettings: () => ({}) }));
 vi.mock("@/lib/composio-connection", () => ({ composioSectionFor: (g: unknown) => loader("composio", () => m.composio)(g) }));
+vi.mock("@/lib/news-settings", () => ({ newsSectionFor: async () => m.news }));
 vi.mock("@/lib/coverage", () => ({ coverageFor: (g: unknown) => loader("coverage", () => m.coverage)(g) }));
 vi.mock("next/headers", () => ({ cookies: async () => ({ get: () => undefined }) }));
 vi.mock("@/lib/origin-notice-server", () => ({ currentOriginNotice: async () => m.origin }));
@@ -56,7 +58,7 @@ const view = (done: number) => ({
 });
 
 beforeEach(() => {
-  m.result = m.google = m.composio = m.brain = m.origin = null;
+  m.result = m.google = m.composio = m.brain = m.origin = m.news = null;
   m.quickbooks = null;
   m.coverage = { items: [], unavailable: false };
   m.started = [];
@@ -191,6 +193,19 @@ describe("Coverage (T-234 part 1: moved here from Home)", () => {
   it("no coverage rows and no providers: no Connections section", async () => {
     await draw();
     expect(screen.queryByTestId("connections-section")).toBeNull();
+  });
+});
+describe("GovCon news status (T-234 part 4)", () => {
+  const view = { webAllowed: true, enabled: true, capUsd: 20, monthSpendUsd: 1.5, monthFetches: 3, lastStatus: "ok", lastFailure: null, lastFetchAt: "2026-11-12T11:00:00Z" };
+  it("owner / admin_technical: a News section with its own nav entry; nobody else gets one", async () => {
+    m.news = view;
+    await draw();
+    expect(screen.getByTestId("news-section")).toBeTruthy();
+    expect(within(screen.getByTestId("settings-nav")).getByRole("link", { name: "GovCon news" }).getAttribute("href")).toBe("#news");
+    cleanup();
+    m.news = null;
+    await draw();
+    expect(screen.queryByTestId("news-section")).toBeNull();
   });
 });
 const navLabelsOf = () => within(screen.getByTestId("settings-nav")).getAllByRole("link").map((a) => `${a.textContent ?? ""}|${a.getAttribute("href") ?? ""}`);

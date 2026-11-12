@@ -163,6 +163,8 @@ export function inngestRoute(
 }
 export { BRIEFING_DAILY_CRON, BRIEFING_DAILY_RETRIES, BRIEFING_WINDOW_MINUTES, briefingDailyFunction, handleBriefingDaily, isBriefingDue } from "./briefing-daily";
 export type { BriefingDailyDeps } from "./briefing-daily";
+export { NEWS_DAILY_CRON, NEWS_DAILY_RETRIES, handleNewsDaily, isNewsTimeReached, newsDailyFunction } from "./news-daily";
+export type { NewsDailyDeps } from "./news-daily";
 export { ACTION_EXPIRE_CRON, ACTION_EXPIRE_RETRIES, actionExpireFunction, handleActionExpire } from "./action-expire";
 export type { ActionExpireDeps } from "./action-expire";
 export { ACTION_RECONCILE_CRON, ACTION_RECONCILE_RETRIES, actionReconcileFunction, handleActionReconcile } from "./action-reconcile";

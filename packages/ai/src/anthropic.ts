@@ -14,7 +14,9 @@ import type {
   LLMRequest,
   LLMResult,
   LLMUsage,
+  LLMWebSearch,
   CacheTtl,
+  LLMCitation,
   ModelTier,
 } from "./types";
 
@@ -66,7 +68,14 @@ function cacheControl(ttl: CacheTtl | undefined): { cache_control?: Anthropic.Ca
 function toBlock(b: LLMContentBlock): Anthropic.ContentBlockParam {
   switch (b.type) {
     case "text":
-      return { type: "text", text: b.text, ...cacheControl(b.cache) };
+      return {
+        type: "text",
+        text: b.text,
+        ...cacheControl(b.cache),
+        ...(b.citations?.length
+          ? { citations: b.citations.map((c) => ({ type: "web_search_result_location" as const, url: c.url, title: c.title, cited_text: c.citedText, encrypted_index: c.encryptedIndex })) }
+          : {}),
+      };
     case "tool_use":
       return { type: "tool_use", id: b.id, name: b.name, input: b.input };
     case "tool_result":
@@ -81,6 +90,17 @@ function toBlock(b: LLMContentBlock): Anthropic.ContentBlockParam {
       return { type: "thinking", thinking: b.thinking, signature: b.signature };
     case "redacted_thinking":
       return { type: "redacted_thinking", data: b.data };
+    case "server_tool_use":
+      return { type: "server_tool_use", id: b.id, name: b.name, input: b.input };
+    case "web_search_tool_result":
+      return {
+        type: "web_search_tool_result",
+        tool_use_id: b.toolUseId,
+        content:
+          b.results === null
+            ? { type: "web_search_tool_result_error", error_code: (b.errorCode ?? "unavailable") as Anthropic.WebSearchToolRequestError["error_code"] }
+            : b.results.map((r) => ({ type: "web_search_result" as const, url: r.url, title: r.title, page_age: r.pageAge, encrypted_content: r.encryptedContent })),
+      };
   }
 }
 
@@ -121,8 +141,30 @@ function validateToolRoundTrips(messages: LLMMessage[]): void {
   });
 }
 
-/** Pure request builder (exported for tests). Throws invalid_request for combinations the API rejects. */
-export function buildParams(req: LLMRequest, model: string): Params {
+const HOSTNAME = /^(?=.{1,253}$)[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?(?:\.[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?)+$/;
+const MAX_DOMAINS = 64;
+const MAX_SEARCH_USES = 20;
+const MAX_RESUMES = 5;
+export const DEFAULT_MAX_RESUMES = 2;
+const isServerBlock = (b: LLMContentBlock) => b.type === "server_tool_use" || b.type === "web_search_tool_result" || (b.type === "text" && !!b.citations?.length);
+
+/** The web search opt-in must be well formed: bounded uses, plain hostnames, never both domain lists. */
+function validateWebSearch(w: LLMWebSearch): void {
+  if (!Number.isInteger(w.maxUses) || w.maxUses < 1 || w.maxUses > MAX_SEARCH_USES) throw new LLMProviderError("invalid_request");
+  if (w.maxResumes !== undefined && (!Number.isInteger(w.maxResumes) || w.maxResumes < 0 || w.maxResumes > MAX_RESUMES)) throw new LLMProviderError("invalid_request");
+  if (w.allowedDomains && w.blockedDomains) throw new LLMProviderError("invalid_request");
+  for (const list of [w.allowedDomains, w.blockedDomains]) {
+    if (!list) continue;
+    if (list.length === 0 || list.length > MAX_DOMAINS || list.some((d) => typeof d !== "string" || !HOSTNAME.test(d))) throw new LLMProviderError("invalid_request");
+  }
+}
+
+/**
+ * Pure request builder (exported for tests). Throws invalid_request for combinations the API rejects.
+ * `resume` (internal, set only by the provider's pause_turn loop) appends the assistant content of the paused turn after the
+ * user messages; a caller's own messages must still end with a user message.
+ */
+export function buildParams(req: LLMRequest, model: string, resume?: LLMContentBlock[]): Params {
   if (typeof req.laneId !== "string" || !LANE_ID.test(req.laneId)) throw new LLMProviderError("invalid_request");
   if (!Number.isInteger(req.maxTokens) || req.maxTokens < 1 || req.maxTokens > MAX_TOKENS_CEILING) {
     throw new LLMProviderError("invalid_request");
@@ -137,10 +179,20 @@ export function buildParams(req: LLMRequest, model: string): Params {
     throw new LLMProviderError("invalid_request"); // thinking-off is only valid at effort <= high
   }
   validateToolRoundTrips(req.messages);
+  const web = req.serverTools?.webSearch;
+  if (web) {
+    validateWebSearch(web);
+    if (req.tools?.length) throw new LLMProviderError("invalid_request"); // server tools are isolated from Jarvis tools (plan-review 11)
+  } else if (req.serverTools !== undefined && Object.keys(req.serverTools).length > 0) {
+    throw new LLMProviderError("invalid_request");
+  }
+  // Server-side blocks (and citations) in the messages are only valid for a request that opted in.
+  if (!web && (req.messages.some((m) => blocksOf(m).some(isServerBlock)) || resume)) throw new LLMProviderError("invalid_request");
+  if (req.messages.some((m) => m.role === "user" && blocksOf(m).some(isServerBlock))) throw new LLMProviderError("invalid_request");
   const params: Params = {
     model,
     max_tokens: req.maxTokens,
-    messages: req.messages.map(toMessage),
+    messages: [...req.messages.map(toMessage), ...(resume ? [toMessage({ role: "assistant", content: resume })] : [])],
   };
   if (typeof req.system === "string") {
     if (req.system) params.system = req.system;
@@ -159,22 +211,77 @@ export function buildParams(req: LLMRequest, model: string): Params {
     }));
     params.tool_choice = { type: "auto" };
   }
+  if (web) {
+    // Current-model variant. code_execution is deliberately NOT declared. Never both domain lists (validated above).
+    params.tools = [
+      {
+        type: "web_search_20260209",
+        name: "web_search",
+        max_uses: web.maxUses,
+        ...(web.allowedDomains ? { allowed_domains: web.allowedDomains } : {}),
+        ...(web.blockedDomains ? { blocked_domains: web.blockedDomains } : {}),
+      },
+    ];
+  }
   return params;
 }
 
 function mapUsage(u: Msg["usage"]): LLMUsage {
+  const searches = u.server_tool_use?.web_search_requests;
   return {
     inputTokens: u.input_tokens,
     outputTokens: u.output_tokens,
     cacheReadInputTokens: u.cache_read_input_tokens ?? 0,
     cacheCreationInputTokens: u.cache_creation_input_tokens ?? 0,
+    ...(typeof searches === "number" ? { webSearchRequests: searches } : {}),
   };
 }
 
-function mapContent(blocks: Msg["content"]): LLMContentBlock[] {
+function sumUsage(a: LLMUsage, b: LLMUsage): LLMUsage {
+  const searches = (a.webSearchRequests ?? 0) + (b.webSearchRequests ?? 0);
+  return {
+    inputTokens: a.inputTokens + b.inputTokens,
+    outputTokens: a.outputTokens + b.outputTokens,
+    cacheReadInputTokens: a.cacheReadInputTokens + b.cacheReadInputTokens,
+    cacheCreationInputTokens: a.cacheCreationInputTokens + b.cacheCreationInputTokens,
+    ...(a.webSearchRequests !== undefined || b.webSearchRequests !== undefined ? { webSearchRequests: searches } : {}),
+  };
+}
+
+function mapCitations(cs: Anthropic.TextCitation[] | null | undefined): LLMCitation[] {
+  const out: LLMCitation[] = [];
+  for (const c of cs ?? []) {
+    // Only web search citations are meaningful here; any other kind (documents) never occurs without documents and is dropped.
+    if (c.type === "web_search_result_location") out.push({ url: c.url, title: c.title, citedText: c.cited_text, encryptedIndex: c.encrypted_index });
+  }
+  return out;
+}
+
+function mapContent(blocks: Msg["content"], webSearch: boolean): LLMContentBlock[] {
   const out: LLMContentBlock[] = [];
   for (const b of blocks) {
-    if (b.type === "text") out.push({ type: "text", text: b.text });
+    if (b.type === "text") {
+      const citations = webSearch ? mapCitations(b.citations) : [];
+      out.push({ type: "text", text: b.text, ...(citations.length ? { citations } : {}) });
+    } else if (webSearch && b.type === "server_tool_use" && b.name === "web_search") {
+      out.push({ type: "server_tool_use", id: b.id, name: "web_search", input: b.input });
+    } else if (webSearch && b.type === "web_search_tool_result") {
+      // Success is a LIST of results; failure is an ERROR OBJECT (HTTP 200). Branch before indexing.
+      const c: unknown = b.content;
+      if (Array.isArray(c)) {
+        out.push({
+          type: "web_search_tool_result",
+          toolUseId: b.tool_use_id,
+          results: c.flatMap((r: Anthropic.WebSearchResultBlock) =>
+            r && r.type === "web_search_result" && typeof r.url === "string" ? [{ url: r.url, title: typeof r.title === "string" ? r.title : "", pageAge: typeof r.page_age === "string" ? r.page_age : null, encryptedContent: r.encrypted_content }] : [],
+          ),
+          errorCode: null,
+        });
+      } else {
+        const code = (c as { error_code?: unknown } | null)?.error_code;
+        out.push({ type: "web_search_tool_result", toolUseId: b.tool_use_id, results: null, errorCode: typeof code === "string" ? code : "unavailable" });
+      }
+    }
     else if (b.type === "tool_use") out.push({ type: "tool_use", id: b.id, name: b.name, input: b.input });
     else if (b.type === "thinking") out.push({ type: "thinking", thinking: b.thinking, signature: b.signature });
     else if (b.type === "redacted_thinking") out.push({ type: "redacted_thinking", data: b.data });
@@ -184,9 +291,9 @@ function mapContent(blocks: Msg["content"]): LLMContentBlock[] {
   return out;
 }
 
-export function mapMessage(m: Msg, latencyMs: number, requestId?: string | null): LLMResult {
+export function mapMessage(m: Msg, latencyMs: number, requestId?: string | null, opts: { webSearch?: boolean } = {}): LLMResult {
   const common = {
-    content: mapContent(m.content),
+    content: mapContent(m.content, opts.webSearch === true),
     usage: mapUsage(m.usage),
     model: m.model,
     requestId: requestId ?? (m as { _request_id?: string | null })._request_id ?? null,
@@ -275,20 +382,37 @@ export function createAnthropicProvider(opts: AnthropicProviderOptions): LLMProv
           ...p,
         });
       try {
-        const params = buildParams(req, model);
+        const web = req.serverTools?.webSearch;
         const c = getClient();
         const options: RequestOpts = { timeout: req.timeoutMs ?? defaultTimeout, ...(req.signal ? { signal: req.signal } : {}) };
-        let message: Msg;
-        let streamRequestId: string | null = null;
-        if (req.stream || req.maxTokens > STREAM_ABOVE_MAX_TOKENS) {
-          const s = c.messages.stream(params, options);
-          message = await s.finalMessage();
-          // finalMessage() is a snapshot without _request_id; the stream object carries it.
-          streamRequestId = s.request_id ?? null;
-        } else {
-          message = await c.messages.create(params, options);
+        const once = async (resume?: LLMContentBlock[]) => {
+          const params = buildParams(req, model, resume);
+          let message: Msg;
+          let streamRequestId: string | null = null;
+          if (req.stream || req.maxTokens > STREAM_ABOVE_MAX_TOKENS) {
+            const s = c.messages.stream(params, options);
+            message = await s.finalMessage();
+            // finalMessage() is a snapshot without _request_id; the stream object carries it.
+            streamRequestId = s.request_id ?? null;
+          } else {
+            message = await c.messages.create(params, options);
+          }
+          return mapMessage(message, Date.now() - started, streamRequestId, { webSearch: web !== undefined });
+        };
+        let result = await once();
+        // pause_turn (web search only): resume by re-sending the user messages plus the assistant content so far (no "Continue"
+        // message), at most maxResumes times. The final result carries every block and the summed usage.
+        if (web) {
+          const cap = web.maxResumes ?? DEFAULT_MAX_RESUMES;
+          let all = result.content;
+          let usage = result.usage;
+          for (let n = 0; result.status === "paused" && n < cap; n++) {
+            result = await once(all);
+            all = [...all, ...result.content];
+            usage = sumUsage(usage, result.usage);
+          }
+          result = { ...result, content: all, usage };
         }
-        const result = mapMessage(message, Date.now() - started, streamRequestId);
         log({ stopReason: result.stopReason, usage: result.usage, requestId: result.requestId, model: result.model });
         return result;
       } catch (err) {

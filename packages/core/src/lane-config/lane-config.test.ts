@@ -149,6 +149,17 @@ describe("lane config schema", () => {
     expect(parseLaneConfig({}).assistant.max_snippet_chars).toBe(300);
   });
 
+  it("news (T-234 part 4): off by default, generic topics and official domains, bounded values, strict", () => {
+    const n = parseLaneConfig({}).news;
+    expect(n).toMatchObject({ enabled: false, time: "06:00", max_searches: 6, monthly_cap_usd: 20, cost_per_1000_searches_usd: 10, blocked_domains: [] });
+    expect(n.topics).toHaveLength(6);
+    expect(n.preferred_domains).toEqual(["acquisition.gov", "federalregister.gov", "gsa.gov", "sam.gov", "defense.gov"]);
+    expect(parseLaneConfig({ news: { enabled: true, monthly_cap_usd: 5 } }).news).toMatchObject({ enabled: true, monthly_cap_usd: 5 });
+    for (const bad of [{ monthly_cap_usd: 0 }, { monthly_cap_usd: 5000 }, { time: "6:00" }, { max_searches: 11 }, { topics: [] }, { topics: ["<script>"] }, { blocked_domains: ["https://x.test/p"] }, { preferred_domains: ["x y.test"] }, { allowed_domains: ["x.test"] }, { cost_per_1000_searches_usd: -1 }]) {
+      expect(() => parseLaneConfig({ news: bad })).toThrow(z.ZodError);
+    }
+  });
+
   it("refuses input nested deeper than the limit without recursing further", () => {
     let deep: unknown = "x";
     for (let i = 0; i < 10_000; i++) deep = [deep];
