@@ -15,6 +15,8 @@ import {
   type ApproveResult,
   type CapabilityFacts,
   type Rpc,
+  hasEmailPlaceholder,
+  PLACEHOLDER_MESSAGE,
 } from "@nichols/approvals/server";
 import { AuthError, authErrorResponse, type Guards } from "@nichols/core/auth";
 import { domainOf } from "@nichols/briefing/domain";
@@ -93,6 +95,7 @@ const STATUS: Record<string, number> = {
   in_progress: 409,
   already_proposed: 409,
   reply_subject_fixed: 400,
+  placeholder_in_body: 409,
   unavailable: 503,
   // reply actions (lib/reply.ts)
   not_replyable: 409,
@@ -189,6 +192,8 @@ export type PendingCard = {
   /** Per-recipient warnings (spec §8; T-232 security review M1): a domain outside the lane's mailboxes, or a hidden copy. */
   recipientFlags: RecipientFlag[];
   capability: CardCapability;
+  /** The subject or body still holds a placeholder such as "[amount]" (T-237): Approve is off until it is edited out. */
+  placeholder: string | null;
 };
 export type { RecipientFlag };
 
@@ -233,6 +238,7 @@ export function toCard(row: ActionRow, facts: CapabilityFacts, laneId: string, i
     replyThread: typeof row.target.thread_id === "string",
     recipientFlags: recipientFlags(row.payload, [...internalDomains, ...(facts.mailbox ? [domainOf(facts.mailbox)] : [])]),
     capability: { enabled: cap.enabled, message: cap.message, settingsHref: cap.settingsHref },
+    placeholder: hasEmailPlaceholder(row.payload, typeof row.target.thread_id === "string") ? PLACEHOLDER_MESSAGE : null,
   };
 }
 

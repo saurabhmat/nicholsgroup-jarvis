@@ -9,6 +9,7 @@ import { useRouter } from "next/navigation";
 import { useState } from "react";
 import { Alert, AlertDescription, AlertTitle, Badge, Button, cn } from "@nichols/ui";
 import type { PendingCard } from "@/lib/approvals";
+import { PLACEHOLDER_FAILED } from "@/lib/reply-messages";
 
 const control =
   "min-h-11 w-full min-w-0 rounded-control border border-border bg-card px-3 py-2 text-body text-foreground placeholder:text-muted-foreground focus:outline-none focus:ring-2 focus:ring-ring disabled:opacity-60";
@@ -79,7 +80,7 @@ export function ApprovalCard({ laneId, card, canAct }: { laneId: string; card: P
       return;
     }
     if (status === 200) {
-      setDone(data.status === "verified" ? (isSend ? "Sent and checked in the mailbox." : "Saved as a Gmail draft and checked.") : data.status === "failed" ? "It could not be completed. Check the mailbox before trying again." : "Already being carried out.");
+      setDone(data.status === "verified" ? (isSend ? "Sent and checked in the mailbox." : "Saved as a Gmail draft and checked.") : data.status === "failed" ? (data.failureCode === "placeholder_in_body" ? PLACEHOLDER_FAILED : "It could not be completed. Check the mailbox before trying again.") : "Already being carried out.");
       return router.refresh();
     }
     if (status === 409 && data.error === "hash_mismatch") router.refresh();
@@ -95,7 +96,7 @@ export function ApprovalCard({ laneId, card, canAct }: { laneId: string; card: P
   }
 
   const cap = card.capability;
-  const approveDisabled = !canAct || !cap.enabled || dirty || busy !== null;
+  const approveDisabled = !canAct || !cap.enabled || card.placeholder !== null || dirty || busy !== null;
   const label = isSend ? "Approve & send" : "Save as Gmail draft";
   const id = `a-${card.id}`;
 
@@ -117,6 +118,12 @@ export function ApprovalCard({ laneId, card, canAct }: { laneId: string; card: P
         <Alert variant="alert">
           <AlertTitle>Recipients came from an email</AlertTitle>
           <AlertDescription>Check the recipients before approving. Text inside an email never approves anything.</AlertDescription>
+        </Alert>
+      ) : null}
+      {card.placeholder ? (
+        <Alert variant="alert" data-testid="placeholder-warning">
+          <AlertTitle>Edit before approving</AlertTitle>
+          <AlertDescription>{card.placeholder}</AlertDescription>
         </Alert>
       ) : null}
       {card.recipientFlags.length > 0 ? (

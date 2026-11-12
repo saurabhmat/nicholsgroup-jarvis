@@ -22,11 +22,15 @@ export const UNKNOWN_MESSAGE = "Sending status unknown: check Sent before retryi
 
 export type ReplyOutcome = "sent" | "failed" | "unknown";
 
+/** Execution refused an email that still held a placeholder such as [amount] (T-237): nothing was sent. */
+export const PLACEHOLDER_FAILED = "The email was not sent: it still contains a placeholder such as [amount]. Edit the text to replace it, save, then approve.";
+
 const FAILED: Record<string, string> = {
   connection_unhealthy: "The email was not sent: Google needs to be reconnected. Reconnect in Settings, then try again.",
   execution_refused: "The email was not sent: Google refused it. Check the recipients and try again.",
   execution_error: "The email was not sent because of an error. You can try again.",
   payload_changed: "The reply changed after you approved it, so it was not sent. Review it and send it again.",
+  placeholder_in_body: PLACEHOLDER_FAILED,
 };
 
 /**
