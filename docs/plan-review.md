@@ -1156,3 +1156,11 @@ Every BLOCKER, HIGH and MEDIUM from the T-235 reviews and re-checks is fixed. Th
 - **Part 2, the footer count.** "View all in Inbox · N need attention" counts the threads the attention rules rank, not the whole Inbox. The Inbox has no matching filter yet, so the link opens the plain Inbox.
 - **Part 5 code L2, KPI figures.** They moved from Source Serif to Inter ("everything else Inter"). This is a reading of the brief; easy to revert in `kpi-card.tsx` / `kpi-strip.tsx`.
 - **The phone e2e persona.** It is `finance-operator`, which has no comms view, so the 44 px Reply/Open checks run only when rows exist.
+
+## T-236: logged, not fixed (Nov 12, 2026)
+- **The retry is best effort (code review HIGH, mitigated).** The retry after a cut-off reply runs at effort "low" with a smaller request, but it still has to fit the existing bounds: Home's background briefing 60 s (retry only before 40 s), news Refresh 70 s (retry only before 30 s). A reply that genuinely needs 8000+ output tokens can still end as a timeout. The main fix is the first call's 8000 limit. If production logs (`briefing.model_call` / `news.model_call`) show output tokens near the limit or timeouts, the options are raising `maxDuration` on Home (Vercel plan limit; a human decision) or moving the runs to Inngest.
+- **The cap overshoot (security M1, decision).** The news reserve covers one attempt ($0.99 at defaults), not the rare retry. The cap can be passed once per lane per month, by one fetch's cost above its reserve (about $1.17 at default prices). Reserving the retry would have booked every fetch at $2.16 or more against the cap.
+- **Undated stories.** One undated story per digest is still kept as "date unknown" (the T-234 decision, NEWS_MAX_UNDATED=1); further undated stories are dropped with `undated_extra`. Set it to 0 if Saurabh prefers "missing date = dropped" literally.
+- **A context-window stop gets different codes:** briefing `output_invalid`, news `output_truncated`. Neither is retried. Cosmetic.
+- **Gmail body reads in the scheduled briefing do not take the abort signal** (existed before T-236). A stall of more than 120 s leaves the claim `running` until it is treated as lost.
+- **`retryMaxTokens` exists twice** (news-domain.ts and briefing-run.ts, the same 1.5x / 32000 rule). Small; leave until a third user appears.

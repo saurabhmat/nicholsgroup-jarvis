@@ -82,8 +82,9 @@ const cents = (usd: number) => Math.ceil(usd * 100 - 1e-9) / 100;
  * The most one attempt (one call plus its resumes) can cost, in USD rounded up to cents. It is reserved before the first call.
  * Decision (T-236 security review M1): the rare retry after a cut-off reply is NOT reserved. SQL books every attempt at no less
  * than its reserve (core.news_finish*), so reserving the retry would double what every ordinary fetch costs against the monthly
- * cap. The retry's real cost is still booked in full (the estimate replaces the reserve when higher), so the cap can be passed by
- * at most one retry's cost, once.
+ * cap. Every fetch's real cost is booked in full (the estimate replaces the reserve when higher; the input figure is a planning
+ * number, not a limit), and SQL refuses the next fetch once the month is over the cap, so the cap can be passed once per lane per
+ * month, by one fetch's cost above its reserve (about $1.17 at default prices with a retry and 50k input tokens per call).
  */
 export function reserveUsd(cfg: NewsConfig, maxResumes: number = NEWS_MAX_RESUMES): number {
   const calls = 1 + maxResumes;

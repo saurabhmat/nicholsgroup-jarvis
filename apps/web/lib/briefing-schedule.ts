@@ -35,10 +35,10 @@ export async function dueOwners(clientFor: ClientFor, laneId: string, now: Date)
   return allowed.filter((u): u is string => u !== null);
 }
 
-/** One scheduled run. Throws when the model failed, so the Inngest step retries (the failed attempt is still saved). */
 /** The scheduled run's bound: under the Inngest route's maxDuration (120 s), leaving time for the save. */
 export const SCHEDULE_RUN_TIMEOUT_MS = 100_000;
 
+/** One scheduled run. Throws when the model failed, so the Inngest step retries (the failed attempt is still saved). */
 export async function runScheduled(clientFor: ClientFor, laneId: string, ownerUserId: string, now: Date): Promise<string> {
   const p = getLLMProvider();
   if (!p.configured) throw new Error("model not configured");
