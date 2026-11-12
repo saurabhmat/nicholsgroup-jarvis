@@ -1144,3 +1144,15 @@ Every BLOCKER, HIGH and MEDIUM from the part 2–5 reviews and re-checks is fixe
 - **Part 4, the first live web-search call.** The response shapes are tested against fakes only. The first real call after H-049 is a manual check: record the response as a fixture (H-049 step).
 - **Part 5 security L2, keep-alive.** A visible Home tab refreshes every 5 minutes, which renews the session cookies, so an unattended visible tab never idles out. There is no idle-timeout rule today; if one is added, the auto-refresh must not count as activity.
 - **Part 5 code L6, refresh during an action.** No pause while a server action ("Run now", news Refresh) is in flight. Component state survives a refresh, so the effect is a redundant re-read.
+
+## T-235: logged, not fixed (Nov 12, 2026)
+Every BLOCKER, HIGH and MEDIUM from the T-235 reviews and re-checks is fixed. These are the accepted LOW items:
+- **Part 1 security L1, lane-wide briefing state.** The run state and the 6/day cap are lane-wide by design. In a lane with two owners, one can see the other's run timing and use the shared cap.
+- **Part 1 security L3, the token in the background run.** The background run holds the owner's bearer token for at most 60 s. Signing out mid-run does not stop it, because the JWT stays valid until it expires.
+- **Part 1 security L5, no content-shape check in SQL.** `briefing_save_own` does not check the shape of `content` in SQL. An owner calling the RPC directly can store any JSON object (at most 64 KB) as their own briefing, which only they can read. This was already true before T-235.
+- **Part 1 code L5, how runs are stored.** Auto and Regenerate runs are stored with `trigger 'manual'`. `brief.briefing_runs.kind` tells them apart.
+- **Parts 3–4 security L4, attendee display names.** These are shown as the invite says. An organiser can choose a misleading name; it is shown as text only, and addresses never appear.
+- **Parts 3–4 code M3, QuickBooks outage.** An outage keeps the three tiles ("Could not load"), so a lane that never connected QuickBooks may briefly see them during an outage.
+- **Part 2, the footer count.** "View all in Inbox · N need attention" counts the threads the attention rules rank, not the whole Inbox. The Inbox has no matching filter yet, so the link opens the plain Inbox.
+- **Part 5 code L2, KPI figures.** They moved from Source Serif to Inter ("everything else Inter"). This is a reading of the brief; easy to revert in `kpi-card.tsx` / `kpi-strip.tsx`.
+- **The phone e2e persona.** It is `finance-operator`, which has no comms view, so the 44 px Reply/Open checks run only when rows exist.
