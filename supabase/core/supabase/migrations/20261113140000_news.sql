@@ -142,6 +142,11 @@ begin
      or new.requested_by is distinct from old.requested_by or new.reserved <> old.reserved then
     raise exception 'brief.news_digests: identity columns are fixed' using errcode = '23514';
   end if;
+  -- The refresh cost floor also lives in the table guard, not only in news_finish_own: no later writer can book an owner
+  -- refresh below what was reserved for it (part 4 re-check L2).
+  if new.trigger = 'refresh' and new.est_cost < old.reserved then
+    raise exception 'brief.news_digests: a refresh is never booked below its reserve' using errcode = '23514';
+  end if;
   if new.status in ('ok', 'partial') and jsonb_array_length(new.items) = 0 then
     raise exception 'brief.news_digests: an ok digest needs items' using errcode = '23514';
   end if;

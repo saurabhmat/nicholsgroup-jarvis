@@ -5,7 +5,7 @@
 -- size, count); finished rows are final; reads (members with the briefing view) and denial: other lane, AAL1, outsider, admin_technical
 -- (spend only), anon; the owner-only refresh; retention floor and the current month kept.
 begin;
-select plan(125);
+select plan(128);
 \ir helpers/lane_rls.psql
 
 update core.lanes set enabled = true where code = 'APK';
@@ -362,6 +362,17 @@ select throws_ok(format($$select core.news_finish('PKG', %L, 'ok', null, %L::jso
 select throws_ok(format($$select core.news_finish('PKG', %L, 'ok', null, %L::jsonb, 1, 0.1)$$, '00000000-0000-0000-0000-0000000000a3', pg_temp.item1(jsonb_build_object('source_url', 'https://10.0.0.5/x'))::text), '23514', null, 'an IPv4 literal host is refused');
 select lives_ok(format($$select core.news_finish('PKG', %L, 'ok', null, %L::jsonb, 1, 0.1)$$, '00000000-0000-0000-0000-0000000000a3', pg_temp.item1(jsonb_build_object('preferred', true, 'citations', jsonb_build_array('https://www.acquisition.gov/x')))::text), 'a well-formed item (with the preferred flag and a citation) is stored');
 reset role;
+
+-- Part 4 re-check L2 / L3: as the table owner (the guard applies to every writer), a pending refresh's reserve is frozen and
+-- it is never booked below it.
+-- (The insert itself skips the guard for this fixture only: earlier denial cases changed the owner's memberships.)
+alter table brief.news_digests disable trigger news_digests_guard;
+insert into brief.news_digests (id, lane_id, trigger, requested_by, est_cost, reserved)
+values ('00000000-0000-0000-0000-0000000000f1', 'PKG', 'refresh', pg_temp.uid('owner@example.test'), 2.00, 2.00);
+alter table brief.news_digests enable trigger news_digests_guard;
+select throws_ok($$update brief.news_digests set reserved = 0 where id = '00000000-0000-0000-0000-0000000000f1'$$, '23514', null, 'the reserve of an attempt is frozen');
+select throws_ok($$update brief.news_digests set status = 'failed', failure_code = 'x', est_cost = 0.50 where id = '00000000-0000-0000-0000-0000000000f1'$$, '23514', null, 'a refresh is never booked below its reserve, whoever writes');
+select lives_ok($$update brief.news_digests set status = 'failed', failure_code = 'x', est_cost = 2.50 where id = '00000000-0000-0000-0000-0000000000f1'$$, 'a refresh booked at or above its reserve is fine');
 
 select * from finish();
 rollback;
