@@ -85,11 +85,11 @@ describe("AiBriefing: Today at a glance (T-235 part 2)", () => {
     expect(screen.getByTestId("briefing-last-failed")).toBeTruthy();
   });
 
-  it("the admin hint renders only when the server passed one, as a second small line inside the same muted line", () => {
+  it("the admin hint renders only when the server passed one, continuing the same single muted line", () => {
     const { rerender } = render(<AiBriefing {...base} brief={null} failure="key_missing" />);
     expect(screen.queryByTestId("briefing-failure-hint")).toBeNull();
     rerender(<AiBriefing {...base} brief={null} failure="key_missing" failureHint="Set ANTHROPIC_API_KEY" />);
-    expect(screen.getByTestId("briefing-failure-hint").textContent).toBe("Set ANTHROPIC_API_KEY");
+    expect(screen.getByTestId("briefing-failure-hint").textContent).toBe(" · Set ANTHROPIC_API_KEY");
     expect(screen.getAllByTestId("briefing-failure")).toHaveLength(1);
   });
 

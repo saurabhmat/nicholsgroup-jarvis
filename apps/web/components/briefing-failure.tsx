@@ -9,11 +9,8 @@ export function FailureReason({ code, hint = null, prefix = "AI summary unavaila
   return (
     <span data-testid="briefing-failure" className="text-small text-muted-foreground">
       {prefix}: {failureText(code)}
-      {hint ? (
-        <span data-testid="briefing-failure-hint" className="block">
-          {hint}
-        </span>
-      ) : null}
+      {/* T-235: one line, never a stack. The admin hint continues the same line after a separator. */}
+      {hint ? <span data-testid="briefing-failure-hint">{` · ${hint}`}</span> : null}
     </span>
   );
 }

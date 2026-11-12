@@ -39,7 +39,7 @@ const TOP_PRIORITIES = 3;
  * (2-3 sentences), then "Top priorities" as a numbered list of three (bold action, muted reason), then "Summary at <time>" with the
  * owner's `controls` (T-235 part 1: Updating summary..., the menu; no Run button). Without an AI briefing (none yet, failed, or not
  * configured) the rule-based sentences stand in and exactly ONE muted line says "AI summary unavailable: <reason>"; the admin
- * hint is a second small line, only when the server passed one (admins only).
+ * hint continues that same line, only when the server passed one (admins only).
  * `failure`: why the newest attempt (or the AI setup) failed, a fixed code; `failureHint`: the admin hint, set server-side only for owner or admin_technical.
  */
 export function AiBriefing({ brief, fallbackLines, tz, controls = null, now = new Date(), failure = null, failureHint = null }: { laneId?: string; brief: SavedBriefingView | null; fallbackLines: string[]; tz: string; controls?: ReactNode; now?: Date; failure?: FailureCode | null; failureHint?: string | null }) {
@@ -72,7 +72,7 @@ export function AiBriefing({ brief, fallbackLines, tz, controls = null, now = ne
       ) : (
         <p className="text-body text-muted-foreground">Your briefing appears here once this company&apos;s sources are connected.</p>
       )}
-      {/* One muted line, never a stack: why there is no (new) AI summary. The admin hint is the only possible second line. */}
+      {/* One muted line, never a stack: why there is no (new) AI summary. The admin hint continues the same line. */}
       {!lines && (failure || (brief && (brief.status === "failed" || brief.lastFailedAt))) ? (
         <p>
           <FailureReason code={failure} hint={failureHint} />
