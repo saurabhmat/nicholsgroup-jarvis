@@ -40,6 +40,7 @@ import { HomeSkeleton, KpiStripSkeleton } from "./page-skeleton";
 import { onboardingFor } from "@/lib/onboarding-progress";
 import { timed } from "@/lib/timed";
 import { homeFinanceFor } from "@/lib/home-finance";
+import { homeFinanceDetailFor } from "@/lib/home-finance-detail";
 import { kpiTiles } from "@/lib/home-kpi-tiles";
 
 export async function HomePage({ params }: { params: Promise<{ laneId: string }> }) {
@@ -172,8 +173,9 @@ async function HomeSections({ laneId, now }: { laneId: string; now: Date }) {
   );
 }
 
-/** Row 2 in its own boundary: a slow QuickBooks read (core.home_finance) never holds the rest of Home back (T-230 A). */
+/** The KPI row in its own boundary: a slow QuickBooks read (core.home_finance) never holds the rest of Home back (T-230 A). */
 async function KpiSection({ laneId, feeds, canConnect }: { laneId: string; feeds: HomeView["feeds"]; canConnect: boolean }) {
-  const finance = await timed("load.home_finance", async () => homeFinanceFor(await guards(), laneId));
-  return <KpiStrip laneId={laneId} tiles={kpiTiles(finance, feeds)} canConnect={canConnect && finance.state !== "no_access"} />; // the banner talks about finance: not for a role without that view
+  const g = await guards();
+  const [finance, detail] = await Promise.all([timed("load.home_finance", async () => homeFinanceFor(g, laneId)), timed("load.home_finance_detail", async () => homeFinanceDetailFor(g, laneId))]);
+  return <KpiStrip laneId={laneId} tiles={kpiTiles(finance, detail, feeds, canConnect)} />;
 }

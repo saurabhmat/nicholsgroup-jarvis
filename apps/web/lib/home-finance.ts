@@ -27,16 +27,16 @@ export type HomeFinanceView =
 
 const STATES: readonly string[] = ["not_connected", "no_data", "mapping_missing", "ok", "no_access"];
 
-const num = (v: unknown): number | null => {
+export const num = (v: unknown): number | null => {
   const n = typeof v === "string" && v.trim() !== "" ? Number(v) : v;
   return typeof n === "number" && Number.isFinite(n) ? n : null;
 };
-const count = (v: unknown): number => {
+export const count = (v: unknown): number => {
   const n = num(v);
   return n !== null && n >= 0 ? Math.floor(n) : 0;
 };
-const text = (v: unknown): string | null => (typeof v === "string" && v.trim() !== "" ? v : null);
-const instant = (v: unknown): string | null => {
+export const text = (v: unknown): string | null => (typeof v === "string" && v.trim() !== "" ? v : null);
+export const instant = (v: unknown): string | null => {
   if (typeof v !== "string") return null;
   const t = Date.parse(v);
   return Number.isNaN(t) ? null : new Date(t).toISOString();

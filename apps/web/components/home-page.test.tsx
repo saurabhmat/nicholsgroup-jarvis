@@ -23,6 +23,7 @@ vi.mock("@/lib/onboarding-progress", () => ({
   onboardingFor: async () => m.progress,
 }));
 vi.mock("@/lib/home-finance", async (orig) => ({ ...(await orig<typeof import("@/lib/home-finance")>()), homeFinanceFor: async () => m.finance }));
+vi.mock("@/lib/home-finance-detail", async (orig) => ({ ...(await orig<typeof import("@/lib/home-finance-detail")>()), homeFinanceDetailFor: async () => ({ state: "no_access" }) }));
 vi.mock("@/lib/home", async (orig) => ({ ...(await orig<typeof import("@/lib/home")>()), homeFor: async () => m.view }));
 
 import { HomePage } from "./home-page";
@@ -93,7 +94,7 @@ describe("Home layout (T-234 part 1)", () => {
     expect(next7.getAttribute("data-open")).toBe("false"); // collapsed by default
 
     const kpis = screen.getByTestId("home-kpis");
-    expect(kpis.className).toMatch(/lg:grid-cols-5/);
+    expect(kpis.className).toContain("auto-fit");
     expect(kpis.querySelectorAll("[data-slot=kpi-tile]")).toHaveLength(5);
 
     const row3 = screen.getByTestId("home-row-news");
@@ -132,7 +133,7 @@ describe("Home layout (T-234 part 1)", () => {
     m.view = view({ feeds: [{ provider: "quickbooks", status: "active" }] as HomeView["feeds"] });
     await draw();
     const tiles = screen.getAllByTestId("kpi-tile");
-    expect(tiles.map((t) => t.getAttribute("data-kpi"))).toEqual(["cash", "ar30", "pnl"]);
+    expect(tiles.map((t) => t.getAttribute("data-kpi"))).toEqual(["cash", "ar30", "bills14", "pnl"]);
     expect(within(tiles[0] as HTMLElement).getByText("Book balance")).toBeTruthy();
   });
 
