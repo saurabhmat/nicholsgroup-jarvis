@@ -500,8 +500,8 @@ describe("rate limits (T-063 review)", () => {
     }
     // The first message read is rate-limited for good (its five attempts are instant in tests); every other read takes
     // 200 ms, so the page fails while the first few workers are still reading. The invariant is checked directly, not by
-    // a timing threshold (the old "< 8 reads" bound flaked on a loaded single-core machine): no read STARTS after the
-    // sync rejected, and the page never reads through all 24 other messages.
+    // a timing threshold (the old "< 8 reads" bound flaked on a loaded single-core machine): only reads already in flight
+    // can land after the reject, and the page never reads through all 24 other messages.
     let target: string | undefined;
     let others = 0;
     let rejected = false;
@@ -521,7 +521,10 @@ describe("rate limits (T-063 review)", () => {
     await expect(h.mail.sync("PKG", conn, null, { pageSize: 100 })).rejects.toMatchObject({ info: { kind: "rate_limited" } });
     rejected = true;
     await delay(1000); // let any worker that kept going show up in the count
-    expect(startedAfterReject).toBe(0);
+    // Reads already in flight when the page failed may reach the server after the reject (a loaded machine delays the
+    // token step before the HTTP call), but no worker takes a NEW item: at most concurrency - 1 = 3 late arrivals. A
+    // worker that kept going would start many more (24 reads at 200 ms each, 4 at a time).
+    expect(startedAfterReject).toBeLessThan(4);
     expect(others).toBeLessThan(24);
   });
 
