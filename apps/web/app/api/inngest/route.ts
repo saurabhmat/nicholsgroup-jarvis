@@ -36,6 +36,9 @@ import { expireStaleActions, reconcileStuckLane } from "@nichols/approvals/wire"
 import { dueOwners, runScheduled } from "@/lib/briefing-schedule";
 import { newsDue, runScheduledNews } from "@/lib/news-schedule";
 
+// A scheduled news fetch (one model call with web search and up to 2 resumes, 80 s abort) runs inside this route's step.
+export const maxDuration = 120;
+
 const importPurge = createImportPurge({ clientFor: (laneId) => getLaneJobClient(laneId) });
 // The brain tables in the retention catalog: kept until deleted, or cleaned by brain-import-purge (never by retention.purge).
 for (const declaration of BRAIN_RETENTION) retentionRegistry.declare(declaration);
@@ -123,7 +126,8 @@ export const { GET, POST, PUT } = inngestRoute((inngest) => [
     run: (laneId, owner, now) => runScheduled(briefingClient, laneId, owner, now),
   }),
   // news.daily (T-234 part 4): every 15 min; a lane fetches only when lane_config.news.enabled, its time (news.time, default 06:00 New
-  // York) has passed today and the SQL gates agree (web category, once a day, monthly cap). Needs a sync of this function in
+  // York) has passed today and the SQL gates agree (web category, monthly cap, retry rules: a failed or lost fetch is retried by a
+  // later tick, 30 minutes apart, at most 3 failures a day, nothing after an ok digest). Needs a sync of this function in
   // Inngest Cloud after the deploy (backlog H-051).
   newsDailyFunction(inngest, {
     enabledLanes: () => getServerEnv().ENABLED_LANES,

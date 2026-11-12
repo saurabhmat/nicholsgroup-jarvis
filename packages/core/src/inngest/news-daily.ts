@@ -2,8 +2,9 @@ import "server-only";
 // news.daily (T-234 part 4): a tick every 15 minutes. For each served lane the injected `due` says whether GovCon news is
 // configured (lane_config.news.enabled) and the lane's fetch time (news.time, America/New_York, default 06:00) has passed
 // today; then `run` fetches. The database is the authority: core.news_begin_scheduled refuses a lane without the `web` policy
-// category, a second scheduled attempt on the same New York date, a fetch over the monthly cap and a fetch while another is
-// in flight, so a retried or doubled tick can never fetch twice or overspend. A refusal is a normal "skipped" outcome. One lane
+// category, a fetch once the New York date already has an ok/partial digest, a retry sooner than 30 minutes after the last
+// attempt, a 4th attempt after 3 failures, a fetch over the monthly cap and a fetch while another is in flight. A failed or lost
+// morning attempt is therefore retried by a later 15-minute tick; a retried or doubled tick can never fetch twice or overspend. A refusal is a normal "skipped" outcome. One lane
 // failing never stops the others; the tick fails after all were tried, with lane ids only. core cannot import modules:
 // apps/web injects the run (lib/news-schedule with the job client).
 import { NonRetriableError, type Inngest, type InngestFunction } from "inngest";

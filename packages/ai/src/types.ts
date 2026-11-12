@@ -147,13 +147,19 @@ export class LLMProviderError extends Error {
   readonly retryable: boolean;
   readonly status: number | null;
   readonly requestId: string | null;
-  constructor(code: LLMErrorCode, opts: { status?: number | null; requestId?: string | null } = {}) {
+  /**
+   * Usage of the calls that DID complete before this failure (a web-search request that paused and was resumed, then failed):
+   * a lower bound on what was billed, for cost accounting. Absent when no call completed.
+   */
+  usage?: LLMUsage;
+  constructor(code: LLMErrorCode, opts: { status?: number | null; requestId?: string | null; usage?: LLMUsage } = {}) {
     // The message is a fixed string per code: vendor error bodies can echo prompt text, so they are never copied.
     super(`LLM provider error: ${code}`);
     this.name = "LLMProviderError";
     this.code = code;
     this.status = opts.status ?? null;
     this.requestId = opts.requestId ?? null;
+    if (opts.usage) this.usage = opts.usage;
     this.retryable =
       code === "rate_limited" || code === "overloaded" || code === "timeout" || code === "connection" || code === "server_error";
   }

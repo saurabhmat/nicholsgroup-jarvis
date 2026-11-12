@@ -1,7 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 import { webSearchResult, createMockProvider } from "@nichols/ai/testing";
 import { beginNews, finishNews, itemsFrom, loadNewsCard } from "./news";
-import { NewsGateError } from "./news-run";
 import { newsFailureText } from "./news-types";
 
 const NOW = new Date("2026-11-12T15:00:00Z");
@@ -19,20 +18,23 @@ function fake(rpc: Record<string, Res>, config: unknown = { news: { enabled: tru
   } as never;
   return { client, calls };
 }
-const item = (over: Record<string, unknown> = {}) => ({ headline: "H", why: "W", source_name: "S", source_url: "https://a.gov/x", published_at: "2026-11-12T09:00:00Z", citations: [], ...over });
+const item = (over: Record<string, unknown> = {}) => ({ headline: "H", why: "W", source_name: "S", source_url: "https://a.gov/x", published_at: "2026-11-12T09:00:00Z", citations: [], preferred: true, ...over });
 
 describe("begin / finish", () => {
   it("refresh uses the owner functions and the schedule uses the job functions", async () => {
-    const f = fake({ news_begin_refresh: { data: "id-r", error: null }, news_begin_scheduled: { data: "id-s", error: null } });
+    const f = fake({ news_begin_refresh: { data: { id: "id-r", gate: null }, error: null }, news_begin_scheduled: { data: { id: "id-s", gate: null }, error: null } });
     expect(await beginNews(f.client, "PKG", "refresh", 0.8)).toBe("id-r");
     expect(await beginNews(f.client, "PKG", "schedule", 0.8)).toBe("id-s");
     expect(f.calls.map((c) => c.fn)).toEqual(["news_begin_refresh", "news_begin_scheduled"]);
     expect(f.calls[0]?.args).toEqual({ p_lane: "PKG", p_reserve: 0.8 });
   });
-  it("the SQL refusal messages become gate errors (rate limit and cap mapping); anything else is an infrastructure error", async () => {
-    for (const m of ["rate_limited", "cap_reached", "not_configured", "busy", "already_fetched"]) {
-      await expect(beginNews(fake({ news_begin_refresh: { data: null, error: { message: m, code: "P0001" } } }).client, "PKG", "refresh", 1)).rejects.toBeInstanceOf(NewsGateError);
+  it("a gate in the database answer becomes a gate error; an unknown gate, a bad shape or an SQL error is an infrastructure error", async () => {
+    for (const g of ["rate_limited", "cap_reached", "not_configured", "busy", "already_fetched", "retry_later", "attempts_exhausted"]) {
+      await expect(beginNews(fake({ news_begin_refresh: { data: { id: null, gate: g }, error: null } }).client, "PKG", "refresh", 1)).rejects.toMatchObject({ name: "NewsGateError", code: g });
     }
+    await expect(beginNews(fake({ news_begin_refresh: { data: { id: null, gate: "made_up" }, error: null } }).client, "PKG", "refresh", 1)).rejects.toThrow("news begin failed");
+    await expect(beginNews(fake({ news_begin_refresh: { data: "id-only", error: null } }).client, "PKG", "refresh", 1)).rejects.toThrow("news begin failed");
+    await expect(beginNews(fake({ news_begin_refresh: { data: { id: 5, gate: null }, error: null } }).client, "PKG", "refresh", 1)).rejects.toThrow("news begin failed");
     await expect(beginNews(fake({ news_begin_refresh: { data: null, error: { message: "permission denied for table x", code: "42501" } } }).client, "PKG", "refresh", 1)).rejects.toThrow("news begin failed (42501)");
   });
   it("finish passes the lane and the exact result; its error text never carries SQL detail", async () => {
@@ -57,7 +59,7 @@ describe("itemsFrom (stored rows are validated again on read)", () => {
 });
 
 describe("loadNewsCard (reads only)", () => {
-  const latest = (over: Record<string, unknown> = {}) => ({ data: [{ items: [item()], fetched_at: "2026-11-12T11:00:00Z", last_failed_at: null, last_failure_code: null, last_refresh_at: null, pending_since: null, ...over }], error: null });
+  const latest = (over: Record<string, unknown> = {}) => ({ data: [{ items: [item()], fetched_at: "2026-11-12T11:00:00Z", last_failed_at: null, last_failure_code: null, next_refresh_at: null, pending_since: null, ...over }], error: null });
   it("not configured: no items, no refresh", async () => {
     const f = fake({ news_enabled: { data: false, error: null }, news_latest: { data: [], error: null } });
     const c = await loadNewsCard(f.client, "PKG", { isOwner: true, isAdmin: true }, NOW);
@@ -78,9 +80,9 @@ describe("loadNewsCard (reads only)", () => {
     expect(f.calls.some((x) => x.fn === "news_spend")).toBe(false);
   });
   it("the 1-per-hour limit becomes a time; past it, nothing", async () => {
-    const f = fake({ news_enabled: { data: true, error: null }, news_latest: latest({ last_refresh_at: "2026-11-12T14:30:00Z" }), news_spend: { data: [{ month_spend: 0, cap_usd: 20 }], error: null } });
+    const f = fake({ news_enabled: { data: true, error: null }, news_latest: latest({ next_refresh_at: "2026-11-12T15:30:00Z" }), news_spend: { data: [{ month_spend: 0, cap_usd: 20 }], error: null } });
     expect((await loadNewsCard(f.client, "PKG", { isOwner: true, isAdmin: true }, NOW)).nextRefreshAt).toBe("2026-11-12T15:30:00.000Z");
-    const g = fake({ news_enabled: { data: true, error: null }, news_latest: latest({ last_refresh_at: "2026-11-12T13:59:00Z" }), news_spend: { data: [{ month_spend: 0, cap_usd: 20 }], error: null } });
+    const g = fake({ news_enabled: { data: true, error: null }, news_latest: latest({ next_refresh_at: "2026-11-12T14:59:00Z" }), news_spend: { data: [{ month_spend: 0, cap_usd: 20 }], error: null } });
     expect((await loadNewsCard(g.client, "PKG", { isOwner: true, isAdmin: true }, NOW)).nextRefreshAt).toBeNull();
   });
   it("budget reached when month-to-date + the worst case of one fetch exceeds the cap", async () => {
@@ -122,17 +124,17 @@ describe("scheduled news", () => {
 
     const provider = createMockProvider([webSearchResult({ text: JSON.stringify({ items: [{ headline: "H", why: "W", source_name: "S", source_url: "https://a.gov/x", published_at: null }] }), hits: [{ url: "https://a.gov/x" }] })]);
     mocked.mockReturnValue({ configured: true, provider } as never);
-    const capped = fake({ news_begin_scheduled: { data: null, error: { message: "cap_reached", code: "P0001" } } });
+    const capped = fake({ news_begin_scheduled: { data: { id: null, gate: "cap_reached" }, error: null } });
     expect(await runScheduledNews(async () => capped.client, "PKG", NOW)).toBe("skipped:cap_reached");
     expect(provider.calls).toHaveLength(0);
-    const ok = fake({ news_begin_scheduled: { data: "id-1", error: null }, news_finish: { data: null, error: null } });
+    const ok = fake({ news_begin_scheduled: { data: { id: "id-1", gate: null }, error: null }, news_finish: { data: null, error: null } });
     expect(await runScheduledNews(async () => ok.client, "PKG", NOW)).toBe("fetched");
     expect(ok.calls.map((x) => x.fn)).toEqual(["news_begin_scheduled", "news_finish"]);
     expect((ok.calls[0]?.args as { p_lane: string }).p_lane).toBe("PKG");
     // a model failure is stored (not thrown) and reported with its code
     const failing = createMockProvider([new (await import("@nichols/ai")).LLMProviderError("rate_limited")]);
     mocked.mockReturnValue({ configured: true, provider: failing } as never);
-    const f2 = fake({ news_begin_scheduled: { data: "id-2", error: null }, news_finish: { data: null, error: null } });
+    const f2 = fake({ news_begin_scheduled: { data: { id: "id-2", gate: null }, error: null }, news_finish: { data: null, error: null } });
     expect(await runScheduledNews(async () => f2.client, "PKG", NOW)).toBe("failed:model_busy");
     // an infrastructure fault throws (the job reports the lane)
     const broken = fake({ news_begin_scheduled: { data: null, error: { message: "boom", code: "XX000" } } });

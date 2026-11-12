@@ -43,10 +43,9 @@ export type NewsRunDeps = {
 
 export type NewsRunResult = { id: string; status: NewsFinish["status"]; failureCode: NewsFailureCode | null; items: number };
 
-/** Maps the SQL error text of core.news_begin_* / brief.news_reserve to a gate code (anything else is an infrastructure fault). */
-export function gateCodeFrom(error: { message?: string } | null | undefined): NewsGateCode | null {
-  const m = error?.message ?? "";
-  return NEWS_GATE_CODES.find((c) => m === c) ?? null;
+/** Maps the gate text returned by core.news_begin_* / brief.news_reserve ({id, gate}) to a gate code; anything else is null. */
+export function gateCodeFrom(gate: unknown): NewsGateCode | null {
+  return typeof gate === "string" ? (NEWS_GATE_CODES.find((c) => gate === c) ?? null) : null;
 }
 
 function failureFor(e: unknown): { code: NewsFailureCode; cost: "reserve" | "zero" } {
@@ -89,7 +88,11 @@ export async function runNewsFetch(deps: NewsRunDeps, input: { laneId: string; l
     });
   } catch (e) {
     const f = failureFor(e);
-    return failed(f.code, f.cost === "reserve" ? reserve : 0);
+    // Once any model call completed (a search that paused and was resumed, then failed), the cost is the reserve floor or what the
+    // provider saw, whichever is higher: never $0 after a call ran.
+    const used = e instanceof LLMProviderError ? e.usage : undefined;
+    const estimate = f.cost === "zero" && !used ? 0 : Math.max(reserve, used ? actualUsd(used, cfg) : 0);
+    return failed(f.code, estimate, Math.min(50, used?.webSearchRequests ?? 0));
   }
   const cost = actualUsd(result.usage, cfg); // the honest estimate replaces the reserve, even when it is higher
   const searches = Math.min(50, result.usage.webSearchRequests ?? 0);

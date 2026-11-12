@@ -5,21 +5,25 @@
 import type { LaneClient } from "@nichols/core/lane-router";
 import { gateCodeFrom, NewsGateError, type NewsFinish } from "./news-run";
 import { newsConfigFrom, normalizeUrl, plainText, reserveUsd } from "./news-domain";
-import { NEWS_REFRESH_INTERVAL_MS, type NewsCard, type NewsItem } from "./news-types";
+import type { NewsCard, NewsItem } from "./news-types";
 
 type Db = Pick<LaneClient, "schema">;
 
-/** Reserves one attempt in SQL (gates, cap, rate limit). Throws NewsGateError for a refusal, Error for anything else. */
+/** Reserves one attempt in SQL (gates, cap, limits). Throws NewsGateError for a refusal, Error for anything else. */
 export async function beginNews(client: Db, laneId: string, trigger: "schedule" | "refresh", reserve: number): Promise<string> {
   const core = client.schema("core");
   const { data, error } = trigger === "refresh" ? await core.rpc("news_begin_refresh", { p_lane: laneId, p_reserve: reserve }) : await core.rpc("news_begin_scheduled", { p_lane: laneId, p_reserve: reserve });
-  if (error) {
-    const code = gateCodeFrom(error);
+  if (error) throw new Error(`news begin failed (${error.code ?? "unknown"})`);
+  // The database answers {id, gate} instead of raising for a refusal (so closing a lost attempt commits with the refusal).
+  const r = typeof data === "object" && data !== null && !Array.isArray(data) ? (data as { id?: unknown; gate?: unknown }) : null;
+  if (r === null) throw new Error("news begin failed");
+  if (r.gate !== null && r.gate !== undefined) {
+    const code = gateCodeFrom(r.gate);
     if (code) throw new NewsGateError(code);
-    throw new Error(`news begin failed (${error.code ?? "unknown"})`);
+    throw new Error("news begin failed (unknown gate)");
   }
-  if (typeof data !== "string") throw new Error("news begin failed");
-  return data;
+  if (typeof r.id !== "string") throw new Error("news begin failed");
+  return r.id;
 }
 
 /** Stores the result of the attempt `id` (SQL re-checks the item shape, https and size). */
@@ -44,12 +48,12 @@ export function itemsFrom(json: unknown): NewsItem[] {
     if (!url || !headline || !why || !source) continue;
     const when = typeof r.published_at === "string" && Number.isFinite(Date.parse(r.published_at)) ? r.published_at : null;
     // The link is the stored string (the tool's own), which normalizeUrl just proved to be a plain https URL.
-    out.push({ headline, why, source, publishedAt: when, url: r.source_url as string });
+    out.push({ headline, why, source, publishedAt: when, url: r.source_url as string, preferred: r.preferred === true });
   }
   return out.slice(0, 6);
 }
 
-type LatestRow = { items?: unknown; fetched_at?: string | null; last_failure_code?: string | null; last_failed_at?: string | null; last_refresh_at?: string | null; pending_since?: string | null };
+type LatestRow = { items?: unknown; fetched_at?: string | null; last_failure_code?: string | null; last_failed_at?: string | null; next_refresh_at?: string | null; pending_since?: string | null };
 
 /**
  * What Home needs. `isOwner`: may refresh and sees the budget; `isAdmin`: owner or admin_technical (Settings hint).
@@ -65,7 +69,8 @@ export async function loadNewsCard(client: Db, laneId: string, opts: { isOwner: 
   ]);
   const configured = !enabled.error && enabled.data === true;
   const row = (!latest.error && Array.isArray(latest.data) ? (latest.data[0] as LatestRow | undefined) : undefined) ?? null;
-  const next = row?.last_refresh_at ? Date.parse(row.last_refresh_at) + NEWS_REFRESH_INTERVAL_MS : null;
+  // SQL says when the owner may refresh again (an ok/partial refresh + 1 hour, or a failed one + 5 minutes).
+  const next = row?.next_refresh_at ? Date.parse(row.next_refresh_at) : null;
   let budgetReached = false;
   const s = spend && !spend.error && Array.isArray(spend.data) ? (spend.data[0] as { month_spend?: number | string; cap_usd?: number | string } | undefined) : undefined;
   if (opts.isOwner && s) {
@@ -78,7 +83,7 @@ export async function loadNewsCard(client: Db, laneId: string, opts: { isOwner: 
     updatedAt: row?.fetched_at && row.items && itemsFrom(row.items).length > 0 ? row.fetched_at : null,
     failure: row?.last_failed_at ? (row.last_failure_code ?? "unknown") : null,
     canRefresh: opts.isOwner && configured,
-    nextRefreshAt: next !== null && next > now.getTime() ? new Date(next).toISOString() : null,
+    nextRefreshAt: next !== null && Number.isFinite(next) && next > now.getTime() ? new Date(next).toISOString() : null,
     budgetReached,
     isAdmin: opts.isAdmin,
     inFlight: !!row?.pending_since,

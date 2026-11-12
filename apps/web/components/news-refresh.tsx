@@ -20,7 +20,12 @@ const MESSAGES: Record<string, string> = {
 export function NewsRefresh({ laneId, disabledReason }: { laneId: string; disabledReason: string | null }) {
   const [state, action, pending] = useActionState<RefreshNewsState, FormData>(() => refreshNews(laneId), null);
   const disabled = pending || disabledReason !== null;
-  const note = pending ? "Fetching news…" : disabledReason ?? (state && "error" in state ? (MESSAGES[state.error] ?? MESSAGES.unavailable) : state?.failure ? `News could not be fetched: ${newsFailureText(state.failure)}` : null);
+  const succeeded = state !== null && "ok" in state && (state.status === "ok" || state.status === "partial");
+  const note = pending
+    ? "Fetching news…"
+    : succeeded
+      ? "Updated just now"
+      : (disabledReason ?? (state && "error" in state ? (MESSAGES[state.error] ?? MESSAGES.unavailable) : state?.failure ? `News could not be fetched: ${newsFailureText(state.failure)}` : null));
   return (
     <form action={action} className="flex flex-wrap items-center gap-2" data-testid="news-refresh-form">
       <button type="submit" disabled={disabled} aria-describedby={note ? "news-refresh-note" : undefined} className={`${buttonVariants({ variant: "outline", size: "sm" })} max-md:min-h-11`} data-testid="news-refresh">

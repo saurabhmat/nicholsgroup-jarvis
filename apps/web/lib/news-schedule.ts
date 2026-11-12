@@ -1,7 +1,9 @@
 // The scheduled GovCon news fetch (T-234 part 4). Wired into the Inngest route, which passes `clientFor` (the job client: only
 // the route creates it). `newsDue` is the cheap check (config on, fetch time reached); `runScheduledNews` does one fetch for one
-// lane. The SQL gates inside core.news_begin_scheduled are authoritative (web category, once a day, monthly cap, one in flight),
-// so a lane that is not configured, or already fetched today, ends as "skipped:<code>" with no model call.
+// lane. The SQL gates inside core.news_begin_scheduled are authoritative (web category, monthly cap, one in flight, and the retry
+// rules: after a failed or lost attempt the next tick retries once the last attempt is 30 minutes old, at most 3 failed attempts a
+// day, nothing once the day has an ok/partial digest), so a lane that is not configured, already fetched, waiting or exhausted ends
+// as "skipped:<code>" with no model call. Each 15-minute tick therefore does at most one fetch per lane.
 import { getLLMProvider } from "@nichols/ai/config";
 import { isNewsTimeReached } from "@nichols/core/inngest";
 import { beginNews, finishNews } from "./news";

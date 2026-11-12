@@ -112,8 +112,28 @@ describe("web search blocks (response)", () => {
     await expect(noOptIn.complete({ ...req, serverTools: undefined })).rejects.toMatchObject({ code: "unknown" });
     const fetchTool = searchMsg({ content: [{ type: "server_tool_use", id: "s", name: "web_fetch", input: {}, caller: { type: "direct" } }] });
     await expect(createAnthropicProvider({ models, logger: () => {}, client: sequence([fetchTool]).client }).complete(req)).rejects.toMatchObject({ code: "unknown" });
-    const code = searchMsg({ content: [{ type: "code_execution_tool_result", tool_use_id: "s", content: {} }] });
-    await expect(createAnthropicProvider({ models, logger: () => {}, client: sequence([code]).client }).complete(req)).rejects.toMatchObject({ code: "unknown" });
+    const otherResult = searchMsg({ content: [{ type: "web_fetch_tool_result", tool_use_id: "s", content: {} }] });
+    await expect(createAnthropicProvider({ models, logger: () => {}, client: sequence([otherResult]).client }).complete(req)).rejects.toMatchObject({ code: "unknown" });
+    const mcp = searchMsg({ content: [{ type: "mcp_tool_use", id: "s", name: "x", server_name: "y", input: {} }] });
+    await expect(createAnthropicProvider({ models, logger: () => {}, client: sequence([mcp]).client }).complete(req)).rejects.toMatchObject({ code: "unknown" });
+  });
+  it("dynamic filtering: code-execution server blocks are accepted and skipped with the opt-in; without it they fail closed", async () => {
+    const blocks = [
+      { type: "server_tool_use", id: "c1", name: "code_execution", input: { code: "print(1)" }, caller: { type: "direct" } },
+      { type: "code_execution_tool_result", tool_use_id: "c1", content: { type: "code_execution_result", stdout: "1" } },
+      { type: "server_tool_use", id: "c2", name: "bash_code_execution", input: { command: "ls" } },
+      { type: "bash_code_execution_tool_result", tool_use_id: "c2", content: {} },
+      { type: "server_tool_use", id: "c3", name: "text_editor_code_execution", input: {} },
+      { type: "text_editor_code_execution_tool_result", tool_use_id: "c3", content: {} },
+      { type: "text", text: "Answer" },
+    ];
+    const m = searchMsg({ content: blocks });
+    const r = await createAnthropicProvider({ models, logger: () => {}, client: sequence([m]).client }).complete(req);
+    expect(r.content).toEqual([{ type: "text", text: "Answer" }]);
+    await expect(createAnthropicProvider({ models, logger: () => {}, client: sequence([m]).client }).complete({ ...req, serverTools: undefined })).rejects.toMatchObject({ code: "unknown" });
+  });
+  it("never declares code_execution itself, even after code-execution blocks arrived", () => {
+    expect(JSON.stringify(buildParams(req, "m"))).not.toContain("code_execution");
   });
   it("a text-only reply to a web-search request is fine; citations are ignored without the opt-in", async () => {
     const plain = searchMsg({ content: [{ type: "text", text: "x", citations: [{ type: "web_search_result_location", url: "https://a.test/", title: null, cited_text: "c", encrypted_index: "i" }] }] });
@@ -141,6 +161,45 @@ describe("pause_turn", () => {
     expect(r.usage.webSearchRequests).toBe(3);
     expect(r.usage.inputTokens).toBe(110);
     expect(r.content.map((b) => b.type)).toEqual(["server_tool_use", "server_tool_use", "web_search_tool_result", "text"]);
+  });
+  it("keeps code-execution blocks for the resume (re-sent unchanged) but never returns them", async () => {
+    const codeUse = { type: "server_tool_use", id: "c1", name: "code_execution", input: { code: "x" }, caller: { type: "direct" } };
+    const codeRes = { type: "code_execution_tool_result", tool_use_id: "c1", content: { type: "code_execution_result", stdout: "ok" } };
+    const first = searchMsg({ stop_reason: "pause_turn", content: [codeUse, codeRes, { type: "server_tool_use", id: "s1", name: "web_search", input: { query: "q" }, caller: { type: "direct" } }] });
+    const { client, seen } = sequence([first, searchMsg()]);
+    const r = await createAnthropicProvider({ models, logger: () => {}, client }).complete(req);
+    const assistant = (seen[1]?.messages as { role: string; content: unknown[] }[])[1];
+    expect(assistant?.content[0]).toEqual(codeUse);
+    expect(assistant?.content[1]).toEqual(codeRes);
+    expect(r.content.map((b) => b.type)).toEqual(["server_tool_use", "server_tool_use", "web_search_tool_result", "text"]);
+  });
+  it("does not resume from an empty paused turn (no empty assistant message)", async () => {
+    const { client, seen } = sequence([searchMsg({ stop_reason: "pause_turn", content: [] })]);
+    const r = await createAnthropicProvider({ models, logger: () => {}, client }).complete(req);
+    expect(seen).toHaveLength(1);
+    expect(r.status).toBe("paused");
+  });
+  it("a failure after earlier calls carries the usage gathered so far on the error", async () => {
+    let n = 0;
+    const client: AnthropicLike = {
+      messages: {
+        create: async () => {
+          if (n++ === 0) return paused("s1");
+          throw new Error("connection reset");
+        },
+        stream: () => {
+          throw new Error("no stream");
+        },
+      },
+    };
+    const err = await createAnthropicProvider({ models, logger: () => {}, client }).complete(req).catch((e: unknown) => e);
+    expect(err).toBeInstanceOf(LLMProviderError);
+    expect((err as LLMProviderError).usage).toMatchObject({ inputTokens: 10, outputTokens: 5, webSearchRequests: 1 });
+  });
+  it("a response that fails closed (unknown block) still counts its usage", async () => {
+    const bad = searchMsg({ content: [{ type: "web_fetch_tool_result", tool_use_id: "s", content: {} }] });
+    const err = await createAnthropicProvider({ models, logger: () => {}, client: sequence([bad]).client }).complete(req).catch((e: unknown) => e);
+    expect((err as LLMProviderError).usage).toMatchObject({ inputTokens: 100, outputTokens: 50 });
   });
   it("caps the resumes (default 2) and then returns the paused result", async () => {
     const { client, seen } = sequence([paused("s1")]);

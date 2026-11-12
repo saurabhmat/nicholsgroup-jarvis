@@ -6,7 +6,7 @@
 import Link from "next/link";
 import { laneHref, PageSection } from "@nichols/ui";
 import { NewsRefresh } from "./news-refresh";
-import { newsFailureText, type NewsCard } from "@/lib/news-types";
+import { newsFailureText, registrableHost, type NewsCard, type NewsItem } from "@/lib/news-types";
 
 export type { NewsItem } from "@/lib/news-types";
 
@@ -32,6 +32,13 @@ export function newsTime(iso: string, tz: string, now: Date): string {
 const storyDate = (iso: string | null, tz: string) => (iso ? new Intl.DateTimeFormat("en-US", { timeZone: safeZone(tz), month: "short", day: "numeric" }).format(new Date(iso)) : null);
 const httpsOnly = (u: string) => /^https:\/\//i.test(u);
 
+/** Source name, where the link REALLY goes (its registrable host; "via host" when outside the lane's preferred domains) and the date. */
+export function newsMeta(n: NewsItem, tz: string): string {
+  const host = registrableHost(n.url);
+  const where = host ? (n.preferred ? host : `via ${host}`) : null;
+  return [n.source, where, storyDate(n.publishedAt, tz) ?? "date unknown"].filter(Boolean).join(" · ");
+}
+
 export function GovConNews({ laneId = "", card = null, tz = BUSINESS_TZ, now = new Date() }: { laneId?: string; card?: NewsCard | null; tz?: string; now?: Date }) {
   const configured = card?.configured === true;
   const items = configured ? card.items.filter((i) => httpsOnly(i.url)) : [];
@@ -49,7 +56,9 @@ export function GovConNews({ laneId = "", card = null, tz = BUSINESS_TZ, now = n
                   {n.headline}
                 </a>
                 <span className="text-small text-foreground">{n.why}</span>
-                <span className="text-small text-muted-foreground">{[n.source, storyDate(n.publishedAt, tz)].filter(Boolean).join(" · ")}</span>
+                <span data-testid="news-meta" className="text-small text-muted-foreground">
+                  {newsMeta(n, tz)}
+                </span>
               </li>
             ))}
           </ul>

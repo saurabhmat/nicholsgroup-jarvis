@@ -56,7 +56,7 @@ describe("runNewsFetch", () => {
     expect(h.calls.finish[0]?.r.items).toEqual([]);
   });
   it("a gate refusal (cap, rate limit, not configured) never calls the model and stores nothing", async () => {
-    for (const code of ["cap_reached", "rate_limited", "not_configured", "busy", "already_fetched"] as const) {
+    for (const code of ["cap_reached", "rate_limited", "not_configured", "busy", "already_fetched", "retry_later", "attempts_exhausted"] as const) {
       const h = harness([good()], async () => {
         throw new NewsGateError(code);
       });
@@ -73,6 +73,20 @@ describe("runNewsFetch", () => {
     expect(await slow.run()).toMatchObject({ failureCode: "timed_out" });
     expect(slow.calls.finish[0]?.r.estCostUsd).toBe(reserveUsd(cfg));
     expect(await harness([new LLMProviderError("unauthorized")]).run()).toMatchObject({ failureCode: "model_failed" });
+  });
+  it("once a model call ran (usage on the error), a failure never costs $0: the reserve is the floor, a higher actual wins", async () => {
+    const usage = { inputTokens: 1000, outputTokens: 500, cacheReadInputTokens: 0, cacheCreationInputTokens: 0, webSearchRequests: 2 };
+    const busyAfterCalls = harness([Object.assign(new LLMProviderError("overloaded"), { usage })]);
+    expect(await busyAfterCalls.run()).toMatchObject({ failureCode: "model_busy" });
+    expect(busyAfterCalls.calls.finish[0]?.r.estCostUsd).toBe(reserveUsd(cfg));
+    expect(busyAfterCalls.calls.finish[0]?.r.searches).toBe(2);
+    const big = { ...usage, inputTokens: 2_000_000 }; // 6.00 in tokens: above the reserve
+    const huge = harness([Object.assign(new LLMProviderError("server_error"), { usage: big })]);
+    await huge.run();
+    expect(huge.calls.finish[0]?.r.estCostUsd).toBeGreaterThan(reserveUsd(cfg));
+    const unauthorized = harness([Object.assign(new LLMProviderError("unauthorized"), { usage })]);
+    await unauthorized.run();
+    expect(unauthorized.calls.finish[0]?.r.estCostUsd).toBe(reserveUsd(cfg));
   });
   it("refusal, pause cap, truncation and non-JSON answers are fixed failure codes", async () => {
     const base = textResult("x");
@@ -111,10 +125,11 @@ describe("runNewsFetch", () => {
 });
 
 describe("gateCodeFrom", () => {
-  it("maps only the exact SQL messages", () => {
-    expect(gateCodeFrom({ message: "cap_reached" })).toBe("cap_reached");
-    expect(gateCodeFrom({ message: "rate_limited" })).toBe("rate_limited");
-    expect(gateCodeFrom({ message: "cap_reached: details" })).toBeNull();
+  it("maps only the exact gate codes the database returns", () => {
+    expect(gateCodeFrom("cap_reached")).toBe("cap_reached");
+    expect(gateCodeFrom("retry_later")).toBe("retry_later");
+    expect(gateCodeFrom("attempts_exhausted")).toBe("attempts_exhausted");
+    expect(gateCodeFrom("cap_reached: details")).toBeNull();
     expect(gateCodeFrom(null)).toBeNull();
   });
 });

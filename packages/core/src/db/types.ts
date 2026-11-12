@@ -678,10 +678,10 @@ isOneToOne: false
 { Args: { "event": Json }; Returns: Json
                            },
 "news_begin_refresh":
-{ Args: { "p_lane": string,"p_reserve": number }; Returns: string
+{ Args: { "p_lane": string,"p_reserve": number }; Returns: Json
                            },
 "news_begin_scheduled":
-{ Args: { "p_lane": string,"p_reserve": number }; Returns: string
+{ Args: { "p_lane": string,"p_reserve": number }; Returns: Json
                            },
 "news_enabled":
 { Args: { "p_lane": string }; Returns: boolean
@@ -694,7 +694,7 @@ isOneToOne: false
                            },
 "news_latest":
 { Args: { "p_lane": string }; Returns: {
-              "day": string,"fetched_at": string,"id": string,"items": Json,"last_failed_at": string,"last_failure_code": string,"last_refresh_at": string,"pending_since": string,"searches": number,"status": string,"trigger": string
+              "day": string,"fetched_at": string,"id": string,"items": Json,"last_failed_at": string,"last_failure_code": string,"next_refresh_at": string,"pending_since": string,"searches": number,"status": string,"trigger": string
             }[]
                            },
 "news_purge":

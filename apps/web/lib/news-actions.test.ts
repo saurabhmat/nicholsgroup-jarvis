@@ -14,6 +14,7 @@ vi.mock("@/lib/guards", () => ({
 vi.mock("@nichols/ai/config", () => ({ getLLMProvider: (...a: unknown[]) => state.provider(...a) }));
 vi.mock("next/cache", () => ({ revalidatePath: (p: string) => state.revalidate(p) }));
 import { refreshNews } from "@/app/[laneId]/news-actions";
+import { NEWS_REFRESH_TIMEOUT_MS } from "@/lib/news-types";
 
 const client = () => ({
   schema: () => ({
@@ -26,7 +27,7 @@ const ok = () => webSearchResult({ text: JSON.stringify({ items: [{ headline: "H
 beforeEach(() => {
   vi.clearAllMocks();
   state.requireRole.mockResolvedValue({ client: client(), session: { userId: "u" } });
-  state.rpc.mockImplementation(async (fn: string) => (fn === "news_begin_refresh" ? { data: "id-1", error: null } : { data: null, error: null }));
+  state.rpc.mockImplementation(async (fn: string) => (fn === "news_begin_refresh" ? { data: { id: "id-1", gate: null }, error: null } : { data: null, error: null }));
   state.provider.mockReturnValue({ configured: true, provider: createMockProvider([ok()]) });
 });
 
@@ -49,11 +50,21 @@ describe("refreshNews", () => {
     expect(await refreshNews("PKG")).toEqual({ error: "ai_not_set_up" });
     expect(state.rpc).not.toHaveBeenCalled();
   });
+  it("scheduled-only gate codes cannot reach the owner as anything but busy", async () => {
+    for (const code of ["retry_later", "attempts_exhausted", "already_fetched"]) {
+      state.provider.mockReturnValue({ configured: true, provider: createMockProvider([ok()]) });
+      state.rpc.mockResolvedValueOnce({ data: { id: null, gate: code }, error: null });
+      expect(await refreshNews("PKG")).toEqual({ error: "busy" });
+    }
+  });
+  it("the abort is 70 s (Home's maxDuration is 90 s)", () => {
+    expect(NEWS_REFRESH_TIMEOUT_MS).toBe(70_000);
+  });
   it("the SQL refusals (1 per hour, monthly cap, not configured) are returned as codes and the model is never called", async () => {
     for (const code of ["rate_limited", "cap_reached", "not_configured", "busy"]) {
       const provider = createMockProvider([ok()]);
       state.provider.mockReturnValue({ configured: true, provider });
-      state.rpc.mockResolvedValueOnce({ data: null, error: { message: code, code: "P0001" } });
+      state.rpc.mockResolvedValueOnce({ data: { id: null, gate: code }, error: null });
       expect(await refreshNews("PKG")).toEqual({ error: code });
       expect(provider.calls).toHaveLength(0);
     }

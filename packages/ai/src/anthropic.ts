@@ -65,8 +65,20 @@ function cacheControl(ttl: CacheTtl | undefined): { cache_control?: Anthropic.Ca
   return ttl ? { cache_control: ttl === "1h" ? { type: "ephemeral", ttl: "1h" } : { type: "ephemeral" } } : {};
 }
 
-function toBlock(b: LLMContentBlock): Anthropic.ContentBlockParam {
+/**
+ * A server-side code-execution block (web_search_20260209 may use code execution for dynamic result filtering). It is never
+ * mapped to the app, but it is kept for the pause_turn resume and re-sent UNCHANGED. Internal to this file.
+ */
+type KeptBlock = { type: "kept_server_block"; raw: unknown };
+type InternalBlock = LLMContentBlock | KeptBlock;
+const CODE_EXEC_TOOLS = new Set(["code_execution", "bash_code_execution", "text_editor_code_execution"]);
+const CODE_EXEC_RESULTS = new Set(["code_execution_tool_result", "bash_code_execution_tool_result", "text_editor_code_execution_tool_result"]);
+const publicBlocks = (blocks: InternalBlock[]): LLMContentBlock[] => blocks.filter((b): b is LLMContentBlock => b.type !== "kept_server_block");
+
+function toBlock(b: InternalBlock): Anthropic.ContentBlockParam {
   switch (b.type) {
+    case "kept_server_block":
+      return b.raw as Anthropic.ContentBlockParam;
     case "text":
       return {
         type: "text",
@@ -104,7 +116,7 @@ function toBlock(b: LLMContentBlock): Anthropic.ContentBlockParam {
   }
 }
 
-function toMessage(m: LLMMessage): Anthropic.MessageParam {
+function toMessage(m: { role: "user" | "assistant"; content: string | InternalBlock[] }): Anthropic.MessageParam {
   return { role: m.role, content: typeof m.content === "string" ? m.content : m.content.map(toBlock) };
 }
 
@@ -164,7 +176,7 @@ function validateWebSearch(w: LLMWebSearch): void {
  * `resume` (internal, set only by the provider's pause_turn loop) appends the assistant content of the paused turn after the
  * user messages; a caller's own messages must still end with a user message.
  */
-export function buildParams(req: LLMRequest, model: string, resume?: LLMContentBlock[]): Params {
+export function buildParams(req: LLMRequest, model: string, resume?: InternalBlock[]): Params {
   if (typeof req.laneId !== "string" || !LANE_ID.test(req.laneId)) throw new LLMProviderError("invalid_request");
   if (!Number.isInteger(req.maxTokens) || req.maxTokens < 1 || req.maxTokens > MAX_TOKENS_CEILING) {
     throw new LLMProviderError("invalid_request");
@@ -257,9 +269,16 @@ function mapCitations(cs: Anthropic.TextCitation[] | null | undefined): LLMCitat
   return out;
 }
 
-function mapContent(blocks: Msg["content"], webSearch: boolean): LLMContentBlock[] {
-  const out: LLMContentBlock[] = [];
+function mapContent(blocks: Msg["content"], webSearch: boolean): InternalBlock[] {
+  const out: InternalBlock[] = [];
   for (const b of blocks) {
+    const kind = (b as { type: string }).type;
+    const toolName = (b as { name?: unknown }).name;
+    if (webSearch && ((kind === "server_tool_use" && typeof toolName === "string" && CODE_EXEC_TOOLS.has(toolName)) || CODE_EXEC_RESULTS.has(kind))) {
+      // Dynamic filtering by the web search tool: accepted, not mapped, kept for the resume. Never declared by us.
+      out.push({ type: "kept_server_block", raw: b });
+      continue;
+    }
     if (b.type === "text") {
       const citations = webSearch ? mapCitations(b.citations) : [];
       out.push({ type: "text", text: b.text, ...(citations.length ? { citations } : {}) });
@@ -292,6 +311,14 @@ function mapContent(blocks: Msg["content"], webSearch: boolean): LLMContentBlock
 }
 
 export function mapMessage(m: Msg, latencyMs: number, requestId?: string | null, opts: { webSearch?: boolean } = {}): LLMResult {
+  return stripKept(mapMessageKeep(m, latencyMs, requestId, opts));
+}
+
+const stripKept = (r: InternalResult): LLMResult => ({ ...r, content: publicBlocks(r.content) }) as unknown as LLMResult;
+type WithInternalContent<T> = T extends unknown ? Omit<T, "content"> & { content: InternalBlock[] } : never;
+type InternalResult = WithInternalContent<LLMResult>;
+
+function mapMessageKeep(m: Msg, latencyMs: number, requestId?: string | null, opts: { webSearch?: boolean } = {}): InternalResult {
   const common = {
     content: mapContent(m.content, opts.webSearch === true),
     usage: mapUsage(m.usage),
@@ -381,11 +408,12 @@ export function createAnthropicProvider(opts: AnthropicProviderOptions): LLMProv
           requestId: null,
           ...p,
         });
+      let usageSoFar: LLMUsage | undefined;
       try {
         const web = req.serverTools?.webSearch;
         const c = getClient();
         const options: RequestOpts = { timeout: req.timeoutMs ?? defaultTimeout, ...(req.signal ? { signal: req.signal } : {}) };
-        const once = async (resume?: LLMContentBlock[]) => {
+        const once = async (resume?: InternalBlock[]) => {
           const params = buildParams(req, model, resume);
           let message: Msg;
           let streamRequestId: string | null = null;
@@ -397,26 +425,32 @@ export function createAnthropicProvider(opts: AnthropicProviderOptions): LLMProv
           } else {
             message = await c.messages.create(params, options);
           }
-          return mapMessage(message, Date.now() - started, streamRequestId, { webSearch: web !== undefined });
+          // Counted as soon as a response arrived, before any mapping can fail closed: it was billed either way.
+          usageSoFar = usageSoFar ? sumUsage(usageSoFar, mapUsage(message.usage)) : mapUsage(message.usage);
+          return mapMessageKeep(message, Date.now() - started, streamRequestId, { webSearch: web !== undefined });
         };
-        let result = await once();
+        let internal = await once();
         // pause_turn (web search only): resume by re-sending the user messages plus the assistant content so far (no "Continue"
-        // message), at most maxResumes times. The final result carries every block and the summed usage.
+        // message), at most maxResumes times. The final result carries every block and the summed usage. Code-execution blocks
+        // from dynamic filtering are carried for the resume and removed from what the caller sees.
         if (web) {
           const cap = web.maxResumes ?? DEFAULT_MAX_RESUMES;
-          let all = result.content;
-          let usage = result.usage;
-          for (let n = 0; result.status === "paused" && n < cap; n++) {
-            result = await once(all);
-            all = [...all, ...result.content];
-            usage = sumUsage(usage, result.usage);
+          let all = internal.content;
+          let usage = internal.usage;
+          for (let n = 0; internal.status === "paused" && n < cap; n++) {
+            if (all.length === 0) break; // nothing to resume from: an empty assistant message would be rejected
+            internal = await once(all);
+            all = [...all, ...internal.content];
+            usage = sumUsage(usage, internal.usage);
           }
-          result = { ...result, content: all, usage };
+          internal = { ...internal, content: all, usage };
         }
+        const result = stripKept(internal);
         log({ stopReason: result.stopReason, usage: result.usage, requestId: result.requestId, model: result.model });
         return result;
       } catch (err) {
         const e = mapError(err);
+        if (usageSoFar && !e.usage) e.usage = usageSoFar;
         log({ outcome: "error", errorCode: e.code, requestId: e.requestId });
         throw e;
       }

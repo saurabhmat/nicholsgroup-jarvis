@@ -3,7 +3,7 @@
 // the owner's Refresh states (disabled with the next time, monthly budget, in flight), and that rendering never fetches.
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
-import type { NewsCard } from "@/lib/news-types";
+import { registrableHost, type NewsCard } from "@/lib/news-types";
 
 const refreshNews = vi.fn<(lane: string) => Promise<unknown>>(async () => ({ ok: true, status: "ok" }));
 vi.mock("@/app/[laneId]/news-actions", () => ({ refreshNews: (l: string) => refreshNews(l) }));
@@ -17,8 +17,8 @@ const NOW = new Date("2026-11-12T15:00:00Z");
 const card = (over: Partial<NewsCard> = {}): NewsCard => ({
   configured: true,
   items: [
-    { headline: "FAR overhaul: part 19 rewrite", why: "Changes small-business set-asides.", source: "Federal Register", publishedAt: "2026-11-12T09:00:00Z", url: "https://www.federalregister.gov/d/2026-1" },
-    { headline: "CMMC phase 2 date", why: "Affects DoD subcontracts.", source: "defense.gov", publishedAt: null, url: "https://www.defense.gov/news/1" },
+    { headline: "FAR overhaul: part 19 rewrite", why: "Changes small-business set-asides.", source: "Federal Register", publishedAt: "2026-11-12T09:00:00Z", url: "https://www.federalregister.gov/d/2026-1", preferred: true },
+    { headline: "CMMC phase 2 date", why: "Affects DoD subcontracts.", source: "defense.gov", publishedAt: null, url: "https://www.defense.gov/news/1", preferred: false },
   ],
   updatedAt: "2026-11-12T11:00:00Z",
   failure: null,
@@ -58,9 +58,8 @@ describe("states", () => {
     const list = within(screen.getByTestId("news-list")).getAllByRole("listitem");
     expect(list).toHaveLength(2);
     expect(list[0]?.textContent).toContain("Changes small-business set-asides.");
-    expect(list[0]?.textContent).toContain("Federal Register · Nov 12");
-    expect(list[1]?.textContent).toContain("defense.gov");
-    expect(list[1]?.textContent).not.toContain("·");
+    expect(list[0]?.textContent).toContain("Federal Register · federalregister.gov · Nov 12");
+    expect(list[1]?.textContent).toContain("defense.gov · via defense.gov · date unknown");
     expect(screen.getByTestId("news-updated").textContent).toBe("Updated 6:00 AM · Last refresh failed: the fetch took too long");
   });
 });
@@ -74,10 +73,24 @@ describe("links and text", () => {
       expect(a.getAttribute("rel")).toBe("noopener noreferrer");
     }
   });
+  it("shows where the link really goes (registrable host), 'via <host>' outside the preferred domains, whatever the model called the source", () => {
+    const items = [
+      { headline: "Official", why: "w", source: "Acquisition.gov", publishedAt: "2026-11-12T09:00:00Z", url: "https://www.acquisition.gov/far", preferred: true },
+      { headline: "Spoofed", why: "w", source: "Federal Register", publishedAt: "2026-11-12T09:00:00Z", url: "https://news.shady-site.org/a", preferred: false },
+      { headline: "UK", why: "w", source: "S", publishedAt: "2026-11-12T09:00:00Z", url: "https://www.contracts.gov.uk/x", preferred: false },
+    ];
+    render_(card({ items }));
+    const meta = screen.getAllByTestId("news-meta").map((m) => m.textContent);
+    expect(meta[0]).toBe("Acquisition.gov · acquisition.gov · Nov 12");
+    expect(meta[1]).toBe("Federal Register · via shady-site.org · Nov 12");
+    expect(meta[2]).toBe("S · via contracts.gov.uk · Nov 12");
+    expect(registrableHost("https://a.b.c.example.com/x")).toBe("example.com");
+    expect(registrableHost("not a url")).toBeNull();
+  });
   it("a non-https item is not rendered at all; model text is text, never HTML", () => {
-    const evil = { headline: "<img src=x onerror=alert(1)>Bold", why: "<b>why</b>", source: "S", publishedAt: null, url: "https://a.gov/x" };
-    const bad = { headline: "javascript", why: "w", source: "S", publishedAt: null, url: "javascript:alert(1)" };
-    const http = { headline: "plain http", why: "w", source: "S", publishedAt: null, url: "http://a.gov/x" };
+    const evil = { headline: "<img src=x onerror=alert(1)>Bold", why: "<b>why</b>", source: "S", publishedAt: null, url: "https://a.gov/x", preferred: false };
+    const bad = { headline: "javascript", why: "w", source: "S", publishedAt: null, url: "javascript:alert(1)", preferred: false };
+    const http = { headline: "plain http", why: "w", source: "S", publishedAt: null, url: "http://a.gov/x", preferred: false };
     const { container } = render_(card({ items: [evil, bad, http] }));
     expect(container.querySelectorAll("img")).toHaveLength(0);
     expect(container.querySelectorAll("b")).toHaveLength(0);
@@ -120,6 +133,12 @@ describe("Refresh (owner only)", () => {
     await waitFor(() => expect(screen.getByTestId("news-refresh-note").textContent).toBe("Refresh is limited to once an hour."));
     expect(refreshNews).toHaveBeenCalledTimes(1);
     expect(refreshNews).toHaveBeenCalledWith("PKG");
+  });
+  it("a successful refresh says 'Updated just now'", async () => {
+    refreshNews.mockResolvedValueOnce({ ok: true, status: "ok" });
+    render_(card({ canRefresh: true }));
+    fireEvent.click(screen.getByTestId("news-refresh"));
+    await waitFor(() => expect(screen.getByTestId("news-refresh-note").textContent).toBe("Updated just now"));
   });
   it("a fetch that failed is reported with its fixed reason", async () => {
     refreshNews.mockResolvedValueOnce({ ok: true, status: "failed", failure: "search_failed" });

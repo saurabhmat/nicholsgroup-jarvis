@@ -4,7 +4,11 @@
 //   - its link is https, has a real host and is NOT in the lane's blocked domains;
 //   - its link appears among the URLs the search tool returned (or cited) in THIS response, so a link the model made up
 //     is dropped (grounding); the stored link is the tool's own string, never the model's;
-//   - its published time (when given) is inside the last 48 hours.
+//   - its date is CONFIRMED inside the last 48 hours: a `published_at` that is an absolute date inside the window, or the matching
+//     search hit's own `pageAge` inside the window. An unconfirmed (undated) story is kept only once per digest, shown as "date
+//     unknown"; a future date (more than 1 h ahead) or an older date drops the story. (Decision: at most ONE undated item, not zero,
+//     because trade-press pages often carry no machine-readable date and an empty card is worse than one honest "date unknown".)
+//   - one story per link and per (normalised) headline.
 // Rule 7 concerns OUR financial figures; this is news, so amounts and dates stay as the source wrote them (not masked).
 import { UNTRUSTED_DATA_RULE, type LLMResult } from "@nichols/ai";
 import type { LaneConfig } from "@nichols/core/lane-config";
@@ -26,8 +30,11 @@ export const NEWS_MAX_ITEMS = 6;
 export const NEWS_MIN_OK_ITEMS = 4;
 export const NEWS_MAX_TOKENS = 4000;
 export const NEWS_MAX_RESUMES = 2;
-/** Worst-case input tokens over a whole fetch (every search result page read, every resume): a planning number, not a measure. */
-export const NEWS_WORST_INPUT_TOKENS = 150_000;
+/** Worst-case input tokens of ONE model call (every search result page read): a planning number, not a measure. The reserve is (1 + resumes) x this. */
+export const NEWS_WORST_INPUT_TOKENS_PER_CALL = 50_000;
+/** Tolerance for a date slightly ahead of now (clock skew, time zones). */
+const FUTURE_SLACK_MS = 3_600_000;
+export const NEWS_MAX_UNDATED = 1;
 const HEADLINE_MAX = 200;
 const WHY_MAX = 300;
 const SOURCE_MAX = 80;
@@ -45,6 +52,7 @@ export function buildNewsSystem(opts: { laneName: string; cfg: NewsConfig; now: 
     `You prepare a short daily news digest for ${name}, a US federal government contractor. Use the web search tool to find the most important US federal contracting news published since ${since} (the last 48 hours; now is ${now.toISOString()}).`,
     "Topics:",
     ...cfg.topics.map((t) => `- ${t}`),
+    "Never put the company name, the lane name or any name of the person or business you are preparing this for in a search query; search only for the public topics.",
     `Prefer official sources (${cfg.preferred_domains.join(", ")}) and reputable trade press, and prefer the original source over an article that summarises it. Do not include opinion pieces, press-release rewrites of old news, or sponsored content.`,
     `Return 4 to 6 stories (fewer only if fewer qualify), most important first, each a different story. Only include a story you found in the search results, and link only to a page that appeared in those results.`,
     `Output ONLY this JSON, with no markdown and no commentary:`,
@@ -60,9 +68,9 @@ export const buildNewsUser = (now: Date) => `Prepare today's digest now. Today i
 const cents = (usd: number) => Math.ceil(usd * 100 - 1e-9) / 100;
 
 /** The most one fetch (the first call plus its resumes) can cost, in USD rounded up to cents. It is reserved before the call. */
-export function reserveUsd(cfg: NewsConfig): number {
-  const calls = 1 + NEWS_MAX_RESUMES;
-  const tokens = (NEWS_WORST_INPUT_TOKENS * cfg.input_usd_per_mtok + calls * NEWS_MAX_TOKENS * cfg.output_usd_per_mtok) / 1_000_000;
+export function reserveUsd(cfg: NewsConfig, maxResumes: number = NEWS_MAX_RESUMES): number {
+  const calls = 1 + maxResumes;
+  const tokens = (calls * NEWS_WORST_INPUT_TOKENS_PER_CALL * cfg.input_usd_per_mtok + calls * NEWS_MAX_TOKENS * cfg.output_usd_per_mtok) / 1_000_000;
   const searches = (calls * cfg.max_searches * cfg.cost_per_1000_searches_usd) / 1000;
   return Math.min(100, Math.max(0.01, cents(tokens + searches)));
 }
@@ -75,9 +83,20 @@ export function actualUsd(usage: LLMResult["usage"], cfg: NewsConfig): number {
 }
 
 // ---------------------------------------------------------------- evidence (what the search tool really returned)
-export type NewsEvidence = { results: Map<string, string>; cited: Set<string>; searches: number; searchErrors: number; searchOk: number };
+export type NewsEvidence = {
+  results: Map<string, string>;
+  /** The search tool's own `page_age` for a result URL (normalised), when it gave one. */
+  ages: Map<string, string>;
+  cited: Set<string>;
+  searches: number;
+  searchErrors: number;
+  searchOk: number;
+};
 
 const BAD_URL_CHARS = /[\u0000-\u0020\u007f-\u009f<>"\\]/;
+/** Special-use / non-public name spaces and wildcard-DNS services (they resolve to any address the owner of the name picks). */
+const SPECIAL_USE_TLD = /\.(internal|local|localhost|arpa|test|example|invalid|onion|lan|home|corp|intranet)$/;
+const WILDCARD_DNS = /(^|\.)(nip\.io|sslip\.io|xip\.io|traefik\.me|localtest\.me|lvh\.me)$/;
 
 /** A comparable form of an https URL, or null when it is not a plain public https URL. */
 export function normalizeUrl(raw: unknown): string | null {
@@ -90,7 +109,7 @@ export function normalizeUrl(raw: unknown): string | null {
   }
   if (u.protocol !== "https:" || u.username || u.password || (u.port && u.port !== "443")) return null;
   const host = u.hostname.toLowerCase().replace(/\.$/, "");
-  if (!host.includes(".") || /^[\d.]+$/.test(host) || host.includes(":") || host === "localhost") return null;
+  if (!host.includes(".") || /^[\d.]+$/.test(host) || host.includes(":") || host === "localhost" || SPECIAL_USE_TLD.test(host) || WILDCARD_DNS.test(host)) return null;
   const path = u.pathname.length > 1 ? u.pathname.replace(/\/+$/, "") : "/";
   return `https://${host}${path}${u.search}`;
 }
@@ -99,7 +118,7 @@ const hostOf = (normalized: string) => new URL(normalized).hostname;
 
 /** The URLs this response's search blocks returned and its citations cited (every one is untrusted until used as a link). */
 export function collectEvidence(result: Pick<LLMResult, "content" | "usage">): NewsEvidence {
-  const e: NewsEvidence = { results: new Map(), cited: new Set(), searches: result.usage.webSearchRequests ?? 0, searchErrors: 0, searchOk: 0 };
+  const e: NewsEvidence = { results: new Map(), ages: new Map(), cited: new Set(), searches: result.usage.webSearchRequests ?? 0, searchErrors: 0, searchOk: 0 };
   for (const b of result.content) {
     if (b.type === "web_search_tool_result") {
       if (b.results === null) e.searchErrors++;
@@ -107,7 +126,10 @@ export function collectEvidence(result: Pick<LLMResult, "content" | "usage">): N
         e.searchOk++;
         for (const r of b.results) {
           const n = normalizeUrl(r.url);
-          if (n && !e.results.has(n)) e.results.set(n, r.url);
+          if (n && !e.results.has(n)) {
+            e.results.set(n, r.url);
+            if (typeof r.pageAge === "string" && r.pageAge.trim()) e.ages.set(n, r.pageAge.trim());
+          }
         }
       }
     } else if (b.type === "text") {
@@ -129,9 +151,16 @@ export function plainText(raw: unknown, max: number): string {
   const t = raw
     .normalize("NFKC")
     .replace(CONTROL, " ")
-    .replace(/<[^>]*>/g, " ")
+    // Only real tag-like patterns (<b>, </p>, <a href="..">, <!-- -->): a bare "<", ">" or "a < b" stays.
+    .replace(/<\/?[A-Za-z][^<>]*>|<!--[\s\S]*?-->/g, " ")
     .replace(/\[([^\]]*)\]\((?:[^)]*)\)/g, "$1")
-    .replace(/[*_`#>]+/g, "")
+    // Markdown emphasis PAIRS and code spans; snake_case, "2 * 3" and lone underscores stay.
+    .replace(/\*\*([^*\n]+)\*\*/g, "$1")
+    .replace(/(?<![\w*])\*([^*\s][^*\n]*?)\*(?![\w*])/g, "$1")
+    .replace(/(?<![\w_])__([^_\n]+)__(?![\w_])/g, "$1")
+    .replace(/(?<![\w_])_([^_\s][^_\n]*?)_(?![\w_])/g, "$1")
+    .replace(/`([^`\n]+)`/g, "$1")
+    .replace(/^#{1,6}\s+/, "")
     .replace(/\s+/g, " ")
     .trim();
   return t.length > max ? `${t.slice(0, max - 1).trimEnd()}…` : t;
@@ -171,18 +200,37 @@ export function newsJsonFrom(content: LLMResult["content"]): unknown {
   return null;
 }
 
-/** A published time: the instant, or null when absent/unparseable/implausibly in the future. A bare date counts to the end of that day. */
-export function parsePublished(raw: string | null | undefined, now: Date): { at: string | null; tooOld: boolean } {
-  if (!raw) return { at: null, tooOld: false };
+export type Published = { at: string | null; status: "in" | "old" | "future" | "unknown" };
+
+const REL_UNITS: Record<string, number> = { minute: 60_000, hour: 3_600_000, day: 86_400_000, week: 7 * 86_400_000, month: 30 * 86_400_000, year: 365 * 86_400_000 };
+
+/**
+ * Where a date string sits against the 48 h window. "unknown" = absent, not an absolute date (no 4-digit year) or unparseable;
+ * "future" = more than 1 h ahead of now; "old" = older than the window (a date without a time counts to the end of that day);
+ * "in" = inside it. A relative age ("2 days ago", the search tool's page_age) is accepted when `relative` is set.
+ */
+export function parsePublished(raw: string | null | undefined, now: Date, relative = false): Published {
+  if (!raw) return { at: null, status: "unknown" };
   const s = raw.trim();
+  if (relative) {
+    const m = /^(\d{1,3})\s*(minute|hour|day|week|month|year)s?\s+ago$/i.exec(s);
+    if (m) {
+      const ago = Number(m[1]) * (REL_UNITS[(m[2] ?? "").toLowerCase()] ?? 0);
+      return ago > NEWS_WINDOW_MS ? { at: null, status: "old" } : { at: new Date(now.getTime() - ago).toISOString(), status: "in" };
+    }
+  }
+  if (!/\b(19|20)\d{2}\b/.test(s)) return { at: null, status: "unknown" };
   const t = Date.parse(s);
-  if (!Number.isFinite(t)) return { at: null, tooOld: false };
-  const dateOnly = /^\d{4}-\d{2}-\d{2}$/.test(s);
+  if (!Number.isFinite(t)) return { at: null, status: "unknown" };
+  const dateOnly = !/\d{1,2}:\d{2}/.test(s);
   const end = dateOnly ? t + 86_400_000 : t;
-  if (now.getTime() - end > NEWS_WINDOW_MS) return { at: null, tooOld: true };
-  if (t - now.getTime() > 86_400_000) return { at: null, tooOld: false };
-  return { at: new Date(t).toISOString(), tooOld: false };
+  if (t - now.getTime() > FUTURE_SLACK_MS) return { at: null, status: "future" };
+  if (now.getTime() - end > NEWS_WINDOW_MS) return { at: null, status: "old" };
+  return { at: new Date(t).toISOString(), status: "in" };
 }
+
+/** A headline reduced to letters and digits, for spotting the same story under two links. */
+const headlineKey = (h: string) => h.toLowerCase().replace(/[^\p{L}\p{N}]+/gu, "");
 
 const blocked = (host: string, list: readonly string[]) => list.some((d) => host === d || host.endsWith(`.${d}`));
 
@@ -197,6 +245,8 @@ export function validateNews(json: unknown, evidence: NewsEvidence, cfg: NewsCon
   if (!env.success) return { items: [], dropped: 0 };
   const out: StoredNewsItem[] = [];
   const seen = new Set<string>();
+  const seenHeadlines = new Set<string>();
+  let undated = 0;
   let dropped = 0;
   for (const raw of env.data.items) {
     const c = candidate.safeParse(raw);
@@ -211,14 +261,38 @@ export function validateNews(json: unknown, evidence: NewsEvidence, cfg: NewsCon
     const why = plainText(c.data.why, WHY_MAX);
     const source = plainText(c.data.source_name, SOURCE_MAX);
     const published = parsePublished(c.data.published_at, now);
-    if (!n || !grounded || !headline || !why || !source || published.tooOld || blocked(hostOf(n), cfg.blocked_domains) || seen.has(n) || out.length >= NEWS_MAX_ITEMS) {
+    const age = n ? evidence.ages.get(n) : undefined;
+    const aged = parsePublished(age, now, true);
+    const key = headlineKey(headline);
+    // Dropped for certain: an old or future date, from the model or from the search tool.
+    const badDate = published.status === "old" || published.status === "future" || aged.status === "old";
+    if (!n || !grounded || !headline || !why || !source || !key || badDate || blocked(hostOf(n), cfg.blocked_domains) || seen.has(n) || seenHeadlines.has(key) || out.length >= NEWS_MAX_ITEMS) {
       dropped++;
       continue;
     }
+    // Confirmed: the model's own absolute date, or the search tool's page age, is inside the window. Otherwise the story is undated.
+    const confirmedAt = published.status === "in" ? published.at : aged.status === "in" ? aged.at : null;
+    if (confirmedAt === null) {
+      if (undated >= NEWS_MAX_UNDATED) {
+        dropped++;
+        continue;
+      }
+      undated++;
+    }
     seen.add(n);
+    seenHeadlines.add(key);
     // The stored link is the search tool's own string when it returned one, else the normalised (cited) form.
     const url = original ?? n;
-    out.push({ headline, why, source_name: source, source_url: url, published_at: published.at, citations: evidence.cited.has(n) ? [url] : [] });
+    const host = hostOf(n);
+    out.push({
+      headline,
+      why,
+      source_name: source,
+      source_url: url,
+      published_at: confirmedAt,
+      citations: evidence.cited.has(n) ? [url] : [],
+      preferred: cfg.preferred_domains.some((d) => host === d || host.endsWith(`.${d}`)),
+    });
   }
   return { items: out, dropped };
 }

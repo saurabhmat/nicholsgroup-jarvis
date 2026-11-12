@@ -6,8 +6,13 @@
 --    brain_import), so it neither opens the chat nor is offered to it.
 -- 2. brief.news_digests: one row per fetch attempt (append-only apart from the single pending -> final step). The model call
 --    happens between core.news_begin_* (which reserves the worst-case cost, enforces the lane gates, the monthly cap, the
---    once-a-day schedule and the 1-per-hour owner refresh, all under an advisory lock) and core.news_finish* (which stores the
+--    scheduled-attempt rules and the owner-refresh limit, all under an advisory lock) and core.news_finish* (which stores the
 --    items and the cost estimate). A crashed call keeps its reserved cost (conservative) and is closed as failed/timed_out.
+--    Scheduled attempts: a failed or lost morning fetch does not block the day. A scheduled attempt is allowed while today has no
+--    ok/partial/pending digest, fewer than 3 scheduled failures and the last scheduled attempt started at least 30 minutes ago.
+--    Owner refresh: one ok/partial refresh per hour; after a FAILED refresh one retry is allowed 5 minutes later.
+--    news_begin_* RETURN a gate code ({id, gate}) instead of raising, so the closing of a lost attempt commits even when the
+--    reserve is then refused. The owner's refresh cannot under-report its spend: news_finish_own keeps the reserve as a floor.
 --    Items are display data derived from untrusted web results (rule 9): the app validates them (grounded https links); the
 --    database re-checks shape, https and size. News is not financial data: amounts stay as the source wrote them.
 -- 3. Read: AAL2 + the caller holds the 'briefing' view in the lane (the Home view; owners, finance operators and viewers),
@@ -95,6 +100,8 @@ create table if not exists brief.news_digests (
   searches integer not null default 0 check (searches between 0 and 50),
   -- USD estimate (searches x lane price + tokens x lane prices). While pending it holds the reserved worst case.
   est_cost numeric(18,2) not null default 0 check (est_cost between 0 and 1000),
+  -- The worst case reserved before the model call (fixed at insert). news_finish_own never stores less than this for a refresh.
+  reserved numeric(18,2) not null default 0 check (reserved between 0 and 100),
   created_at timestamptz not null default pg_catalog.clock_timestamp(),
   fetched_at timestamptz,
   check ((status = 'pending') = (fetched_at is null)),
@@ -102,6 +109,7 @@ create table if not exists brief.news_digests (
 );
 comment on table brief.news_digests is
   'GovCon news digests (T-234 part 4): one row per fetch attempt; items are display data from untrusted web results, validated by the app. Members with the briefing view read; the job and the owner refresh write through definer functions.';
+alter table brief.news_digests add column if not exists reserved numeric(18,2) not null default 0 check (reserved between 0 and 100);
 create index if not exists news_digests_lane_created_idx on brief.news_digests (lane_id, created_at desc);
 create index if not exists news_digests_lane_day_idx on brief.news_digests (lane_id, day);
 
@@ -131,7 +139,7 @@ begin
     raise exception 'brief.news_digests: a finished digest is final' using errcode = '23514';
   end if;
   if new.id <> old.id or new.lane_id <> old.lane_id or new.trigger <> old.trigger or new.day <> old.day or new.created_at <> old.created_at
-     or new.requested_by is distinct from old.requested_by then
+     or new.requested_by is distinct from old.requested_by or new.reserved <> old.reserved then
     raise exception 'brief.news_digests: identity columns are fixed' using errcode = '23514';
   end if;
   if new.status in ('ok', 'partial') and jsonb_array_length(new.items) = 0 then
@@ -146,8 +154,13 @@ begin
        or coalesce(jsonb_typeof(v_el -> 'why'), '') <> 'string' or length(v_el ->> 'why') not between 1 and 400
        or coalesce(jsonb_typeof(v_el -> 'source_name'), '') <> 'string' or length(v_el ->> 'source_name') not between 1 and 120
        or coalesce(jsonb_typeof(v_el -> 'source_url'), '') <> 'string' or (v_el ->> 'source_url') !~ '^https://[^[:space:]<>"]+$' or length(v_el ->> 'source_url') not between 12 and 2048
+       -- The authority (host part) carries no user-info ('@'), no IP literal ('[...]') and is not a bare IPv4 address.
+       or coalesce(pg_catalog.substring(v_el ->> 'source_url', '^https://([^/?#]*)'), '@') ~ '@|\[|\]'
+       or coalesce(pg_catalog.substring(v_el ->> 'source_url', '^https://([^/?#]*)'), '@') ~ '^[0-9.]+(:[0-9]+)?$'
        or (v_el ? 'published_at' and jsonb_typeof(v_el -> 'published_at') not in ('string', 'null'))
-       or (v_el ? 'citations' and jsonb_typeof(v_el -> 'citations') <> 'array') then
+       or (v_el ? 'preferred' and jsonb_typeof(v_el -> 'preferred') <> 'boolean')
+       or (v_el ? 'citations' and (jsonb_typeof(v_el -> 'citations') <> 'array' or jsonb_array_length(v_el -> 'citations') > 6
+            or exists (select 1 from jsonb_array_elements(v_el -> 'citations') c where jsonb_typeof(c) <> 'string' or length(c #>> '{}') > 2048))) then
       raise exception 'brief.news_digests: an item is malformed (headline, why, source_name, https source_url)' using errcode = '23514';
     end if;
   end loop;
@@ -203,12 +216,19 @@ $$;
 revoke all on function brief.news_cap(text) from public, anon, authenticated, service_role;
 
 -- ---------------------------------------------------------------- reserve (the gates, before any model call)
--- Raises (P0001) one of: not_configured (no 'web' category or news.enabled is not true), already_fetched (scheduled: today already
--- has a digest or a scheduled attempt), busy (an attempt started in the last 10 minutes is still pending), rate_limited (an owner
--- refresh in the last hour), cap_reached (month-to-date + p_reserve > lane_config news.monthly_cap_usd, default 20). The cap
--- comes from the lane config here, never from the caller. Returns the new pending row's id; its est_cost is the reserve.
-create or replace function brief.news_reserve(p_lane text, p_trigger text, p_user uuid, p_reserve numeric)
-returns uuid
+-- Returns {"id": <uuid>, "gate": null} for a new pending row (its est_cost and reserved are the reserve), or {"id": null, "gate": <code>}
+-- for a refusal. It does NOT raise for a refusal: the closing of a lost attempt (below) must commit even when the reserve is then refused.
+-- Gate codes: not_configured (no 'web' category or news.enabled is not true), already_fetched (scheduled: today already has an
+-- ok/partial/pending digest), attempts_exhausted (scheduled: 3 scheduled failures today), retry_later (scheduled: the last scheduled
+-- attempt started less than 30 minutes ago), busy (an attempt started in the last 10 minutes is still pending), rate_limited (owner
+-- refresh: an ok/partial refresh in the last hour, or any refresh in the last 5 minutes), cap_reached (month-to-date + p_reserve >
+-- lane_config news.monthly_cap_usd, default 20). The cap comes from the lane config here, never from the caller. Invalid arguments
+-- and a disabled lane still raise (22023).
+drop function if exists core.news_begin_scheduled(text, numeric);
+drop function if exists core.news_begin_refresh(text, numeric);
+drop function if exists brief.news_reserve(text, text, uuid, numeric);
+create function brief.news_reserve(p_lane text, p_trigger text, p_user uuid, p_reserve numeric)
+returns jsonb
 language plpgsql
 security definer
 set search_path = ''
@@ -219,6 +239,7 @@ declare
   v_cap numeric;
   v_spend numeric;
   v_id uuid;
+  v_failures integer;
 begin
   if p_lane is null or p_lane !~ '^[A-Z]{1,8}$' or p_trigger not in ('schedule', 'refresh') or p_reserve is null or p_reserve <= 0 or p_reserve > 100 then
     raise exception 'invalid arguments' using errcode = '22023';
@@ -228,43 +249,55 @@ begin
   end if;
   perform pg_catalog.pg_advisory_xact_lock(pg_catalog.hashtextextended('brief.news_digests:' || p_lane, 0));
   if not coalesce((select 'web' = any (lp.llm_allowed_categories) from core.lane_policies lp where lp.lane_id = p_lane), false) then
-    raise exception 'not_configured' using errcode = 'P0001';
+    return pg_catalog.jsonb_build_object('id', null, 'gate', 'not_configured');
   end if;
   select c.config -> 'news' into v_cfg from core.lane_config c where c.lane_id = p_lane order by c.version desc limit 1;
   if coalesce(v_cfg ->> 'enabled', 'false') <> 'true' then
-    raise exception 'not_configured' using errcode = 'P0001';
+    return pg_catalog.jsonb_build_object('id', null, 'gate', 'not_configured');
   end if;
   v_cap := brief.news_cap(p_lane);
-  -- A pending attempt older than 10 minutes was lost (crash, timeout): close it as failed, keeping its reserved cost.
+  -- A pending attempt older than 10 minutes was lost (crash, timeout): close it as failed, keeping its reserved cost. This is a
+  -- committed step: every refusal below returns normally instead of raising.
   update brief.news_digests d set status = 'failed', failure_code = 'timed_out'
   where d.lane_id = p_lane and d.status = 'pending' and d.created_at < pg_catalog.clock_timestamp() - interval '10 minutes';
-  if p_trigger = 'schedule' and exists (
-       select 1 from brief.news_digests d where d.lane_id = p_lane and d.day = v_today and (d.trigger = 'schedule' or d.status in ('ok', 'partial', 'pending'))) then
-    raise exception 'already_fetched' using errcode = 'P0001';
+  if p_trigger = 'schedule' then
+    if exists (select 1 from brief.news_digests d where d.lane_id = p_lane and d.day = v_today and d.status in ('ok', 'partial', 'pending')) then
+      return pg_catalog.jsonb_build_object('id', null, 'gate', 'already_fetched');
+    end if;
+    select count(*) into v_failures from brief.news_digests d where d.lane_id = p_lane and d.day = v_today and d.trigger = 'schedule' and d.status = 'failed';
+    if v_failures >= 3 then
+      return pg_catalog.jsonb_build_object('id', null, 'gate', 'attempts_exhausted');
+    end if;
+    if exists (select 1 from brief.news_digests d where d.lane_id = p_lane and d.day = v_today and d.trigger = 'schedule'
+               and d.created_at > pg_catalog.clock_timestamp() - interval '30 minutes') then
+      return pg_catalog.jsonb_build_object('id', null, 'gate', 'retry_later');
+    end if;
   end if;
   if exists (select 1 from brief.news_digests d where d.lane_id = p_lane and d.status = 'pending') then
-    raise exception 'busy' using errcode = 'P0001';
+    return pg_catalog.jsonb_build_object('id', null, 'gate', 'busy');
   end if;
   if p_trigger = 'refresh' and exists (
-       select 1 from brief.news_digests d where d.lane_id = p_lane and d.trigger = 'refresh' and d.created_at > pg_catalog.clock_timestamp() - interval '1 hour') then
-    raise exception 'rate_limited' using errcode = 'P0001';
+       select 1 from brief.news_digests d where d.lane_id = p_lane and d.trigger = 'refresh'
+       and ((d.status in ('ok', 'partial') and d.created_at > pg_catalog.clock_timestamp() - interval '1 hour')
+            or d.created_at > pg_catalog.clock_timestamp() - interval '5 minutes')) then
+    return pg_catalog.jsonb_build_object('id', null, 'gate', 'rate_limited');
   end if;
   select coalesce(sum(d.est_cost), 0) into v_spend from brief.news_digests d where d.lane_id = p_lane and d.created_at >= brief.news_month_start();
   if v_spend + p_reserve > v_cap then
-    raise exception 'cap_reached' using errcode = 'P0001';
+    return pg_catalog.jsonb_build_object('id', null, 'gate', 'cap_reached');
   end if;
-  insert into brief.news_digests (lane_id, trigger, requested_by, est_cost) values (p_lane, p_trigger, p_user, p_reserve) returning id into v_id;
-  return v_id;
+  insert into brief.news_digests (lane_id, trigger, requested_by, est_cost, reserved) values (p_lane, p_trigger, p_user, p_reserve, p_reserve) returning id into v_id;
+  return pg_catalog.jsonb_build_object('id', v_id, 'gate', null);
 end;
 $$;
 comment on function brief.news_reserve(text, text, uuid, numeric) is
-  'T-234 part 4: lane gates (web category, news.enabled), once-a-day schedule, 1-per-hour refresh, monthly cap from lane_config; reserves the worst-case cost. service_role and the definer wrappers only.';
+  'T-234 part 4: lane gates (web category, news.enabled), scheduled retry rules (3 failures, 30 min apart), refresh limit (1 ok per hour, retry 5 min after a failure), monthly cap from lane_config; reserves the worst-case cost. Returns {id, gate}. service_role and the definer wrappers only.';
 revoke all on function brief.news_reserve(text, text, uuid, numeric) from public, anon, authenticated;
 grant execute on function brief.news_reserve(text, text, uuid, numeric) to service_role;
 
 -- The job (service_role).
-create or replace function core.news_begin_scheduled(p_lane text, p_reserve numeric)
-returns uuid
+create function core.news_begin_scheduled(p_lane text, p_reserve numeric)
+returns jsonb
 language sql
 security invoker
 set search_path = ''
@@ -289,9 +322,9 @@ $$;
 revoke all on function core.news_finish(text, uuid, text, text, jsonb, integer, numeric) from public, anon, authenticated;
 grant execute on function core.news_finish(text, uuid, text, text, jsonb, integer, numeric) to service_role;
 
--- The owner's Refresh: aal2 + lane owner + briefing view; the 1-per-hour limit and the cap are enforced by brief.news_reserve.
-create or replace function core.news_begin_refresh(p_lane text, p_reserve numeric)
-returns uuid
+-- The owner's Refresh: aal2 + lane owner + briefing view; the refresh limit and the cap are enforced by brief.news_reserve (returns {id, gate}).
+create function core.news_begin_refresh(p_lane text, p_reserve numeric)
+returns jsonb
 language plpgsql
 security definer
 set search_path = ''
@@ -326,7 +359,12 @@ begin
   if p_lane is null or not core.has_lane_role(v_uid, p_lane, array['owner']) or not (p_lane = any (core.allowed_lanes(v_uid, 'briefing'))) then
     raise exception 'not allowed' using errcode = '42501';
   end if;
-  update brief.news_digests d set status = p_status, failure_code = p_failure_code, items = coalesce(p_items, '[]'), searches = coalesce(p_searches, 0), est_cost = coalesce(p_est_cost, 0)
+  if p_est_cost is not null and (p_est_cost < 0 or p_est_cost > 1000) then
+    raise exception 'invalid cost' using errcode = '22023';
+  end if;
+  -- The owner cannot under-report: the stored cost is never below what was reserved for this attempt.
+  update brief.news_digests d set status = p_status, failure_code = p_failure_code, items = coalesce(p_items, '[]'), searches = coalesce(p_searches, 0),
+         est_cost = greatest(d.reserved, coalesce(p_est_cost, 0))
   where d.id = p_id and d.lane_id = p_lane and d.trigger = 'refresh' and d.requested_by = v_uid and d.status = 'pending';
   if not found then
     raise exception 'not_pending' using errcode = 'P0001';
@@ -337,11 +375,13 @@ revoke all on function core.news_finish_own(text, uuid, text, text, jsonb, integ
 grant execute on function core.news_finish_own(text, uuid, text, text, jsonb, integer, numeric) to authenticated;
 
 -- ---------------------------------------------------------------- reads
--- Home: the newest ok/partial digest fetched in the last 30 hours (items), the newest failure after it, the newest owner
--- refresh (the 1-per-hour limit shown as a time) and whether an attempt is in flight. No row when the lane has no attempt at all.
-create or replace function core.news_latest(p_lane text)
+-- Home: the newest ok/partial digest fetched in the last 30 hours (items), the newest failure after it, the time from which the
+-- owner may refresh again (an ok/partial refresh + 1 hour, or any refresh + 5 minutes; null when allowed now) and whether an
+-- attempt is in flight. No row when the lane has no attempt at all.
+drop function if exists core.news_latest(text);
+create function core.news_latest(p_lane text)
 returns table (id uuid, day date, trigger text, status text, items jsonb, fetched_at timestamptz, searches integer,
-               last_failed_at timestamptz, last_failure_code text, last_refresh_at timestamptz, pending_since timestamptz)
+               last_failed_at timestamptz, last_failure_code text, next_refresh_at timestamptz, pending_since timestamptz)
 language plpgsql
 stable
 security invoker
@@ -364,14 +404,16 @@ begin
   )
   select g.id, g.day, g.trigger, g.status, coalesce(g.items, '[]'::jsonb), g.fetched_at, g.searches,
          (select b.fetched_at from bad b), (select b.failure_code from bad b),
-         (select max(r.created_at) from mine r where r.trigger = 'refresh'),
+         (select w.at from (select greatest((select max(r.created_at) + interval '1 hour' from mine r where r.trigger = 'refresh' and r.status in ('ok', 'partial')),
+                                            (select max(r.created_at) + interval '5 minutes' from mine r where r.trigger = 'refresh')) as at) w
+          where w.at > pg_catalog.clock_timestamp()),
          (select max(p.created_at) from mine p where p.status = 'pending' and p.created_at > pg_catalog.clock_timestamp() - interval '10 minutes')
   from (select 1) one
   left join good g on true
   where exists (select 1 from mine);
 end;
 $$;
-comment on function core.news_latest(text) is 'Home GovCon news: the newest ok digest (30 h), the newest failure after it, the last owner refresh and the in-flight flag. Invoker: RLS on brief.news_digests applies.';
+comment on function core.news_latest(text) is 'Home GovCon news: the newest ok digest (30 h), the newest failure after it, when the owner may refresh again and the in-flight flag. Invoker: RLS on brief.news_digests applies.';
 revoke all on function core.news_latest(text) from public, anon;
 grant execute on function core.news_latest(text) to authenticated, service_role;
 

@@ -1,8 +1,8 @@
 "use server";
 // "Refresh" on the GovCon news card (T-234 part 4). Order: lane id shape -> AAL2 session + OWNER role (requireRole) -> AI
 // configured -> the lane's news config -> runNewsFetch, which reserves the attempt in SQL FIRST (web category, news.enabled,
-// 1 refresh per hour, monthly cap, one in flight: all enforced by core.news_begin_refresh, not here) and only then calls the
-// model, bounded by a time limit (Home's maxDuration is 90 s). Every database call uses the owner's own lane client, so RLS
+// one ok refresh per hour (a retry 5 min after a failed one), monthly cap, one in flight: all enforced by core.news_begin_refresh, not here) and only then calls the
+// model, bounded by a 70 s time limit (Home's maxDuration is 90 s, so the abort and the closing database call fit). Every database call uses the owner's own lane client, so RLS
 // and the definer functions' own checks apply; no service client on this path. Returns a code only. A page render or the
 // 5-minute auto-refresh never calls this: the card only reads the stored digest.
 import { getLLMProvider } from "@nichols/ai/config";
@@ -13,11 +13,9 @@ import { guards } from "@/lib/guards";
 import { beginNews, finishNews } from "@/lib/news";
 import { newsConfigFrom } from "@/lib/news-domain";
 import { NewsGateError, runNewsFetch } from "@/lib/news-run";
-import type { RefreshNewsState } from "@/lib/news-types";
+import { NEWS_REFRESH_TIMEOUT_MS, type RefreshNewsState } from "@/lib/news-types";
 
 const LANE = /^[A-Z]{1,8}$/;
-/** The whole fetch (model call with its searches and resumes) is cut off here; the SQL row is then closed as failed/timed_out. */
-export const NEWS_REFRESH_TIMEOUT_MS = 80_000;
 
 export async function refreshNews(laneId: string): Promise<RefreshNewsState> {
   if (typeof laneId !== "string" || !LANE.test(laneId)) return { error: "forbidden" };
@@ -43,7 +41,7 @@ export async function refreshNews(laneId: string): Promise<RefreshNewsState> {
     return { ok: true, status: res.status, ...(res.failureCode ? { failure: res.failureCode } : {}) };
   } catch (e) {
     if (e instanceof AuthError) return { error: "forbidden" };
-    if (e instanceof NewsGateError) return { error: e.code === "already_fetched" ? "busy" : e.code };
+    if (e instanceof NewsGateError) return { error: e.code === "already_fetched" || e.code === "retry_later" || e.code === "attempts_exhausted" ? "busy" : e.code };
     if (e instanceof Error && e.name === "EnvValidationError") return { error: "ai_not_set_up" };
     console.error("[news] refresh failed", { laneId, error: e instanceof Error ? e.name : typeof e });
     return { error: "unavailable" };

@@ -28,7 +28,7 @@ export function NewsSection({ view, tz, now }: { view: NewsSettingsView; tz: str
       </dl>
       {on ? null : (
         <p data-testid="news-setup-hint" className="mt-3 text-small text-muted-foreground">
-          To turn it on, a person with database access adds the web category to this lane&apos;s policy and switches news on in the lane config (see the T-234 hand-off notes).
+          An administrator turns news on for this company.
         </p>
       )}
     </Card>

@@ -23,6 +23,7 @@ describe("NewsSection", () => {
       render(<NewsSection view={v} tz="America/New_York" now={NOW} />);
       expect(screen.getByTestId("news-status").textContent).toBe("Not configured");
       expect(screen.getByTestId("news-setup-hint")).toBeTruthy();
+      expect(screen.getByTestId("news-setup-hint").textContent).toBe("An administrator turns news on for this company.");
       cleanup();
     }
   });
