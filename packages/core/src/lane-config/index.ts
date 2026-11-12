@@ -242,8 +242,16 @@ export const laneConfigSchema = z.strictObject({
         .transform((r) => (r["email.save_draft"] === undefined && r["email.draft"] !== undefined ? { ...r, "email.save_draft": r["email.draft"] } : r))
         .default({ "email.save_draft": 72, "email.draft": 72, "email.send": 72, "monday.item": 168 }),
       payload_retention_days: z.int().min(1).max(3650).default(30),
+      // action.reconcile_stuck (T-192): an action still `executing` after this many minutes is looked up at the provider;
+      // undecidable ones end failed / outcome_unknown after the give-up time (at least the first number + 5).
+      reconcile_after_minutes: z.int().min(5).max(1440).default(10),
+      reconcile_give_up_minutes: z.int().min(10).max(2880).default(60),
       allowed_mailboxes: z.array(email).max(20).default([]),
       monday_column_allowlist: ids,
+    })
+    .refine((a) => a.reconcile_give_up_minutes >= a.reconcile_after_minutes + 5, {
+      message: "reconcile_give_up_minutes must be at least reconcile_after_minutes + 5",
+      path: ["reconcile_give_up_minutes"],
     })
     .prefault({}),
   assistant: z

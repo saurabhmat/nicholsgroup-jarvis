@@ -1079,7 +1079,13 @@ Logged, not fixed (MEDIUM and below):
 All HIGH items are fixed (security H1; code H1, H2), plus security M2, L1, L2, L6, L7 and code M1 – M4, L6 – L8. Details are in `.agent/pr/T-232.md`.
 
 Logged, not fixed:
-- **Security M3 / code M1 (rest), stuck `executing` rows.** There is no `action.reconcile_stuck` (T-192). A row left `executing` (the request was killed after the send, or recording failed) keeps its body and needs a manual look until T-192. Do this **before PKG sends live mail**.
+- **Security M3 / code M1 (rest), stuck `executing` rows.** Resolved by T-192 (`action.reconcile_stuck`, spec approvals §6a; migration `20261112100000`, production part 11): a row left `executing` is verified by the provider marker or failed as `outcome_unknown` after the give-up time (default 60 min), and its body is purged on the terminal transition. Production needs part 11 applied **before PKG sends live mail** (H-047 step 6).
+- **T-192 review follow-ups (Nov 11, 2026).** Security M1, L1 - L6 and code M1 - M3, L4 - L6 are fixed (see `.agent/pr/T-192.md`). Logged, not fixed:
+  - code L7: a sweep handles at most 20 rows per lane; more than 20 stuck rows (e.g. a long outage) take several 5-minute runs, oldest first. The worst starvation case (rows that always error) is closed by security L1.
+  - code L9 (skipped as agreed).
+  - Resolved by the T-192 follow-up commit: the execute path's pre-send and post-failure lookup and the reconciler's `findWrite` now share one helper (`findOwnCopies`): the mailbox's own `in:sent` / `in:drafts` only (no spam or trash), and a hit counts only with our Message-ID or `X-Portal-Action-Id`, From = the sending mailbox and the SENT / DRAFT label.
+  - Accepted trade-offs of the own-copy lookup (safe: nothing is ever resent, the action ends `outcome_unknown` for a human): a Sent copy moved to Trash after a crash is not seen (the lookup is `in:sent`); a draft the user sends or edits before the reconciler runs loses the DRAFT label or its id.
+  - Not-found actions keep their body until the give-up time (default 60 min); D-19 purge happens at the terminal transition.
 - **Security M4.** Gmail may replace a client Message-ID. The duplicate guard after a crash then rests on the claim only (safe: an unknown outcome is never resent). Check this on the first live send (H-item).
 - **Security M1 (rest).** No "new to this thread" flag and no live quote of the thread (spec §8, §10). T-231d's recipient is always the sender of the message replied to, taken from metadata.
 - **Security L3.** Switching `store_outbound_drafts` off leaves pending bodies until they expire (now at most 15 min after `expires_at`).

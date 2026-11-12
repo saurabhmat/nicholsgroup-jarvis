@@ -135,6 +135,10 @@ function world(over: { facts?: Partial<CapabilityFacts>; mailboxes?: string[]; w
         purge(r);
         return { data: null, error: null };
       }
+      case "act_action_state": {
+        const r = get(a.p_id);
+        return { data: r ? [{ status: r.status, failure_code: r.failure_code ?? null }] : [], error: null };
+      }
       case "has_lane_role":
         return { data: a.p_uid === OWNER, error: null };
       default:
@@ -475,6 +479,51 @@ describe("review fixes (T-232 code review H1, H2, M1, M4)", () => {
     expect(w.rows.get(id)?.status).toBe("executing");
     expect(w.audits.some((a) => a.action === "action.record_failed")).toBe(true);
     expect(w.calls.writes).toBe(1);
+  });
+
+  it("a failed execute keeps its failure code in the action.failed audit entry (T-192 security L4)", async () => {
+    const w = world({ writer: "unknown" });
+    const { id, hash } = await proposeEmailAction(w.deps, "PKG", input);
+    await expect(approveAndExecute(w.deps, w.ctx, { actionId: id, hashSeen: hash })).resolves.toMatchObject({ status: "failed", failureCode: "outcome_unknown" });
+    expect(w.audits.find((x) => x.action === "action.failed")?.metadata).toMatchObject({ failure: "outcome_unknown", outcome: "outcome_unknown" });
+  });
+
+  it("an execute that loses the race to the reconciler reports the row's real status and writes no contradicting failure audit (T-192 code review M1)", async () => {
+    const w = world();
+    const { id, hash } = await proposeEmailAction(w.deps, "PKG", input);
+    const inner = w.rpc;
+    // The reconciler verified the action while the late execute was still reading back.
+    w.deps.jobRpc = async () => async (fn, args) => {
+      if (fn === "act_claim_sent") {
+        const r = w.rows.get(id);
+        if (r) r.status = "verified";
+        return { data: null, error: { code: "P0001", message: "act: no open claim" } };
+      }
+      return inner(fn, args);
+    };
+    const res = await approveAndExecute(w.deps, w.ctx, { actionId: id, hashSeen: hash });
+    expect(res).toEqual({ status: "verified", actionId: id });
+    expect(w.audits.some((x) => x.action === "action.failed")).toBe(false);
+    expect(w.calls.writes).toBe(1);
+  });
+
+  it("an execute that loses the race to a reconciler failure reports that failure", async () => {
+    const w = world();
+    const { id, hash } = await proposeEmailAction(w.deps, "PKG", input);
+    const inner = w.rpc;
+    w.deps.jobRpc = async () => async (fn, args) => {
+      if (fn === "act_mark_verified") {
+        const r = w.rows.get(id);
+        if (r) {
+          r.status = "failed";
+          r.failure_code = "marker_not_found";
+        }
+        return { data: null, error: { code: "P0001", message: "act: not_executing" } };
+      }
+      return inner(fn, args);
+    };
+    await expect(approveAndExecute(w.deps, w.ctx, { actionId: id, hashSeen: hash })).resolves.toEqual({ status: "failed", actionId: id, failureCode: "marker_not_found" });
+    expect(w.audits.some((x) => x.action === "action.failed" || x.action === "action.record_failed")).toBe(false);
   });
 
   it("the executor uses the approver recorded in the database", async () => {

@@ -69,6 +69,13 @@ async function ApprovalsBody({ laneId }: { laneId: string }) {
                     {h.actionType === "email.send" ? "To" : "Draft to"} {h.to.join(", ") || "unknown"}
                     {h.failureCode ? ` · ${h.failureCode.replaceAll("_", " ")}` : ""}
                   </p>
+                  {h.outcomeUnknown ? (
+                    <p data-testid="approvals-outcome-unknown" className="text-small text-alert-foreground">
+                      {h.failureCode === "reconcile_sent_unverified"
+                        ? `It was ${h.actionType === "email.send" ? "sent" : "saved"} but could not be read back. Check the mailbox before asking for it again.`
+                        : `Outcome unknown: it may have been ${h.actionType === "email.send" ? "sent" : "saved"}. Check the mailbox before asking for it again.`}
+                    </p>
+                  ) : null}
                 </div>
                 <div className="flex items-center gap-2">
                   <span className="text-small text-muted-foreground">{WHEN.format(new Date(h.at))}</span>

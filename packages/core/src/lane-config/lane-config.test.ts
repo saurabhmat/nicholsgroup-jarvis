@@ -141,6 +141,11 @@ describe("lane config schema", () => {
     expect(() => parseLaneConfig({ approvals: { approver_roles: ["owner", "finance_operator"] } })).toThrow(z.ZodError);
     expect(() => parseLaneConfig({ approvals: { approver_roles: [] } })).toThrow(z.ZodError);
     expect(() => parseLaneConfig({ approvals: { step_up_max_age_s: 3600 } })).toThrow(z.ZodError);
+    // T-192: the reconcile give-up time is at least the reconcile threshold + 5 minutes.
+    expect(parseLaneConfig({ approvals: {} }).approvals).toMatchObject({ reconcile_after_minutes: 10, reconcile_give_up_minutes: 60 });
+    expect(parseLaneConfig({ approvals: { reconcile_after_minutes: 20, reconcile_give_up_minutes: 25 } }).approvals.reconcile_give_up_minutes).toBe(25);
+    expect(() => parseLaneConfig({ approvals: { reconcile_after_minutes: 20, reconcile_give_up_minutes: 24 } })).toThrow(z.ZodError);
+    expect(() => parseLaneConfig({ approvals: { reconcile_after_minutes: 4 } })).toThrow(z.ZodError);
     expect(parseLaneConfig({}).assistant.max_snippet_chars).toBe(300);
   });
 

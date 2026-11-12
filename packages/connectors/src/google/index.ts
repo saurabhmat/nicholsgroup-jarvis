@@ -13,7 +13,7 @@ import { createGmailProvider } from "./mail";
 import { createMailSync } from "./mail-sync";
 import { createGoogleOAuthProvider, type GoogleClientConfig } from "./provider";
 import { createGoogleTokenManager } from "./token-manager";
-import { createGoogleEmailWriter } from "./email-writer";
+import { createGoogleEmailWriter, type GoogleEmailReconciler } from "./email-writer";
 import { createGoogleWriter } from "./writer";
 
 function client(): GoogleClientConfig {
@@ -71,6 +71,9 @@ export const googleWriter = createGoogleWriter({ vault, connections, tokens });
 
 /** Send or save-as-draft an approved email (T-232; approvals only, via the write subpath). Never called by a route, job or tool. */
 export const googleEmailWriter = createGoogleEmailWriter({ connections, tokens, api, laneConfig: laneConfigReader, claims: actionClaimReader });
+
+/** Recovery (T-192): the writer's read side only (marker lookup and read-back). It has no `executeWrite`, so a reconciler cannot send. */
+export const googleEmailReconciler: GoogleEmailReconciler = Object.freeze({ findWrite: googleEmailWriter.findWrite, verifyWrite: googleEmailWriter.verifyWrite });
 
 /** The authoritative, lane-bound Google connection row the email writer runs on (write subpath only). */
 export async function loadGoogleWriteConnection(laneId: LaneId, connectionId: string): Promise<LaneBoundConnection<"google">> {

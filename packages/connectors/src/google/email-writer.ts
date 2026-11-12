@@ -26,7 +26,7 @@ import type { SecretValue } from "../vault/secret";
 import type { GoogleApi } from "./api";
 import { GMAIL_BASE, GMAIL_RATE_LIMIT } from "./constants";
 import { assertGoogleConnection } from "./guard";
-import { cleanText, decodeEncodedWords } from "./headers";
+import { cleanText, decodeEncodedWords, MAX_SINGLE_HEADER, parseAddressList } from "./headers";
 import { createGoogleHttp } from "./http";
 import { buildRfc822, PORTAL_ACTION_HEADER, portalMessageId, toBase64Url } from "./mime-build";
 import type { GoogleTokenManager } from "./token-manager";
@@ -59,7 +59,16 @@ export type GoogleEmailWriterDeps = {
 export interface GoogleEmailWriter extends ConnectorWriter<GoogleEmailApprovedAction, "google"> {
   /** Reads the message back and compares thread, Message-ID, recipients and subject with the approved payload. Throws `VERIFICATION_MISMATCH_MESSAGE`. */
   verifyWrite(laneId: LaneId, conn: LaneBoundConnection<"google">, action: GoogleEmailApprovedAction, externalId: string): Promise<void>;
+  /**
+   * Read-only marker lookup for recovery (T-192): the ids of the messages in the mailbox whose Message-ID is this action's
+   * deterministic `<portal-{id}@domain>` (at most 5, only the mailbox's own sent or draft copy: an inbound message carrying the Message-ID is ignored). Runs the same checks as `verifyWrite` but not
+   * the open-claim check, sends nothing and writes nothing. An empty list does NOT prove nothing was sent (Gmail search can lag).
+   */
+  findWrite(laneId: LaneId, conn: LaneBoundConnection<"google">, action: GoogleEmailApprovedAction): Promise<string[]>;
 }
+
+/** What the reconciler may hold: look up and read back, never `executeWrite`. */
+export type GoogleEmailReconciler = Pick<GoogleEmailWriter, "findWrite" | "verifyWrite">;
 
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 const refused = (message: string) => new ConnectorError({ kind: "invalid_input", message });
@@ -88,6 +97,15 @@ function assertPayloadHash(action: GoogleEmailApprovedAction): void {
 
 function header(m: MetaMessage, name: string): string | undefined {
   return m.payload?.headers?.find((h) => h.name.toLowerCase() === name.toLowerCase())?.value;
+}
+/**
+ * True when the From header is exactly ONE mailbox whose bare address is `mailbox` (case-insensitive). Uses the quote-,
+ * comment- and encoded-word-aware parser of `headers.ts`: `"Last, First" <a@b>`, `=?UTF-8?B?..?= <a@b>` and `a@b (note)` are
+ * accepted; `"<a@b>" <evil@x>` is the address in the LAST angle brackets (evil@x), and two addresses are refused.
+ */
+function fromIsMailbox(value: string | undefined, mailbox: string): boolean {
+  const list = parseAddressList(value, 3, MAX_SINGLE_HEADER);
+  return list.length === 1 && list[0]?.address === mailbox.toLowerCase();
 }
 const addressSet = (value: string | undefined): string[] =>
   [...new Set((value ?? "").split(",").map((p) => (/<([^<>]+)>/.exec(p)?.[1] ?? p).trim().toLowerCase()).filter((p) => p !== ""))].sort();
@@ -126,14 +144,31 @@ export function createGoogleEmailWriter(deps: GoogleEmailWriterDeps): GoogleEmai
     return { row, compose, mailbox };
   }
 
-  async function findByMessageId(laneId: LaneId, conn: LaneBoundConnection<string>, messageId: string): Promise<MessageRef | null> {
+  /**
+   * The ONE lookup of "is this action's message already in the mailbox", shared by the execute path (pre-send duplicate check
+   * and post-failure lookup) and the reconciler's `findWrite`, so they cannot drift (T-192 security M1 and follow-up).
+   * Searches only the sending mailbox's own `in:sent` (email.send) or `in:drafts` (email.save_draft): never Inbox, Spam or
+   * Trash (no `includeSpamTrash`). A hit counts only when, read back, it carries our Message-ID or X-Portal-Action-Id AND its
+   * From is the sending mailbox (bare address, case-insensitive) AND it has the expected SENT / DRAFT label. An inbound or
+   * forged message with our Message-ID therefore never blocks a send and never decides an outcome.
+   */
+  async function findOwnCopies(laneId: LaneId, conn: LaneBoundConnection<string>, action: GoogleEmailApprovedAction, mailbox: string): Promise<string[]> {
+    const isSend = action.action_type === "email.send";
+    const messageId = portalMessageId(action.id, mailbox);
     const res = await deps.api.get<{ messages?: MessageRef[] }>(laneId, conn, PATH_MESSAGES, undefined, {
-      q: `rfc822msgid:${messageId.replace(/^<|>$/g, "")}`,
-      maxResults: 1,
-      includeSpamTrash: true,
+      q: `rfc822msgid:${messageId.replace(/^<|>$/g, "")} in:${isSend ? "sent" : "drafts"}`,
+      maxResults: 5,
     });
-    const first = res.data?.messages?.[0];
-    return first && typeof first.id === "string" ? first : null;
+    const own: string[] = [];
+    for (const hit of res.data?.messages ?? []) {
+      if (!hit || typeof hit.id !== "string" || hit.id === "") continue;
+      const m = await readMeta(laneId, conn, hit.id, ["Message-ID", "From", PORTAL_ACTION_HEADER]);
+      const mid = header(m, "Message-ID")?.trim().toLowerCase();
+      const marker = header(m, PORTAL_ACTION_HEADER)?.trim().toLowerCase();
+      const ours = mid === messageId.toLowerCase() || marker === action.id.toLowerCase();
+      if (ours && fromIsMailbox(header(m, "From"), mailbox) && (m.labelIds ?? []).includes(isSend ? "SENT" : "DRAFT")) own.push(m.id);
+    }
+    return own;
   }
 
   async function readMeta(laneId: LaneId, conn: LaneBoundConnection<string>, id: string, headers: string[]): Promise<MetaMessage> {
@@ -176,10 +211,9 @@ export function createGoogleEmailWriter(deps: GoogleEmailWriterDeps): GoogleEmai
       throw new ConnectorError({ kind: "forbidden", message: "This action is not approved and claimed for execution" });
     }
     const executed_at = () => new Date((deps.now ?? Date.now)()).toISOString();
-    const messageId = portalMessageId(action.id, mailbox);
 
-    const existing = await findByMessageId(laneId, row, messageId);
-    if (existing) return { outcome: "already_applied", external_id: existing.id, executed_at: executed_at(), provider_tid: null } satisfies ExecResult;
+    const existing = (await findOwnCopies(laneId, row, action, mailbox))[0];
+    if (existing) return { outcome: "already_applied", external_id: existing, executed_at: executed_at(), provider_tid: null } satisfies ExecResult;
 
     let reply: { messageId: string; references: string } | undefined;
     if (compose.inReplyTo) {
@@ -206,12 +240,12 @@ export function createGoogleEmailWriter(deps: GoogleEmailWriterDeps): GoogleEmai
       if (isConnectorError(e) && DEFINITE_KINDS.has(e.info.kind) && e.info.message !== OUTCOME_UNKNOWN_MESSAGE) throw e;
       // The provider may have processed it: look for the deterministic Message-ID (twice: Gmail search can lag), and
       // never send again.
-      let found = await findByMessageId(laneId, row, messageId).catch(() => null);
+      let found = (await findOwnCopies(laneId, row, action, mailbox).catch(() => []))[0];
       if (!found) {
         await (deps.sleep ?? ((ms: number) => new Promise<void>((r) => setTimeout(r, ms))))(2000);
-        found = await findByMessageId(laneId, row, messageId).catch(() => null);
+        found = (await findOwnCopies(laneId, row, action, mailbox).catch(() => []))[0];
       }
-      if (found) return { outcome: "already_applied", external_id: found.id, executed_at: executed_at(), provider_tid: null };
+      if (found) return { outcome: "already_applied", external_id: found, executed_at: executed_at(), provider_tid: null };
       throw new ConnectorError({ kind: "provider_error", message: OUTCOME_UNKNOWN_MESSAGE });
     }
   };
@@ -220,6 +254,10 @@ export function createGoogleEmailWriter(deps: GoogleEmailWriterDeps): GoogleEmai
     provider: "google",
     actionTypes: GOOGLE_EMAIL_ACTIONS,
     executeWrite,
+    async findWrite(laneId, conn, action) {
+      const { row, mailbox } = await prepare(laneId, conn, action);
+      return findOwnCopies(laneId, row, action, mailbox);
+    },
     async verifyWrite(laneId, conn, action, externalId) {
       const { row, compose, mailbox } = await prepare(laneId, conn, action);
       const mismatch = () => new ConnectorError({ kind: "provider_error", message: VERIFICATION_MISMATCH_MESSAGE });
