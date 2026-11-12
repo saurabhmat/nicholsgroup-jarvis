@@ -166,6 +166,8 @@ export function CalendarSections({ view, now }: { view: BriefingView; now: Date 
 
 /** Avatar colours: text and ground are token pairs checked for 4.5:1 in light and dark (tokens.test.ts). */
 const AVATAR = ["bg-primary-tint text-primary", "bg-alert-surface text-alert-foreground", "bg-success-surface text-success", "bg-muted text-foreground"] as const;
+/** The phone shows the first three attention rows (the iPhone design); desktop shows up to five. */
+const PHONE_ROWS = 3;
 const CHIP_TONE = { alert: "alert", gold: "gold", outline: "outline" } as const;
 
 /**
@@ -207,7 +209,7 @@ export function AttentionSection({ laneId, mail, now, notes, replies, canReply =
   return (
     <div className="flex flex-col gap-3">
       <ol role="list" data-testid="attention-list" className="flex flex-col divide-y divide-border">
-        {mail.attention.map((a) => {
+        {mail.attention.map((a, index) => {
           const t = a.thread;
           const note = notes?.get(`${t.connectionId}:${t.messageId}`);
           const mailbox = mail.mailboxOf[t.connectionId];
@@ -216,7 +218,7 @@ export function AttentionSection({ laneId, mail, now, notes, replies, canReply =
           const chips = attentionChips(a.kind, t.unreadCount > 0);
           const age = ageShort(t.receivedAt, now);
           return (
-            <li key={a.key} data-testid="attention-item" data-kind={a.kind} className="group relative py-1">
+            <li key={a.key} data-testid="attention-item" data-kind={a.kind} className={`group relative py-1 ${index >= PHONE_ROWS ? "max-md:hidden" : ""}`}>
               <div className="-mx-2 flex flex-col gap-3 rounded-control px-2 py-3 md:flex-row md:items-center md:gap-4 md:group-hover:bg-muted/60">
               <div className="flex min-w-0 flex-1 flex-col gap-2">
                 <div className="flex min-w-0 items-center gap-2">
@@ -290,7 +292,8 @@ export function AttentionSection({ laneId, mail, now, notes, replies, canReply =
         })}
       </ol>
       <Link href={laneHref(laneId, "inbox")} data-testid="attention-view-all" className="self-start py-1 text-small font-medium text-primary underline-offset-2 hover:underline max-md:inline-flex max-md:min-h-11 max-md:items-center">
-        View all in Inbox {"\u00b7"} {total} need attention <span aria-hidden>{"\u2192"}</span>
+        <span className="max-md:hidden">View all in Inbox {"\u00b7"} {total} need attention</span>
+        <span className="md:hidden">View all {"\u00b7"} {total} in Inbox</span> <span aria-hidden>{"\u2192"}</span>
       </Link>
     </div>
   );

@@ -1,18 +1,15 @@
-// Home (D-20 batch 1, p3 and p6; T-234 part 1 layout, on the T-230 tokens). Three aligned rows:
-//   1. "Needs your attention" (2/3; T-234 part 2: AI summary + Top 3, top 5 items with Reply/Open, drafts and deadlines folded) |
-//      right column: Today's calendar with "Next 7 days" collapsed below it.
-//   2. KPI strip: five equal compact tiles (Cash book balance, AR > 30 days, P&L MTD, MRR, Paid subscribers).
-//   3. GovCon news (2/3; the stored digest, read only) | Projects at a glance (1/3). Both are SLIM one-line cards (1/2 + 1/2) while
-//      the news is off and no board is connected (T-235 part 5). The grid gap is 20px (gap-5), the one off-scale value, by design.
-// T-234 part 5: HomeAutoRefresh (header) re-reads this page every 5 minutes with router.refresh() only. A render of this page
+// Home (D-20 batch 1, p3 and p6; T-234 layout; T-237 part C redesign, docs/design/home/*.png). Desktop order: header (greeting, sync status,
+// Ask Jarvis), approvals banner (hidden at 0), KPI row, two columns 2:1 (left "Needs your attention"; right Today, then GovCon news),
+// the Finance section (md and up only), then the slim Projects card. Phone (below md), in the iPhone design's order: approvals,
+// attention, Today, KPIs, news, projects (Finance hidden). One DOM, one render of each section: the phone order is CSS `order`.
+// The grid items are placed explicitly from md (row/column starts) so DOM order stays the desktop reading order.
+// T-234 part 5: HomeAutoRefresh re-reads this page every 5 minutes with router.refresh() only. A render of this page
 // reads stored data and starts nothing: no AI briefing (the summary starts from the client's one call on mount, never from a render), no news fetch (stored digest; Refresh is a button),
 // no sync (the sync jobs run in Inngest). Client state (drawer, fields, expanded sections) lives in client components below.
-// One column on a phone, in the same order: attention, calendar, KPIs, news, projects. Coverage is no longer a card here: a
-// small status dot in the header shows only when a source is stale or in error and links to Settings -> Connections.
 // T-231b: "Needs your attention" shows subject (figures masked), sender and mailbox to callers who may read the lane's mail
 // (comms view, AAL2); never a body.
 import Link from "next/link";
-import { Suspense } from "react";
+import { cache, Suspense } from "react";
 import { Alert, AlertDescription, AlertTitle, buttonVariants, homeHeading, laneHref, PageHeader, PageSection } from "@nichols/ui";
 import { eyebrowDate } from "@/lib/format-date";
 import { guards } from "@/lib/guards";
@@ -31,6 +28,8 @@ import { loadNewsCard } from "@/lib/news";
 import { ProjectsGlance } from "./home-projects";
 import { TimezoneCookie } from "./timezone-cookie";
 import { loadLane } from "@/lib/lane-page";
+import { firstNameFor } from "@/lib/first-name";
+import { HomeFinanceSection } from "./home-finance-section";
 import { HomeScope, PersistedDetails } from "./home-scope";
 import { HomeAutoRefresh } from "./home-auto-refresh";
 import { BriefingAuto } from "./briefing-auto";
@@ -49,7 +48,8 @@ export async function HomePage({ params }: { params: Promise<{ laneId: string }>
   // The verified user id (from loadLane's lane check) is only a sessionStorage key part for view state (expanded sections, the open drawer).
   const userId = lane.userId;
   const tz = viewerZone((await cookies()).get("tz")?.value);
-  const heading = homeHeading(); // no first name in the session yet: "Good morning"
+  // The first name is the user's own profile row (core.users.display_name); none readable: just "Good morning" (never invented).
+  const heading = homeHeading(await timed("load.first_name", async () => firstNameFor(await guards(), lane.laneId, userId)));
   // T-230 A: the header renders as soon as the lane is verified; the data sections and the setup banner stream in behind it
   // (each in its own boundary, so the slow setup lookup never holds back today's figures, and neither holds the header).
   return (
@@ -64,7 +64,7 @@ export async function HomePage({ params }: { params: Promise<{ laneId: string }>
           <>
             <HomeAutoRefresh renderedAt={now.toISOString()} tz={tz} />
             <Suspense fallback={null}>
-              <HomeCoverageDot laneId={lane.laneId} />
+              <HomeCoverageDot laneId={lane.laneId} now={now} />
             </Suspense>
             <Link href={laneHref(lane.laneId, "assistant")} className={buttonVariants()}>
               Ask Jarvis
@@ -79,9 +79,14 @@ export async function HomePage({ params }: { params: Promise<{ laneId: string }>
       <Suspense fallback={null}>
         <ApprovalsWaiting laneId={lane.laneId} />
       </Suspense>
-      <Suspense fallback={<HomeSkeleton />}>
-        <HomeSections laneId={lane.laneId} now={now} />
-      </Suspense>
+      {/* The grid items are the KPI row (its own boundary) and the sections of HomeSections. From md every item has an explicit
+          row/column (see GRID_*), so a hidden item (no approvals, no finance) leaves a zero-height row and no gap (items carry their own bottom margin).
+          Phone: one column, `order` classes give the iPhone design's order. */}
+      <div data-testid="home-grid" className="grid grid-cols-1 gap-5 md:grid-cols-3 md:grid-rows-[auto_auto_auto_auto_1fr_auto_auto] md:gap-x-5 md:gap-y-0">
+        <Suspense fallback={<HomeSkeleton />}>
+          <HomeSections laneId={lane.laneId} now={now} />
+        </Suspense>
+      </div>
     </div>
     </HomeScope>
   );
@@ -123,59 +128,69 @@ async function HomeSections({ laneId, now }: { laneId: string; now: Date }) {
   const failure = setup?.code ?? (saved && (saved.status === "failed" || saved.lastFailedAt) ? await lastFailureReason(await laneClient(), laneId) : null);
   // The hint is built here, on the server, and only for admins: non-admins get no hint string at all.
   const failureHint = isAdmin && failure ? adminHint(failure, setup?.names ?? []) : null;
-  const newsSlim = newsCard?.configured !== true;
   return (
     <>
       <TimezoneCookie current={tzCookie ?? null} />
       {view.unavailable ? (
-        <Alert variant="alert">
+        <Alert variant="alert" className={`${GRID_FULL} md:row-start-1 md:mb-5`}>
           <AlertTitle>Some of today&apos;s information could not be loaded</AlertTitle>
           <AlertDescription>Reload the page in a minute. If it keeps happening, check Settings → Connections.</AlertDescription>
         </Alert>
       ) : null}
-      {/* Row 1 */}
-      <div data-testid="home-row-attention" className="grid items-start gap-5 lg:grid-cols-3">
-        <div data-testid="home-attention-slot" className="flex min-w-0 flex-col gap-5 lg:col-span-2">
-          <PageSection title="Needs your attention" note="Top 5 · metadata only">
-            <AiBriefing laneId={laneId} brief={saved} fallbackLines={view.unavailable ? [] : composeBriefing(view, now)} tz={brief.viewerTz} controls={isOwner && brief.mail.access ? <BriefingAuto laneId={laneId} preparedAt={saved && saved.status !== "failed" ? saved.preparedAt : null} initial={runState} tz={brief.viewerTz} /> : null} now={now} failure={failure} failureHint={failureHint} />
-            <AttentionSection laneId={laneId} mail={brief.mail} now={now} notes={notesByMessage(saved)} replies={repliesByMessage(saved)} canReply={isOwner} />
-            {saved && saved.status !== "failed" ? (
-              // Folded so the card stays short: reply drafts (with Copy) and deadlines from the briefing.
-              <PersistedDetails id="attention-extras" testId="attention-extras" className="border-t border-border pt-3" summaryClassName="cursor-pointer text-small font-medium text-primary" summary="Drafts and deadlines">
-                <div className="mt-3 flex flex-col gap-5">
-                  <ReplyDrafts laneId={laneId} brief={saved} tz={brief.viewerTz} />
-                  <Deadlines laneId={laneId} brief={saved} tz={brief.viewerTz} />
-                </div>
-              </PersistedDetails>
-            ) : null}
-          </PageSection>
-        </div>
-        <div data-testid="home-calendar-slot" className="flex min-w-0 flex-col gap-5">
-          <CalendarSections view={brief} now={now} />
-        </div>
+      {/* KPI row: directly under the approvals banner on desktop, after Today on the phone. Its own boundary: a slow QuickBooks read never holds the rest back. */}
+      <div data-testid="home-kpi-slot" className={`${GRID_FULL} order-3 min-w-0 empty:hidden md:order-none md:row-start-2 md:mb-5`}>
+        <Suspense fallback={<KpiStripSkeleton />}>
+          <KpiSection laneId={laneId} feeds={view.feeds} canConnect={isAdmin} />
+        </Suspense>
       </div>
-      {/* Row 2 */}
-      <Suspense fallback={<KpiStripSkeleton />}>
-        <KpiSection laneId={laneId} feeds={view.feeds} canConnect={isAdmin} />
-      </Suspense>
-      {/* Row 3 */}
-      {/* Projects has no board yet, so it is always a slim card. With GovCon news also slim, the two sit side by side
-          (1/2 + 1/2); with real news, news is 2/3 and the slim Projects card sits in the 1/3 column, at the top. */}
-      <div data-testid="home-row-news" data-news-slim={newsSlim ? "true" : "false"} className={`grid items-start gap-5 ${newsSlim ? "md:grid-cols-2" : "lg:grid-cols-3"}`}>
-        <div data-testid="home-news-slot" className={`min-w-0 ${newsSlim ? "" : "lg:col-span-2"}`}>
-          <GovConNews laneId={laneId} card={newsCard} tz={brief.viewerTz} now={now} />
-        </div>
-        <div data-testid="home-projects-slot" className="min-w-0">
-          <ProjectsGlance laneId={laneId} canConnect={isAdmin} />
-        </div>
+      <div data-testid="home-attention-slot" className="order-1 flex min-w-0 flex-col gap-5 md:order-none md:col-span-2 md:col-start-1 md:row-span-3 md:row-start-3 md:mb-5">
+        <PageSection title="Needs your attention" note="Top 5 · metadata only">
+          <AiBriefing laneId={laneId} brief={saved} fallbackLines={view.unavailable ? [] : composeBriefing(view, now)} tz={brief.viewerTz} controls={isOwner && brief.mail.access ? <BriefingAuto laneId={laneId} preparedAt={saved && saved.status !== "failed" ? saved.preparedAt : null} initial={runState} tz={brief.viewerTz} /> : null} now={now} failure={failure} failureHint={failureHint} />
+          <AttentionSection laneId={laneId} mail={brief.mail} now={now} notes={notesByMessage(saved)} replies={repliesByMessage(saved)} canReply={isOwner} />
+          {saved && saved.status !== "failed" ? (
+            // Folded so the card stays short: reply drafts (with Copy) and deadlines from the briefing.
+            <PersistedDetails id="attention-extras" testId="attention-extras" className="border-t border-border pt-3" summaryClassName="cursor-pointer text-small font-medium text-primary" summary="Drafts and deadlines">
+              <div className="mt-3 flex flex-col gap-5">
+                <ReplyDrafts laneId={laneId} brief={saved} tz={brief.viewerTz} />
+                <Deadlines laneId={laneId} brief={saved} tz={brief.viewerTz} />
+              </div>
+            </PersistedDetails>
+          ) : null}
+        </PageSection>
+      </div>
+      <div data-testid="home-calendar-slot" className="order-2 flex min-w-0 flex-col gap-5 md:order-none md:col-start-3 md:row-start-3 md:mb-5">
+        <CalendarSections view={brief} now={now} />
+      </div>
+      <div data-testid="home-news-slot" className="order-4 min-w-0 md:order-none md:col-start-3 md:row-start-4 md:mb-5">
+        <GovConNews laneId={laneId} card={newsCard} tz={brief.viewerTz} now={now} />
+      </div>
+      {/* Finance: md and up only (the iPhone design omits it); hidden entirely when QuickBooks is not connected or for no_access. */}
+      <div data-testid="home-finance-slot" className={`${GRID_FULL} hidden min-w-0 empty:hidden md:row-start-6 md:mb-5 md:block`}>
+        <Suspense fallback={null}>
+          <FinanceSlot laneId={laneId} />
+        </Suspense>
+      </div>
+      <div data-testid="home-projects-slot" className={`${GRID_FULL} order-5 min-w-0 md:order-none md:row-start-7`}>
+        <ProjectsGlance laneId={laneId} canConnect={isAdmin} />
       </div>
     </>
   );
 }
 
-/** The KPI row in its own boundary: a slow QuickBooks read (core.home_finance) never holds the rest of Home back (T-230 A). */
-async function KpiSection({ laneId, feeds, canConnect }: { laneId: string; feeds: HomeView["feeds"]; canConnect: boolean }) {
+const GRID_FULL = "md:col-span-3 md:col-start-1";
+
+/** Both finance reads, once per request (React `cache`): the KPI row and the Finance section share them. */
+const loadFinance = cache(async (laneId: string) => {
   const g = await guards();
-  const [finance, detail] = await Promise.all([timed("load.home_finance", async () => homeFinanceFor(g, laneId)), timed("load.home_finance_detail", async () => homeFinanceDetailFor(g, laneId))]);
+  return Promise.all([timed("load.home_finance", async () => homeFinanceFor(g, laneId)), timed("load.home_finance_detail", async () => homeFinanceDetailFor(g, laneId))]);
+});
+
+async function KpiSection({ laneId, feeds, canConnect }: { laneId: string; feeds: HomeView["feeds"]; canConnect: boolean }) {
+  const [finance, detail] = await loadFinance(laneId);
   return <KpiStrip laneId={laneId} tiles={kpiTiles(finance, detail, feeds, canConnect)} />;
+}
+
+async function FinanceSlot({ laneId }: { laneId: string }) {
+  const [finance, detail] = await loadFinance(laneId);
+  return <HomeFinanceSection laneId={laneId} finance={finance} detail={detail} />;
 }

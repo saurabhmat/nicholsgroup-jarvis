@@ -31,6 +31,16 @@ const card = (over: Partial<NewsCard> = {}): NewsCard => ({
 });
 const render_ = (c: NewsCard | null, laneId = "PKG") => render(<GovConNews laneId={laneId} card={c} now={NOW} />);
 
+describe("T-237: at most three stories", () => {
+  it("shows the first three of five, each with its source link", () => {
+    const items = Array.from({ length: 5 }, (_, n) => ({ headline: `Story ${String(n)}`, why: "w", source: "S", publishedAt: null, url: `https://www.example.test/${String(n)}`, preferred: true }));
+    render_(card({ items }));
+    const list = screen.getByTestId("news-list");
+    expect(within(list).getAllByRole("link").map((a) => a.textContent)).toEqual(["Story 0", "Story 1", "Story 2"]);
+    expect(within(list).getAllByRole("link").every((a) => a.getAttribute("href")?.startsWith("https://"))).toBe(true);
+  });
+});
+
 describe("states", () => {
   it("off (no card, or not configured): one slim line 'GovCon news is off'; only admins get 'Set up in Settings'", () => {
     render_(null);

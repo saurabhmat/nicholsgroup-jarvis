@@ -261,10 +261,19 @@ describe("AttentionSection (T-234 part 2, T-235 part 2: scannable rows)", () => 
   it("the footer counts the ranked items: the rows shown plus the overflow", () => {
     const { rerender } = render(<AttentionSection laneId="PKG" now={now} mail={mail()} />);
     const link = screen.getByTestId("attention-view-all");
-    expect(link.textContent).toBe("View all in Inbox \u00b7 1 need attention \u2192");
+    expect(link.textContent).toBe("View all in Inbox \u00b7 1 need attentionView all \u00b7 1 in Inbox \u2192"); // desktop and phone wording, one of them hidden by CSS
     expect(link.getAttribute("href")).toBe("/PKG/inbox");
     rerender(<AttentionSection laneId="PKG" now={now} mail={mail(30)} />);
-    expect(screen.getByTestId("attention-view-all").textContent).toBe("View all in Inbox \u00b7 31 need attention \u2192");
+    expect(screen.getByTestId("attention-view-all").textContent).toBe("View all in Inbox \u00b7 31 need attentionView all \u00b7 31 in Inbox \u2192");
+  });
+
+  it("T-237: the phone shows the first three rows (the rest are hidden below md); the footer has the phone wording too", () => {
+    const rows = Array.from({ length: 5 }, (_, n) => ({ key: `k${String(n)}`, kind: "priority" as const, reason: "r", thread: { ...thread, messageId: `m${String(n)}`, threadKey: `t${String(n)}` } }));
+    render(<AttentionSection laneId="PKG" now={now} mail={{ ...mail(0), attention: rows }} />);
+    const items = screen.getAllByTestId("attention-item");
+    expect(items).toHaveLength(5);
+    expect(items.map((i) => /max-md:hidden/.test(i.className))).toEqual([false, false, false, true, true]);
+    expect(screen.getByTestId("attention-view-all").textContent).toContain("View all \u00b7 5 in Inbox");
   });
 
   it("Open goes to the thread in Jarvis, never to a Google page (the old link used the stored provider URL)", () => {

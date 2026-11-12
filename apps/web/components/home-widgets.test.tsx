@@ -21,8 +21,19 @@ describe("Coverage status dot", () => {
     expect(dot.getAttribute("aria-label")).toBe("2 sources are stale or in error. Open Settings, Connections.");
     expect(dot.textContent).toContain("Sync issue"); // a visible word too
   });
+  it("all sources fine: a green dot and 'All sources synced · N min ago' (the oldest last sync), linking to Connections", () => {
+    const at = (min: number) => ({ ...item("ok"), lastSyncAt: new Date(Date.parse("2026-11-12T15:00:00Z") - min * 60_000).toISOString() });
+    render(<CoverageDot laneId="PKG" view={{ items: [at(2), at(7), item("not_connected")], unavailable: false }} now={new Date("2026-11-12T15:00:00Z")} />);
+    const dot = screen.getByTestId("coverage-dot");
+    expect(dot.textContent).toBe("All sources synced \u00b7 7 min ago");
+    expect(dot.getAttribute("data-status")).toBe("synced");
+    expect(dot.getAttribute("href")).toBe("/PKG/settings#connections");
+  });
+  it("all sources fine but no sync time known: just 'All sources synced'", () => {
+    render(<CoverageDot laneId="PKG" view={{ items: [item("ok")], unavailable: false }} />);
+    expect(screen.getByTestId("coverage-dot").textContent).toBe("All sources synced");
+  });
   it.each([
-    ["all sources ok", [item("ok")]],
     ["only a source that was never connected", [item("not_connected")]],
     ["no sources", []],
   ])("is hidden when %s", (_n, items) => {

@@ -95,7 +95,7 @@ export function PageSkeleton({ variant = "home" }: { variant?: SkeletonVariant }
 /** The streaming body of Home (its header is already shown): same blocks as the page skeleton. */
 export function HomeSkeleton() {
   return (
-    <div role="status" aria-busy="true" data-testid="card-skeleton" className="flex min-w-0 flex-col gap-4">
+    <div role="status" aria-busy="true" data-testid="card-skeleton" className="flex min-w-0 flex-col gap-4 md:col-span-3">
       <span className="sr-only">Loading</span>
       <Grid />
     </div>

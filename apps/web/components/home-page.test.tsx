@@ -1,12 +1,13 @@
 // @vitest-environment jsdom
-// T-230 B / T-234 part 1: the Home grid. Row 1: attention 2/3 + calendar column; row 2: five KPI tiles; row 3: GovCon news 2/3 +
-// projects 1/3; the phone-only setup banner has a reserved slot while it loads. Data comes from lib (mocked here); only structure is checked.
+// T-230 B / T-234 part 1 / T-237 part C: the Home grid. Desktop: KPI row, attention 2/3 | Today then GovCon news 1/3, Finance, Projects; the phone
+// reorders the same DOM with CSS `order` (attention, Today, KPIs, news, projects; no Finance). The phone-only setup banner has a reserved slot while it loads.
+// Data comes from lib (mocked here); only structure is checked.
 import { cloneElement, isValidElement, Suspense, type ReactElement, type ReactNode } from "react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { cleanup, render, screen, within } from "@testing-library/react";
 import type { HomeView } from "@/lib/home";
 
-const m = vi.hoisted(() => ({ owner: false, mail: { access: false } as { access: boolean; attention?: unknown[]; more?: number; money?: unknown[]; mailboxOf?: Record<string, string> }, coverage: { items: [], unavailable: false } as unknown, view: null as unknown, progress: null as unknown, finance: { state: "not_connected", asOf: null, lastSyncAt: null, connectionStatus: null, cash: { reason: null, total: null, asOf: null, accounts: [], unmapped: 0 }, ar: { reason: null, over30: null, invoices: 0, unmapped: 0 }, pnl: { reason: null, income: null, expenses: null, net: null, start: null, end: null, method: null, partial: false, asOf: null } } as unknown }));
+const m = vi.hoisted(() => ({ owner: false, mail: { access: false } as { access: boolean; attention?: unknown[]; more?: number; money?: unknown[]; mailboxOf?: Record<string, string> }, coverage: { items: [], unavailable: false } as unknown, view: null as unknown, progress: null as unknown, detail: { state: "no_access" } as unknown, userName: undefined as string | undefined, finance: { state: "not_connected", asOf: null, lastSyncAt: null, connectionStatus: null, cash: { reason: null, total: null, asOf: null, accounts: [], unmapped: 0 }, ar: { reason: null, over30: null, invoices: 0, unmapped: 0 }, pnl: { reason: null, income: null, expenses: null, net: null, start: null, end: null, method: null, partial: false, asOf: null } } as unknown }));
 vi.mock("@/lib/lane-page", () => ({ loadLane: async () => ({ laneId: "PKG", name: "Pub K Group", lanes: [], userId: "u1" }) }));
 vi.mock("@/lib/guards", () => ({ guards: async () => ({ requireLane: async () => ({ client: {}, session: { userId: "u1" } }), requireRole: async (_l: string, roles: string[]) => { if (m.owner && roles.includes("owner")) return { client: {}, session: { userId: "u1" } }; throw new Error("not admin"); } }) }));
 vi.mock("@/app/[laneId]/briefing-actions", () => ({ ensureFreshBriefing: async () => ({ started: false, gate: "not_stale" }), regenerateBriefing: async () => ({ started: false, gate: "not_stale" }), briefingRunState: async () => null }));
@@ -22,12 +23,14 @@ vi.mock("@/lib/timed", () => ({ timed: async <T,>(_n: string, f: () => Promise<T
 vi.mock("@/lib/onboarding-progress", () => ({
   onboardingFor: async () => m.progress,
 }));
+vi.mock("@/lib/first-name", async (orig) => ({ ...(await orig<typeof import("@/lib/first-name")>()), firstNameFor: async () => m.userName }));
 vi.mock("@/lib/home-finance", async (orig) => ({ ...(await orig<typeof import("@/lib/home-finance")>()), homeFinanceFor: async () => m.finance }));
-vi.mock("@/lib/home-finance-detail", async (orig) => ({ ...(await orig<typeof import("@/lib/home-finance-detail")>()), homeFinanceDetailFor: async () => ({ state: "no_access" }) }));
+vi.mock("@/lib/home-finance-detail", async (orig) => ({ ...(await orig<typeof import("@/lib/home-finance-detail")>()), homeFinanceDetailFor: async () => m.detail }));
 vi.mock("@/lib/home", async (orig) => ({ ...(await orig<typeof import("@/lib/home")>()), homeFor: async () => m.view }));
 
 import { HomePage } from "./home-page";
 import { toHomeFinance } from "@/lib/home-finance";
+import { toHomeFinanceDetail } from "@/lib/home-finance-detail";
 
 const okRow = {
   state: "ok", as_of: "2026-11-11T20:00:00Z", last_sync_at: "2026-11-11T19:55:00Z", connection_status: "active",
@@ -65,9 +68,12 @@ async function draw() {
   return fallbacks;
 }
 const defaultFinance = m.finance;
+const defaultDetail = m.detail;
 afterEach(() => {
   cleanup();
   m.finance = defaultFinance;
+  m.detail = defaultDetail;
+  m.userName = undefined;
   m.progress = null;
   m.owner = false;
   m.mail = { access: false };
@@ -77,42 +83,81 @@ afterEach(() => {
 describe("Home layout (T-234 part 1)", () => {
   const follows = (a: Element, b: Element) => Boolean(a.compareDocumentPosition(b) & Node.DOCUMENT_POSITION_FOLLOWING);
 
-  it("row 1: attention 2/3 | calendar column (Next 7 days under it); row 2: five KPIs (all sources connected); row 3: news 2/3 | projects 1/3; in this DOM order (= the phone's single column)", async () => {
+  const detailRow = { state: "ok", as_of: "2026-11-11T20:00:00Z", bills_due_14_total: 410.5, bills_due_14_count: 2, aging: [{ bucket: "current", total: 100, count: 1 }, { bucket: "1_30", total: 50, count: 1 }, { bucket: "31_60", total: 0, count: 0 }, { bucket: "61_90", total: 20, count: 1 }, { bucket: "90_plus", total: 10, count: 1 }], oldest: [{ customer: "Customer A", balance: 10, days_overdue: 94 }], unmapped_invoices: 0, unmapped_bills: 0 };
+
+  it("desktop order: KPI row, then attention | calendar and news (right column), Finance, Projects; the grid items are placed explicitly from md", async () => {
     m.finance = toHomeFinance([okRow]);
+    m.detail = toHomeFinanceDetail([detailRow]);
     m.view = view({ feeds: allFeeds as HomeView["feeds"] });
     await draw();
-    const row1 = screen.getByTestId("home-row-attention");
-    expect(row1.className).toMatch(/lg:grid-cols-3/);
+    const grid = screen.getByTestId("home-grid");
+    expect(grid.className).toMatch(/md:grid-cols-3/);
+    const kpiSlot = screen.getByTestId("home-kpi-slot");
     const attentionSlot = screen.getByTestId("home-attention-slot");
     const calendarSlot = screen.getByTestId("home-calendar-slot");
-    expect(attentionSlot.className).toMatch(/lg:col-span-2/);
-    expect(calendarSlot.className).not.toMatch(/col-span/);
+    const newsSlot = screen.getByTestId("home-news-slot");
+    const financeSlot = screen.getByTestId("home-finance-slot");
+    const projectsSlot = screen.getByTestId("home-projects-slot");
+    // DOM = desktop reading order
+    const order = [kpiSlot, attentionSlot, calendarSlot, newsSlot, financeSlot, projectsSlot];
+    order.forEach((el, i) => {
+      const prev = order[i - 1];
+      if (prev) expect(follows(prev, el)).toBe(true);
+    });
+    expect(attentionSlot.className).toMatch(/md:col-span-2/);
+    expect(calendarSlot.className).toMatch(/md:col-start-3/);
+    expect(newsSlot.className).toMatch(/md:col-start-3/);
     expect(within(attentionSlot).getByRole("region", { name: "Needs your attention" })).toBeTruthy();
     const today = within(calendarSlot).getByRole("region", { name: "Today's calendar" });
     const next7 = within(calendarSlot).getByTestId("next-7-days");
     expect(follows(today, next7)).toBe(true);
     expect(next7.getAttribute("data-open")).toBe("false"); // collapsed by default
-
-    const kpis = screen.getByTestId("home-kpis");
+    const kpis = within(kpiSlot).getByTestId("home-kpis");
     expect(kpis.className).toContain("auto-fit");
     expect(kpis.querySelectorAll("[data-slot=kpi-tile]")).toHaveLength(5);
+    expect(within(newsSlot).getByRole("region", { name: "GovCon news" })).toBeTruthy(); // slim "off" card here too
+    expect(newsSlot.textContent).toContain("GovCon news is off");
+    expect(within(financeSlot).getByRole("region", { name: "Finance" })).toBeTruthy();
+    expect(within(projectsSlot).getByRole("region", { name: "Projects at a glance" })).toBeTruthy();
+  });
 
-    const row3 = screen.getByTestId("home-row-news");
-    // News off and no board: two slim cards side by side (1/2 + 1/2), not 2/3 of a row.
-    expect(row3.getAttribute("data-news-slim")).toBe("true");
-    expect(row3.className).toMatch(/md:grid-cols-2/);
-    expect(row3.className).toMatch(/\bgap-5\b/);
-    expect(screen.getByTestId("home-news-slot").className).not.toMatch(/col-span-2/);
-    expect(within(screen.getByTestId("home-news-slot")).getByRole("region", { name: "GovCon news" })).toBeTruthy();
-    expect(screen.getByTestId("home-news-slot").textContent).toContain("GovCon news is off");
-    expect(within(screen.getByTestId("home-projects-slot")).getByRole("region", { name: "Projects at a glance" })).toBeTruthy();
+  it("phone order by CSS `order` classes on the one DOM: attention, Today, KPIs, news, projects; Finance is hidden below md", async () => {
+    m.finance = toHomeFinance([okRow]);
+    m.detail = toHomeFinanceDetail([detailRow]);
+    m.view = view({ feeds: allFeeds as HomeView["feeds"] });
+    await draw();
+    const ord = (id: string) => Number(/(?:^|\s)order-(\d)(?:\s|$)/.exec(screen.getByTestId(id).className)?.[1] ?? "0");
+    const phone = ["home-attention-slot", "home-calendar-slot", "home-kpi-slot", "home-news-slot", "home-projects-slot"].map(ord);
+    expect(phone).toEqual([...phone].sort((a, b) => a - b));
+    expect(new Set(phone).size).toBe(5);
+    for (const id of ["home-attention-slot", "home-calendar-slot", "home-kpi-slot", "home-news-slot", "home-projects-slot"]) expect(screen.getByTestId(id).className).toMatch(/md:order-none/);
+    expect(screen.getByTestId("home-finance-slot").className).toMatch(/(^|\s)hidden(\s|$)/);
+    expect(screen.getByTestId("home-finance-slot").className).toMatch(/md:block/);
+    // nothing is rendered twice
+    expect(screen.getAllByRole("region", { name: "Needs your attention" })).toHaveLength(1);
+    expect(screen.getAllByTestId("home-kpis")).toHaveLength(1);
+  });
 
-    // phone order: attention, calendar, KPIs, news, projects
-    const order = [attentionSlot, calendarSlot, kpis, screen.getByTestId("home-news-slot"), screen.getByTestId("home-projects-slot")];
-    order.forEach((el, i) => {
-      const prev = order[i - 1];
-      if (prev) expect(follows(prev, el)).toBe(true);
-    });
+  it("the heading says 'Good morning' with the profile's first name when there is one, else plain 'Good morning'", async () => {
+    m.view = view();
+    await draw();
+    expect(screen.getByRole("heading", { level: 1 }).textContent).toBe("Good morning");
+    cleanup();
+    m.userName = "Dana";
+    await draw();
+    expect(screen.getByRole("heading", { level: 1 }).textContent).toBe("Good morning, Dana");
+    expect(screen.getByRole("link", { name: "Ask Jarvis" })).toBeTruthy();
+  });
+
+  it("Finance is hidden when QuickBooks is not connected and for a role without the finance view", async () => {
+    m.view = view();
+    await draw();
+    expect(screen.queryByTestId("home-finance")).toBeNull(); // the default mock is not_connected
+    cleanup();
+    m.finance = { state: "no_access" };
+    await draw();
+    expect(screen.queryByTestId("home-finance")).toBeNull();
+    expect(screen.queryAllByTestId("kpi-tile")).toHaveLength(0);
   });
 
   it("the briefing, Money and Coverage cards are gone from Home; the briefing's summary lives inside 'Needs your attention'", async () => {
@@ -128,7 +173,7 @@ describe("Home layout (T-234 part 1)", () => {
     expect(within(attention).getByTestId("ai-briefing")).toBeTruthy();
   });
 
-  it("KPI tiles: Cash book balance, AR, P&L from the finance read; MRR and Paid subscribers only when their feeds are connected", async () => {
+  it("KPI tiles: Cash book balance, AR, bills, net income from the finance reads; MRR only when Stripe is connected", async () => {
     m.finance = toHomeFinance([okRow]);
     m.view = view({ feeds: [{ provider: "quickbooks", status: "active" }] as HomeView["feeds"] });
     await draw();
