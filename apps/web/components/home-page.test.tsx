@@ -97,10 +97,13 @@ describe("Home layout (T-234 part 1)", () => {
     expect(kpis.querySelectorAll("[data-slot=kpi-tile]")).toHaveLength(5);
 
     const row3 = screen.getByTestId("home-row-news");
-    expect(row3.className).toMatch(/lg:grid-cols-3/);
-    expect(screen.getByTestId("home-news-slot").className).toMatch(/lg:col-span-2/);
+    // News off and no board: two slim cards side by side (1/2 + 1/2), not 2/3 of a row.
+    expect(row3.getAttribute("data-news-slim")).toBe("true");
+    expect(row3.className).toMatch(/md:grid-cols-2/);
+    expect(row3.className).toMatch(/\bgap-5\b/);
+    expect(screen.getByTestId("home-news-slot").className).not.toMatch(/col-span-2/);
     expect(within(screen.getByTestId("home-news-slot")).getByRole("region", { name: "GovCon news" })).toBeTruthy();
-    expect(screen.getByTestId("home-news-slot").textContent).toContain("News not configured");
+    expect(screen.getByTestId("home-news-slot").textContent).toContain("GovCon news is off");
     expect(within(screen.getByTestId("home-projects-slot")).getByRole("region", { name: "Projects at a glance" })).toBeTruthy();
 
     // phone order: attention, calendar, KPIs, news, projects

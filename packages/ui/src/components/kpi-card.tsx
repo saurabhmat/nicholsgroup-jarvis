@@ -51,7 +51,7 @@ export function KpiCard({
   return (
     <Card data-slot="kpi-card" data-status={effectiveStatus} className={cn("min-w-0", className)}>
       <CardHeader>
-        <CardTitle as={headingLevel} className="font-sans text-body font-medium text-muted-foreground">{label}</CardTitle>
+        <CardTitle as={headingLevel} className="font-sans text-label font-medium uppercase tracking-wide text-muted-foreground">{label}</CardTitle>
         {bookBalance || qualifier ? (
           <div className="flex flex-wrap items-center gap-2">
             {bookBalance ? <BookBalanceLabel /> : null}
@@ -61,7 +61,7 @@ export function KpiCard({
       </CardHeader>
       <CardContent>
         {effectiveStatus === "ok" ? (
-          <p data-slot="kpi-value" className="font-heading text-page-title font-semibold tabular-nums text-foreground">
+          <p data-slot="kpi-value" className="font-sans text-page-title font-semibold tabular-nums text-foreground">
             {value}
           </p>
         ) : (

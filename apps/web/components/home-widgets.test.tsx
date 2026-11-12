@@ -164,15 +164,19 @@ describe("Next 7 days (collapsible)", () => {
 });
 
 describe("News and Projects slots", () => {
-  it("GovCon news shows 'News not configured' until part 4 supplies items", () => {
+  it("GovCon news is a slim line 'GovCon news is off' until it is configured", () => {
     render(<GovConNews />);
     expect(screen.getByRole("region", { name: "GovCon news" })).toBeTruthy();
-    expect(screen.getByTestId("news-empty").textContent).toBe("News not configured");
+    expect(screen.getByTestId("news-empty").textContent).toBe("GovCon news is off");
   });
-  it("Projects at a glance is compact and says no board is connected", () => {
-    render(<ProjectsGlance />);
+  it("Projects at a glance is a slim line; 'Connect in Settings' only for admins", () => {
+    const { rerender } = render(<ProjectsGlance laneId="PKG" />);
     expect(screen.getByRole("region", { name: "Projects at a glance" })).toBeTruthy();
-    expect(screen.getByTestId("projects-notice").textContent).toMatch(/No project board connected/);
+    expect(screen.getByTestId("projects-notice").textContent).toBe("No project board connected");
+    expect(screen.queryByRole("link")).toBeNull();
+    rerender(<ProjectsGlance laneId="PKG" canConnect />);
+    expect(screen.getByTestId("projects-notice").textContent).toBe("No project board connected\u00b7Connect in Settings");
+    expect(screen.getByRole("link", { name: "Connect in Settings" }).getAttribute("href")).toBe("/PKG/settings#connections");
   });
 });
 

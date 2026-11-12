@@ -83,7 +83,7 @@
   /* T-230 B: main area 1440px wide next to the 240px side menu, 32px side padding (docs/design/README.md). */
   --content-max-width: 1440px;
   --sidebar-width: 240px;
-  --card-shadow: 0 1px 2px rgb(14 42 71 / 0.06), 0 1px 3px rgb(14 42 71 / 0.05);
+  --card-shadow: 0 1px 2px rgb(14 42 71 / 0.04), 0 1px 3px rgb(14 42 71 / 0.03);
 }
 
 /* Dark set: keep both blocks identical. */
@@ -242,18 +242,20 @@
   --shadow-card: var(--card-shadow);
 
   /*
-   * Type scale (T-230 B), defined once: text-body 15px, text-small 13px, text-card-title 18px (serif, headings get the
+   * Type scale (T-230 B, T-235 part 5), defined once: text-label 12px (Inter; uppercase tracking-wide, KPI labels ONLY), text-body 15px / 1.55, text-small 13px, text-card-title 20px (serif, headings get the
    * serif face from the base layer), text-page-title 32px (serif). The side menu keeps Tailwind's text-sm (14px) labels.
    * Use these classes; no ad hoc text-xs / text-sm / text-xl for page content.
    */
   --text-body: 0.9375rem;
-  --text-body--line-height: 1.5;
+  --text-body--line-height: 1.55;
   --text-small: 0.8125rem;
   --text-small--line-height: 1.45;
-  --text-card-title: 1.125rem;
+  --text-card-title: 1.25rem;
   --text-card-title--line-height: 1.3;
   --text-page-title: 2rem;
   --text-page-title--line-height: 1.2;
+  --text-label: 0.75rem;
+  --text-label--line-height: 1.4;
 }
 
 @layer base {
@@ -266,7 +268,7 @@
     color: var(--foreground);
     font-family: var(--body-font);
     font-size: 0.9375rem; /* body 15px */
-    line-height: 1.5;
+    line-height: 1.55;
   }
 
   h1,

@@ -15,7 +15,7 @@ export function EmptyState({ title, description, action, className }: EmptyState
       data-slot="empty-state"
       role="status"
       className={cn(
-        "flex flex-col items-center gap-2 rounded-card border border-dashed border-border bg-card px-6 py-10 text-center",
+        "flex flex-col items-center gap-2 rounded-card border border-dashed border-border bg-card px-6 py-8 text-center",
         className,
       )}
     >

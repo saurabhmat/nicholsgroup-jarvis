@@ -21,6 +21,7 @@ export { AppShell, type AppShellProps, type ShellBrand } from "./components/app-
 export { LaneSwitcher, type LaneSwitcherProps, type ShellLane, type ShellLink } from "./components/lane-switcher";
 export { PageHeader, type PageHeaderProps } from "./components/page-header";
 export { PageSection, type PageSectionProps } from "./components/page-section";
+export { SlimCard, type SlimCardProps } from "./components/slim-card";
 export { PERIODS, PeriodToggle, type PeriodKey, type PeriodToggleProps } from "./components/period-toggle";
 export { TabIcon } from "./components/tab-icon";
 export {

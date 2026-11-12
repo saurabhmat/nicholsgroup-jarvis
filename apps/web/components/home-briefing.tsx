@@ -31,7 +31,7 @@ function Chips({ e }: { e: DayEvent }) {
   const chips = eventChips(e);
   if (chips.length === 0) return null;
   return (
-    <span data-testid="event-chips" className="flex flex-wrap gap-1.5">
+    <span data-testid="event-chips" className="flex flex-wrap gap-2">
       {chips.map((c) => (
         <Badge key={c.key} variant={CHIP_VARIANT[c.key]} title={c.detail}>
           {c.label}
@@ -82,10 +82,10 @@ export function TodayCalendar({ calendar, tz, now }: { calendar: CalendarSection
           <li key={e.key} data-testid="calendar-event" className={`flex gap-3 py-3 text-body ${past ? "opacity-60" : ""}`}>
             <span data-testid="event-time" className="flex w-24 shrink-0 flex-col tabular-nums">
               {e.allDay ? (
-                <span className="font-semibold text-foreground">All day</span>
+                <span className="font-medium text-foreground">All day</span>
               ) : (
                 <>
-                  <time dateTime={e.startAt} className="font-semibold text-foreground">
+                  <time dateTime={e.startAt} className="font-medium text-foreground">
                     {formatTimeIn(e.startAt, tz)}
                   </time>
                   {own ? <span data-testid="event-zone" className="text-small text-muted-foreground">{own}</span> : null}
@@ -125,7 +125,7 @@ export function LookAhead({ events, tz }: { events: NotableEvent[]; tz: string }
         return (
           <li key={e.key} className="flex gap-3 py-3 text-body">
             <span className="flex w-24 shrink-0 flex-col tabular-nums">
-              <time dateTime={e.allDay && e.startDate ? e.startDate : e.startAt} className="font-semibold text-foreground">
+              <time dateTime={e.allDay && e.startDate ? e.startDate : e.startAt} className="font-medium text-foreground">
                 {formatDayIn(e.allDay && e.startDate ? `${e.startDate}T12:00:00Z` : e.startAt, tz)}
               </time>
               {e.allDay ? null : (
@@ -218,13 +218,13 @@ export function AttentionSection({ laneId, mail, now, notes, replies, canReply =
           return (
             <li key={a.key} data-testid="attention-item" data-kind={a.kind} className="group relative py-1">
               <div className="-mx-2 flex flex-col gap-3 rounded-control px-2 py-3 md:flex-row md:items-center md:gap-4 md:group-hover:bg-muted/60">
-              <div className="flex min-w-0 flex-1 flex-col gap-1.5">
+              <div className="flex min-w-0 flex-1 flex-col gap-2">
                 <div className="flex min-w-0 items-center gap-2">
-                  <span aria-hidden data-testid="attention-avatar" className={`flex size-8 shrink-0 items-center justify-center rounded-full text-small font-semibold ${AVATAR[who.slot] ?? AVATAR[0]}`}>
+                  <span aria-hidden data-testid="attention-avatar" className={`flex size-8 shrink-0 items-center justify-center rounded-full text-small font-medium ${AVATAR[who.slot] ?? AVATAR[0]}`}>
                     {who.initials}
                   </span>
                   <span className="min-w-0 truncate text-body">
-                    <span data-testid="attention-sender" className="font-semibold text-foreground">{who.name}</span>
+                    <span data-testid="attention-sender" className="font-medium text-foreground">{who.name}</span>
                     {who.company ? <span data-testid="attention-company" className="text-muted-foreground">{` \u00b7 ${who.company}`}</span> : null}
                     {t.fromAddress ? <span className="sr-only">{`, from ${t.fromAddress}`}</span> : null}
                   </span>
@@ -233,7 +233,7 @@ export function AttentionSection({ laneId, mail, now, notes, replies, canReply =
                     <span className="sr-only">{age === "now" ? "" : " ago"}</span>
                   </time>
                 </div>
-                <p data-testid="attention-subject" className="truncate text-body font-medium text-foreground">
+                <p data-testid="attention-subject" className="truncate text-body text-foreground">
                   {subject}
                 </p>
                 {note && (note.why || note.next) ? (

@@ -75,7 +75,7 @@ Both modes ship in Release A. The app follows the device setting; the user can o
 - App icon: H-029 (blocks T-025).
 - Meeting provider label ("Teams" on page 3) is sample text; D-1 is open.
 
-## Layout and type scale (T-230 B, Nov 9, 2026)
+## Layout and type scale (T-230 B, Nov 9, 2026; typography and spacing T-235 part 5, Nov 12, 2026)
 
 Approved by Saurabh from production screenshots of Robert's 2000px screen (content was a ~600px column with small text). Screenshots before and after: [`t-230/`](t-230/) (`before/` is Home and Settings at 1440 on the old layout). Tokens and utilities live in `packages/ui/src/styles/theme.css`; use them, not ad hoc sizes.
 
@@ -83,18 +83,24 @@ Approved by Saurabh from production screenshots of Robert's 2000px screen (conte
 - Side menu 240px (`--sidebar-width`), labels 14px (Tailwind `text-sm`, the only place it is still used). Main area `max-width: 1440px` (`--content-max-width`), 32px side padding (`md:px-8`), **left-aligned** next to the menu: no centred margins, so on a 2000px screen the free space is on the right. iPhone: 16px padding, unchanged.
 - Page rhythm: 16px (`gap-4`) between header, rows and cards; 8px extra under the page header.
 
-**Type scale** (defined once in `theme.css`, classes `text-body`, `text-small`, `text-card-title`, `text-page-title`; `cn()` knows them)
+**Type scale** (defined once in `theme.css`, classes `text-label`, `text-body`, `text-small`, `text-card-title`, `text-page-title`; `cn()` knows them). T-235 part 5 (Nov 12, 2026) tightened it: Source Serif 4 is used ONLY for the page title and card titles; everything else is Inter.
 
 | Use | Size | Face |
 |---|---|---|
-| Body, controls, list rows | 15px (`text-body`, also the `<body>` default) | Inter |
+| KPI label (and the "Book balance" label) | 12px (`text-label`), **uppercase, tracking-wide, medium**; the only uppercase text in the app | Inter |
+| Body, controls, list rows | 15px / line-height 1.55 (`text-body`, also the `<body>` default) | Inter |
 | Secondary ("small"): eyebrow, notes, chips, source lines | 13px (`text-small`) | Inter |
-| Card title (h2/h3), empty-state title | 18px (`text-card-title`) | Source Serif 4, semibold |
-| Page title (h1), KPI figure | 32px (`text-page-title`) | Source Serif 4, italic accent word |
+| Card title (h2/h3), empty-state title | 20px (`text-card-title`) | Source Serif 4, semibold |
+| Page title (h1) | 32px (`text-page-title`) | Source Serif 4, italic accent word |
+| KPI figure | 32px on a KpiCard, 20px on a Home tile; tabular numbers | Inter, semibold |
 
-**Cards** (`Card`, `PageSection`, `KpiCard` in `@nichols/ui`; every page gets the same look): 12px radius, 1px border, subtle shadow (`shadow-card`, `--card-shadow`), padding 20px (24px from `sm`), 16px gap in grids, equal heights in a row (grid items stretch). Fewer, bigger cards: a section is one card, not a card per sub-item. Placeholders that carry no information (for example "Projects at a glance" with no board) are one line, not a card.
+**Weights**: at most two text weights in any row or card region. In practice 400 (regular) and 500 (medium: names, buttons, chips, links); semibold is for titles and figures only. An attention row: sender name medium, subject regular, Reply, Open and chips medium (tested).
 
-**Home** (desktop): header; briefing card full width; the four figure cards in one row (2 x 2 on iPhone); "Needs your attention" 2/3 and "Today's meetings" 1/3 (stacked on iPhone); "Projects at a glance" one line until a board is connected. The skeleton uses the same grid. The phone-only "Finish setting up" banner has a reserved 52px slot while it loads.
+**Spacing scale**: 4 / 8 / 12 / 16 / 24 / 32 px (`1 / 2 / 3 / 4 / 6 / 8`). No `p-5`, `gap-1.5`, `gap-3.5` or `py-10` in shared or Home components (a 2px `py-0.5` on chips is the one hairline). The single exception is the Home grid gap, **20px (`gap-5`)**, as the brief asked for it; it applies between Home's header, rows and the cards inside a column.
+
+**Muted text** is `--muted-foreground` (`#4B5563` light, `#A9B8CC` dark): at least 4.5:1 on the ground, the card and the muted fill in both themes (`tokens.test.ts`).
+
+**Home** (desktop): header; briefing card full width; the four figure cards in one row (2 x 2 on iPhone); "Needs your attention" 2/3 and "Today's meetings" 1/3 (stacked on iPhone); row 3 is GovCon news and "Projects at a glance": while the news is off and no board is connected both are slim cards side by side (1/2 + 1/2, one per line on iPhone); with real news it is news 2/3 and the slim Projects card in the 1/3 column. The skeleton uses the same grid. The phone-only "Finish setting up" banner has a reserved 52px slot while it loads.
 
 **Settings** (desktop): two columns, a 200px sub-nav on the left (Connections, AI brain, Developer tools; in-page anchors; only the sections the user may see) and the sections on the right. iPhone: the sub-nav is a wrapping row of 44px chips above the content. *Connections* is one compact list with the columns Provider, Account, Status chip, Last sync, Actions (Google rows, Composio rows; each row stacks with labelled cells on iPhone). With no Composio project key on the server a single line replaces the Composio rows: "Composio not configured on this server (COMPOSIO_API_KEY not set)"; with the key set but a toolkit's id missing that row says "Not configured: X is not set". Setting names only, never values. *Developer tools* holds "Temporary: connection test", collapsed by default.
 

@@ -18,12 +18,12 @@ export function KpiStripSkeleton() {
 function Grid() {
   return (
     <>
-      <div className="grid gap-4 lg:grid-cols-3">
+      <div className="grid gap-5 lg:grid-cols-3">
         <Block className="h-72 rounded-card lg:col-span-2" />
         <Block className="h-72 rounded-card" />
       </div>
       <KpiStripSkeleton />
-      <div className="grid gap-4 lg:grid-cols-3">
+      <div className="grid gap-5 lg:grid-cols-3">
         <Block className="h-56 rounded-card lg:col-span-2" />
         <Block className="h-56 rounded-card" />
       </div>

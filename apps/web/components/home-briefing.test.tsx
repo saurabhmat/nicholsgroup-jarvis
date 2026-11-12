@@ -71,7 +71,7 @@ describe("TodayCalendar (T-235 part 3: compact)", () => {
     const start = first.getByText("9:00 AM");
     expect(start.tagName).toBe("TIME");
     expect(start.getAttribute("datetime")).toBe("2026-11-12T14:00:00.000Z");
-    expect(start.className).toMatch(/font-semibold/);
+    expect(start.className).toMatch(/font-medium/);
     expect(first.getByTestId("event-zone").textContent).toBe("6:00 AM PST");
     expect(first.getByText("10:00 AM")).toBeTruthy();
     expect(within(rows[2] as HTMLElement).queryByTestId("event-zone")).toBeNull(); // no own zone: nothing extra
@@ -192,7 +192,7 @@ describe("AttentionSection (T-234 part 2, T-235 part 2: scannable rows)", () => 
     expect(avatar.textContent).toBe("DW");
     expect(avatar.getAttribute("aria-hidden")).toBe("true");
     expect(within(item).getByTestId("attention-sender").textContent).toBe("Dana Whitfield");
-    expect(within(item).getByTestId("attention-sender").className).toMatch(/font-semibold/);
+    expect(within(item).getByTestId("attention-sender").className).toMatch(/font-medium/);
     expect(within(item).getByTestId("attention-company").textContent).toBe(" \u00b7 acme.test"); // no www.
     const age = within(item).getByTestId("attention-age");
     expect(age.tagName).toBe("TIME");
@@ -311,6 +311,15 @@ describe("AttentionSection (T-234 part 2, T-235 part 2: scannable rows)", () => 
     expect(document.activeElement).toBe(screen.getByTestId("attention-reply"));
     act(() => (focusable[1] as HTMLElement).focus());
     expect(document.activeElement).toBe(screen.getByTestId("attention-open"));
+  });
+
+  it("an attention row uses at most two font weights (name medium, subject regular; buttons and chips are medium)", () => {
+    const m = mail();
+    render(<AttentionSection laneId="PKG" now={now} mail={{ ...m, attention: [{ ...first(m.attention), kind: "priority" }] }} notes={new Map([["c1:m1", note]])} canReply />);
+    const weights = new Set<string>();
+    for (const el of screen.getByTestId("attention-item").querySelectorAll("[class]")) for (const w of el.getAttribute("class")?.match(/\bfont-(?:thin|light|normal|medium|semibold|bold|extrabold)\b/g) ?? []) weights.add(w);
+    expect(weights.size).toBeLessThanOrEqual(2);
+    expect(screen.getByTestId("attention-subject").className).not.toMatch(/font-(medium|semibold|bold)/); // regular
   });
 
   it("the phone row stacks (actions under the text, 44 px targets); the desktop row is one line with the actions on the right, centred", () => {

@@ -32,14 +32,17 @@ const card = (over: Partial<NewsCard> = {}): NewsCard => ({
 const render_ = (c: NewsCard | null, laneId = "PKG") => render(<GovConNews laneId={laneId} card={c} now={NOW} />);
 
 describe("states", () => {
-  it("off (no card, or not configured): 'News not configured'; admins get a Settings hint, others do not", () => {
+  it("off (no card, or not configured): one slim line 'GovCon news is off'; only admins get 'Set up in Settings'", () => {
     render_(null);
-    expect(screen.getByTestId("news-empty").textContent).toContain("News not configured");
+    expect(screen.getByTestId("news-empty").textContent).toBe("GovCon news is off");
     expect(screen.queryByTestId("news-admin-hint")).toBeNull();
     cleanup();
     render_(card({ configured: false, items: [], isAdmin: true }));
-    expect(screen.getByTestId("news-empty").textContent).toContain("News not configured");
-    expect(within(screen.getByTestId("news-admin-hint")).getByRole("link").getAttribute("href")).toBe("/PKG/settings#news");
+    expect(screen.getByTestId("news-empty").textContent).toBe("GovCon news is off\u00b7Set up in Settings");
+    expect(screen.getByTestId("news-admin-hint").getAttribute("href")).toBe("/PKG/settings#news");
+    const slim = screen.getByRole("region", { name: "GovCon news" });
+    expect(slim.className).toMatch(/\bpy-3\b/); // slim: no 24px card padding, no body
+    expect(slim.querySelector("h2")).toBeNull();
     expect(screen.queryByTestId("news-refresh")).toBeNull();
   });
   it("configured, nothing stored: 'No news yet today'", () => {

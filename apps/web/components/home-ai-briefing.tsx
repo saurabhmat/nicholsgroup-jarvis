@@ -46,7 +46,7 @@ export function AiBriefing({ brief, fallbackLines, tz, controls = null, now = ne
   const lines = brief && brief.status !== "failed" && brief.content.lines.length > 0 ? brief.content.lines : null;
   const priorities = brief && brief.status !== "failed" ? brief.content.priorities.slice(0, TOP_PRIORITIES) : [];
   return (
-    <section data-testid="ai-briefing" aria-labelledby="glance-title" className="mb-1 flex flex-col gap-3 rounded-control border-l-[3px] border-l-gold bg-background px-4 py-3">
+    <section data-testid="ai-briefing" aria-labelledby="glance-title" className="mb-1 flex flex-col gap-3 rounded-control rounded-l-none border-l-[3px] border-l-gold bg-background px-4 py-3">
       <h3 id="glance-title" className="font-sans text-small font-semibold text-foreground">
         Today at a glance
       </h3>
