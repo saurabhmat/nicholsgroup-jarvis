@@ -35,6 +35,9 @@ export async function dueOwners(clientFor: ClientFor, laneId: string, now: Date)
   return allowed.filter((u): u is string => u !== null);
 }
 
+/** The scheduled run's bound: under the Inngest route's maxDuration (120 s), leaving time for the save. */
+export const SCHEDULE_RUN_TIMEOUT_MS = 100_000;
+
 /** One scheduled run. Throws when the model failed, so the Inngest step retries (the failed attempt is still saved). */
 export async function runScheduled(clientFor: ClientFor, laneId: string, ownerUserId: string, now: Date): Promise<string> {
   const p = getLLMProvider();
@@ -65,6 +68,9 @@ export async function runScheduled(clientFor: ClientFor, laneId: string, ownerUs
       policy: policyFrom(pol.data),
       save: (l, r) => saveBriefing(c, l, r),
       proposeReply: replyProposer(ownerUserId),
+      // T-236 review L1: both model calls (a cut-off reply's retry included) stop before Inngest's maxDuration (120 s), so a
+      // slow run is saved as a timeout and its claim closed, instead of the function being killed with the claim open.
+      signal: AbortSignal.timeout(SCHEDULE_RUN_TIMEOUT_MS),
     },
     { laneId: laneId as LaneId, ownerUserId, trigger: "schedule", now, viewerTz: BUSINESS_TZ },
   );

@@ -11,8 +11,11 @@ import {
   parsePublished,
   plainText,
   reserveUsd,
+  retryMaxTokens,
   validateNews,
   NEWS_MAX_ITEMS,
+  NEWS_RETRY_ITEMS,
+  WHY_MAX,
 } from "./news-domain";
 
 const NOW = new Date("2026-11-12T15:00:00Z");
@@ -59,10 +62,11 @@ describe("prompt", () => {
 
 describe("cost", () => {
   it("the reserve is the worst case of one fetch (calls x searches x price + tokens), in cents, within the SQL limit", () => {
-    // 3 calls x 50k in x $3 + 3 x 4000 out x $15 = 0.45 + 0.18 = 0.63; 3 x 6 searches x $10/1000 = 0.18 -> 0.81
-    expect(reserveUsd(cfg)).toBe(0.81);
-    // (1 + maxResumes) x the per-call ceiling: no resumes = one call = a third of the tokens
-    expect(reserveUsd(cfg, 0)).toBe(0.27); // 0.15 tokens in + 0.06 out + 0.06 searches
+    // T-236: one attempt (the retry after a cut-off reply is not reserved, see reserveUsd). 3 calls x 50k in x $3 = 0.45;
+    // 3 x 8000 out x $15 = 0.36; 3 x 6 searches x $10/1000 = 0.18 -> 0.99
+    expect(reserveUsd(cfg)).toBe(0.99);
+    // no resumes = one call: 0.15 in + 0.12 out + 0.06 searches
+    expect(reserveUsd(cfg, 0)).toBe(0.33);
     expect(reserveUsd(cfg, 5)).toBeGreaterThan(reserveUsd(cfg));
     expect(reserveUsd(newsConfigFrom({ news: { input_usd_per_mtok: 1000 } }))).toBe(100);
   });
@@ -215,7 +219,8 @@ describe("answer extraction and evidence", () => {
     const r = webSearchResult({ text: 'ok {not json} then {"items":[{"headline":"a"}]}' });
     expect(newsJsonFrom(r.content)).toEqual({ items: [{ headline: "a" }] });
     expect(newsJsonFrom(textResult("no json here").content)).toBeNull();
-    expect(newsJsonFrom(textResult('{"items": []}').content)).toBeNull();
+    // T-236: an empty list is an answer (no stories: no_valid_items), not an unusable reply.
+    expect(newsJsonFrom(textResult('{"items": []}').content)).toEqual({ items: [] });
   });
   it("evidence counts results, citations, searches and errors", () => {
     const e = collectEvidence(webSearchResult({ text: "x", errorCode: "unavailable", searches: 1 }));
@@ -223,3 +228,60 @@ describe("answer extraction and evidence", () => {
     expect(e.results.size).toBe(0);
   });
 });
+
+describe("T-236: output limit, forgiving validation, drop reasons", () => {
+  const now = new Date("2026-11-12T15:00:00Z");
+  const base = newsConfigFrom({ news: { enabled: true } });
+  const U = (n: number) => `https://www.federalregister.gov/d/2026-${String(n)}`;
+  const item = (n: number, over: Record<string, unknown> = {}) => ({ headline: `Story ${String(n)}`, why: "Why", source_name: "FR", source_url: U(n), published_at: "2026-11-12T08:00:00Z", ...over });
+  const ev = (n: number) => collectEvidence(webSearchResult({ text: "x", hits: Array.from({ length: n }, (_, i) => ({ url: U(i + 1) })) }));
+
+  it("news.max_tokens defaults to 8000, the retry gets 1.5x (at most 32000), and the config refuses silly values", () => {
+    expect(base.max_tokens).toBe(8000);
+    expect(retryMaxTokens(base)).toBe(12000);
+    expect(retryMaxTokens(newsConfigFrom({ news: { max_tokens: 30000 } }))).toBe(32000);
+    expect(newsConfigFrom({ news: { max_tokens: 500 } }).max_tokens).toBe(8000); // invalid -> defaults (off)
+  });
+  it("the prompt asks for 4 to 6 stories and a why of at most 200 characters; the retry prompt for at most 4 and 150", () => {
+    const first = buildNewsSystem({ laneName: "Pub K", cfg: base, now });
+    expect(first).toContain("Return 4 to 6 stories");
+    expect(first).toContain("up to 200 characters on why it matters");
+    const retry = buildNewsSystem({ laneName: "Pub K", cfg: base, now, retry: true });
+    expect(retry).toContain(`at most ${String(NEWS_RETRY_ITEMS)} stories`);
+    expect(retry).toContain("up to 150 characters on why it matters");
+  });
+  it("why is cut to 200 characters", () => {
+    const r = validateNews({ items: [item(1, { why: "w".repeat(500) })] }, ev(1), base, now);
+    expect(r.items[0]?.why.length).toBeLessThanOrEqual(WHY_MAX);
+  });
+  it("bad entries are dropped one by one with a reason code; the good ones stay", () => {
+    const r = validateNews(
+      {
+        items: [
+          item(1),
+          "not an object",
+          item(2, { source_url: "http://insecure.example.com/x" }),
+          item(3, { source_url: "https://made-up.example.com/x" }),
+          item(4, { published_at: "2026-10-01" }),
+          item(5, { published_at: null }),
+          item(6, { published_at: null }),
+          item(1, { headline: "Other headline" }),
+          item(7, { headline: "   " }),
+          { ...item(8), source_url: "https://news.blocked.example.com/story" },
+        ],
+      },
+      collectEvidence(webSearchResult({ text: "x", hits: [...Array.from({ length: 7 }, (_, i) => ({ url: U(i + 1) })), { url: "https://news.blocked.example.com/story" }] })),
+      newsConfigFrom({ news: { enabled: true, blocked_domains: ["blocked.example.com"] } }),
+      now,
+    );
+    expect(r.items.map((i) => i.source_url)).toEqual([U(1), U(5)]);
+    expect(r.reasons).toEqual({ invalid_shape: 1, bad_link: 1, ungrounded: 1, blocked_domain: 1, bad_date: 1, undated_extra: 1, duplicate: 1, empty_text: 1 });
+    expect(r.dropped).toBe(8);
+  });
+  it("a long list is not refused: at most 6 stories are kept, the rest counted as over_limit", () => {
+    const r = validateNews({ items: Array.from({ length: 45 }, (_, i) => item(i + 1)) }, ev(45), base, now);
+    expect(r.items).toHaveLength(NEWS_MAX_ITEMS);
+    expect(r.reasons.over_limit).toBe(39);
+  });
+});
+

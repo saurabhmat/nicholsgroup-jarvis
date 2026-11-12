@@ -10,6 +10,7 @@ const HINTS: Readonly<Record<Exclude<FailureCode, "sdk_override_set">, string>> 
   model_not_allowed: "Check the AI categories in this company's lane policy (email, calendar)",
   timeout: "The AI provider did not answer in time; it retries on the next Home visit or with Regenerate",
   provider_error: "Check the AI provider status and ANTHROPIC_API_KEY",
+  output_truncated: "The reply was cut off at the output limit twice (the retry used 1.5x); raise briefing.max_tokens in lane_config. See briefing.model_call in the server log (codes only)",
   output_invalid: "The model's reply was not the expected format after one automatic retry; see the server log briefing.model_output_invalid (codes only)",
 };
 

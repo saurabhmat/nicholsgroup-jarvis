@@ -151,11 +151,11 @@ describe("lane config schema", () => {
 
   it("news (T-234 part 4): off by default, generic topics and official domains, bounded values, strict", () => {
     const n = parseLaneConfig({}).news;
-    expect(n).toMatchObject({ enabled: false, time: "06:00", max_searches: 6, monthly_cap_usd: 20, cost_per_1000_searches_usd: 10, blocked_domains: [] });
+    expect(n).toMatchObject({ enabled: false, time: "06:00", max_searches: 6, max_tokens: 8000, monthly_cap_usd: 20, cost_per_1000_searches_usd: 10, blocked_domains: [] });
     expect(n.topics).toHaveLength(6);
     expect(n.preferred_domains).toEqual(["acquisition.gov", "federalregister.gov", "gsa.gov", "sam.gov", "defense.gov"]);
     expect(parseLaneConfig({ news: { enabled: true, monthly_cap_usd: 5 } }).news).toMatchObject({ enabled: true, monthly_cap_usd: 5 });
-    for (const bad of [{ monthly_cap_usd: 0 }, { monthly_cap_usd: 5000 }, { time: "6:00" }, { max_searches: 11 }, { topics: [] }, { topics: ["<script>"] }, { blocked_domains: ["https://x.test/p"] }, { preferred_domains: ["x y.test"] }, { allowed_domains: ["x.test"] }, { cost_per_1000_searches_usd: -1 }]) {
+    for (const bad of [{ monthly_cap_usd: 0 }, { monthly_cap_usd: 5000 }, { time: "6:00" }, { max_searches: 11 }, { max_tokens: 1999 }, { max_tokens: 32001 }, { max_tokens: 8000.5 }, { topics: [] }, { topics: ["<script>"] }, { blocked_domains: ["https://x.test/p"] }, { preferred_domains: ["x y.test"] }, { allowed_domains: ["x.test"] }, { cost_per_1000_searches_usd: -1 }]) {
       expect(() => parseLaneConfig({ news: bad })).toThrow(z.ZodError);
     }
   });
@@ -256,3 +256,12 @@ describe("briefing exclusions: subject prefixes (T-234 part 2 review)", () => {
     expect(parse({ [key]: ["Canceled:"] }).success).toBe(true);
   });
 });
+
+describe("T-236: briefing.max_tokens", () => {
+  it("defaults to 8000 and accepts 2000..32000 integers only", () => {
+    expect(laneConfigSchema.parse({}).briefing.max_tokens).toBe(8000);
+    expect(laneConfigSchema.parse({ briefing: { max_tokens: 12000 } }).briefing.max_tokens).toBe(12000);
+    for (const bad of [1999, 32001, 8000.5, "8000"]) expect(laneConfigSchema.safeParse({ briefing: { max_tokens: bad } }).success).toBe(false);
+  });
+});
+
