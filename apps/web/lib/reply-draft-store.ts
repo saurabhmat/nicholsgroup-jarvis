@@ -6,7 +6,7 @@
 //   * Every entry has a time to live; an expired one is removed when read.
 //   * Nothing is written when the lane does not store outbound drafts (D-19, rule 6): callers check `storesDrafts` first.
 //   * `clearAllDrafts()` runs at sign-out and removes every namespace listed in DRAFT_NAMESPACES.
-export const DRAFT_NAMESPACES = ["reply-draft", "reply-ai"] as const;
+export const DRAFT_NAMESPACES = ["reply-draft", "reply-ai", "home-open", "drawer-open"] as const;
 export type DraftNamespaceName = (typeof DRAFT_NAMESPACES)[number];
 
 const ROOT = "nichols:";
@@ -156,5 +156,19 @@ export const aiDrafts = draftNamespace<StoredAiDraft>("reply-ai", {
     if (!o) return null;
     const text = str(o.text, MAX_BODY);
     return text === null || typeof o.awaiting !== "boolean" ? null : { text, awaiting: o.awaiting };
+  },
+});
+
+// ------------------------------------------------------------------------------------------------------ Home view state (T-234 part 5)
+
+/** Which expanded sections the owner left open on Home (item id = the section id): kept for the tab session, 12 hours at most. */
+export const expandedSections = draftNamespace<boolean>("home-open", { ttlMs: 12 * 3_600_000, validate: (v) => (typeof v === "boolean" ? v : null) });
+
+/** The message whose Reply drawer is open (item id "current"): so a full reload reopens it. An id only, never content. */
+export const openDrawer = draftNamespace<{ messageId: string }>("drawer-open", {
+  ttlMs: 12 * 3_600_000,
+  validate(v) {
+    const id = typeof v === "object" && v !== null ? str((v as Record<string, unknown>).messageId, 256) : null;
+    return id ? { messageId: id } : null;
   },
 });

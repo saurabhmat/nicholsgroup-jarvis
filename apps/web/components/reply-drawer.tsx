@@ -17,6 +17,7 @@ import { Alert, AlertDescription, AlertTitle, Badge, Button, cn } from "@nichols
 import { callApprovals, errorText, invalidAddresses, splitAddresses, stepUpHref, type DraftResult, type ReplyContext } from "@/lib/reply-client";
 import { flagRecipients } from "@/lib/reply-flags";
 import { DRAFTS_OFF_MESSAGE, REPLY_MESSAGES, resultMessage, UNKNOWN_MESSAGE, type ReplyOutcome } from "@/lib/reply-messages";
+import { holdRefresh } from "@/lib/refresh-gate";
 import { aiDrafts, debounced, replyDrafts, type ReplyDraftFields } from "@/lib/reply-draft-store";
 import { CapabilityMessage } from "./approval-card";
 import { CopyTextButton } from "./copy-text-button";
@@ -162,6 +163,11 @@ export function ReplyDrawer({ laneId, messageId, onClose }: { laneId: string; me
       alive = false;
     };
   }, [laneId, messageId, target]);
+
+  // The Home auto-refresh stays paused while this drawer is open (T-234 part 5) and, separately, while a send is in progress.
+  useEffect(() => holdRefresh("drawer"), []);
+  const sendingNow = busy === "send";
+  useEffect(() => (sendingNow ? holdRefresh("sending") : undefined), [sendingNow]);
 
   // Focus moves in, the page behind does not scroll (focus is returned by the trigger). Edits not yet written are flushed on close,
   // and a refresh that was held back while the drawer was open runs once it is gone.

@@ -3,6 +3,9 @@
 //      right column: Today's calendar with "Next 7 days" collapsed below it.
 //   2. KPI strip: five equal compact tiles (Cash book balance, AR > 30 days, P&L MTD, MRR, Paid subscribers).
 //   3. GovCon news (2/3; the stored digest, read only) | Projects at a glance (1/3).
+// T-234 part 5: HomeAutoRefresh (header) re-reads this page every 5 minutes with router.refresh() only. A render of this page
+// reads stored data and starts nothing: no AI briefing (Run now is a button), no news fetch (stored digest; Refresh is a button),
+// no sync (the sync jobs run in Inngest). Client state (drawer, fields, expanded sections) lives in client components below.
 // One column on a phone, in the same order: attention, calendar, KPIs, news, projects. Coverage is no longer a card here: a
 // small status dot in the header shows only when a source is stale or in error and links to Settings -> Connections.
 // T-231b: "Needs your attention" shows subject (figures masked), sender and mailbox to callers who may read the lane's mail
@@ -27,6 +30,8 @@ import { loadNewsCard } from "@/lib/news";
 import { ProjectsGlance } from "./home-projects";
 import { TimezoneCookie } from "./timezone-cookie";
 import { loadLane } from "@/lib/lane-page";
+import { HomeScope, PersistedDetails } from "./home-scope";
+import { HomeAutoRefresh } from "./home-auto-refresh";
 import { ApprovalsWaiting } from "./approvals-waiting";
 import { OnboardingBanner } from "./onboarding-entry";
 import { HomeSkeleton, KpiStripSkeleton } from "./page-skeleton";
@@ -38,10 +43,14 @@ import { kpiTiles } from "@/lib/home-kpi-tiles";
 export async function HomePage({ params }: { params: Promise<{ laneId: string }> }) {
   const lane = await loadLane((await params).laneId);
   const now = new Date();
+  // The verified user id is only a sessionStorage key part for view state (expanded sections, the open drawer); memoised per request.
+  const g0 = await guards();
+  const userId = (await g0.requireLane(lane.laneId as Parameters<typeof g0.requireLane>[0])).session.userId;
   const heading = homeHeading(); // no first name in the session yet: "Good morning"
   // T-230 A: the header renders as soon as the lane is verified; the data sections and the setup banner stream in behind it
   // (each in its own boundary, so the slow setup lookup never holds back today's figures, and neither holds the header).
   return (
+    <HomeScope laneId={lane.laneId} userId={userId}>
     <div className="flex flex-col gap-4">
       <PageHeader
         className="mb-2"
@@ -50,6 +59,7 @@ export async function HomePage({ params }: { params: Promise<{ laneId: string }>
         accent={heading.accent}
         actions={
           <>
+            <HomeAutoRefresh renderedAt={now.toISOString()} />
             <Suspense fallback={null}>
               <HomeCoverageDot laneId={lane.laneId} />
             </Suspense>
@@ -70,6 +80,7 @@ export async function HomePage({ params }: { params: Promise<{ laneId: string }>
         <HomeSections laneId={lane.laneId} now={now} />
       </Suspense>
     </div>
+    </HomeScope>
   );
 }
 
@@ -124,13 +135,12 @@ async function HomeSections({ laneId, now }: { laneId: string; now: Date }) {
             <AttentionSection laneId={laneId} mail={brief.mail} now={now} notes={notesByMessage(saved)} replies={repliesByMessage(saved)} canReply={isOwner} />
             {saved && saved.status !== "failed" ? (
               // Folded so the card stays short: reply drafts (with Copy) and deadlines from the briefing.
-              <details data-testid="attention-extras" className="border-t border-border pt-3">
-                <summary className="cursor-pointer text-small font-medium text-primary">Drafts and deadlines</summary>
+              <PersistedDetails id="attention-extras" testId="attention-extras" className="border-t border-border pt-3" summaryClassName="cursor-pointer text-small font-medium text-primary" summary="Drafts and deadlines">
                 <div className="mt-3 flex flex-col gap-5">
                   <ReplyDrafts laneId={laneId} brief={saved} tz={brief.viewerTz} />
                   <Deadlines laneId={laneId} brief={saved} tz={brief.viewerTz} />
                 </div>
-              </details>
+              </PersistedDetails>
             ) : null}
           </PageSection>
         </div>

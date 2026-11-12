@@ -77,6 +77,13 @@ test("owner: today's calendar, Next 7 days, the KPI strip and the rule-based att
   await expect(next7).toHaveAttribute("aria-expanded", "false");
   await next7.click();
   await expect(next7).toHaveAttribute("aria-expanded", "true");
+  // T-234 part 5: the header says when the data was read (silent text, absolute time in the title), and an expanded section
+  // survives a full reload (sessionStorage, per company and user).
+  await expect(page.getByTestId("home-updated")).toHaveText(/^Updated (just now|\d+ min ago)$/);
+  await expect(page.getByTestId("home-updated")).toHaveAttribute("title", /^Data read at /);
+  await page.reload();
+  await expect(page.getByRole("button", { name: /Next 7 days/ })).toHaveAttribute("aria-expanded", "true");
+  await expect(page.getByTestId("home-updated")).toHaveText("Updated just now");
   const tiles = page.getByTestId("kpi-tile");
   await expect(tiles).toHaveCount(5);
   const boxes = await tiles.evaluateAll((els) => els.map((e) => e.getBoundingClientRect()));

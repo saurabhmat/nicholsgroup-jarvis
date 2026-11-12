@@ -125,7 +125,7 @@ export function CalendarSections({ view, now }: { view: BriefingView; now: Date 
       <PageSection title="Today's calendar" note={`Times in ${view.viewerTz.replace(/_/g, " ")}`}>
         <TodayCalendar calendar={view.calendar} tz={view.viewerTz} now={now} />
       </PageSection>
-      <CollapsibleSection title="Next 7 days" testId="next-7-days">
+      <CollapsibleSection title="Next 7 days" testId="next-7-days" persistId="next-7-days">
         {view.calendar.access ? <LookAhead events={view.calendar.ahead} tz={view.viewerTz} /> : <p className="text-body text-muted-foreground">No calendar to look ahead in. See Settings → Connections.</p>}
       </CollapsibleSection>
     </>

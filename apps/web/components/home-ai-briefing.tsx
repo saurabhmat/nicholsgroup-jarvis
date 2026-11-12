@@ -10,6 +10,7 @@ import type { FailureCode } from "@nichols/briefing/domain";
 import type { SavedBriefingView } from "@/lib/briefing";
 import { FailureReason } from "./briefing-failure";
 import { RunBriefingButton } from "./run-briefing-button";
+import { PersistedDetails } from "./home-scope";
 
 const STATUS: Record<SavedBriefingView["status"], { label: string; variant: "success" | "outline" | "alert" }> = {
   ready: { label: "Ready", variant: "success" },
@@ -37,14 +38,13 @@ export function AiBriefing({ laneId, brief, fallbackLines, tz, canRun, failure =
             {lines.slice(0, SUMMARY_LINES).join(" ")}
           </p>
           {lines.length > SUMMARY_LINES ? (
-            <details data-testid="briefing-more" className="mt-1 text-small">
-              <summary className="cursor-pointer text-primary">More from the briefing</summary>
+            <PersistedDetails id="briefing-more" testId="briefing-more" className="mt-1 text-small" summaryClassName="cursor-pointer text-primary" summary="More from the briefing">
               <ul className="mt-2 flex list-disc flex-col gap-1 pl-5 text-body leading-relaxed text-foreground">
                 {lines.slice(SUMMARY_LINES).map((l, i) => (
                   <li key={String(i)}>{l}</li>
                 ))}
               </ul>
-            </details>
+            </PersistedDetails>
           ) : null}
         </div>
       ) : fallbackLines.length > 0 ? (
