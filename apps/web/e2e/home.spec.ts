@@ -29,9 +29,9 @@ const cleanup = () =>
 const seed = () =>
   sql(`insert into core.connections (id, lane_id, provider, external_account_id, status) values ('${CID}', 'PKG', 'google', 'home-e2e@example.test', 'active');
        insert into cal.event_index (lane_id, connection_id, provider, calendar_id, event_id, title, location, online_meeting_url, start_at, end_at, all_day, start_date, end_date, status, attendees, source_updated_at)
-       select 'PKG', '${CID}', 'google', 'primary', 'e2e-m1', '${MEETING}', 'Synthetic room', 'https://meet.example.test/e2e',
-              now() + interval '20 minutes', now() + interval '30 minutes', false, null, null, 'confirmed', '[]', now()
-       union all
+       values ('PKG', '${CID}', 'google', 'primary', 'e2e-m1', '${MEETING}', 'Synthetic room', 'https://meet.example.test/e2e',
+               now() + interval '20 minutes', now() + interval '30 minutes', false, null, null, 'confirmed', '[]', now());
+       insert into cal.event_index (lane_id, connection_id, provider, calendar_id, event_id, title, location, online_meeting_url, start_at, end_at, all_day, start_date, end_date, status, attendees, source_updated_at)
        select 'PKG', '${CID}', 'google', 'primary', 'e2e-m2', '${ALL_DAY}', null, null,
               (d::timestamp at time zone 'America/New_York'), ((d + 1)::timestamp at time zone 'America/New_York'), true, d, d + 1, 'confirmed', '[]', now()
        from (select (now() at time zone 'America/New_York')::date as d) t;
@@ -72,7 +72,7 @@ test("owner: today's calendar, Next 7 days, the KPI strip and the rule-based att
   await expect(attention.getByTestId("attention-view-all")).toContainText(/^View all in Inbox · \d+ need attention/);
   // T-234 part 2: each item has Reply and Open; Open goes to the thread in Jarvis (never a Google page).
   const firstItem = attention.getByTestId("attention-item").first();
-  await expect(firstItem.getByRole("link", { name: "Reply" })).toBeVisible();
+  await expect(firstItem.getByTestId("attention-reply")).toBeVisible(); // the owner's Reply is a drawer button (T-235 part 3)
   await expect(firstItem.getByTestId("attention-open")).toHaveAttribute("href", /^\/PKG\/inbox\/[A-Za-z0-9_-]+$/);
   // Reply sits above the stretched link: for the owner (a button) a click opens the drawer and the URL is unchanged; for a role
   // that cannot send, Reply is a plain link to the same thread as Open.
@@ -89,11 +89,18 @@ test("owner: today's calendar, Next 7 days, the KPI strip and the rule-based att
     await page.goBack();
   }
   // The whole row opens the thread (stretched link): clicking the subject text, not the Open link, navigates.
-  await firstItem.getByTestId("attention-subject").click();
+  // A real mouse click at the subject's position (the Open link's ::after overlay is the topmost element there, which is the
+  // point of the stretched link; Playwright's locator click would refuse because the overlay "intercepts" it).
+  const subjectBox = await firstItem.getByTestId("attention-subject").boundingBox();
+  if (!subjectBox) throw new Error("subject not laid out");
+  await page.mouse.click(subjectBox.x + subjectBox.width / 2, subjectBox.y + subjectBox.height / 2);
   await expect(page).toHaveURL(/\/PKG\/inbox\/[A-Za-z0-9_-]+$/);
   await page.goBack();
   await expect(attention.getByText("Synthetic subject 1")).toBeVisible();
-  await expect(attention.getByText("Synthetic subject 4")).toHaveCount(0);
+  // The read message is still unanswered, so it counts as waiting on the owner (T-231b review rule), with that chip.
+  const readItem = attention.getByTestId("attention-item").filter({ hasText: "Synthetic subject 4" });
+  await expect(readItem).toHaveCount(1);
+  await expect(readItem).toContainText("Waiting on you");
   // T-234 part 1: Coverage is no longer on Home (Settings -> Connections); Next 7 days is collapsed until clicked; five KPI tiles.
   await expect(page.getByTestId("coverage-line")).toHaveCount(0);
   const next7 = page.getByRole("button", { name: /Next 7 days/ });
@@ -143,7 +150,7 @@ test("a finance-only viewer sees no meetings and no mail counts", async ({ page 
   await expect(body).not.toContainText("Synthetic subject");
 });
 
-test("phone: the KPI banner fits 390 px (no horizontal scroll)", async ({ page }, info) => {
+test("phone: Home fits 390 px (no horizontal scroll), 44 px row targets, no empty KPI tiles", async ({ page }, info) => {
   test.skip(info.project.name === "desktop", "phone viewport only");
   test.setTimeout(150_000);
   await signIn(page, personas(info).member);
@@ -160,9 +167,10 @@ test("phone: the KPI banner fits 390 px (no horizontal scroll)", async ({ page }
     }
   }
   expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
-  // Nothing connected: the member (owner) sees the slim banner, never five empty tiles; tiles, if any, are one column.
+  // Nothing connected: never five empty tiles. The "Connect …" banner is only for roles that can connect sources AND see finance
+  // (the owner; covered on desktop and in kpi-strip tests); the phone member (finance_operator) cannot connect, so no banner.
   await expect(page.getByTestId("kpi-tile")).toHaveCount(0);
-  await expect(page.getByTestId("home-kpis-banner")).toBeVisible();
+  await expect(page.getByTestId("home-kpis-banner")).toHaveCount(0);
   const overflow = await page.evaluate(() => document.documentElement.scrollWidth - document.documentElement.clientWidth);
   expect(overflow).toBeLessThanOrEqual(0);
 });
