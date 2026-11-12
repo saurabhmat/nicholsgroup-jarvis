@@ -1,5 +1,6 @@
 // T-230 B: layout screenshots (not part of e2e:brain). Signs in as the owner persona (synthetic local seed) and saves PNGs.
 // Run: SHOTS=1 SHOTS_OUT=/abs/dir [SHOTS_SET=before] E2E_SPECS=e2e/screenshots.spec.ts pnpm e2e:brain --project=desktop
+// SHOTS_SEED=1: the global setup loads the synthetic Home fixture (e2e/fixtures/home-shots.sql) after the reset.
 // SHOTS_SET=before: Home and Settings at 1440 only. SHOTS_SET=home (T-235): Home at 1440, 1920 and iPhone. Default: the full set.
 // LOCAL stack only.
 import { mkdirSync } from "node:fs";
