@@ -1119,6 +1119,11 @@ Spec: `docs/specs/brain-and-employees.md`, `docs/specs/brain-interview.md`; seed
 - depends: T-235
 - note: approved by Saurabh Nov 12, 2026 after production showed "News could not be fetched: the AI answer could not be used" (~7:28 PM IST) and briefing failures with stopReason max_tokens. Branch agent/T-236 from agent/T-235; full reviews; commit; don't push.
 - acceptance: (1) lane_config news.max_tokens and briefing.max_tokens (default 8000). (2) news: at most 6 stories, "why" at most 200 characters. (3) a reply with stopReason max_tokens is never parsed: one retry with a higher limit (news: fewer stories), then a fixed failure code. (4) forgiving news validation: invalid stories dropped, fail only with none left. (5) logs: stopReason, output tokens, search count, validation codes; no content. (6) a failed fetch never uses up the hourly Refresh slot. (7) a contract test against the real API behind an env flag, synthetic inputs.
+### T-237 Home redesign to the approved PNGs (desktop, reply drawer, iPhone)
+- status: approved
+- depends: T-236
+- note: approved by Saurabh Nov 12, 2026. Brief verbatim in `.agent/tasks/T-237-brief.md`; reference images in `docs/design/home/` (prototype sample data). Branch agent/T-237 from agent/T-236; full reviews; commit per part; don't push; production SQL (schema-qualified, one script) in the checkpoint.
+- acceptance: layout order header → approvals banner → KPI row (Cash book, AR > 30, Bills due 14 days, Net income MTD, MRR; one "Connect QuickBooks" tile when QuickBooks is not connected) → attention (2/3) | Today + GovCon news (1/3) → Finance section (MTD income vs expenses, AR aging, oldest unpaid invoices, as-of time) → slim Projects; 560 px reply drawer (full screen on a phone) with autosave and a commitment warning, Send through approvals; ET times without "Z"; no promotional/newsletter mail in the top 5; no "[amount]" placeholders (hide the field); attendee names deduplicated; the 5-minute refresh keeps an open draft (new e2e); AA contrast; synthetic data only.
 ### T-174 Lane onboarding playbook + dry run
 - status: proposed
 - depends: T-090, T-047
