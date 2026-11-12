@@ -19,7 +19,7 @@ const CANARY = "BODY-CANARY-7f3a-not-real";
 
 type Row = Record<string, unknown> & { id: string; status: string; payload: Record<string, unknown> };
 
-function world(over: { facts?: Partial<CapabilityFacts>; mailboxes?: string[]; writer?: "ok" | "unknown" | "mismatch" | "refused"; auditFailOnce?: string; markVerifiedThrows?: boolean } = {}) {
+function world(over: { facts?: Partial<CapabilityFacts>; mailboxes?: string[]; writer?: "ok" | "unknown" | "mismatch" | "refused" | "timeout" | "plain_throw" | "no_id" | "rate_limited"; auditFailOnce?: string; markVerifiedThrows?: boolean } = {}) {
   let auditFailPending = over.auditFailOnce;
   const rows = new Map<string, Row>();
   const audits: AuditEntry[] = [];
@@ -163,6 +163,10 @@ function world(over: { facts?: Partial<CapabilityFacts>; mailboxes?: string[]; w
       calls.writes += 1;
       if (over.writer === "unknown") throw new ConnectorError({ kind: "provider_error", message: OUTCOME_UNKNOWN_MESSAGE });
       if (over.writer === "refused") throw new ConnectorError({ kind: "forbidden", message: "no" });
+      if (over.writer === "timeout") throw new ConnectorError({ kind: "timeout", message: "timed out" });
+      if (over.writer === "rate_limited") throw new ConnectorError({ kind: "rate_limited", message: "slow down" });
+      if (over.writer === "plain_throw") throw new Error("socket reset");
+      if (over.writer === "no_id") return { outcome: "accepted" as const, external_id: null, executed_at: new Date().toISOString(), provider_tid: null };
       return { outcome: "accepted" as const, external_id: "gmail-msg-1", executed_at: new Date().toISOString(), provider_tid: null };
     },
     async verifyWrite() {
@@ -613,5 +617,22 @@ describe("toApprovalsError: the reply guards (T-234 part 3)", () => {
     expect(e.message).toBe("An earlier reply to this conversation may already have gone out. Check your Sent folder first.");
     expect(e.message).toBe(CHECK_SENT_FIRST_MESSAGE);
     expect(toApprovalsError({ code: "23505", message: "act: reply_already_pending" }).code).toBe("reply_already_pending");
+  });
+});
+
+describe("send-stage failures are unknown unless the provider certainly did nothing (T-234 part 3 re-check M2)", () => {
+  const run = async (writer: "timeout" | "plain_throw" | "no_id" | "rate_limited" | "refused") => {
+    const w = world({ writer });
+    const { id, hash } = await proposeEmailAction(w.deps, "PKG", input);
+    return approveAndExecute(w.deps, w.ctx, { actionId: id, hashSeen: hash });
+  };
+  it("a timeout, a plain runtime error or an accepted send without an id may have gone out: unknown, never execution_error", async () => {
+    await expect(run("timeout")).resolves.toMatchObject({ status: "failed", failureCode: "outcome_unknown" });
+    await expect(run("plain_throw")).resolves.toMatchObject({ status: "failed", failureCode: "outcome_unknown" });
+    await expect(run("no_id")).resolves.toMatchObject({ status: "failed", failureCode: "verification_unavailable" });
+  });
+  it("a kind the provider certainly did not act on stays a definite failure", async () => {
+    await expect(run("refused")).resolves.toMatchObject({ status: "failed", failureCode: "execution_refused" });
+    await expect(run("rate_limited")).resolves.toMatchObject({ status: "failed", failureCode: "execution_error" });
   });
 });

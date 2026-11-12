@@ -259,6 +259,9 @@ export async function rejectAction(deps: ApprovalsPublicDeps, ctx: UserCtx, acti
 }
 
 type FailureOutcome = "mismatch" | "error" | "outcome_unknown";
+/** Connector error kinds after which the provider certainly created nothing (the writer classifies them before or instead of the request). */
+const DEFINITE_SEND_KINDS: ReadonlySet<string> = new Set(["forbidden", "invalid_input", "lane_mismatch", "unsupported_op", "reconnect_required", "connection_unavailable", "rate_limited", "not_found"]);
+
 function failureOf(e: unknown, stage: "before" | "send" | "verify"): { code: string; outcome: FailureOutcome } {
   if (e instanceof TamperError) return { code: "payload_changed", outcome: "error" };
   if (isConnectorError(e)) {
@@ -266,11 +269,18 @@ function failureOf(e: unknown, stage: "before" | "send" | "verify"): { code: str
     if (e.info.message === VERIFICATION_MISMATCH_MESSAGE) return { code: "verification_mismatch", outcome: "mismatch" };
     // The email may already be in the mailbox: never report a plain failure for a read-back that could not run.
     if (stage === "verify") return { code: "verification_unavailable", outcome: "outcome_unknown" };
+    // During the send, only a kind the provider certainly did not act on is a definite failure; anything else (a
+    // timeout, a reset, a provider error) may have gone out, so it is unknown and blocks a resend (T-234 part 3
+    // security re-check M2: the reply guard treats execution_* as "nothing went out").
+    if (stage === "send" && !DEFINITE_SEND_KINDS.has(e.info.kind)) return { code: "outcome_unknown", outcome: "outcome_unknown" };
     if (e.info.kind === "reconnect_required" || e.info.kind === "connection_unavailable") return { code: "connection_unhealthy", outcome: "error" };
     if (["forbidden", "invalid_input", "lane_mismatch", "unsupported_op"].includes(e.info.kind)) return { code: "execution_refused", outcome: "error" };
     return { code: "execution_error", outcome: "error" };
   }
-  return stage === "verify" ? { code: "verification_unavailable", outcome: "outcome_unknown" } : { code: "execution_error", outcome: "error" };
+  if (stage === "verify") return { code: "verification_unavailable", outcome: "outcome_unknown" };
+  // A non-connector error during the send (a dropped socket, a runtime error after the request left) may have sent it.
+  if (stage === "send") return { code: "outcome_unknown", outcome: "outcome_unknown" };
+  return { code: "execution_error", outcome: "error" };
 }
 class TamperError extends Error {
   override readonly name = "TamperError";
@@ -362,10 +372,12 @@ export async function executeApproved(deps: ApprovalsDeps, laneId: LaneId, actio
     const conn = await deps.loadWriteConnection(laneId, row.connectionId);
     stage = "send";
     const res = await deps.writer.executeWrite(laneId, conn, action);
+    // executeWrite returned: the provider accepted the request. From here nothing is a definite "not sent"; a missing
+    // id is a read-back problem (verification_unavailable, outcome unknown), never execution_error (re-check M2).
+    stage = "verify";
     if (res.external_id === null) throw new ApprovalsError("unavailable");
     externalId = res.external_id;
     outcome = res.outcome;
-    stage = "verify";
     const sent = await job("act_claim_sent", { p_lane: laneId, p_id: actionId, p_external_id: externalId });
     if (sent.error) throw toApprovalsError(sent.error);
     await deps.writer.verifyWrite(laneId, conn, action, externalId);

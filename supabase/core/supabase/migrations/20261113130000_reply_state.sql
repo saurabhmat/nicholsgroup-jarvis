@@ -175,6 +175,16 @@ begin
                       or (a.status = 'failed' and act.is_unknown_failure(a.failure_code) and a.updated_at > pg_catalog.now() - interval '24 hours'))) then
       raise exception 'act: check_sent_first' using errcode = 'P0001';
     end if;
+    -- T-234 part 3 re-check M1: a draft made BEFORE the latest reply in this conversation went out is stale. Approving it
+    -- would send a second reply without the owner's explicit confirmation (a pending briefing draft on another message
+    -- of the thread, or a draft saved in a second tab while the first was sending). Saving an edit makes a new proposal
+    -- dated after that send, which is the explicit confirmation; the drawer's "Send another reply" does the same.
+    if exists (select 1 from act.proposed_actions a
+               where a.lane_id = p_lane and a.connection_id = v_row.connection_id and a.id <> v_row.id
+                 and a.action_type = 'email.send' and a.status = 'verified' and a.verified_at > v_row.created_at
+                 and a.payload -> 'inReplyTo' ->> 'threadId' = v_row.payload -> 'inReplyTo' ->> 'threadId') then
+      raise exception 'act: already_replied' using errcode = 'P0001';
+    end if;
   end if;
   perform set_config('act.reason', 'approved', true);
   update act.proposed_actions
@@ -186,6 +196,6 @@ $$;
 
 revoke all on function act.insert_proposal(text, text, uuid, jsonb, jsonb, integer, text, text, jsonb, text, uuid, boolean, uuid) from public, anon, authenticated;
 comment on function act.approve(text, uuid, text) is
-  'Approves the exact payload: aal2, TOTP step-up within step_up_max_age_s (amr), owner of the lane, hash seen = stored hash, not expired, approvals_live, type allowed by lane policy, connection granted compose, no other approved/executing/failed-unknown action in the same thread (check_sent_first).';
+  'Approves the exact payload: aal2, TOTP step-up within step_up_max_age_s (amr), owner of the lane, hash seen = stored hash, not expired, approvals_live, type allowed by lane policy, connection granted compose, no other approved/executing/failed-unknown action in the same thread (check_sent_first), not made before the latest verified reply in the thread (already_replied).';
 revoke all on function act.approve(text, uuid, text) from public, anon, authenticated, service_role;
 grant execute on function act.approve(text, uuid, text) to authenticated;

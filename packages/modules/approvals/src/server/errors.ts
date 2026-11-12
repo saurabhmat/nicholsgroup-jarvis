@@ -19,6 +19,7 @@ export const APPROVALS_ERROR_CODES = [
   "already_proposed",
   "reply_subject_fixed",
   "check_sent_first",
+  "already_replied",
   "reply_already_pending",
   "unavailable",
 ] as const;
@@ -51,6 +52,7 @@ const MESSAGES: Record<ApprovalsErrorCode, string> = {
   already_proposed: "A reply to this message is already waiting for approval.",
   reply_subject_fixed: "The subject of a reply can't be changed: it keeps the reply in its thread.",
   check_sent_first: CHECK_SENT_FIRST_MESSAGE,
+  already_replied: "You already replied in this conversation after this draft was made. Edit and save it to send it anyway.",
   reply_already_pending: "A reply to this message is already waiting for approval. Open it to edit it.",
   unavailable: "Approvals are unavailable right now.",
 };
@@ -81,6 +83,7 @@ export function toApprovalsError(error: { code?: string | undefined; message?: s
   if (has("not_found") || code === "P0002") return new ApprovalsError("not_found");
   if (message.includes("does not allow storing outbound drafts")) return new ApprovalsError("drafts_not_allowed");
   if (has("check_sent_first")) return new ApprovalsError("check_sent_first");
+  if (has("already_replied")) return new ApprovalsError("already_replied");
   if (has("reply_already_pending")) return new ApprovalsError("reply_already_pending");
   if (has("already waiting for approval")) return new ApprovalsError("already_proposed");
   if (has("too many pending") || code === "54000") return new ApprovalsError("too_many_pending");

@@ -7,12 +7,13 @@ import { createMockProvider, textResult } from "@nichols/ai/testing";
 import { LLMProviderError } from "@nichols/ai/types";
 import type { ActionRow, ApprovalsPublicDeps, CapabilityFacts, UserCtx } from "@nichols/approvals/server";
 
-const mod = vi.hoisted(() => ({ propose: vi.fn(), edit: vi.fn(), get: vi.fn() }));
+const mod = vi.hoisted(() => ({ propose: vi.fn(), edit: vi.fn(), get: vi.fn(), reject: vi.fn() }));
 vi.mock("@nichols/approvals/server", async (orig) => ({
   ...(await orig<typeof import("@nichols/approvals/server")>()),
   proposeEmailAction: mod.propose,
   editEmailProposal: mod.edit,
   getApproval: mod.get,
+  rejectAction: mod.reject,
 }));
 
 import { ApprovalsError, NOT_ENABLED_MESSAGE, NOT_LIVE_MESSAGE } from "@nichols/approvals/server";
@@ -297,6 +298,24 @@ describe("saveReply: server-derived payload", () => {
     await expect(saveReply(ctxWith().ctx, db(), approvals(), { now: () => NOW }, { ...input, confirmResend: false })).rejects.toMatchObject({ code: "already_replied" });
     await saveReply(ctxWith().ctx, db(), approvals(), { now: () => NOW }, { ...input, confirmResend: true });
     expect(mod.propose).toHaveBeenCalledTimes(1);
+  });
+
+  it("a confirmed resend withdraws a draft made before the earlier reply went out and proposes a fresh one (re-check M1)", async () => {
+    mod.propose.mockResolvedValue({ id: PID, hash: HASH });
+    setState({ already_sent_at: "2026-11-12T12:00:00Z", pending: row({ createdAt: "2026-11-12T09:00:00Z" }) });
+    const input = { messageId: "m1", to: ["dana@sender.example.test"], cc: [], bodyText: "Another", confirmResend: true };
+    await saveReply(ctxWith().ctx, db(), approvals(), { now: () => NOW }, input);
+    expect(mod.reject).toHaveBeenCalledTimes(1);
+    expect(mod.edit).not.toHaveBeenCalled();
+    expect(mod.propose).toHaveBeenCalledTimes(1);
+  });
+
+  it("a confirmed resend edits a draft made after the earlier reply (it can be approved)", async () => {
+    mod.edit.mockResolvedValue({ id: PID, hash: HASH, unchanged: false });
+    setState({ already_sent_at: "2026-11-12T08:00:00Z", pending: row({ createdAt: "2026-11-12T09:00:00Z" }) });
+    await saveReply(ctxWith().ctx, db(), approvals(), { now: () => NOW }, { messageId: "m1", to: ["dana@sender.example.test"], cc: [], bodyText: "x", confirmResend: true });
+    expect(mod.reject).not.toHaveBeenCalled();
+    expect(mod.edit).toHaveBeenCalledTimes(1);
   });
 
   it("blocked wins over a confirmation (check Sent first, even if the owner confirmed)", async () => {

@@ -16,6 +16,7 @@ import {
   toApprovalsError,
   capabilityOf,
   editEmailProposal,
+  rejectAction,
   getApproval,
   proposeEmailAction,
   type ActionRow,
@@ -305,7 +306,12 @@ export async function saveReply(ctx: UserCtx, db: Db, approvals: ApprovalsPublic
     // The subject, thread, mailbox and bcc stay as stored: only what the owner may edit goes in.
     editEmailProposal(approvals, ctx, id, { to: [...input.to], cc: [...input.cc], bodyText: input.bodyText });
   const pending = await loadPending(ctx, state, deps.now());
-  if (pending) return edit(pending.id);
+  // A draft made before the latest reply in this conversation went out cannot be approved (act.approve: already_replied).
+  // The owner confirmed another reply, so that stale draft is withdrawn (rejected, with a fixed reason; the history keeps
+  // it) and a fresh proposal is made below (T-234 part 3 re-check M1).
+  const stale = pending !== null && state.alreadySentAt !== null && Date.parse(pending.createdAt) < Date.parse(state.alreadySentAt);
+  if (pending && !stale) return edit(pending.id);
+  if (pending && stale) await rejectAction(approvals, ctx, pending.id, "Replaced by a new reply after an earlier one was sent");
   const own = await approvals.laneMailboxes(ctx.laneId).catch(() => [] as string[]);
   const sameAsDefault = JSON.stringify(input.to.map((a) => a.toLowerCase())) === JSON.stringify(defaultRecipients(ref, own));
   try {

@@ -3,7 +3,7 @@
 -- denial, AAL1 and anon denial, approve refused with check_sent_first, the job rule after a failed-unknown action, the owner's
 -- second pending proposal for a message refused, a supersede (edit) still allowed, is_unknown_failure codes.
 begin;
-select plan(26);
+select plan(28);
 \ir helpers/lane_rls.psql
 
 create function pg_temp.claims_amr(p_email text, p_aal text, p_at bigint) returns text language sql as $$
@@ -126,6 +126,20 @@ select throws_ok(format($$select core.act_approve('PKG', %L, %L)$$, (select id f
 select lives_ok(format($$select core.act_approve('PKG', %L, %L)$$, (select id from ids where k = 'n6'), encode(sha256(convert_to('rs-n6', 'utf8')), 'hex')), 'approve allowed: the only unknown failure is older than 24 h');
 reset role;
 select is((select status from act.proposed_actions where id = (select id from ids where k = 'n2')), 'proposed', 'the refused approval left the proposal pending');
+
+-- already_replied (re-check M1): T5 has a verified send. A proposal made BEFORE it (a stale briefing draft on another message,
+-- a second tab) is refused; one made after it (the owner's explicit new reply) is allowed. Inside one transaction now() is
+-- constant, so "after" = created_at equal to verified_at (not before it).
+select pg_temp.mk('n5old', 'PKG', '00000000-0000-4000-8000-000000003041', 'T5', 'M5b', 'user');
+alter table act.proposed_actions disable trigger proposed_actions_guard;
+update act.proposed_actions set created_at = now() - interval '1 hour' where id = (select id from ids where k = 'n5old');
+alter table act.proposed_actions enable trigger proposed_actions_guard;
+select pg_temp.mk('n5new', 'PKG', '00000000-0000-4000-8000-000000003041', 'T5', 'M5c', 'user');
+select pg_temp.claims_amr('owner@example.test', 'aal2', extract(epoch from now())::bigint);
+set local role authenticated;
+select throws_ok(format($$select core.act_approve('PKG', %L, %L)$$, (select id from ids where k = 'n5old'), encode(sha256(convert_to('rs-n5old', 'utf8')), 'hex')), 'P0001', 'act: already_replied', 'approve refused: the draft was made before the latest verified reply in the thread');
+select lives_ok(format($$select core.act_approve('PKG', %L, %L)$$, (select id from ids where k = 'n5new'), encode(sha256(convert_to('rs-n5new', 'utf8')), 'hex')), 'approve allowed: a draft made after that reply');
+reset role;
 
 -- ---------------------------------------------------------------- insert_proposal rules
 select throws_ok($$select pg_temp.mk('j3', 'PKG', '00000000-0000-4000-8000-000000003041', 'T3', 'M3', 'job')$$, '23505', 'act: a reply to this message is already waiting for approval', 'a job does not propose again after a failed-unknown action for that message');
