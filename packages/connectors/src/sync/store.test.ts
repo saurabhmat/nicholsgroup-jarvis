@@ -19,7 +19,7 @@ function fakeClient(respond: (c: Call) => { data?: unknown; error?: { code?: str
   const rpcs: { fn: string; args: Record<string, unknown> }[] = [];
   const builder = (call: Call) => {
     const b: Record<string, unknown> = {};
-    for (const op of ["eq", "lt", "or", "limit"]) b[op] = (col: string, v?: unknown) => { call.filters.push([op, col, v]); return b; };
+    for (const op of ["eq", "lt", "or", "limit", "order"]) b[op] = (col: string, v?: unknown) => { call.filters.push([op, col, v]); return b; };
     b.select = () => b;
     b.single = () => Promise.resolve({ data: respond(call).data ?? null, error: respond(call).error ?? null });
     b.then = (res: (v: unknown) => unknown) => Promise.resolve({ data: Array.isArray(respond(call).data) ? respond(call).data : [{ id: "run-1" }], error: respond(call).error ?? null }).then(res);
@@ -133,17 +133,20 @@ describe("sync run store", () => {
     expect(f.calls).toHaveLength(0);
   });
 
-  it("T-241: hasCompletedFullSync looks for a succeeded full conn.sync run of this lane's connection", async () => {
-    const yes = fakeClient(() => ({ data: [{ id: "r1" }] }));
-    await expect(createSyncRunStore(yes.clientFor).hasCompletedFullSync?.("PKG", conn)).resolves.toBe(true);
+  it("T-241: fullSyncHistory reads this lane's connection's full conn.sync runs: completed and the last attempt", async () => {
+    const yes = fakeClient(() => ({ data: [{ started_at: "2026-11-13T10:00:00Z" }] }));
+    await expect(createSyncRunStore(yes.clientFor).fullSyncHistory?.("PKG", conn)).resolves.toEqual({ completed: true, lastAttemptAt: "2026-11-13T10:00:00Z" });
     expect(yes.calls[0]).toMatchObject({ table: "sync_runs", op: "select" });
-    expect(yes.calls[0]?.filters).toEqual(expect.arrayContaining([["eq", "lane_id", "PKG"], ["eq", "connection_id", CONN_ID], ["eq", "job", "sync"], ["eq", "status", "succeeded"], ["eq", "kind", "full"]]));
-    const none = fakeClient(() => ({ data: [] }));
-    // the fake answers [{id}] for an empty array; an explicit empty list must read as "never"
-    const emptyList = { ...none, clientFor: async () => ({ schema: () => ({ from: () => ({ select: () => { const b: Record<string, unknown> = {}; for (const op of ["eq", "limit"]) b[op] = () => b; b.then = (r: (v: unknown) => unknown) => Promise.resolve({ data: [], error: null }).then(r); return b; } }) }) }) as never };
-    await expect(createSyncRunStore(emptyList.clientFor).hasCompletedFullSync?.("PKG", conn)).resolves.toBe(false);
+    expect(yes.calls[0]?.filters).toEqual(expect.arrayContaining([["eq", "lane_id", "PKG"], ["eq", "connection_id", CONN_ID], ["eq", "job", "sync"], ["eq", "kind", "full"], ["eq", "status", "succeeded"]]));
+    const empty = { clientFor: async () => ({ schema: () => ({ from: () => ({ select: () => { const b: Record<string, unknown> = {}; for (const op of ["eq", "limit", "order"]) b[op] = () => b; b.then = (r: (v: unknown) => unknown) => Promise.resolve({ data: [], error: null }).then(r); return b; } }) }) }) as never };
+    await expect(createSyncRunStore(empty.clientFor).fullSyncHistory?.("PKG", conn)).resolves.toEqual({ completed: false, lastAttemptAt: null });
     const broken = fakeClient(() => ({ error: { code: "XX000" } }));
-    await expect(createSyncRunStore(broken.clientFor).hasCompletedFullSync?.("PKG", conn)).rejects.toMatchObject({ info: { kind: "transient" } });
+    await expect(createSyncRunStore(broken.clientFor).fullSyncHistory?.("PKG", conn)).rejects.toMatchObject({ info: { kind: "transient" } });
+  });
+  it("T-241: the cursor store resets only this connection's generic stream through the lane-checked function", async () => {
+    const f = fakeClient();
+    await createSyncCursorStore(f.clientFor).reset?.("PKG", conn);
+    expect(f.rpcs).toEqual([{ fn: "sync_cursor_reset", args: { p_lane: "PKG", p_connection_id: CONN_ID, p_stream: GENERIC_STREAM } }]);
   });
 
   it("refuses a connection that is not bound to the lane", async () => {

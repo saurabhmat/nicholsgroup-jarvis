@@ -27,6 +27,9 @@ function isFormNavigation(request: Request): boolean {
   return type.startsWith("application/x-www-form-urlencoded") || type.startsWith("multipart/form-data") || request.headers.get("sec-fetch-mode") === "navigate";
 }
 
+/** How long the callback waits for its follow-up before redirecting anyway. */
+export const ON_CONNECTED_TIMEOUT_MS = 3_000;
+
 /** Called once after a connect or reconnect stored its tokens (T-241: QuickBooks starts its full initial load). Ids only. */
 export type OnConnected = (connected: { provider: string; laneId: string; connectionId: string }) => Promise<void>;
 
@@ -72,7 +75,14 @@ export function createConnectHandlers(flow: Pick<ReturnType<typeof createOAuthFl
         if (result.ok && opts.onConnected) {
           // The connect stands whatever happens here: a failure is logged by class and the next scheduled sync still loads the data.
           try {
-            await opts.onConnected({ provider: result.provider, laneId: result.laneId, connectionId: result.connectionId });
+            // Bounded (review L4): a slow event API must not hold the user's redirect; the scheduled poll still loads the data.
+            let timer: ReturnType<typeof setTimeout> | undefined;
+            const timeout = new Promise<never>((_, reject) => { timer = setTimeout(() => reject(Object.assign(new Error("follow-up timed out"), { name: "TimeoutError" })), ON_CONNECTED_TIMEOUT_MS); });
+            try {
+              await Promise.race([opts.onConnected({ provider: result.provider, laneId: result.laneId, connectionId: result.connectionId }), timeout]);
+            } finally {
+              clearTimeout(timer);
+            }
           } catch (e) {
             console.error("[api/connect/callback] follow-up not started:", e instanceof Error ? e.name : typeof e);
           }

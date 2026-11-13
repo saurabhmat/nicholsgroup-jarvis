@@ -1,7 +1,7 @@
 // T-241: the callback's follow-up (a QuickBooks connect starts its full initial load). Runs only after a successful connect, gets ids
 // only, and never changes the redirect: a failure is logged by class.
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { createConnectHandlers, type OnConnected } from "./handlers";
+import { createConnectHandlers, ON_CONNECTED_TIMEOUT_MS, type OnConnected } from "./handlers";
 
 afterEach(() => vi.restoreAllMocks());
 const CONN = "00000000-0000-4000-8000-0000000000c1";
@@ -31,5 +31,15 @@ describe("connect callback follow-up (T-241)", () => {
     const out = log.mock.calls.flat().join(" ");
     expect(out).toContain("TypeError");
     expect(out).not.toContain("canary-7c1");
+  });
+  it("a follow-up that hangs does not hold the redirect (bounded)", async () => {
+    vi.useFakeTimers();
+    const log = vi.spyOn(console, "error").mockImplementation(() => undefined);
+    const pending = handlers({ ok: true, provider: "quickbooks", laneId: "PKG", connectionId: CONN }, () => new Promise<void>(() => undefined)).callback(cb(), "qbo");
+    await vi.advanceTimersByTimeAsync(ON_CONNECTED_TIMEOUT_MS + 10);
+    const res = await pending;
+    expect(res.headers.get("location")).toBe("/PKG/settings?connect=ok&provider=quickbooks");
+    expect(log.mock.calls.flat().join(" ")).toContain("TimeoutError");
+    vi.useRealTimers();
   });
 });

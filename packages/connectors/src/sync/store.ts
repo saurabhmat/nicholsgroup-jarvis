@@ -87,15 +87,17 @@ export function createSyncRunStore(clientFor: JobClientFor, now: () => Date = ()
       }
     },
 
-    async hasCompletedFullSync(laneId, conn) {
+    async fullSyncHistory(laneId, conn) {
       assertLaneBound(laneId, conn);
       const db = await client(laneId);
       try {
         // job = 'sync' is the column default, so this also reads rows written before the column existed (T-196).
-        const { data, error } = await db.schema("core").from("sync_runs").select("id").eq("lane_id", laneId).eq("connection_id", conn.id)
-          .eq("job", "sync").eq("status", "succeeded").eq("kind", "full").limit(1);
-        if (error) throw error;
-        return Array.isArray(data) && data.length > 0;
+        const full = () => db.schema("core").from("sync_runs").select("started_at").eq("lane_id", laneId).eq("connection_id", conn.id).eq("job", "sync").eq("kind", "full");
+        const [done, last] = await Promise.all([full().eq("status", "succeeded").limit(1), full().order("started_at", { ascending: false }).limit(1)]);
+        if (done.error) throw done.error;
+        if (last.error) throw last.error;
+        const at = Array.isArray(last.data) ? (last.data[0] as { started_at?: unknown } | undefined)?.started_at : undefined;
+        return { completed: Array.isArray(done.data) && done.data.length > 0, lastAttemptAt: typeof at === "string" ? at : null };
       } catch {
         throw unavailable();
       }
@@ -140,6 +142,11 @@ export function createSyncCursorStore(clientFor: JobClientFor): SyncCursorStore 
       assertLaneBound(laneId, conn);
       const data = await call(laneId, "sync_cursor_put", { p_lane: laneId, p_connection_id: conn.id, p_stream: GENERIC_STREAM, p_expected: expected, p_cursor: next });
       return data === true;
+    },
+    async reset(laneId, conn) {
+      assertLaneBound(laneId, conn);
+      // core.sync_cursor_reset: service_role only, lane-checked; deletes this connection's generic stream only.
+      await call(laneId, "sync_cursor_reset", { p_lane: laneId, p_connection_id: conn.id, p_stream: GENERIC_STREAM });
     },
   };
 }

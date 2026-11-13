@@ -13,10 +13,19 @@ export function connectSyncEventId(connectionId: string, nowMs: number): string 
 }
 
 type Send = (event: ReturnType<typeof connSyncRequested.create>) => Promise<unknown>;
+/** Drops the connection's stored sync cursor (lane-checked), so ANY next sync is a full load even if the connect sync is skipped. */
+type ResetCursor = (laneId: string, connectionId: string) => Promise<void>;
 
-export function connectFollowUp(send: Send, now: () => number = Date.now): OnConnected {
+export function connectFollowUp(send: Send, resetCursor: ResetCursor, now: () => number = Date.now): OnConnected {
   return async ({ provider, laneId, connectionId }) => {
     if (!FULL_LOAD_ON_CONNECT.has(provider)) return;
+    // Review M2: the connect sync can be skipped (another run of the connection is in progress) and a reconnect keeps the old
+    // cursor; without a cursor the next sync of any trigger reloads everything. A failed reset is logged; the event still goes.
+    try {
+      await resetCursor(laneId, connectionId);
+    } catch (e) {
+      console.error("[connect] sync cursor not reset:", e instanceof Error ? e.name : typeof e);
+    }
     await send(connSyncRequested.create({ laneId, connectionId, trigger: "connect" }, { id: connectSyncEventId(connectionId, now()) }));
   };
 }
