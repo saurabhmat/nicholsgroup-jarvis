@@ -16,6 +16,11 @@ const renewers: Record<string, SubscriptionRenewer> = {};
 export const tokenHealthJob = createTokenHealthJob({ loader: connectionLoader, store, checkers });
 export const subscriptionRenewJob = createSubscriptionRenewJob({ loader: connectionLoader, store, renewers });
 
+/** Marks a reconnect_required connection's admin notice as sent, after the scan's event went out (T-195). */
+export async function markReconnectNotified(laneId: Parameters<typeof store.listUsableConnectionIds>[0], connectionId: string): Promise<void> {
+  await store.markReconnectNotified(laneId, await connectionLoader.loadConnection(laneId, connectionId));
+}
+
 /** Ids for the daily scan. */
 export const listHealthConnectionIds = (laneId: Parameters<typeof store.listUsableConnectionIds>[0]) => store.listUsableConnectionIds(laneId);
 export const listRenewConnectionIds = (laneId: Parameters<typeof store.listUsableConnectionIds>[0]) =>

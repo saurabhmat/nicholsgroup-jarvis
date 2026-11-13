@@ -90,7 +90,7 @@ describe("refresh on a 401", () => {
     expect(stored(h, conn.id).refresh_token).toBe(intuit.state.issued[1]?.refresh);
   });
 
-  it("a second 401 after the refresh is final (no loop) and is a forbidden/401 error", async () => {
+  it("a second 401 after the refresh is final (no loop) and becomes a forbidden failure and does not change the status (T-195 error map)", async () => {
     const { intuit, h, conn } = await setup();
     intuit.state.reject401 = 5;
     const err = (await h.api.get(LANE, conn, "/v3/company/{realm}/companyinfo/{realm}", { realm: FAKE_REALM }).catch((e: unknown) => e)) as ConnectorError;
@@ -99,6 +99,7 @@ describe("refresh on a 401", () => {
     expect(err.info.http_status).toBe(401);
     expect(refreshCalls(intuit)).toHaveLength(1);
     expect(intuit.state.apiRequests).toHaveLength(2);
+    expect(h.rows.get(conn.id)?.status).toBe("active");
   });
 
   it("an expired access token that Intuit rejects is replaced by the one another caller already stored (no second refresh)", async () => {

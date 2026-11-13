@@ -3,12 +3,17 @@ import "server-only";
 // (`@nichols/approvals/wire`) so tests of the module logic never import the connector wiring. The job client bypasses RLS:
 // every call below passes the lane and the database re-checks it (act.* functions are lane-scoped definer functions).
 import { prepareEmailWrite, laneMailboxes } from "@nichols/connectors/google";
-import { googleEmailReconciler, googleEmailWriter, loadGoogleWriteConnection } from "@nichols/connectors/write";
+import { googleEmailReconciler, googleEmailWriter, loadGoogleWriteConnection, loadQuickbooksWriteConnection, quickbooksDisconnectVerifier, quickbooksWriter } from "@nichols/connectors/write";
 import type { LaneId } from "@nichols/core";
 import { getAudit, getLaneJobClient } from "@nichols/core/lane-router";
 import { approveAndExecute, executeApproved, proposeEmailAction, type ProposeEmailInput } from "./email";
+import { isQboDisconnectable } from "./capability";
+import { approveAndExecuteQbo, executeApprovedQbo, type QboExecDeps } from "./qbo";
 import { reconcileStuckActions, type ReconcileDeps, type ReconcileSummary } from "./reconcile";
 import { createEmailReconciler } from "./reconcile-email";
+import { createQboReconciler } from "./reconcile-qbo";
+import { getRow } from "./email";
+import { isEmailType } from "./types";
 import type { CapabilityFacts, ApprovalsDeps, ApprovalsPublicDeps, Rpc, UserCtx } from "./types";
 
 const rpcOf = (client: { schema(name: "core"): { rpc: unknown } }): Rpc => {
@@ -32,10 +37,13 @@ async function readFacts(laneId: LaneId, connectionId: string): Promise<Capabili
   if (conn.error || policy.error || config.error) throw new Error("capability facts unavailable");
   const c = conn.data as { provider: string; external_account_id: string; status: string; features: Record<string, unknown> } | null;
   const usable = c !== null && c.provider === "google" && (c.status === "active" || c.status === "degraded");
+  // T-195: a QuickBooks connection of the lane that is not disconnected (reconnect_required can still be disconnected).
+  const qboOk = c !== null && c.provider === "quickbooks" && isQboDisconnectable(c.status);
   const approvals = ((config.data?.config as { approvals?: Record<string, unknown> } | null | undefined)?.approvals ?? {}) as Record<string, unknown>;
   const age = approvals.step_up_max_age_s;
   return {
     mailbox: usable ? c.external_account_id.toLowerCase() : null,
+    qbo: qboOk ? { realmId: c.external_account_id } : null,
     composeGranted: usable && c.features?.gmail_compose === true,
     writeActionsAllowed: ((policy.data?.write_actions_allowed as string[] | undefined) ?? []).filter((x) => typeof x === "string"),
     approvalsLive: approvals.approvals_live === true,
@@ -61,14 +69,34 @@ const fullDeps: ApprovalsDeps = Object.freeze({
   writer: googleEmailWriter,
 });
 
-/** Approve the exact hash the owner saw, then carry it out once (the route calls this after requireRole + requireStepUp). */
-export function approveAndExecuteEmail(ctx: UserCtx, input: { actionId: string; hashSeen: string }) {
-  return approveAndExecute(fullDeps, ctx, input);
+/** The QuickBooks disconnect executor's deps (T-195): the approvals-only writer and the read-back verifier, private to this file. */
+const qboDeps: QboExecDeps = Object.freeze({
+  ...approvalsDeps,
+  loadWriteConnection: loadQuickbooksWriteConnection as QboExecDeps["loadWriteConnection"],
+  writer: quickbooksWriter as unknown as QboExecDeps["writer"],
+  verifier: quickbooksDisconnectVerifier as QboExecDeps["verifier"],
+});
+
+/**
+ * Approve the exact hash the person saw, then carry it out once (the route calls this after requireRole + requireStepUp).
+ * The action's own type picks the executor: an email goes through the Gmail writer, `qbo.disconnect` (T-195) through the
+ * QuickBooks writer. The type is read from the action row (RLS: the caller must be able to see it), never from the request.
+ */
+export async function approveAndExecuteAction(ctx: UserCtx, input: { actionId: string; hashSeen: string }) {
+  const row = await getRow(ctx.rpc, ctx.laneId, input.actionId);
+  return isEmailType(row.actionType) ? approveAndExecute(fullDeps, ctx, input) : approveAndExecuteQbo(qboDeps, ctx, input);
 }
+/** Same function under its T-232 name (emails were the only action type then). */
+export const approveAndExecuteEmail = approveAndExecuteAction;
 
 /** Carries out an action already approved in the database (a job or a resume); the approver is read from the row. */
 export function executeApprovedEmail(laneId: Parameters<typeof executeApproved>[1], actionId: string) {
   return executeApproved(fullDeps, laneId, actionId);
+}
+
+/** Carries out a QuickBooks disconnect already approved in the database (a resume); the approver is read from the row. */
+export function executeApprovedDisconnect(laneId: Parameters<typeof executeApprovedQbo>[1], actionId: string) {
+  return executeApprovedQbo(qboDeps, laneId, actionId);
 }
 
 
@@ -86,7 +114,10 @@ export async function expireStaleActions(laneId: LaneId): Promise<number> {
 const reconcileDeps: ReconcileDeps = Object.freeze({
   jobRpc,
   audit: approvalsDeps.audit,
-  reconcilers: Object.freeze([createEmailReconciler({ reconciler: googleEmailReconciler, loadWriteConnection: loadGoogleWriteConnection })]),
+  reconcilers: Object.freeze([
+    createEmailReconciler({ reconciler: googleEmailReconciler, loadWriteConnection: loadGoogleWriteConnection }),
+    createQboReconciler({ verifier: quickbooksDisconnectVerifier as QboExecDeps["verifier"], loadWriteConnection: loadQuickbooksWriteConnection as QboExecDeps["loadWriteConnection"] }),
+  ]),
 });
 export function reconcileStuckLane(laneId: LaneId): Promise<ReconcileSummary> {
   return reconcileStuckActions(reconcileDeps, laneId);

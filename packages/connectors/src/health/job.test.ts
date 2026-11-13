@@ -33,9 +33,16 @@ function setup(rows: Connection[]) {
       return mintLaneBoundConnection(r) as LaneBoundConnection<string>;
     },
   };
+  const notified = new Set<string>();
   const store: TokenHealthStore = {
     async listUsableConnectionIds(laneId) {
-      return rows.filter((r) => r.lane_id === laneId && ["active", "degraded"].includes(r.status)).map((r) => r.id);
+      return rows.filter((r) => r.lane_id === laneId && (["active", "degraded"].includes(r.status) || (r.status === "reconnect_required" && r.provider === "quickbooks" && !notified.has(r.id)))).map((r) => r.id);
+    },
+    async reconnectNoticePending(_laneId, conn) {
+      return !notified.has(conn.id);
+    },
+    async markReconnectNotified(_laneId, conn) {
+      notified.add(conn.id);
     },
     async applyHealth(laneId, conn, patch) {
       patches.push({ laneId, id: conn.id, patch });
@@ -46,7 +53,7 @@ function setup(rows: Connection[]) {
       return true;
     },
   };
-  return { loader, store, patches, cleared, entries, logger };
+  return { loader, store, patches, cleared, entries, logger, notified };
 }
 
 const good = async (): Promise<HealthStatus> => ({ ok: true, status: "active", checked_at: NOW.toISOString(), provider_tid: null, error: null });
@@ -106,10 +113,10 @@ describe("conn.token_health job", () => {
     expect(other.patches).toEqual([]);
   });
 
-  it("reconnect_required from the check is flagged, not applied as a status change (T-195)", async () => {
+  it("reconnect_required from the check is flagged, not applied as a status change (the status is recorded where the failure happens, T-195)", async () => {
     const s = setup([row(1)]);
     const out = await createTokenHealthJob({ ...s, checkers: { quickbooks: bad("reconnect_required") }, now: () => NOW }).run("PKG", id(1));
-    expect(out).toMatchObject({ ok: true, alerts: [{ reason: "health_check_failed", errorKind: "reconnect_required" }] });
+    expect(out).toMatchObject({ ok: true, alerts: [{ reason: "reconnect_required", errorKind: "reconnect_required" }] });
     expect(s.patches[0]?.patch.status).toBeUndefined();
     expect(s.patches[0]?.patch.last_error).toMatchObject({ kind: "reconnect_required" });
   });
@@ -164,12 +171,25 @@ describe("conn.token_health job", () => {
   });
 
   it("skips connections that are not usable (reconnect_required, pending, disconnected)", async () => {
-    for (const status of ["reconnect_required", "pending", "disconnected"] as const) {
+    for (const status of ["pending", "disconnected"] as const) {
       const s = setup([row(1, { status, token_expires_at: status === "disconnected" ? null : at(DAY) })]);
       const out = await createTokenHealthJob({ ...s, checkers: { quickbooks: bad("forbidden") }, now: () => NOW }).run("PKG", id(1));
       expect(out).toEqual({ ok: true, skipped: "connection_not_usable", alerts: [] });
       expect(s.patches).toEqual([]);
     }
+  });
+
+  it("a QuickBooks connection recorded as reconnect_required is not checked but re-raises its admin alert (T-195: the scan lists it while its notice is unsent); other providers are skipped", async () => {
+    const s = setup([row(1, { status: "reconnect_required" })]);
+    const out = await createTokenHealthJob({ ...s, checkers: { quickbooks: bad("forbidden") }, now: () => NOW }).run("PKG", id(1));
+    expect(out).toEqual({ ok: true, skipped: "connection_not_usable", alerts: [{ provider: "quickbooks", reason: "reconnect_required", errorKind: "reconnect_required" }] });
+    expect(s.patches).toEqual([]);
+    // once the notice went out the scan lists nothing and an on-demand check raises nothing
+    await s.store.markReconnectNotified("PKG", await s.loader.loadConnection("PKG", id(1)));
+    expect(await s.store.listUsableConnectionIds("PKG")).toEqual([]);
+    expect(await createTokenHealthJob({ ...s, checkers: { quickbooks: bad("forbidden") }, now: () => NOW }).run("PKG", id(1))).toEqual({ ok: true, skipped: "connection_not_usable", alerts: [] });
+    const g = setup([row(2, { status: "reconnect_required", provider: "google", external_account_id: "x@example.test" })]);
+    expect(await createTokenHealthJob({ ...g, checkers: {}, now: () => NOW }).run("PKG", id(2))).toEqual({ ok: true, skipped: "connection_not_usable", alerts: [] });
   });
 
   it("one connection failing does not block another", async () => {

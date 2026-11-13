@@ -673,7 +673,7 @@ describe("throttling, errors, logs and lanes", () => {
         HttpResponse.json({ Fault: { Error: [{ Message: "ApplicationAuthorizationFailed", code: "003100" }], type: "AUTHENTICATION" } }, { status: 403 }),
       ),
     );
-    await expect(run(h, conn, null)).rejects.toMatchObject({ info: { kind: "forbidden" } });
+    await expect(run(h, conn, null)).rejects.toMatchObject({ info: { kind: "reconnect_required", http_status: 403 } });
   });
 
   it("CompanyInfo as real QuickBooks returns it (record Id \"1\", not the realm) is stored under the realm", async () => {

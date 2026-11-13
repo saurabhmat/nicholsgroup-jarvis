@@ -69,3 +69,5 @@ export function computePayloadSha256(action: Pick<ApprovedActionShape, "lane_id"
     .update(canonicalJson({ lane_id, action_type, connection_id, target, payload, payload_schema_version }), "utf8")
     .digest("hex");
 }
+
+export { JCS_TEST_VECTORS, type JcsVector } from "./jcs-vector";

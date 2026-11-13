@@ -6,7 +6,6 @@ import { assertLaneBound } from "../contract/lane-bound";
 import type { JobClientFor } from "../vault/tokens";
 import { HEALTH_CHECK_ENDPOINT, type TokenHealthStore } from "./types";
 
-const USABLE = ["active", "degraded"];
 /** A runaway listing is cut here (the Inngest scan applies its own cap too). */
 const LIST_LIMIT = 500;
 
@@ -25,7 +24,10 @@ export function createTokenHealthStore(clientFor: JobClientFor): TokenHealthStor
       if (providers && providers.length === 0) return [];
       const db = await client(laneId);
       try {
-        let q = db.schema("core").from("connections").select("id").eq("lane_id", laneId).eq("transport", "native").in("status", USABLE); // Composio connections have no token to check (T-219)
+        let q = db.schema("core").from("connections").select("id").eq("lane_id", laneId).eq("transport", "native") // Composio connections have no token to check (T-219)
+          // Usable connections, plus a QuickBooks connection that is reconnect_required and whose admin notice was never sent (T-195):
+          // the scan re-raises that alert until it goes through.
+          .or("status.in.(active,degraded),and(status.eq.reconnect_required,provider.eq.quickbooks,reconnect_notified_at.is.null)");
         if (providers) q = q.in("provider", [...providers]);
         const { data, error } = await q.order("created_at", { ascending: true }).limit(LIST_LIMIT);
         if (error) throw error;
@@ -70,6 +72,23 @@ export function createTokenHealthStore(clientFor: JobClientFor): TokenHealthStor
       } catch {
         throw unavailable();
       }
+    },
+    async reconnectNoticePending(laneId, conn) {
+      assertLaneBound(laneId, conn);
+      const db = await client(laneId);
+      try {
+        const { data, error } = await db.schema("core").from("connections").select("reconnect_notified_at").eq("lane_id", laneId).eq("id", conn.id).eq("status", "reconnect_required").maybeSingle();
+        if (error) throw error;
+        return data !== null && (data as { reconnect_notified_at: string | null }).reconnect_notified_at === null;
+      } catch {
+        throw unavailable();
+      }
+    },
+    async markReconnectNotified(laneId, conn) {
+      assertLaneBound(laneId, conn);
+      const db = await client(laneId);
+      const { error } = await db.schema("core").from("connections").update({ reconnect_notified_at: new Date().toISOString() }).eq("lane_id", laneId).eq("id", conn.id).eq("status", "reconnect_required");
+      if (error) throw unavailable();
     },
   };
 }

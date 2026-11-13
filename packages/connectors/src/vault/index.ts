@@ -13,6 +13,7 @@ import { createTokenVault } from "./tokens";
 import { createTokenHealthStore } from "../health/store";
 
 import { createQboFeatureStore } from "../quickbooks/features";
+import { createReconnectStore } from "../quickbooks/reconnect";
 import { createNormalizeStore } from "../quickbooks/normalize-store";
 import { createReportCacheStore } from "../quickbooks/report-store";
 import { createSyncCursorStore, createSyncRunStore } from "../sync/store";
@@ -62,6 +63,9 @@ export const syncTargetLister = createSyncTargetLister(getLaneJobClient);
 
 /** The generic sync cursor (core.sync_cursor_get/put) with the lane's job client (T-038). */
 export const syncCursorStore = createSyncCursorStore(getLaneJobClient);
+
+/** Records a connection as reconnect_required after invalid_grant, with the lane's job client (T-195). */
+export const reconnectStore = createReconnectStore(getLaneJobClient);
 
 /** Writes the QuickBooks edition flags onto core.connections with the lane's job client (T-051). */
 export const qboFeatureStore = createQboFeatureStore(getLaneJobClient);

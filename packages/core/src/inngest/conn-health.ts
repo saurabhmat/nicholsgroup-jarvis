@@ -12,6 +12,7 @@ import "server-only";
 import { NonRetriableError, cron, type Inngest, type InngestFunction } from "inngest";
 import {
   CONN_ATTENTION_REASONS,
+  attentionEventId,
   connAttentionNeeded,
   connHealthCheckRequested,
   connSubscriptionRenewRequested,
@@ -35,7 +36,11 @@ export type ConnRenewResult =
 
 type Lanes = { enabledLanes: () => readonly string[]; listConnectionIds: (laneId: string) => Promise<readonly string[]> };
 
-export type ConnHealthDeps = Lanes & { check: (laneId: string, connectionId: string) => Promise<ConnHealthResult> };
+export type ConnHealthDeps = Lanes & {
+  check: (laneId: string, connectionId: string) => Promise<ConnHealthResult>;
+  /** Called after a `reconnect_required` alert's event was sent: records that the admin notice went out so the scan stops listing it (T-195). */
+  markReconnectNotified?: (laneId: string, connectionId: string) => Promise<void>;
+};
 export type ConnRenewDeps = Lanes & { renew: (laneId: string, connectionId: string) => Promise<ConnRenewResult> };
 
 /** Function options, exported so tests assert them. UTC; 11:00 is 06:00/07:00 in New York, before the business day. */
@@ -120,7 +125,7 @@ export async function attentionEvents(laneId: string, connectionId: string, aler
     };
     const parsed = (await connAttentionNeeded.schema["~standard"].validate(data)) as { issues?: unknown };
     if (parsed.issues) continue;
-    events.push(connAttentionNeeded.create(data, { id: `attn:${laneId}:${connectionId}:${a.reason}:${day(now)}` }));
+    events.push(connAttentionNeeded.create(data, { id: attentionEventId(laneId, connectionId, a.reason, now) }));
   }
   return events;
 }
@@ -149,6 +154,10 @@ export function connHealthFunctions(inngest: Inngest, health: ConnHealthDeps, re
         const result = await step.run("check", () => handleConnHealthCheck(health, event.data));
         const attention = await attentionEvents(event.data.laneId, event.data.connectionId, result.alerts, now());
         if (attention.length > 0) await step.sendEvent("attention", attention);
+        if (attention.length > 0 && health.markReconnectNotified && result.alerts.some((a: AttentionAlert) => a.reason === "reconnect_required")) {
+          const mark = health.markReconnectNotified;
+          await step.run("mark-notified", () => mark(event.data.laneId, event.data.connectionId));
+        }
         return { skipped: result.skipped, alerts: result.alerts.length };
       },
     ),

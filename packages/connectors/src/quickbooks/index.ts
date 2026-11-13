@@ -3,17 +3,20 @@
 // env at call time (`requireConnectorEnv("intuit")` fails closed naming missing variables, never printing values).
 import { getServerEnv, requireConnectorEnv } from "@nichols/core/env/server";
 import { getAudit } from "@nichols/core/lane-router";
-import { connectionLoader, getToken, normalizeStore, reportCacheStore, qboFeatureStore, laneConfigReader, revokeToken, rotateToken, storeToken } from "../vault/index";
+import type { LaneBoundConnection } from "../contract/lane-bound";
+import { connectionLoader, getToken, normalizeStore, reportCacheStore, qboFeatureStore, laneConfigReader, actionClaimReader, reconnectStore, revokeToken, rotateToken, storeToken } from "../vault/index";
 import { SecretValue } from "../vault/secret";
 import { createQboApi } from "./api";
 import { createQuickBooksConnector } from "./connector";
 import { createQboFeatureRecorder } from "./features";
 import { createQboNormalizeJob } from "./normalize-job";
 import { createQboReportsJob } from "./reports-job";
-import { createQuickBooksWriter } from "./writer";
+import { createQuickBooksDisconnectVerifier, createQuickBooksWriter } from "./writer";
 import { createDiscovery } from "./discovery";
 import { createQuickBooksOAuthProvider, type QboClientConfig } from "./provider";
 import { createTokenManager } from "./token-manager";
+import { createReconnectRecorder } from "./reconnect";
+import { attentionEventId, connAttentionNeeded, sendLaneEvent } from "@nichols/core/inngest";
 
 const discovery = createDiscovery();
 
@@ -37,15 +40,32 @@ export const quickbooksOAuthProvider = createQuickBooksOAuthProvider({
 
 const vault = { getToken, rotateToken, storeToken, revokeToken };
 
+/**
+ * invalid_grant (and a 403 with Intuit code 3100): the connection is recorded as reconnect_required (so conn.sync, the webhook
+ * CDC and the reports job skip it) and the admin is notified with the existing `conn/attention.needed` event (T-040),  one per
+ * connection per day. If the event cannot be sent, the daily token-health scan raises it again (reconnect_notified_at stays null).
+ */
+const onReconnectRequired = createReconnectRecorder({
+  store: reconnectStore,
+  notify: async ({ laneId, connectionId, provider, errorKind }) => {
+    const now = new Date();
+    await sendLaneEvent(connAttentionNeeded.create({ laneId, connectionId, provider, reason: "reconnect_required", errorKind }, { id: attentionEventId(laneId, connectionId, "reconnect_required", now) }));
+  },
+});
+
 const tokens = createTokenManager({
   vault,
   tokenEndpoint: async (laneId) => (await discovery.get(laneId, environment())).token,
   client,
+  onReconnectRequired,
 });
 
-const api = createQboApi({ tokens, environment });
+const api = createQboApi({ tokens, environment, onReconnectRequired });
 
 const connections = { load: (laneId: string, id: string) => connectionLoader.loadConnection(laneId, id) };
+
+/** The read-back after a disconnect (T-195): the connection is `disconnected` and the Vault hands out no token. Read-only. */
+export const quickbooksDisconnectVerifier = createQuickBooksDisconnectVerifier({ connections, vault });
 
 /** Edition flags from Preferences go to core.connections.features; a change is audited (T-051). */
 const features = createQboFeatureRecorder({ store: qboFeatureStore, audit: getAudit() });
@@ -68,6 +88,11 @@ export const quickbooksNormalizeJob = createQboNormalizeJob({ loader: connection
  * Revoke-at-Intuit and delete-Vault-tokens (D-24: approvals only). Reached through `@nichols/connectors/writer`-side
  * code in the approvals module; no route, job or connector method calls it.
  */
-export const quickbooksWriter = createQuickBooksWriter({ provider: quickbooksOAuthProvider, environment, client, discovery, vault, connections, tokens });
+export const quickbooksWriter = createQuickBooksWriter({ provider: quickbooksOAuthProvider, environment, client, discovery, vault, connections, tokens, claims: actionClaimReader });
+
+/** The authoritative, lane-bound QuickBooks connection row the disconnect executor runs on (write subpath only). */
+export async function loadQuickbooksWriteConnection(laneId: string, connectionId: string) {
+  return (await connectionLoader.loadConnection(laneId, connectionId)) as LaneBoundConnection<"quickbooks">;
+}
 
 export { QBO_SCOPE, QBO_SLUG } from "./constants";

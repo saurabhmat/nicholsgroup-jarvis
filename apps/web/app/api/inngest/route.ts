@@ -27,7 +27,7 @@ import { getLaneJobClient } from "@nichols/core/lane-router";
 import { BRAIN_RETENTION, createImportPurge } from "@nichols/brain/jobs";
 import { getServerEnv } from "@nichols/core/env/server";
 import { QBO_SYNC_ENTITIES, connSyncJob, isQuickbooksConnectionUsable, listCalendarConnectionIds, listQuickbooksSyncConnectionIds, qboSyncIntervalHours } from "@nichols/connectors/sync";
-import { listHealthConnectionIds, listRenewConnectionIds, subscriptionRenewJob, tokenHealthJob } from "@nichols/connectors/health";
+import { listHealthConnectionIds, listRenewConnectionIds, markReconnectNotified, subscriptionRenewJob, tokenHealthJob } from "@nichols/connectors/health";
 import { retentionPurgeJob, retentionRegistry } from "@nichols/connectors/retention";
 import { listQuickbooksConnectionIds, qboReportsJob } from "@nichols/connectors/reports";
 import { qboNormalizeJob } from "@nichols/connectors/normalize";
@@ -92,6 +92,7 @@ export const { GET, POST, PUT } = inngestRoute((inngest) => [
       enabledLanes: () => getServerEnv().ENABLED_LANES,
       listConnectionIds: (laneId) => listHealthConnectionIds(laneId),
       check: (laneId, connectionId) => tokenHealthJob.run(laneId, connectionId),
+      markReconnectNotified: (laneId, connectionId) => markReconnectNotified(laneId as never, connectionId),
     },
     {
       enabledLanes: () => getServerEnv().ENABLED_LANES,

@@ -17,7 +17,7 @@ function fake(result: { data?: unknown; error?: unknown }) {
     const call = { op, values, filters: [] as [string, string, unknown][] };
     calls.push(call);
     const b: Record<string, unknown> = {};
-    for (const f of ["eq", "in"]) b[f] = (c: string, v: unknown) => { call.filters.push([f, c, v]); return b; };
+    for (const f of ["eq", "in", "or"]) b[f] = (c: string, v?: unknown) => { call.filters.push([f, c, v]); return b; };
     b.select = () => b; b.order = () => b; b.limit = () => b;
     b.then = (res: (v: unknown) => unknown) => Promise.resolve({ data: result.data ?? [], error: result.error ?? null }).then(res);
     return b;
@@ -32,7 +32,7 @@ describe("token health store", () => {
     const store = createTokenHealthStore(f.clientFor);
     await expect(store.listUsableConnectionIds("PKG", ["google"])).resolves.toEqual(["a", "b"]);
     expect(f.lanes).toEqual(["PKG"]);
-    expect(f.calls[0]?.filters).toEqual([["eq", "lane_id", "PKG"], ["eq", "transport", "native"], ["in", "status", ["active", "degraded"]], ["in", "provider", ["google"]]]);
+    expect(f.calls[0]?.filters).toEqual([["eq", "lane_id", "PKG"], ["eq", "transport", "native"], ["or", "status.in.(active,degraded),and(status.eq.reconnect_required,provider.eq.quickbooks,reconnect_notified_at.is.null)", undefined], ["in", "provider", ["google"]]]);
   });
 
   it("an empty provider list means none, without a query", async () => {

@@ -537,13 +537,15 @@ Scope: read-only, Accounting API only (no Payments, no Payroll); never create, u
 - acceptance: Owns QB-11. `intuit-signature` verified with `INTUIT_WEBHOOK_VERIFIER_TOKEN` (fails closed when unset) over the raw body; realm resolved to its lane through `core.connections`, unknown realms dropped and logged; processing is idempotent (dedupe key from realm, entity, id, operation and last-updated time in `core.webhook_events`), then a targeted CDC fetch for the changed entities; no sync for a connection in `reconnect_required`; spoofed, replayed and duplicate payloads tested.
 
 ### T-195 QuickBooks disconnect, reconnect and error mapping
-- status: proposed
-- depends: T-050, T-038, T-040, T-113
+- status: done
+- note: approved by Saurabh Nov 13, 2026 ("carry on with quick books connect... complete the code... no need for my approval"). T-113 is not built: like T-232 (email), `qbo.disconnect` executes inline after the approval and step-up, through the approvals-only write path, with the same claim/hash/once/verify/audit guarantees; T-113 later moves it onto `action.execute`.
+- depends: T-050, T-038, T-040, T-232
 - acceptance: Owns QB-1 (server side), QB-3, QB-4, QB-6 (expired refresh token, `invalid_grant`), QB-8, QB-14. Disconnect is an **approvals action** (D-24): an owner or admin_technical proposes `qbo.disconnect` for the lane's connection, it is approved with step-up, and the T-113 executor (an `executeWrite` on the approvals-only write path built in the T-050 follow-up) calls Intuit's revoke endpoint once, verifies, deletes the Vault tokens and marks the connection disconnected, audited with proposer and approver; the executor reads `payload_sha256` and `approved_by` from the locked `act.proposed_actions` row (never from the caller), passes only the branded action, and shares one JCS test vector with `computePayloadSha256` (T-050 final security review F-M1); reconnect reuses the connect flow and the existing connection row for the same realm; `invalid_grant`, revoked or expired refresh token set `reconnect_required`, stop `conn.sync` for that connection and emit the admin notification event; an error map from recorded sandbox fixtures (synthetic values) covers 400 Fault/Error codes, 401, 403, 404, 429 with `Retry-After`, 5xx and timeouts, each to retry (capped exponential backoff), `reconnect_required` or failed-with-message; `invalid_grant` is never retried (test).
 
 ### T-196 QuickBooks sync and API error log + export
-- status: proposed
-- depends: T-050, T-031, T-041
+- status: approved
+- note: approved by Saurabh Nov 13, 2026 ("carry on with quick books connect... complete the code... no need for my approval"). T-041 (Sentry) is not built: errors go through one scrubbed error sink whose Sentry transport T-041 plugs in; until then the sink logs codes only.
+- depends: T-050, T-031
 - acceptance: Owns QB-9 (storage), QB-15. Per-connection sync runs (`core.sync_runs`) and a lane-scoped `core.connector_api_errors` (lane_id, connection_id, at, endpoint, http_status, provider_error_code, provider_message, provider_tid) with RLS + pgTAP incl. cross-lane denial; redaction test proves no tokens, emails or names are stored; errors also sent to Sentry with the same scrubbing; owner and admin_technical can export a date range as CSV or JSON for Intuit support, audited.
 
 ### T-198 Temporary QuickBooks connect and health controls (pilot sandbox run)
@@ -552,10 +554,10 @@ Scope: read-only, Accounting API only (no Payments, no Payroll); never create, u
 - acceptance: Approved by Saurabh Nov 4, 2026 for the Nov 12 QB-1 – QB-20 sandbox run, until T-045 (connection health page, D-21) replaces it. On the lane's Settings page, visible only to owner and admin_technical at AAL2 and labelled "Temporary: connection test": a "Connect QuickBooks" button (starts the existing T-050 connect flow) and a "Check connection" button that calls a new authenticated route running the T-050 CompanyInfo health check for that lane's connection. The route returns only status (`ok` / `reconnect_required` / `not_connected` / `error`), checked-at time and the Intuit request id, never tokens, realm id or company data; it requires `requireRole(lane, owner|admin_technical)` at AAL2; other roles and other lanes get 403/404 (tests); no external write (rule 5); behind `lane_config` or an env flag so it can be switched off. Removed or folded into T-045 when that ships.
 
 ### T-197 Settings → Connections (functional)
-- status: proposed
+- status: approved
+- note: approved by Saurabh Nov 13, 2026 ("carry on with quick books connect... complete the code... no need for my approval"). Folds in the temporary T-198 controls. The page itself (route, layout, role gating) is created by T-199; this task adds the QuickBooks section to it. Google is covered by T-199 (split out Nov 5, 2026 so the Google button does not wait on T-195).
 - depends: T-195, T-019, T-022, T-199
 - acceptance: Owns QB-1 (UI and manual checklist), QB-4 (UI), QB-16. Functional page (restyled after D-20, like the sign-in pages) at Settings → Connections listing the lane's connections with status, last sync and the class-tracking flag; Connect, Disconnect (confirm) and Reconnect QuickBooks for owner and admin_technical at AAL2; a `reconnect_required` banner with "Reconnect QuickBooks"; a "Contact support" link (`mailto:it@pub-k.org`) on the page and in the shared QuickBooks error banner component; no figures shown; data fetched over HTTPS only; Playwright test plus the QB-1 manual checklist against the sandbox company in the PR body.
-  The page itself (route, layout, role gating) is created by T-199; this task adds the QuickBooks section to it. Google is covered by T-199 (split out Nov 5, 2026 so the Google button does not wait on T-195).
 
 ### T-199 Settings → Connections page with the Google connection
 - status: done

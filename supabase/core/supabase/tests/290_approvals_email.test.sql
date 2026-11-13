@@ -150,7 +150,7 @@ select throws_ok(format($$select core.act_approve('PKG', %L, %L)$$, (select id f
 reset role;
 select pg_temp.claims_amr('admin-technical@example.test', 'aal2', extract(epoch from now())::bigint);
 set local role authenticated;
-select throws_ok(format($$select core.act_approve('PKG', %L, %L)$$, (select id from ids where k = 'a1'), pg_temp.hash('a1')), '42501', null, 'admin_technical cannot approve');
+select throws_ok(format($$select core.act_approve('PKG', %L, %L)$$, (select id from ids where k = 'a1'), pg_temp.hash('a1')), 'P0002', null, 'admin_technical cannot approve (not_found for an email id: no probing, T-195 I1)');
 reset role;
 select pg_temp.claims_amr('outsider@example.test', 'aal2', extract(epoch from now())::bigint);
 set local role authenticated;
