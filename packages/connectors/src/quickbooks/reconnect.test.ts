@@ -99,7 +99,7 @@ describe("invalid_grant (revoked or expired refresh token)", () => {
   it("a status store that is down does not hide the error: the caller still gets reconnect_required, the failure is logged without detail", async () => {
     const { intuit, h, conn } = await setup();
     const broken = createReconnectRecorder({
-      store: { markReconnectRequired: async () => { throw new ConnectorError({ kind: "transient", message: "Connection store unavailable" }); } },
+      store: { markReconnectRequired: async () => { throw new ConnectorError({ kind: "transient", message: "Connection store unavailable" }); }, markNotified: async () => undefined },
       notify: async () => { throw new Error("must not be reached"); },
     });
     const tokens = createTokenManager({
@@ -236,6 +236,71 @@ describe("reconnect (QB-4, QB-8): the connect flow, the same connection row", ()
   });
 });
 
+describe("only a dead grant is recorded (security M1, L2)", () => {
+  it("a token endpoint 401 (invalid_client) leaves the status unchanged and sends no event", async () => {
+    const { intuit, h, conn } = await setup();
+    intuit.state.failRefresh = { status: 401, error: "invalid_client", always: true };
+    h.clock.t += 59 * 60_000;
+    const err = (await h.tokens.accessToken(LANE, conn).catch((e: unknown) => e)) as ConnectorError;
+    expect(err.info.kind).not.toBe("reconnect_required");
+    expect(h.rows.get(conn.id)?.status).toBe("active");
+    expect(h.notices).toEqual([]);
+  });
+
+  it("a failed Vault re-read after invalid_grant is a transient outage, not reconnect_required, and records nothing", async () => {
+    const { intuit, h, conn } = await setup();
+    let reads = 0;
+    const flaky = { ...h.vault, getToken: async (l: string, c: never) => {
+      reads += 1;
+      if (reads > 1) throw new ConnectorError({ kind: "transient", message: "Token store unavailable" });
+      return h.vault.getToken(l, c);
+    } };
+    const tokens = createTokenManager({
+      vault: flaky,
+      tokenEndpoint: async (l) => (await h.discovery.get(l, "sandbox")).token,
+      client: () => ({ clientId: "synthetic-intuit-client-id", clientSecret: new SecretValue("synthetic-intuit-client-secret-01") }),
+      now: () => h.clock.t,
+      sleep: async () => undefined,
+    });
+    killRefreshToken(h, intuit);
+    await expect(tokens.accessToken(LANE, conn)).rejects.toMatchObject({ info: { kind: "transient" } });
+    expect(h.rows.get(conn.id)?.status).toBe("active");
+  });
+});
+
+describe("the admin notice is durable (code review M1)", () => {
+  it("a notify that fails once leaves the connection un-notified; the health scan lists it and raises the alert; a later notice marks it", async () => {
+    const { intuit, h, conn } = await setup();
+    h.notifyState.fail = 1;
+    killRefreshToken(h, intuit);
+    await h.tokens.accessToken(LANE, conn).catch(() => undefined);
+    expect(h.rows.get(conn.id)?.status).toBe("reconnect_required");
+    expect(h.notices).toEqual([]);
+    expect(h.notified.has(conn.id)).toBe(false);
+    // the daily token-health job re-raises it for a reconnect_required QuickBooks connection
+    const { createTokenHealthJob } = await import("../health/job");
+    const job = createTokenHealthJob({
+      loader: { loadConnection: (l, id) => h.connections.load(l, id) },
+      store: { listUsableConnectionIds: async () => [], applyHealth: async () => true, clearHealthError: async () => false },
+      checkers: {},
+    });
+    expect(await job.run(LANE, conn.id)).toMatchObject({ ok: true, alerts: [{ provider: "quickbooks", reason: "reconnect_required", errorKind: "reconnect_required" }] });
+    // a recorder call whose notify now works marks it
+    const second = createReconnectRecorder({ store: { markReconnectRequired: async () => true, markNotified: async (l, c) => void h.notified.add(c.id) }, notify: async (n) => void h.notices.push(n) });
+    await second(LANE, conn, new ConnectorError({ kind: "reconnect_required", message: "x" }).toJSON());
+    expect(h.notices).toHaveLength(1);
+    expect(h.notified.has(conn.id)).toBe(true);
+  });
+
+  it("a notify that works marks the connection notified", async () => {
+    const { intuit, h, conn } = await setup();
+    killRefreshToken(h, intuit);
+    await h.tokens.accessToken(LANE, conn).catch(() => undefined);
+    expect(h.notices).toHaveLength(1);
+    expect(h.notified.has(conn.id)).toBe(true);
+  });
+});
+
 describe("the real reconnect store (SQL shape)", () => {
   it("updates only an active or degraded row of the lane, through the lane's job client, and reports whether it changed", async () => {
     const { conn } = await setup();
@@ -254,6 +319,6 @@ describe("the real reconnect store (SQL shape)", () => {
     const store = createReconnectStore((async () => ({ schema: () => ({ from: chain }) })) as never);
     const info = new ConnectorError({ kind: "reconnect_required", message: "x", http_status: 400, provider_error_code: "invalid_grant" }).toJSON();
     expect(await store.markReconnectRequired(LANE, conn, info)).toBe(true);
-    expect(calls[0]).toMatchObject({ table: "connections", patch: { status: "reconnect_required", last_error: info }, eq: [["lane_id", LANE], ["id", conn.id]], inn: [["status", ["active", "degraded"]]] });
+    expect(calls[0]).toMatchObject({ table: "connections", patch: { status: "reconnect_required", last_error: info, reconnect_notified_at: null }, eq: [["lane_id", LANE], ["id", conn.id]], inn: [["status", ["active", "degraded"]]] });
   });
 });

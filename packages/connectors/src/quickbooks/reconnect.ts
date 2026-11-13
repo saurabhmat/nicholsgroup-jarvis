@@ -10,8 +10,11 @@
 //     active or degraded (assertStatusUsable, sync/usable.ts), and Intuit is not called again until the user reconnects.
 //   * The notification is the existing `conn/attention.needed` event (T-040), reason `reconnect_required`, ids and enums only
 //     (never Intuit's text). Its id is per connection and UTC day, so a repeat the same day is dropped by Inngest.
-//   * Best effort: a failure here is logged and swallowed. The caller already has the reconnect_required error to throw;
-//     the next call (or the daily health check) tries again.
+//   * Durable: once the event was sent, `core.connections.reconnect_notified_at` is set. While it is null the daily token-health
+//     scan still lists the connection (health/store.ts) and the health job raises the same alert (health/job.ts), so a notify
+//     that failed here is retried every day until it goes through or the connection is reconnected (a reconnect or a new
+//     reconnect_required clears the marker).
+//   * The recorder itself never throws: a failure is logged. The caller already has the reconnect_required error to throw.
 import type { LaneId } from "@nichols/core";
 import { ConnectorError } from "../contract/errors";
 import { assertLaneBound, type LaneBoundConnection } from "../contract/lane-bound";
@@ -22,6 +25,8 @@ import type { JobClientFor } from "../vault/tokens";
 export interface ReconnectStore {
   /** Marks the connection `reconnect_required` if it is still active or degraded. True when this call changed it. */
   markReconnectRequired(laneId: LaneId, conn: LaneBoundConnection<string>, error: ConnectorErrorInfo): Promise<boolean>;
+  /** Records that the admin notification was sent (only while the connection is still reconnect_required). */
+  markNotified(laneId: LaneId, conn: LaneBoundConnection<string>): Promise<void>;
 }
 
 export type ReconnectNotice = { laneId: LaneId; connectionId: string; provider: string; errorKind: string };
@@ -44,9 +49,16 @@ export function createReconnectRecorder(deps: ReconnectRecorderDeps): OnReconnec
       const changed = await deps.store.markReconnectRequired(laneId, conn, error);
       if (!changed) return;
       child.warn("conn.reconnect_required", { http_status: error.http_status, provider_error_code: error.provider_error_code });
-      await deps.notify({ laneId, connectionId: conn.id, provider: conn.provider, errorKind: "reconnect_required" });
     } catch {
       child.error("conn.reconnect_required.record_failed", {});
+      return;
+    }
+    try {
+      await deps.notify({ laneId, connectionId: conn.id, provider: conn.provider, errorKind: "reconnect_required" });
+      await deps.store.markNotified(laneId, conn);
+    } catch {
+      // Not marked notified: the daily token-health scan raises the alert again.
+      child.error("conn.reconnect_required.notify_failed", {});
     }
   };
 }
@@ -66,7 +78,7 @@ export function createReconnectStore(clientFor: JobClientFor): ReconnectStore {
         const { data, error: dbError } = await client
           .schema("core")
           .from("connections")
-          .update({ status: "reconnect_required", last_error: error })
+          .update({ status: "reconnect_required", last_error: error, reconnect_notified_at: null })
           .eq("lane_id", laneId)
           .eq("id", conn.id)
           .in("status", ["active", "degraded"])
@@ -76,6 +88,23 @@ export function createReconnectStore(clientFor: JobClientFor): ReconnectStore {
       } catch {
         throw new ConnectorError({ kind: "transient", message: "Connection store unavailable" });
       }
+    },
+    async markNotified(laneId, conn) {
+      assertLaneBound(laneId, conn);
+      let client: Awaited<ReturnType<JobClientFor>>;
+      try {
+        client = await clientFor(laneId);
+      } catch {
+        throw new ConnectorError({ kind: "connection_unavailable", message: "Lane is not available for connection health" });
+      }
+      const { error: dbError } = await client
+        .schema("core")
+        .from("connections")
+        .update({ reconnect_notified_at: new Date().toISOString() })
+        .eq("lane_id", laneId)
+        .eq("id", conn.id)
+        .eq("status", "reconnect_required");
+      if (dbError) throw new ConnectorError({ kind: "transient", message: "Connection store unavailable" });
     },
   };
 }

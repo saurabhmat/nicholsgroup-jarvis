@@ -3,7 +3,7 @@ import "server-only";
 // `./wire` (`approvalsDeps`); tests pass fakes. The public interface the briefing job (T-231d) uses is `proposeEmailAction`.
 export { APPROVALS_ERROR_CODES, ApprovalsError, CHECK_SENT_FIRST_MESSAGE, NOT_ENABLED_MESSAGE, NOT_LIVE_MESSAGE, PLACEHOLDER_MESSAGE, QBO_NOT_ENABLED_MESSAGE, toApprovalsError } from "./errors";
 export type { ApprovalsErrorCode } from "./errors";
-export { capabilityOf, emailWriteCapability } from "./capability";
+export { capabilityOf, emailWriteCapability, isQboDisconnectable, QBO_DISCONNECTABLE_STATUSES } from "./capability";
 export type { Capability, EmailWriteCapability } from "./capability";
 // approveAndExecute / executeApproved need the write path: request code uses approveAndExecuteEmail from
 // `@nichols/approvals/wire`, which keeps the writer private (T-232 security review H1).

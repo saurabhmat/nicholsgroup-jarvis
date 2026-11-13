@@ -44,6 +44,10 @@ export function createTokenHealthJob(deps: Common & { checkers: Readonly<Record<
         return { ok: false, retryable: err.info.disposition === "retry", errorKind: err.info.kind };
       }
       const child = log.child({ laneId, provider: conn.provider, connectionId: conn.id });
+      // T-195: a QuickBooks connection recorded as reconnect_required is listed only while its admin notice is unsent: raise it again.
+      if (conn.status === "reconnect_required" && conn.provider === "quickbooks") {
+        return { ok: true, skipped: "connection_not_usable", alerts: [{ provider: conn.provider, reason: "reconnect_required", errorKind: "reconnect_required" }] };
+      }
       if (!USABLE.has(conn.status)) return { ok: true, skipped: "connection_not_usable", alerts: [] };
 
       const alerts: AttentionAlert[] = [];

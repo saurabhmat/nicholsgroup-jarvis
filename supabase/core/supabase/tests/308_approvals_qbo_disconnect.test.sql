@@ -7,7 +7,7 @@
 -- denial); reject; claim by the recorded approver only; reconnect_required connections can be disconnected; token store clears
 -- last_error on reconnect; lane policy accepts the new class and nothing else new.
 begin;
-select plan(45);
+select plan(50);
 \ir helpers/lane_rls.psql
 
 create function pg_temp.claims_amr(p_email text, p_aal text, p_at bigint) returns text language sql as $$
@@ -31,7 +31,9 @@ insert into core.connections (id, lane_id, provider, external_account_id, status
   ('00000000-0000-4000-8000-000000003082', 'PKG', 'quickbooks', 'realm-t195-pkg-2', 'reconnect_required', '{}'),
   ('00000000-0000-4000-8000-000000003083', 'PKG', 'google', 'act-t195@example.test', 'active', '{"gmail_compose": true}'),
   ('00000000-0000-4000-8000-000000003084', 'APK', 'quickbooks', 'realm-t195-apk-1', 'active', '{}'),
-  ('00000000-0000-4000-8000-000000003085', 'PKG', 'quickbooks', 'realm-t195-pkg-3', 'active', '{}');
+  ('00000000-0000-4000-8000-000000003085', 'PKG', 'quickbooks', 'realm-t195-pkg-3', 'active', '{}'),
+  ('00000000-0000-4000-8000-000000003086', 'PKG', 'quickbooks', 'realm-t195-pkg-4', 'active', '{}'),
+  ('00000000-0000-4000-8000-000000003087', 'PKG', 'quickbooks', 'realm-t195-pkg-5', 'active', '{}');
 
 create function pg_temp.hash(p_n text) returns text language sql as $$ select encode(sha256(convert_to('hash-' || p_n, 'utf8')), 'hex'); $$;
 
@@ -115,7 +117,7 @@ select throws_ok(format($$select core.act_approve('PKG', %L, %L)$$, (select id f
 reset role;
 select pg_temp.claims_amr('admin-technical@example.test', 'aal2', extract(epoch from now())::bigint);
 set local role authenticated;
-select throws_ok(format($$select core.act_approve('PKG', %L, %L)$$, (select id from ids where k = 'e1'), pg_temp.hash('e1')), '42501', null, 'admin_technical still cannot approve an email');
+select throws_ok(format($$select core.act_approve('PKG', %L, %L)$$, (select id from ids where k = 'e1'), pg_temp.hash('e1')), 'P0002', null, 'admin_technical cannot approve an email: not_found, no id probing (I1)');
 select throws_ok(format($$select core.act_approve('APK', %L, %L)$$, (select id from ids where k = 'k1'), pg_temp.hash('k1')), '42501', null, 'CROSS-LANE: admin_technical of PKG cannot approve in APK');
 select throws_ok(format($$select core.act_approve('PKG', %L, %L)$$, (select id from ids where k = 'k1'), pg_temp.hash('k1')), 'P0002', null, 'CROSS-LANE: naming APK''s action under PKG finds nothing');
 select throws_ok(format($$select core.act_approve('PKG', %L, %L)$$, (select id from ids where k = 'q1'), pg_temp.hash('other')), 'P0001', 'act: hash_mismatch', 'a hash other than the stored one is refused');
@@ -159,13 +161,42 @@ select throws_ok(format($$select core.act_reject('PKG', %L, 'x')$$, (select id f
 reset role;
 select pg_temp.claims_amr('admin-technical@example.test', 'aal2', extract(epoch from now())::bigint);
 set local role authenticated;
-select throws_ok(format($$select core.act_reject('PKG', %L, 'x')$$, (select id from ids where k = 'e1')), '42501', null, 'admin_technical cannot reject an email');
+select throws_ok(format($$select core.act_reject('PKG', %L, 'x')$$, (select id from ids where k = 'e1')), 'P0002', null, 'admin_technical cannot reject an email: not_found, no id probing (I1)');
 reset role;
 
 -- ---------------------------------------------------------------- claim
 set local role service_role;
 select is((select (core.act_claim_execution('PKG', (select id from ids where k = 'q1'))).status), 'executing', 'the approved disconnect is claimed once');
 select throws_ok(format($$select core.act_claim_execution('PKG', %L)$$, (select id from ids where k = 'q1')), 'P0001', null, 'a second claim is refused');
+reset role;
+
+
+-- ---------------------------------------------------------------- claim gates (L3)
+set local role service_role;
+insert into ids select 'q3', core.act_propose('PKG', 'qbo.disconnect', '00000000-0000-4000-8000-000000003086', '{"realm_id":"realm-t195-pkg-4"}', '{}', 1, pg_temp.hash('q3'), null, '[]', 'user', pg_temp.uid('admin-technical@example.test'), false);
+reset role;
+select pg_temp.claims_amr('admin-technical@example.test', 'aal2', extract(epoch from now())::bigint);
+set local role authenticated;
+select is(core.act_approve('PKG', (select id from ids where k = 'q3'), pg_temp.hash('q3')), pg_temp.hash('q3'), 'admin_technical approves a second disconnect');
+reset role;
+update core.memberships set role = 'viewer' where lane_id = 'PKG' and user_id = pg_temp.uid('admin-technical@example.test');
+set local role service_role;
+select throws_ok(format($$select core.act_claim_execution('PKG', %L)$$, (select id from ids where k = 'q3')), 'P0001', 'act: approver_revoked', 'claim is refused once the approver lost the role');
+reset role;
+update core.memberships set role = 'admin_technical' where lane_id = 'PKG' and user_id = pg_temp.uid('admin-technical@example.test');
+
+set local role service_role;
+insert into ids select 'q4', core.act_propose('PKG', 'qbo.disconnect', '00000000-0000-4000-8000-000000003087', '{"realm_id":"realm-t195-pkg-5"}', '{}', 1, pg_temp.hash('q4'), null, '[]', 'user', pg_temp.uid('owner@example.test'), false);
+reset role;
+select pg_temp.claims_amr('owner@example.test', 'aal2', extract(epoch from now())::bigint);
+set local role authenticated;
+select is(core.act_approve('PKG', (select id from ids where k = 'q4'), pg_temp.hash('q4')), pg_temp.hash('q4'), 'the owner approves a third disconnect');
+reset role;
+update core.connections set status = 'disconnected' where id = '00000000-0000-4000-8000-000000003087';
+set local role service_role;
+select throws_ok(format($$select core.act_claim_execution('PKG', %L)$$, (select id from ids where k = 'q4')), 'P0001', 'act: connection_not_enabled', 'claim is refused once the connection became disconnected');
+select throws_ok(format($$select core.act_propose('PKG', 'qbo.disconnect', %L, '{"realm_id":"realm-t195-pkg-5"}'::jsonb, '{}'::jsonb, 1, %L, null, '[]'::jsonb, 'user', %L, false)$$,
+                        '00000000-0000-4000-8000-000000003087', pg_temp.hash('q5'), pg_temp.uid('owner@example.test')), '23503', null, 'a disconnected connection cannot be proposed (status list = the connection_ok list)');
 reset role;
 
 -- ---------------------------------------------------------------- reconnect clears last_error

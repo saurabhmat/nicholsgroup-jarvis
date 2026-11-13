@@ -12,6 +12,7 @@ import "server-only";
 import { NonRetriableError, cron, type Inngest, type InngestFunction } from "inngest";
 import {
   CONN_ATTENTION_REASONS,
+  attentionEventId,
   connAttentionNeeded,
   connHealthCheckRequested,
   connSubscriptionRenewRequested,
@@ -120,7 +121,7 @@ export async function attentionEvents(laneId: string, connectionId: string, aler
     };
     const parsed = (await connAttentionNeeded.schema["~standard"].validate(data)) as { issues?: unknown };
     if (parsed.issues) continue;
-    events.push(connAttentionNeeded.create(data, { id: `attn:${laneId}:${connectionId}:${a.reason}:${day(now)}` }));
+    events.push(connAttentionNeeded.create(data, { id: attentionEventId(laneId, connectionId, a.reason, now) }));
   }
   return events;
 }

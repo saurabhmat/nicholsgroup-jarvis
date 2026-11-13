@@ -74,6 +74,9 @@ export function createQboApi(deps: QboApiDeps): QboApi {
       assertQuickbooksConnection(conn); // before any request or token read: another provider's token never goes to Intuit
       const http = httpFor(laneId, conn);
       let used: SecretValue | undefined;
+      // An error thrown by the token manager while it got a token (the token endpoint: invalid_client, 5xx, a store outage) is not
+      // an Intuit API answer: it is passed on as the token manager threw it and is never classified here (T-195 security M1).
+      let tokenError: unknown;
       const request = (rejected?: SecretValue) =>
         http.request<T>({
           method: "GET",
@@ -83,7 +86,12 @@ export function createQboApi(deps: QboApiDeps): QboApi {
           auth: {
             scheme: "Bearer",
             secret: async () => {
-              used = await deps.tokens.accessToken(laneId, conn, rejected ? { rejected } : undefined);
+              try {
+                used = await deps.tokens.accessToken(laneId, conn, rejected ? { rejected } : undefined);
+              } catch (e) {
+                tokenError = e;
+                throw e;
+              }
               return used;
             },
           },
@@ -99,9 +107,10 @@ export function createQboApi(deps: QboApiDeps): QboApi {
       } catch (e) {
         // The error map (QB-14, ./errors.ts): every Intuit failure leaves as retry, reconnect_required or failed-with-message.
         if (!isConnectorError(e)) throw e;
+        if (tokenError !== undefined) throw toConnectorError(tokenError);
         const mapped = toConnectorError(mapIntuitError(e));
         if (mapped.info.kind === "reconnect_required" && e.info.kind !== "reconnect_required") {
-          // 401 after a refresh, or an app-authorization refusal: the grant is dead although the refresh did not say so.
+          // Intuit says the app is not authorized for this company (403, code 3100): the grant is dead although the refresh did not say so.
           await deps.onReconnectRequired?.(laneId, conn, mapped.toJSON());
         }
         throw mapped;

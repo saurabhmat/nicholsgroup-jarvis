@@ -99,20 +99,32 @@ describe("400 with a Fault: failed, with a fixed message, never retried", () => 
 });
 
 describe("401, 403, 404", () => {
-  it("401: refreshes the token once and retries once; a second 401 is reconnect_required and the status is recorded", async () => {
+  it("401: refreshes the token once and retries once; a second 401 is a failure with a message and does NOT record reconnect_required (the token was just refreshed)", async () => {
     const { h, conn, intuit } = await setup();
     const seen = reply(fx("auth401"));
     const err = await fail(h.api.get(LANE, conn, PATH, { realm: FAKE_REALM }));
-    expect(err.info.kind).toBe("reconnect_required");
-    expect(err.info.disposition).toBe("reconnect_required");
+    expect(err.info.kind).toBe("forbidden");
+    expect(err.info.disposition).toBe("fail");
     expect(err.info.http_status).toBe(401);
     expect(err.info.provider_error_code).toBe("3200");
-    expect(err.info.message).toMatch(/Reconnect QuickBooks/);
+    expect(err.info.message).toMatch(/did not accept/);
     expect(seen.n).toBe(2);
     expect(intuit.state.tokenRequests.filter((r) => r.grant === "refresh_token")).toHaveLength(1);
-    expect(h.rows.get(conn.id)?.status).toBe("reconnect_required");
-    expect(h.rows.get(conn.id)?.last_error?.kind).toBe("reconnect_required");
-    expect(h.notices).toEqual([{ laneId: LANE, connectionId: conn.id, provider: "quickbooks", errorKind: "reconnect_required" }]);
+    expect(h.rows.get(conn.id)?.status).toBe("active");
+    expect(h.rows.get(conn.id)?.last_error).toBeNull();
+    expect(h.notices).toEqual([]);
+  });
+
+  it("a token endpoint answer (401 invalid_client: our own client secret is wrong) is not an API answer: status unchanged, no event, the original error", async () => {
+    const { h, conn, intuit } = await setup();
+    intuit.state.failRefresh = { status: 401, error: "invalid_client", always: true };
+    h.clock.t += 59 * 60_000;
+    const seen = reply(OK);
+    const err = await fail(h.api.get(LANE, conn, PATH, { realm: FAKE_REALM }));
+    expect(err.info).toMatchObject({ kind: "forbidden", http_status: 401, provider_error_code: "invalid_client" });
+    expect(h.rows.get(conn.id)?.status).toBe("active");
+    expect(h.notices).toEqual([]);
+    expect(seen.n).toBe(0);
   });
 
   it("401 that goes away after the refresh is not an error at all", async () => {
@@ -245,7 +257,7 @@ describe("the classification itself (pure)", () => {
     expect(c(400, "2500").outcome).toBe("failed");
     expect(c(400, "4001").outcome).toBe("failed");
     expect(c(400, null).outcome).toBe("failed");
-    expect(c(401, "3200").outcome).toBe("reconnect_required");
+    expect(c(401, "3200").outcome).toBe("failed");
     expect(c(403, "3100").outcome).toBe("reconnect_required");
     expect(c(403, "120").outcome).toBe("failed");
     expect(c(403, null).outcome).toBe("failed");

@@ -164,12 +164,21 @@ describe("conn.token_health job", () => {
   });
 
   it("skips connections that are not usable (reconnect_required, pending, disconnected)", async () => {
-    for (const status of ["reconnect_required", "pending", "disconnected"] as const) {
+    for (const status of ["pending", "disconnected"] as const) {
       const s = setup([row(1, { status, token_expires_at: status === "disconnected" ? null : at(DAY) })]);
       const out = await createTokenHealthJob({ ...s, checkers: { quickbooks: bad("forbidden") }, now: () => NOW }).run("PKG", id(1));
       expect(out).toEqual({ ok: true, skipped: "connection_not_usable", alerts: [] });
       expect(s.patches).toEqual([]);
     }
+  });
+
+  it("a QuickBooks connection recorded as reconnect_required is not checked but re-raises its admin alert (T-195: the scan lists it while its notice is unsent); other providers are skipped", async () => {
+    const s = setup([row(1, { status: "reconnect_required" })]);
+    const out = await createTokenHealthJob({ ...s, checkers: { quickbooks: bad("forbidden") }, now: () => NOW }).run("PKG", id(1));
+    expect(out).toEqual({ ok: true, skipped: "connection_not_usable", alerts: [{ provider: "quickbooks", reason: "reconnect_required", errorKind: "reconnect_required" }] });
+    expect(s.patches).toEqual([]);
+    const g = setup([row(2, { status: "reconnect_required", provider: "google", external_account_id: "x@example.test" })]);
+    expect(await createTokenHealthJob({ ...g, checkers: {}, now: () => NOW }).run("PKG", id(2))).toEqual({ ok: true, skipped: "connection_not_usable", alerts: [] });
   });
 
   it("one connection failing does not block another", async () => {

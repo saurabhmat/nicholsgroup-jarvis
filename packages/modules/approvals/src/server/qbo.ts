@@ -17,7 +17,7 @@
 // (`proposerKind: "user"`), never by a job or the assistant.
 import { isConnectorError } from "@nichols/connectors";
 import type { LaneBoundConnection } from "@nichols/connectors";
-import { QBO_VERIFICATION_MISMATCH_MESSAGE, type QboApprovedAction } from "@nichols/connectors/write";
+import { QBO_REVOKED_NOT_RECORDED_MESSAGE, QBO_VERIFICATION_MISMATCH_MESSAGE, type QboApprovedAction } from "@nichols/connectors/write";
 import type { LaneId } from "@nichols/core";
 import { capabilityOf } from "./capability";
 import { audit, checkId, checkLane, getRow, settledState, type ApproveResult, type ProposeResult } from "./email";
@@ -101,6 +101,8 @@ function failureOf(e: unknown, stage: Stage): { code: string; outcome: FailureOu
     if (isConnectorError(e) && e.info.message === QBO_VERIFICATION_MISMATCH_MESSAGE) return { code: "verification_mismatch", outcome: "outcome_unknown" };
     return { code: "verification_unavailable", outcome: "outcome_unknown" };
   }
+  // Intuit ended the grant but recording it here failed: the connection may be unusable already. Never "nothing changed" (security L1).
+  if (isConnectorError(e) && e.info.message === QBO_REVOKED_NOT_RECORDED_MESSAGE) return { code: "revoked_not_recorded", outcome: "outcome_unknown" };
   if (isConnectorError(e)) {
     if (e.info.kind === "reconnect_required" || e.info.kind === "connection_unavailable") return { code: "connection_unhealthy", outcome: "error" };
     if (["forbidden", "invalid_input", "lane_mismatch", "unsupported_op"].includes(e.info.kind)) return { code: "execution_refused", outcome: "error" };

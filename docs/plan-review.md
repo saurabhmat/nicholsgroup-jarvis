@@ -1178,3 +1178,11 @@ Every BLOCKER, HIGH and MEDIUM from the T-235 reviews and re-checks is fixed. Th
 - (T-237 security re-check, LOW) `reply-origin` entries (24 h) for other messages stay until reopened, expiry or sign-out when a lane switches draft storage off; the same holds for `reply-draft` / `reply-ai` (shorter). Optional follow-up: clear the lane's `reply-*` namespaces whenever a loaded context reports `storesDrafts === false`.
 - (T-237, INFO) If `core.allowed_lanes` itself fails during a finance outage, a finance viewer also sees no Finance UI instead of "Could not load" (fails closed on purpose).
 - (T-237, INFO) The full e2e run under load failed `brain-import.spec.ts:141` once; it passed 4/4 alone (load-sensitive, like the 300 ms skeleton check).
+
+## T-195: logged, not fixed (Nov 13, 2026)
+Reviews (security and code): no BLOCKER, no HIGH. All MEDIUM and the listed LOW items were fixed in the review-fix commits. Remaining:
+- (LOW) The reconnect_required notice is durable through `core.connections.reconnect_notified_at`: if the first send fails it is retried by the daily token-health scan, so the admin may hear up to a day late (same-day repeats are dropped by the Inngest event id). A faster retry would need a new job; not worth it for the pilot.
+- (LOW) While a reconnect_required QuickBooks connection is un-notified the daily scan lists it, so the health job reports `skipped: connection_not_usable` together with an alert (the alert is the point). Only QuickBooks is included; Google/Composio reconnect_required are not re-alerted.
+- (LOW) The "only active/degraded/reconnect_required may be disconnected" rule is enforced by a BEFORE INSERT trigger (`act.qbo_disconnect_status_guard`) plus `act.connection_ok`, not inside `act.insert_proposal`, to avoid copying that long function a third time. Same effect on every insert path.
+- (LOW) The Intuit error codes in `quickbooks/errors.ts` and the fixtures are from the documented format, not recorded; the QB-14 sandbox check confirms them. A 403 with code 3100 records `reconnect_required`; if Intuit uses 3100 for a transient condition a connection could need a reconnect it does not need.
+- (INFO) An admin_technical who calls approve/reject with an EMAIL action id now gets `not_found` (no id probing); the coarse role check still answers 42501 for roles that hold neither role.

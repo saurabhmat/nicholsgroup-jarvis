@@ -78,6 +78,10 @@ export const connAttentionNeeded = eventType("conn/attention.needed", {
   }),
 });
 
+/** The Inngest event id of an attention alert: one per connection, reason and UTC day, so a repeat the same day is dropped. Shared by every sender (conn-health, the QuickBooks reconnect recorder). */
+export const attentionEventId = (laneId: string, connectionId: string, reason: (typeof CONN_ATTENTION_REASONS)[number], now: Date): string =>
+  `attn:${laneId}:${connectionId}:${reason}:${now.toISOString().slice(0, 10)}`;
+
 /** Purge one lane's expired rows (T-042). Sent by the daily schedule for each enabled lane, or by hand. Lane id only. */
 export const retentionPurgeRequested = eventType("retention/purge.requested", {
   schema: z.strictObject({ laneId: laneIdSchema }),

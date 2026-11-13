@@ -119,12 +119,15 @@ export function createTokenManager(deps: TokenManagerDeps): TokenManager {
   async function newerStored(laneId: LaneId, conn: LaneBoundConnection<string>, stored: StoredTokens): Promise<StoredTokens | null> {
     for (const delay of REREAD_DELAYS_MS) {
       if (delay > 0) await sleep(delay);
+      let current: StoredTokens;
       try {
-        const current = await readStored(laneId, conn);
-        if (current.raw.reveal() !== stored.raw.reveal()) return current;
+        current = await readStored(laneId, conn);
       } catch {
-        return null; // cannot tell: report the original failure
+        // The re-read itself failed: we cannot tell whether another instance won. That is an outage, never "unchanged", so it must
+        // not end as reconnect_required (T-195 security review L2).
+        throw new ConnectorError({ kind: "transient", message: "The stored credential could not be re-read after a failed refresh" });
       }
+      if (current.raw.reveal() !== stored.raw.reveal()) return current;
     }
     return null;
   }

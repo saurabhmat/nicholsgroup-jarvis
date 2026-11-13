@@ -46,3 +46,7 @@ export async function emailWriteCapability(deps: Pick<ApprovalsDeps, "readFacts"
     "email.save_draft": capabilityOf(laneId, facts, "email.save_draft"),
   };
 }
+
+/** The connection statuses a QuickBooks disconnect may target. One list: `act.connection_ok` and the status trigger in SQL use the same three (T-195 review L4). */
+export const QBO_DISCONNECTABLE_STATUSES: readonly string[] = ["active", "degraded", "reconnect_required"];
+export const isQboDisconnectable = (status: string): boolean => QBO_DISCONNECTABLE_STATUSES.includes(status);

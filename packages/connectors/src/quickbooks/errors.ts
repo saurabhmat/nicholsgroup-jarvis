@@ -13,15 +13,17 @@
 //   400 + Fault code 2xxx (validation), 6xxx (business rule), 5xxx, 610      failed   "QuickBooks rejected the request: it was not valid"
 //   400 + Fault code 4xxx (query / syntax: QueryParserError, 4000, 4001)      failed   "QuickBooks could not read the request"
 //   400 + a code we do not know                                               failed   (generic)
-//   401 (after one refresh and one retry: ./api.ts)                           reconnect_required
-//   401 + 003200 AuthenticationFailed / 3100 ApplicationAuthorizationFailed   reconnect_required
-//   403 + 3100 / 003100 (app not authorized for this company)                 reconnect_required
+//   401 (after one refresh and one retry: ./api.ts)                           failed (forbidden): the token WAS just refreshed, so
+//                                                                              the grant is not proven dead; no status change
+//   403 + 3100 / 003100 (app not authorized for this company)                 reconnect_required (the only API answer that is)
 //   403 anything else (permission)                                            failed
 //   404                                                                       failed
 //   429 (ThrottleExceeded, with or without Retry-After)                       retry
 //   500, 502, 503, 504, network failure                                       retry
 //   timeout                                                                   retry
 //   token endpoint: 400 invalid_grant                                         reconnect_required (./token-manager.ts), never retried
+//   token endpoint: anything else (401 invalid_client = our own client id/secret is wrong, 5xx) is NOT a dead grant: it leaves as
+//   the token manager threw it, never recorded as reconnect_required (T-195 security review M1).
 //
 // The fixtures behind the tests (testing/msw/quickbooks/error-fixtures.ts) are written by hand in Intuit's documented response
 // format ({"Fault":{"Error":[{"Message","Detail","code"}],"type"}}) with synthetic values; no live call recorded them. Which
@@ -42,6 +44,7 @@ const MSG = {
   syntax: "QuickBooks could not read the request. Nothing was changed.",
   badRequest: "QuickBooks refused the request. Nothing was changed.",
   reconnect: "QuickBooks no longer accepts this connection. Reconnect QuickBooks in Settings.",
+  unauthorized: "QuickBooks did not accept the request's credentials. It will be checked again; if it keeps happening, reconnect QuickBooks in Settings.",
   forbidden: "QuickBooks says this connection is not allowed to do that. Check the QuickBooks user's permissions, then try again.",
   notFound: "QuickBooks could not find what was asked for.",
   rateLimited: "QuickBooks is limiting requests right now. It will be tried again shortly.",
@@ -68,7 +71,7 @@ export function classifyIntuitFailure(info: Pick<ConnectorErrorInfo, "kind" | "h
   if (info.kind === "reconnect_required") return { outcome: "reconnect_required", message: MSG.reconnect, retryAfterSeconds: null };
   if (status === 429 || info.kind === "rate_limited") return { outcome: "retry", message: MSG.rateLimited, retryAfterSeconds };
   if (info.kind === "timeout" || info.kind === "transient" || (status !== null && status >= 500)) return { outcome: "retry", message: MSG.unavailable, retryAfterSeconds };
-  if (status === 401) return { outcome: "reconnect_required", message: MSG.reconnect, retryAfterSeconds: null };
+  if (status === 401) return { outcome: "failed", message: MSG.unauthorized, retryAfterSeconds: null };
   if (status === 403) {
     return code !== null && AUTH_CODES.has(code)
       ? { outcome: "reconnect_required", message: MSG.reconnect, retryAfterSeconds: null }
@@ -108,7 +111,7 @@ export function mapIntuitError(e: unknown): unknown {
 }
 
 function failedKind(i: ConnectorErrorInfo): ConnectorError["info"]["kind"] {
-  if (i.http_status === 403) return "forbidden";
+  if (i.http_status === 401 || i.http_status === 403) return "forbidden";
   if (i.http_status === 404) return "not_found";
   if (i.http_status === 400) return "invalid_input";
   return "provider_error";

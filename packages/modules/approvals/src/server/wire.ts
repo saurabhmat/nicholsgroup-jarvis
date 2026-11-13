@@ -7,6 +7,7 @@ import { googleEmailReconciler, googleEmailWriter, loadGoogleWriteConnection, lo
 import type { LaneId } from "@nichols/core";
 import { getAudit, getLaneJobClient } from "@nichols/core/lane-router";
 import { approveAndExecute, executeApproved, proposeEmailAction, type ProposeEmailInput } from "./email";
+import { isQboDisconnectable } from "./capability";
 import { approveAndExecuteQbo, executeApprovedQbo, type QboExecDeps } from "./qbo";
 import { reconcileStuckActions, type ReconcileDeps, type ReconcileSummary } from "./reconcile";
 import { createEmailReconciler } from "./reconcile-email";
@@ -37,7 +38,7 @@ async function readFacts(laneId: LaneId, connectionId: string): Promise<Capabili
   const c = conn.data as { provider: string; external_account_id: string; status: string; features: Record<string, unknown> } | null;
   const usable = c !== null && c.provider === "google" && (c.status === "active" || c.status === "degraded");
   // T-195: a QuickBooks connection of the lane that is not disconnected (reconnect_required can still be disconnected).
-  const qboOk = c !== null && c.provider === "quickbooks" && c.status !== "disconnected" && c.status !== "pending";
+  const qboOk = c !== null && c.provider === "quickbooks" && isQboDisconnectable(c.status);
   const approvals = ((config.data?.config as { approvals?: Record<string, unknown> } | null | undefined)?.approvals ?? {}) as Record<string, unknown>;
   const age = approvals.step_up_max_age_s;
   return {

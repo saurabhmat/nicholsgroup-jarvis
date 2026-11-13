@@ -9,7 +9,7 @@ import { useMockServer } from "../testing/msw/index";
 import { createFakeIntuit } from "../testing/msw/quickbooks/handlers";
 import { createQboHarness } from "../testing/quickbooks-harness";
 import { SecretValue } from "../vault/secret";
-import { createQuickBooksDisconnectVerifier, QBO_REVOKE_ACTION, QBO_VERIFICATION_MISMATCH_MESSAGE } from "./writer";
+import { createQuickBooksDisconnectVerifier, QBO_REVOKE_ACTION, QBO_REVOKED_NOT_RECORDED_MESSAGE, QBO_VERIFICATION_MISMATCH_MESSAGE } from "./writer";
 
 const server = useMockServer();
 const LANE = "PKG";
@@ -51,6 +51,34 @@ describe("an approved revoke ends with the row disconnected and the Vault tokens
     const after = await h.disconnectForTest(LANE, conn);
     expect(after.status).toBe("disconnected");
     expect(h.secrets.has(conn.id)).toBe(false);
+  });
+});
+
+describe("the writer's own claim check (security M2)", () => {
+  it("no open claim in the approvals database: invalid_input, no revoke request, the tokens and the connection are kept", async () => {
+    const { intuit, h, conn } = await setup();
+    h.claimState.open = false;
+    const err = await refused(h.disconnectForTest(LANE, conn));
+    expect(err).toBeInstanceOf(ConnectorError);
+    expect(err.info.kind).toBe("invalid_input");
+    expect(intuit.state.revokeRequests).toHaveLength(0);
+    expect(h.secrets.has(conn.id)).toBe(true);
+    expect(h.rows.get(conn.id)?.status).toBe("active");
+    expect(h.stats.revokes).toBe(0);
+  });
+});
+
+describe("Intuit confirmed but the Vault could not record it (security L1)", () => {
+  it("is reported with its own message, not as 'nothing changed'", async () => {
+    const { intuit, h, conn } = await setup();
+    const real = h.vault.revokeToken;
+    h.vault.revokeToken = async () => {
+      throw new ConnectorError({ kind: "transient", message: "Token store unavailable" });
+    };
+    const err = await refused(h.disconnectForTest(LANE, conn));
+    expect(err.info.message).toBe(QBO_REVOKED_NOT_RECORDED_MESSAGE);
+    expect(intuit.state.revokeRequests).toHaveLength(1);
+    h.vault.revokeToken = real;
   });
 });
 

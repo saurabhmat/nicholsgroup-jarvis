@@ -16,6 +16,7 @@ import { LANE_EVENTS } from "./events";
 
 export {
   actionApproved,
+  attentionEventId,
   CONN_ATTENTION_REASONS,
   connAttentionNeeded,
   connHealthCheckRequested,

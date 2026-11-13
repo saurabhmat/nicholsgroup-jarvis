@@ -4,10 +4,10 @@
 import { randomUUID } from "node:crypto";
 import { describe, expect, it } from "vitest";
 import { ConnectorError } from "@nichols/connectors";
-import { QBO_VERIFICATION_MISMATCH_MESSAGE as QBO_VERIFICATION_MESSAGE_FOR_TESTS } from "@nichols/connectors/write";
+import { QBO_REVOKED_NOT_RECORDED_MESSAGE, QBO_VERIFICATION_MISMATCH_MESSAGE as QBO_VERIFICATION_MESSAGE_FOR_TESTS } from "@nichols/connectors/write";
 import type { AuditEntry } from "@nichols/core/audit";
 import { createAudit } from "@nichols/core/audit";
-import { capabilityOf } from "./capability";
+import { capabilityOf, isQboDisconnectable } from "./capability";
 import { approveAndExecute, editEmailProposal, rejectAction } from "./email";
 import { ApprovalsError, QBO_NOT_ENABLED_MESSAGE } from "./errors";
 import { approveAndExecuteQbo, executeApprovedQbo, proposeQboDisconnect, qboExternalId, type QboExecDeps } from "./qbo";
@@ -23,7 +23,7 @@ const REALM = "9341450000000001";
 const TOKEN_CANARY = "synthetic-refresh-token-CANARY";
 
 type Row = Record<string, unknown> & { id: string; status: string; payload: Record<string, unknown>; target: Record<string, unknown> };
-type Writer = "ok" | "already_applied" | "unhealthy" | "refused" | "transient" | "plain_throw";
+type Writer = "ok" | "already_applied" | "unhealthy" | "refused" | "transient" | "plain_throw" | "not_recorded";
 type Verifier = "ok" | "mismatch" | "down";
 
 function world(over: { facts?: Partial<CapabilityFacts> | null; writer?: Writer; verifier?: Verifier; markVerifiedThrows?: boolean; claimedApprover?: string } = {}) {
@@ -135,6 +135,7 @@ function world(over: { facts?: Partial<CapabilityFacts> | null; writer?: Writer;
         if (over.writer === "refused") throw new ConnectorError({ kind: "invalid_input", message: "The approved action does not match its approval" });
         if (over.writer === "transient") throw new ConnectorError({ kind: "timeout", message: "timed out" });
         if (over.writer === "plain_throw") throw new Error("socket reset");
+        if (over.writer === "not_recorded") throw new ConnectorError({ kind: "transient", message: QBO_REVOKED_NOT_RECORDED_MESSAGE });
         return { outcome: over.writer === "already_applied" ? "already_applied" : "accepted", external_id: null };
       },
     },
@@ -211,6 +212,13 @@ describe("capability (same gate as email: lane policy class + approvals_live)", 
   });
   it("an email policy class does not enable the disconnect", () => {
     expect(cap({ writeActionsAllowed: ["email_send", "email_draft"] }).enabled).toBe(false);
+  });
+});
+
+describe("the one status list for a disconnect (review L4)", () => {
+  it("active, degraded and reconnect_required only", () => {
+    for (const ok of ["active", "degraded", "reconnect_required"]) expect(isQboDisconnectable(ok)).toBe(true);
+    for (const no of ["pending", "disconnected", "error", ""]) expect(isQboDisconnectable(no)).toBe(false);
   });
 });
 
@@ -356,6 +364,13 @@ describe("executeApprovedQbo: exactly once, and every failure is a terminal, hon
     expect(w.rows.get(id)).toMatchObject({ status: "failed", failure_code: code, failure_outcome: outcome });
     expect(w.calls.verifies).toBe(0);
     expect(w.audits.at(-1)).toMatchObject({ action: "action.failed", metadata: { failure: code, outcome } });
+  });
+
+  it("Intuit ended the grant but recording it failed: failed / revoked_not_recorded, outcome unknown (never 'nothing changed')", async () => {
+    const w = world({ writer: "not_recorded" });
+    const { id, hash } = await proposed(w);
+    expect(await approveAndExecuteQbo(w.deps, w.ctx(), { actionId: id, hashSeen: hash })).toEqual({ status: "failed", actionId: id, failureCode: "revoked_not_recorded" });
+    expect(w.rows.get(id)?.failure_outcome).toBe("outcome_unknown");
   });
 
   it("a read-back that finds the connection still connected is failed / verification_mismatch (outcome unknown)", async () => {

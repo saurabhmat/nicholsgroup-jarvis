@@ -189,6 +189,9 @@ export function createQboHarness(options: QboHarnessOptions) {
 
   // ---- T-195 twins: the reconnect_required status update (core.connections) and the admin notification event.
   const notices: ReconnectNotice[] = [];
+  /** Twin of core.connections.reconnect_notified_at: connection ids whose notice was sent. */
+  const notified = new Set<string>();
+  const notifyState = { fail: 0 };
   const reconnectStore: ReconnectStore = {
     async markReconnectRequired(laneId, conn, error) {
       assertLaneBound(laneId, conn);
@@ -196,10 +199,22 @@ export function createQboHarness(options: QboHarnessOptions) {
       if (row.status !== "active" && row.status !== "degraded") return false;
       row.status = "reconnect_required";
       row.last_error = error;
+      notified.delete(row.id);
       return true;
     },
+    async markNotified(laneId, conn) {
+      const row = rowOf(laneId, conn);
+      if (row.status === "reconnect_required") notified.add(row.id);
+    },
   };
-  const onReconnectRequired = createReconnectRecorder({ store: reconnectStore, notify: async (n) => void notices.push(n), logger });
+  const onReconnectRequired = createReconnectRecorder({ store: reconnectStore, notify: async (n) => {
+      if (notifyState.fail > 0) {
+        notifyState.fail -= 1;
+        throw new Error("notify down");
+      }
+      notices.push(n);
+    },
+    logger });
 
   /** A token manager of its own (a second serverless instance sharing the same Vault). */
   const newTokenManager = () =>
@@ -283,6 +298,8 @@ export function createQboHarness(options: QboHarnessOptions) {
     now,
     logger,
   });
+  /** Twin of core.act_claim_open: true while the action is approved and claimed (tests set false). */
+  const claimState = { open: true };
   const revoker = createQuickBooksRevoker({
     provider,
     environment: () => environment,
@@ -291,6 +308,7 @@ export function createQboHarness(options: QboHarnessOptions) {
     vault,
     connections,
     tokens,
+    claims: { claimOpen: async () => claimState.open },
     now,
     httpFor: (laneId, baseUrl) => fastHttp(laneId, undefined, baseUrl),
   });
@@ -359,6 +377,8 @@ export function createQboHarness(options: QboHarnessOptions) {
     audits,
     rows,
     notices,
+    notified,
+    notifyState,
     secrets,
     realms,
     stats,
@@ -373,6 +393,7 @@ export function createQboHarness(options: QboHarnessOptions) {
     connector,
     flow,
     revoker,
+    claimState,
     approvedRevoke,
     disconnectForTest,
     /** Adds a connection of another provider in the lane with a stored credential (a Google-shaped token set). */

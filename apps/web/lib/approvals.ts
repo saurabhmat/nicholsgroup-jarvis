@@ -84,6 +84,19 @@ const body = z.discriminatedUnion("action", [
   }),
 ]);
 
+type Req = z.infer<typeof body>;
+const OWNER_ONLY = ["owner"] as const;
+const OWNER_OR_ADMIN = [...WRITE_ROLES[QBO_DISCONNECT]] as const;
+const FIRST_CHECK_ROLES: Record<Req["action"], readonly ("owner" | "admin_technical")[]> = {
+  save: OWNER_ONLY,
+  reply_context: OWNER_ONLY,
+  draft_reply: OWNER_ONLY,
+  propose_reply: OWNER_ONLY,
+  propose_qbo_disconnect: OWNER_OR_ADMIN,
+  approve: OWNER_OR_ADMIN,
+  reject: OWNER_OR_ADMIN,
+};
+
 const STATUS: Record<string, number> = {
   invalid: 400,
   forbidden: 403,
@@ -147,11 +160,11 @@ export async function handleApprovals(request: Request, laneId: string, deps: Ap
 
   try {
     const g = await deps.guards();
-    // The role the action needs. Email actions: owner. propose_qbo_disconnect: owner or admin_technical. approve and reject: the
-    // action's own type decides (below), so both roles pass this first check and email is narrowed to the owner right after.
-    const qboRoles = [...WRITE_ROLES[QBO_DISCONNECT]];
-    const wide = req.action === "propose_qbo_disconnect" || req.action === "approve" || req.action === "reject";
-    const { session, client } = await g.requireRole(laneId, wide ? qboRoles : ["owner"]);
+    // The role the action needs, from a table that must list EVERY action (the Record type fails to compile for a new one), so email
+    // can never fall into the wide list by accident. Email-only actions: owner. propose_qbo_disconnect: owner or admin_technical.
+    // approve and reject cover both types, so they pass with either role here and the action's own type (read from its row, below)
+    // narrows an email action back to the owner.
+    const { session, client } = await g.requireRole(laneId, [...FIRST_CHECK_ROLES[req.action]]);
     const ctx = { laneId, userId: session.userId, rpc: coreRpc(client) };
     switch (req.action) {
       case "save": {
