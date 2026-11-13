@@ -18,6 +18,8 @@ export function Shell(props: {
   onboarding?: OnboardingProgress | null;
   /** The session user's first name for the phone header band's Home title. */
   firstName?: string;
+  /** The server's time (the greeting), so the client render never reads the clock (T-243). */
+  now?: Date;
   signOut: (formData: FormData) => void | Promise<void>;
   children: ReactNode;
 }) {

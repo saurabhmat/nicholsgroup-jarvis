@@ -36,6 +36,7 @@ vi.mock("@/lib/composio-availability", () => ({ availability: () => ({}), missin
 vi.mock("@/lib/composio-connection", () => ({ composioSectionFor: (g: unknown) => loader("composio", () => m.composio)(g) }));
 vi.mock("@/lib/news-settings", () => ({ newsSectionFor: async () => m.news }));
 vi.mock("@/lib/coverage", () => ({ coverageFor: (g: unknown) => loader("coverage", () => m.coverage)(g) }));
+vi.mock("next/server", async (orig) => ({ ...(await orig<typeof import("next/server")>()), connection: async () => undefined })); // T-243: the pages call connection() first (outside a request it throws)
 vi.mock("next/headers", () => ({ cookies: async () => ({ get: () => undefined }) }));
 vi.mock("@/lib/origin-notice-server", () => ({ currentOriginNotice: async () => m.origin }));
 vi.mock("@/lib/onboarding-progress", () => ({ onboardingFor: () => loader("brain", () => m.brain)() }));

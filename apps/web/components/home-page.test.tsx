@@ -13,6 +13,7 @@ vi.mock("@/lib/guards", () => ({ guards: async () => ({ requireLane: async () =>
 vi.mock("@/app/[laneId]/briefing-actions", () => ({ ensureFreshBriefing: async () => ({ started: false, gate: "not_stale" }), regenerateBriefing: async () => ({ started: false, gate: "not_stale" }), briefingRunState: async () => null }));
 vi.mock("@/lib/briefing-setup", () => ({ aiSetupFailure: () => null }));
 vi.mock("next/headers", () => ({ cookies: async () => ({ get: (n: string) => (n === "tz" && m.cookieTz ? { value: m.cookieTz } : undefined) }) }));
+vi.mock("next/server", async (orig) => ({ ...(await orig<typeof import("next/server")>()), connection: async () => undefined })); // T-243: the pages call connection() first (outside a request it throws)
 vi.mock("next/navigation", () => ({ useRouter: () => ({ refresh: () => undefined }) }));
 vi.mock("@/lib/briefing", async (orig) => ({
   ...(await orig<typeof import("@/lib/briefing")>()),

@@ -141,8 +141,8 @@ describe("T-243: the summary may only remove items from Home's attention list", 
     expect(withSummaryApplied({ access: false }, brief(false))).toEqual({ access: false });
   });
   it("a list without `fresh` (older shape) is cut from `attention` and never grows", () => {
-    const { fresh: _unused, ...plain } = mail;
-    expect(ids(withSummaryApplied(plain as MailSection, brief(false)))).toEqual(["m1", "m3", "m4", "m5"]);
+    const plain = Object.fromEntries(Object.entries(mail).filter(([k]) => k !== "fresh")) as MailSection;
+    expect(ids(withSummaryApplied(plain, brief(false)))).toEqual(["m1", "m3", "m4", "m5"]);
   });
   it("stored briefings: needsReply is read back as a boolean, any other value is unknown", () => {
     const row = (needsReply: unknown) => [{ id: "00000000-0000-4000-8000-000000000001", status: "ready", prepared_at: "2026-11-11T12:00:00Z", source_refs: [], content: { attention: [{ ref: "r1", what: "w", why: "y", next: "n", needsReply }] } }];
