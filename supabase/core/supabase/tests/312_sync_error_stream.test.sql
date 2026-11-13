@@ -4,7 +4,7 @@
 -- trigger function is not executable by API roles, denial for another lane is unchanged, and (M1) a connection leaving
 -- active/degraded drops its job_failures rows (other connections, lane-wide rows and other lanes keep theirs).
 begin;
-select plan(14);
+select plan(19);
 \ir helpers/lane_rls.psql
 
 update core.lanes set enabled = true where code = 'APK';
@@ -76,6 +76,29 @@ select is((select count(*)::int from core.job_failures where connection_id = '00
           'leaving the syncable states drops that connection''s failure rows (the banner cannot stick)');
 select is((select count(*)::int from core.job_failures where (lane_id, connection_id) in (('PKG', ''), ('APK', '00000000-0000-4000-8000-000000003122'))), 2,
           'lane-wide rows and other lanes are untouched');
+
+-- ---------------------------------------------------------------- the production path: service_role updates fire both triggers
+update core.connections set status = 'active' where id = '00000000-0000-4000-8000-000000003121';
+update core.connections set last_error = '{"kind": "timeout", "message": "t", "disposition": "retry", "endpoint": null, "http_status": null, "provider_error_code": null, "provider_tid": null, "retry_after_seconds": null}'::jsonb,
+                            last_error_stream = 'calendar' where id = '00000000-0000-4000-8000-000000003121';
+insert into core.job_failures (lane_id, function_id, connection_id, consecutive_failures, alerted_at) values
+  ('PKG', 'conn-sync.calendar', '00000000-0000-4000-8000-000000003121', 3, now());
+set local role service_role;
+update core.connections set last_error = null where id = '00000000-0000-4000-8000-000000003121';
+update core.connections set status = 'reconnect_required' where id = '00000000-0000-4000-8000-000000003121';
+reset role;
+select is((select last_error_stream from core.connections where id = '00000000-0000-4000-8000-000000003121'), null, 'service_role clearing last_error clears the tag');
+select is((select count(*)::int from core.job_failures where connection_id = '00000000-0000-4000-8000-000000003121'), 0, 'service_role moving the status drops the failure rows');
+
+-- ---------------------------------------------------------------- M-1: no streak for a connection that is not syncable or not the lane's
+set local role service_role;
+select is((select consecutive_failures from core.job_failure_record('PKG', 'conn-sync.mail', '00000000-0000-4000-8000-000000003121', 'reconnect_required')), 0,
+          'a failure of a connection that is no longer synced records nothing');
+select is((select consecutive_failures from core.job_failure_record('PKG', 'conn-sync.mail', '00000000-0000-4000-8000-000000003122', 'timeout')), 0,
+          'a connection of another lane records nothing (connection bound to its lane)');
+reset role;
+select is((select count(*)::int from core.job_failures where connection_id in ('00000000-0000-4000-8000-000000003121', '00000000-0000-4000-8000-000000003122') and function_id = 'conn-sync.mail' and consecutive_failures > 0 and lane_id = 'PKG'), 0,
+          '...and no row was written');
 
 select * from finish();
 rollback;

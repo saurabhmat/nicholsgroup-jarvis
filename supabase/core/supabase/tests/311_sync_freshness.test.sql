@@ -29,6 +29,10 @@ select ok(coalesce((select bool_and(prosecdef and proconfig = array['search_path
 
 -- ---------------------------------------------------------------- the failure streak
 set local role service_role;
+-- Two syncable PKG connections for the per-connection streaks (job_failure_record ignores unknown or non-syncable ones).
+insert into core.connections (id, lane_id, provider, external_account_id, status) values
+  ('00000000-0000-4000-8000-0000000b0001', 'PKG', 'google', 'streak-a@example.test', 'active'),
+  ('00000000-0000-4000-8000-0000000b0002', 'PKG', 'google', 'streak-b@example.test', 'degraded');
 select is((select consecutive_failures from core.job_failure_record('PKG', 'mail-ingest-delta', '', 'transient')), 1, 'first failure counts 1');
 select is((select alert from core.job_failure_record('PKG', 'mail-ingest-delta', '', 'transient')), false, 'second failure: no alert yet');
 select is((select alert from core.job_failure_record('PKG', 'mail-ingest-delta', '', 'timeout')), true, 'third failure alerts');

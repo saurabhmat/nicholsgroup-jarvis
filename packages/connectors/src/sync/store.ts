@@ -6,7 +6,7 @@ import { ConnectorError } from "../contract/errors";
 import { assertLaneBound } from "../contract/lane-bound";
 import { createIndexRpc } from "../google/index-rpc";
 import type { JobClientFor } from "../vault/tokens";
-import type { SyncCursorStore, SyncRunStore } from "./types";
+import { SYNC_STREAMS, type SyncCursorStore, type SyncRunStore } from "./types";
 
 /** A run still `running` after this long belonged to a crashed worker; the next start cancels it. */
 export const STALE_RUN_MS = 30 * 60_000;
@@ -89,6 +89,8 @@ export function createSyncRunStore(clientFor: JobClientFor, now: () => Date = ()
 
     async recordOutcome(laneId, conn, outcome, stream = null) {
       assertLaneBound(laneId, conn);
+      // The stream ends up in a PostgREST filter below: only the known values, whatever the caller's types say.
+      if (stream !== null && !(SYNC_STREAMS as readonly string[]).includes(stream)) throw unavailable();
       const db = await client(laneId);
       const table = () => db.schema("core").from("connections");
       try {

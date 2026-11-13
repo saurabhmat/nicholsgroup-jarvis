@@ -6,6 +6,7 @@
 -- 2. core.briefing_coverage: a row shows error_kind only when the error belongs to its stream (or to the whole connection).
 --    Body otherwise unchanged from 20261117110000.
 -- 3. A connection leaving active/degraded drops its core.job_failures rows (see below).
+-- 4. core.job_failure_record ignores a connection that is not the lane's or not active/degraded (see below).
 -- Safe to re-run.
 
 alter table core.connections add column if not exists last_error_stream text;
@@ -153,3 +154,53 @@ revoke all on function core.connections_clear_job_failures() from public, anon, 
 drop trigger if exists connections_clear_job_failures on core.connections;
 create trigger connections_clear_job_failures after update of status on core.connections
   for each row execute function core.connections_clear_job_failures();
+
+-- 4. (security re-check M-1) core.job_failure_record: a connection that is not the lane's, or not active/degraded, records nothing
+--    (returns 0, no alert). Otherwise unchanged from 20261119100000.
+create or replace function core.job_failure_record(p_lane text, p_function text, p_connection text, p_code text)
+returns table (consecutive_failures integer, alert boolean)
+language plpgsql
+security definer
+set search_path = ''
+as $$
+declare
+  v_conn text := coalesce(p_connection, '');
+  v_code text := case when p_code ~ '^[a-z][a-z_]{0,40}$' then p_code else 'failed' end;
+  v_n integer;
+  v_alerted timestamptz;
+begin
+  if p_lane is null or p_function is null or not exists (select 1 from core.lanes l where l.code = p_lane and l.enabled) then
+    raise exception 'lane is not available' using errcode = '22023';
+  end if;
+  -- T-238 security re-check M-1: a connection that is not this lane's, or no longer synced (the run that failed may itself have moved
+  -- it to reconnect_required, after the status trigger dropped its rows), starts no streak: nothing would ever reset it.
+  if v_conn <> '' and v_conn !~ '^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$' then
+    raise exception 'connection id is not a uuid' using errcode = '23514';
+  end if;
+  if v_conn <> '' and not exists (select 1 from core.connections c
+                                   where c.id::text = v_conn and c.lane_id = p_lane and c.status in ('active', 'degraded')) then
+    return query select 0, false;
+    return;
+  end if;
+  insert into core.job_failures as f (lane_id, function_id, connection_id, consecutive_failures, streak_started_at, last_failure_at, last_error_code)
+  values (p_lane, p_function, v_conn, 1, pg_catalog.clock_timestamp(), pg_catalog.clock_timestamp(), v_code)
+  on conflict (lane_id, function_id, connection_id) do update
+    set consecutive_failures = f.consecutive_failures + 1,
+        streak_started_at = case when f.consecutive_failures = 0 then pg_catalog.clock_timestamp() else f.streak_started_at end,
+        last_failure_at = pg_catalog.clock_timestamp(),
+        last_error_code = v_code,
+        updated_at = pg_catalog.now()
+  returning f.consecutive_failures, f.alerted_at into v_n, v_alerted;
+  if v_n >= 3 and v_alerted is null then
+    update core.job_failures f set alerted_at = pg_catalog.clock_timestamp()
+     where f.lane_id = p_lane and f.function_id = p_function and f.connection_id = v_conn;
+    return query select v_n, true;
+  else
+    return query select v_n, false;
+  end if;
+end;
+$$;
+comment on function core.job_failure_record(text, text, text, text) is
+  'T-238: a scheduled function failed (after retries). Increments the streak; at 3 sets alerted_at once and returns alert = true. service_role only.';
+revoke all on function core.job_failure_record(text, text, text, text) from public, anon, authenticated;
+grant execute on function core.job_failure_record(text, text, text, text) to service_role;

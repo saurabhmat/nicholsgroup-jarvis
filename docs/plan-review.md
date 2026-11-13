@@ -1230,3 +1230,10 @@ Logged, not fixed:
 - (LOW, security L7) `core.sync_now_claim` checks the `connections` view; the RLS on the new tables uses `health`. Same roles today.
 - (LOW, code review L1) A `reconnect_required` failure flips the connection's status on the first failure, so it never reaches the "3 in a row" banner. It shows in the Home status line and on the Settings row instead.
 - (LOW, code review L2) Every tracked cron writes one `job_failure_clear` per enabled lane per successful run.
+Security re-check of the review fixes (05713eb): no BLOCKER or HIGH.
+- Fixed:
+  - (MEDIUM M-1) `core.job_failure_record` records nothing for a connection that is not the lane's or not active/degraded, so a failure recorded after the run moved the connection to reconnect_required cannot start a streak that nothing resets. A non-UUID id is still refused.
+  - (LOW L-1) The store refuses a stream outside mail/calendar before it builds the PostgREST filter.
+  - (LOW L-2) pgTAP proves both triggers fire on service_role updates.
+  - (LOW L-4/L-5) The part 18 header names the job_failures trigger; the check also asserts service_role execute and the access checks inside `briefing_coverage`.
+- Logged, not fixed: (LOW L-3) in the bound-row mismatch case, `ensureConnection` may leave a tokenless `pending` row before the reconnect is refused. No secret is involved, and it cannot happen with today's unique key.

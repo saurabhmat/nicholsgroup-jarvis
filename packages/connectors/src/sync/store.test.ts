@@ -125,6 +125,13 @@ describe("sync run store", () => {
     expect(f.calls[4]?.filters.some(([op]) => op === "or")).toBe(false);
   });
 
+  it("refuses a stream value outside mail and calendar before building any filter", async () => {
+    const f = fakeClient();
+    const store = createSyncRunStore(f.clientFor, () => NOW);
+    await expect(store.recordOutcome("PKG", conn, { ok: true }, "mail,id.neq.x" as never)).rejects.toMatchObject({ info: { kind: "transient" } });
+    expect(f.calls).toHaveLength(0);
+  });
+
   it("refuses a connection that is not bound to the lane", async () => {
     const store = createSyncRunStore(fakeClient().clientFor);
     await expect(store.start("APK", conn, { trigger: "manual", jobRunId: null })).rejects.toMatchObject({ info: { kind: "lane_mismatch" } });
