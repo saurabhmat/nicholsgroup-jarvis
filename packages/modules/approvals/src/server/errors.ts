@@ -22,6 +22,8 @@ export const APPROVALS_ERROR_CODES = [
   "already_replied",
   "reply_already_pending",
   "placeholder_in_body",
+  "qbo_not_enabled",
+  "disconnect_pending",
   "unavailable",
 ] as const;
 export type ApprovalsErrorCode = (typeof APPROVALS_ERROR_CODES)[number];
@@ -30,6 +32,9 @@ export type ApprovalsErrorCode = (typeof APPROVALS_ERROR_CODES)[number];
 export const NOT_ENABLED_MESSAGE = "Sending isn't enabled for this mailbox yet. Reconnect Google with send permission in Settings";
 /** Shown when everything is enabled but the company is not yet switched on (T-170 gate). */
 export const NOT_LIVE_MESSAGE = "Approvals are not live for this company yet.";
+
+/** Shown when disconnecting QuickBooks is not allowed for the company (lane policy class `qbo_disconnect`) or the connection is gone. */
+export const QBO_NOT_ENABLED_MESSAGE = "Disconnecting QuickBooks isn't enabled for this company yet. Ask your administrator to allow it.";
 
 /** An email whose text still holds a placeholder (T-237): never sent; the approver edits it first. */
 export const PLACEHOLDER_MESSAGE = "This email still contains a placeholder such as [amount]. Edit the text to replace it, save, then approve.";
@@ -59,6 +64,8 @@ const MESSAGES: Record<ApprovalsErrorCode, string> = {
   already_replied: "You already replied in this conversation after this draft was made. Edit and save it to send it anyway.",
   reply_already_pending: "A reply to this message is already waiting for approval. Open it to edit it.",
   placeholder_in_body: PLACEHOLDER_MESSAGE,
+  qbo_not_enabled: QBO_NOT_ENABLED_MESSAGE,
+  disconnect_pending: "A disconnect is already waiting for approval for this QuickBooks company.",
   unavailable: "Approvals are unavailable right now.",
 };
 
@@ -90,6 +97,7 @@ export function toApprovalsError(error: { code?: string | undefined; message?: s
   if (has("check_sent_first")) return new ApprovalsError("check_sent_first");
   if (has("already_replied")) return new ApprovalsError("already_replied");
   if (has("reply_already_pending")) return new ApprovalsError("reply_already_pending");
+  if (has("disconnect_already_pending")) return new ApprovalsError("disconnect_pending");
   if (has("already waiting for approval")) return new ApprovalsError("already_proposed");
   if (has("too many pending") || code === "54000") return new ApprovalsError("too_many_pending");
   if (code === "22023" || code === "22004" || code === "23514") return new ApprovalsError("invalid");

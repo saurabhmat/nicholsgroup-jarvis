@@ -9,7 +9,7 @@ const json = z.record(z.string(), z.unknown());
 const RowSchema = z.object({
   id: z.uuid(),
   lane_id: z.string().regex(/^[A-Z]{1,8}$/),
-  action_type: z.enum(["email.send", "email.save_draft"]),
+  action_type: z.enum(["email.send", "email.save_draft", "qbo.disconnect"]),
   connection_id: z.uuid(),
   provider: z.string(),
   target: json,

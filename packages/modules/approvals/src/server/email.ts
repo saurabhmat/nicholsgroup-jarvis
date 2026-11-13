@@ -19,7 +19,7 @@ import { capabilityOf } from "./capability";
 import { ApprovalsError, toApprovalsError } from "./errors";
 import { firstRow, hashOfRow, rowsOf } from "./rows";
 import type { ActionRow, ApprovalsDeps, ApprovalsPublicDeps, EmailActionType, ProposerKind, Rpc, UserCtx } from "./types";
-import { EMAIL_ACTION_TYPES } from "./types";
+import { EMAIL_ACTION_TYPES, isEmailType } from "./types";
 
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 const LANE = /^[A-Z]{1,8}$/;
@@ -70,16 +70,16 @@ export type ApproveResult =
   | { status: "failed"; actionId: string; failureCode: string }
   | { status: "already_in_progress"; actionId: string };
 
-function checkLane(laneId: LaneId): void {
+export function checkLane(laneId: LaneId): void {
   if (typeof laneId !== "string" || !LANE.test(laneId)) throw new ApprovalsError("invalid");
 }
-function checkId(id: string): void {
+export function checkId(id: string): void {
   if (typeof id !== "string" || !UUID.test(id)) throw new ApprovalsError("invalid");
 }
 const cloneJson = <T>(v: T): T => JSON.parse(JSON.stringify(v)) as T;
 
 /** Writes an audit entry; ids, type, hash and codes only. A failure to audit stops the caller (the action does not proceed). */
-async function audit(deps: Pick<ApprovalsPublicDeps, "audit">, laneId: LaneId, actor: AuditEntry["actor"], action: string, actionId: string, metadata: Record<string, unknown>): Promise<void> {
+export async function audit(deps: Pick<ApprovalsPublicDeps, "audit">, laneId: LaneId, actor: AuditEntry["actor"], action: string, actionId: string, metadata: Record<string, unknown>): Promise<void> {
   await deps.audit.log({ laneId, actor, action, target: `action:${actionId}`, metadata });
 }
 
@@ -177,7 +177,7 @@ export async function proposeEmailAction(deps: ApprovalsPublicDeps, laneId: Lane
   return { id: data, hash: p.hash };
 }
 
-async function getRow(rpc: Rpc, laneId: LaneId, actionId: string): Promise<ActionRow> {
+export async function getRow(rpc: Rpc, laneId: LaneId, actionId: string): Promise<ActionRow> {
   const { data, error } = await rpc("act_get", { p_lane: laneId, p_id: actionId });
   if (error) throw toApprovalsError(error);
   if (!Array.isArray(data) || data.length === 0) throw new ApprovalsError("not_found");
@@ -209,7 +209,7 @@ export async function editEmailProposal(deps: ApprovalsPublicDeps, ctx: UserCtx,
   checkId(actionId);
   await requireOwner(ctx);
   const old = await getRow(ctx.rpc, ctx.laneId, actionId);
-  if (old.status !== "proposed") throw new ApprovalsError("not_editable");
+  if (old.status !== "proposed" || !isEmailType(old.actionType)) throw new ApprovalsError("not_editable");
   const body = old.payload.bodyText;
   if (typeof body !== "string" || old.payloadPurgedAt !== null) throw new ApprovalsError("not_editable");
   const list = (v: unknown): string[] => (Array.isArray(v) ? v.filter((x): x is string => typeof x === "string") : []);
@@ -326,6 +326,8 @@ export async function approveAndExecute(deps: ApprovalsDeps, ctx: UserCtx, input
   };
 
   const row = await getRow(ctx.rpc, ctx.laneId, input.actionId);
+  // Other action types (qbo.disconnect) have their own executor (./qbo.ts); this one only ever carries out email.
+  if (!isEmailType(row.actionType)) throw new ApprovalsError("invalid");
   if (row.status === "approved") {
     // Resume (T-232 code review H2): approved by this owner, for this exact hash, but never carried out (an audit
     // outage or a killed request after act_approve). The single claim keeps it to one execution; the gates run again.
@@ -385,7 +387,7 @@ export async function executeApproved(deps: ApprovalsDeps, laneId: LaneId, actio
     // Immediately before the external call: the stored content must still be what was approved.
     if (hashOfRow(row) !== row.payloadSha256 || row.approvedHash !== row.payloadSha256) throw new TamperError();
     if (typeof approvedBy !== "string" || !UUID.test(approvedBy)) throw new TamperError();
-    if (typeof row.payload.bodyText !== "string") throw new TamperError();
+    if (!isEmailType(row.actionType) || typeof row.payload.bodyText !== "string") throw new TamperError();
     // Last line of defence right before the external call (a job-path execute, a row approved before this rule): refuse.
     if (hasEmailPlaceholder(row.payload, isReplyRow(row))) throw new PlaceholderError();
     const action: GoogleEmailApprovedAction = {
@@ -448,7 +450,7 @@ export async function executeApproved(deps: ApprovalsDeps, laneId: LaneId, actio
 }
 
 /** The action's status when it is already verified or failed (finished by someone else), else null (still executing, or unreadable). */
-async function settledState(job: Rpc, laneId: LaneId, actionId: string): Promise<ApproveResult | null> {
+export async function settledState(job: Rpc, laneId: LaneId, actionId: string): Promise<ApproveResult | null> {
   try {
     const { data, error } = await job("act_action_state", { p_lane: laneId, p_id: actionId });
     if (error || !Array.isArray(data) || data.length === 0) return null;

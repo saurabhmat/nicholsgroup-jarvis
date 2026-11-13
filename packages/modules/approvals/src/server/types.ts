@@ -6,6 +6,18 @@ import type { GoogleEmailWriter } from "@nichols/connectors/write";
 
 export const EMAIL_ACTION_TYPES = ["email.send", "email.save_draft"] as const;
 export type EmailActionType = (typeof EMAIL_ACTION_TYPES)[number];
+/** The QuickBooks disconnect (T-195, D-24): revoking our grant at Intuit is an external write, so it is an approvals action. */
+export const QBO_DISCONNECT = "qbo.disconnect" as const;
+export type QboActionType = typeof QBO_DISCONNECT;
+export const ACTION_TYPES = [...EMAIL_ACTION_TYPES, QBO_DISCONNECT] as const;
+export type ActionType = (typeof ACTION_TYPES)[number];
+export const isEmailType = (t: ActionType): t is EmailActionType => (EMAIL_ACTION_TYPES as readonly string[]).includes(t);
+/** The roles that may propose, approve and reject an action type (mirrors act.write_roles in the database). */
+export const WRITE_ROLES: Readonly<Record<ActionType, readonly ["owner"] | readonly ["owner", "admin_technical"]>> = {
+  "email.send": ["owner"],
+  "email.save_draft": ["owner"],
+  "qbo.disconnect": ["owner", "admin_technical"],
+};
 export type ActionStatus = "proposed" | "approved" | "executing" | "verified" | "failed" | "rejected" | "expired" | "invalidated";
 export type ProposerKind = "user" | "assistant" | "job";
 
@@ -13,7 +25,7 @@ export type ProposerKind = "user" | "assistant" | "job";
 export type ActionRow = {
   id: string;
   laneId: string;
-  actionType: EmailActionType;
+  actionType: ActionType;
   connectionId: string;
   provider: string;
   target: Record<string, unknown>;
@@ -57,6 +69,11 @@ export type CapabilityFacts = {
   approvalsLive: boolean;
   /** `lane_config.approvals.step_up_max_age_s` */
   stepUpMaxAgeS: number;
+  /**
+   * The connection as a QuickBooks connection of the lane that is not disconnected (T-195): its realm. Null (or absent) when it is
+   * not a QuickBooks connection of the lane, or is disconnected.
+   */
+  qbo?: { realmId: string } | null;
 };
 
 export type ProposedEmail = { proposed: { target: Record<string, unknown>; payload: Record<string, unknown>; payload_schema_version: number }; connection: LaneBoundConnection<"google"> };
