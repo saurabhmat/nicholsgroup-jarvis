@@ -15,9 +15,12 @@ import { ConnectorError, toConnectorError } from "../contract/errors";
 import { assertLaneBound, type ConnectionLoader } from "../contract/lane-bound";
 import { LaneIdSchema } from "../contract/schemas";
 import { connectorLog, type ConnectorLogger } from "../log/index";
+import { createJobRunLog } from "../sync/job-run";
+import type { SyncRunStore } from "../sync/types";
 import type { QboApi } from "./api";
 import { assertQuickbooksConnection, type QboConnection } from "./guard";
 import { planReports, projectReport, reportPolicy, REPORT_MAX_BYTES, type ProjectedReport, type QboReportKind, type ReportSettings } from "./reports";
+import type { JobRunResult } from "../sync/job-run";
 import { entityQuery, MAX_PAGES, PAGE_SIZE, type PayrollSettings } from "./sync";
 
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
@@ -49,6 +52,8 @@ export type QboReportsJobDeps = {
   payroll: (laneId: LaneId) => Promise<PayrollSettings>;
   now?: () => number;
   logger?: ConnectorLogger;
+  /** Writes one core.sync_runs row (job = reports) per run (T-196). Optional: without it no run is logged. */
+  runs?: SyncRunStore;
 };
 
 export type QboReportsOutcome =
@@ -59,6 +64,7 @@ export type QboReportsOutcome =
 export function createQboReportsJob(deps: QboReportsJobDeps) {
   const now = deps.now ?? Date.now;
   const log = deps.logger ?? connectorLog;
+  const runLog = createJobRunLog({ runs: deps.runs, job: "reports", logger: log });
 
   const failure = (e: ConnectorError, stored: QboReportKind[]): QboReportsOutcome => ({
     ok: false,
@@ -85,6 +91,9 @@ export function createQboReportsJob(deps: QboReportsJobDeps) {
   return {
     async run(laneId: LaneId, connectionId: string): Promise<QboReportsOutcome> {
       const stored: QboReportKind[] = [];
+      let close: ((r: JobRunResult) => Promise<void>) | undefined;
+      let error: ConnectorError | undefined;
+      let outcome: QboReportsOutcome;
       try {
         if (!LaneIdSchema.safeParse(laneId).success || !UUID.test(connectionId)) throw new ConnectorError({ kind: "invalid_input", message: "A lane and a connection id are required" });
         const loaded = await deps.loader.loadConnection(laneId, connectionId);
@@ -96,6 +105,7 @@ export function createQboReportsJob(deps: QboReportsJobDeps) {
           child.info("qbo.reports.skipped", { reason: "connection_not_usable", status: conn.status });
           return { ok: true, skipped: "connection_not_usable" };
         }
+        close = await runLog.open(laneId, conn);
         // Fail closed: nothing is fetched until both settings are known.
         const settings = await deps.settings(laneId);
         const payroll = await deps.payroll(laneId);
@@ -138,11 +148,17 @@ export function createQboReportsJob(deps: QboReportsJobDeps) {
           }
         }
         child.info("qbo.reports.done", { stored: stored.length, excluded_rows: excludedRows });
-        if (firstError) return failure(firstError, stored);
-        return { ok: true, skipped: null, stored, excludedRows };
+        if (firstError) {
+          error = firstError;
+          outcome = failure(firstError, stored);
+        } else outcome = { ok: true, skipped: null, stored, excludedRows };
       } catch (e) {
-        return failure(toConnectorError(e), stored);
+        error = toConnectorError(e);
+        outcome = failure(error, stored);
       }
+      // The run row is closed after the work, whatever happened (never throws).
+      if (close) await close(error ? { ok: false, error } : { ok: true, received: stored.length, written: stored.length });
+      return outcome;
     },
   };
 }

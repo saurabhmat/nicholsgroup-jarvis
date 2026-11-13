@@ -31,7 +31,8 @@ export function createSyncRunStore(clientFor: JobClientFor, now: () => Date = ()
       const runs = () => db.schema("core").from("sync_runs");
       try {
         const cancel = { status: "cancelled", finished_at: at.toISOString() };
-        const base = () => runs().update(cancel).eq("lane_id", laneId).eq("connection_id", conn.id).eq("status", "running");
+        const job = input.job ?? "sync";
+        const base = () => runs().update(cancel).eq("lane_id", laneId).eq("connection_id", conn.id).eq("job", job).eq("status", "running");
         const stale = await base().lt("started_at", new Date(at.getTime() - STALE_RUN_MS).toISOString());
         if (stale.error) throw stale.error;
         if (input.jobRunId) {
@@ -39,7 +40,7 @@ export function createSyncRunStore(clientFor: JobClientFor, now: () => Date = ()
           if (own.error) throw own.error;
         }
         const inserted = await runs()
-          .insert({ lane_id: laneId, connection_id: conn.id, kind: conn.last_sync_at ? "incremental" : "full", trigger: input.trigger, started_at: at.toISOString(), job_run_id: input.jobRunId })
+          .insert({ lane_id: laneId, connection_id: conn.id, kind: job !== "sync" ? "snapshot" : conn.last_sync_at ? "incremental" : "full", job, trigger: input.trigger, started_at: at.toISOString(), job_run_id: input.jobRunId })
           .select("id")
           .single();
         if (inserted.error) {

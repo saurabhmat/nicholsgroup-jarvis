@@ -10,6 +10,7 @@ import { createHttpClient, type ConnectorResponse, type HttpClient, type HttpCli
 import type { ConnectorLogger } from "../log/index";
 import type { SecretValue } from "../vault/secret";
 import { API_BASE, API_RATE_LIMIT, INTUIT_TID_HEADER, MINOR_VERSION, type IntuitEnvironment } from "./constants";
+import type { ApiErrorSink } from "../error-log/sink";
 import { mapIntuitError, QBO_RETRY } from "./errors";
 import type { OnReconnectRequired } from "./reconnect";
 import type { TokenManager } from "./token-manager";
@@ -20,6 +21,11 @@ export type QboApiDeps = {
   logger?: ConnectorLogger;
   /** Called when a call ends in reconnect_required (a 401 that survived a refresh, an app authorization refusal): records the status and notifies (T-195). Never throws. */
   onReconnectRequired?: OnReconnectRequired;
+  /**
+   * Records every Intuit API error once, after the error map, with scrubbed fields only (T-196: core.connector_api_errors and the
+   * redacted log; Sentry later, T-041). Never throws. Token-endpoint failures are not API errors and are not recorded here.
+   */
+  errors?: ApiErrorSink;
   /** Test hook: extra HTTP client options (fast backoff, injected fetch). */
   httpOptions?: Partial<HttpClientOptions>;
   httpFor?: (laneId: LaneId, conn: LaneBoundConnection<string>) => HttpClient;
@@ -114,6 +120,7 @@ export function createQboApi(deps: QboApiDeps): QboApi {
           // Intuit says the app is not authorized for this company (403, code 3100): the grant is dead although the refresh did not say so.
           await deps.onReconnectRequired?.(laneId, conn, mapped.toJSON());
         }
+        await deps.errors?.record(laneId, conn, mapped.toJSON());
         throw mapped;
       }
     },

@@ -4,9 +4,11 @@
 import { getServerEnv, requireConnectorEnv } from "@nichols/core/env/server";
 import { getAudit } from "@nichols/core/lane-router";
 import type { LaneBoundConnection } from "../contract/lane-bound";
-import { connectionLoader, getToken, normalizeStore, reportCacheStore, qboFeatureStore, laneConfigReader, actionClaimReader, reconnectStore, revokeToken, rotateToken, storeToken } from "../vault/index";
+import { apiErrorStore, connectionLoader, syncRunStore, getToken, normalizeStore, reportCacheStore, qboFeatureStore, laneConfigReader, actionClaimReader, reconnectStore, revokeToken, rotateToken, storeToken } from "../vault/index";
 import { SecretValue } from "../vault/secret";
 import { createQboApi } from "./api";
+import { createApiErrorSink } from "../error-log/sink";
+import { classifyIntuitFailure } from "./errors";
 import { createQuickBooksConnector } from "./connector";
 import { createQboFeatureRecorder } from "./features";
 import { createQboNormalizeJob } from "./normalize-job";
@@ -60,7 +62,13 @@ const tokens = createTokenManager({
   onReconnectRequired,
 });
 
-const api = createQboApi({ tokens, environment, onReconnectRequired });
+/**
+ * One sink for every Intuit API error (T-196): a scrubbed row in core.connector_api_errors and a redacted log line, with the
+ * fixed message of the error map (never Intuit's text). T-041 adds a Sentry transport to `transports` here.
+ */
+const apiErrors = createApiErrorSink({ store: apiErrorStore, messageFor: (info) => classifyIntuitFailure(info).message });
+
+const api = createQboApi({ tokens, environment, onReconnectRequired, errors: apiErrors });
 
 const connections = { load: (laneId: string, id: string) => connectionLoader.loadConnection(laneId, id) };
 
@@ -79,10 +87,11 @@ export const quickbooksReportsJob = createQboReportsJob({
   store: reportCacheStore,
   settings: (laneId) => laneConfigReader.reportSettings(laneId),
   payroll: (laneId) => laneConfigReader.payrollSettings(laneId),
+  runs: syncRunStore,
 });
 
 /** raw.source_records -> fin.* for one connection, after a successful sync (T-056): one SQL function, no provider call. */
-export const quickbooksNormalizeJob = createQboNormalizeJob({ loader: connectionLoader, store: normalizeStore });
+export const quickbooksNormalizeJob = createQboNormalizeJob({ loader: connectionLoader, store: normalizeStore, runs: syncRunStore });
 
 /**
  * Revoke-at-Intuit and delete-Vault-tokens (D-24: approvals only). Reached through `@nichols/connectors/writer`-side
