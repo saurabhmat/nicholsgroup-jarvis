@@ -9,7 +9,7 @@ import { createConnectorLogger } from "../log/index";
 import { RateLimiter } from "../http/rate-limit";
 import { createHttpClient } from "../http/client";
 import { http, HttpResponse, useMockServer } from "../testing/msw/index";
-import { forgetSecretsForTests, SecretValue } from "../vault/secret";
+import { SecretValue } from "../vault/secret";
 import { createOAuthFlow, type OAuthProvider } from "./flow";
 import { createConnectHandlers } from "./handlers";
 import { connectionOfState, hashState, laneOfState, newState } from "./pkce";
@@ -93,7 +93,6 @@ const rowsOf = (): Row[] => [
 ];
 
 afterEach(() => {
-  forgetSecretsForTests();
   RateLimiter.resetForTests();
 });
 

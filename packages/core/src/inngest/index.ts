@@ -59,6 +59,8 @@ export {
   shouldRefreshBriefingAfterSync,
 } from "./mail-ingest";
 export type { MailIngestDeps, MailIngestPlan } from "./mail-ingest";
+export { FAILURE_ALERT_THRESHOLD, failureCode, withFailureTracking } from "./failure-tracking";
+export type { FailureTracker } from "./failure-tracking";
 export { BRIEFING_REFRESH_RETRIES, briefingRefreshFunction, handleBriefingRefresh } from "./briefing-refresh";
 export type { BriefingRefreshDeps, BriefingRefreshOutcome } from "./briefing-refresh";
 export {

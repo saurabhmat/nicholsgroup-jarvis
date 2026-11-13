@@ -7,12 +7,14 @@ import type { GoogleSectionView } from "@/lib/google-connection";
 import type { QuickBooksSectionView } from "@/lib/quickbooks-connection";
 import type { CoverageView } from "@/lib/coverage";
 import { CoverageList } from "./coverage-list";
+import { JobFailureBanner } from "./job-failure-banner";
+import type { JobFailureItem } from "@/lib/job-failures";
 import { ComposioNotes, ComposioNotices, ComposioRows } from "./composio-connection-section";
 import { ConnectionsHeader } from "./connection-rows";
 import { GoogleNotes, GoogleNotices, GoogleRows, GoogleSyncBar } from "./google-connection-section";
 import { QuickBooksNotes, QuickBooksNotices, QuickBooksRows } from "./quickbooks-connection-section";
 
-export function ConnectionsSection({ laneId, google, quickbooks, composio, coverage = null, tz = "America/New_York", now = new Date() }: { laneId: string; google: GoogleSectionView | null; quickbooks: QuickBooksSectionView | null; composio: ComposioSectionView | null; coverage?: CoverageView | null; tz?: string; now?: Date }) {
+export function ConnectionsSection({ laneId, google, quickbooks, composio, coverage = null, jobFailures = null, tz = "America/New_York", now = new Date() }: { laneId: string; google: GoogleSectionView | null; quickbooks: QuickBooksSectionView | null; composio: ComposioSectionView | null; coverage?: CoverageView | null; jobFailures?: JobFailureItem[] | null; tz?: string; now?: Date }) {
   return (
     <section id="connections" aria-labelledby="connections-title" className="scroll-mt-8">
       <Card>
@@ -22,6 +24,7 @@ export function ConnectionsSection({ laneId, google, quickbooks, composio, cover
           </CardTitle>
           <CardDescription>The accounts that feed this company&apos;s mail, calendar and files into the portal.</CardDescription>
         </CardHeader>
+        <JobFailureBanner laneId={laneId} items={jobFailures} now={now} onSettings />
         {google ? <GoogleNotices view={google} /> : null}
         {google ? <GoogleSyncBar laneId={laneId} view={google} /> : null}
         {quickbooks ? <QuickBooksNotices view={quickbooks} /> : null}

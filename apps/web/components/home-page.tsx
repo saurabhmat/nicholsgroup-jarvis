@@ -23,6 +23,8 @@ import { AiBriefing, Deadlines, notesByMessage, repliesByMessage } from "./home-
 import { ReplyDrafts } from "./home-reply-drafts";
 import { AttentionSection, CalendarSections } from "./home-briefing";
 import { HomeCoverageDot } from "./coverage-dot";
+import { JobFailureBanner } from "./job-failure-banner";
+import { jobFailureBannerFor } from "@/lib/job-failures";
 import { KpiStrip } from "./kpi-strip";
 import { GovConNews } from "./home-news";
 import { loadNewsCard } from "@/lib/news";
@@ -131,7 +133,7 @@ async function HomeSections({ laneId, now }: { laneId: string; now: Date }) {
   const g = await guards();
   // Home v1 counts and the T-231 briefing sections load in parallel. Each shows its own "unavailable" state; neither ever shows an empty day.
   const laneClient = async () => (await g.requireLane(laneId as Parameters<typeof g.requireLane>[0])).client;
-  const [view, brief, saved, isAdmin, isOwner, newsCard, runState] = await Promise.all([
+  const [view, brief, saved, isAdmin, isOwner, newsCard, runState, jobFailures] = await Promise.all([
     timed("load.home", async () => homeFor(g, laneId, now)),
     timed("load.briefing", async () => briefingFor(await laneClient(), laneId, now, tz)),
     timed("load.briefing_latest", async () => latestBriefing(await laneClient(), laneId)),
@@ -148,6 +150,8 @@ async function HomeSections({ laneId, now }: { laneId: string; now: Date }) {
     }),
     // The owner's run state (a run open, the last Regenerate, runs today): SQL answers nothing for anyone else (T-235 part 1).
     timed("load.briefing_run_state", async () => loadRunState(await laneClient(), laneId)),
+    // Scheduled functions that failed 3 times in a row (T-238 E): owner and admin_technical only, null for everyone else or when unreadable.
+    timed("load.job_failures", () => jobFailureBannerFor(g, laneId)),
   ]);
   // Why there is no AI summary: the AI setup itself (names only), else the stored code of the newest failed attempt.
   const setup = aiSetupFailure();
@@ -157,11 +161,16 @@ async function HomeSections({ laneId, now }: { laneId: string; now: Date }) {
   return (
     <>
       <TimezoneCookie current={tzCookie ?? null} />
-      {view.unavailable ? (
-        <Alert variant="alert" className={`${GRID_FULL} md:row-start-1 md:mb-5`}>
-          <AlertTitle>Some of today&apos;s information could not be loaded</AlertTitle>
-          <AlertDescription>Reload the page in a minute. If it keeps happening, check Settings → Connections.</AlertDescription>
-        </Alert>
+      {view.unavailable || jobFailures ? (
+        <div data-testid="home-alerts-slot" className={`${GRID_FULL} flex flex-col gap-3 md:row-start-1 md:mb-5`}>
+          <JobFailureBanner laneId={laneId} items={jobFailures} now={now} />
+          {view.unavailable ? (
+            <Alert variant="alert">
+              <AlertTitle>Some of today&apos;s information could not be loaded</AlertTitle>
+              <AlertDescription>Reload the page in a minute. If it keeps happening, check Settings → Connections.</AlertDescription>
+            </Alert>
+          ) : null}
+        </div>
       ) : null}
       {/* KPI row: directly under the approvals banner on desktop, after Today on the phone. Its own boundary: a slow QuickBooks read never holds the rest back. */}
       <div data-testid="home-kpi-slot" className={`${GRID_FULL} order-3 min-w-0 empty:hidden md:order-none md:row-start-2 md:mb-5`}>

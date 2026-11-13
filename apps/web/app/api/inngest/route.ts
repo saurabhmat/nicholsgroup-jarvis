@@ -26,6 +26,7 @@ import {
   retentionPurgeFunctions,
   sendLaneEvent,
   shouldNormalizeAfterSync,
+  withFailureTracking,
   shouldRefreshBriefingAfterSync,
 } from "@nichols/core/inngest";
 import type { LaneId } from "@nichols/core";
@@ -39,6 +40,7 @@ import { listQuickbooksConnectionIds, qboReportsJob } from "@nichols/connectors/
 import { qboNormalizeJob } from "@nichols/connectors/normalize";
 import { purgeBriefingRuns, purgeBriefings, purgeNews } from "@nichols/briefing/jobs";
 import { expireStaleActions, reconcileStuckLane } from "@nichols/approvals/wire";
+import { createFailureTracker } from "@/lib/job-failures";
 import { dueOwners, ownersWithViews, runRefresh, runScheduled } from "@/lib/briefing-schedule";
 import { newsDue, runScheduledNews } from "@/lib/news-schedule";
 
@@ -64,7 +66,11 @@ if (!retentionRegistry.list().some((t) => t.id === "brief.news_digests")) {
 }
 const briefingClient = (laneId: string) => getLaneJobClient(laneId as LaneId);
 
-export const { GET, POST, PUT } = inngestRoute((inngest) => [
+// Failure tracking (T-238 E): every cron-triggered function below, and conn.sync runs started by the schedule, counts consecutive failures
+// per lane; the third in a row raises the in-app banner and one server log line. Created per request set-up through withFailureTracking.
+const failureTracker = createFailureTracker({ clientFor: briefingClient, enabledLanes: () => getServerEnv().ENABLED_LANES });
+
+const functionsFor = (inngest: Parameters<Parameters<typeof inngestRoute>[0]>[0]) => [
   ...platformFunctions(inngest),
   connSyncFunction(inngest, {
     runSync: (laneId, connectionId, input) => connSyncJob.run(laneId, connectionId, input),
@@ -178,4 +184,6 @@ export const { GET, POST, PUT } = inngestRoute((inngest) => [
     purgeLane: (laneId) => importPurge.purgeLane(laneId as LaneId),
     enabledLanes: () => getServerEnv().ENABLED_LANES,
   }),
-]);
+];
+
+export const { GET, POST, PUT } = inngestRoute((client) => functionsFor(withFailureTracking(client, failureTracker)));

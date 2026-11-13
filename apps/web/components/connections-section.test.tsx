@@ -40,6 +40,15 @@ describe("ConnectionsSection", () => {
     expect(screen.queryByTestId("composio-gmail")).toBeNull(); // Composio view is null: not drawn
   });
 
+  it("T-238 E: the failure banner sits at the top of Connections when given items, and is absent otherwise", () => {
+    render(<ConnectionsSection laneId="PKG" google={google} quickbooks={null} composio={null} jobFailures={[{ functionId: "conn-sync.calendar", name: "Calendar sync", failures: 3, since: "2026-11-13T14:15:00Z", detail: null }]} now={new Date("2026-11-13T15:00:00Z")} />);
+    expect(screen.getByTestId("job-failure-banner").textContent).toContain("Calendar sync has failed 3 times in a row since 9:15 AM ET.");
+    expect(screen.getByTestId("job-failure-settings-link").getAttribute("href")).toBe("#connections");
+    cleanup();
+    render(<ConnectionsSection laneId="PKG" google={google} quickbooks={null} composio={null} />);
+    expect(screen.queryByTestId("job-failure-banner")).toBeNull();
+  });
+
   it("Google not connected: one row with Connect Google", () => {
     render(<ConnectionsSection laneId="PKG" google={{ connections: [] }} quickbooks={null} composio={null} />);
     const row = screen.getByTestId("google-not-connected");

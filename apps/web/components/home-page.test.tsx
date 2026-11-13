@@ -7,7 +7,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { cleanup, render, screen, within } from "@testing-library/react";
 import type { HomeView } from "@/lib/home";
 
-const m = vi.hoisted(() => ({ briefCoverage: [] as unknown[], financeView: false, owner: false, mail: { access: false } as { access: boolean; attention?: unknown[]; more?: number; money?: unknown[]; mailboxOf?: Record<string, string> }, coverage: { items: [], unavailable: false } as unknown, view: null as unknown, progress: null as unknown, detail: { state: "no_access" } as unknown, userName: undefined as string | undefined, cookieTz: undefined as string | undefined, briefingTz: [] as string[], finance: { state: "not_connected", asOf: null, lastSyncAt: null, connectionStatus: null, cash: { reason: null, total: null, asOf: null, accounts: [], unmapped: 0 }, ar: { reason: null, over30: null, invoices: 0, unmapped: 0 }, pnl: { reason: null, income: null, expenses: null, net: null, start: null, end: null, method: null, partial: false, asOf: null } } as unknown }));
+const m = vi.hoisted(() => ({ jobFailures: null as unknown, briefCoverage: [] as unknown[], financeView: false, owner: false, mail: { access: false } as { access: boolean; attention?: unknown[]; more?: number; money?: unknown[]; mailboxOf?: Record<string, string> }, coverage: { items: [], unavailable: false } as unknown, view: null as unknown, progress: null as unknown, detail: { state: "no_access" } as unknown, userName: undefined as string | undefined, cookieTz: undefined as string | undefined, briefingTz: [] as string[], finance: { state: "not_connected", asOf: null, lastSyncAt: null, connectionStatus: null, cash: { reason: null, total: null, asOf: null, accounts: [], unmapped: 0 }, ar: { reason: null, over30: null, invoices: 0, unmapped: 0 }, pnl: { reason: null, income: null, expenses: null, net: null, start: null, end: null, method: null, partial: false, asOf: null } } as unknown }));
 vi.mock("@/lib/lane-page", () => ({ loadLane: async () => ({ laneId: "PKG", name: "Pub K Group", lanes: [], userId: "u1" }) }));
 vi.mock("@/lib/guards", () => ({ guards: async () => ({ requireLane: async () => ({ client: {}, session: { userId: "u1" } }), requireRole: async (_l: string, roles: string[]) => { if (m.owner && roles.includes("owner")) return { client: {}, session: { userId: "u1" } }; throw new Error("not admin"); } }) }));
 vi.mock("@/app/[laneId]/briefing-actions", () => ({ ensureFreshBriefing: async () => ({ started: false, gate: "not_stale" }), regenerateBriefing: async () => ({ started: false, gate: "not_stale" }), briefingRunState: async () => null }));
@@ -19,6 +19,7 @@ vi.mock("@/lib/briefing", async (orig) => ({
   briefingFor: async (_c: unknown, _l: string, _n: Date, tz: string) => (m.briefingTz.push(tz), { viewerTz: "America/New_York", coverage: m.briefCoverage, coverageLine: "Coverage: test.", calendar: { access: false }, mail: m.mail.access ? { access: true, attention: [], more: 0, money: [], mailboxOf: {} } : { access: false }, config: {}, mailboxes: [] }),
 }));
 vi.mock("@/lib/coverage", async (orig) => ({ ...(await orig<typeof import("@/lib/coverage")>()), coverageFor: async () => m.coverage }));
+vi.mock("@/lib/job-failures", async (orig) => ({ ...(await orig<typeof import("@/lib/job-failures")>()), jobFailureBannerFor: async () => m.jobFailures }));
 vi.mock("@/lib/timed", () => ({ timed: async <T,>(_n: string, f: () => Promise<T>) => f() }));
 vi.mock("@/lib/onboarding-progress", () => ({
   onboardingFor: async () => m.progress,
@@ -83,6 +84,7 @@ afterEach(() => {
   m.mail = { access: false };
   m.coverage = { items: [], unavailable: false };
   m.briefCoverage = [];
+  m.jobFailures = null;
 });
 
 describe("Home display zone (T-237 polish)", () => {
@@ -236,6 +238,17 @@ describe("Home layout (T-234 part 1)", () => {
     expect(dot.textContent).toContain("Mail not synced yet");
     expect(dot.getAttribute("aria-label")).toMatch(/Mail not synced yet/);
     expect(screen.queryByTestId("home-sync-now")).toBeNull(); // not owner or admin in this mock
+  });
+
+  it("T-238 E: the failed-function banner shows on Home when the loader returns items (owner/admin only; null for everyone else), and not otherwise", async () => {
+    m.view = view();
+    await draw();
+    expect(screen.queryByTestId("job-failure-banner")).toBeNull();
+    cleanup();
+    m.jobFailures = [{ functionId: "conn-sync.mail", name: "Mail sync", failures: 3, since: "2026-11-13T14:15:00Z", detail: null }];
+    await draw();
+    expect(screen.getByTestId("job-failure-banner").textContent).toMatch(/Mail sync has failed 3 times in a row since .* ET\./);
+    expect(screen.getByTestId("job-failure-settings-link").getAttribute("href")).toBe("/PKG/settings#connections");
   });
 
   it("T-238 F: one plain line in the summary card when mail data is older than 24 hours, none when fresh", async () => {
