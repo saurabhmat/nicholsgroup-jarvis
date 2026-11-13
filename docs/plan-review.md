@@ -1279,3 +1279,11 @@ Logged, not fixed:
 - (security L1) A holder of the Inngest event key can queue `conn/sync.requested` with trigger "connect" (a full reload) without a per-connection throttle. Same trust level as today (that key already sends any sync, normalize and approval event). Option: an Inngest throttle keyed on the connection id.
 - (code review MEDIUM 4) The 100 s normalizer timeout abandons the HTTP call, but the Postgres function may keep running and hold its advisory lock. The retry then waits on the lock or reports a lock conflict (now named in the reason). The function's run time itself (production showed 2m35s) is not addressed. Next step if it recurs: read the named reason from the run output.
 - (code review LOW 4) SQLSTATE 42883 is reported as "normalizer function not found" even when an undefined function inside the normalizer raised it. A network error that supabase-js returns as an error object with an empty code reads "unknown database error", not "network".
+
+## T-242: review results (combined security and code review, Nov 13, 2026)
+Fixed:
+- (HIGH) The first version deduped every upsert input with self-join deletes on `is not distinct from`. That made the planner use a nested loop: 33.5 s on 20k posting lines, enough to turn the 21000 into endless timeouts. It also could never fire, since every input is already unique. It was removed.
+- (MEDIUM) Silently dropping a posting line or payment allocation would lose money rows (rule 7). Duplicate built keys are now refused with 21000 under the step `payment_keys` / `transaction_keys` (a hash-aggregate check, about 12 ms on 20k rows).
+- (LOW) `check-part-20.sql` compares `md5(prosrc)` with the repository body, and the diagnostics show it. The diagnostics note that their last query needs part 16.
+
+Open: the production root cause of 21000 is not found. The review confirmed none of the paths. The next failure names its step; if that step's input is proven unique, compare production with the repository (raw unique index, function md5).

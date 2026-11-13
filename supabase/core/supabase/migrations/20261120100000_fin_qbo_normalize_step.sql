@@ -1,13 +1,12 @@
--- T-242: the QuickBooks normalizer failed in production with SQLSTATE 21000 (cardinality violation) after PKG's first full sync.
--- 21000 is "ON CONFLICT DO UPDATE command cannot affect row a second time" (two input rows for one target key in one statement) or
--- "more than one row returned by a subquery used as an expression". The function's handler re-raises every failure with a constant
--- message, so the failing section was unknown. This replaces core.fin_qbo_normalize (body otherwise unchanged from 20261106100000):
---   1. Every upsert's input is reduced to one row per target key first (latest source_updated_at wins): invoices and bills by id,
---      payments by id and by (payment, allocation), transactions by (txn_type, source_id, line_no), bill-payment entities by id.
---      The number removed is returned as `deduped_rows` (0 on clean data).
---   2. The error message names the section that was running: "fin.qbo_normalize failed: SQLSTATE %, table %, constraint %, step %",
---      where step is one of config, effective, accounts, invoices, bills, payments, transactions, summary (schema words, never data).
--- Grants and comment are restated. Safe to re-run (create or replace).
+-- T-242: the QuickBooks normalizer failed in production with SQLSTATE 21000 (cardinality violation) after PKG's first full sync. The
+-- function's handler re-raises every failure with a constant message, so the failing section was unknown, and a review of every
+-- upsert input and scalar subquery found no path to 21000 on data the repository can produce (raw is unique per connection, type and
+-- id; every upsert input is unique by construction). This replaces core.fin_qbo_normalize, body otherwise unchanged from 20261106100000:
+--   1. The error message names the section that was running: "fin.qbo_normalize failed: SQLSTATE %, table %, constraint %, step %",
+--      step in: config, effective, accounts, invoices, bills, payments, payment_keys, transactions, transaction_keys, summary.
+--   2. Before the two upserts whose keys are built (payment allocations, posting lines) a hash-aggregate check refuses a duplicate key
+--      with 21000 under its own step (payment_keys / transaction_keys). Nothing is dropped silently.
+-- Grants and comment restated. Safe to re-run (create or replace).
 
 create or replace function core.fin_qbo_normalize(p_lane text, p_connection_id uuid)
 returns jsonb
@@ -53,10 +52,8 @@ declare
   v_null_account integer;
   v_err_table text;
   v_err_constraint text;
-  -- T-242: the section that was running, for the error message (schema-level words only, never data).
+  -- T-242: the section that was running, for the error message (fixed words only, never data).
   v_step text := 'config';
-  v_dedup integer := 0;
-  v_n integer;
   v_entity_types constant text[] := array['Account', 'Customer', 'Vendor', 'Invoice', 'Bill', 'Payment', 'BillPayment', 'Purchase', 'Deposit', 'JournalEntry'];
   v_code_re constant text := '^[A-Za-z0-9_]{1,32}$';
   v_payroll_re constant text := '(payroll|salar(y|ies)|\ywages?\y|compensation)';
@@ -231,13 +228,6 @@ begin
          coalesce(e.payload #>> '{CurrencyRef,value}', 'USD') as currency,
          coalesce((e.payload -> 'Voided') = 'true'::jsonb, false) as voided
   from pg_temp.q_eff e where e.object_type = 'Invoice' and e.why is null;
-  -- T-242: one row per target key before the upsert (ON CONFLICT cannot touch a row twice in one statement, SQLSTATE 21000): the
-  -- latest source version wins. Counted in deduped_rows.
-  delete from pg_temp.q_inv a using pg_temp.q_inv b
-  where a.id is not distinct from b.id
-    and (coalesce(a.source_updated_at, '-infinity'::timestamptz), a.ctid) < (coalesce(b.source_updated_at, '-infinity'::timestamptz), b.ctid);
-  get diagnostics v_n = row_count;
-  v_dedup := v_dedup + v_n;
   select count(*) into v_invalid from pg_temp.q_inv
   where issue_date is null or total is null or balance is null or currency !~ '^[A-Z]{3}$' or not fin.qbo_ids_ok(classes || array[coalesce(cust, 'x')]);
   with w as (
@@ -285,13 +275,6 @@ begin
          coalesce(e.payload #>> '{CurrencyRef,value}', 'USD') as currency,
          coalesce((e.payload -> 'Voided') = 'true'::jsonb, false) as voided
   from pg_temp.q_eff e where e.object_type = 'Bill' and e.why is null;
-  -- T-242: one row per target key before the upsert (ON CONFLICT cannot touch a row twice in one statement, SQLSTATE 21000): the
-  -- latest source version wins. Counted in deduped_rows.
-  delete from pg_temp.q_bill a using pg_temp.q_bill b
-  where a.id is not distinct from b.id
-    and (coalesce(a.source_updated_at, '-infinity'::timestamptz), a.ctid) < (coalesce(b.source_updated_at, '-infinity'::timestamptz), b.ctid);
-  get diagnostics v_n = row_count;
-  v_dedup := v_dedup + v_n;
   select count(*) into v_invalid from pg_temp.q_bill
   where issue_date is null or total is null or balance is null or currency !~ '^[A-Z]{3}$' or not fin.qbo_ids_ok(classes || array[coalesce(vend, 'x')]);
   with w as (
@@ -341,13 +324,6 @@ begin
   from pg_temp.q_eff e where e.object_type = 'Payment' and e.why is null;
   select count(*) into v_invalid from pg_temp.q_pay where txn_date is null or total is null or currency !~ '^[A-Z]{3}$' or not fin.qbo_ids_ok(array[coalesce(cust, 'x')]);
   delete from pg_temp.q_pay where txn_date is null or total is null or currency !~ '^[A-Z]{3}$' or not fin.qbo_ids_ok(array[coalesce(cust, 'x')]);
-  -- T-242: one row per target key before the upsert (ON CONFLICT cannot touch a row twice in one statement, SQLSTATE 21000): the
-  -- latest source version wins. Counted in deduped_rows.
-  delete from pg_temp.q_pay a using pg_temp.q_pay b
-  where a.id is not distinct from b.id
-    and (coalesce(a.source_updated_at, '-infinity'::timestamptz), a.ctid) < (coalesce(b.source_updated_at, '-infinity'::timestamptz), b.ctid);
-  get diagnostics v_n = row_count;
-  v_dedup := v_dedup + v_n;
 
   -- One row per allocation to an invoice, in line order. invoice_id: null when the invoice is not in fin (not in raw yet, or
   -- skipped as invalid: unapplied, linked later in place) or is voided (link refused). A dead invoice never gets here: the payment is dead ('linked').
@@ -384,9 +360,13 @@ begin
   cross join lateral (select count(*)::integer as c from pg_temp.q_alloc a where a.pay_id = p.id) n
   where n.c = 0 or coalesce(p.unapplied, 0) > 0;
 
-  delete from pg_temp.q_prow a using pg_temp.q_prow b where a.pay_id = b.pay_id and a.alloc_no = b.alloc_no and a.ctid < b.ctid;
-  get diagnostics v_n = row_count;
-  v_dedup := v_dedup + v_n;
+  -- T-242: one row per (payment, allocation) is what the upsert needs (by construction it is; a duplicate would be a bug). Checked
+  -- with a hash aggregate (cheap) and refused with 21000 under its own step, never silently dropped (rule 7: no lost money rows).
+  v_step := 'payment_keys';
+  if exists (select 1 from pg_temp.q_prow group by pay_id, alloc_no having count(*) > 1) then
+    raise exception 'duplicate payment allocation key' using errcode = '21000';
+  end if;
+  v_step := 'payments';
   -- Reallocation log (ids only): an existing allocation row whose invoice link changes or is removed.
   create temp table pg_temp.q_realloc on commit drop as
   select f.id as payment_row, f.invoice_id as from_invoice, r.invoice_id as to_invoice, row_number() over (order by f.id) as rn
@@ -485,24 +465,22 @@ begin
   where x.sign is not null;
   select count(*) into v_invalid from pg_temp.q_txn where txn_date is null or amount is null or currency !~ '^[A-Z]{3}$' or not fin.qbo_ids_ok(array[coalesce(class_id, 'x'), coalesce(cust, 'x')]);
   delete from pg_temp.q_txn where txn_date is null or amount is null or currency !~ '^[A-Z]{3}$' or not fin.qbo_ids_ok(array[coalesce(class_id, 'x'), coalesce(cust, 'x')]);
-  -- T-242: one row per target key before the upsert (ON CONFLICT cannot touch a row twice in one statement, SQLSTATE 21000): the
-  -- latest source version wins. Counted in deduped_rows.
-  delete from pg_temp.q_txn a using pg_temp.q_txn b
-  where a.txn_type is not distinct from b.txn_type and a.source_id is not distinct from b.source_id and a.line_no is not distinct from b.line_no
-    and (coalesce(a.source_updated_at, '-infinity'::timestamptz), a.ctid) < (coalesce(b.source_updated_at, '-infinity'::timestamptz), b.ctid);
-  get diagnostics v_n = row_count;
-  v_dedup := v_dedup + v_n;
+  -- T-242: one row per (txn_type, source_id, line_no), as the upsert needs (by construction; checked, refused under its own step).
+  v_step := 'transaction_keys';
+  if exists (select 1 from pg_temp.q_txn group by txn_type, source_id, line_no having count(*) > 1) then
+    raise exception 'duplicate posting line key' using errcode = '21000';
+  end if;
+  v_step := 'transactions';
 
   -- A BillPayment takes the entity of the live bill(s) it pays when they agree (like a payment takes its invoice's), else unmapped.
   create temp table pg_temp.q_bpent on commit drop as
-  select distinct on (e.external_id) e.external_id as id,
+  select e.external_id as id,
          (select case when count(distinct b.entity_code) = 1 then min(b.entity_code) end
           from jsonb_array_elements(case when jsonb_typeof(e.payload -> 'Line') = 'array' then e.payload -> 'Line' else '[]'::jsonb end) l
           cross join lateral jsonb_array_elements(case when jsonb_typeof(l -> 'LinkedTxn') = 'array' then l -> 'LinkedTxn' else '[]'::jsonb end) lt
           join fin.bills b on b.connection_id = p_connection_id and b.source_id = lt ->> 'TxnId' and not b.deleted and not b.voided
           where lt ->> 'TxnType' = 'Bill') as ent
-  from pg_temp.q_eff e where e.object_type = 'BillPayment' and e.why is null
-  order by e.external_id, e.source_updated_at desc nulls last;
+  from pg_temp.q_eff e where e.object_type = 'BillPayment' and e.why is null;
 
   with w as (
     insert into fin.transactions as t (lane_id, connection_id, source_id, raw_record_id, source_updated_at, txn_type, line_no, txn_date,
@@ -557,7 +535,7 @@ begin
     into v_unmapped;
   select count(*) into v_null_account from fin.transactions
   where connection_id = p_connection_id and account_id is null and not voided and not deleted and line_no > 0;
-  v_counts := v_counts || jsonb_build_object('deduped_rows', v_dedup, 'unmapped_rows', v_unmapped, 'class_fallback_rows', v_fallback_rows,
+  v_counts := v_counts || jsonb_build_object('unmapped_rows', v_unmapped, 'class_fallback_rows', v_fallback_rows,
     'null_account_lines', v_null_account,
     'invalid_records', coalesce((v_counts -> 'invoices' ->> 'invalid')::integer, 0) + coalesce((v_counts -> 'bills' ->> 'invalid')::integer, 0)
                      + coalesce((v_counts -> 'payments' ->> 'invalid')::integer, 0) + coalesce((v_counts -> 'transactions' ->> 'invalid')::integer, 0));
@@ -578,6 +556,6 @@ end;
 $$;
 
 comment on function core.fin_qbo_normalize(text, uuid) is
-  'Normalizes one QuickBooks connection''s raw.source_records into fin.* (T-056; T-242: one row per target key before each upsert, deduped_rows counted; the error names the step). Idempotent, lane-checked, never deletes, tombstones deleted/unseen/excluded records, tags entities from lane_config. Service_role only.';
+  'Normalizes one QuickBooks connection''s raw.source_records into fin.* (T-056; T-242: the error names the step, built keys checked). Idempotent, lane-checked, never deletes, tombstones deleted/unseen/excluded records, tags entities from lane_config. Service_role only.';
 revoke all on function core.fin_qbo_normalize(text, uuid) from public, anon, authenticated;
 grant execute on function core.fin_qbo_normalize(text, uuid) to service_role;

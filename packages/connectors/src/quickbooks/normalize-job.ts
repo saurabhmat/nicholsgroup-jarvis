@@ -64,7 +64,6 @@ export function createQboNormalizeJob(deps: QboNormalizeJobDeps) {
         const written = tables.reduce((n, t) => n + t.inserted + t.updated, 0);
         const tombstoned = tables.reduce((n, t) => n + t.tombstoned, 0);
         if (r.invalid_records > 0) child.warn("qbo.normalize.invalid_records", { count: r.invalid_records });
-        if ((r.deduped_rows ?? 0) > 0) child.warn("qbo.normalize.deduped_rows", { count: r.deduped_rows ?? 0 });
         if (r.class_fallback) child.warn("qbo.normalize.class_fallback", { rows: r.class_fallback_rows });
         child.info("qbo.normalize.done", {
           written,

@@ -45,8 +45,6 @@ export const NormalizeResultSchema = z.object({
   unmapped_rows: Count,
   null_account_lines: Count,
   invalid_records: Count,
-  /** T-242: input rows dropped so each target key had one row (latest source version kept). 0 on clean data; absent before the migration. */
-  deduped_rows: Count.optional(),
   dead_deleted: Count,
   dead_unseen: Count,
   dead_payroll: Count,
@@ -70,10 +68,10 @@ export interface NormalizeStore {
  * object names, never row data). Only a message of exactly that shape is passed on, so an operator can see which constraint
  * refused a record without any database text of another kind reaching a log.
  */
-const REFUSAL = /^fin\.qbo_normalize failed: SQLSTATE ([0-9A-Z]{5}), table ([a-z_]{1,63}|-), constraint ([a-z0-9_]{1,63}|-)(?:, step ([a-z]{1,20}))?$/;
+const REFUSAL = /^fin\.qbo_normalize failed: SQLSTATE ([0-9A-Z]{5}), table ([a-z_]{1,63}|-), constraint ([a-z0-9_]{1,63}|-)(?:, step ([a-z_]{1,20}))?$/;
 function refusalMessage(message: string): string {
   const m = REFUSAL.exec(message);
-  // T-242: the function also names the section that was running (a fixed word such as "payments"), when it is the new version.
+  // T-242: the function also names the section that was running (a fixed word such as "payments" or "transaction_keys").
   const step = m?.[4] ? `, step ${m[4]}` : "";
   return m ? `The normalizer refused the synced data (SQLSTATE ${m[1] ?? ""}, table ${m[2] ?? ""}, constraint ${m[3] ?? ""}${step})` : "The normalizer refused the synced data";
 }

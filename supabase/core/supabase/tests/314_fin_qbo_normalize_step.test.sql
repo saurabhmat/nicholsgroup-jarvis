@@ -1,9 +1,9 @@
--- T-242: the normalizer after PKG's SQLSTATE 21000. Synthetic data only.
+-- T-242: the normalizer after PKG's SQLSTATE 21000 (the error names its step; built keys are checked, never silently dropped). Synthetic data only.
 -- Covered: (a) the same QuickBooks entity twice in raw is impossible (unique per connection, type and id): a full load and later
 -- incremental loads update the one row; (b) core.lane_config_current is one row per lane however many versions exist; the normalizer
 -- runs on duplicate-prone shapes (one invoice paid by two payment lines, a line linking two invoices, a deposit of a payment, journal
--- lines, a full load then an incremental re-sync with newer versions) without a cardinality error, returns deduped_rows = 0 on clean
--- data, is idempotent, and its failure message names the step; grants unchanged.
+-- lines, a full load then an incremental re-sync with newer versions) without a cardinality error, is idempotent, and its failure
+-- message names the step; grants unchanged.
 begin;
 select plan(13);
 
@@ -46,7 +46,7 @@ select is((select count(*)::int from core.lane_config_current where lane_id = 'P
 set local role service_role;
 create temp table r1 on commit drop as select core.fin_qbo_normalize('PKG', '00000000-0000-4000-8000-0000000003e1') as out;
 reset role;
-select is((select (out ->> 'deduped_rows')::int from r1), 0, 'a full load of duplicate-prone shapes normalizes; nothing needed deduping');
+select ok((select out ? 'transactions' from r1), 'a full load of duplicate-prone shapes normalizes (no cardinality error)');
 select is((select count(*)::int from fin.payments where connection_id = '00000000-0000-4000-8000-0000000003e1'), 4,
           'three allocation rows plus the unapplied rest for one payment (no collision on (payment, allocation))');
 select is((select count(*)::int from fin.payments where connection_id = '00000000-0000-4000-8000-0000000003e1' and invoice_id is not null), 3,
@@ -63,12 +63,14 @@ set local role service_role;
 create temp table r2 on commit drop as select core.fin_qbo_normalize('PKG', '00000000-0000-4000-8000-0000000003e1') as out;
 create temp table r3 on commit drop as select core.fin_qbo_normalize('PKG', '00000000-0000-4000-8000-0000000003e1') as out;
 reset role;
-select is((select (out ->> 'deduped_rows')::int from r2), 0, 'after an incremental re-sync: still one row per key');
+select is((select (out #>> '{payments,updated}')::int from r2) > 0, true, 'after an incremental re-sync the newer payment version is applied (one row per key)');
 select is((select (out #>> '{transactions,inserted}')::int + (out #>> '{transactions,updated}')::int from r3), 0, 'a third run changes nothing (idempotent)');
 
 -- ---------------------------------------------------------------- the step in the error, grants
-select ok((select prosrc like '%step %%' and prosrc like '%v_step := ''payments''%' and prosrc like '%v_step := ''transactions''%'
-           from pg_proc where oid = 'core.fin_qbo_normalize(text, uuid)'::regprocedure), 'the failure message names the step that was running');
+select ok((select prosrc like '%step %%' and prosrc like '%v_step := ''payment_keys''%' and prosrc like '%v_step := ''transaction_keys''%'
+                  and prosrc not like '%is not distinct from b.%'
+           from pg_proc where oid = 'core.fin_qbo_normalize(text, uuid)'::regprocedure),
+          'the failure message names the step; built keys are checked under their own step; no quadratic dedupe joins');
 select ok((select prosecdef and proconfig = array['search_path=""'] from pg_proc where oid = 'core.fin_qbo_normalize(text, uuid)'::regprocedure),
           'still security definer with an empty search_path');
 select ok(has_function_privilege('service_role', 'core.fin_qbo_normalize(text, uuid)', 'execute')
