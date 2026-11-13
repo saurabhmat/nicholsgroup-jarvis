@@ -18,6 +18,7 @@ import { composeBriefing, homeFor, type HomeView } from "@/lib/home";
 import { briefingFor, lastFailureReason, latestBriefing, loadRunState } from "@/lib/briefing";
 import { aiSetupFailure } from "@/lib/briefing-setup";
 import { adminHint } from "@nichols/briefing/hints";
+import { staleDataLine } from "@nichols/briefing/domain";
 import { AiBriefing, Deadlines, notesByMessage, repliesByMessage } from "./home-ai-briefing";
 import { ReplyDrafts } from "./home-reply-drafts";
 import { AttentionSection, CalendarSections } from "./home-briefing";
@@ -170,7 +171,7 @@ async function HomeSections({ laneId, now }: { laneId: string; now: Date }) {
       </div>
       <div data-testid="home-attention-slot" className="order-1 flex min-w-0 flex-col gap-5 md:order-none md:col-span-2 md:col-start-1 md:row-span-3 md:row-start-3 md:mb-5">
         <PageSection title="Needs your attention" note="Top 5 · metadata only">
-          <AiBriefing laneId={laneId} brief={saved} fallbackLines={view.unavailable ? [] : composeBriefing(view, now)} tz={brief.viewerTz} controls={isOwner && brief.mail.access ? <BriefingAuto laneId={laneId} preparedAt={saved && saved.status !== "failed" ? saved.preparedAt : null} initial={runState} tz={brief.viewerTz} /> : null} now={now} failure={failure} failureHint={failureHint} />
+          <AiBriefing laneId={laneId} brief={saved} fallbackLines={view.unavailable ? [] : composeBriefing(view, now)} tz={brief.viewerTz} controls={isOwner && brief.mail.access ? <BriefingAuto laneId={laneId} preparedAt={saved && saved.status !== "failed" ? saved.preparedAt : null} initial={runState} tz={brief.viewerTz} /> : null} now={now} failure={failure} failureHint={failureHint} staleLine={brief.unavailable ? null : staleDataLine(brief.coverage, now, saved && saved.status !== "failed" ? saved.preparedAt : null)} />
           <AttentionSection laneId={laneId} mail={brief.mail} now={now} notes={notesByMessage(saved)} replies={repliesByMessage(saved)} canReply={isOwner} tz={brief.viewerTz} />
           {saved && saved.status !== "failed" ? (
             // Folded so the card stays short: reply drafts (with Copy) and deadlines from the briefing.
