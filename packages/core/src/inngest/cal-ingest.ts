@@ -5,8 +5,9 @@ import "server-only";
 //   - Cadence 15 minutes: calendar changes (moved meetings) matter within the quarter hour for an executive's day view,
 //     one delta call per calendar costs a single cheap request when nothing changed, and Google Calendar quotas are far
 //     above 4 requests an hour per calendar. (Calendar push is not built; this polling is the freshness mechanism.)
-//   - No separate calendar-only runner: conn.sync runs mail then calendar per Google connection, and the mail delta is
-//     equally cheap. A `streams` option would add an event field, a runner split and run-log semantics for no gain today.
+//   - Streams (T-238): the event asks for ["calendar"] only. The Gmail delta has its own schedule (mail-ingest-delta,
+//     mail-ingest.ts), so each stream runs once per tick and never twice. Manual, connect and webhook syncs omit `streams`
+//     and keep running both.
 //   - Fan-out: step "plan" lists every lane (a lane that cannot be listed is recorded and skipped, never blocking the
 //     others); step "fan-out" sends conn/sync.requested with trigger "schedule" and the deterministic event id
 //     `cal-ingest:<connectionId>:<slot>`, so Inngest drops a duplicate of the same tick (a retry, a double cron).
@@ -74,7 +75,7 @@ export async function handleCalIngest(deps: CalIngestDeps, scheduledAtMs: unknow
   if (plan.sends.length > 0) {
     await step.sendEvent(
       "fan-out",
-      plan.sends.map((s) => connSyncRequested.create({ laneId: s.laneId, connectionId: s.connectionId, trigger: "schedule" }, { id: calIngestEventId(s.connectionId, slot) })),
+      plan.sends.map((s) => connSyncRequested.create({ laneId: s.laneId, connectionId: s.connectionId, trigger: "schedule", streams: ["calendar"] }, { id: calIngestEventId(s.connectionId, slot) })),
     );
   }
   // Fail the run (visible in Inngest) AFTER the healthy lanes were sent. Not retried: a retry replays the saved plan; the next tick is the retry.

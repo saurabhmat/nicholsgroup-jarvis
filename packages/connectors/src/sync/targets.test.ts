@@ -1,6 +1,6 @@
 // The scheduled calendar sync's connection lister (T-130): lane-filtered, usable statuses, calendar providers only.
 import { describe, expect, it } from "vitest";
-import { createSyncTargetLister, CALENDAR_PROVIDERS, MAX_SYNC_TARGETS } from "./targets";
+import { createSyncTargetLister, CALENDAR_PROVIDERS, MAIL_PROVIDERS, MAX_SYNC_TARGETS } from "./targets";
 
 const A = "00000000-0000-4000-8000-000000000a01";
 
@@ -33,6 +33,25 @@ describe("listCalendarConnectionIds", () => {
     expect(err.message).not.toContain("leaks");
     await expect(lister.listCalendarConnectionIds("pkg" as never)).rejects.toThrow();
     await expect(createSyncTargetLister(async () => { throw new Error("no lane"); }).listCalendarConnectionIds("APK")).rejects.toThrow();
+  });
+});
+
+describe("listMailConnectionIds (T-238)", () => {
+  it("selects ids of the lane's usable native connections of mail providers only", async () => {
+    const x = fake({ data: [{ id: A }, { id: "bad" }] });
+    await expect(createSyncTargetLister(x.clientFor).listMailConnectionIds("PKG")).resolves.toEqual([A]);
+    expect(x.f).toContainEqual(["lane", "PKG", null]);
+    expect(x.f).toContainEqual(["eq", "lane_id", "PKG"]);
+    expect(x.f).toContainEqual(["in", "provider", [...MAIL_PROVIDERS]]);
+    expect(x.f).toContainEqual(["eq", "transport", "native"]);
+    expect(x.f).toContainEqual(["in", "status", ["active", "degraded"]]);
+    expect(MAIL_PROVIDERS).toEqual(["google"]);
+  });
+  it("fails generically and refuses a bad lane", async () => {
+    const lister = createSyncTargetLister(fake({ error: { message: "relation x leaks" } }).clientFor);
+    const err = (await lister.listMailConnectionIds("PKG").catch((e: unknown) => e)) as Error;
+    expect(err.message).not.toContain("leaks");
+    await expect(lister.listMailConnectionIds("pkg" as never)).rejects.toThrow();
   });
 });
 

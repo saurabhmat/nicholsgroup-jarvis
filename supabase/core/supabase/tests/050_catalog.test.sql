@@ -129,11 +129,17 @@ insert into security_definer_ok values
   ('core.briefing_claim_schedule', 'the 06:30 job records its run; service_role only, owner role and view re-checked; never gated (T-235)'),
   ('core.briefing_run_state', 'Home: a run is open, last Regenerate, runs today, newest briefing times; aal2 + lane owner + briefing view, else no row (T-235)'),
   ('core.briefing_claim_release', 'the claiming owner releases their own open run claim (closed as lost); aal2 + lane owner + briefing view, own row only (T-235)'),
-  ('brief.briefing_runs_purge', 'retention of run claims older than N New York days (floor 1); service_role only (T-235)');
+  ('brief.briefing_runs_purge', 'retention of run claims older than N New York days (floor 1); service_role only (T-235)'),
+  ('core.briefing_claim_refresh', 'the briefing.refresh job claims a run after new mail through the same gates as Home auto; service_role only, owner role and view re-checked (T-238)'),
+  ('core.briefing_claim_refresh_close', 'the briefing.refresh job finishes the owner''s open auto claim; service_role only (T-238)'),
+  ('core.job_failure_record', 'a scheduled function failed: increments its streak, alerts once at 3; service_role only (T-238)'),
+  ('core.job_failure_clear', 'a scheduled function succeeded: resets its streak; service_role only (T-238)'),
+  ('core.sync_now_claim', 'Sync now rate limit (one per lane per 2 minutes): aal2 + owner or admin_technical + connections view (T-238)');
 
 -- App functions authenticated may execute (callable through the API). Each one is reviewed.
 create temp table authenticated_exec_ok (name text primary key, why text not null) on commit drop;
 insert into authenticated_exec_ok values
+  ('core.sync_now_claim', 'Sync now rate limit; definer, checks aal2, the role and the connections view itself (T-238)'),
   ('core.briefing_coverage', 'Home briefing coverage; definer, checks the caller''s views itself (T-231a)'),
   ('core.briefing_events', 'Home calendar; invoker, RLS on cal.event_index applies (T-231a)'),
   ('core.briefing_threads', 'Home attention and money threads; invoker, RLS on comms.message_index applies (T-231b)'),

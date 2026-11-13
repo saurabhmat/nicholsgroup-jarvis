@@ -8,7 +8,7 @@ import type { LaneId } from "@nichols/core";
 import { ConnectorError, toConnectorError } from "../contract/errors";
 import type { ConnectionLoader } from "../contract/lane-bound";
 import { connectorLog, type ConnectorLogger } from "../log/index";
-import type { ConnSyncOutcome, SyncRunStore, SyncRunner, SyncTrigger } from "./types";
+import type { ConnSyncOutcome, SyncRunStore, SyncRunner, SyncStream, SyncTrigger } from "./types";
 
 const USABLE = new Set(["active", "degraded"]);
 const RUN_ID = /^[A-Za-z0-9_-]{1,128}$/;
@@ -33,7 +33,7 @@ export function createConnSyncJob(deps: ConnSyncJobDeps) {
   });
 
   return {
-    async run(laneId: LaneId, connectionId: string, input: { trigger: SyncTrigger; jobRunId?: string | null; objectTypes?: readonly string[] }): Promise<ConnSyncOutcome> {
+    async run(laneId: LaneId, connectionId: string, input: { trigger: SyncTrigger; jobRunId?: string | null; objectTypes?: readonly string[]; streams?: readonly SyncStream[] }): Promise<ConnSyncOutcome> {
       const jobRunId = input.jobRunId && RUN_ID.test(input.jobRunId) ? input.jobRunId : null;
       let conn;
       try {
@@ -65,7 +65,9 @@ export function createConnSyncJob(deps: ConnSyncJobDeps) {
       try {
         const runner = deps.runners[conn.provider];
         if (!runner) throw new ConnectorError({ kind: "unsupported_op", message: "No sync is available for this provider" });
-        result = await runner(laneId, conn, input.objectTypes && input.objectTypes.length > 0 ? { objectTypes: input.objectTypes } : undefined);
+        const hasTypes = input.objectTypes && input.objectTypes.length > 0;
+        const hasStreams = input.streams && input.streams.length > 0;
+        result = await runner(laneId, conn, hasTypes || hasStreams ? { ...(hasTypes ? { objectTypes: input.objectTypes } : {}), ...(hasStreams ? { streams: input.streams } : {}) } : undefined);
       } catch (e) {
         error = toConnectorError(e);
       }

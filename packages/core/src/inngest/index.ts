@@ -16,6 +16,7 @@ import { LANE_EVENTS } from "./events";
 
 export {
   actionApproved,
+  briefingRefreshRequested,
   attentionEventId,
   CONN_ATTENTION_REASONS,
   connAttentionNeeded,
@@ -46,6 +47,20 @@ export {
   planCalIngest,
 } from "./cal-ingest";
 export type { CalIngestDeps, CalIngestPlan } from "./cal-ingest";
+export {
+  MAIL_INGEST_CADENCE_MS,
+  MAIL_INGEST_CRON,
+  MAIL_INGEST_RETRIES,
+  briefingRefreshEventId,
+  handleMailIngest,
+  mailIngestEventId,
+  mailIngestFunction,
+  mailIngestSlot,
+  shouldRefreshBriefingAfterSync,
+} from "./mail-ingest";
+export type { MailIngestDeps, MailIngestPlan } from "./mail-ingest";
+export { BRIEFING_REFRESH_RETRIES, briefingRefreshFunction, handleBriefingRefresh } from "./briefing-refresh";
+export type { BriefingRefreshDeps, BriefingRefreshOutcome } from "./briefing-refresh";
 export {
   FIN_REPORTS_CONCURRENCY,
   FIN_REPORTS_CRON,

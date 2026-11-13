@@ -255,6 +255,39 @@ describe("provider runners", () => {
   });
 });
 
+describe("Google runner streams (T-238)", () => {
+  it("mail-only never touches the calendar, calendar-only never touches mail, no streams runs both", async () => {
+    const s = await setup();
+    const calls: string[] = [];
+    const ok = (name: string, written: number) => ({ run: async () => { calls.push(name); return { written, skipped: 0, removed: 0, mode: "incremental" as const }; } });
+    const runner = createGoogleSyncRunner({ mail: ok("mail", 3), calendar: ok("cal", 5) });
+    await expect(runner("PKG", s.a, { streams: ["mail"] })).resolves.toEqual({ kind: "incremental", received: 3, written: 3 });
+    expect(calls).toEqual(["mail"]);
+    calls.length = 0;
+    await expect(runner("PKG", s.a, { streams: ["calendar"] })).resolves.toEqual({ kind: "incremental", received: 5, written: 5 });
+    expect(calls).toEqual(["cal"]);
+    calls.length = 0;
+    await runner("PKG", s.a, { streams: [] });
+    await runner("PKG", s.a, { objectTypes: ["x"] });
+    await runner("PKG", s.a);
+    expect(calls).toEqual(["mail", "cal", "mail", "cal", "mail", "cal"]);
+    calls.length = 0;
+    await runner("PKG", s.a, { streams: ["mail", "calendar"] });
+    expect(calls).toEqual(["mail", "cal"]);
+  });
+
+  it("the job hands streams to the runner and omits them when absent", async () => {
+    const s = await setup();
+    const seen: unknown[] = [];
+    const runner: SyncRunner = async (_l, _c, options) => { seen.push(options); return { kind: "incremental", received: 0, written: 0 }; };
+    const job = createConnSyncJob({ loader: s.mock.loader, runs: memoryRuns().store, runners: { [s.a.provider]: runner } });
+    await job.run("PKG", s.a.id, { trigger: "schedule", streams: ["mail"] });
+    await job.run("PKG", s.a.id, { trigger: "schedule" });
+    await job.run("PKG", s.a.id, { trigger: "webhook", objectTypes: ["Invoice"], streams: [] });
+    expect(seen).toEqual([{ streams: ["mail"] }, undefined, { objectTypes: ["Invoice"] }]);
+  });
+});
+
 describe("SyncRunner type", () => {
   it("is a function of lane and connection", () => {
     const r: SyncRunner = async () => ({ kind: "full", received: 0, written: 0 });

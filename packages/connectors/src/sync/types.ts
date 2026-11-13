@@ -6,6 +6,10 @@ import type { ConnectorErrorInfo } from "../contract/schemas";
 export const SYNC_TRIGGERS = ["schedule", "manual", "webhook", "connect"] as const;
 export type SyncTrigger = (typeof SYNC_TRIGGERS)[number];
 
+/** Streams a Google run can be limited to (T-238). Absent = both. */
+export const SYNC_STREAMS = ["mail", "calendar"] as const;
+export type SyncStream = (typeof SYNC_STREAMS)[number];
+
 /** Which job wrote a core.sync_runs row (T-196): conn.sync (any trigger, webhook CDC included), the report pull, the normalizer. */
 export const SYNC_JOBS = ["sync", "reports", "normalize"] as const;
 export type SyncJob = (typeof SYNC_JOBS)[number];
@@ -14,7 +18,7 @@ export type SyncJob = (typeof SYNC_JOBS)[number];
 export type SyncRunnerResult = { kind: "full" | "incremental"; received: number; written: number };
 
 /** Runs one connection's sync. Throws ConnectorError for failures (anything else is reduced to a generic provider_error). */
-export type SyncRunner = (laneId: LaneId, conn: LaneBoundConnection<string>, options?: { objectTypes?: readonly string[] }) => Promise<SyncRunnerResult>;
+export type SyncRunner = (laneId: LaneId, conn: LaneBoundConnection<string>, options?: { objectTypes?: readonly string[]; streams?: readonly SyncStream[] }) => Promise<SyncRunnerResult>;
 
 export type SyncRunFinish = {
   status: "succeeded" | "failed" | "cancelled";
