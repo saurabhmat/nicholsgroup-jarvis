@@ -265,3 +265,25 @@ describe("T-236: briefing.max_tokens", () => {
   });
 });
 
+
+describe("T-240: briefing.attention.fresh_hours, deadline_subjects, own_domain_bulk_senders", () => {
+  const parse = (briefing: unknown) => laneConfigSchema.shape.briefing.safeParse(briefing);
+  it("defaults: 48 hours, generic deadline words, non-person local parts", () => {
+    const b = laneConfigSchema.shape.briefing.parse({});
+    expect(b.attention.fresh_hours).toBe(48);
+    expect(b.deadline_subjects).toEqual(["deadline", "due today", "due tomorrow", "by EOD", "RFP", "proposal due", "expires"]);
+    expect(b.exclusions.own_domain_bulk_senders).toContain("no-reply@");
+    expect(b.exclusions.own_domain_bulk_senders).toContain("newsletter@");
+  });
+  it("fresh_hours is a whole number from 6 to 168; unknown keys are refused", () => {
+    expect(parse({ attention: { fresh_hours: 6 } }).success).toBe(true);
+    expect(parse({ attention: { fresh_hours: 168 } }).success).toBe(true);
+    for (const fresh_hours of [5, 169, 0, -1, 48.5, "48"]) expect(parse({ attention: { fresh_hours } }).success).toBe(false);
+    expect(parse({ attention: { fresh_hours: 24, extra: 1 } }).success).toBe(false);
+    expect(laneConfigSchema.parse({ briefing: { attention: { fresh_hours: 72 } } }).briefing.attention.fresh_hours).toBe(72);
+  });
+  it("deadline_subjects is a list of plain text patterns", () => {
+    expect(parse({ deadline_subjects: ["cutoff"] }).success).toBe(true);
+    expect(parse({ deadline_subjects: [""] }).success).toBe(false);
+  });
+});

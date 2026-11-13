@@ -49,13 +49,28 @@ describe("senderParts", () => {
   });
 });
 
-describe("attentionChips", () => {
-  it("priority order, at most two", () => {
-    expect(attentionChips("priority", true).map((c) => c.label)).toEqual(["Priority sender", "Unread"]);
-    expect(attentionChips("waiting", true).map((c) => c.label)).toEqual(["Waiting on you", "Unread"]);
-    expect(attentionChips("security", true).map((c) => c.label)).toEqual(["Unread", "Security alert"]);
-    expect(attentionChips("unread", true).map((c) => c.label)).toEqual(["Unread"]);
-    expect(attentionChips("waiting", false)).toHaveLength(1);
+describe("attentionChips (T-240)", () => {
+  const labels = (item: Parameters<typeof attentionChips>[0], max?: number) => attentionChips(item, max).map((c) => c.label);
+  it("'Waiting on you' only when the owner is in the To and no reply followed", () => {
+    expect(labels({ kind: "waiting", unread: false, waitingOnYou: true })).toEqual(["Waiting on you"]);
+    expect(labels({ kind: "waiting", unread: false, waitingOnYou: false })).toEqual([]); // Cc, list address or unknown: no chip
+    expect(labels({ kind: "waiting", unread: false })).toEqual([]);
+    expect(labels({ kind: "unread", unread: true, waitingOnYou: true })).toEqual(["Waiting on you", "Unread"]);
+  });
+  it("otherwise the reason: VIP, Money, Deadline", () => {
+    expect(labels({ kind: "priority", unread: true })).toEqual(["VIP", "Unread"]);
+    expect(labels({ kind: "waiting", unread: false, money: true })).toEqual(["Money"]);
+    expect(labels({ kind: "unread", unread: true, deadline: true })).toEqual(["Deadline", "Unread"]);
+    expect(labels({ kind: "waiting", unread: false, deadline: true, money: true })).toEqual(["Money", "Deadline"]);
+  });
+  it("at most two chips, in order VIP, Waiting on you, Money, Deadline, Unread", () => {
+    expect(labels({ kind: "priority", unread: true, vip: true, waitingOnYou: true, money: true, deadline: true })).toEqual(["VIP", "Waiting on you"]);
+    expect(labels({ kind: "unread", unread: true, waitingOnYou: true, money: true })).toEqual(["Waiting on you", "Money"]);
+    expect(labels({ kind: "unread", unread: true, waitingOnYou: true, money: true, deadline: true }, 4)).toEqual(["Waiting on you", "Money", "Deadline", "Unread"]);
+  });
+  it("security and repeated failures", () => {
+    expect(labels({ kind: "security", unread: true })).toEqual(["Unread", "Security alert"]);
+    expect(labels({ kind: "repeated_failures", unread: false })).toEqual(["Repeated failures"]);
   });
 });
 

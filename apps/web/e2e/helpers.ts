@@ -14,7 +14,7 @@ export const rememberAuthenticator = (email: string, key: string): void => write
 export async function expectLaneHome(page: Page, lane = "PKG"): Promise<void> {
   // Generous timeout: next dev compiles the lane routes on first visit, which can exceed the default 5 s.
   await expect(page).toHaveURL(new RegExp(`/${lane}$`), { timeout: 30_000 });
-  await expect(page.getByRole("heading", { name: /^Good morning/, level: 1 })).toBeAttached(); // sr-only below md (T-024)
+  await expect(page.getByRole("heading", { name: /^Good (morning|afternoon|evening)/, level: 1 })).toBeAttached(); // sr-only below md (T-024)
 }
 
 /** Signs out through the UI: the side menu on desktop; the More tab on iPhone (the side menu is hidden there). */

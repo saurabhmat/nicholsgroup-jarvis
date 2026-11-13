@@ -64,6 +64,28 @@ describe("AppShell", () => {
     expect(side?.querySelector("svg")).not.toBeNull();
   });
 
+  // T-240: no visual test here, so the structure is pinned: nothing on the brand truncates, clips or forbids wrapping, the star keeps its size,
+  // the side menu keeps its width, and the colours are tokens (light and dark come from the --sidebar-* variables).
+  it("the brand is not clipped: wraps instead of truncating, star keeps its size, side menu keeps its width", () => {
+    const { container } = shell({ pathname: "/PKG" });
+    const side = container.querySelector("[data-slot=side-menu]") as HTMLElement;
+    const brand = side.querySelector("[data-slot=brand]") as HTMLElement;
+    for (const el of [brand, ...Array.from(brand.querySelectorAll("*"))]) {
+      const cls = el.getAttribute("class") ?? "";
+      expect(cls).not.toMatch(/\b(truncate|text-ellipsis|overflow-hidden|whitespace-nowrap|line-clamp-\d|max-w-)/);
+    }
+    expect(brand.className).toContain("overflow-visible");
+    expect(brand.querySelector("[data-slot=brand-wordmark]")?.className).toContain("break-words");
+    expect(brand.querySelector("[data-slot=brand-product]")?.className).toContain("break-words");
+    expect(brand.querySelector("svg")?.getAttribute("class")).toContain("shrink-0");
+    expect(brand.querySelector("p")?.className).toMatch(/leading-tight/); // room for descenders
+    expect(side.className).toMatch(/\bw-60\b/);
+    expect(side.className).toMatch(/\bmin-w-60\b/);
+    expect(side.className).toMatch(/\bbg-sidebar\b/);
+    expect(brand.querySelector("p")?.className).toContain("text-sidebar-strong");
+    expect(brand.querySelector("[data-slot=brand-product]")?.className).toContain("text-sidebar-section");
+  });
+
   it("has the iPhone tabs Home, Approvals, Inbox, Ask, More and no back link", () => {
     shell({ pathname: "/PKG/assistant" });
     const tabs = screen.getByRole("navigation", { name: "Tabs" });

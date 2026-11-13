@@ -35,8 +35,8 @@ const seed = () =>
        select 'PKG', '${CID}', 'google', 'primary', 'e2e-m2', '${ALL_DAY}', null, null,
               (d::timestamp at time zone 'America/New_York'), ((d + 1)::timestamp at time zone 'America/New_York'), true, d, d + 1, 'confirmed', '[]', now()
        from (select (now() at time zone 'America/New_York')::date as d) t;
-       insert into comms.message_index (lane_id, connection_id, provider, message_id, from_address, subject, received_at, is_read, is_important, folder, labels, deleted, source_updated_at)
-       select 'PKG', '${CID}', 'google', 'e2e-' || g, 'sender@example.test', 'Synthetic subject ' || g, now() - interval '1 minute', g = 4, true, 'INBOX', '{}', false, now()
+       insert into comms.message_index (lane_id, connection_id, provider, message_id, from_address, to_recipients, subject, received_at, is_read, is_important, folder, labels, deleted, source_updated_at)
+       select 'PKG', '${CID}', 'google', 'e2e-' || g, 'sender@example.test', case when g = 4 then '[{"address": "home-e2e@example.test"}]'::jsonb else '[]'::jsonb end, 'Synthetic subject ' || g, now() - interval '1 minute', g = 4, true, 'INBOX', '{}', false, now()
        from generate_series(1, 4) g;`);
 
 test.beforeEach(() => {
@@ -97,7 +97,7 @@ test("owner: today's calendar, Next 7 days, the KPI strip and the rule-based att
   await expect(page).toHaveURL(/\/PKG\/inbox\/[A-Za-z0-9_-]+$/);
   await page.goBack();
   await expect(attention.getByText("Synthetic subject 1")).toBeVisible();
-  // The read message is still unanswered, so it counts as waiting on the owner (T-231b review rule), with that chip.
+  // The read message is still unanswered and addressed to the owner's mailbox (T-240: in its To), so it counts as waiting on the owner, with that chip.
   const readItem = attention.getByTestId("attention-item").filter({ hasText: "Synthetic subject 4" });
   await expect(readItem).toHaveCount(1);
   await expect(readItem).toContainText("Waiting on you");
@@ -127,10 +127,11 @@ test("owner: today's calendar, Next 7 days, the KPI strip and the rule-based att
   await page.reload();
   await expect(page.getByRole("button", { name: /Next 7 days/ })).toHaveAttribute("aria-expanded", "true");
   await expect(page.getByTestId("home-updated")).toHaveText("Updated just now");
-  // T-237 part B: QuickBooks is not connected in this fixture: no QuickBooks tiles, one "Connect QuickBooks" tile for the owner.
+  // T-237 part B, T-240 part 3f: QuickBooks is not connected in this fixture: no QuickBooks tiles, one slim strip line with the Connect action for the owner.
   await expect(page.getByTestId("kpi-tile")).toHaveCount(0);
+  await expect(page.getByTestId("qb-strip")).toContainText("QuickBooks is not connected. Connect it to see cash, AR and bills.");
   const connect = page.getByTestId("kpi-connect");
-  await expect(connect).toContainText("Connect QuickBooks");
+  await expect(connect).toHaveAccessibleName("Connect QuickBooks in Settings");
   await expect(connect).toHaveAttribute("href", "/PKG/settings#connections");
 });
 

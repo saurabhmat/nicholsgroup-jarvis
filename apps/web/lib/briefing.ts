@@ -40,11 +40,11 @@ const DAY_MS = 86_400_000;
 
 export type BriefingConfig = LaneConfig["briefing"];
 
-export type CalendarSection = { access: true; today: DayEvent[]; ahead: NotableEvent[]; /** All meetings in the next 7 days (not only the notable ones), for the header summary. */ aheadSummary?: { meetings: number; clashes: number }; owners: string[] } | { access: false; unavailable?: true };
+export type CalendarSection = { access: true; today: DayEvent[]; ahead: NotableEvent[]; /** Names we already hold for exact addresses (display names in the lane's mail index), used when an event has none (T-240). */ knownNames?: Record<string, string>; /** All meetings in the next 7 days (not only the notable ones), for the header summary. */ aheadSummary?: { meetings: number; clashes: number }; owners: string[] } | { access: false; unavailable?: true };
 
 /** "Needs your attention" + Money from mail metadata; `access: false` when the caller may not read the lane's mail. */
 export type MailSection =
-  | { access: true; attention: AttentionThread[]; more: number; money: MoneyThread[]; mailboxOf: Record<string, string> }
+  | { access: true; attention: AttentionThread[]; more: number; /** T-240: qualifying threads older than the fresh window, newest first (Home shows the count; Inbox ?view=waiting lists them). */ stillWaiting: AttentionThread[]; money: MoneyThread[]; mailboxOf: Record<string, string> }
   | { access: false; unavailable?: true };
 
 export type BriefingView = {
@@ -75,6 +75,27 @@ type Db = Pick<LaneClient, "schema">;
 /** The events window: the viewer's day plus 7 days, never more than the SQL cap of 8 x 24 h (a 25-hour DST day included). */
 export function eventsWindow(from: Date, to: Date): { from: Date; to: Date } {
   return { from, to: new Date(Math.min(to.getTime() + 7 * DAY_MS, from.getTime() + 8 * DAY_MS)) };
+}
+
+/** The lane's own mail domains (T-240): the domains of its mailboxes and connected accounts, public mail providers left out. Derived, never configured. */
+export function ownMailDomains(owners: Iterable<string>): string[] {
+  return [...new Set([...owners].map(domainOf).filter((d) => d !== "" && !PUBLIC_MAIL_DOMAINS.has(d)))];
+}
+
+/**
+ * Display names the mail index holds for exact sender addresses (never an address as a name), for attendees whose event has no name.
+ * Only from mail that PASSED sender authentication (T-240 security review M2: a forged From must not rename a real attendee); the
+ * newest such row wins. UI only: these names are never put into the AI facts (review M1).
+ */
+export function knownNamesFrom(rows: readonly { fromAddress: string | null; fromName: string | null; isAuthPass?: boolean }[]): Record<string, string> {
+  const out = new Map<string, string>();
+  for (const r of rows) {
+    if (r.isAuthPass !== true || !r.fromAddress) continue;
+    const key = r.fromAddress.toLowerCase();
+    const name = r.fromName?.trim().replace(/\s+/g, " ");
+    if (name && !name.includes("@") && name.length <= 100 && !out.has(key)) out.set(key, name);
+  }
+  return Object.fromEntries(out);
 }
 
 /** Owner domains count as internal, except public mail providers (gmail.com says nothing about who is a colleague). */
@@ -113,17 +134,19 @@ export async function loadBriefing(client: Db, laneId: string, now: Date, viewer
   let calendar: CalendarSection = { access: false };
   if (calendarAccess && events.error) calendar = { access: false, unavailable: true };
   else if (calendarAccess) {
+    const knownNames = knownNamesFrom(threads.error ? [] : parseThreads(threads.data));
     const split = splitByDay(parseEvents(events.data), from, to, localDate(from, viewerTz), 7);
-    calendar = { access: true, today: analyzeDay(split.today, owners, internal), ahead: notableAhead(split.later, owners, internal), aheadSummary: summarizeAhead(split.later, owners), owners: [...owners] };
+    calendar = { access: true, knownNames, today: analyzeDay(split.today, owners, internal), // No knownNames here: `ahead` feeds the AI facts, and mail display names are sender-written and may be outside the lane's AI policy.
+    ahead: notableAhead(split.later, owners, internal, 8), aheadSummary: summarizeAhead(split.later, owners), owners: [...owners] };
   }
   let mail: MailSection = { access: false };
   if (mailAccess && threads.error) mail = { access: false, unavailable: true };
   else if (mailAccess) {
     const rows = parseThreads(threads.data);
-    const rules: AttentionRules = { prioritySenders, securitySubjects: briefing.security_subjects, securitySenders: briefing.security_senders, exclusions: briefing.exclusions, money: briefing.money };
+    const rules: AttentionRules = { prioritySenders, freshHours: briefing.attention.fresh_hours, deadlineSubjects: briefing.deadline_subjects, ownDomains: ownMailDomains(owners), securitySubjects: briefing.security_subjects, securitySenders: briefing.security_senders, exclusions: briefing.exclusions, money: briefing.money };
     const ranked = rankAttention(rows, rules, now);
     const mailboxOf = Object.fromEntries(coverage.filter((c) => c.connectionId && c.stream === "mail").map((c) => [c.connectionId as string, c.account]));
-    mail = { access: true, attention: ranked.top, more: ranked.more, money: moneyThreads(rows, rules), mailboxOf };
+    mail = { access: true, attention: ranked.top, more: ranked.more, stillWaiting: ranked.stillWaiting, money: moneyThreads(rows, rules), mailboxOf };
   }
   return { viewerTz, coverage, coverageLine: coverageLine(coverage, mailAccess || calendarAccess), calendar, mail, config: briefing, mailboxes };
 }

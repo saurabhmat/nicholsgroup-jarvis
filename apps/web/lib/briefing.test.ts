@@ -2,7 +2,7 @@
 // dates, "nothing set up" is not "no access", owner domains on public mail providers are not internal, and an events
 // error keeps Coverage.
 import { describe, expect, it } from "vitest";
-import { briefingFor, eventsWindow, internalDomains, loadBriefing, viewerZone } from "./briefing";
+import { briefingFor, eventsWindow, internalDomains, knownNamesFrom, loadBriefing, ownMailDomains, viewerZone } from "./briefing";
 import { dayWindow } from "@nichols/briefing/domain";
 
 type Res = { data: unknown; error: unknown };
@@ -86,5 +86,36 @@ describe("helpers", () => {
     expect(viewerZone("europe/london")).toBe("Europe/London");
     expect(viewerZone("x;y")).toBe("America/New_York");
     expect(viewerZone(undefined)).toBe("America/New_York");
+  });
+});
+
+describe("T-240: names for attendees and the lane's own domains", () => {
+  it("knownNamesFrom keeps display names for exact addresses, never an address as a name, first one wins (any case)", () => {
+    expect(
+      knownNamesFrom([
+        { fromAddress: "Rob@pubk.test", fromName: "Rob  N", isAuthPass: true },
+        { fromAddress: "rob@pubk.test", fromName: "Other", isAuthPass: true },
+        { fromAddress: "x@acme.test", fromName: "x@acme.test", isAuthPass: true },
+        { fromAddress: "y@acme.test", fromName: null, isAuthPass: true },
+        { fromAddress: null, fromName: "Nobody", isAuthPass: true },
+        { fromAddress: "constructor", fromName: "Proto", isAuthPass: true },
+      ]),
+    ).toEqual({ "rob@pubk.test": "Rob N", constructor: "Proto" });
+  });
+  it("knownNamesFrom ignores mail that did not pass sender authentication (a forged From cannot rename an attendee)", () => {
+    expect(knownNamesFrom([{ fromAddress: "cfo@partner.test", fromName: "Acme Escrow Officer" }, { fromAddress: "cfo@partner.test", fromName: "Forged", isAuthPass: false }])).toEqual({});
+    expect(knownNamesFrom([{ fromAddress: "cfo@partner.test", fromName: "Forged" }, { fromAddress: "cfo@partner.test", fromName: "Pat Lee", isAuthPass: true }])).toEqual({ "cfo@partner.test": "Pat Lee" });
+  });
+  it("ownMailDomains: the domains of the lane's mailboxes, public providers and duplicates left out", () => {
+    expect(ownMailDomains(["me@pubk.test", "ceo@PUBK.test", "x@gmail.com", "y@other.test", "bad"])).toEqual(["pubk.test", "other.test"]);
+  });
+  it("calendar attendees come back with the names the mail index holds for their exact address", async () => {
+    const { client } = fakeClient({
+      briefing_coverage: { data: [covRow, { ...covRow, stream: "mail" }], error: null },
+      briefing_events: { data: [{ event_id: "e1", calendar_id: "c1", title: "Sync", start_at: "2026-11-11T19:00:00Z", end_at: "2026-11-11T20:00:00Z", all_day: false, status: "confirmed", attendees: [{ email: "me@pubk.test" }, { email: "rnichols@pubk.test" }] }], error: null },
+      briefing_threads: { data: [{ connection_id: "c", thread_key: "t1", message_id: "m1", from_address: "rnichols@pubk.test", from_name: "Robert N", subject: "Hi", received_at: "2026-11-11T18:00:00Z", labels: ["INBOX"], unread_count: 1, inbound_count: 1, is_auth_pass: true }], error: null },
+    });
+    const view = await loadBriefing(client, "PKG", new Date("2026-11-11T17:00:00Z"), "America/New_York");
+    expect(view.calendar.access && view.calendar.knownNames).toEqual({ "rnichols@pubk.test": "Robert N" });
   });
 });

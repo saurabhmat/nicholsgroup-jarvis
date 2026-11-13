@@ -78,11 +78,12 @@ describe("TodayCalendar (T-235 part 3: compact)", () => {
     expect(screen.getAllByRole("list")).toHaveLength(1); // list semantics
   });
 
-  it("attendees are names (never emails): a name, else the capitalised local part; at most 3 then '+N more'; resources and the owner left out", () => {
+  it("T-240: attendees show a name, else the full address (never a name made from the local part); at most 3 then '+N more'; resources and the owner left out", () => {
     view();
     const text = (screen.getAllByTestId("calendar-event")[0] as HTMLElement).textContent ?? "";
-    expect(text).toContain("With Dana Whitfield, Guest Person, Raj +2 more"); // raj's 'name' is an address: local part instead
-    expect(text).not.toMatch(/@/);
+    expect(text).toContain("With dana.whitfield@acme.test, Guest Person, raj@acme.test +2 more"); // raj's 'name' is an address: the address itself, not "Raj"
+    expect(text).not.toContain("Raj");
+    expect(text).not.toContain("Dana Whitfield");
     expect(text).not.toContain("Room 1");
   });
 
@@ -165,14 +166,14 @@ describe("Next 7 days summary and LookAhead", () => {
     expect(screen.getByText(note)).toBeTruthy();
   });
 
-  it("lists notable events with names (never addresses), a time column and a title link", () => {
+  it("lists notable events with a name or the address, a time column and a title link", () => {
     const ahead = notableAhead(
       parseEvents([{ calendar_id: "primary", event_id: "x", title: "Client call", start_at: "2026-11-14T15:00:00Z", end_at: "2026-11-14T16:00:00Z", source_url: "https://calendar.example.test/x", attendees: [{ email: "c.client@acme.test" }] }]),
       owners,
       internal,
     );
     render(<LookAhead events={ahead} tz="America/New_York" />);
-    expect(screen.getByText("External: C Client")).toBeTruthy();
+    expect(screen.getByText("External: c.client@acme.test")).toBeTruthy();
     expect(screen.getByText("Sat, Nov 14").tagName).toBe("TIME");
     expect(screen.getByText("10:00 AM").tagName).toBe("TIME");
     expect(screen.getByRole("link", { name: "Client call" }).getAttribute("href")).toBe("https://calendar.example.test/x");
@@ -189,7 +190,7 @@ describe("AttentionSection (T-234 part 2, T-235 part 2: scannable rows)", () => 
     if (x === undefined) throw new Error("empty");
     return x;
   };
-  const mail = (more = 0, mailboxOf: Record<string, string> = { c1: "me@pubk.test" }) => ({ access: true as const, attention: [{ key: "k", kind: "priority" as const, reason: "Priority sender, unread · 1h", thread }], more, money: [], mailboxOf });
+  const mail = (more = 0, mailboxOf: Record<string, string> = { c1: "me@pubk.test" }) => ({ access: true as const, attention: [{ key: "k", kind: "priority" as const, reason: "Priority sender, unread · 1h", flags: { vip: true, money: null as "invoice" | null, deadline: false, waitingOnYou: false }, thread }], more, stillWaiting: [] as never[], money: [], mailboxOf });
   const note = { ref: "r1", what: "Deck", why: "Board meets Friday", next: "Send comments" };
 
   it("line 1: initials avatar (hidden from assistive tech), name, domain, age as <time> with the full date; line 2: the masked subject with a title", () => {
@@ -215,7 +216,7 @@ describe("AttentionSection (T-234 part 2, T-235 part 2: scannable rows)", () => 
   });
 
   it("T-237: a subject holding a masked-figure placeholder is hidden (never '[amount]'); so are the AI why/next lines that hold one; a missing subject shows no line", () => {
-    const row = (subject: string | null) => ({ ...mail(), attention: [{ key: "k", kind: "priority" as const, reason: "r", thread: { ...thread, subject } }] });
+    const row = (subject: string | null) => ({ ...mail(), attention: [{ key: "k", kind: "priority" as const, reason: "r", flags: { vip: true, money: null, deadline: false, waitingOnYou: false }, thread: { ...thread, subject } }] });
     const { rerender } = render(<AttentionSection laneId="PKG" now={now} mail={row("Board deck $1,200")} notes={new Map([["c1:m1", { ref: "r1", what: "x", why: "Costs [amount] more", next: "Send comments" }]])} />);
     const item = screen.getByTestId("attention-item");
     expect(within(item).queryByTestId("attention-subject")).toBeNull();
@@ -260,16 +261,39 @@ describe("AttentionSection (T-234 part 2, T-235 part 2: scannable rows)", () => 
     expect(screen.queryByText("Deck")).toBeNull(); // "what" repeats the title
   });
 
-  it("at most two chips, in priority order (Priority sender, Waiting on you, Unread, Security alert)", () => {
+  it("T-240: chips follow the flags: VIP, then Waiting on you only when true, then Money, Deadline, Unread, Security alert; at most two", () => {
     const m = mail();
+    const flags = (over: Partial<(typeof m.attention)[number]["flags"]>) => ({ ...first(m.attention).flags, ...over });
+    const chips = () => screen.getAllByTestId("attention-chip").map((c) => c.textContent);
     const { rerender } = render(<AttentionSection laneId="PKG" now={now} mail={m} />);
-    expect(screen.getAllByTestId("attention-chip").map((c) => c.textContent)).toEqual(["Priority sender", "Unread"]);
-    rerender(<AttentionSection laneId="PKG" now={now} mail={{ ...m, attention: [{ ...first(m.attention), kind: "waiting" }] }} />);
-    expect(screen.getAllByTestId("attention-chip").map((c) => c.textContent)).toEqual(["Waiting on you", "Unread"]);
-    rerender(<AttentionSection laneId="PKG" now={now} mail={{ ...m, attention: [{ ...first(m.attention), kind: "security", thread: { ...thread, unreadCount: 3 } }] }} />);
-    expect(screen.getAllByTestId("attention-chip").map((c) => c.textContent)).toEqual(["Unread", "Security alert"]);
-    rerender(<AttentionSection laneId="PKG" now={now} mail={{ ...m, attention: [{ ...first(m.attention), kind: "waiting", thread: { ...thread, unreadCount: 0 } }] }} />);
-    expect(screen.getAllByTestId("attention-chip").map((c) => c.textContent)).toEqual(["Waiting on you"]);
+    expect(chips()).toEqual(["VIP", "Unread"]);
+    rerender(<AttentionSection laneId="PKG" now={now} mail={{ ...m, attention: [{ ...first(m.attention), kind: "waiting", flags: flags({ vip: false, waitingOnYou: true }) }] }} />);
+    expect(chips()).toEqual(["Waiting on you", "Unread"]);
+    // Cc, list address or no reply owed: no "Waiting on you"; the reason chip shows instead
+    rerender(<AttentionSection laneId="PKG" now={now} mail={{ ...m, attention: [{ ...first(m.attention), kind: "waiting", flags: flags({ vip: false, money: "invoice" }), thread: { ...thread, unreadCount: 0 } }] }} />);
+    expect(chips()).toEqual(["Money"]);
+    rerender(<AttentionSection laneId="PKG" now={now} mail={{ ...m, attention: [{ ...first(m.attention), kind: "unread", flags: flags({ vip: false, deadline: true }) }] }} />);
+    expect(chips()).toEqual(["Deadline", "Unread"]);
+    rerender(<AttentionSection laneId="PKG" now={now} mail={{ ...m, attention: [{ ...first(m.attention), kind: "security", flags: flags({ vip: false }), thread: { ...thread, unreadCount: 3 } }] }} />);
+    expect(chips()).toEqual(["Unread", "Security alert"]);
+    rerender(<AttentionSection laneId="PKG" now={now} mail={{ ...m, attention: [{ ...first(m.attention), kind: "waiting", flags: flags({ vip: false }), thread: { ...thread, unreadCount: 0 } }] }} />);
+    expect(screen.queryAllByTestId("attention-chip")).toHaveLength(0);
+  });
+
+  it("T-240: 'Still waiting: N older threads' links to the Inbox waiting view; singular for 1; hidden at 0; shown with an empty top list", () => {
+    const m = mail();
+    const old = first(m.attention);
+    const { rerender } = render(<AttentionSection laneId="PKG" now={now} mail={m} />);
+    expect(screen.queryByTestId("attention-still-waiting")).toBeNull();
+    rerender(<AttentionSection laneId="PKG" now={now} mail={{ ...m, stillWaiting: [old] }} />);
+    expect(screen.getByTestId("attention-still-waiting").textContent).toContain("Still waiting: 1 older thread");
+    expect(screen.getByTestId("attention-still-waiting").textContent).not.toContain("threads");
+    expect(screen.getByTestId("attention-still-waiting").getAttribute("href")).toBe("/PKG/inbox?view=waiting");
+    rerender(<AttentionSection laneId="PKG" now={now} mail={{ ...m, stillWaiting: [old, old, old] }} />);
+    expect(screen.getByTestId("attention-still-waiting").textContent).toContain("Still waiting: 3 older threads");
+    rerender(<AttentionSection laneId="PKG" now={now} mail={{ ...m, attention: [], stillWaiting: [old, old] }} />);
+    expect(screen.getByTestId("attention-still-waiting").textContent).toContain("Still waiting: 2 older threads");
+    expect(screen.queryByTestId("attention-list")).toBeNull();
   });
 
   it("the mailbox is hidden with one mailbox and shown with several", () => {
@@ -295,7 +319,7 @@ describe("AttentionSection (T-234 part 2, T-235 part 2: scannable rows)", () => 
   });
 
   it("T-237: the phone shows the first three rows (the rest are hidden below md); the footer has the phone wording too", () => {
-    const rows = Array.from({ length: 5 }, (_, n) => ({ key: `k${String(n)}`, kind: "priority" as const, reason: "r", thread: { ...thread, messageId: `m${String(n)}`, threadKey: `t${String(n)}` } }));
+    const rows = Array.from({ length: 5 }, (_, n) => ({ key: `k${String(n)}`, kind: "priority" as const, reason: "r", flags: { vip: true, money: null, deadline: false, waitingOnYou: false }, thread: { ...thread, messageId: `m${String(n)}`, threadKey: `t${String(n)}` } }));
     render(<AttentionSection laneId="PKG" now={now} mail={{ ...mail(0), attention: rows }} />);
     const items = screen.getAllByTestId("attention-item");
     expect(items).toHaveLength(5);
@@ -383,7 +407,7 @@ describe("AttentionSection (T-234 part 2, T-235 part 2: scannable rows)", () => 
   });
 
   it("a repeated-failures item has Open but no Reply", () => {
-    const m = { ...mail(), attention: [{ key: "failures:ci.test", kind: "repeated_failures" as const, reason: "3 failure alerts from ci.test", thread, count: 3 }] };
+    const m = { ...mail(), attention: [{ key: "failures:ci.test", kind: "repeated_failures" as const, reason: "3 failure alerts from ci.test", flags: { vip: false, money: null, deadline: false, waitingOnYou: false }, thread, count: 3 }] };
     render(<AttentionSection laneId="PKG" now={now} mail={m} />);
     expect(screen.queryByTestId("attention-reply")).toBeNull();
     expect(screen.getByTestId("attention-open")).toBeTruthy();

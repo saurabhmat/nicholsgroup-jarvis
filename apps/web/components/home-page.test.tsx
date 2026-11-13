@@ -3,11 +3,11 @@
 // reorders the same DOM with CSS `order` (attention, Today, KPIs, news, projects; no Finance). The phone-only setup banner has a reserved slot while it loads.
 // Data comes from lib (mocked here); only structure is checked.
 import { cloneElement, isValidElement, Suspense, type ReactElement, type ReactNode } from "react";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { cleanup, render, screen, within } from "@testing-library/react";
 import type { HomeView } from "@/lib/home";
 
-const m = vi.hoisted(() => ({ jobFailures: null as unknown, briefCoverage: [] as unknown[], financeView: false, owner: false, mail: { access: false } as { access: boolean; attention?: unknown[]; more?: number; money?: unknown[]; mailboxOf?: Record<string, string> }, coverage: { items: [], unavailable: false } as unknown, view: null as unknown, progress: null as unknown, detail: { state: "no_access" } as unknown, userName: undefined as string | undefined, cookieTz: undefined as string | undefined, briefingTz: [] as string[], finance: { state: "not_connected", asOf: null, lastSyncAt: null, connectionStatus: null, cash: { reason: null, total: null, asOf: null, accounts: [], unmapped: 0 }, ar: { reason: null, over30: null, invoices: 0, unmapped: 0 }, pnl: { reason: null, income: null, expenses: null, net: null, start: null, end: null, method: null, partial: false, asOf: null } } as unknown }));
+const m = vi.hoisted(() => ({ jobFailures: null as unknown, briefCoverage: [] as unknown[], financeView: false, owner: false, mail: { access: false } as { access: boolean; attention?: unknown[]; more?: number; money?: unknown[]; mailboxOf?: Record<string, string> }, coverage: { items: [], unavailable: false } as unknown, view: null as unknown, progress: null as unknown, detail: { state: "no_access" } as unknown, userName: undefined as string | undefined, cookieTz: undefined as string | undefined, briefingTz: [] as string[], freshHours: 48, finance: { state: "not_connected", asOf: null, lastSyncAt: null, connectionStatus: null, cash: { reason: null, total: null, asOf: null, accounts: [], unmapped: 0 }, ar: { reason: null, over30: null, invoices: 0, unmapped: 0 }, pnl: { reason: null, income: null, expenses: null, net: null, start: null, end: null, method: null, partial: false, asOf: null } } as unknown }));
 vi.mock("@/lib/lane-page", () => ({ loadLane: async () => ({ laneId: "PKG", name: "Pub K Group", lanes: [], userId: "u1" }) }));
 vi.mock("@/lib/guards", () => ({ guards: async () => ({ requireLane: async () => ({ client: {}, session: { userId: "u1" } }), requireRole: async (_l: string, roles: string[]) => { if (m.owner && roles.includes("owner")) return { client: {}, session: { userId: "u1" } }; throw new Error("not admin"); } }) }));
 vi.mock("@/app/[laneId]/briefing-actions", () => ({ ensureFreshBriefing: async () => ({ started: false, gate: "not_stale" }), regenerateBriefing: async () => ({ started: false, gate: "not_stale" }), briefingRunState: async () => null }));
@@ -16,7 +16,7 @@ vi.mock("next/headers", () => ({ cookies: async () => ({ get: (n: string) => (n 
 vi.mock("next/navigation", () => ({ useRouter: () => ({ refresh: () => undefined }) }));
 vi.mock("@/lib/briefing", async (orig) => ({
   ...(await orig<typeof import("@/lib/briefing")>()),
-  briefingFor: async (_c: unknown, _l: string, _n: Date, tz: string) => (m.briefingTz.push(tz), { viewerTz: "America/New_York", coverage: m.briefCoverage, coverageLine: "Coverage: test.", calendar: { access: false }, mail: m.mail.access ? { access: true, attention: [], more: 0, money: [], mailboxOf: {} } : { access: false }, config: {}, mailboxes: [] }),
+  briefingFor: async (_c: unknown, _l: string, _n: Date, tz: string) => (m.briefingTz.push(tz), { viewerTz: "America/New_York", coverage: m.briefCoverage, coverageLine: "Coverage: test.", calendar: { access: false }, mail: m.mail.access ? { access: true, attention: [], more: 0, stillWaiting: [], money: [], mailboxOf: {} } : { access: false }, config: { attention: { fresh_hours: m.freshHours } }, mailboxes: [] }),
 }));
 vi.mock("@/lib/coverage", async (orig) => ({ ...(await orig<typeof import("@/lib/coverage")>()), coverageFor: async () => m.coverage }));
 vi.mock("@/lib/job-failures", async (orig) => ({ ...(await orig<typeof import("@/lib/job-failures")>()), jobFailureBannerFor: async () => m.jobFailures }));
@@ -71,13 +71,20 @@ async function draw() {
 }
 const defaultFinance = m.finance;
 const defaultDetail = m.detail;
+// The greeting follows the clock (T-240): fix it at 9:00 AM Eastern so the tests do not depend on when they run.
+beforeEach(() => {
+  vi.useFakeTimers({ toFake: ["Date"] });
+  vi.setSystemTime(new Date("2026-11-11T14:00:00Z"));
+});
 afterEach(() => {
+  vi.useRealTimers();
   cleanup();
   m.finance = defaultFinance;
   m.detail = defaultDetail;
   m.userName = undefined;
   m.cookieTz = undefined;
   m.briefingTz = [];
+  m.freshHours = 48;
   m.progress = null;
   m.owner = false;
   m.financeView = false;
@@ -156,6 +163,34 @@ describe("Home layout (T-234 part 1)", () => {
     // nothing is rendered twice
     expect(screen.getAllByRole("region", { name: "Needs your attention" })).toHaveLength(1);
     expect(screen.getAllByTestId("home-kpis")).toHaveLength(1);
+  });
+
+  it("T-240: the section note says 'Top 5 from the last 2 days' (the configured window), never 'metadata only'", async () => {
+    m.view = view();
+    await draw();
+    const region = screen.getByRole("region", { name: "Needs your attention" });
+    expect(region.textContent).toContain("Top 5 from the last 2 days");
+    expect(document.body.textContent).not.toMatch(/metadata only/i);
+    cleanup();
+    m.freshHours = 72;
+    await draw();
+    expect(screen.getByRole("region", { name: "Needs your attention" }).textContent).toContain("Top 5 from the last 3 days");
+    cleanup();
+    m.freshHours = 12;
+    await draw();
+    expect(screen.getByRole("region", { name: "Needs your attention" }).textContent).toContain("Top 5 from the last 12 hours");
+  });
+
+  it("T-240: the greeting follows Eastern time of day, not the server's or viewer's zone", async () => {
+    m.view = view();
+    vi.setSystemTime(new Date("2026-11-11T18:00:00Z")); // 1:00 PM Eastern
+    await draw();
+    expect(screen.getByRole("heading", { level: 1 }).textContent).toBe("Good afternoon");
+    cleanup();
+    vi.setSystemTime(new Date("2026-11-11T22:00:00Z")); // 5:00 PM Eastern
+    m.userName = "Dana";
+    await draw();
+    expect(screen.getByRole("heading", { level: 1 }).textContent).toBe("Good evening, Dana");
   });
 
   it("the heading says 'Good morning' with the profile's first name when there is one, else plain 'Good morning'", async () => {

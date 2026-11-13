@@ -43,7 +43,7 @@ describe("attendeeNames", () => {
       { email: "d@x.test", name: "Dee" },
       { email: "e@x.test", name: "Eve" },
     ]);
-    expect(attendeeNames(e, owners, 3)).toEqual({ names: ["Anna Lee", "B", "C"], more: 2 });
+    expect(attendeeNames(e, owners, 3)).toEqual({ names: ["Anna Lee", "b@x.test", "c@x.test"], more: 2 });
   });
   it("only google calendar domains are resources", () => {
     const e = first([{ email: "x@notcalendar.google.com.evil.test", name: "X" }, { email: "y@evilcalendar.google.com", name: "Y" }]);
@@ -69,7 +69,7 @@ describe("attendeeNames", () => {
   });
   it("the same address twice (different case) is one person; local-part names dedupe by full address only", () => {
     expect(attendeeNames(first([{ email: "Ann@X.test", name: "Ann Lee" }, { email: "ann@x.test", name: "Ann Lee" }]), owners).names).toEqual(["Ann Lee"]);
-    expect(attendeeNames(first([{ email: "sam@a.test" }, { email: "sam@b.test" }, { email: "SAM@a.test" }]), owners).names).toEqual(["Sam", "Sam"]);
+    expect(attendeeNames(first([{ email: "sam@a.test" }, { email: "sam@b.test" }, { email: "SAM@a.test" }]), owners).names).toEqual(["sam@a.test", "sam@b.test"]);
   });
   it("a look-alike external named like an internal colleague stays separate and is counted in 'more'", () => {
     const e = first([
@@ -81,8 +81,21 @@ describe("attendeeNames", () => {
     ]);
     expect(attendeeNames(e, owners, 3)).toEqual({ names: ["Dana Whitfield", "Dana Whitfield", "Ben"], more: 1 });
   });
-  it("shows a role mailbox as its local part", () => {
-    expect(attendeeNames(first([{ email: "support@x.test" }]), owners).names).toEqual(["support"]);
+  it("T-240: never makes a name from the address's local part: no display name shows the full address", () => {
+    expect(attendeeNames(first([{ email: "rnichols@pubk-example.test" }, { email: "wcobb@pubk-example.test" }, { email: "dana.whitfield@x.test" }]), owners).names).toEqual(["rnichols@pubk-example.test", "wcobb@pubk-example.test", "dana.whitfield@x.test"]);
+    expect(attendeeNames(first([{ email: "support@x.test" }]), owners).names).toEqual(["support@x.test"]);
+  });
+  it("T-240: a name held for that exact address (the mail index) is used when the event has none; the event's own name wins", () => {
+    const known = new Map([["rob.n@x.test", "Rob N"], ["ann@x.test", "Annie From Mail"]]);
+    const e = first([{ email: "Rob.N@x.test" }, { email: "ann@x.test", name: "Ann Lee" }, { email: "other@x.test" }, { email: "x@x.test", name: "a@b.test" }]);
+    expect(attendeeNames(e, owners, 5, known).names).toEqual(["Rob N", "Ann Lee", "other@x.test", "x@x.test"]);
+    // a known name for a DIFFERENT address is never applied
+    expect(attendeeNames(first([{ email: "rob@x.test" }]), owners, 3, known).names).toEqual(["rob@x.test"]);
+  });
+  it("T-240: a known name that is itself an address is ignored; known names dedupe by name and domain like event names", () => {
+    expect(attendeeNames(first([{ email: "a@x.test" }]), owners, 3, new Map([["a@x.test", "a@x.test"]])).names).toEqual(["a@x.test"]);
+    const known = new Map([["d1@x.test", "Dana W"], ["d2@x.test", "dana  w"]]);
+    expect(attendeeNames(first([{ email: "d1@x.test" }, { email: "d2@x.test" }]), owners, 3, known).names).toEqual(["Dana W"]);
   });
 });
 

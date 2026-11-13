@@ -73,11 +73,12 @@ export function TodayCalendar({ calendar, tz, now }: { calendar: CalendarSection
   }
   if (calendar.today.length === 0) return <p className="text-body text-muted-foreground">Nothing scheduled today.</p>;
   const owners = new Set(calendar.owners);
+  const known = new Map(Object.entries(calendar.knownNames ?? {}));
   return (
     <ul data-testid="today-calendar" className="flex flex-col divide-y divide-border">
       {calendar.today.map((e) => {
         const past = !e.allDay && Date.parse(e.endAt) <= now.getTime();
-        const who = attendeeSummary(e, owners);
+        const who = attendeeSummary(e, owners, 3, known);
         const own = e.allDay ? null : otherZoneTime(e.startAt, tz, e.timezone);
         return (
           <li key={e.key} data-testid="calendar-event" className={`flex gap-3 py-3 text-body ${past ? "opacity-60" : ""}`}>
@@ -107,7 +108,7 @@ export function TodayCalendar({ calendar, tz, now }: { calendar: CalendarSection
                 ) : null}
               </span>
               {e.location ? <span className="truncate text-small text-muted-foreground">{e.location}</span> : null}
-              {who ? <span className="truncate text-small text-muted-foreground">With {who}</span> : null}
+              {who ? <span title={who} className="truncate text-small text-muted-foreground">With {who}</span> : null}
               <Chips e={e} />
             </span>
           </li>
@@ -166,6 +167,16 @@ export function CalendarSections({ view, now }: { view: BriefingView; now: Date 
   );
 }
 
+/** T-240: "Still waiting: N older threads", a link to the Inbox's waiting view; nothing at 0. */
+export function StillWaiting({ laneId, count }: { laneId: string; count: number }) {
+  if (count <= 0) return null;
+  return (
+    <Link href={`${laneHref(laneId, "inbox")}?view=waiting`} data-testid="attention-still-waiting" className="self-start py-1 text-small text-muted-foreground underline-offset-2 hover:text-foreground hover:underline max-md:inline-flex max-md:min-h-11 max-md:items-center">
+      Still waiting: {count} older {count === 1 ? "thread" : "threads"} <span aria-hidden>{"\u2192"}</span>
+    </Link>
+  );
+}
+
 /** Avatar colours: text and ground are token pairs checked for 4.5:1 in light and dark (tokens.test.ts). */
 const AVATAR = ["bg-primary-tint text-primary", "bg-alert-surface text-alert-foreground", "bg-success-surface text-success", "bg-muted text-foreground"] as const;
 /** The phone shows the first three attention rows (the iPhone design); desktop shows up to five. */
@@ -202,8 +213,14 @@ export function AttentionSection({ laneId, mail, now, notes, replies, canReply =
       <EmptyState title="No mail to show" description="Your role in this company does not include mail." className="border-0 bg-transparent px-0 py-6" />
     );
   }
+  const stillWaiting = <StillWaiting laneId={laneId} count={mail.stillWaiting.length} />;
   if (mail.attention.length === 0) {
-    return <p className="text-body text-muted-foreground">Nothing needs you in the mail that was read (newsletters, calendar invitations, auto-replies, codes and automated alerts are left out). Settings → Connections shows what was read.</p>;
+    return (
+      <div className="flex flex-col gap-3">
+        <p className="text-body text-muted-foreground">Nothing new needs you in the mail that was read (newsletters, calendar invitations, auto-replies, codes and automated alerts are left out). Settings → Connections shows what was read.</p>
+        {stillWaiting}
+      </div>
+    );
   }
   // "to <mailbox>" only tells something when the lane reads more than one mailbox.
   const showMailbox = new Set(Object.values(mail.mailboxOf)).size > 1;
@@ -220,7 +237,7 @@ export function AttentionSection({ laneId, mail, now, notes, replies, canReply =
           const subject = fieldText(a.kind === "repeated_failures" ? a.reason : t.subject ? maskFigures(t.subject) : null, tz);
           const why = fieldText(note?.why, tz);
           const next = fieldText(note?.next, tz);
-          const chips = attentionChips(a.kind, t.unreadCount > 0);
+          const chips = attentionChips({ kind: a.kind, unread: t.unreadCount > 0, vip: a.flags.vip, money: a.flags.money !== null, deadline: a.flags.deadline, waitingOnYou: a.flags.waitingOnYou });
           const age = ageShort(t.receivedAt, now);
           return (
             <li key={a.key} data-testid="attention-item" data-kind={a.kind} className={`group relative py-1 ${index >= PHONE_ROWS ? "max-md:hidden" : ""}`}>
@@ -302,6 +319,7 @@ export function AttentionSection({ laneId, mail, now, notes, replies, canReply =
         <span className="max-md:hidden">View all in Inbox {"\u00b7"} {total} need attention</span>
         <span className="md:hidden">View all {"\u00b7"} {total} in Inbox</span> <span aria-hidden>{"\u2192"}</span>
       </Link>
+      {stillWaiting}
     </div>
   );
 }

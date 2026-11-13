@@ -6,6 +6,7 @@ import type { Guards } from "@nichols/core/auth";
 import type { LaneClient } from "@nichols/core/lane-router";
 import { gmailThreadUrl } from "@nichols/connectors/comms";
 import { parseCoverageRows } from "@nichols/briefing/domain";
+import { briefingFor } from "./briefing";
 
 export const INBOX_FILTERS = ["all", "unread", "important"] as const;
 export type InboxFilter = (typeof INBOX_FILTERS)[number];
@@ -92,6 +93,30 @@ export async function inboxFor(g: Pick<Guards, "requireLane">, laneId: string, p
     console.error("[inbox] list unavailable", { laneId });
     return { filter, rows: [], next: null, unavailable: true };
   }
+}
+
+// ---------------------------------------------------------------------------------------------------------- Still waiting (T-240)
+
+/** `?view=waiting` shows the threads Home counts as "Still waiting": qualifying mail older than the fresh window. Anything else is the normal list. */
+export const isWaitingView = (params: SearchParams): boolean => one(params.view) === "waiting";
+
+export type WaitingView = { rows: InboxRow[]; /** The fresh window in hours (lane_config), for the page text. */ freshHours: number; unavailable?: true };
+
+/**
+ * The rows behind Home's "Still waiting" line, from the same ranking (rankAttention), newest first, with the caller's own lane client
+ * (RLS and the comms view apply: a role without mail sees nothing). Metadata only. `load` is injected for tests.
+ */
+export async function waitingFor(g: Pick<Guards, "requireLane">, laneId: string, now: Date, load: typeof briefingFor = briefingFor): Promise<WaitingView> {
+  const { client } = await g.requireLane(laneId as Parameters<Guards["requireLane"]>[0]);
+  const view = await load(client, laneId, now, "America/New_York");
+  const freshHours = view.config.attention.fresh_hours;
+  if (!view.mail.access) return { rows: [], freshHours, ...(view.mail.unavailable ? { unavailable: true as const } : {}) };
+  const rows = view.mail.stillWaiting.flatMap((a) =>
+    isMessageId(a.thread.messageId)
+      ? [{ messageId: a.thread.messageId, fromName: a.thread.fromName, fromAddress: a.thread.fromAddress, subject: a.thread.subject, receivedAt: a.thread.receivedAt, isRead: a.thread.unreadCount === 0, isImportant: a.thread.isImportant, isStarred: false, hasAttachments: false }]
+      : [],
+  );
+  return { rows, freshHours };
 }
 
 // ---------------------------------------------------------------------------------------------------------- one message

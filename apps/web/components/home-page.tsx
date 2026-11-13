@@ -43,7 +43,8 @@ import { onboardingFor } from "@/lib/onboarding-progress";
 import { timed } from "@/lib/timed";
 import { hasFinanceView, homeFinanceFor } from "@/lib/home-finance";
 import { homeFinanceDetailFor } from "@/lib/home-finance-detail";
-import { kpiTiles } from "@/lib/home-kpi-tiles";
+import { kpiTiles, quickbooksStrip } from "@/lib/home-kpi-tiles";
+import { freshWindowText } from "@/lib/fresh-window";
 
 /** Home's display zone: always Eastern, never the tz cookie (the cookie is still refreshed for other pages). */
 const HOME_TZ = "America/New_York";
@@ -66,8 +67,8 @@ export async function HomePage({ params }: { params: Promise<{ laneId: string }>
         className="mb-2"
         eyebrow={`${eyebrowDate(now)} · ${lane.name}`}
         title={
-          <Suspense fallback={homeHeading(undefined).lead}>
-            <HomeGreeting laneId={lane.laneId} />
+          <Suspense fallback={homeHeading(undefined, now).lead}>
+            <HomeGreeting laneId={lane.laneId} now={now} />
           </Suspense>
         }
         actions={
@@ -102,9 +103,9 @@ export async function HomePage({ params }: { params: Promise<{ laneId: string }>
   );
 }
 
-/** The greeting text: "Good morning" at once, with the first name once the profile row is read. */
-async function HomeGreeting({ laneId }: { laneId: string }) {
-  const heading = homeHeading(await timed("load.first_name", async () => firstNameFor(await guards(), laneId)));
+/** The greeting text at once ("Good morning", "Good afternoon" or "Good evening" by Eastern time), with the first name once the profile row is read. */
+async function HomeGreeting({ laneId, now }: { laneId: string; now: Date }) {
+  const heading = homeHeading(await timed("load.first_name", async () => firstNameFor(await guards(), laneId)), now);
   return (
     <>
       {heading.lead}
@@ -179,7 +180,7 @@ async function HomeSections({ laneId, now }: { laneId: string; now: Date }) {
         </Suspense>
       </div>
       <div data-testid="home-attention-slot" className="order-1 flex min-w-0 flex-col gap-5 md:order-none md:col-span-2 md:col-start-1 md:row-span-3 md:row-start-3 md:mb-5">
-        <PageSection title="Needs your attention" note="Top 5 · metadata only">
+        <PageSection title="Needs your attention" note={`Top 5 from the last ${freshWindowText(brief.config.attention.fresh_hours)}`}>
           <AiBriefing laneId={laneId} brief={saved} fallbackLines={view.unavailable ? [] : composeBriefing(view, now)} tz={brief.viewerTz} controls={isOwner && brief.mail.access ? <BriefingAuto laneId={laneId} preparedAt={saved && saved.status !== "failed" ? saved.preparedAt : null} initial={runState} tz={brief.viewerTz} /> : null} now={now} failure={failure} failureHint={failureHint} staleLine={brief.unavailable ? null : staleDataLine(brief.coverage, now, saved && saved.status !== "failed" ? saved.preparedAt : null)} />
           <AttentionSection laneId={laneId} mail={brief.mail} now={now} notes={notesByMessage(saved)} replies={repliesByMessage(saved)} canReply={isOwner} tz={brief.viewerTz} />
           {saved && saved.status !== "failed" ? (
@@ -227,7 +228,7 @@ const loadFinance = cache(async (laneId: string) => {
 
 async function KpiSection({ laneId, feeds, canConnect }: { laneId: string; feeds: HomeView["feeds"]; canConnect: boolean }) {
   const [finance, detail] = await loadFinance(laneId);
-  return <KpiStrip laneId={laneId} tiles={kpiTiles(finance, detail, feeds, canConnect)} />;
+  return <KpiStrip laneId={laneId} tiles={kpiTiles(finance, detail, feeds)} strip={quickbooksStrip(finance, canConnect)} />;
 }
 
 async function FinanceSlot({ laneId }: { laneId: string }) {

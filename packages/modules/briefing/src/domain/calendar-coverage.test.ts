@@ -76,7 +76,7 @@ describe("calendar analysis", () => {
     );
     expect(ahead.map((e) => [e.title, e.why.join("|")])).toEqual([
       ["Thanksgiving", "Holiday"],
-      ["Client", "External: Client"],
+      ["Client", "External: client@acme.test"],
       ["Invite", "RSVP pending"],
     ]);
   });

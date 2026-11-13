@@ -5,8 +5,9 @@ import { Suspense } from "react";
 import { Alert, AlertDescription, AlertTitle, Badge, cn, EmptyState, laneHref, PageHeader } from "@nichols/ui";
 import { senderLabel } from "@nichols/briefing/domain";
 import { guards } from "@/lib/guards";
-import { inboxFor, INBOX_FILTERS, type InboxFilter, type InboxRow } from "@/lib/inbox";
+import { inboxFor, INBOX_FILTERS, isWaitingView, waitingFor, type InboxFilter, type InboxRow } from "@/lib/inbox";
 import { loadLane } from "@/lib/lane-page";
+import { freshWindowText } from "@/lib/fresh-window";
 import { CardSkeleton } from "./page-skeleton";
 import { timed } from "@/lib/timed";
 
@@ -36,9 +37,39 @@ export async function InboxPage({ params, searchParams }: { params: Promise<{ la
 }
 
 async function InboxList({ laneId, searchParams }: { laneId: string; searchParams: Promise<Record<string, string | string[] | undefined>> }) {
-  const view = await timed("load.inbox", async () => inboxFor(await guards(), laneId, await searchParams));
+  const params = await searchParams;
   const now = new Date();
   const base = laneHref(laneId, "inbox");
+  // T-240: ?view=waiting lists the older threads Home counts as "Still waiting" (same ranking, metadata only).
+  if (isWaitingView(params)) {
+    const waiting = await timed("load.inbox_waiting", async () => waitingFor(await guards(), laneId, now));
+    return (
+      <>
+        <nav aria-label="Filter mail" className="flex flex-wrap gap-2">
+          <Link href={base} className="rounded-full border border-border bg-card px-4 py-1.5 text-body font-medium text-foreground transition-colors hover:bg-muted">All mail</Link>
+          <Link href={`${base}?view=waiting`} aria-current="page" className="rounded-full border border-primary bg-primary px-4 py-1.5 text-body font-medium text-primary-foreground">Still waiting</Link>
+        </nav>
+        <p data-testid="inbox-waiting-note" className="text-body text-muted-foreground">Threads that still need you, with no new message in the last {freshWindowText(waiting.freshHours)}. Newest first.</p>
+        {waiting.unavailable ? (
+          <Alert variant="alert">
+            <AlertTitle>Mail could not be loaded</AlertTitle>
+            <AlertDescription>Reload the page in a minute. If it keeps happening, check Settings → Connections.</AlertDescription>
+          </Alert>
+        ) : waiting.rows.length === 0 ? (
+          <EmptyState title="Nothing older is waiting" description="Older threads that need a reply show here." />
+        ) : (
+          <section aria-label="Messages" className="overflow-hidden rounded-card border border-border bg-card">
+            <ul data-testid="inbox-list" className="divide-y divide-border">
+              {waiting.rows.map((r) => (
+                <Row key={r.messageId} row={r} href={`${base}/${encodeURIComponent(r.messageId)}`} when={when(r.receivedAt, now)} />
+              ))}
+            </ul>
+          </section>
+        )}
+      </>
+    );
+  }
+  const view = await timed("load.inbox", async () => inboxFor(await guards(), laneId, params));
   return (
     <>
       <nav aria-label="Filter mail" className="flex flex-wrap gap-2">
@@ -55,6 +86,7 @@ async function InboxList({ laneId, searchParams }: { laneId: string; searchParam
             {FILTER_LABEL[f]}
           </Link>
         ))}
+        <Link href={`${base}?view=waiting`} className="rounded-full border border-border bg-card px-4 py-1.5 text-body font-medium text-foreground transition-colors hover:bg-muted">Still waiting</Link>
       </nav>
       {view.unavailable ? (
         <Alert variant="alert">

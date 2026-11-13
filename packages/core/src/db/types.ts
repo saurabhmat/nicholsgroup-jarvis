@@ -687,7 +687,7 @@ isOneToOne: false
                            },
 "briefing_threads":
 { Args: { "p_lane": string,"p_since": string }; Returns: {
-              "connection_id": string,"from_address": string,"from_name": string,"inbound_count": number,"is_auth_pass": boolean,"is_auto": boolean,"is_bulk": boolean,"is_calendar": boolean,"is_generated": boolean,"is_important": boolean,"labels": (string)[],"last_at": string,"last_is_owner": boolean,"message_id": string,"owner_replied": boolean,"received_at": string,"source_url": string,"subject": string,"thread_key": string,"unread_count": number
+              "connection_id": string,"from_address": string,"from_name": string,"inbound_count": number,"is_auth_pass": boolean,"is_auto": boolean,"is_bulk": boolean,"is_calendar": boolean,"is_generated": boolean,"is_important": boolean,"labels": (string)[],"last_at": string,"last_is_owner": boolean,"last_to_owner": boolean,"message_id": string,"owner_replied": boolean,"received_at": string,"source_url": string,"subject": string,"thread_key": string,"unread_count": number
             }[]
                            },
 "briefings_purge":

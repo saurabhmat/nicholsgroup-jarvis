@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { displayText, inboxFor, loadInbox, openMessage, parseInboxQuery, PAGE_SIZE, toRows } from "./inbox";
+import { displayText, inboxFor, isWaitingView, waitingFor, loadInbox, openMessage, parseInboxQuery, PAGE_SIZE, toRows } from "./inbox";
 
 type Result = { data: unknown; error: unknown };
 const client = (handler: (fn: string, args: Record<string, unknown>) => Result, calls: unknown[] = []) => ({
@@ -125,5 +125,29 @@ describe("openMessage", () => {
     expect(await openMessage(c as never, "PKG", "m1", fail("not_found"))).toMatchObject({ state: "body_unavailable", reason: "gone" });
     expect(await openMessage(c as never, "PKG", "m1", fail("transient"))).toMatchObject({ state: "body_unavailable", reason: "error" });
     expect(JSON.stringify(log.mock.calls)).not.toContain("secret body text");
+  });
+});
+
+describe("T-240: ?view=waiting (Still waiting)", () => {
+  const g = (laneCalls: string[] = []) => ({ requireLane: async (l: string) => (laneCalls.push(l), { client: {} as never }) }) as never;
+  const thread = (id: string, over: Record<string, unknown> = {}) => ({ key: `c:${id}`, kind: "waiting", flags: {}, reason: "r", thread: { connectionId: "c", threadKey: id, messageId: id, fromAddress: "a@x.test", fromName: "Ann", subject: `S ${id}`, receivedAt: "2026-11-01T12:00:00.000Z", isImportant: false, unreadCount: 0, ...over } });
+  const view = (over: Record<string, unknown>) => (async () => ({ config: { attention: { fresh_hours: 48 } }, ...over })) as never;
+  it("is on only for view=waiting", () => {
+    expect(isWaitingView({ view: "waiting" })).toBe(true);
+    expect(isWaitingView({ view: "other" })).toBe(false);
+    expect(isWaitingView({ view: ["waiting"] })).toBe(false);
+    expect(isWaitingView({ filter: "unread" })).toBe(false);
+  });
+  it("lists the still-waiting threads of the lane as rows (metadata only), skipping unusable ids", async () => {
+    const lanes: string[] = [];
+    const out = await waitingFor(g(lanes), "PKG", new Date("2026-11-13T12:00:00Z"), view({ mail: { access: true, stillWaiting: [thread("m1"), thread("../bad"), thread("m2", { unreadCount: 2 })] } }));
+    expect(lanes).toEqual(["PKG"]);
+    expect(out.freshHours).toBe(48);
+    expect(out.rows.map((r) => [r.messageId, r.isRead, r.subject])).toEqual([["m1", true, "S m1"], ["m2", false, "S m2"]]);
+    expect(Object.keys(out.rows[0] ?? {}).sort()).toEqual(["fromAddress", "fromName", "hasAttachments", "isImportant", "isRead", "isStarred", "messageId", "receivedAt", "subject"]);
+  });
+  it("no mail access: no rows; an outage says unavailable", async () => {
+    expect((await waitingFor(g(), "PKG", new Date(), view({ mail: { access: false } }))).rows).toEqual([]);
+    expect((await waitingFor(g(), "PKG", new Date(), view({ mail: { access: false, unavailable: true } }))).unavailable).toBe(true);
   });
 });

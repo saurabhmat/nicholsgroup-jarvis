@@ -200,6 +200,11 @@ export const laneConfigSchema = z.strictObject({
       internal_domains: z.array(z.string().regex(/^[a-z0-9.-]+\.[a-z]{2,}$/)).max(50).default([]),
       // Mail older than this is not considered for "Needs your attention".
       attention_days: z.int().min(1).max(14).default(7),
+      // T-240: the top 5 holds only threads whose latest inbound message is at most this many hours old (6 hours to 7 days).
+      // Older qualifying threads are counted on Home as "Still waiting" and listed in the Inbox (?view=waiting).
+      attention: z.strictObject({ fresh_hours: z.int().min(6).max(168).default(48) }).prefault({}),
+      // T-240: whole-word subject patterns that mark a deadline (the "Deadline" chip and importance band). Generic business words, not company data.
+      deadline_subjects: patterns.default(["deadline", "due today", "due tomorrow", "by EOD", "RFP", "proposal due", "expires"]),
       // Sender patterns: "name@" = the local part exactly; "example.com" (has a dot, no @) = that domain or a subdomain;
       // a plain word = contained in the local part only (never the domain). Subject patterns match whole words.
       exclusions: z
@@ -220,6 +225,9 @@ export const laneConfigSchema = z.strictObject({
           // List-Id: stored as the boolean is_bulk, never the headers). These are the org's OWN newsletter senders, which look like
           // colleagues but are bulk: same sender syntax as above ("name@", "example.com", a word). Empty by default (company data).
           org_newsletter_senders: patterns.default([]),
+          // T-240. Mail from one of the lane's OWN mailbox domains (derived, never listed here) whose sender is one of these non-person
+          // local parts ("name@" = exactly that local part) is bulk even without a header flag (older rows). A colleague is never matched.
+          own_domain_bulk_senders: patterns.default(["no-reply@", "noreply@", "do-not-reply@", "donotreply@", "newsletter@", "newsletters@", "news@", "updates@", "info@", "marketing@", "announcements@", "digest@"]),
           // Calendar invitations and updates: text/calendar mail is flagged at sync (is_calendar); these subject PREFIXES (case-insensitive,
           // at the start of the subject, so "Re: Invitation: ..." from a person is not caught) cover mail whose parts are not visible.
           calendar_subjects: prefixPatterns.default(["Invitation:", "Updated invitation:", "Updated invitation with note:", "Canceled event:", "Cancelled event:", "Canceled:", "Accepted:", "Declined:", "Tentatively accepted:", "New event:"]),
