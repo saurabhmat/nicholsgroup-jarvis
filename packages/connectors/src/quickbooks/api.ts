@@ -86,6 +86,7 @@ export function createQboApi(deps: QboApiDeps): QboApi {
           auth: {
             scheme: "Bearer",
             secret: async () => {
+              tokenError = undefined; // a failure of an earlier attempt must not outrank this attempt's own API answer
               try {
                 used = await deps.tokens.accessToken(laneId, conn, rejected ? { rejected } : undefined);
               } catch (e) {

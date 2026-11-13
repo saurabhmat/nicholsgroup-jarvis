@@ -45,8 +45,15 @@ export function createTokenHealthJob(deps: Common & { checkers: Readonly<Record<
       }
       const child = log.child({ laneId, provider: conn.provider, connectionId: conn.id });
       // T-195: a QuickBooks connection recorded as reconnect_required is listed only while its admin notice is unsent: raise it again.
+      // Only while the notice is unsent: once it has gone out (the recorder or this scan marked it) nothing is raised again.
       if (conn.status === "reconnect_required" && conn.provider === "quickbooks") {
-        return { ok: true, skipped: "connection_not_usable", alerts: [{ provider: conn.provider, reason: "reconnect_required", errorKind: "reconnect_required" }] };
+        let pending: boolean;
+        try {
+          pending = await deps.store.reconnectNoticePending(laneId, conn);
+        } catch (e) {
+          return { ok: false, retryable: true, errorKind: toConnectorError(e).info.kind };
+        }
+        return { ok: true, skipped: "connection_not_usable", alerts: pending ? [{ provider: conn.provider, reason: "reconnect_required", errorKind: "reconnect_required" }] : [] };
       }
       if (!USABLE.has(conn.status)) return { ok: true, skipped: "connection_not_usable", alerts: [] };
 

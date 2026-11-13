@@ -39,6 +39,10 @@ export interface TokenHealthStore {
    * written by a sync or a renewal meanwhile is kept. Returns false when nothing was cleared.
    */
   clearHealthError(laneId: LaneId, conn: LaneBoundConnection<string>): Promise<boolean>;
+  /** True while a reconnect_required connection's admin notice has not been sent (`reconnect_notified_at is null`, T-195). */
+  reconnectNoticePending(laneId: LaneId, conn: LaneBoundConnection<string>): Promise<boolean>;
+  /** Records that the notice was sent (only while the connection is still reconnect_required). */
+  markReconnectNotified(laneId: LaneId, conn: LaneBoundConnection<string>): Promise<void>;
 }
 
 /** Marker stored as `last_error.endpoint` for errors written by the health check (not a real path). */

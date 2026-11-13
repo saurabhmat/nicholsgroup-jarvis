@@ -169,6 +169,33 @@ describe("401, 403, 404", () => {
   });
 });
 
+describe("a token failure of an earlier attempt does not outrank the API answer (review L)", () => {
+  it("secret() fails once (swallowed by the client), the next attempt gets a token and Intuit answers 403/3100: the API error wins and is recorded", async () => {
+    const { h, conn } = await setup();
+    let calls = 0;
+    const flaky = { ...h.tokens, accessToken: async (l: string, c: never, o?: never) => {
+      calls += 1;
+      if (calls === 1) throw new ConnectorError({ kind: "transient", message: "Token store unavailable" });
+      return h.tokens.accessToken(l, c, o);
+    } } as unknown as typeof h.tokens;
+    const api = createQboApi({
+      tokens: flaky,
+      environment: () => "sandbox",
+      onReconnectRequired: undefined,
+      httpFor: () => ({
+        async request(req: { auth?: { secret: unknown } }) {
+          const secret = req.auth?.secret as () => Promise<unknown>;
+          await secret().catch(() => undefined); // attempt 1: the token read fails
+          await secret(); // attempt 2: succeeds
+          throw new ConnectorError({ kind: "forbidden", message: "x", http_status: 403, provider_error_code: "3100" });
+        },
+      }) as never,
+    });
+    const err = await fail(api.get(LANE, conn, PATH, { realm: FAKE_REALM }));
+    expect(err.info).toMatchObject({ kind: "reconnect_required", http_status: 403, provider_error_code: "3100" });
+  });
+});
+
 describe("429 with Retry-After", () => {
   it("waits the Retry-After (not the shorter backoff) and succeeds on the retry", async () => {
     const { api, conn, sleeps } = await setup();

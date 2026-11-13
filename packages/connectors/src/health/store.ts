@@ -73,5 +73,22 @@ export function createTokenHealthStore(clientFor: JobClientFor): TokenHealthStor
         throw unavailable();
       }
     },
+    async reconnectNoticePending(laneId, conn) {
+      assertLaneBound(laneId, conn);
+      const db = await client(laneId);
+      try {
+        const { data, error } = await db.schema("core").from("connections").select("reconnect_notified_at").eq("lane_id", laneId).eq("id", conn.id).eq("status", "reconnect_required").maybeSingle();
+        if (error) throw error;
+        return data !== null && (data as { reconnect_notified_at: string | null }).reconnect_notified_at === null;
+      } catch {
+        throw unavailable();
+      }
+    },
+    async markReconnectNotified(laneId, conn) {
+      assertLaneBound(laneId, conn);
+      const db = await client(laneId);
+      const { error } = await db.schema("core").from("connections").update({ reconnect_notified_at: new Date().toISOString() }).eq("lane_id", laneId).eq("id", conn.id).eq("status", "reconnect_required");
+      if (error) throw unavailable();
+    },
   };
 }

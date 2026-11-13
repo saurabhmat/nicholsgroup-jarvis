@@ -281,7 +281,7 @@ describe("the admin notice is durable (code review M1)", () => {
     const { createTokenHealthJob } = await import("../health/job");
     const job = createTokenHealthJob({
       loader: { loadConnection: (l, id) => h.connections.load(l, id) },
-      store: { listUsableConnectionIds: async () => [], applyHealth: async () => true, clearHealthError: async () => false },
+      store: { listUsableConnectionIds: async () => [], applyHealth: async () => true, clearHealthError: async () => false, reconnectNoticePending: async (_l, c) => !h.notified.has(c.id), markReconnectNotified: async (_l, c) => void h.notified.add(c.id) },
       checkers: {},
     });
     expect(await job.run(LANE, conn.id)).toMatchObject({ ok: true, alerts: [{ provider: "quickbooks", reason: "reconnect_required", errorKind: "reconnect_required" }] });
