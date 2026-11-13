@@ -1,9 +1,9 @@
 import { describe, expect, it } from "vitest";
 import { laneConfigSchema } from "@nichols/core/lane-config";
-import { classify, maskFigures, moneyThreads, rankAttention, senderHas, subjectHas, type AttentionRules, type ThreadRow } from "./attention";
+import { classify, maskFigures, moneyThreads, rankAttention, senderHas, subjectHas, waitingOnYou, type AttentionRules, type ThreadRow } from "./attention";
 
 const b = laneConfigSchema.shape.briefing.parse({});
-const rules: AttentionRules = { prioritySenders: ["boss@pubk.test", "@bigclient.test"], securitySubjects: b.security_subjects, securitySenders: b.security_senders, exclusions: b.exclusions, money: b.money };
+const rules: AttentionRules = { prioritySenders: ["boss@pubk.test", "@bigclient.test"], freshHours: b.attention.fresh_hours, deadlineSubjects: b.deadline_subjects, ownDomains: [], securitySubjects: b.security_subjects, securitySenders: b.security_senders, exclusions: b.exclusions, money: b.money };
 const now = new Date("2026-11-11T15:00:00Z");
 let n = 0;
 const t = (over: Partial<ThreadRow>): ThreadRow => ({
@@ -167,7 +167,7 @@ describe("rankAttention", () => {
   it("acceptance order: priority, waiting on you, unread people, trusted security alerts; drops answered and automated", () => {
     const rows = [
       t({ fromAddress: "friend@acme.test", subject: "Unread", receivedAt: "2026-11-11T12:00:00Z" }),
-      t({ fromAddress: "colleague@acme.test", subject: "Waiting", ownerReplied: true, unreadCount: 0, receivedAt: "2026-11-09T12:00:00Z" }),
+      t({ fromAddress: "colleague@acme.test", subject: "Waiting", ownerReplied: true, unreadCount: 0, receivedAt: "2026-11-10T12:00:00Z", lastToOwner: true }),
       t({ fromAddress: "no-reply@accounts.google.com", subject: "Security alert", unreadCount: 0 }),
       t({ fromAddress: "ceo@bigclient.test", subject: "Priority", unreadCount: 0, isAuthPass: true }),
       t({ fromAddress: "x@acme.test", subject: "Answered", lastIsOwner: true, ownerReplied: true }),
@@ -181,7 +181,7 @@ describe("rankAttention", () => {
       ["Security alert", "security"],
     ]);
     expect(top[0]?.reason).toBe("Priority sender, not answered · 5h");
-    expect(top[1]?.reason).toBe("Waiting on your reply · 2d");
+    expect(top[1]?.reason).toBe("Waiting on your reply · 27h");
     expect(more).toBe(0);
   });
 
@@ -191,7 +191,7 @@ describe("rankAttention", () => {
       rules,
       now,
     );
-    expect(top.map((i) => [i.thread.subject, i.kind, i.reason])).toEqual([["Question", "waiting", "Read, not answered · 5h"]]);
+    expect(top.map((i) => [i.thread.subject, i.kind, i.reason])).toEqual([["Question", "waiting", "Read, no reply from you · 5h"]]);
   });
 
   it("authenticated priority senders skip the soft exclusions (auto-generated) but not one-time codes", () => {
@@ -234,6 +234,133 @@ describe("rankAttention", () => {
     const { top, more } = rankAttention(Array.from({ length: 8 }, () => t({})), rules, now);
     expect(top).toHaveLength(5);
     expect(more).toBe(3);
+  });
+});
+
+describe("T-240: recency-aware ranking", () => {
+  const ago = (hours: number) => new Date(now.getTime() - hours * 3_600_000).toISOString();
+  const subjects = (rows: ThreadRow[], r = rules) => rankAttention(rows, r, now).top.map((i) => i.thread.subject);
+  it("a 2-hour-old unread from a person outranks a 6-day-old 'read, not answered' thread (which goes to Still waiting)", () => {
+    const rows = [t({ subject: "Old", unreadCount: 0, receivedAt: ago(6 * 24) }), t({ subject: "New", receivedAt: ago(2) })];
+    const out = rankAttention(rows, rules, now);
+    expect(out.top.map((i) => i.thread.subject)).toEqual(["New"]);
+    expect(out.stillWaiting.map((i) => i.thread.subject)).toEqual(["Old"]);
+    expect(out.more).toBe(0);
+  });
+  it("48 hours is the boundary: exactly 48 h is fresh, a minute over is Still waiting", () => {
+    const out = rankAttention([t({ subject: "At 48h", receivedAt: ago(48) }), t({ subject: "Over", receivedAt: new Date(now.getTime() - 48 * 3_600_000 - 60_000).toISOString() })], rules, now);
+    expect(out.top.map((i) => i.thread.subject)).toEqual(["At 48h"]);
+    expect(out.stillWaiting.map((i) => i.thread.subject)).toEqual(["Over"]);
+  });
+  it("a custom fresh_hours moves the boundary", () => {
+    const rows = [t({ subject: "30h", receivedAt: ago(30) }), t({ subject: "5h", receivedAt: ago(5) })];
+    expect(subjects(rows, { ...rules, freshHours: 24 })).toEqual(["5h"]);
+    expect(subjects(rows, { ...rules, freshHours: 72 })).toEqual(["5h", "30h"]);
+    expect(rankAttention(rows, { ...rules, freshHours: 24 }, now).stillWaiting).toHaveLength(1);
+  });
+  it("newest first within a band", () => {
+    const rows = [t({ subject: "10h", receivedAt: ago(10) }), t({ subject: "1h", receivedAt: ago(1) }), t({ subject: "30h", receivedAt: ago(30) })];
+    expect(subjects(rows)).toEqual(["1h", "10h", "30h"]);
+  });
+  it("importance bands across: VIP, money or deadline, waiting, unread, security, failures; a fresh older VIP beats a newer unread", () => {
+    const ci = (s: string) => t({ fromAddress: "notifications@github.com", subject: s, receivedAt: ago(1) });
+    const rows = [
+      t({ subject: "Unread 1h", receivedAt: ago(1) }),
+      t({ subject: "Waiting 5h", unreadCount: 0, receivedAt: ago(5) }),
+      t({ subject: "Contract deadline Friday", receivedAt: ago(20) }),
+      t({ subject: "VIP 40h", fromAddress: "ceo@bigclient.test", isAuthPass: true, unreadCount: 0, receivedAt: ago(40) }),
+      t({ fromAddress: "no-reply@accounts.google.com", subject: "Security alert", receivedAt: ago(1) }),
+      ci("Run failed"), ci("Run failed"), ci("Build failed"),
+    ];
+    expect(rankAttention(rows, rules, now, 10).top.map((i) => i.thread.subject)).toEqual(["VIP 40h", "Contract deadline Friday", "Waiting 5h", "Unread 1h", "Security alert", "Run failed"]);
+  });
+  it("money subjects take the money band, with the money flag", () => {
+    const { top } = rankAttention([t({ subject: "Unread", receivedAt: ago(1) }), t({ subject: "Invoice 1042 is attached", receivedAt: ago(9) })], rules, now);
+    expect(top.map((i) => i.thread.subject)).toEqual(["Invoice 1042 is attached", "Unread"]);
+    expect(top[0]?.flags).toMatchObject({ money: "invoice", deadline: false });
+  });
+  it("no exception for priority senders: an old VIP thread goes to Still waiting", () => {
+    const out = rankAttention([t({ subject: "Old VIP", fromAddress: "ceo@bigclient.test", isAuthPass: true, receivedAt: ago(100) })], rules, now);
+    expect(out.top).toEqual([]);
+    expect(out.stillWaiting.map((i) => i.kind)).toEqual(["priority"]);
+  });
+  it("Still waiting is newest first; old security alerts and old failures are dropped, not counted", () => {
+    const old = (s: string, h: number, over: Partial<ThreadRow> = {}) => t({ subject: s, receivedAt: ago(h), ...over });
+    const out = rankAttention(
+      [old("A", 100), old("B", 80), old("C", 200, { unreadCount: 0 }), old("Alert", 90, { fromAddress: "no-reply@accounts.google.com", subject: "Security alert" }),
+       ...["x", "y", "z"].map((s) => old(s, 120, { fromAddress: "notifications@github.com", subject: "Run failed" }))],
+      rules,
+      now,
+    );
+    expect(out.top).toEqual([]);
+    expect(out.stillWaiting.map((i) => i.thread.subject)).toEqual(["B", "A", "C"]);
+  });
+  it("more = fresh items beyond the cap, never counting old ones", () => {
+    const rows = [...Array.from({ length: 7 }, (_, i) => t({ receivedAt: ago(i + 1) })), t({ receivedAt: ago(500) })];
+    const out = rankAttention(rows, rules, now);
+    expect(out.top).toHaveLength(5);
+    expect(out.more).toBe(2);
+    expect(out.stillWaiting).toHaveLength(1);
+  });
+  it("exclusions are unchanged: bulk, newsletters, labels and calendar are never top 5 or Still waiting", () => {
+    const rows = [t({ isBulk: true, receivedAt: ago(100) }), t({ fromAddress: "newsletter@shop.test", receivedAt: ago(100) }), t({ labels: ["INBOX", "CATEGORY_PROMOTIONS"], receivedAt: ago(1) }), t({ isCalendar: true, receivedAt: ago(100) })];
+    const out = rankAttention(rows, rules, now);
+    expect([out.top.length, out.stillWaiting.length]).toEqual([0, 0]);
+  });
+});
+
+describe("T-240: Waiting on you vs the reason chips", () => {
+  const one = (over: Partial<ThreadRow>, r = rules) => rankAttention([t(over)], r, now).top[0];
+  it("waitingOnYou only when the owner is in the To of the latest message and no later reply", () => {
+    expect(one({ lastToOwner: true, unreadCount: 0 })?.flags.waitingOnYou).toBe(true);
+    expect(one({ lastToOwner: false, unreadCount: 0 })?.flags.waitingOnYou).toBe(false); // Cc, Bcc or a list address
+    expect(one({ unreadCount: 0 })?.flags.waitingOnYou).toBe(false); // unknown: fails safe
+    // the owner replied after it: the thread is not on the list at all
+    expect(rankAttention([t({ lastToOwner: true, lastIsOwner: true, ownerReplied: true })], rules, now).top).toEqual([]);
+    expect(waitingOnYou(t({ lastToOwner: true, lastIsOwner: true }))).toBe(false);
+  });
+  it("the reason text does not claim a reply is owed when the owner is not in the To", () => {
+    expect(one({ unreadCount: 0, lastToOwner: true })?.reason).toBe("Read, not answered · 5h");
+    expect(one({ unreadCount: 0 })?.reason).toBe("Read, no reply from you · 5h");
+    expect(one({ ownerReplied: true, unreadCount: 0 })?.reason).toBe("New message after your reply · 5h");
+  });
+  it("reason flags: Money (existing patterns), Deadline (lane_config list), VIP (authenticated priority sender only)", () => {
+    expect(one({ subject: "Invoice 88 is due" })?.flags).toMatchObject({ money: "invoice", deadline: false, vip: false });
+    expect(one({ subject: "RFP response deadline moved" })?.flags).toMatchObject({ money: null, deadline: true });
+    expect(one({ subject: "Due tomorrow: signed forms" })?.flags.deadline).toBe(true);
+    expect(one({ subject: "Rapid footprint review" })?.flags.deadline).toBe(false); // whole words only
+    expect(one({ subject: "Hi", fromAddress: "ceo@bigclient.test", isAuthPass: true })?.flags.vip).toBe(true);
+    expect(one({ subject: "Hi", fromAddress: "ceo@bigclient.test" })?.flags.vip).toBe(false);
+  });
+  it("a custom deadline list replaces the default", () => {
+    expect(one({ subject: "Cutoff Friday" }, { ...rules, deadlineSubjects: ["cutoff"] })?.flags.deadline).toBe(true);
+    expect(one({ subject: "Deadline Friday" }, { ...rules, deadlineSubjects: ["cutoff"] })?.flags.deadline).toBe(false);
+  });
+});
+
+describe("T-240: newsletters from the lane's own domains", () => {
+  const own = { ...rules, ownDomains: ["pubk.test"] };
+  it("a non-person mailbox on an own domain is excluded as bulk even with no flag and an empty org list", () => {
+    for (const from of ["news@pubk.test", "no-reply@pubk.test", "newsletter@mail.pubk.test", "updates@pubk.test", "info@pubk.test", "marketing@pubk.test"]) {
+      expect(classify(t({ fromAddress: from }), own).excluded).toBe("bulk");
+      expect(rankAttention([t({ fromAddress: from })], own, now).top).toEqual([]);
+    }
+  });
+  it("a list-style label or auto-generated mail from an own domain is bulk", () => {
+    expect(classify(t({ fromAddress: "robert@pubk.test", labels: ["INBOX", "List/Weekly"] }), own).excluded).toBe("bulk");
+    expect(classify(t({ fromAddress: "robert@pubk.test", isGenerated: true }), own).excluded).toBe("bulk");
+  });
+  it("a real colleague on the same domain still ranks", () => {
+    expect(rankAttention([t({ fromAddress: "colleague@pubk.test", subject: "Quick question" })], own, now).top).toHaveLength(1);
+    expect(classify(t({ fromAddress: "robert.jones@pubk.test" }), own).excluded).toBeNull();
+  });
+  it("the same address from a domain that is not the lane's own is not caught by this rule", () => {
+    expect(classify(t({ fromAddress: "info@client.test", subject: "Hello" }), own).excluded).toBeNull();
+    expect(classify(t({ fromAddress: "info@pubk.test", subject: "Hello" }), rules).excluded).toBeNull(); // no own domains known
+  });
+  it("bulk from an own domain stays out even from an authenticated priority sender", () => {
+    const prio = { ...own, prioritySenders: ["news@pubk.test"] };
+    expect(rankAttention([t({ fromAddress: "news@pubk.test", isAuthPass: true })], prio, now).top).toEqual([]);
   });
 });
 

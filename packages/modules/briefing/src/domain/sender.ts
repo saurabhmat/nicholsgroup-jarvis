@@ -28,16 +28,23 @@ export function senderLabel(fromName: string | null, fromAddress: string | null)
   return company ? `${name} · ${company}` : name;
 }
 
-/** The chips of an attention row, at most `max`, in priority order: Priority sender, Waiting on you, Unread, Security alert, then the rest. */
-export function attentionChips(kind: string, unread: boolean, max = 2): { key: string; label: string; tone: "alert" | "outline" | "gold" }[] {
-  const all: { key: string; label: string; tone: "alert" | "outline" | "gold" }[] = [];
-  if (kind === "priority") all.push({ key: "priority", label: "Priority sender", tone: "alert" });
-  if (kind === "waiting") all.push({ key: "waiting", label: "Waiting on you", tone: "gold" });
-  if (unread || kind === "unread") all.push({ key: "unread", label: "Unread", tone: "outline" });
-  if (kind === "security") all.push({ key: "security", label: "Security alert", tone: "alert" });
-  if (kind === "repeated_failures") all.push({ key: "repeated_failures", label: "Repeated failures", tone: "alert" });
-  const order = ["priority", "waiting", "unread", "security", "repeated_failures"];
-  return all.sort((a, b) => order.indexOf(a.key) - order.indexOf(b.key)).slice(0, max);
+export type AttentionChip = { key: string; label: string; tone: "alert" | "outline" | "gold" };
+
+/**
+ * The chips of an attention row, at most `max`, in order: VIP, Waiting on you, Money, Deadline, Unread, Security alert,
+ * Repeated failures (T-240). "Waiting on you" appears ONLY when `waitingOnYou` is true (the owner's mailbox is in the To of the
+ * latest message and no reply from the owner came after it); otherwise the reason chips (VIP, Money, Deadline) say why the thread is here.
+ */
+export function attentionChips(item: { kind: string; unread: boolean; vip?: boolean; money?: boolean; deadline?: boolean; waitingOnYou?: boolean }, max = 2): AttentionChip[] {
+  const all: AttentionChip[] = [];
+  if (item.vip === true || item.kind === "priority") all.push({ key: "priority", label: "VIP", tone: "alert" });
+  if (item.waitingOnYou === true) all.push({ key: "waiting", label: "Waiting on you", tone: "gold" });
+  if (item.money === true) all.push({ key: "money", label: "Money", tone: "gold" });
+  if (item.deadline === true) all.push({ key: "deadline", label: "Deadline", tone: "alert" });
+  if (item.unread || item.kind === "unread") all.push({ key: "unread", label: "Unread", tone: "outline" });
+  if (item.kind === "security") all.push({ key: "security", label: "Security alert", tone: "alert" });
+  if (item.kind === "repeated_failures") all.push({ key: "repeated_failures", label: "Repeated failures", tone: "alert" });
+  return all.slice(0, max);
 }
 
 /** "now", "12m", "5h", "3d": the short age on a row (the full date is the `title`). */

@@ -44,7 +44,7 @@ export type CalendarSection = { access: true; today: DayEvent[]; ahead: NotableE
 
 /** "Needs your attention" + Money from mail metadata; `access: false` when the caller may not read the lane's mail. */
 export type MailSection =
-  | { access: true; attention: AttentionThread[]; more: number; money: MoneyThread[]; mailboxOf: Record<string, string> }
+  | { access: true; attention: AttentionThread[]; more: number; /** T-240: qualifying threads older than the fresh window, newest first (Home shows the count; Inbox ?view=waiting lists them). */ stillWaiting: AttentionThread[]; money: MoneyThread[]; mailboxOf: Record<string, string> }
   | { access: false; unavailable?: true };
 
 export type BriefingView = {
@@ -75,6 +75,11 @@ type Db = Pick<LaneClient, "schema">;
 /** The events window: the viewer's day plus 7 days, never more than the SQL cap of 8 x 24 h (a 25-hour DST day included). */
 export function eventsWindow(from: Date, to: Date): { from: Date; to: Date } {
   return { from, to: new Date(Math.min(to.getTime() + 7 * DAY_MS, from.getTime() + 8 * DAY_MS)) };
+}
+
+/** The lane's own mail domains (T-240): the domains of its mailboxes and connected accounts, public mail providers left out. Derived, never configured. */
+export function ownMailDomains(owners: Iterable<string>): string[] {
+  return [...new Set([...owners].map(domainOf).filter((d) => d !== "" && !PUBLIC_MAIL_DOMAINS.has(d)))];
 }
 
 /** Owner domains count as internal, except public mail providers (gmail.com says nothing about who is a colleague). */
@@ -120,10 +125,10 @@ export async function loadBriefing(client: Db, laneId: string, now: Date, viewer
   if (mailAccess && threads.error) mail = { access: false, unavailable: true };
   else if (mailAccess) {
     const rows = parseThreads(threads.data);
-    const rules: AttentionRules = { prioritySenders, securitySubjects: briefing.security_subjects, securitySenders: briefing.security_senders, exclusions: briefing.exclusions, money: briefing.money };
+    const rules: AttentionRules = { prioritySenders, freshHours: briefing.attention.fresh_hours, deadlineSubjects: briefing.deadline_subjects, ownDomains: ownMailDomains(owners), securitySubjects: briefing.security_subjects, securitySenders: briefing.security_senders, exclusions: briefing.exclusions, money: briefing.money };
     const ranked = rankAttention(rows, rules, now);
     const mailboxOf = Object.fromEntries(coverage.filter((c) => c.connectionId && c.stream === "mail").map((c) => [c.connectionId as string, c.account]));
-    mail = { access: true, attention: ranked.top, more: ranked.more, money: moneyThreads(rows, rules), mailboxOf };
+    mail = { access: true, attention: ranked.top, more: ranked.more, stillWaiting: ranked.stillWaiting, money: moneyThreads(rows, rules), mailboxOf };
   }
   return { viewerTz, coverage, coverageLine: coverageLine(coverage, mailAccess || calendarAccess), calendar, mail, config: briefing, mailboxes };
 }

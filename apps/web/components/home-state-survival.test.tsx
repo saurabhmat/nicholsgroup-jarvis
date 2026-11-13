@@ -299,7 +299,7 @@ describe("the list keys (the real attention list)", () => {
     connectionId: "c1", threadKey: "t1", messageId, fromAddress: "boss@pubk.test", fromName: "Boss", subject: "Board deck", receivedAt: "2026-11-12T10:00:00Z",
     sourceUrl: "https://mail.google.com/mail/u/me/#all/t1", labels: ["INBOX"], isImportant: false, lastIsOwner: false, ownerReplied: false, unreadCount: 1, inboundCount: 1,
   });
-  const mail = (messageId: string) => ({ access: true as const, attention: [{ key: "c1:t1", kind: "priority" as const, reason: "Priority sender", thread: thread(messageId) }], more: 0, money: [], mailboxOf: { c1: "me@pubk.test" } });
+  const mail = (messageId: string) => ({ access: true as const, attention: [{ key: "c1:t1", kind: "priority" as const, reason: "Priority sender", flags: { vip: true, money: null, deadline: false, waitingOnYou: false }, thread: thread(messageId) }], more: 0, stillWaiting: [] as never[], money: [], mailboxOf: { c1: "me@pubk.test" } });
   const list = (messageId: string) => (
     <HomeScope laneId="PKG" userId="u1">
       <AttentionSection laneId="PKG" now={new Date("2026-11-12T13:00:00Z")} mail={mail(messageId)} canReply />

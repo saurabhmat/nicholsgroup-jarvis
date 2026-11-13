@@ -16,7 +16,7 @@ vi.mock("next/headers", () => ({ cookies: async () => ({ get: (n: string) => (n 
 vi.mock("next/navigation", () => ({ useRouter: () => ({ refresh: () => undefined }) }));
 vi.mock("@/lib/briefing", async (orig) => ({
   ...(await orig<typeof import("@/lib/briefing")>()),
-  briefingFor: async (_c: unknown, _l: string, _n: Date, tz: string) => (m.briefingTz.push(tz), { viewerTz: "America/New_York", coverage: m.briefCoverage, coverageLine: "Coverage: test.", calendar: { access: false }, mail: m.mail.access ? { access: true, attention: [], more: 0, money: [], mailboxOf: {} } : { access: false }, config: {}, mailboxes: [] }),
+  briefingFor: async (_c: unknown, _l: string, _n: Date, tz: string) => (m.briefingTz.push(tz), { viewerTz: "America/New_York", coverage: m.briefCoverage, coverageLine: "Coverage: test.", calendar: { access: false }, mail: m.mail.access ? { access: true, attention: [], more: 0, stillWaiting: [], money: [], mailboxOf: {} } : { access: false }, config: {}, mailboxes: [] }),
 }));
 vi.mock("@/lib/coverage", async (orig) => ({ ...(await orig<typeof import("@/lib/coverage")>()), coverageFor: async () => m.coverage }));
 vi.mock("@/lib/job-failures", async (orig) => ({ ...(await orig<typeof import("@/lib/job-failures")>()), jobFailureBannerFor: async () => m.jobFailures }));

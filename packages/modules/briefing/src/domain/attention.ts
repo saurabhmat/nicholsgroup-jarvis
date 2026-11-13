@@ -1,19 +1,29 @@
 // "Needs your attention" and the Money card (T-231b): rules over thread METADATA (core.briefing_threads), no AI, no
 // bodies. Every pattern comes from lane_config.briefing. Sender patterns are anchored ("name@" = local part, "x.com" =
 // domain or subdomain, a word = in the local part); subject patterns match whole words. Order of the top list
-// (acceptance order):
-//   1. lane_config priority_senders (address or @domain) that PASSED AUTHENTICATION (isAuthPass, derived at sync from Google's
+// (T-240: importance, then recency; the list is FRESH mail only):
+//   A thread qualifies as before (rules below). It is in the top 5 only when its latest inbound message is within
+//   lane_config briefing.attention.fresh_hours (default 48). Older qualifying threads (priority, waiting, unread) are not
+//   ranked: they are listed as "Still waiting" (no exception for priority senders). Within the window the importance bands run
+//   high to low, and inside a band the NEWEST message comes first (so a 2-hour-old unread from a person beats a 6-day-old
+//   "read, not answered" thread, which is out of the window; a 40-hour VIP beats a 1-hour unread):
+//   0. lane_config priority_senders (address or @domain) that PASSED AUTHENTICATION (isAuthPass, derived at sync from Google's
 //      own Authentication-Results): not subject to the soft exclusions. A priority sender without an auth pass (spoofed From,
 //      or a row synced before the column existed: needs the resync, backlog H-048) is ranked as an ordinary sender.
 //      Hard exclusions for everyone: one-time codes and the header flags calendar / true auto-reply.
+//   1. Money or Deadline: a thread that qualifies below (waiting or unread, from a real person) whose subject matches the
+//      money patterns or lane_config briefing.deadline_subjects
 //   2. threads waiting on the owner: last message from a real person, not the owner, and either the owner already wrote
 //      in the thread or the message was read and left unanswered
 //   3. unread mail from real people (not automated, not excluded)
 //   4. security alerts (new sign-in, critical vulnerability, ...) from lane_config security_senders domains only
-//   5. repeated bot/CI failures (one item per sender domain); within a tier, older first (age)
+//   5. repeated bot/CI failures (one item per sender domain)
+// The "Waiting on you" chip is separate from the band: it needs the owner's mailbox address in the TO of the latest message
+// (lastToOwner, computed in SQL) and no reply from the owner after it (see sender.ts).
 // Excluded before ranking: OTP codes, calendar invitations/updates, auto-replies, bulk/marketing mail (header flag or the org's
 // own newsletter senders), excluded labels (promotions, social, forums), newsletters, social networks, bank transaction alerts
-// (statements and due dates are kept), single bot/CI messages (and automated senders' CI-style subjects).
+// (statements and due dates are kept), single bot/CI messages (and automated senders' CI-style subjects), and (T-240) mail from the
+// lane's OWN domains that is not a person mailbox (no-reply, newsletter, updates ... local parts, a list-style label, auto-generated mail).
 
 import { domainOf } from "./calendar";
 import { httpsUrl } from "./url";
@@ -41,10 +51,18 @@ export type ThreadRow = {
   isGenerated?: boolean;
   /** Google's Authentication-Results passed for the From domain (dmarc, or aligned dkim). False on rows synced before the column. */
   isAuthPass?: boolean;
+  /** T-240: the connection's mailbox address is in the TO list of the latest inbound message (not only Cc/Bcc). Absent = false (fails safe: no "Waiting on you" chip). */
+  lastToOwner?: boolean;
 };
 
 export type AttentionRules = {
   prioritySenders: readonly string[];
+  /** T-240: hours a thread's latest inbound message may be old to be in the top 5 (lane_config briefing.attention.fresh_hours). */
+  freshHours: number;
+  /** T-240: subject words that mark a deadline (lane_config briefing.deadline_subjects). */
+  deadlineSubjects: readonly string[];
+  /** T-240: the lane's own mail domains (derived from its mailboxes, public providers left out). */
+  ownDomains: readonly string[];
   securitySubjects: readonly string[];
   securitySenders: readonly string[];
   exclusions: {
@@ -59,6 +77,8 @@ export type AttentionRules = {
     bank_keep_subjects: readonly string[];
     automated_senders: readonly string[];
     org_newsletter_senders: readonly string[];
+    /** T-240: local-part patterns of non-person mailboxes; from the lane's own domains these are bulk ("no-reply@", "newsletter@"). */
+    own_domain_bulk_senders: readonly string[];
     calendar_subjects: readonly string[];
     auto_reply_subjects: readonly string[];
     bot_subjects: readonly string[];
@@ -68,9 +88,13 @@ export type AttentionRules = {
 
 export type AttentionKind = "priority" | "security" | "waiting" | "unread" | "repeated_failures";
 
+/** Why a row is on the list, beyond its kind (T-240): drives the chips. */
+export type AttentionFlags = { vip: boolean; money: MoneyKind | null; deadline: boolean; /** Owner in To and no later reply from the owner. */ waitingOnYou: boolean };
+
 export type AttentionThread = {
   key: string;
   kind: AttentionKind;
+  flags: AttentionFlags;
   /** One line: why it is here (rule-based, no AI). */
   reason: string;
   thread: ThreadRow;
@@ -153,10 +177,26 @@ export function classify(t: ThreadRow, r: AttentionRules): Classified {
     hard = false;
     if (subjectStarts(t.subject, x.calendar_subjects)) excluded = "calendar";
     else if (subjectStarts(t.subject, x.auto_reply_subjects)) excluded = "auto_reply";
+    else if (ownDomainBulk(t, x, r.ownDomains)) excluded = "bulk";
     else if (t.isGenerated === true) excluded = "generated";
     else excluded = classifyBulkAndBelow(t, x, bot, automated);
   }
   return { excluded, hard: excluded !== null && hard, automated, bot, security };
+}
+
+/** Labels that mark list mail ("List-...", newsletter, mailing list): a Gmail label or a user label. */
+const LIST_LABEL = /^(?:list|lists|newsletter|newsletters|mailing[ _-]?list)(?:$|[ _/:-])/i;
+
+/**
+ * T-240: mail from one of the lane's own domains that is not a person mailbox is bulk even without a header flag or an org
+ * newsletter list (older rows). A colleague writing from the same domain is NOT excluded: only a non-person local part
+ * (lane_config own_domain_bulk_senders), a list-style label or auto-generated mail counts.
+ */
+function ownDomainBulk(t: ThreadRow, x: AttentionRules["exclusions"], ownDomains: readonly string[]): boolean {
+  if (ownDomains.length === 0 || !t.fromAddress) return false;
+  const d = domainOf(t.fromAddress);
+  if (!ownDomains.some((o) => d === lower(o) || d.endsWith(`.${lower(o)}`))) return false;
+  return senderHas(t.fromAddress, x.own_domain_bulk_senders) || t.labels.some((l) => LIST_LABEL.test(l)) || t.isGenerated === true;
 }
 
 function classifyBulkAndBelow(t: ThreadRow, x: AttentionRules["exclusions"], bot: boolean, automated: boolean): string | null {
@@ -184,10 +224,28 @@ const senderLabel = (t: ThreadRow) => t.fromName ?? t.fromAddress ?? "Unknown se
 /** Exclusions no sender can skip in the attention list: promotions and other category labels, newsletters, bulk mail, social. */
 const NEVER_TOP: ReadonlySet<string> = new Set(["bulk", "label", "newsletter", "social"]);
 
-/** Ranks the attention list; returns the top `limit` (default 5) and how many more qualified. */
-export function rankAttention(rows: ThreadRow[], r: AttentionRules, now: Date, limit = 5): { top: AttentionThread[]; more: number } {
-  const out: { item: AttentionThread; tier: number }[] = [];
+const MONEY_KINDS: readonly MoneyKind[] = ["failed_payment", "invoice", "bill", "renewal"];
+const HOUR_MS = 3_600_000;
+
+/** Importance bands, high to low (T-240). Lower number = higher on the list. */
+const BAND = { vip: 0, moneyOrDeadline: 1, waiting: 2, unread: 3, security: 4, failures: 5 } as const;
+
+/** "Waiting on you": the owner's mailbox is in the TO of the latest message AND no reply from the owner came after it. */
+export const waitingOnYou = (t: ThreadRow): boolean => t.lastToOwner === true && !t.lastIsOwner;
+
+/**
+ * Ranks the attention list (T-240). Qualifying threads whose latest inbound message is within `r.freshHours` are ordered by
+ * importance band, then NEWEST first; the first `limit` (default 5) are `top`, the rest of the fresh ones are counted in `more`.
+ * Qualifying threads that need a reply (priority, waiting, unread) but are older than the window are not ranked: they are
+ * returned in `stillWaiting` (newest first, no exception for priority senders). Old security alerts and old repeated failures
+ * are dropped (they do not wait on a reply).
+ */
+export function rankAttention(rows: ThreadRow[], r: AttentionRules, now: Date, limit = 5): { top: AttentionThread[]; more: number; stillWaiting: AttentionThread[] } {
+  const out: { item: AttentionThread; band: number }[] = [];
+  const old: AttentionThread[] = [];
   const failures = new Map<string, ThreadRow[]>();
+  const windowMs = r.freshHours * HOUR_MS;
+  const isFresh = (iso: string) => now.getTime() - Date.parse(iso) <= windowMs;
   for (const t of rows) {
     const c = classify(t, r);
     const priority = isTrustedPriority(t, r);
@@ -205,21 +263,32 @@ export function rankAttention(rows: ThreadRow[], r: AttentionRules, now: Date, l
     const unread = t.unreadCount > 0;
     const ago = ageLabel(t.receivedAt, now);
     const person = !c.automated;
-    let item: { tier: number; kind: AttentionKind; reason: string } | null = null;
-    if (priority) item = { tier: 0, kind: "priority", reason: `Priority sender${unread ? ", unread" : ", not answered"} · ${ago}` };
-    else if (person && (t.ownerReplied || !unread)) item = { tier: 1, kind: "waiting", reason: t.ownerReplied ? `Waiting on your reply · ${ago}` : `Read, not answered · ${ago}` };
-    else if (person && unread) item = { tier: 2, kind: "unread", reason: `Unread from ${senderLabel(t)} · ${ago}` };
-    else if (c.security) item = { tier: 3, kind: "security", reason: `Security alert from ${senderLabel(t)} · ${ago}` };
-    if (item) out.push({ tier: item.tier, item: { key: `${t.connectionId}:${t.threadKey}`, kind: item.kind, reason: item.reason, thread: t } });
+    const toOwner = waitingOnYou(t);
+    const money = MONEY_KINDS.find((k) => subjectHas(t.subject, r.money[k])) ?? null;
+    const deadline = subjectHas(t.subject, r.deadlineSubjects);
+    const flags: AttentionFlags = { vip: priority, money, deadline, waitingOnYou: toOwner };
+    let item: { band: number; kind: AttentionKind; reason: string } | null = null;
+    if (priority) item = { band: BAND.vip, kind: "priority", reason: `Priority sender${unread ? ", unread" : ", not answered"} \u00b7 ${ago}` };
+    else if (person && (t.ownerReplied || !unread)) {
+      // Facts only: the "Waiting on you" chip is shown only when the owner is in the To; the reason says what is known.
+      const what = t.ownerReplied ? (toOwner ? "Waiting on your reply" : "New message after your reply") : toOwner ? "Read, not answered" : "Read, no reply from you";
+      item = { band: money || deadline ? BAND.moneyOrDeadline : BAND.waiting, kind: "waiting", reason: `${what} \u00b7 ${ago}` };
+    } else if (person && unread) item = { band: money || deadline ? BAND.moneyOrDeadline : BAND.unread, kind: "unread", reason: `Unread from ${senderLabel(t)} \u00b7 ${ago}` };
+    else if (c.security) item = { band: BAND.security, kind: "security", reason: `Security alert from ${senderLabel(t)} \u00b7 ${ago}` };
+    if (!item) continue;
+    const built: AttentionThread = { key: `${t.connectionId}:${t.threadKey}`, kind: item.kind, flags, reason: item.reason, thread: t };
+    if (isFresh(t.receivedAt)) out.push({ band: item.band, item: built });
+    else if (item.kind === "priority" || item.kind === "waiting" || item.kind === "unread") old.push(built);
   }
   for (const [domain, list] of failures) {
     if (list.length < r.exclusions.bot_failure_repeat) continue;
     const latest = [...list].sort((a, b) => b.receivedAt.localeCompare(a.receivedAt))[0];
-    if (!latest) continue;
-    out.push({ tier: 4, item: { key: `failures:${domain}`, kind: "repeated_failures", reason: `${String(list.length)} failure alerts from ${domain}`, thread: latest, count: list.length } });
+    if (!latest || !isFresh(latest.receivedAt)) continue;
+    out.push({ band: BAND.failures, item: { key: `failures:${domain}`, kind: "repeated_failures", flags: { vip: false, money: null, deadline: false, waitingOnYou: false }, reason: `${String(list.length)} failure alerts from ${domain}`, thread: latest, count: list.length } });
   }
-  out.sort((a, b) => a.tier - b.tier || a.item.thread.receivedAt.localeCompare(b.item.thread.receivedAt));
-  return { top: out.slice(0, limit).map((o) => o.item), more: Math.max(0, out.length - limit) };
+  const newest = (a: AttentionThread, b: AttentionThread) => Date.parse(b.thread.receivedAt) - Date.parse(a.thread.receivedAt) || a.key.localeCompare(b.key);
+  out.sort((a, b) => a.band - b.band || newest(a.item, b.item));
+  return { top: out.slice(0, limit).map((o) => o.item), more: Math.max(0, out.length - limit), stillWaiting: old.sort(newest) };
 }
 
 const MONEY_ORDER: MoneyKind[] = ["failed_payment", "invoice", "bill", "renewal"];
@@ -280,6 +349,7 @@ export function parseThreads(data: unknown): ThreadRow[] {
         isAuto: r.is_auto === true,
         isGenerated: r.is_generated === true,
         isAuthPass: r.is_auth_pass === true,
+        lastToOwner: r.last_to_owner === true,
       },
     ];
   });
