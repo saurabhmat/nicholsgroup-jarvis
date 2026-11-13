@@ -15,6 +15,25 @@ const brief = (over: Partial<SavedBriefingView["content"]> = {}, status: SavedBr
 });
 const base = { laneId: "PKG", fallbackLines: ["Rule-based: 2 unread."], tz: "America/New_York", now: new Date("2026-11-11T20:00:00Z") };
 
+describe("T-238 F: the stale-data line", () => {
+  it("shows exactly one line under the title when given, and nothing when null or absent", () => {
+    render(<AiBriefing {...base} brief={brief()} staleLine="Mail was last synced 26 hours ago, so this summary may miss newer email." />);
+    expect(screen.getAllByTestId("stale-data-line")).toHaveLength(1);
+    expect(screen.getByTestId("stale-data-line").textContent).toBe("Mail was last synced 26 hours ago, so this summary may miss newer email.");
+    expect(screen.getByRole("heading", { name: "Today at a glance" }).nextElementSibling?.getAttribute("data-testid")).toBe("stale-data-line");
+    cleanup();
+    render(<AiBriefing {...base} brief={brief()} staleLine={null} />);
+    expect(screen.queryByTestId("stale-data-line")).toBeNull();
+    cleanup();
+    render(<AiBriefing {...base} brief={brief()} />);
+    expect(screen.queryByTestId("stale-data-line")).toBeNull();
+  });
+  it("is plain text: markup in it is not interpreted", () => {
+    render(<AiBriefing {...base} brief={null} staleLine="<b>x</b>" />);
+    expect(screen.getByTestId("stale-data-line").innerHTML).toBe("&lt;b&gt;x&lt;/b&gt;");
+  });
+});
+
 describe("T-237: placeholders and raw times are never shown", () => {
   const PH = /\[(amount|number)\]/;
   it("a summary sentence holding a placeholder is dropped; a line that is only a placeholder sentence disappears", () => {

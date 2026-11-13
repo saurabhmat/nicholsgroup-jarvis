@@ -11,6 +11,7 @@ import { NonRetriableError, RetryAfterError, type Inngest, type InngestFunction 
 import { connSyncRequested } from "./events";
 
 export type SyncTriggerName = "schedule" | "manual" | "webhook" | "connect";
+export type SyncStreamName = "mail" | "calendar";
 
 /** Mirrors ConnSyncOutcome in @nichols/connectors/sync (structural: core does not import connectors). */
 export type ConnSyncResult =
@@ -19,7 +20,7 @@ export type ConnSyncResult =
   | { ok: false; retryable: boolean; retryAfterSeconds: number | null; errorKind: string; message: string };
 
 export type ConnSyncDeps = {
-  runSync: (laneId: string, connectionId: string, input: { trigger: SyncTriggerName; jobRunId: string | null; objectTypes?: readonly string[] }) => Promise<ConnSyncResult>;
+  runSync: (laneId: string, connectionId: string, input: { trigger: SyncTriggerName; jobRunId: string | null; objectTypes?: readonly string[]; streams?: readonly SyncStreamName[] }) => Promise<ConnSyncResult>;
   enabledLanes: () => readonly string[];
   /**
    * Called after every sync that ran and was logged, whether or not it wrote anything (not for a skipped or failed one), with ids
@@ -27,7 +28,7 @@ export type ConnSyncDeps = {
    * start the QuickBooks normalizer (fin.qbo_normalize, T-056). Its failure never fails or repeats the sync (that would redo
    * the work): the result says `followUp: "failed"` and the next sync starts it again.
    */
-  afterSync?: (run: { laneId: string; connectionId: string; provider: string; runId: string; trigger: SyncTriggerName; kind: "full" | "incremental"; written: number }) => Promise<void>;
+  afterSync?: (run: { laneId: string; connectionId: string; provider: string; runId: string; trigger: SyncTriggerName; kind: "full" | "incremental"; written: number; streams?: readonly SyncStreamName[] }) => Promise<void>;
 };
 
 /** Function options, exported so tests assert them. */
@@ -38,18 +39,18 @@ const MAX_RETRY_AFTER_SECONDS = 15 * 60;
 /** The function body without Inngest, for tests: throws what Inngest needs to decide about a retry. */
 export async function handleConnSync(
   deps: ConnSyncDeps,
-  data: { laneId: string; connectionId: string; trigger: SyncTriggerName; objectTypes?: readonly string[] | undefined },
+  data: { laneId: string; connectionId: string; trigger: SyncTriggerName; objectTypes?: readonly string[] | undefined; streams?: readonly SyncStreamName[] | undefined },
   runId: string | null,
 ): Promise<(Exclude<ConnSyncResult, { ok: false }> & { followUp?: "sent" | "failed" }) | { ok: true; skipped: "lane_not_served" }> {
   // Events can reach Inngest without passing sendLaneEvent (anyone holding the event key): validate again, echo nothing.
   const parsed = await connSyncRequested.schema["~standard"].validate(data);
   if (parsed.issues) throw new NonRetriableError("conn.sync: invalid event data");
   if (!deps.enabledLanes().includes(data.laneId)) return { ok: true, skipped: "lane_not_served" };
-  const result = await deps.runSync(data.laneId, data.connectionId, { trigger: data.trigger, jobRunId: runId, ...(data.objectTypes ? { objectTypes: data.objectTypes } : {}) });
+  const result = await deps.runSync(data.laneId, data.connectionId, { trigger: data.trigger, jobRunId: runId, ...(data.objectTypes ? { objectTypes: data.objectTypes } : {}), ...(data.streams ? { streams: data.streams } : {}) });
   if (result.ok) {
     if (result.skipped === null && deps.afterSync && typeof result.provider === "string") {
       try {
-        await deps.afterSync({ laneId: data.laneId, connectionId: data.connectionId, provider: result.provider, runId: result.runId, trigger: data.trigger, kind: result.kind, written: result.written });
+        await deps.afterSync({ laneId: data.laneId, connectionId: data.connectionId, provider: result.provider, runId: result.runId, trigger: data.trigger, kind: result.kind, written: result.written, ...(data.streams ? { streams: data.streams } : {}) });
         return { ...result, followUp: "sent" };
       } catch {
         return { ...result, followUp: "failed" };

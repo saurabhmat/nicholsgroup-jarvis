@@ -40,6 +40,15 @@ describe("ConnectionsSection", () => {
     expect(screen.queryByTestId("composio-gmail")).toBeNull(); // Composio view is null: not drawn
   });
 
+  it("T-238 E: the failure banner sits at the top of Connections when given items, and is absent otherwise", () => {
+    render(<ConnectionsSection laneId="PKG" google={google} quickbooks={null} composio={null} jobFailures={[{ functionId: "conn-sync.calendar", name: "Calendar sync", failures: 3, since: "2026-11-13T14:15:00Z", detail: null }]} now={new Date("2026-11-13T15:00:00Z")} />);
+    expect(screen.getByTestId("job-failure-banner").textContent).toContain("Calendar sync has failed 3 times in a row since 9:15 AM ET.");
+    expect(screen.getByTestId("job-failure-settings-link").getAttribute("href")).toBe("#connections");
+    cleanup();
+    render(<ConnectionsSection laneId="PKG" google={google} quickbooks={null} composio={null} />);
+    expect(screen.queryByTestId("job-failure-banner")).toBeNull();
+  });
+
   it("Google not connected: one row with Connect Google", () => {
     render(<ConnectionsSection laneId="PKG" google={{ connections: [] }} quickbooks={null} composio={null} />);
     const row = screen.getByTestId("google-not-connected");
@@ -62,10 +71,38 @@ describe("ConnectionsSection", () => {
     expect(screen.queryByTestId("google-not-connected")).toBeNull();
   });
 
-  it("Google needs reconnecting: an alert and Reconnect Google", () => {
+  it("Google needs reconnecting: an alert, and the row's own Reconnect bound to its connection (no section-level Reconnect Google)", () => {
     render(<ConnectionsSection laneId="PKG" google={{ connections: google.connections.map((c) => ({ ...c, state: "reconnect_required" as const })) }} quickbooks={null} composio={null} />);
     expect(screen.getByText("Google needs to be reconnected")).toBeTruthy();
-    expect(screen.getByRole("button", { name: "Reconnect Google" })).toBeTruthy();
+    expect(screen.queryByRole("button", { name: "Reconnect Google" })).toBeNull();
+    const reconnect = screen.getByRole("button", { name: "Reconnect boss@example.test" });
+    expect(reconnect.textContent).toBe("Reconnect");
+    expect(reconnect.closest("form")?.getAttribute("action")).toBe(`/api/connect/google/start?lane=PKG&connection=${google.connections[0]?.id as string}`);
+    expect(reconnect.closest("form")?.getAttribute("method")).toBe("post");
+    expect(screen.getByRole("button", { name: "Connect another Google account" })).toBeTruthy();
+  });
+
+  it("every Google row has its own Reconnect; the connection id in each form is that row's", () => {
+    const two = { connections: [google.connections[0] as GoogleSectionView["connections"][number], { ...(google.connections[0] as GoogleSectionView["connections"][number]), id: "00000000-0000-4000-8000-0000000000e2", mailbox: "ops@example.test", state: "disconnected" as const }] };
+    render(<ConnectionsSection laneId="PKG" google={two} quickbooks={null} composio={null} />);
+    const rows = screen.getAllByTestId("google-connection");
+    expect(rows).toHaveLength(2);
+    const forms = rows.map((r) => within(r).getByRole("button", { name: /^Reconnect / }).closest("form")?.getAttribute("action"));
+    expect(forms).toEqual([`/api/connect/google/start?lane=PKG&connection=${two.connections[0]?.id as string}`, "/api/connect/google/start?lane=PKG&connection=00000000-0000-4000-8000-0000000000e2"]);
+    expect(within(rows[1] as HTMLElement).getByText("Disconnected")).toBeTruthy();
+    expect(within(rows[0] as HTMLElement).getAllByRole("button")).toHaveLength(1); // Reconnect only
+    expect(within(rows[1] as HTMLElement).getAllByRole("button")).toHaveLength(2); // Reconnect + Connect another (last row only)
+  });
+
+  it("Sync now sits above the list for connected accounts, and not when nothing is connected or the status is unavailable", () => {
+    render(<ConnectionsSection laneId="PKG" google={google} quickbooks={null} composio={null} />);
+    expect(screen.getByTestId("settings-sync-now").tagName).toBe("BUTTON");
+    cleanup();
+    render(<ConnectionsSection laneId="PKG" google={{ connections: [] }} quickbooks={null} composio={null} />);
+    expect(screen.queryByTestId("settings-sync-now")).toBeNull();
+    cleanup();
+    render(<ConnectionsSection laneId="PKG" google={{ connections: google.connections.map((c) => ({ ...c, state: "reconnect_required" as const })) }} quickbooks={null} composio={null} />);
+    expect(screen.queryByTestId("settings-sync-now")).toBeNull();
   });
 
   it("unavailable status: says so and offers no connect button", () => {

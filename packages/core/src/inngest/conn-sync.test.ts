@@ -31,6 +31,19 @@ describe("conn.sync function config", () => {
   });
 });
 
+describe("streams (T-238)", () => {
+  it("hands streams to the job only when the event has them, and to afterSync with the run", async () => {
+    const afterSync = vi.fn<NonNullable<ConnSyncDeps["afterSync"]>>(async () => {});
+    const d = { ...deps({ ...ok, provider: "google" }), afterSync };
+    await handleConnSync(d, { laneId: "PKG", connectionId: CONN, trigger: "schedule", streams: ["mail"] }, null);
+    expect(d.runSync).toHaveBeenLastCalledWith("PKG", CONN, { trigger: "schedule", jobRunId: null, streams: ["mail"] });
+    expect(afterSync).toHaveBeenLastCalledWith(expect.objectContaining({ streams: ["mail"], written: 1 }));
+    await handleConnSync(d, { laneId: "PKG", connectionId: CONN, trigger: "manual" }, null);
+    expect(d.runSync).toHaveBeenLastCalledWith("PKG", CONN, { trigger: "manual", jobRunId: null });
+    expect(afterSync.mock.calls.at(-1)?.[0]).not.toHaveProperty("streams");
+  });
+});
+
 describe("handleConnSync", () => {
   it("passes lane, connection, trigger and the Inngest run id to the job", async () => {
     const d = deps(ok);

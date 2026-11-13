@@ -19,12 +19,9 @@ export type ClientFor = (laneId: string) => Promise<Db>;
 
 const VIEWS = ["briefing", "comms", "calendar"] as const;
 
-export async function dueOwners(clientFor: ClientFor, laneId: string, now: Date): Promise<string[]> {
+/** Owners of the lane who still hold the briefing, comms and calendar views (re-checked on every run). */
+export async function ownersWithViews(clientFor: ClientFor, laneId: string): Promise<string[]> {
   const c = await clientFor(laneId);
-  const cfg = await c.schema("core").from("lane_config_current").select("config").eq("lane_id", laneId).maybeSingle();
-  if (cfg.error) return [];
-  const { briefing } = briefingConfigFrom(cfg.data?.config);
-  if (!briefing.schedule_enabled || !isBriefingDue(briefing.time, briefing.days, now)) return [];
   const owners = await briefingOwners(c, laneId as LaneId);
   const allowed = await Promise.all(
     owners.map(async (uid) => {
@@ -33,6 +30,15 @@ export async function dueOwners(clientFor: ClientFor, laneId: string, now: Date)
     }),
   );
   return allowed.filter((u): u is string => u !== null);
+}
+
+export async function dueOwners(clientFor: ClientFor, laneId: string, now: Date): Promise<string[]> {
+  const c = await clientFor(laneId);
+  const cfg = await c.schema("core").from("lane_config_current").select("config").eq("lane_id", laneId).maybeSingle();
+  if (cfg.error) return [];
+  const { briefing } = briefingConfigFrom(cfg.data?.config);
+  if (!briefing.schedule_enabled || !isBriefingDue(briefing.time, briefing.days, now)) return [];
+  return ownersWithViews(clientFor, laneId);
 }
 
 /** The scheduled run's bound: under the Inngest route's maxDuration (120 s), leaving time for the save. */
@@ -59,13 +65,20 @@ export async function runScheduled(clientFor: ClientFor, laneId: string, ownerUs
     },
   );
   if (claim?.gate === "done") return typeof claim.id === "string" ? claim.id : "done";
-  const res = await runBriefing(
+  const res = await runModel(c, p.provider, pol.data, laneId, ownerUserId, now);
+  if (res.status === "failed") throw new Error("briefing model step failed");
+  return res.id;
+}
+
+/** The model run shared by the scheduled and the refresh paths (the claim is the caller's business). */
+async function runModel(c: Db, provider: Extract<ReturnType<typeof getLLMProvider>, { configured: true }>["provider"], policyRow: unknown, laneId: string, ownerUserId: string, now: Date) {
+  return runBriefing(
     {
       client: c,
-      provider: p.provider,
+      provider,
       readBody: async (l, conn, m) => (await readGmailBody(l, conn, m)).text,
       brain: { brainUser: null, laneBrain: {}, notes: ["no_brain_in_schedule"] },
-      policy: policyFrom(pol.data),
+      policy: policyFrom(policyRow as Parameters<typeof policyFrom>[0]),
       save: (l, r) => saveBriefing(c, l, r),
       proposeReply: replyProposer(ownerUserId),
       // T-236 review L1: both model calls (a cut-off reply's retry included) stop before Inngest's maxDuration (120 s), so a
@@ -74,6 +87,40 @@ export async function runScheduled(clientFor: ClientFor, laneId: string, ownerUs
     },
     { laneId: laneId as LaneId, ownerUserId, trigger: "schedule", now, viewerTz: BUSINESS_TZ },
   );
+}
+
+/**
+ * The refresh after new mail (T-238): asks the EXISTING run claim (core.briefing_claim_refresh = brief.briefing_claim kind 'auto':
+ * 3 h stale, one running, 6 per lane and day, 10-minute pause). Any gate, or a claim that cannot be recorded, means NO model call:
+ * "refused". Only a granted claim runs the briefing (trigger recorded as "schedule"); its claim is closed after the run (done,
+ * failed, or lost when the run died). Throws when the model step failed, so the Inngest step is retried by its retry policy.
+ */
+export async function runRefresh(clientFor: ClientFor, laneId: string, ownerUserId: string, now: Date): Promise<"ran" | "refused" | "skipped"> {
+  const p = getLLMProvider();
+  if (!p.configured) return "skipped"; // no model, nothing to refresh (and nothing claimed)
+  const c = await clientFor(laneId);
+  const pol = await c.schema("core").from("lane_policies").select("llm_allowed_categories, store_outbound_drafts").eq("lane_id", laneId).maybeSingle();
+  if (pol.error) throw new Error("lane policy unavailable");
+  const claim = await c.schema("core").rpc("briefing_claim_refresh", { p_lane: laneId, p_owner: ownerUserId });
+  if (claim.error) throw new Error("claim unavailable");
+  const res0 = claim.data as { id?: unknown; gate?: unknown } | null;
+  if (typeof res0?.gate === "string") return "refused";
+  if (typeof res0?.id !== "string") return "refused";
+  const close = async (status: "done" | "failed" | "lost") => {
+    try {
+      await c.schema("core").rpc("briefing_claim_refresh_close", { p_lane: laneId, p_owner: ownerUserId, p_status: status });
+    } catch {
+      console.error("[briefing] refresh claim not closed", { laneId }); // the claim is closed as lost after 10 minutes
+    }
+  };
+  let res;
+  try {
+    res = await runModel(c, p.provider, pol.data, laneId, ownerUserId, now);
+  } catch {
+    await close("lost");
+    throw new Error("briefing refresh run died");
+  }
+  await close(res.status === "failed" ? "failed" : "done");
   if (res.status === "failed") throw new Error("briefing model step failed");
-  return res.id;
+  return "ran";
 }

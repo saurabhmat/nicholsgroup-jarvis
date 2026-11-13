@@ -19,7 +19,7 @@ function fakeClient(respond: (c: Call) => { data?: unknown; error?: { code?: str
   const rpcs: { fn: string; args: Record<string, unknown> }[] = [];
   const builder = (call: Call) => {
     const b: Record<string, unknown> = {};
-    for (const op of ["eq", "lt"]) b[op] = (col: string, v: unknown) => { call.filters.push([op, col, v]); return b; };
+    for (const op of ["eq", "lt", "or"]) b[op] = (col: string, v?: unknown) => { call.filters.push([op, col, v]); return b; };
     b.select = () => b;
     b.single = () => Promise.resolve({ data: respond(call).data ?? null, error: respond(call).error ?? null });
     b.then = (res: (v: unknown) => unknown) => Promise.resolve({ data: Array.isArray(respond(call).data) ? respond(call).data : [{ id: "run-1" }], error: respond(call).error ?? null }).then(res);
@@ -103,6 +103,33 @@ describe("sync run store", () => {
     expect(f.calls[0]).toMatchObject({ table: "connections", values: { last_sync_at: NOW.toISOString(), last_error: null } });
     expect(f.calls[1]?.values).not.toHaveProperty("status");
     expect(f.calls[1]?.filters).toEqual(expect.arrayContaining([["eq", "lane_id", "PKG"], ["eq", "id", CONN_ID]]));
+  });
+
+  it("T-238: a one-stream run tags its failure with the stream, and its success clears only that stream's (or the whole connection's) error", async () => {
+    const f = fakeClient();
+    const store = createSyncRunStore(f.clientFor, () => NOW);
+    const err = new ConnectorError({ kind: "forbidden", message: "f" }).toJSON();
+    await store.recordOutcome("PKG", conn, { ok: false, error: err }, "calendar");
+    expect(f.calls[0]).toMatchObject({ table: "connections", op: "update", values: { last_error: err, last_error_stream: "calendar" } });
+    await store.recordOutcome("PKG", conn, { ok: true }, "mail");
+    // last_sync_at moves; last_error is cleared only where it is mail's or the whole connection's (the calendar error stays)
+    expect(f.calls[1]).toMatchObject({ values: { last_sync_at: NOW.toISOString() } });
+    expect(f.calls[1]?.values).not.toHaveProperty("last_error");
+    expect(f.calls[2]).toMatchObject({ values: { last_error: null } });
+    expect(f.calls[2]?.filters).toEqual(expect.arrayContaining([["eq", "lane_id", "PKG"], ["eq", "id", CONN_ID], ["or", "last_error_stream.is.null,last_error_stream.eq.mail", undefined]]));
+    // a run of both streams (no stream) clears any error and tags a failure with null
+    await store.recordOutcome("PKG", conn, { ok: false, error: err });
+    expect(f.calls[3]?.values).toMatchObject({ last_error_stream: null });
+    await store.recordOutcome("PKG", conn, { ok: true });
+    expect(f.calls[4]).toMatchObject({ values: { last_sync_at: NOW.toISOString(), last_error: null } });
+    expect(f.calls[4]?.filters.some(([op]) => op === "or")).toBe(false);
+  });
+
+  it("refuses a stream value outside mail and calendar before building any filter", async () => {
+    const f = fakeClient();
+    const store = createSyncRunStore(f.clientFor, () => NOW);
+    await expect(store.recordOutcome("PKG", conn, { ok: true }, "mail,id.neq.x" as never)).rejects.toMatchObject({ info: { kind: "transient" } });
+    expect(f.calls).toHaveLength(0);
   });
 
   it("refuses a connection that is not bound to the lane", async () => {

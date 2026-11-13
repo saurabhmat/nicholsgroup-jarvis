@@ -55,6 +55,23 @@ describe("findConnection (read-only)", () => {
   });
 });
 
+describe("findById (reconnect, T-238)", () => {
+  const GOOGLE = { ...ROW, provider: "google", external_account_id: "ann@pubk.test", status: "disconnected" };
+  it("reads one native connection of the lane and provider by id, any status, and returns only id, account and status", async () => {
+    const f = fake({ row: GOOGLE });
+    await expect(createConnectionStore(f.clientFor).findById("PKG", "google", ROW.id)).resolves.toEqual({ id: ROW.id, externalAccountId: "ann@pubk.test", status: "disconnected" });
+    expect(f.calls.selected).toBe("id, external_account_id, status");
+    expect(f.calls.filters).toEqual([["lane_id", "PKG"], ["provider", "google"], ["transport", "native"], ["id", ROW.id]]);
+    expect(f.calls.upsert).toBeUndefined();
+  });
+  it("is null when there is no such row for this lane; refuses a bad lane or id; hides database text", async () => {
+    expect(await createConnectionStore(fake({ row: null }).clientFor).findById("PKG", "google", ROW.id)).toBeNull();
+    expect(await kind(createConnectionStore(fake().clientFor).findById("pkg", "google", ROW.id))).toBe("invalid_input");
+    expect(await kind(createConnectionStore(fake().clientFor).findById("PKG", "google", "not-a-uuid"))).toBe("invalid_input");
+    expect(await kind(createConnectionStore(fake({ selectError: { message: "secret" } }).clientFor).findById("PKG", "google", ROW.id))).toBe("transient");
+  });
+});
+
 describe("createConnectionStore", () => {
   it("records who started the connect as created_by", async () => {
     const f = fake();

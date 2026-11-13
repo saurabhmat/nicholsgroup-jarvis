@@ -21,6 +21,7 @@ import { timed } from "@/lib/timed";
 import { BrainSection } from "./brain-section";
 import { NewsSection } from "./news-section";
 import { newsSectionFor } from "@/lib/news-settings";
+import { jobFailureBannerFor } from "@/lib/job-failures";
 import { ModulePage } from "./module-page";
 
 export async function SettingsPage({
@@ -36,7 +37,7 @@ export async function SettingsPage({
   // Independent reads, run together (T-230 A). Each keeps its own role check; the guards memoise the shared ones.
   const now = new Date();
   const tz = viewerZone((await cookies()).get("tz")?.value);
-  const [result, quickbooks, google, composio, brain, coverage, news] = await Promise.all([
+  const [result, quickbooks, google, composio, brain, coverage, news, jobFailures] = await Promise.all([
     // The result of a connect the OAuth callback sent back here (fixed, allowlisted text; connect roles only).
     timed("load.connect_result", () => connectResultFor(g, lane.laneId, query)),
     timed("load.quickbooks", () => quickbooksSectionFor(g, lane.laneId, undefined, approvalsDeps)),
@@ -47,6 +48,8 @@ export async function SettingsPage({
     timed("load.coverage", () => coverageFor(g, lane.laneId, now)),
     // GovCon news status (T-234 part 4): owner and admin_technical only; null for everyone else.
     timed("load.news_settings", () => newsSectionFor(g, lane.laneId)),
+    // Scheduled functions that failed 3 times in a row (T-238 E): owner and admin_technical only.
+    timed("load.job_failures", () => jobFailureBannerFor(g, lane.laneId)),
   ]);
   // On another host than NEXT_PUBLIC_APP_URL a connect cannot finish (hosts only in the notice); only users who can connect see it.
   const origin = google || quickbooks || composio ? await currentOriginNotice() : null;
@@ -83,7 +86,7 @@ export async function SettingsPage({
         <div className="grid gap-4 lg:grid-cols-[200px_minmax(0,1fr)] lg:gap-8">
           <SettingsNav items={nav} />
           <div className="flex min-w-0 flex-col gap-4">
-            {google || quickbooks || composio || showCoverage ? <ConnectionsSection laneId={lane.laneId} google={google} quickbooks={quickbooks} composio={composio} coverage={showCoverage ? coverage : null} tz={tz} now={now} /> : null}
+            {google || quickbooks || composio || showCoverage ? <ConnectionsSection laneId={lane.laneId} google={google} quickbooks={quickbooks} composio={composio} coverage={showCoverage ? coverage : null} jobFailures={jobFailures} tz={tz} now={now} /> : null}
             {news ? <NewsSection view={news} tz={tz} now={now} /> : null}
             {brain ? <BrainSection laneId={lane.laneId} view={brain} /> : null}
           </div>

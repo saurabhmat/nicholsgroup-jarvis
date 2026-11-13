@@ -7,3 +7,4 @@ export * from "./attention";
 export * from "./sender";
 export * from "./compose";
 export * from "./failure";
+export * from "./sync-status";

@@ -2,7 +2,7 @@
 // the caller may see: account, last sync, status chip and a FIXED reason when it is not OK (codes only, names only; never
 // provider text). The state is a word in the chip, never colour alone.
 import { Badge } from "@nichols/ui";
-import { ago, formatTimeIn, type CoverageItem } from "@nichols/briefing/domain";
+import { ago, formatTimeIn, syncErrorText, type CoverageItem } from "@nichols/briefing/domain";
 import type { CoverageView } from "@/lib/coverage";
 
 const STATE_BADGE: Record<CoverageItem["state"], { label: string; variant: "success" | "alert" | "muted" | "outline" }> = {
@@ -36,6 +36,12 @@ export function CoverageList({ view, tz, now }: { view: CoverageView; tz: string
                 <span className="text-small text-muted-foreground">{c.lastSyncAt ? `Synced ${formatTimeIn(c.lastSyncAt, tz)} (${ago(c.lastSyncAt, now)})` : "Never synced"}</span>
                 <Badge variant={badge.variant}>{badge.label}</Badge>
                 {c.reason ? <span className="basis-full text-small text-muted-foreground">{c.reason}</span> : null}
+                {/* T-238: the latest sync failed (the connection carries the error from it) while the connection itself is still active: the same fixed text as Home. */}
+                {c.state !== "error" && c.errorKind !== null ? (
+                  <span data-testid="coverage-sync-error" className="basis-full text-small text-foreground">
+                    Latest sync failed: {syncErrorText(c.errorKind, c.provider)}
+                  </span>
+                ) : null}
               </li>
             );
           })}

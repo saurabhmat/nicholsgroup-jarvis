@@ -18,10 +18,13 @@ import { composeBriefing, homeFor, type HomeView } from "@/lib/home";
 import { briefingFor, lastFailureReason, latestBriefing, loadRunState } from "@/lib/briefing";
 import { aiSetupFailure } from "@/lib/briefing-setup";
 import { adminHint } from "@nichols/briefing/hints";
+import { staleDataLine } from "@nichols/briefing/domain";
 import { AiBriefing, Deadlines, notesByMessage, repliesByMessage } from "./home-ai-briefing";
 import { ReplyDrafts } from "./home-reply-drafts";
 import { AttentionSection, CalendarSections } from "./home-briefing";
 import { HomeCoverageDot } from "./coverage-dot";
+import { JobFailureBanner } from "./job-failure-banner";
+import { jobFailureBannerFor } from "@/lib/job-failures";
 import { KpiStrip } from "./kpi-strip";
 import { GovConNews } from "./home-news";
 import { loadNewsCard } from "@/lib/news";
@@ -130,7 +133,7 @@ async function HomeSections({ laneId, now }: { laneId: string; now: Date }) {
   const g = await guards();
   // Home v1 counts and the T-231 briefing sections load in parallel. Each shows its own "unavailable" state; neither ever shows an empty day.
   const laneClient = async () => (await g.requireLane(laneId as Parameters<typeof g.requireLane>[0])).client;
-  const [view, brief, saved, isAdmin, isOwner, newsCard, runState] = await Promise.all([
+  const [view, brief, saved, isAdmin, isOwner, newsCard, runState, jobFailures] = await Promise.all([
     timed("load.home", async () => homeFor(g, laneId, now)),
     timed("load.briefing", async () => briefingFor(await laneClient(), laneId, now, tz)),
     timed("load.briefing_latest", async () => latestBriefing(await laneClient(), laneId)),
@@ -147,6 +150,8 @@ async function HomeSections({ laneId, now }: { laneId: string; now: Date }) {
     }),
     // The owner's run state (a run open, the last Regenerate, runs today): SQL answers nothing for anyone else (T-235 part 1).
     timed("load.briefing_run_state", async () => loadRunState(await laneClient(), laneId)),
+    // Scheduled functions that failed 3 times in a row (T-238 E): owner and admin_technical only, null for everyone else or when unreadable.
+    timed("load.job_failures", () => jobFailureBannerFor(g, laneId)),
   ]);
   // Why there is no AI summary: the AI setup itself (names only), else the stored code of the newest failed attempt.
   const setup = aiSetupFailure();
@@ -156,11 +161,16 @@ async function HomeSections({ laneId, now }: { laneId: string; now: Date }) {
   return (
     <>
       <TimezoneCookie current={tzCookie ?? null} />
-      {view.unavailable ? (
-        <Alert variant="alert" className={`${GRID_FULL} md:row-start-1 md:mb-5`}>
-          <AlertTitle>Some of today&apos;s information could not be loaded</AlertTitle>
-          <AlertDescription>Reload the page in a minute. If it keeps happening, check Settings → Connections.</AlertDescription>
-        </Alert>
+      {view.unavailable || jobFailures ? (
+        <div data-testid="home-alerts-slot" className={`${GRID_FULL} flex flex-col gap-3 md:row-start-1 md:mb-5`}>
+          <JobFailureBanner laneId={laneId} items={jobFailures} now={now} />
+          {view.unavailable ? (
+            <Alert variant="alert">
+              <AlertTitle>Some of today&apos;s information could not be loaded</AlertTitle>
+              <AlertDescription>Reload the page in a minute. If it keeps happening, check Settings → Connections.</AlertDescription>
+            </Alert>
+          ) : null}
+        </div>
       ) : null}
       {/* KPI row: directly under the approvals banner on desktop, after Today on the phone. Its own boundary: a slow QuickBooks read never holds the rest back. */}
       <div data-testid="home-kpi-slot" className={`${GRID_FULL} order-3 min-w-0 empty:hidden md:order-none md:row-start-2 md:mb-5`}>
@@ -170,7 +180,7 @@ async function HomeSections({ laneId, now }: { laneId: string; now: Date }) {
       </div>
       <div data-testid="home-attention-slot" className="order-1 flex min-w-0 flex-col gap-5 md:order-none md:col-span-2 md:col-start-1 md:row-span-3 md:row-start-3 md:mb-5">
         <PageSection title="Needs your attention" note="Top 5 · metadata only">
-          <AiBriefing laneId={laneId} brief={saved} fallbackLines={view.unavailable ? [] : composeBriefing(view, now)} tz={brief.viewerTz} controls={isOwner && brief.mail.access ? <BriefingAuto laneId={laneId} preparedAt={saved && saved.status !== "failed" ? saved.preparedAt : null} initial={runState} tz={brief.viewerTz} /> : null} now={now} failure={failure} failureHint={failureHint} />
+          <AiBriefing laneId={laneId} brief={saved} fallbackLines={view.unavailable ? [] : composeBriefing(view, now)} tz={brief.viewerTz} controls={isOwner && brief.mail.access ? <BriefingAuto laneId={laneId} preparedAt={saved && saved.status !== "failed" ? saved.preparedAt : null} initial={runState} tz={brief.viewerTz} /> : null} now={now} failure={failure} failureHint={failureHint} staleLine={brief.unavailable ? null : staleDataLine(brief.coverage, now, saved && saved.status !== "failed" ? saved.preparedAt : null)} />
           <AttentionSection laneId={laneId} mail={brief.mail} now={now} notes={notesByMessage(saved)} replies={repliesByMessage(saved)} canReply={isOwner} tz={brief.viewerTz} />
           {saved && saved.status !== "failed" ? (
             // Folded so the card stays short: reply drafts (with Copy) and deadlines from the briefing.

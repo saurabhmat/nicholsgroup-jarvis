@@ -12,6 +12,11 @@ import type { JobClientFor } from "./tokens";
 export interface ConnectionStore {
   /** The lane's connection for this provider account, created `pending` when there is none; minted lane-bound. */
   ensureConnection(laneId: LaneId, provider: Provider, externalAccountId: string, createdBy?: string): Promise<LaneBoundConnection>;
+  /**
+   * One native connection of the lane by id, for a reconnect (T-238): null when there is none for this lane, provider and id (another
+   * lane's, another provider's, a Composio one, or no such row). Any status, `disconnected` included. Read-only; ids, status and the account id.
+   */
+  findById(laneId: LaneId, provider: Provider, connectionId: string): Promise<{ id: string; externalAccountId: string; status: string } | null>;
   /** Merges boolean features into the connection row (T-232: Google `gmail_compose`), through the lane's job client. */
   setFeatures(laneId: LaneId, connection: LaneBoundConnection, features: Record<string, boolean>): Promise<void>;
   /** The lane's newest connection for the provider that is not disconnected, or null. Read-only (T-198 health check). */
@@ -64,6 +69,34 @@ export function createConnectionStore(clientFor: JobClientFor): ConnectionStore 
         return mintLaneBoundConnection(row as Connection);
       } catch {
         throw new ConnectorError({ kind: "provider_error", message: "Stored connection row is invalid" });
+      }
+    },
+    async findById(laneId, provider, connectionId) {
+      if (typeof laneId !== "string" || !LANE_ID.test(laneId) || typeof connectionId !== "string" || !/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(connectionId)) {
+        throw new ConnectorError({ kind: "invalid_input", message: "A lane and a connection id are required" });
+      }
+      let client: Awaited<ReturnType<JobClientFor>>;
+      try {
+        client = await clientFor(laneId);
+      } catch {
+        throw new ConnectorError({ kind: "connection_unavailable", message: "Lane is not available for connection access" });
+      }
+      try {
+        const { data, error } = await client
+          .schema("core")
+          .from("connections")
+          .select("id, external_account_id, status")
+          .eq("lane_id", laneId)
+          .eq("provider", provider)
+          .eq("transport", "native")
+          .eq("id", connectionId)
+          .maybeSingle();
+        if (error) throw error;
+        const row = data as { id?: unknown; external_account_id?: unknown; status?: unknown } | null;
+        if (!row || typeof row.id !== "string" || typeof row.external_account_id !== "string" || typeof row.status !== "string") return null;
+        return { id: row.id, externalAccountId: row.external_account_id, status: row.status };
+      } catch {
+        throw new ConnectorError({ kind: "transient", message: "Connection store unavailable" });
       }
     },
     async setFeatures(laneId, connection, features) {

@@ -52,7 +52,7 @@ describe("mapGoogleStatus", () => {
     ["pending", "connecting"],
     ["degraded", "degraded"],
     ["reconnect_required", "reconnect_required"],
-    ["disconnected", undefined],
+    ["disconnected", "disconnected"],
     ["weird", undefined],
     [null, undefined],
   ])("%s -> %s", (s, want) => expect(mapGoogleStatus(s)).toBe(want));
@@ -98,10 +98,10 @@ describe("loadGoogleSection", () => {
     expect(view.connections[0]).toMatchObject({ lastMailSyncAt: null, lastCalendarSyncAt: null, mailboxAllowed: false });
   });
 
-  it("maps reconnect_required and hides disconnected rows", async () => {
+  it("maps reconnect_required and lists disconnected rows so they can be reconnected (T-238)", async () => {
     const rows: Rows = { ...connected, connections: { data: [{ id: CID, external_account_id: "ops@example.test", status: "reconnect_required" }, { id: "x", external_account_id: "old@example.test", status: "disconnected" }], error: null } };
     const view = await loadGoogleSection(fakeClient(rows), "PKG");
-    expect(view.connections.map((c) => c.state)).toEqual(["reconnect_required"]);
+    expect(view.connections.map((c) => c.state)).toEqual(["reconnect_required", "disconnected"]);
   });
 
   it("no connection: empty list, and no further reads", async () => {

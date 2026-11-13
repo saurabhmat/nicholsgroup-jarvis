@@ -92,11 +92,11 @@ describe("planCalIngest", () => {
 
 describe("what is sent is what conn.sync accepts", () => {
   it("the fan-out event is a valid conn/sync.requested with trigger schedule and the tick id", async () => {
-    const e = connSyncRequested.create({ laneId: "PKG", connectionId: A, trigger: "schedule" }, { id: calIngestEventId(A, 7) });
+    const e = connSyncRequested.create({ laneId: "PKG", connectionId: A, trigger: "schedule", streams: ["calendar"] }, { id: calIngestEventId(A, 7) });
     expect(e.name).toBe("conn/sync.requested");
     expect(e.id).toBe("cal-ingest:" + A + ":7");
     await expect(e.validate()).resolves.toBeUndefined();
-    expect(e.data).toEqual({ laneId: "PKG", connectionId: A, trigger: "schedule" });
+    expect(e.data).toEqual({ laneId: "PKG", connectionId: A, trigger: "schedule", streams: ["calendar"] });
   });
 
   it("forged or invalid events are refused by conn.sync without running a sync", async () => {
@@ -108,6 +108,8 @@ describe("what is sent is what conn.sync accepts", () => {
       { laneId: "PKG", connectionId: "x", trigger: "schedule" },
       { laneId: "pkg", connectionId: A, trigger: "schedule" },
       { laneId: "PKG", connectionId: A, trigger: "schedule", token: "t" },
+      { laneId: "PKG", connectionId: A, trigger: "schedule", streams: ["contacts"] },
+      { laneId: "PKG", connectionId: A, trigger: "schedule", streams: [] },
     ];
     for (const b of bad) await expect(handleConnSync(d, b as never, null)).rejects.toBeInstanceOf(NonRetriableError);
     await expect(handleConnSync(d, { laneId: "APK", connectionId: A, trigger: "schedule" }, null)).resolves.toEqual({ ok: true, skipped: "lane_not_served" });
@@ -133,8 +135,8 @@ describe("handleCalIngest", () => {
     expect(out).toEqual({ lanes: 1, connections: 2, slot });
     expect(sent).toHaveLength(1);
     expect(sent[0]?.events.map((e) => [e.name, e.id, e.data])).toEqual([
-      ["conn/sync.requested", calIngestEventId(A, slot), { laneId: "PKG", connectionId: A, trigger: "schedule" }],
-      ["conn/sync.requested", calIngestEventId(B, slot), { laneId: "PKG", connectionId: B, trigger: "schedule" }],
+      ["conn/sync.requested", calIngestEventId(A, slot), { laneId: "PKG", connectionId: A, trigger: "schedule", streams: ["calendar"] }],
+      ["conn/sync.requested", calIngestEventId(B, slot), { laneId: "PKG", connectionId: B, trigger: "schedule", streams: ["calendar"] }],
     ]);
   });
 

@@ -7,7 +7,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { cleanup, render, screen, within } from "@testing-library/react";
 import type { HomeView } from "@/lib/home";
 
-const m = vi.hoisted(() => ({ financeView: false, owner: false, mail: { access: false } as { access: boolean; attention?: unknown[]; more?: number; money?: unknown[]; mailboxOf?: Record<string, string> }, coverage: { items: [], unavailable: false } as unknown, view: null as unknown, progress: null as unknown, detail: { state: "no_access" } as unknown, userName: undefined as string | undefined, cookieTz: undefined as string | undefined, briefingTz: [] as string[], finance: { state: "not_connected", asOf: null, lastSyncAt: null, connectionStatus: null, cash: { reason: null, total: null, asOf: null, accounts: [], unmapped: 0 }, ar: { reason: null, over30: null, invoices: 0, unmapped: 0 }, pnl: { reason: null, income: null, expenses: null, net: null, start: null, end: null, method: null, partial: false, asOf: null } } as unknown }));
+const m = vi.hoisted(() => ({ jobFailures: null as unknown, briefCoverage: [] as unknown[], financeView: false, owner: false, mail: { access: false } as { access: boolean; attention?: unknown[]; more?: number; money?: unknown[]; mailboxOf?: Record<string, string> }, coverage: { items: [], unavailable: false } as unknown, view: null as unknown, progress: null as unknown, detail: { state: "no_access" } as unknown, userName: undefined as string | undefined, cookieTz: undefined as string | undefined, briefingTz: [] as string[], finance: { state: "not_connected", asOf: null, lastSyncAt: null, connectionStatus: null, cash: { reason: null, total: null, asOf: null, accounts: [], unmapped: 0 }, ar: { reason: null, over30: null, invoices: 0, unmapped: 0 }, pnl: { reason: null, income: null, expenses: null, net: null, start: null, end: null, method: null, partial: false, asOf: null } } as unknown }));
 vi.mock("@/lib/lane-page", () => ({ loadLane: async () => ({ laneId: "PKG", name: "Pub K Group", lanes: [], userId: "u1" }) }));
 vi.mock("@/lib/guards", () => ({ guards: async () => ({ requireLane: async () => ({ client: {}, session: { userId: "u1" } }), requireRole: async (_l: string, roles: string[]) => { if (m.owner && roles.includes("owner")) return { client: {}, session: { userId: "u1" } }; throw new Error("not admin"); } }) }));
 vi.mock("@/app/[laneId]/briefing-actions", () => ({ ensureFreshBriefing: async () => ({ started: false, gate: "not_stale" }), regenerateBriefing: async () => ({ started: false, gate: "not_stale" }), briefingRunState: async () => null }));
@@ -16,9 +16,10 @@ vi.mock("next/headers", () => ({ cookies: async () => ({ get: (n: string) => (n 
 vi.mock("next/navigation", () => ({ useRouter: () => ({ refresh: () => undefined }) }));
 vi.mock("@/lib/briefing", async (orig) => ({
   ...(await orig<typeof import("@/lib/briefing")>()),
-  briefingFor: async (_c: unknown, _l: string, _n: Date, tz: string) => (m.briefingTz.push(tz), { viewerTz: "America/New_York", coverage: [], coverageLine: "Coverage: test.", calendar: { access: false }, mail: m.mail.access ? { access: true, attention: [], more: 0, money: [], mailboxOf: {} } : { access: false }, config: {}, mailboxes: [] }),
+  briefingFor: async (_c: unknown, _l: string, _n: Date, tz: string) => (m.briefingTz.push(tz), { viewerTz: "America/New_York", coverage: m.briefCoverage, coverageLine: "Coverage: test.", calendar: { access: false }, mail: m.mail.access ? { access: true, attention: [], more: 0, money: [], mailboxOf: {} } : { access: false }, config: {}, mailboxes: [] }),
 }));
 vi.mock("@/lib/coverage", async (orig) => ({ ...(await orig<typeof import("@/lib/coverage")>()), coverageFor: async () => m.coverage }));
+vi.mock("@/lib/job-failures", async (orig) => ({ ...(await orig<typeof import("@/lib/job-failures")>()), jobFailureBannerFor: async () => m.jobFailures }));
 vi.mock("@/lib/timed", () => ({ timed: async <T,>(_n: string, f: () => Promise<T>) => f() }));
 vi.mock("@/lib/onboarding-progress", () => ({
   onboardingFor: async () => m.progress,
@@ -82,6 +83,8 @@ afterEach(() => {
   m.financeView = false;
   m.mail = { access: false };
   m.coverage = { items: [], unavailable: false };
+  m.briefCoverage = [];
+  m.jobFailures = null;
 });
 
 describe("Home display zone (T-237 polish)", () => {
@@ -222,17 +225,44 @@ describe("Home layout (T-234 part 1)", () => {
     expect(screen.queryByTestId("home-kpis-banner")).toBeNull(); // the banner for owner / admin is in home-widgets.test.tsx
   });
 
-  it("the header status dot shows only when a source is stale or in error, inside the header, linking to Settings -> Connections", async () => {
+  it("the header sync status shows when a source is connected, inside the header, linking to Settings -> Connections; nothing with no source", async () => {
     m.view = view();
     await draw();
-    expect(screen.queryByTestId("coverage-dot")).toBeNull(); // all quiet: nothing in the header
+    expect(screen.queryByTestId("coverage-dot")).toBeNull(); // no source connected: nothing in the header
     cleanup();
     m.coverage = { items: [{ stream: "mail", account: "a@pubk.test", connectionId: "c", provider: "google", status: "active", configured: true, lastSyncAt: null, errorKind: null, state: "stale", reason: "Not synced yet." }], unavailable: false };
     await draw();
     const dot = screen.getByTestId("coverage-dot");
     expect(dot.closest("header")).toBeTruthy();
     expect(dot.getAttribute("href")).toBe("/PKG/settings#connections");
-    expect(dot.getAttribute("aria-label")).toMatch(/stale or in error/);
+    expect(dot.textContent).toContain("Mail not synced yet");
+    expect(dot.getAttribute("aria-label")).toMatch(/Mail not synced yet/);
+    expect(screen.queryByTestId("home-sync-now")).toBeNull(); // not owner or admin in this mock
+  });
+
+  it("T-238 E: the failed-function banner shows on Home when the loader returns items (owner/admin only; null for everyone else), and not otherwise", async () => {
+    m.view = view();
+    await draw();
+    expect(screen.queryByTestId("job-failure-banner")).toBeNull();
+    cleanup();
+    m.jobFailures = [{ functionId: "conn-sync.mail", name: "Mail sync", failures: 3, since: "2026-11-13T14:15:00Z", detail: null }];
+    await draw();
+    expect(screen.getByTestId("job-failure-banner").textContent).toMatch(/Mail sync has failed 3 times in a row since .* ET\./);
+    expect(screen.getByTestId("job-failure-settings-link").getAttribute("href")).toBe("/PKG/settings#connections");
+  });
+
+  it("T-238 F: one plain line in the summary card when mail data is older than 24 hours, none when fresh", async () => {
+    const src = (stream: string, lastSyncAt: string) => ({ stream, account: `${stream}@pubk.test`, connectionId: `c-${stream}`, provider: "google", status: "active", configured: true, lastSyncAt, errorKind: null, state: "ok", reason: null });
+    m.view = view();
+    m.briefCoverage = [src("mail", new Date(Date.now() - 5 * 60_000).toISOString()), src("calendar", new Date(Date.now() - 5 * 60_000).toISOString())];
+    await draw();
+    expect(screen.queryByTestId("stale-data-line")).toBeNull();
+    cleanup();
+    m.briefCoverage = [src("mail", new Date(Date.now() - 26 * 3_600_000).toISOString()), src("calendar", new Date(Date.now() - 5 * 60_000).toISOString())];
+    await draw();
+    expect(screen.getAllByTestId("stale-data-line")).toHaveLength(1);
+    expect(screen.getByTestId("stale-data-line").textContent).toMatch(/^Mail was last synced 26 hours ago, so this summary may miss newer email\.$/);
+    expect(screen.getByTestId("stale-data-line").closest("[data-testid=ai-briefing]")).toBeTruthy();
   });
 
   it("cards use the shared card look: 12px radius token, subtle shadow", async () => {

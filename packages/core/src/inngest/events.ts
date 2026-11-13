@@ -18,7 +18,20 @@ export const connSyncRequested = eventType("conn/sync.requested", {
      * connector checks them against its own allowlist again and refuses an unknown one. Absent = the whole connection.
      */
     objectTypes: z.array(z.string().regex(/^[A-Za-z]{1,40}$/)).min(1).max(16).optional(),
+    /**
+     * Limit a Google run to one stream (T-238): the scheduled Gmail delta asks for ["mail"], the calendar delta for ["calendar"], so each
+     * stream runs once per tick. Absent = both (manual, connect and webhook triggers, and any other provider).
+     */
+    streams: z.array(z.enum(["mail", "calendar"])).min(1).max(2).optional(),
   }),
+});
+
+/**
+ * A scheduled mail sync wrote new messages (T-238): refresh the lane's briefing through the run claim (stale after 3 h, 6 runs a day,
+ * one running). Lane id only. The event id is per lane and 15-minute slot, so one tick sends at most one.
+ */
+export const briefingRefreshRequested = eventType("briefing/refresh.requested", {
+  schema: z.strictObject({ laneId: laneIdSchema }),
 });
 
 /** An approved action is ready to execute (approvals spec §5, T-193): ids only. */
@@ -111,6 +124,7 @@ export const finQboNormalizeRequested = eventType("fin/qbo-normalize.requested",
 /** Every lane event, for the test that checks they all require laneId. Add new events here. */
 export const LANE_EVENTS = [
   connSyncRequested,
+  briefingRefreshRequested,
   actionApproved,
   systemHeartbeat,
   webhookReceived,
