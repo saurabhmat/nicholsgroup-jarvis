@@ -7,6 +7,7 @@ import { senderLabel } from "@nichols/briefing/domain";
 import { guards } from "@/lib/guards";
 import { inboxFor, INBOX_FILTERS, isWaitingView, waitingFor, type InboxFilter, type InboxRow } from "@/lib/inbox";
 import { loadLane } from "@/lib/lane-page";
+import { freshWindowText } from "@/lib/fresh-window";
 import { CardSkeleton } from "./page-skeleton";
 import { timed } from "@/lib/timed";
 
@@ -42,14 +43,13 @@ async function InboxList({ laneId, searchParams }: { laneId: string; searchParam
   // T-240: ?view=waiting lists the older threads Home counts as "Still waiting" (same ranking, metadata only).
   if (isWaitingView(params)) {
     const waiting = await timed("load.inbox_waiting", async () => waitingFor(await guards(), laneId, now));
-    const days = waiting.freshHours % 24 === 0 ? `${String(waiting.freshHours / 24)} day${waiting.freshHours === 24 ? "" : "s"}` : `${String(waiting.freshHours)} hours`;
     return (
       <>
         <nav aria-label="Filter mail" className="flex flex-wrap gap-2">
           <Link href={base} className="rounded-full border border-border bg-card px-4 py-1.5 text-body font-medium text-foreground transition-colors hover:bg-muted">All mail</Link>
           <Link href={`${base}?view=waiting`} aria-current="page" className="rounded-full border border-primary bg-primary px-4 py-1.5 text-body font-medium text-primary-foreground">Still waiting</Link>
         </nav>
-        <p data-testid="inbox-waiting-note" className="text-body text-muted-foreground">Threads that still need you, with no new message in the last {days}. Newest first.</p>
+        <p data-testid="inbox-waiting-note" className="text-body text-muted-foreground">Threads that still need you, with no new message in the last {freshWindowText(waiting.freshHours)}. Newest first.</p>
         {waiting.unavailable ? (
           <Alert variant="alert">
             <AlertTitle>Mail could not be loaded</AlertTitle>
