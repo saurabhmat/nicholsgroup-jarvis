@@ -161,8 +161,23 @@ describe("T-240: tidyModelText (no row refs, no UTC)", () => {
   it("removes bare row refs, parenthesised and bracketed ones, and tidies the spacing", () => {
     expect(tidyModelText("Client asked about the renewal (r4).", now)).toBe("Client asked about the renewal.");
     expect(tidyModelText("Two threads [r6] and (r2, r3) need a reply.", now)).toBe("Two threads and need a reply.");
-    expect(tidyModelText("See r4 for the contract, then reply to r6.", now)).toBe("for the contract, then reply to.");
+    expect(tidyModelText("See r4 for the contract, then reply to r6.", now)).toBe("See this thread for the contract, then reply to this thread.");
     expect(tidyModelText("r1: the board deck is due", now)).toBe("the board deck is due");
+  });
+  it("with the refs the model was given: only those are refs; other r<n> words, R2 and r&d are untouched; a field is never emptied", () => {
+    const refs = new Set(["r1", "r4"]);
+    expect(tidyModelText("Reply to r4 today about the r2 round.", now, refs)).toBe("Reply to this thread today about the r2 round.");
+    expect(tidyModelText("The ryzen r5 quote (r4) and R2 funding, r&d budget.", now, refs)).toBe("The ryzen r5 quote and R2 funding, r&d budget.");
+    expect(tidyModelText("Model r7 shipped [r9].", now, refs)).toBe("Model r7 shipped [r9].");
+    expect(tidyModelText("r1: the board deck is due", now, refs)).toBe("the board deck is due");
+  });
+  it("tidyContent passes the refs through", () => {
+    const c = { lines: ["Reply to r4 about the r2 round."], attention: [], deadlines: [], priorities: [], replies: [], notes: [] } as unknown as BriefContent;
+    expect(tidyContent(c, now, [{ ref: "r4" }] as unknown as BriefRef[]).lines).toEqual(["Reply to this thread about the r2 round."]);
+    const only = { lines: ["(r4)"], attention: [{ ref: "r4", what: "(r4)", why: "w", next: "n" }], deadlines: [], priorities: [], replies: [], notes: [] } as unknown as BriefContent;
+    const out = tidyContent(only, now, [{ ref: "r4" }] as unknown as BriefRef[]);
+    expect(out.lines).toEqual([]); // a line that was only a ref is dropped
+    expect(out.attention[0]?.what).toBe("(r4)"); // a field is never emptied
   });
   it("leaves words and ids that only look like refs", () => {
     for (const keep of ["The r2d2 project", "Route 4r", "Invoice #r4", "email r4@acme.test", "Plan R2 is next", "the 2026-r4 cycle"]) expect(tidyModelText(keep, now)).toBe(keep);
@@ -198,7 +213,7 @@ describe("T-240: tidyModelText (no row refs, no UTC)", () => {
     expect(out.attention[0]).toEqual({ ref: "r1", what: "Renewal", why: "Due at 9:00 AM ET", next: "Confirm" });
     expect(out.deadlines[0]).toEqual({ ref: "r1", text: "Renewal", due: "Nov 12, 10:00 AM ET" });
     expect(out.priorities[0]).toEqual({ text: "Reply", reason: "VIP", refs: ["r1"] });
-    expect(out.replies[0]).toEqual({ ref: "r1", status: "ready", context: "About", text: "Hi, see r1 at 2026-11-12T15:00:00Z" });
+    expect(out.replies[0]).toEqual({ ref: "r1", status: "ready", context: "About this thread", text: "Hi, see r1 at 2026-11-12T15:00:00Z" });
     expect(out.moreReplies).toEqual(["r2"]);
     expect(out.notes).toEqual(["body_unreadable:r2"]);
   });

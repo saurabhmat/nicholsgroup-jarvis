@@ -319,6 +319,11 @@ describe("T-240: Waiting on you vs the reason chips", () => {
     expect(rankAttention([t({ lastToOwner: true, lastIsOwner: true, ownerReplied: true })], rules, now).top).toEqual([]);
     expect(waitingOnYou(t({ lastToOwner: true, lastIsOwner: true }))).toBe(false);
   });
+  it("an automated security alert addressed to the owner is not \"Waiting on you\" (code review M1)", () => {
+    const alert = one({ fromAddress: "no-reply@accounts.google.com", subject: "Security alert", unreadCount: 0, lastToOwner: true });
+    expect(alert?.kind).toBe("security");
+    expect(alert?.flags.waitingOnYou).toBe(false);
+  });
   it("the reason text does not claim a reply is owed when the owner is not in the To", () => {
     expect(one({ unreadCount: 0, lastToOwner: true })?.reason).toBe("Read, not answered · 5h");
     expect(one({ unreadCount: 0 })?.reason).toBe("Read, no reply from you · 5h");

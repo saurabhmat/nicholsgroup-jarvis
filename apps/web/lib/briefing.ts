@@ -82,14 +82,20 @@ export function ownMailDomains(owners: Iterable<string>): string[] {
   return [...new Set([...owners].map(domainOf).filter((d) => d !== "" && !PUBLIC_MAIL_DOMAINS.has(d)))];
 }
 
-/** Display names the mail index holds for exact sender addresses (never an address as a name), for attendees whose event has no name. */
-export function knownNamesFrom(rows: readonly { fromAddress: string | null; fromName: string | null }[]): Record<string, string> {
-  const out: Record<string, string> = {};
+/**
+ * Display names the mail index holds for exact sender addresses (never an address as a name), for attendees whose event has no name.
+ * Only from mail that PASSED sender authentication (T-240 security review M2: a forged From must not rename a real attendee); the
+ * newest such row wins. UI only: these names are never put into the AI facts (review M1).
+ */
+export function knownNamesFrom(rows: readonly { fromAddress: string | null; fromName: string | null; isAuthPass?: boolean }[]): Record<string, string> {
+  const out = new Map<string, string>();
   for (const r of rows) {
+    if (r.isAuthPass !== true || !r.fromAddress) continue;
+    const key = r.fromAddress.toLowerCase();
     const name = r.fromName?.trim().replace(/\s+/g, " ");
-    if (r.fromAddress && name && !name.includes("@") && name.length <= 100 && !(r.fromAddress in out)) out[r.fromAddress.toLowerCase()] = name;
+    if (name && !name.includes("@") && name.length <= 100 && !out.has(key)) out.set(key, name);
   }
-  return out;
+  return Object.fromEntries(out);
 }
 
 /** Owner domains count as internal, except public mail providers (gmail.com says nothing about who is a colleague). */
@@ -130,7 +136,8 @@ export async function loadBriefing(client: Db, laneId: string, now: Date, viewer
   else if (calendarAccess) {
     const knownNames = knownNamesFrom(threads.error ? [] : parseThreads(threads.data));
     const split = splitByDay(parseEvents(events.data), from, to, localDate(from, viewerTz), 7);
-    calendar = { access: true, knownNames, today: analyzeDay(split.today, owners, internal), ahead: notableAhead(split.later, owners, internal, 8, new Map(Object.entries(knownNames))), aheadSummary: summarizeAhead(split.later, owners), owners: [...owners] };
+    calendar = { access: true, knownNames, today: analyzeDay(split.today, owners, internal), // No knownNames here: `ahead` feeds the AI facts, and mail display names are sender-written and may be outside the lane's AI policy.
+    ahead: notableAhead(split.later, owners, internal, 8), aheadSummary: summarizeAhead(split.later, owners), owners: [...owners] };
   }
   let mail: MailSection = { access: false };
   if (mailAccess && threads.error) mail = { access: false, unavailable: true };

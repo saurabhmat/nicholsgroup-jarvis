@@ -324,7 +324,7 @@ export async function runBriefing(deps: RunDeps, input: { laneId: LaneId; ownerU
     }
     const raw: unknown = parsed.value;
     // Tidy first (refs and UTC times out of the sentences), then mask: masking would split a timestamp.
-    content = maskContent(tidyContent(checkContent(raw, refs, sourcesFor, allSources, { replies: policy.storeDrafts }), now));
+    content = maskContent(tidyContent(checkContent(raw, refs, sourcesFor, allSources, { replies: policy.storeDrafts }), now, refs));
     if (!policy.storeDrafts) notes.push("reply_drafts_off");
   } catch (e) {
     // Class name and the fixed reason code only: never a provider message, a value or a prompt.

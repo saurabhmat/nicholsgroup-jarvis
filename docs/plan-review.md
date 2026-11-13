@@ -1237,3 +1237,25 @@ Security re-check of the review fixes (05713eb): no BLOCKER or HIGH.
   - (LOW L-2) pgTAP proves both triggers fire on service_role updates.
   - (LOW L-4/L-5) The part 18 header names the job_failures trigger; the check also asserts service_role execute and the access checks inside `briefing_coverage`.
 - Logged, not fixed: (LOW L-3) in the bound-row mismatch case, `ensureConnection` may leave a tokenless `pending` row before the reconnect is refused. No secret is involved, and it cannot happen with today's unique key.
+
+## T-240: review results (security and code review, Nov 13, 2026)
+Neither review found a BLOCKER or HIGH.
+
+Fixed:
+- (code review M1) "Waiting on you" applies only to mail from a person. An automated security alert addressed to the owner no longer gets it (test).
+- (code review M3) Summary clean-up removes only the refs the model was actually given. Other text is left alone ("the r2 round", "ryzen r5", "R2", "r&d"). A ref after "to/about/see/per..." becomes "this thread"; elsewhere it is removed. A field is never emptied; a line that was only a ref is dropped (tests).
+- (security M1) Mail display names are no longer put into the AI facts. `notableAhead` for the facts gets no known names; the names are used for the Home UI only.
+- (security M2, L1) Attendee names come only from mail that passed sender authentication, keyed by the lowercase address in a Map (no prototype keys) (tests).
+- `packages/core/src/db/types.ts` regenerated for `last_to_owner`.
+
+Logged, not fixed:
+- (code review M2) Senders in the attention list who have no display name still get a name derived from the address (`nameFromEmail` in `domain/sender.ts`), the same "Rnichols" effect. The brief named attendees only. Follow-up: show the address instead.
+- (code review M4) `core.briefing_threads` computes `to_owner` for every message in the window, not only the latest inbound one. Correct, but extra work on each Home load. Follow-up: compute it in `last_in`.
+- (code review L1) The Still waiting count can exceed the Inbox list if a row fails `isMessageId` (same ranking function otherwise).
+- (code review L3) Own-domain exclusion runs before the priority check: an authenticated VIP writing from an own-domain `info@`/`news@` address is excluded, and own-domain `is_generated` mail is now a hard exclusion.
+- (code review L4) `PUBLIC_MAIL_DOMAINS` is short (msn.com, hey.com, gmx, pm.me, fastmail, comcast.net, ... missing). Small impact: colleagues still rank.
+- (code review L5) The QuickBooks reconnect state shows on the strip and on the tiles. The strip uses `role="status"` (a live region) for static text.
+- (code review L6, security L4) A date-only ISO date in model text is not rewritten. A bare "23:30 UTC" is dated from `now`'s UTC day. Watch `lines_ungrounded` after deploy.
+- (code review L7) The sidebar's `w-60` + `min-w-60` is redundant. Colours not checked by eye.
+- (security L2, L3) pgTAP 313: the viewer denial counts only `last_to_owner` rows. Missing: a test of a role with the comms view but no connections view, and an APK-only member calling PKG.
+- (security L5) A subject (sender-controlled) can lift a person's thread into the Money/Deadline band. By design; no privilege change.

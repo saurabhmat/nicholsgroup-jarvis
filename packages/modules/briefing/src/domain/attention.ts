@@ -266,7 +266,8 @@ export function rankAttention(rows: ThreadRow[], r: AttentionRules, now: Date, l
     const toOwner = waitingOnYou(t);
     const money = MONEY_KINDS.find((k) => subjectHas(t.subject, r.money[k])) ?? null;
     const deadline = subjectHas(t.subject, r.deadlineSubjects);
-    const flags: AttentionFlags = { vip: priority, money, deadline, waitingOnYou: toOwner };
+    // "Waiting on you" only for mail from a person (code review M1): an automated security alert addressed to the owner waits on nobody.
+    const flags: AttentionFlags = { vip: priority, money, deadline, waitingOnYou: toOwner && person };
     let item: { band: number; kind: AttentionKind; reason: string } | null = null;
     if (priority) item = { band: BAND.vip, kind: "priority", reason: `Priority sender${unread ? ", unread" : ", not answered"} \u00b7 ${ago}` };
     else if (person && (t.ownerReplied || !unread)) {

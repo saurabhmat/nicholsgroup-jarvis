@@ -144,14 +144,15 @@ export function easternDateTime(iso: string): string {
 const ISO_STAMP = /\b\d{4}-\d{2}-\d{2}[T ]\d{2}:\d{2}(?::\d{2}(?:\.\d+)?)?(?:\s?(?:Z|UTC|GMT)\b|[+-]\d{2}:?\d{2}\b)?/g;
 const CLOCK_UTC = /\b(\d{1,2}):(\d{2})\s?(am|pm)?\s?(?:UTC|GMT|Z)\b/gi;
 const REF_GROUP = /\s?[([]\s*(?:(?:refs?|ids?)\s*:?\s*)?r\d{1,2}(?:\s*(?:,|;|and|&)\s*r\d{1,2})*\s*[)\]]/gi;
-const REF_BARE = /(?:\b(?:[Ss]ee|[Rr]efs?|[Pp]er)\s+)?(?<![\w./@#-])r\d{1,2}(?!\.?\d|[\w'@-]):?/g;
+const REF_BARE = /(?<![\w./@#-])(r\d{1,2})(?!\.?\d|[\w'@-])(:?)/g;
+const REF_LEAD = /^\s*(r\d{1,2}):\s*/;
 
 /**
  * Display clean-up of model-written text (T-240), applied before saving: internal row refs ("r4", "(r4)", "[r6]") are removed and any
  * ISO or UTC timestamp is rewritten in Eastern ("9:42 AM ET"; the date is added when it is not today). The prompt asks for neither;
  * this is the deterministic backstop. The `ref` fields of the briefing are not text and are never passed through here.
  */
-export function tidyModelText(text: string, now: Date): string {
+export function tidyModelText(text: string, now: Date, refs?: ReadonlySet<string>): string {
   const withTimes = text
     .replace(ISO_STAMP, (m) => {
       const hasZone = /(?:Z|UTC|GMT|[+-]\d{2}:?\d{2})$/i.test(m);
@@ -166,21 +167,38 @@ export function tidyModelText(text: string, now: Date): string {
       const at = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate(), hour, Number(min)));
       return `${formatTimeIn(at.toISOString(), BUSINESS_TZ)} ET`;
     });
-  return withTimes
-    .replace(REF_GROUP, "")
-    .replace(REF_BARE, "")
+  // A bare token counts as a ref only when it is one the model was given (review M3: "the r2 round", "ryzen r5" stay). Without a ref
+  // set (older callers, tests) every r<n> counts. A leading "r4: " label is dropped; a ref after "to", "about", "see"... becomes
+  // "this thread" so "Reply to r4 today" stays a sentence; any other bare ref is removed ("Renewal r1" -> "Renewal").
+  const isRef = (tok: string) => (refs ? refs.has(tok.toLowerCase()) : true);
+  const tidy = withTimes
+    .replace(REF_GROUP, (m) => (refs && !(m.match(/r\d{1,2}/gi) ?? []).every(isRef) ? m : ""))
+    .replace(REF_LEAD, (m, tok: string) => (isRef(tok) ? "" : m))
+    .replace(REF_BARE, (m, tok: string, _colon: string, at: number, all: string) => {
+      if (!isRef(tok)) return m;
+      // After a word that needs an object ("reply to r4", "see r4", "about r4") the ref becomes "this thread"; elsewhere it goes.
+      return /\b(?:to|about|see|per|on|in|from|re|regarding|with|for)\s+$/i.test(all.slice(0, at)) ? "this thread" : "";
+    })
     .replace(/\s+([,.;:!?])/g, "$1")
     .replace(/\(\s*\)/g, "")
     .replace(/[ \t]{2,}/g, " ")
     .trim();
+  return tidy;
 }
 
 /** tidyModelText over the summary-facing strings (lines, notes, deadlines, priorities, reply context); reply bodies are the owner's draft and stay as written. Run BEFORE maskContent (masking would split a timestamp). */
-export function tidyContent(c: BriefContent, now: Date): BriefContent {
-  const t = (v: string) => tidyModelText(v, now);
+export function tidyContent(c: BriefContent, now: Date, refs?: readonly BriefRef[]): BriefContent {
+  const known = refs ? new Set(refs.map((r) => r.ref.toLowerCase())) : undefined;
+  const line = (v: string) => tidyModelText(v, now, known);
+  // A field is never emptied by the clean-up (review M3): a text that was nothing but refs keeps its wording. Summary lines that
+  // become empty are dropped instead.
+  const t = (v: string) => {
+    const out = line(v);
+    return out === "" && v.trim() !== "" ? v.trim() : out;
+  };
   return {
     ...c,
-    lines: c.lines.map(t).filter((l) => l !== ""),
+    lines: c.lines.map(line).filter((l) => l !== ""),
     attention: c.attention.map((a) => ({ ...a, what: t(a.what), why: t(a.why), next: t(a.next) })),
     deadlines: c.deadlines.map((d) => ({ ...d, text: t(d.text), due: d.due === null ? null : t(d.due) })),
     priorities: c.priorities.map((p) => ({ ...p, text: t(p.text), reason: t(p.reason) })),
