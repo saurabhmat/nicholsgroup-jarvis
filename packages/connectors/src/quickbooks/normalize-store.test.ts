@@ -122,3 +122,29 @@ describe("T-241: a failed call says why (codes only, never database text)", () =
     expect((await infoOf(fails({ message: "weird" }))).message).toBe("Normalizer unavailable: unknown database error");
   });
 });
+
+describe("T-242: SQLSTATE 21000 is permanent and names the step", () => {
+  const infoOf = async (p: Promise<unknown>) => {
+    try { await p; } catch (e) { return (e as { info: { kind: string; message: string; disposition: string } }).info; }
+    throw new Error("expected a failure");
+  };
+  const fails = (error: { code?: string; message?: string }) => createNormalizeStore(client({ error }).clientFor).normalize("PKG", conn);
+  it("the function's 21000 with a step: provider_error (not retried), the step kept, no other text", async () => {
+    const info = await infoOf(fails({ code: "21000", message: "fin.qbo_normalize failed: SQLSTATE 21000, table -, constraint -, step payments" }));
+    expect(info).toMatchObject({ kind: "provider_error", disposition: "fail", message: "The normalizer hit SQLSTATE 21000: a cardinality violation or an UPDATE or DELETE without WHERE (rpc fin_qbo_normalize, step payments)" });
+    const keys = await infoOf(fails({ code: "21000", message: "fin.qbo_normalize failed: SQLSTATE 21000, table -, constraint -, step transaction_keys" }));
+    expect(keys.message).toBe("The normalizer hit SQLSTATE 21000: a cardinality violation or an UPDATE or DELETE without WHERE (rpc fin_qbo_normalize, step transaction_keys)");
+  });
+  it("21000 without the function's shape (older function or other text) is still permanent, with no step and no database text", async () => {
+    const info = await infoOf(fails({ code: "21000", message: "more than one row returned by a subquery used as an expression SECRET-ROW" }));
+    expect(info).toMatchObject({ kind: "provider_error", message: "The normalizer hit SQLSTATE 21000: a cardinality violation or an UPDATE or DELETE without WHERE (rpc fin_qbo_normalize, no step reported)" });
+  });
+  it("a refusal from the new function keeps its step; the old message shape still parses", async () => {
+    const withStep = await infoOf(fails({ code: "23514", message: "fin.qbo_normalize failed: SQLSTATE 23514, table payments, constraint -, step payments" }));
+    expect(withStep.message).toBe("The normalizer refused the synced data (SQLSTATE 23514, table payments, constraint -, step payments)");
+    const old = await infoOf(fails({ code: "23514", message: "fin.qbo_normalize failed: SQLSTATE 23514, table payments, constraint -" }));
+    expect(old.message).toBe("The normalizer refused the synced data (SQLSTATE 23514, table payments, constraint -)");
+    const forged = await infoOf(fails({ code: "23514", message: "fin.qbo_normalize failed: SQLSTATE 23514, table payments, constraint -, step Acme Escrow" }));
+    expect(forged.message).toBe("The normalizer refused the synced data");
+  });
+});

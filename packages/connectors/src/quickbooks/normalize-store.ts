@@ -68,10 +68,16 @@ export interface NormalizeStore {
  * object names, never row data). Only a message of exactly that shape is passed on, so an operator can see which constraint
  * refused a record without any database text of another kind reaching a log.
  */
-const REFUSAL = /^fin\.qbo_normalize failed: SQLSTATE ([0-9A-Z]{5}), table ([a-z_]{1,63}|-), constraint ([a-z0-9_]{1,63}|-)$/;
+const REFUSAL = /^fin\.qbo_normalize failed: SQLSTATE ([0-9A-Z]{5}), table ([a-z_]{1,63}|-), constraint ([a-z0-9_]{1,63}|-)(?:, step ([a-z_]{1,20}))?$/;
 function refusalMessage(message: string): string {
   const m = REFUSAL.exec(message);
-  return m ? `The normalizer refused the synced data (SQLSTATE ${m[1] ?? ""}, table ${m[2] ?? ""}, constraint ${m[3] ?? ""})` : "The normalizer refused the synced data";
+  // T-242: the function also names the section that was running (a fixed word such as "payments" or "transaction_keys").
+  const step = m?.[4] ? `, step ${m[4]}` : "";
+  return m ? `The normalizer refused the synced data (SQLSTATE ${m[1] ?? ""}, table ${m[2] ?? ""}, constraint ${m[3] ?? ""}${step})` : "The normalizer refused the synced data";
+}
+/** The step named in the function's constant failure message ("payments"), or null. */
+function stepOf(message: string): string | null {
+  return REFUSAL.exec(message)?.[4] ?? null;
 }
 
 export function createNormalizeStore(clientFor: JobClientFor): NormalizeStore {
@@ -105,9 +111,22 @@ export function createNormalizeStore(clientFor: JobClientFor): NormalizeStore {
           throw new ConnectorError({ kind: "invalid_input", message: "The lane has no QuickBooks entity mapping in lane_config" });
         }
         if (/^2[23]/.test(code)) throw new ConnectorError({ kind: "provider_error", message: refusalMessage(message) });
+        // T-242: 21000 (cardinality violation: two input rows for one target row, or a subquery with more than one row) comes from
+        // the data and repeats on every attempt: permanent, not "transient" (production retried it for minutes).
+        // Where it failed (T-242): inside the function's main block the message carries the step; otherwise "no step reported" (the
+        // function's opening checks, an older function version, the PostgREST call around it, or something outside the repository).
+        // Fixed words only.
+        const step = stepOf(message);
+        const where = step ? `rpc fin_qbo_normalize, step ${step}` : "rpc fin_qbo_normalize, no step reported";
+        // 21000 is a cardinality violation OR pg-safeupdate's "UPDATE/DELETE requires a WHERE clause" (PostgREST sessions): the
+        // text names both, so nobody chases duplicate data for the second (T-242 production).
+        if (code === "21000") {
+          throw new ConnectorError({ kind: "provider_error", message: `The normalizer hit SQLSTATE 21000: a cardinality violation or an UPDATE or DELETE without WHERE (${where})` });
+        }
         if (code === "42501") throw new ConnectorError({ kind: "connection_unavailable", message: "The connection is not usable for normalization" });
         // supabase-js reports an aborted fetch as an error object without a code; the signal says it was our timeout.
-        throw new ConnectorError(failureReason(code === "unknown" ? (signal.aborted ? null : "unknown") : code, signal.aborted));
+        const reason = failureReason(code === "unknown" ? (signal.aborted ? null : "unknown") : code, signal.aborted);
+        throw new ConnectorError(signal.aborted || code === "unknown" ? reason : { ...reason, message: `${reason.message}, ${where}` });
       }
       const parsed = NormalizeResultSchema.safeParse(data);
       if (!parsed.success) throw new ConnectorError({ kind: "provider_error", message: "The normalizer returned an unexpected result" });

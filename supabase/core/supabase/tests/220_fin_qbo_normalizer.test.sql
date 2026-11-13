@@ -440,7 +440,7 @@ select is((select r -> 'invoices' ->> 'invalid' from run6), '2', 'and counted as
 alter table fin.invoices add constraint tmp_poison check (customer_id is distinct from 'poison-cust');
 select pg_temp.raw('Invoice', 'I-poison', '{"Id": "I-poison", "TxnDate": "2026-10-09", "TotalAmt": 1, "Balance": 1, "CustomerRef": {"value": "poison-cust"}}', false, '2026-11-06T16:00:00Z');
 create temp table runs_before on commit drop as select count(*) as n from fin.normalize_runs;
-select is(pg_temp.refusal($$select pg_temp.norm()$$), array['23514', 'fin.qbo_normalize failed: SQLSTATE 23514, table invoices, constraint tmp_poison', '', ''],
+select is(pg_temp.refusal($$select pg_temp.norm()$$), array['23514', 'fin.qbo_normalize failed: SQLSTATE 23514, table invoices, constraint tmp_poison, step invoices', '', ''],
           'a constraint failure inside the run has a constant message and no DETAIL or HINT (the failing row is not echoed)');
 select is((select count(*)::int from fin.normalize_runs), (select n::int from runs_before), 'and the failed run left no run row (the call rolled back)');
 alter table fin.invoices drop constraint tmp_poison;

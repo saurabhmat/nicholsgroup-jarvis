@@ -1150,6 +1150,12 @@ Spec: `docs/specs/brain-and-employees.md`, `docs/specs/brain-interview.md`; seed
 - note: approved by Saurabh Nov 13, 2026 (production: a manual conn.sync of PKG's QuickBooks connection ran incremental, received 2 and loaded no Accounts, Invoices or Bills; the normalizer then failed as "transient"). Small task from main; branch agent/T-241 from origin/main; security + code review; don't push.
 - acceptance: (1) a QuickBooks connect or reconnect starts conn/sync.requested with trigger "connect", which always reloads everything (stored cursor and object-type subset ignored); a sync of a connection that never completed a full sync also reloads, whatever cursor is stored. (2) production SQL (gitignored manual pair) to reset this connection's cursor safely, with read-only checks. (3) the normalizer's failures carry a safe reason (codes and fixed texts only) in the run log and the Inngest run output; its own timeout is under the route's 120 s maxDuration. Unit tests.
 
+### T-242 QuickBooks normalizer: SQLSTATE 21000 after the first full sync
+- status: done
+- depends: T-241
+- note: approved by Saurabh Nov 13, 2026 (production: "fin.qbo_normalize failed: transient: Normalizer unavailable: SQLSTATE 21000" on PKG's connection after the full sync). Small task from main; branch agent/T-242; security + code review; don't push. Production SQL part 20 (gitignored; needs only the normalizer, part 4).
+- acceptance: (1) read-only production diagnostics (duplicate raw entity ids per type, lane_config_current rows for PKG, raw counts, installed normalizer version, normalize runs). (2) the function's error names the step; the two built keys (payment allocations, posting lines) are checked and a duplicate is refused under its own step, never dropped (review: per-key dedupe deletes were quadratic and could not fire, removed). (3) SQLSTATE 21000 maps to a permanent error (provider_error, not retried) with the step. Tests with synthetic duplicate-prone data. (4) Root cause: pg-safeupdate (PostgREST's authenticator) refuses UPDATE/DELETE without a WHERE; the normalizer's one such statement fixed (part 21), all functions scanned, pgTAP 315 regression.
+
 ### T-174 Lane onboarding playbook + dry run
 - status: proposed
 - depends: T-090, T-047
