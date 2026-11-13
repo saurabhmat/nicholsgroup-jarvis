@@ -32,7 +32,7 @@ export function ConnectionsSection({ laneId, google, quickbooks, composio, cover
           {composio ? <ComposioRows laneId={laneId} view={composio} /> : null}
         </ul>
         {google ? <GoogleNotes /> : null}
-        {quickbooks ? <QuickBooksNotes /> : null}
+        {quickbooks ? <QuickBooksNotes laneId={laneId} now={now} /> : null}
         {composio ? <ComposioNotes view={composio} /> : null}
         {coverage ? <CoverageList view={coverage} tz={tz} now={now} /> : null}
       </Card>

@@ -152,13 +152,18 @@ describe("the Settings page", () => {
     }
   });
 
-  it("the QuickBooks row has Connect / Reconnect QuickBooks and Check connection, and no disconnect control; the temporary section is gone", () => {
+  it("the QuickBooks row has Connect / Reconnect QuickBooks and Check connection; Disconnect only asks for an approval; the temporary section is gone", () => {
     const section = read("../components/quickbooks-connection-section.tsx") + read("../components/connection-check-button.tsx");
     expect(section).toContain("Connect QuickBooks");
     expect(section).toContain("Reconnect QuickBooks");
     expect(section).toContain("Check connection");
     expect(section).toMatch(/\/api\/connect\/qbo\/start\?lane=/);
-    expect(section.toLowerCase()).not.toMatch(/disconnect|revoke|temporary/);
+    expect(read("../components/connection-check-button.tsx").toLowerCase()).not.toMatch(/disconnect|revoke|temporary/);
+    expect(section.toLowerCase()).not.toMatch(/revoke|temporary/);
+    // T-197: the only disconnect control proposes an approval (D-24, rule 5); it calls the approvals route and nothing else.
+    const disconnect = read("../components/quickbooks-disconnect-button.tsx");
+    expect(disconnect).toContain("propose_qbo_disconnect");
+    expect([...disconnect.matchAll(/fetch\(`([^`]*)`/g)].map((m) => m[1])).toEqual(["/api/lanes/${encodeURIComponent(laneId)}/approvals"]);
     expect(existsSync(new URL("../components/connection-test-section.tsx", import.meta.url))).toBe(false);
     expect(read("../components/settings-page.tsx")).not.toMatch(/Temporary|connectionTest|ConnectionTestSection|developer-tools/);
   });
