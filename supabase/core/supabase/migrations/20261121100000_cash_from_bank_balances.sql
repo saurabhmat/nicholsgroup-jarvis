@@ -610,7 +610,10 @@ begin
     (select k.status from core.connections k where k.lane_id = p_lane and k.provider = 'quickbooks' and k.status <> 'disconnected'
        order by (k.status = 'active') desc, k.created_at desc limit 1),
     (select max(k.last_sync_at) from core.connections k where k.lane_id = p_lane and k.provider = 'quickbooks' and k.status <> 'disconnected'),
-    (select max(r.finished_at) from fin.normalize_runs r where r.lane_id = p_lane),
+    -- T-243 re-check L-2: only runs of the current (not disconnected) QuickBooks connections; a replaced connection's run is not "as of".
+    (select max(r.finished_at) from fin.normalize_runs r
+      where r.lane_id = p_lane
+        and r.connection_id in (select k.id from core.connections k where k.lane_id = p_lane and k.provider = 'quickbooks' and k.status <> 'disconnected')),
     case when jsonb_typeof(v_cfg #> '{entities,own_entity}') = 'string' then v_cfg #>> '{entities,own_entity}' end,
     case when jsonb_typeof(v_cfg #> '{qbo,entity_mapping_mode}') = 'string' then v_cfg #>> '{qbo,entity_mapping_mode}' end,
     case when jsonb_typeof(v_cfg #> '{entities,bank_accounts}') = 'array' then v_cfg #> '{entities,bank_accounts}' else '[]'::jsonb end,

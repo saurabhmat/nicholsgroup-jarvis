@@ -82,13 +82,22 @@ describe("T-243 review: the summary can never remove high-value rows", () => {
       { subject: "Contract deadline Friday" },
       { subject: "Plain note" },
     ]);
-    const kinds = r.fresh.map((a) => a.kind + ":" + String(a.flags.vip || a.flags.money !== null || a.flags.deadline));
-    expect(kinds.length).toBe(5);
+    expect(r.fresh.map((a) => a.thread.subject)).toHaveLength(5);
+    expect(r.fresh.find((a) => a.thread.subject?.startsWith("Security alert"))?.kind).toBe("security");
     const out = dropNoReplyItems(r.fresh, noReply(5));
     expect(out.removed).toBe(1); // only the plain row
     expect(out.top.map((a) => a.thread.subject)).not.toContain("Plain note");
     expect(out.top).toHaveLength(4);
     for (const a of r.fresh.filter((x) => x.thread.subject !== "Plain note")) expect(summaryMarksNoReply(a, noReply(5))).toBe(false);
+  });
+  it("re-check M-a: a security alert from a sender that does not look automated (ranked as unread) is still protected", () => {
+    const r = mk([{ fromAddress: "jane@google.com", fromName: "Jane at Google", subject: "Security alert: new sign-in from a new device" }, { subject: "Plain note" }]);
+    const alert = r.fresh.find((a) => a.thread.fromAddress === "jane@google.com");
+    expect(alert?.kind).not.toBe("security"); // the rules ranked it as person mail ...
+    expect(alert?.flags.security).toBe(true); // ... but it is flagged as a security alert
+    const out = dropNoReplyItems(r.fresh, noReply(2));
+    expect(out.top.map((a) => a.thread.fromAddress)).toContain("jane@google.com");
+    expect(out.removed).toBe(1);
   });
   it("two refs for one message: a true wins over a false", () => {
     const r = ranked(1);

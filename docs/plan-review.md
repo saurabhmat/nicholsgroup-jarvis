@@ -1299,3 +1299,10 @@ Open / LOW (not fixed):
 - (LOW) Cash uses `CurrentBalance`, not `CurrentBalanceWithSubAccounts` (sub-account roll-ups are not used).
 - (LOW) Whole-word login-link subjects ("magic link", "login link") exclude a person's mail with those words (hard exclusion). An explicit `otp_subjects` list in a lane's config replaces the new defaults.
 - (LOW) `apps/web/scripts/check-build-log.mjs` is a manual tool, not wired into CI.
+- (T-243, more LOW items from the lead's review reports)
+  - **Silent drops from Cash:** a mapped own bank account that is inactive, deleted or payroll-tombstoned is left out of Cash with no reason or count shown, so a partial total looks complete. Option: a "mapped but not found" count.
+  - **Balances stored for every account type:** `current_balance` is kept for income, expense, liability and equity accounts too, not only Bank. There is no new exposure (finance viewers could already read the balance-sheet cache). Option: store it for `AccountType = 'Bank'` only.
+  - **Summary sees only the rule's top 5:** the no-reply judgement applies only to items that were in the model's input. Items promoted into the top 5 after a removal were never summarised, so one removal does not cascade, and the summary's lines may still mention a removed item. Option: give the model more candidates, e.g. the first 8 fresh items.
+  - **Display names containing "@":** such a name (e.g. "Bob @ Acme") is shown as the From address. That is safer against spoofing, but loses the name.
+  - **Login-link exclusion can hide real alerts:** a genuine security-sender alert whose subject contains "OTP" or "verification link" (e.g. "Your OTP settings changed") is now hard-excluded. Narrow those two patterns if security alerts go missing.
+- (T-243 security re-check) LOW, open: `qbo.sync.done` `excluded_objects` counts re-emitted payroll accounts on every incremental run (cosmetic).

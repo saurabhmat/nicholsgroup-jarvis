@@ -6,7 +6,7 @@
 -- required, group sums, payroll-partial flag, unreadable figure), the "book balance" key names, and denial: another lane
 -- (rows exist, caller is not a member), AAL1, admin_technical (no finance view), outsider, anon.
 begin;
-select plan(70);
+select plan(72);
 \ir helpers/lane_rls.psql
 
 update core.lanes set enabled = true where code in ('APK', 'NC');
@@ -173,6 +173,7 @@ select is((select cash_unmapped from core.home_finance('PKG')), 1, 'cash: a bank
 select ok((select cash_as_of = least(last_sync_at, as_of) and cash_as_of < now() - interval '2 hours 50 minutes' and cash_as_of > now() - interval '3 hours 10 minutes' from core.home_finance('PKG')), 'cash: as_of is the least of the last books sync (2 h ago) and the last normalize (3 h ago), never fresher than the data');
 select is((select cash_total from core.home_finance('PKG')), 1314.66::numeric, 'cash: the balance of a disconnected connection''s account with the same source id (77777.00) is not summed');
 select is((select cash_unmapped from core.home_finance('PKG')) || ':' || (select jsonb_array_length(cash_accounts) from core.home_finance('PKG')), '1:3', 'cash: a disconnected connection''s accounts are neither counted as unmapped nor listed');
+select ok(not ((select qbo_connections from core.home_finance_context('PKG')) @> array['00000000-0000-4000-8000-000000003003'::uuid]), 'the context leaves the disconnected connection out of qbo_connections');
 select is((select cash_accounts::text !~ '88888|7000|8000' from core.home_finance('PKG')), true, 'cash: non-bank, inactive and deleted accounts are not read');
 select is((select cash_reason is null and cash_total <> 1.00 from core.home_finance('PKG')), true, 'cash: the older balance sheet (1.00) is not used');
 
@@ -297,6 +298,7 @@ select is((select cash_total is null and ar_over_30 is null and pnl_net is null 
            from core.home_finance('APK')), true, 'another lane: no figure, no as_of, nothing about its connection');
 select is((select allowed from core.home_finance_context('APK')), false, 'another lane: the context helper says not allowed');
 select is((select connected is false and own_entity is null and bank_accounts = '[]'::jsonb from core.home_finance_context('APK')), true, 'another lane: the context helper returns nothing of the lane');
+select is((select qbo_connections from core.home_finance_context('APK')), '{}'::uuid[], 'another lane: no connection ids');
 select is((select ar_over_30 from core.home_finance('PKG')), 160.25::numeric, 'PKG''s figures never include the other lane''s 7777.00 invoice');
 select is((select cash_total from core.home_finance('PKG')) is null, true, 'PKG cash (mapping removed above) never shows the other lane''s balance');
 reset role;

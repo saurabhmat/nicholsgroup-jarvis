@@ -603,6 +603,11 @@ describe("payroll and compensation are never stored (D-25 default: excluded; spe
     expect(intuit.state.queries).toEqual([ACCOUNT_QUERY]);
     expect(byType(second.records).JournalEntry).toEqual([expect.objectContaining({ external_id: "2", deleted: true, payload: { Id: "2" } })]);
     expect(JSON.stringify(second.records)).not.toMatch(/31337|SECRET/);
+    // T-243: an incremental run re-emits every account (fresh balances); payroll accounts stay tombstoned ({ Id } only, no figures).
+    const accounts = byType(second.records).Account ?? [];
+    expect(accounts.filter((r) => r.deleted).map((r) => [r.external_id, r.payload])).toEqual([["2", { Id: "2" }], ["3", { Id: "3" }]]);
+    expect(accounts.filter((r) => !r.deleted).map((r) => r.external_id)).toEqual(["1"]);
+    expect(JSON.stringify(second.records)).not.toMatch(SECRET_AMOUNTS);
   });
 
   it("a payroll account named generically is still caught by the name safety net, and its sub-accounts follow it", async () => {

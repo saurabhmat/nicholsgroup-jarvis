@@ -33,7 +33,7 @@ export function notesForMessages(saved: SummaryForAttention | null | undefined):
  * no-reply note may still hide the "Waiting on you" chip, never the row.
  */
 export const isProtectedRow = (item: AttentionThread): boolean =>
-  item.kind === "repeated_failures" || item.kind === "security" || item.kind === "priority" || item.flags.vip || item.flags.money !== null || item.flags.deadline;
+  item.kind === "repeated_failures" || item.kind === "security" || item.flags.security === true || item.kind === "priority" || item.flags.vip || item.flags.money !== null || item.flags.deadline;
 
 /** True when the summary says this exact thread message needs no reply and the row may be removed. When two refs map to one message, a `true` wins. */
 export function summaryMarksNoReply(item: AttentionThread, saved: SummaryForAttention | null | undefined): boolean {

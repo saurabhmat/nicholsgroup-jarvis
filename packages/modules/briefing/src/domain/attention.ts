@@ -89,7 +89,11 @@ export type AttentionRules = {
 export type AttentionKind = "priority" | "security" | "waiting" | "unread" | "repeated_failures";
 
 /** Why a row is on the list, beyond its kind (T-240): drives the chips. */
-export type AttentionFlags = { vip: boolean; money: MoneyKind | null; deadline: boolean; /** Owner in To and no later reply from the owner. */ waitingOnYou: boolean };
+export type AttentionFlags = {
+  vip: boolean; money: MoneyKind | null; deadline: boolean; /** Owner in To and no later reply from the owner. */ waitingOnYou: boolean;
+  /** T-243 re-check: a security alert by the rules (security sender and subject), whatever kind the row was ranked as. Protects the row from the summary. */
+  security?: boolean;
+};
 
 export type AttentionThread = {
   key: string;
@@ -268,7 +272,7 @@ export function rankAttention(rows: ThreadRow[], r: AttentionRules, now: Date, l
     const money = MONEY_KINDS.find((k) => subjectHas(t.subject, r.money[k])) ?? null;
     const deadline = subjectHas(t.subject, r.deadlineSubjects);
     // "Waiting on you" only for mail from a person (code review M1): an automated security alert addressed to the owner waits on nobody.
-    const flags: AttentionFlags = { vip: priority, money, deadline, waitingOnYou: toOwner && person };
+    const flags: AttentionFlags = { vip: priority, money, deadline, waitingOnYou: toOwner && person, security: c.security };
     let item: { band: number; kind: AttentionKind; reason: string } | null = null;
     if (priority) item = { band: BAND.vip, kind: "priority", reason: `Priority sender${unread ? ", unread" : ", not answered"} \u00b7 ${ago}` };
     else if (person && (t.ownerReplied || !unread)) {

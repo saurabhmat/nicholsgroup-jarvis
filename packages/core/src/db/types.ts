@@ -742,7 +742,7 @@ isOneToOne: false
                            },
 "home_finance_context":
 { Args: { "p_lane": string }; Returns: {
-              "allowed": boolean,"bank_accounts": Json,"connected": boolean,"connection_status": string,"last_normalized_at": string,"last_sync_at": string,"mapping_mode": string,"own_entity": string
+              "allowed": boolean,"bank_accounts": Json,"connected": boolean,"connection_status": string,"last_normalized_at": string,"last_sync_at": string,"mapping_mode": string,"own_entity": string,"qbo_connections": (string)[]
             }[]
                            },
 "home_finance_detail":
