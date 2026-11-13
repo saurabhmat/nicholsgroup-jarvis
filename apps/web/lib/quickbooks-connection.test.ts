@@ -47,7 +47,12 @@ describe("status mapping", () => {
     expect(["connected", "degraded", "reconnect_required"].every((s) => canDisconnect(s as never))).toBe(true);
     expect(canDisconnect("connecting")).toBe(false);
   });
-  it("the realm is cut to its last four characters", () => expect(realmTailOf("9130000000001")).toBe("0001"));
+  it("the realm is cut to its last four characters; an id of 8 characters or fewer shows no tail", () => {
+    expect(realmTailOf("9130000000001")).toBe("0001");
+    expect(realmTailOf("123456789")).toBe("6789");
+    expect(realmTailOf("12345678")).toBe("");
+    expect(realmTailOf("1234")).toBe("");
+  });
 });
 
 describe("loadQuickBooksSection", () => {
@@ -90,6 +95,19 @@ describe("loadQuickBooksSection", () => {
     expect(text).not.toContain("9130000000001"); // never the whole realm id
   });
 
+  it("a disconnected row next to a live one: only the live one is shown and wasDisconnected is not set", async () => {
+    const { client } = fake({
+      data: [
+        { id: "c2", external_account_id: "9130000000002", status: "disconnected", last_sync_at: null, features: {} },
+        { id: "c1", external_account_id: "9130000000001", status: "active", last_sync_at: null, features: {} },
+      ],
+      error: null,
+    });
+    const view = await loadQuickBooksSection(client, "PKG");
+    expect(view.connections.map((c) => c.id)).toEqual(["c1"]);
+    expect(view.wasDisconnected).toBeUndefined();
+  });
+
   it("no live connection but a disconnected one: wasDisconnected", async () => {
     const { client } = fake({ data: [{ id: "c2", external_account_id: "9130000000002", status: "disconnected", last_sync_at: null }], error: null });
     expect(await loadQuickBooksSection(client, "PKG")).toEqual({ connections: [], wasDisconnected: true });
@@ -104,49 +122,69 @@ describe("loadQuickBooksSection", () => {
 });
 
 describe("withDisconnectState", () => {
-  const view = { connections: [conn({ id: "00000000-0000-4000-8000-000000002901" }), conn({ id: "c2", state: "connecting" })] };
-  const FUTURE = new Date(Date.now() + 3_600_000).toISOString();
-  const act = (over: Record<string, unknown> = {}) => ({
-    id: "00000000-0000-4000-8000-0000000000aa", lane_id: "PKG", action_type: "qbo.disconnect", connection_id: "00000000-0000-4000-8000-000000002901", provider: "quickbooks", target: { realm_id: "9130000000001" }, payload: {},
-    payload_schema_version: 1, payload_sha256: "a".repeat(64), rationale: null, source_refs: [], proposer_kind: "user", proposer_user_id: "00000000-0000-4000-8000-0000000000a1", derived_from_retrieved: false,
-    supersedes_id: null, superseded_by_id: null, status: "proposed", expires_at: FUTURE, approved_by: null, approved_at: null, approved_hash: null, executed_at: null,
-    verified_at: null, result: {}, failure_code: null, payload_purged_at: null, created_at: "2026-11-11T12:00:00Z", updated_at: "2026-11-11T12:00:00Z", ...over,
-  });
-  const ctxWith = (rows: unknown[], fail = false) => ({
-    client: { schema: () => ({ rpc: async () => (fail ? Promise.reject(new Error("x")) : { data: rows, error: null }) }) } as never,
-    laneId: "PKG",
-    userId: "u1",
-  });
+  const C1 = "00000000-0000-4000-8000-000000002901";
+  const C2 = "00000000-0000-4000-8000-000000002902";
+  const A1 = "00000000-0000-4000-8000-0000000000aa";
+  const view = { connections: [conn({ id: C1 }), conn({ id: C2, state: "reconnect_required" }), conn({ id: "c3", state: "connecting" })] };
   const GATE_ON = { qbo: { realmId: "9130000000001" }, writeActionsAllowed: ["qbo_disconnect"], approvalsLive: true, stepUpMaxAgeS: 300, mailbox: null, composeGranted: false };
-  const approvals = (facts: Record<string, unknown> = GATE_ON) => ({ jobRpc: async () => async () => ({ data: 0, error: null }), readFacts: async () => facts }) as never;
+  /** A fake lane client: `schema("core").rpc` records every call and answers act_pending_qbo_disconnects. */
+  function clientWith(answer: () => Promise<{ data: unknown; error: unknown }>) {
+    const calls: [string, unknown][] = [];
+    return { calls, client: { schema: (s: string) => ({ rpc: async (fn: string, args: unknown) => (calls.push([`${s}.${fn}`, args]), answer()) }) } as never };
+  }
+  const rows = (data: unknown) => clientWith(async () => ({ data, error: null }));
+  const approvals = (facts: Record<string, unknown> = GATE_ON) => {
+    const reads: [string, string][] = [];
+    return { reads, deps: { readFacts: async (lane: string, id: string) => (reads.push([lane, id]), facts) } as never };
+  };
 
-  it("a read failure of the approvals list leaves the view as it was (the button stays)", async () => {
-    expect(await withDisconnectState(view, ctxWith([], true), approvals())).toEqual(view);
+  it("reads only through the read-only pending function (no listApprovals, no job client, no write), for this lane", async () => {
+    const { client, calls } = rows([]);
+    await withDisconnectState(view, { client, laneId: "PKG" }, approvals().deps);
+    expect(calls).toEqual([["core.act_pending_qbo_disconnects", { p_lane: "PKG" }]]);
   });
-  it("a connection still being set up gets no disconnect state", async () => {
-    const out = await withDisconnectState({ connections: [conn({ id: "00000000-0000-4000-8000-000000002901", state: "connecting" })] }, ctxWith([act()]), approvals());
-    expect(out.connections[0]?.disconnect).toEqual({ pendingId: null, gate: null });
-  });
-  it("a proposal waiting for this connection shows its id; another connection's, an expired one and a finished one do not", async () => {
-    const out = await withDisconnectState(view, ctxWith([act()]), approvals());
-    expect(out.connections[0]?.disconnect.pendingId).toBe("00000000-0000-4000-8000-0000000000aa");
-    for (const other of [act({ connection_id: "other" }), act({ expires_at: "2020-01-01T00:00:00Z" }), act({ status: "verified" }), act({ status: "rejected" })]) {
-      expect((await withDisconnectState(view, ctxWith([other]), approvals())).connections[0]?.disconnect.pendingId).toBeNull();
+  it("a read failure (error, thrown, odd shape) leaves the view as it was", async () => {
+    for (const c of [clientWith(async () => ({ data: null, error: { message: "x" } })), clientWith(async () => Promise.reject(new Error("x"))), rows({ not: "an array" })]) {
+      expect(await withDisconnectState(view, { client: c.client, laneId: "PKG" }, approvals().deps)).toEqual(view);
     }
   });
-  it("reports the gate with its reason when the lane policy class is missing, and when approvals are not live", async () => {
-    const off = await withDisconnectState(view, ctxWith([]), approvals({ ...GATE_ON, writeActionsAllowed: [] }));
+  it("nothing to disconnect: nothing is read at all", async () => {
+    const { client, calls } = rows([]);
+    const a = approvals();
+    const only = { connections: [conn({ state: "connecting" })] };
+    expect(await withDisconnectState(only, { client, laneId: "PKG" }, a.deps)).toEqual(only);
+    expect(calls).toEqual([]);
+    expect(a.reads).toEqual([]);
+  });
+  it("a connection still being set up gets no disconnect state", async () => {
+    const out = await withDisconnectState(view, { client: rows([]).client, laneId: "PKG" }, approvals().deps);
+    expect(out.connections[2]?.disconnect).toEqual({ pendingId: null, gate: null });
+  });
+  it("a pending proposal shows its id on its own connection only; unknown rows and other shapes are ignored", async () => {
+    const out = await withDisconnectState(view, { client: rows([{ id: A1, connection_id: C2 }, { id: 5, connection_id: C1 }, null, { id: "x", connection_id: "other" }]).client, laneId: "PKG" }, approvals().deps);
+    expect(out.connections[0]?.disconnect.pendingId).toBeNull();
+    expect(out.connections[1]?.disconnect.pendingId).toBe(A1);
+  });
+  it("the lane's facts are read once, however many connections there are", async () => {
+    const a = approvals();
+    await withDisconnectState(view, { client: rows([]).client, laneId: "PKG" }, a.deps);
+    expect(a.reads).toEqual([["PKG", C1]]);
+  });
+  it("reports the gate with its reason when the lane policy class is missing, and when approvals are not live; the same gate on every connection", async () => {
+    const off = await withDisconnectState(view, { client: rows([]).client, laneId: "PKG" }, approvals({ ...GATE_ON, writeActionsAllowed: [] }).deps);
     expect(off.connections[0]?.disconnect.gate?.enabled).toBe(false);
     expect(off.connections[0]?.disconnect.gate?.message).toMatch(/.+/);
-    const notLive = await withDisconnectState(view, ctxWith([]), approvals({ ...GATE_ON, approvalsLive: false }));
+    expect(off.connections[1]?.disconnect.gate).toEqual(off.connections[0]?.disconnect.gate);
+    const notLive = await withDisconnectState(view, { client: rows([]).client, laneId: "PKG" }, approvals({ ...GATE_ON, approvalsLive: false }).deps);
     expect(notLive.connections[0]?.disconnect.gate?.enabled).toBe(false);
-    expect(notLive.connections[1]?.disconnect).toEqual({ pendingId: null, gate: null });
   });
-  it("enabled gate when the policy class and approvals_live are on", async () => {
-    expect((await withDisconnectState(view, ctxWith([]), approvals())).connections[0]?.disconnect.gate).toEqual({ enabled: true, message: null });
+  it("enabled gate when the policy class and approvals_live are on; a facts failure leaves the gate unknown", async () => {
+    expect((await withDisconnectState(view, { client: rows([]).client, laneId: "PKG" }, approvals().deps)).connections[0]?.disconnect.gate).toEqual({ enabled: true, message: null });
+    const broken = { readFacts: async () => Promise.reject(new Error("x")) } as never;
+    expect((await withDisconnectState(view, { client: rows([]).client, laneId: "PKG" }, broken)).connections[0]?.disconnect.gate).toBeNull();
   });
   it("no realm id or payload reaches the output", async () => {
-    expect(JSON.stringify(await withDisconnectState(view, ctxWith([act()]), approvals()))).not.toContain("9130000000001");
+    expect(JSON.stringify(await withDisconnectState(view, { client: rows([{ id: A1, connection_id: C1, target: { realm_id: "9130000000001" } }]).client, laneId: "PKG" }, approvals().deps))).not.toContain("9130000000001");
   });
 });
 

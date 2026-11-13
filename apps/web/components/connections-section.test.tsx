@@ -6,6 +6,7 @@ import { cleanup, render, screen, within } from "@testing-library/react";
 import type { ComposioSectionView } from "@/lib/composio-connection";
 import type { GoogleSectionView } from "@/lib/google-connection";
 import type { QuickBooksSectionView } from "@/lib/quickbooks-connection";
+import { SUPPORT_EMAIL, SUPPORT_HREF } from "@/lib/support";
 import { ConnectionsSection } from "./connections-section";
 
 vi.mock("next/navigation", () => ({ useRouter: () => ({ refresh: vi.fn(), push: vi.fn() }) }));
@@ -144,7 +145,7 @@ describe("QuickBooks row (T-233, T-197)", () => {
     render(<ConnectionsSection laneId="PKG" google={null} quickbooks={qbo({ state: "reconnect_required" })} composio={null} />);
     expect(screen.getByText("QuickBooks needs to be reconnected")).toBeTruthy();
     const banner = document.querySelector("[data-slot=error-banner]") as HTMLElement;
-    expect(within(banner).getByRole("link", { name: "Contact support" }).getAttribute("href")).toMatch(/^mailto:it@pub-k\.org/);
+    expect(within(banner).getByRole("link", { name: "Contact support" }).getAttribute("href")).toMatch(new RegExp(`^${SUPPORT_HREF}`));
     expect(screen.getByRole("button", { name: "Reconnect QuickBooks" })).toBeTruthy();
     expect(screen.queryByRole("button", { name: "Check connection" })).toBeNull();
     expect(screen.getByRole("button", { name: "Disconnect QuickBooks" })).toBeTruthy();
@@ -179,7 +180,7 @@ describe("QuickBooks row (T-233, T-197)", () => {
 
   it("shows the support link and the error-log download on the page itself", () => {
     render(<ConnectionsSection laneId="PKG" google={null} quickbooks={qbo()} composio={null} now={new Date("2026-11-13T15:00:00Z")} />);
-    expect(screen.getByRole("link", { name: "Contact support" }).getAttribute("href")).toBe("mailto:it@pub-k.org");
+    expect(screen.getByRole("link", { name: "Contact support" }).getAttribute("href")).toBe(SUPPORT_HREF);
     expect(screen.getByTestId("qbo-error-export")).toBeTruthy();
   });
 
@@ -188,5 +189,31 @@ describe("QuickBooks row (T-233, T-197)", () => {
     const text = screen.getByTestId("connections-list").textContent ?? "";
     expect(text).not.toMatch(/token|secret|9130000000001/i);
     expect(text).not.toMatch(/[$]\s?\d|\d{1,3},\d{3}/);
+  });
+});
+
+describe("QuickBooks rows: several connections and short ids (T-197 review)", () => {
+  const base = { lastSyncAt: null, jobs: [] as never[], classTracking: true, disconnect: { pendingId: null, gate: null } };
+  it("Reconnect sits on the row that needs it, not only on the last one", () => {
+    render(
+      <ConnectionsSection
+        laneId="PKG"
+        google={null}
+        quickbooks={{ connections: [{ ...base, id: "a", realmTail: "1111", state: "reconnect_required" }, { ...base, id: "b", realmTail: "2222", state: "connected" }] }}
+        composio={null}
+      />,
+    );
+    const [first, second] = screen.getAllByTestId("quickbooks-connection");
+    expect(within(first as HTMLElement).getByRole("button", { name: "Reconnect QuickBooks" })).toBeTruthy();
+    expect(within(second as HTMLElement).queryByRole("button", { name: "Reconnect QuickBooks" })).toBeNull();
+    expect(screen.getByText(/on the affected connection/)).toBeTruthy();
+  });
+  it("an id of 8 characters or fewer shows no tail", () => {
+    render(<ConnectionsSection laneId="PKG" google={null} quickbooks={{ connections: [{ ...base, id: "a", realmTail: "", state: "connected" }] }} composio={null} />);
+    expect(screen.getByText("Connected company")).toBeTruthy();
+    expect(screen.queryByText(/ending/)).toBeNull();
+  });
+  it("the support address is the one constant", () => {
+    expect(SUPPORT_EMAIL).toMatch(/@/);
   });
 });

@@ -6,9 +6,10 @@ import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-li
 const refresh = vi.fn();
 vi.mock("next/navigation", () => ({ useRouter: () => ({ refresh, push: vi.fn() }) }));
 
-import { QuickBooksDisconnectButton } from "./quickbooks-disconnect-button";
+import { QuickBooksDisconnectButton, disconnectErrorText } from "./quickbooks-disconnect-button";
 import { QuickBooksErrorExport } from "./quickbooks-error-export";
 import { QuickBooksErrorBanner } from "./quickbooks-error-banner";
+import { SUPPORT_HREF } from "@/lib/support";
 
 const CONN = "00000000-0000-4000-8000-000000002901";
 const none = { pendingId: null, gate: null };
@@ -57,16 +58,53 @@ describe("QuickBooksDisconnectButton", () => {
     expect(JSON.parse(String(init.body))).toEqual({ action: "propose_qbo_disconnect", connectionId: CONN });
   });
 
-  it("a refusal shows the server's message (or a fixed one) and does not refresh", async () => {
-    fetchMock.mockResolvedValueOnce(new Response(JSON.stringify({ error: "forbidden" }), { status: 403 }));
+  it("a refusal shows FIXED text chosen by the error code; the server's message string is never displayed", async () => {
+    fetchMock.mockResolvedValueOnce(new Response(JSON.stringify({ error: "forbidden", message: "SERVER-WORDS-1" }), { status: 403 }));
     render(<QuickBooksDisconnectButton laneId="PKG" connectionId={CONN} disconnect={none} />);
     fireEvent.click(screen.getByRole("button", { name: "Disconnect QuickBooks" }));
     fireEvent.click(screen.getByRole("button", { name: "Ask to disconnect" }));
     expect((await screen.findByRole("alert")).textContent).toMatch(/owner or technical administrator/);
     expect(refresh).not.toHaveBeenCalled();
-    fetchMock.mockResolvedValueOnce(new Response(JSON.stringify({ message: "One is already waiting." }), { status: 409 }));
+    fetchMock.mockResolvedValueOnce(new Response(JSON.stringify({ error: "disconnect_pending", message: "SERVER-WORDS-2" }), { status: 409 }));
     fireEvent.click(screen.getByRole("button", { name: "Ask to disconnect" }));
-    await waitFor(() => expect(screen.getByRole("alert").textContent).toBe("One is already waiting."));
+    await waitFor(() => expect(screen.getByRole("alert").textContent).toMatch(/already waiting for approval/));
+    expect(refresh).toHaveBeenCalled(); // shows the waiting one
+    fetchMock.mockResolvedValueOnce(new Response(JSON.stringify({ error: "something_new", message: "SERVER-WORDS-3" }), { status: 500 }));
+    fireEvent.click(screen.getByRole("button", { name: "Ask to disconnect" }));
+    await waitFor(() => expect(screen.getByRole("alert").textContent).toBe("That did not work. Reload the page and try again."));
+    expect(document.body.textContent).not.toContain("SERVER-WORDS");
+  });
+  it("error text by status when the body has no code, and by code", () => {
+    expect(disconnectErrorText(401, undefined)).toMatch(/signed out/);
+    expect(disconnectErrorText(404, null)).toMatch(/not found/);
+    expect(disconnectErrorText(503, "unavailable")).toMatch(/unavailable/);
+    expect(disconnectErrorText(500, "__proto__")).toMatch(/did not work/);
+  });
+
+  it("opening the panel moves focus into it; Escape closes it and returns focus to the trigger", () => {
+    render(<QuickBooksDisconnectButton laneId="PKG" connectionId={CONN} disconnect={none} />);
+    fireEvent.click(screen.getByRole("button", { name: "Disconnect QuickBooks" }));
+    const dialog = screen.getByRole("dialog");
+    expect(dialog.contains(document.activeElement)).toBe(true);
+    fireEvent.keyDown(dialog, { key: "Escape" });
+    expect(screen.queryByRole("dialog")).toBeNull();
+    expect(document.activeElement).toBe(screen.getByRole("button", { name: "Disconnect QuickBooks" }));
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+  it("Keep it connected also returns focus to the trigger", () => {
+    render(<QuickBooksDisconnectButton laneId="PKG" connectionId={CONN} disconnect={none} />);
+    fireEvent.click(screen.getByRole("button", { name: "Disconnect QuickBooks" }));
+    fireEvent.click(screen.getByRole("button", { name: "Keep it connected" }));
+    expect(document.activeElement).toBe(screen.getByRole("button", { name: "Disconnect QuickBooks" }));
+  });
+  it("after a successful ask, focus goes to the 'waiting for approval' link once it is drawn", async () => {
+    fetchMock.mockResolvedValue(new Response(JSON.stringify({ ok: true }), { status: 200 }));
+    const { rerender } = render(<QuickBooksDisconnectButton laneId="PKG" connectionId={CONN} disconnect={none} />);
+    fireEvent.click(screen.getByRole("button", { name: "Disconnect QuickBooks" }));
+    fireEvent.click(screen.getByRole("button", { name: "Ask to disconnect" }));
+    await waitFor(() => expect(refresh).toHaveBeenCalled());
+    rerender(<QuickBooksDisconnectButton laneId="PKG" connectionId={CONN} disconnect={{ pendingId: "a1", gate: null }} />);
+    expect(document.activeElement).toBe(screen.getByRole("link", { name: "Open Approvals" }));
   });
 
   it("a network failure shows a fixed message", async () => {
@@ -115,7 +153,7 @@ describe("QuickBooksErrorExport", () => {
 describe("QuickBooksErrorBanner", () => {
   it.each(["reconnect_required", "degraded", "unavailable"] as const)("%s: fixed text and a Contact support mailto", (kind) => {
     render(<QuickBooksErrorBanner kind={kind} />);
-    expect(screen.getByRole("link", { name: "Contact support" }).getAttribute("href")).toMatch(/^mailto:it@pub-k\.org/);
+    expect(screen.getByRole("link", { name: "Contact support" }).getAttribute("href")).toMatch(new RegExp(`^${SUPPORT_HREF}`));
     expect(screen.getByRole("alert").textContent).toMatch(/QuickBooks/);
   });
 });

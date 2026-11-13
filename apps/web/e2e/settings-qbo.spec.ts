@@ -9,6 +9,7 @@ import { completeMfa, expectLaneHome, nextTotpWindow, signInWithEmailCode } from
 import { clearMailbox } from "./mailpit";
 import { personas } from "./personas";
 import { sql } from "../scripts/e2e-sql.mjs";
+import { SUPPORT_HREF } from "../lib/support";
 
 const CID = "00000000-0000-4000-8000-000000000197";
 const REALM = "9130000000197";
@@ -55,7 +56,7 @@ test("owner: connect form, connected state, class tracking, reconnect banner, di
   await expect(none.locator("form")).toHaveAttribute("method", /post/i);
   await expect(none.getByRole("button", { name: "Connect QuickBooks" })).toBeVisible();
   await expect(section.getByRole("button", { name: "Disconnect QuickBooks" })).toHaveCount(0);
-  await expect(section.getByRole("link", { name: "Contact support" })).toHaveAttribute("href", "mailto:it@pub-k.org");
+  await expect(section.getByRole("link", { name: "Contact support" })).toHaveAttribute("href", SUPPORT_HREF);
 
   // Connected: masked company id, per-job times, class tracking on.
   seed();
@@ -83,7 +84,7 @@ test("owner: connect form, connected state, class tracking, reconnect banner, di
   await page.goto("/PKG/settings");
   const banner = page.getByRole("alert").filter({ hasText: "QuickBooks needs to be reconnected" });
   await expect(banner).toBeVisible();
-  await expect(banner.getByRole("link", { name: "Contact support" })).toHaveAttribute("href", /^mailto:it@pub-k\.org/);
+  await expect(banner.getByRole("link", { name: "Contact support" })).toHaveAttribute("href", new RegExp(`^${SUPPORT_HREF}`));
   await expect(page.getByRole("button", { name: "Reconnect QuickBooks" })).toBeVisible();
 
   // Disconnect: the confirm explains it, asking creates a request, the button is replaced by "waiting for approval".

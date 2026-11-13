@@ -11,7 +11,8 @@ import { defaultExportRange } from "@/lib/quickbooks-export-range";
 import { ConnectionCheckButton } from "./connection-check-button";
 import { ConnectionRow, when } from "./connection-rows";
 import { QuickBooksDisconnectButton } from "./quickbooks-disconnect-button";
-import { QuickBooksErrorBanner, SUPPORT_HREF } from "./quickbooks-error-banner";
+import { SUPPORT_HREF } from "@/lib/support";
+import { QuickBooksErrorBanner } from "./quickbooks-error-banner";
 import { QuickBooksErrorExport } from "./quickbooks-error-export";
 
 const LABEL: Record<QuickBooksConnectionState, { text: string; variant: "success" | "alert" | "muted" }> = {
@@ -95,12 +96,12 @@ export function QuickBooksRows({ laneId, view }: { laneId: string; view: QuickBo
           testId="quickbooks-connection"
           provider="QuickBooks"
           sub={sub}
-          account={<span>Company ID ending {c.realmTail}</span>}
+          account={<span>{c.realmTail ? `Company ID ending ${c.realmTail}` : "Connected company"}</span>}
           status={<Badge variant={LABEL[c.state].variant}>{LABEL[c.state].text}</Badge>}
           lastSync={<LastSync c={c} />}
           actions={
             <div className="flex flex-col gap-3">
-              {i === view.connections.length - 1 ? button : null}
+              {c.state === "reconnect_required" || (!reconnect && i === view.connections.length - 1) ? button : null}
               {c.state === "reconnect_required" || c.state === "connecting" ? null : <ConnectionCheckButton laneId={laneId} />}
               {canDisconnect(c.state) ? <QuickBooksDisconnectButton laneId={laneId} connectionId={c.id} disconnect={c.disconnect} /> : null}
             </div>

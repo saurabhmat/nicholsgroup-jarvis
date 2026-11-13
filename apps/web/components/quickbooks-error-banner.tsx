@@ -1,16 +1,16 @@
 // The shared QuickBooks error banner (T-197): fixed text per state and a "Contact support" link (mailto). Used by Settings ->
 // Connections and, later, by the Finance page (T-084/T-092). The text never carries Intuit's wording, ids or any figure.
 import { ErrorBanner } from "@nichols/ui";
+import { SUPPORT_EMAIL, SUPPORT_HREF } from "@/lib/support";
 
-export const SUPPORT_EMAIL = "it@pub-k.org";
-export const SUPPORT_HREF = `mailto:${SUPPORT_EMAIL}`;
+export { SUPPORT_EMAIL, SUPPORT_HREF };
 
 export type QuickBooksBannerKind = "reconnect_required" | "degraded" | "unavailable";
 
 const TEXT: Record<QuickBooksBannerKind, { title: string; description: string; subject: string }> = {
   reconnect_required: {
     title: "QuickBooks needs to be reconnected",
-    description: "QuickBooks access was withdrawn or has expired, so the books are no longer syncing. Use Reconnect QuickBooks below.",
+    description: "QuickBooks access was withdrawn or has expired, so the books are no longer syncing. Use Reconnect QuickBooks on the affected connection.",
     subject: "QuickBooks needs to be reconnected",
   },
   degraded: {

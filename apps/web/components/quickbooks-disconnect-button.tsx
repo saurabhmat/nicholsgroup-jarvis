@@ -3,15 +3,22 @@
 // button only ASKS (propose_qbo_disconnect on the approvals route, owner or admin_technical at AAL2); someone then approves the
 // exact request on the Approvals page with a fresh authenticator code. While one is waiting, a link replaces the button.
 import { useRouter } from "next/navigation";
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { Alert, AlertDescription, Button } from "@nichols/ui";
 import type { QuickBooksDisconnectView } from "@/lib/quickbooks-connection";
 
-const MESSAGES: Record<number, string> = {
-  401: "You are signed out. Sign in again and retry.",
-  403: "Only an owner or technical administrator can ask for this, with your authenticator code entered recently.",
-  404: "That QuickBooks connection was not found. Reload the page.",
+// Fixed client text by the server's error CODE (or the HTTP status); the server's own message string is never shown (T-197 review).
+const BY_CODE: Record<string, string> = {
+  disconnect_pending: "A disconnect is already waiting for approval for this QuickBooks company.",
+  qbo_not_enabled: "Disconnecting QuickBooks isn't enabled for this company yet. Ask your administrator to allow it.",
+  forbidden: "Only an owner or technical administrator can ask for this, with your authenticator code entered recently.",
+  not_found: "That QuickBooks connection was not found. Reload the page.",
+  invalid_request: "That did not work. Reload the page and try again.",
+  unavailable: "Approvals are unavailable right now. Try again in a minute.",
 };
+const BY_STATUS: Record<number, string> = { 401: "You are signed out. Sign in again and retry.", 403: BY_CODE.forbidden as string, 404: BY_CODE.not_found as string };
+const GENERIC = "That did not work. Reload the page and try again.";
+export const disconnectErrorText = (status: number, code: unknown): string => (typeof code === "string" && Object.hasOwn(BY_CODE, code) ? (BY_CODE[code] as string) : (BY_STATUS[status] ?? GENERIC));
 
 export function QuickBooksDisconnectButton({ laneId, connectionId, disconnect }: { laneId: string; connectionId: string; disconnect: QuickBooksDisconnectView }) {
   const router = useRouter();
@@ -19,12 +26,37 @@ export function QuickBooksDisconnectButton({ laneId, connectionId, disconnect }:
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const approvalsHref = `/${encodeURIComponent(laneId)}/approvals`;
+  const trigger = useRef<HTMLButtonElement>(null);
+  const heading = useRef<HTMLParagraphElement>(null);
+  const pendingLink = useRef<HTMLAnchorElement>(null);
+  const focusTrigger = useRef(false); // focus goes back to the trigger after the panel closes
+  const focusPending = useRef(false); // ... or, after a successful ask, to the "waiting for approval" link once it is drawn
+
+  useEffect(() => {
+    if (open) heading.current?.focus();
+  }, [open]);
+  useEffect(() => {
+    if (!open && focusTrigger.current) {
+      focusTrigger.current = false;
+      trigger.current?.focus();
+    }
+  }, [open]);
+  useEffect(() => {
+    if (disconnect.pendingId && focusPending.current) {
+      focusPending.current = false;
+      pendingLink.current?.focus();
+    }
+  }, [disconnect.pendingId]);
+  const close = () => {
+    focusTrigger.current = true;
+    setOpen(false);
+  };
 
   if (disconnect.pendingId) {
     return (
       <div data-testid="qbo-disconnect-pending" className="flex flex-col gap-1 text-small">
         <span className="font-medium text-foreground">Disconnect waiting for approval</span>
-        <a href={approvalsHref} className="underline underline-offset-4">
+        <a ref={pendingLink} href={approvalsHref} className="underline underline-offset-4">
           Open Approvals
         </a>
         {disconnect.gate && !disconnect.gate.enabled && disconnect.gate.message ? <span className="text-muted-foreground">{disconnect.gate.message}</span> : null}
@@ -42,12 +74,14 @@ export function QuickBooksDisconnectButton({ laneId, connectionId, disconnect }:
         body: JSON.stringify({ action: "propose_qbo_disconnect", connectionId }),
       });
       if (res.ok) {
+        focusPending.current = true;
         setOpen(false);
         router.refresh(); // the row now shows "Disconnect waiting for approval"
         return;
       }
-      const data = (await res.json().catch(() => ({}))) as { message?: unknown };
-      setError(typeof data.message === "string" ? data.message : (MESSAGES[res.status] ?? "That did not work. Reload the page and try again."));
+      const data = (await res.json().catch(() => ({}))) as { error?: unknown };
+      setError(disconnectErrorText(res.status, data.error));
+      if (data.error === "disconnect_pending") router.refresh(); // one is already waiting: show it
     } catch {
       setError("That did not work. Check your connection and try again.");
     } finally {
@@ -57,14 +91,14 @@ export function QuickBooksDisconnectButton({ laneId, connectionId, disconnect }:
 
   if (!open) {
     return (
-      <Button variant="outline" onClick={() => setOpen(true)}>
+      <Button ref={trigger} variant="outline" onClick={() => setOpen(true)}>
         Disconnect QuickBooks
       </Button>
     );
   }
   return (
-    <div role="dialog" aria-modal="false" aria-labelledby={`qbo-disc-${connectionId}`} data-testid="qbo-disconnect-confirm" className="flex max-w-md flex-col gap-3 rounded-card border border-border bg-card p-4 text-small text-card-foreground">
-      <p id={`qbo-disc-${connectionId}`} className="text-body font-medium text-foreground">
+    <div role="dialog" aria-modal="false" onKeyDown={(e) => { if (e.key === "Escape" && !busy) close(); }} aria-labelledby={`qbo-disc-${connectionId}`} data-testid="qbo-disconnect-confirm" className="flex max-w-md flex-col gap-3 rounded-card border border-border bg-card p-4 text-small text-card-foreground">
+      <p ref={heading} tabIndex={-1} id={`qbo-disc-${connectionId}`} className="text-body font-medium text-foreground outline-none">
         Disconnect QuickBooks?
       </p>
       <p>
@@ -82,7 +116,7 @@ export function QuickBooksDisconnectButton({ laneId, connectionId, disconnect }:
         <Button onClick={ask} disabled={busy}>
           {busy ? "Asking" : "Ask to disconnect"}
         </Button>
-        <Button variant="ghost" onClick={() => setOpen(false)} disabled={busy}>
+        <Button variant="ghost" onClick={close} disabled={busy}>
           Keep it connected
         </Button>
       </div>

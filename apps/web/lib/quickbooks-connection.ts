@@ -7,7 +7,7 @@
 import { AuthError, type Guards } from "@nichols/core/auth";
 import type { LaneClient } from "@nichols/core/lane-router";
 import { CONNECT_ROLES } from "@nichols/connectors/oauth";
-import { capabilityOf, isQboDisconnectable, listApprovals, QBO_DISCONNECT, type ApprovalsPublicDeps } from "@nichols/approvals/server";
+import { capabilityOf, isQboDisconnectable, QBO_DISCONNECT, type ApprovalsPublicDeps } from "@nichols/approvals/server";
 import { coreRpc } from "./approvals";
 
 export type QuickBooksConnectionState = "connected" | "connecting" | "degraded" | "reconnect_required";
@@ -23,7 +23,7 @@ export type QuickBooksDisconnectView = {
 
 export type QuickBooksConnectionView = {
   id: string;
-  /** The last four characters of the QuickBooks company (realm) id. The whole id is never sent to the page. */
+  /** The last four characters of the QuickBooks company (realm) id; "" for an id of 8 characters or fewer. The whole id is never sent to the page. */
   realmTail: string;
   state: QuickBooksConnectionState;
   /** End of the last successful sync (core.connections.last_sync_at); null = not synced yet. */
@@ -59,7 +59,8 @@ function iso(value: unknown): string | null {
   return Number.isNaN(t) ? null : new Date(t).toISOString();
 }
 
-export const realmTailOf = (realmId: string): string => realmId.slice(-4);
+/** Last four characters of the realm id; empty when the id is 8 characters or shorter (a tail would be half the id). */
+export const realmTailOf = (realmId: string): string => (realmId.length > 8 ? realmId.slice(-4) : "");
 
 /** One status list with the database and the approvals module: active, degraded and reconnect_required (not a connection still being set up). */
 export const canDisconnect = (state: QuickBooksConnectionState): boolean => isQboDisconnectable(state === "connected" ? "active" : state);
@@ -114,41 +115,40 @@ export async function loadQuickBooksSection(client: Db, laneId: string): Promise
   return { connections, ...(connections.length === 0 && rows.some((r) => r.status === "disconnected") ? { wasDisconnected: true as const } : {}) };
 }
 
-type PendingDeps = Pick<ApprovalsPublicDeps, "readFacts" | "jobRpc" | "prepareEmailWrite" | "laneMailboxes" | "audit">;
+type PendingDeps = Pick<ApprovalsPublicDeps, "readFacts">;
 
 /**
- * Adds, to each disconnectable connection, the disconnect proposal waiting for approval (if any) and whether it could be
- * approved now. Both come from the approvals module's own readers (RLS on the user's client). A failure here only hides the
- * pending state (the button stays; proposing again is refused by the database while one is waiting).
+ * Adds, to each disconnectable connection, the disconnect proposal waiting for approval (if any) and whether it could be approved
+ * now. Read-only: the pending ids come from core.act_pending_qbo_disconnects (invoker, RLS, no row cap, no writes; unlike
+ * listApprovals it does not expire stale proposals). The gate (lane policy class and approvals_live) is lane-level, so the lane's
+ * facts are read once. A failure only hides the pending state (the button stays; the database refuses a second pending request).
  */
 export async function withDisconnectState(
   view: QuickBooksSectionView,
-  ctx: { client: Db; laneId: string; userId: string },
+  ctx: { client: Db; laneId: string },
   approvals: PendingDeps,
 ): Promise<QuickBooksSectionView> {
-  const disconnectable = view.connections.filter((c) => canDisconnect(c.state));
-  if (disconnectable.length === 0) return view;
+  const first = view.connections.find((c) => canDisconnect(c.state));
+  if (!first) return view;
   let pending: { id: string; connectionId: string }[] = [];
   try {
-    const rows = await listApprovals(approvals as ApprovalsPublicDeps, { laneId: ctx.laneId, userId: ctx.userId, rpc: coreRpc(ctx.client as never) }, 100);
-    pending = rows.filter((r) => r.actionType === QBO_DISCONNECT && r.status === "proposed" && new Date(r.expiresAt).getTime() > Date.now()).map((r) => ({ id: r.id, connectionId: r.connectionId }));
+    const { data, error } = await coreRpc(ctx.client as never)("act_pending_qbo_disconnects", { p_lane: ctx.laneId });
+    if (error || !Array.isArray(data)) return view;
+    pending = data.flatMap((r: unknown) => {
+      const o = r as { id?: unknown; connection_id?: unknown };
+      return typeof o?.id === "string" && typeof o.connection_id === "string" ? [{ id: o.id, connectionId: o.connection_id }] : [];
+    });
   } catch {
     return view;
   }
-  const connections = await Promise.all(
-    view.connections.map(async (c): Promise<QuickBooksConnectionView> => {
-      if (!canDisconnect(c.state)) return c;
-      const waiting = pending.find((p) => p.connectionId === c.id);
-      let gate: QuickBooksDisconnectView["gate"] = null;
-      try {
-        const cap = capabilityOf(ctx.laneId as never, await approvals.readFacts(ctx.laneId as never, c.id), QBO_DISCONNECT);
-        gate = { enabled: cap.enabled, message: cap.message };
-      } catch {
-        gate = null;
-      }
-      return { ...c, disconnect: { pendingId: waiting?.id ?? null, gate } };
-    }),
-  );
+  let gate: QuickBooksDisconnectView["gate"] = null;
+  try {
+    const cap = capabilityOf(ctx.laneId as never, await approvals.readFacts(ctx.laneId as never, first.id), QBO_DISCONNECT);
+    gate = { enabled: cap.enabled, message: cap.message };
+  } catch {
+    gate = null;
+  }
+  const connections = view.connections.map((c): QuickBooksConnectionView => (canDisconnect(c.state) ? { ...c, disconnect: { pendingId: pending.find((p) => p.connectionId === c.id)?.id ?? null, gate } } : c));
   return { ...view, connections };
 }
 
@@ -164,18 +164,16 @@ export async function quickbooksSectionFor(
   approvals?: PendingDeps,
 ): Promise<QuickBooksSectionView | null> {
   let client: Db;
-  let userId: string;
   try {
     const r = await g.requireRole(laneId, CONNECT_ROLES);
     client = r.client;
-    userId = r.session.userId;
   } catch (e) {
     if (e instanceof AuthError) return null;
     throw e;
   }
   try {
     const view = await load(client, laneId);
-    return approvals ? await withDisconnectState(view, { client, laneId, userId }, approvals) : view;
+    return approvals ? await withDisconnectState(view, { client, laneId }, approvals) : view;
   } catch {
     return { connections: [], unavailable: true };
   }
