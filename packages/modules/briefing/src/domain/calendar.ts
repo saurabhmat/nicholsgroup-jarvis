@@ -147,7 +147,7 @@ export function analyzeDay(events: BriefEvent[], owners: ReadonlySet<string>, in
  * Look-ahead: events after today worth knowing about: holidays and other all-day events, meetings with external
  * attendees, and invitations still unanswered. Declined events are left out. At most `limit`, in time order.
  */
-export function notableAhead(events: BriefEvent[], owners: ReadonlySet<string>, internalDomains: ReadonlySet<string>, limit = 8): NotableEvent[] {
+export function notableAhead(events: BriefEvent[], owners: ReadonlySet<string>, internalDomains: ReadonlySet<string>, limit = 8, known?: KnownNames): NotableEvent[] {
   const out: NotableEvent[] = [];
   for (const e of [...events].sort((a, b) => a.startAt.localeCompare(b.startAt))) {
     const resp = ownResponse(e, owners);
@@ -157,7 +157,7 @@ export function notableAhead(events: BriefEvent[], owners: ReadonlySet<string>, 
     else if (e.allDay) why.push("All day");
     const ext = externalAttendees(e, owners, internalDomains);
     if (ext.length > 0) {
-      const uniq = uniqueNames(ext, e);
+      const uniq = uniqueNames(ext, e, known);
       why.push(`External: ${uniq.slice(0, 2).join(", ")}${uniq.length > 2 ? ` +${String(uniq.length - 2)}` : ""}`);
     }
     if (resp === "needs_action") why.push("RSVP pending");
@@ -185,43 +185,47 @@ export function nameFromEmail(email: string): string {
   return words.map((w) => w.charAt(0).toUpperCase() + w.slice(1).toLowerCase()).join(" ");
 }
 
-/** The display name of an attendee address on an event: its name when it has one (and it is not itself an address), else the capitalised local part. */
-function attendeeName(email: string, e: BriefEvent): string {
-  const a = e.attendees.find((x) => x.email === email);
-  const n = a?.name?.trim();
-  return n && !n.includes("@") ? n : nameFromEmail(email);
+/** Names we already hold for exact addresses (lower case), for example a `from_name` in the lane's mail index. */
+export type KnownNames = ReadonlyMap<string, string>;
+
+/**
+ * How an attendee is shown (T-240). Never a name made up from the address's local part ("rnichols@" is not "Rnichols"):
+ * 1. the display name on the event (when it is not itself an address), 2. a name we already hold for that exact address,
+ * 3. the full email address. `real` = the name came from a person's own display name (it can dedupe by name and domain).
+ */
+function attendeeName(email: string, e: BriefEvent, known?: KnownNames): { name: string; real: boolean } {
+  const n = e.attendees.find((x) => x.email === email)?.name?.trim().replace(/\s+/g, " ");
+  if (n && !n.includes("@")) return { name: n, real: true };
+  const k = known?.get(email.trim().toLowerCase())?.trim().replace(/\s+/g, " ");
+  if (k && !k.includes("@")) return { name: k, real: true };
+  return { name: email.trim(), real: false };
 }
 
-/** Attendee names (never addresses), the owner's mailboxes and resources excluded: at most `max`, plus how many more. */
-export function attendeeNames(e: BriefEvent, owners: ReadonlySet<string>, max = 3): { names: string[]; more: number } {
+/** Attendee names (the address itself when no name is known), the owner's mailboxes and resources excluded: at most `max`, plus how many more. */
+export function attendeeNames(e: BriefEvent, owners: ReadonlySet<string>, max = 3, known?: KnownNames): { names: string[]; more: number } {
   const others = e.attendees.filter((a) => !owners.has(a.email) && !isResource(a.email));
   const uniq = uniqueNames(
     others.map((a) => a.email),
     e,
+    known,
   );
   return { names: uniq.slice(0, max), more: Math.max(0, uniq.length - max) };
-}
-
-/** True when the entry has a real display name (not an address, not just the local part made readable). */
-function hasRealName(email: string, e: BriefEvent): boolean {
-  const n = e.attendees.find((x) => x.email === email)?.name?.trim();
-  return Boolean(n) && !(n as string).includes("@");
 }
 
 /**
  * Display names for addresses, each person once (T-237). The same address (any case) is one person. Two entries with a real display
  * name are one person only when the name (case and whitespace insensitive) AND the email domain both match, so two "Sam"s at different
- * domains stay two and an external who is named like an internal colleague is never merged into them. A name made from the address's
- * local part is no evidence of identity: it dedupes by full address only. The organizer is an attendee entry too.
+ * domains stay two and an external who is named like an internal colleague is never merged into them. An entry shown as its address
+ * is no evidence of identity: it dedupes by full address only. The organizer is an attendee entry too.
  */
-function uniqueNames(emails: readonly string[], e: BriefEvent): string[] {
+function uniqueNames(emails: readonly string[], e: BriefEvent, known?: KnownNames): string[] {
   const seen = new Set<string>();
   const out: string[] = [];
   for (const email of emails) {
     const addr = email.trim().toLowerCase();
-    const name = attendeeName(email, e).replace(/\s+/g, " ").trim();
+    const { name, real } = attendeeName(email, e, known);
     const domain = addr.slice(addr.lastIndexOf("@") + 1);
-    const key = hasRealName(email, e) ? `n:${name.toLowerCase()}|${domain}` : `a:${addr}`;
+    const key = real ? `n:${name.toLowerCase()}|${domain}` : `a:${addr}`;
     if (seen.has(`a:${addr}`) || seen.has(key)) continue;
     seen.add(`a:${addr}`);
     seen.add(key);
@@ -230,9 +234,9 @@ function uniqueNames(emails: readonly string[], e: BriefEvent): string[] {
   return out;
 }
 
-/** "Anna Lee, Bob Smith, Cy Wu +2 more" (names, never addresses; at most `max`). */
-export function attendeeSummary(e: BriefEvent, owners: ReadonlySet<string>, max = 3): string | null {
-  const { names, more } = attendeeNames(e, owners, max);
+/** "Anna Lee, bob@x.test, Cy Wu +2 more" (a name, else the address; at most `max`). */
+export function attendeeSummary(e: BriefEvent, owners: ReadonlySet<string>, max = 3, known?: KnownNames): string | null {
+  const { names, more } = attendeeNames(e, owners, max, known);
   if (names.length === 0) return null;
   return more > 0 ? `${names.join(", ")} +${String(more)} more` : names.join(", ");
 }

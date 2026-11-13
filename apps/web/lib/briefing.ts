@@ -40,7 +40,7 @@ const DAY_MS = 86_400_000;
 
 export type BriefingConfig = LaneConfig["briefing"];
 
-export type CalendarSection = { access: true; today: DayEvent[]; ahead: NotableEvent[]; /** All meetings in the next 7 days (not only the notable ones), for the header summary. */ aheadSummary?: { meetings: number; clashes: number }; owners: string[] } | { access: false; unavailable?: true };
+export type CalendarSection = { access: true; today: DayEvent[]; ahead: NotableEvent[]; /** Names we already hold for exact addresses (display names in the lane's mail index), used when an event has none (T-240). */ knownNames?: Record<string, string>; /** All meetings in the next 7 days (not only the notable ones), for the header summary. */ aheadSummary?: { meetings: number; clashes: number }; owners: string[] } | { access: false; unavailable?: true };
 
 /** "Needs your attention" + Money from mail metadata; `access: false` when the caller may not read the lane's mail. */
 export type MailSection =
@@ -82,6 +82,16 @@ export function ownMailDomains(owners: Iterable<string>): string[] {
   return [...new Set([...owners].map(domainOf).filter((d) => d !== "" && !PUBLIC_MAIL_DOMAINS.has(d)))];
 }
 
+/** Display names the mail index holds for exact sender addresses (never an address as a name), for attendees whose event has no name. */
+export function knownNamesFrom(rows: readonly { fromAddress: string | null; fromName: string | null }[]): Record<string, string> {
+  const out: Record<string, string> = {};
+  for (const r of rows) {
+    const name = r.fromName?.trim().replace(/\s+/g, " ");
+    if (r.fromAddress && name && !name.includes("@") && name.length <= 100 && !(r.fromAddress in out)) out[r.fromAddress.toLowerCase()] = name;
+  }
+  return out;
+}
+
 /** Owner domains count as internal, except public mail providers (gmail.com says nothing about who is a colleague). */
 export function internalDomains(configured: readonly string[], owners: Iterable<string>): Set<string> {
   const own = [...owners].map(domainOf).filter((d) => d !== "" && !PUBLIC_MAIL_DOMAINS.has(d));
@@ -118,8 +128,9 @@ export async function loadBriefing(client: Db, laneId: string, now: Date, viewer
   let calendar: CalendarSection = { access: false };
   if (calendarAccess && events.error) calendar = { access: false, unavailable: true };
   else if (calendarAccess) {
+    const knownNames = knownNamesFrom(threads.error ? [] : parseThreads(threads.data));
     const split = splitByDay(parseEvents(events.data), from, to, localDate(from, viewerTz), 7);
-    calendar = { access: true, today: analyzeDay(split.today, owners, internal), ahead: notableAhead(split.later, owners, internal), aheadSummary: summarizeAhead(split.later, owners), owners: [...owners] };
+    calendar = { access: true, knownNames, today: analyzeDay(split.today, owners, internal), ahead: notableAhead(split.later, owners, internal, 8, new Map(Object.entries(knownNames))), aheadSummary: summarizeAhead(split.later, owners), owners: [...owners] };
   }
   let mail: MailSection = { access: false };
   if (mailAccess && threads.error) mail = { access: false, unavailable: true };

@@ -78,11 +78,12 @@ describe("TodayCalendar (T-235 part 3: compact)", () => {
     expect(screen.getAllByRole("list")).toHaveLength(1); // list semantics
   });
 
-  it("attendees are names (never emails): a name, else the capitalised local part; at most 3 then '+N more'; resources and the owner left out", () => {
+  it("T-240: attendees show a name, else the full address (never a name made from the local part); at most 3 then '+N more'; resources and the owner left out", () => {
     view();
     const text = (screen.getAllByTestId("calendar-event")[0] as HTMLElement).textContent ?? "";
-    expect(text).toContain("With Dana Whitfield, Guest Person, Raj +2 more"); // raj's 'name' is an address: local part instead
-    expect(text).not.toMatch(/@/);
+    expect(text).toContain("With dana.whitfield@acme.test, Guest Person, raj@acme.test +2 more"); // raj's 'name' is an address: the address itself, not "Raj"
+    expect(text).not.toContain("Raj");
+    expect(text).not.toContain("Dana Whitfield");
     expect(text).not.toContain("Room 1");
   });
 
@@ -165,14 +166,14 @@ describe("Next 7 days summary and LookAhead", () => {
     expect(screen.getByText(note)).toBeTruthy();
   });
 
-  it("lists notable events with names (never addresses), a time column and a title link", () => {
+  it("lists notable events with a name or the address, a time column and a title link", () => {
     const ahead = notableAhead(
       parseEvents([{ calendar_id: "primary", event_id: "x", title: "Client call", start_at: "2026-11-14T15:00:00Z", end_at: "2026-11-14T16:00:00Z", source_url: "https://calendar.example.test/x", attendees: [{ email: "c.client@acme.test" }] }]),
       owners,
       internal,
     );
     render(<LookAhead events={ahead} tz="America/New_York" />);
-    expect(screen.getByText("External: C Client")).toBeTruthy();
+    expect(screen.getByText("External: c.client@acme.test")).toBeTruthy();
     expect(screen.getByText("Sat, Nov 14").tagName).toBe("TIME");
     expect(screen.getByText("10:00 AM").tagName).toBe("TIME");
     expect(screen.getByRole("link", { name: "Client call" }).getAttribute("href")).toBe("https://calendar.example.test/x");

@@ -73,11 +73,12 @@ export function TodayCalendar({ calendar, tz, now }: { calendar: CalendarSection
   }
   if (calendar.today.length === 0) return <p className="text-body text-muted-foreground">Nothing scheduled today.</p>;
   const owners = new Set(calendar.owners);
+  const known = new Map(Object.entries(calendar.knownNames ?? {}));
   return (
     <ul data-testid="today-calendar" className="flex flex-col divide-y divide-border">
       {calendar.today.map((e) => {
         const past = !e.allDay && Date.parse(e.endAt) <= now.getTime();
-        const who = attendeeSummary(e, owners);
+        const who = attendeeSummary(e, owners, 3, known);
         const own = e.allDay ? null : otherZoneTime(e.startAt, tz, e.timezone);
         return (
           <li key={e.key} data-testid="calendar-event" className={`flex gap-3 py-3 text-body ${past ? "opacity-60" : ""}`}>
@@ -107,7 +108,7 @@ export function TodayCalendar({ calendar, tz, now }: { calendar: CalendarSection
                 ) : null}
               </span>
               {e.location ? <span className="truncate text-small text-muted-foreground">{e.location}</span> : null}
-              {who ? <span className="truncate text-small text-muted-foreground">With {who}</span> : null}
+              {who ? <span title={who} className="truncate text-small text-muted-foreground">With {who}</span> : null}
               <Chips e={e} />
             </span>
           </li>
