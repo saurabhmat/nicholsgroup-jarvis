@@ -1,4 +1,4 @@
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { fireEvent, render, screen, within } from "@testing-library/react";
 import { AppShell } from "./app-shell";
 import { PageHeader } from "./page-header";
@@ -76,6 +76,12 @@ describe("TabIcon", () => {
 });
 
 describe("AppShell iPhone header and tabs", () => {
+  // The greeting follows the clock (T-240): fix it at 9:00 AM Eastern so these tests do not depend on the time they run.
+  beforeEach(() => {
+    vi.useFakeTimers({ toFake: ["Date"] });
+    vi.setSystemTime(new Date("2026-11-11T14:00:00Z"));
+  });
+  afterEach(() => vi.useRealTimers());
   const lanes = [{ laneId: "PKG", name: "Pub K Group" }];
   const shell = (pathname: string, firstName?: string) =>
     render(

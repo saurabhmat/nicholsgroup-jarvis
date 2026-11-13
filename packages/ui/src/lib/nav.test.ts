@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { activeKey, homeHeading, laneHref, onboardingEntry, pageHeading, MOBILE_TABS, MORE_ITEMS, NAV_ITEMS, navItem } from "./nav";
+import { activeKey, greetingFor, homeHeading, laneHref, onboardingEntry, pageHeading, MOBILE_TABS, MORE_ITEMS, NAV_ITEMS, navItem } from "./nav";
 
 describe("navigation data", () => {
   it("has the desktop order (Get started first, Projects between Assistant and Settings) and no hidden modules", () => {
@@ -60,12 +60,54 @@ describe("headings and the More tab", () => {
     expect(navItem("inbox").heading).toEqual({ lead: "Inbox" });
   });
 
+  const MORNING = new Date("2026-11-11T14:00:00Z"); // 9:00 AM Eastern
   it("builds the Home title with or without a name", () => {
-    expect(homeHeading("Robert")).toEqual({ lead: "Good morning,", accent: "Robert" });
-    expect(homeHeading()).toEqual({ lead: "Good morning" });
-    expect(homeHeading("  ")).toEqual({ lead: "Good morning" });
+    expect(homeHeading("Robert", MORNING)).toEqual({ lead: "Good morning,", accent: "Robert" });
+    expect(homeHeading(undefined, MORNING)).toEqual({ lead: "Good morning" });
+    expect(homeHeading("  ", MORNING)).toEqual({ lead: "Good morning" });
     expect(pageHeading("more")).toEqual({ lead: "More" });
-    expect(pageHeading("home", "Robert").accent).toBe("Robert");
+    expect(pageHeading("home", "Robert", MORNING).accent).toBe("Robert");
+    expect(pageHeading("home", "Robert", new Date("2026-11-11T22:00:00Z")).lead).toBe("Good evening,");
+  });
+
+  // T-240: by America/New_York time of day, whatever the viewer's zone.
+  it("greets by Eastern time: morning before 12:00, afternoon 12:00-16:59, evening from 17:00", () => {
+    const at = (iso: string) => greetingFor(new Date(iso));
+    // November: EST (UTC-5)
+    expect(at("2026-11-11T04:59:00Z")).toBe("Good evening"); // 11:59 PM the day before
+    expect(at("2026-11-11T05:00:00Z")).toBe("Good morning"); // 12:00 AM
+    expect(at("2026-11-11T16:59:00Z")).toBe("Good morning"); // 11:59 AM
+    expect(at("2026-11-11T17:00:00Z")).toBe("Good afternoon"); // 12:00 PM
+    expect(at("2026-11-11T21:59:00Z")).toBe("Good afternoon"); // 4:59 PM
+    expect(at("2026-11-11T22:00:00Z")).toBe("Good evening"); // 5:00 PM
+    expect(at("2026-11-12T04:59:00Z")).toBe("Good evening"); // 11:59 PM
+  });
+  it("follows daylight time: the same UTC instants fall an hour earlier in July (EDT, UTC-4)", () => {
+    const at = (iso: string) => greetingFor(new Date(iso));
+    expect(at("2026-07-01T15:59:00Z")).toBe("Good morning"); // 11:59 AM EDT
+    expect(at("2026-07-01T16:00:00Z")).toBe("Good afternoon"); // 12:00 PM EDT
+    expect(at("2026-07-01T20:59:00Z")).toBe("Good afternoon"); // 4:59 PM EDT
+    expect(at("2026-07-01T21:00:00Z")).toBe("Good evening"); // 5:00 PM EDT
+  });
+  it("the DST changeover days: spring forward (Mar 8 2026) and fall back (Nov 1 2026)", () => {
+    const at = (iso: string) => greetingFor(new Date(iso));
+    expect(at("2026-03-08T15:59:00Z")).toBe("Good morning"); // 11:59 AM EDT (the zone switched at 2 AM)
+    expect(at("2026-03-08T16:00:00Z")).toBe("Good afternoon");
+    expect(at("2026-11-01T16:59:00Z")).toBe("Good morning"); // 11:59 AM EST (fell back at 2 AM)
+    expect(at("2026-11-01T17:00:00Z")).toBe("Good afternoon");
+  });
+  it("never depends on the process zone", () => {
+    const old = process.env.TZ;
+    try {
+      for (const tz of ["Asia/Tokyo", "America/Los_Angeles", "UTC"]) {
+        process.env.TZ = tz;
+        expect(greetingFor(new Date("2026-11-11T14:00:00Z"))).toBe("Good morning");
+        expect(greetingFor(new Date("2026-11-11T23:00:00Z"))).toBe("Good evening");
+      }
+    } finally {
+      if (old === undefined) delete process.env.TZ;
+      else process.env.TZ = old;
+    }
   });
 
   it("gives every tab an icon", () => {

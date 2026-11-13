@@ -17,7 +17,7 @@ test.skip(!process.env.PERF_MEASURE, "measurement run only (PERF_MEASURE=1)");
 test.setTimeout(600_000);
 
 const ROUTES = [
-  { key: "home", path: "/PKG", link: "Home", heading: /^Good morning/ },
+  { key: "home", path: "/PKG", link: "Home", heading: /^Good (morning|afternoon|evening)/ },
   { key: "inbox", path: "/PKG/inbox", link: "Inbox", heading: /^Inbox/ },
   { key: "calendar", path: "/PKG/calendar", link: "Calendar", heading: /^Calendar/ },
   { key: "settings", path: "/PKG/settings", link: "Settings", heading: /^Settings/ },

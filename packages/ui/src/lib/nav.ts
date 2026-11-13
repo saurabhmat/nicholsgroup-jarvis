@@ -54,16 +54,25 @@ export function onboardingEntry(progress: OnboardingProgress): { label: string; 
   return progress.done === null ? { label: "Get started", complete: false } : { label: "Get started", badge: `${String(progress.done)} of ${String(progress.total)}`, complete: false };
 }
 
-/** Home page title. The name is optional: without one the title is just "Good morning". */
-export function homeHeading(firstName?: string): { lead: string; accent?: string } {
+const EASTERN_HOUR = new Intl.DateTimeFormat("en-US", { timeZone: "America/New_York", hour: "numeric", hourCycle: "h23" });
+
+/** "Good morning" before 12:00, "Good afternoon" from 12:00 to 16:59, "Good evening" from 17:00, by America/New_York time whatever the viewer's zone (T-240). */
+export function greetingFor(now: Date = new Date()): "Good morning" | "Good afternoon" | "Good evening" {
+  const hour = Number(EASTERN_HOUR.formatToParts(now).find((p) => p.type === "hour")?.value ?? "0") % 24;
+  return hour < 12 ? "Good morning" : hour < 17 ? "Good afternoon" : "Good evening";
+}
+
+/** Home page title. The name is optional: without one the title is just the greeting ("Good morning"). The greeting follows Eastern time of day (T-240). */
+export function homeHeading(firstName?: string, now: Date = new Date()): { lead: string; accent?: string } {
   const name = firstName?.trim();
-  return name ? { lead: "Good morning,", accent: name } : { lead: "Good morning" };
+  const greeting = greetingFor(now);
+  return name ? { lead: `${greeting},`, accent: name } : { lead: greeting };
 }
 
 /** Title for the iPhone header band: the heading of the active module, "More" for the More tab. */
-export function pageHeading(key: NavKey | "more" | null, firstName?: string): { lead: string; accent?: string } {
+export function pageHeading(key: NavKey | "more" | null, firstName?: string, now: Date = new Date()): { lead: string; accent?: string } {
   if (key === "more") return { lead: "More" };
-  if (key === "home") return homeHeading(firstName);
+  if (key === "home") return homeHeading(firstName, now);
   return key ? navItem(key).heading : { lead: "" };
 }
 
