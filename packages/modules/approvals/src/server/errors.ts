@@ -21,6 +21,7 @@ export const APPROVALS_ERROR_CODES = [
   "check_sent_first",
   "already_replied",
   "reply_already_pending",
+  "placeholder_in_body",
   "unavailable",
 ] as const;
 export type ApprovalsErrorCode = (typeof APPROVALS_ERROR_CODES)[number];
@@ -29,6 +30,9 @@ export type ApprovalsErrorCode = (typeof APPROVALS_ERROR_CODES)[number];
 export const NOT_ENABLED_MESSAGE = "Sending isn't enabled for this mailbox yet. Reconnect Google with send permission in Settings";
 /** Shown when everything is enabled but the company is not yet switched on (T-170 gate). */
 export const NOT_LIVE_MESSAGE = "Approvals are not live for this company yet.";
+
+/** An email whose text still holds a placeholder (T-237): never sent; the approver edits it first. */
+export const PLACEHOLDER_MESSAGE = "This email still contains a placeholder such as [amount]. Edit the text to replace it, save, then approve.";
 
 /** Another email in the same conversation is approved, being sent, or may already have gone out (T-234 part 3). */
 export const CHECK_SENT_FIRST_MESSAGE = "An earlier reply to this conversation may already have gone out. Check your Sent folder first.";
@@ -54,6 +58,7 @@ const MESSAGES: Record<ApprovalsErrorCode, string> = {
   check_sent_first: CHECK_SENT_FIRST_MESSAGE,
   already_replied: "You already replied in this conversation after this draft was made. Edit and save it to send it anyway.",
   reply_already_pending: "A reply to this message is already waiting for approval. Open it to edit it.",
+  placeholder_in_body: PLACEHOLDER_MESSAGE,
   unavailable: "Approvals are unavailable right now.",
 };
 

@@ -659,6 +659,11 @@ isOneToOne: false
               "allowed": boolean,"bank_accounts": Json,"connected": boolean,"connection_status": string,"last_normalized_at": string,"last_sync_at": string,"mapping_mode": string,"own_entity": string
             }[]
                            },
+"home_finance_detail":
+{ Args: { "p_lane": string }; Returns: {
+              "aging": Json,"as_of": string,"bills_due_14_count": number,"bills_due_14_total": number,"oldest": Json,"state": string,"unmapped_bills": number,"unmapped_invoices": number
+            }[]
+                           },
 "home_mail_attention":
 { Args: { "p_lane": string,"p_since": string }; Returns: {
               "priority_configured": boolean,"unread_important": number,"unread_priority": number

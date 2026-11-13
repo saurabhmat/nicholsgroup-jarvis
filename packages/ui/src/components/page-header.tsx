@@ -4,8 +4,8 @@ import { cn } from "../lib/utils";
 export type PageHeaderProps = {
   /** Small line above the title: date and company on Home, a context line elsewhere. */
   eyebrow?: ReactNode;
-  /** Serif heading text. */
-  title: string;
+  /** Serif heading text (a node so a page can stream part of it, e.g. Home's greeting name). */
+  title: ReactNode;
   /** Italic accent word(s) after the title (the prototype's "at a glance"). */
   accent?: string;
   /** Right-hand controls (Ask Jarvis, the period toggle). */

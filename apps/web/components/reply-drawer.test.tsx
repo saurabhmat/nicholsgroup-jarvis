@@ -23,6 +23,7 @@ const baseContext = (over: Partial<ReplyContext> = {}): ReplyContext => ({
   mailbox: "exec@pubkgroup.example.test",
   subject: "Re: Quarterly review",
   replyingTo: "Dana <dana@sender.example.test>",
+  receivedAt: "2026-11-10T21:12:00Z",
   defaults: { to: ["dana@sender.example.test"], cc: [] },
   internalDomains: ["pubkgroup.example.test"],
   proposal: null,
@@ -106,12 +107,12 @@ describe("dialog behaviour", () => {
     expect(document.activeElement).toBe(last);
   });
 
-  it("is a full-screen sheet below md and a 480 px right drawer from md", async () => {
+  it("is a full-screen sheet below md and a 560 px right drawer from md", async () => {
     fakeServer({ reply_context: () => ok({ context: baseContext({ aiAllowed: false }) }) });
     open();
     const cls = screen.getByRole("dialog").className;
     expect(cls).toContain("inset-0");
-    expect(cls).toContain("md:w-[480px]");
+    expect(cls).toContain("md:w-[560px]");
     expect(cls).toContain("md:right-0");
   });
 });
@@ -120,7 +121,7 @@ describe("what the owner sees and may edit", () => {
   it("shows Sends as, the recipients, a read-only subject, and the thread preview as plain text", async () => {
     fakeServer({ reply_context: () => ok({ context: baseContext({ aiAllowed: false }) }) });
     open();
-    expect((await ready()).textContent).toBe("Sends as exec@pubkgroup.example.test");
+    expect((await ready()).textContent).toBe("Sends as exec@pubkgroup.example.test · nothing is sent until you click Send");
     expect(field("reply-to").value).toBe("dana@sender.example.test");
     const subject = field("reply-subject");
     expect(subject.value).toBe("Re: Quarterly review");
@@ -766,5 +767,206 @@ describe("reply-draft-store", () => {
     vi.advanceTimersByTime(1000);
     expect(fn).toHaveBeenCalledTimes(2);
     vi.useRealTimers();
+  });
+});
+
+describe("the redesigned drawer (T-237 part E)", () => {
+  it("shows Reply to <name>, the subject, the thread meta in Eastern time with ET, and a Full thread link", async () => {
+    fakeServer({ reply_context: () => ok({ context: baseContext({ aiAllowed: false }) }) });
+    open();
+    await ready();
+    expect(screen.getByRole("dialog", { name: "Reply to Dana" })).toBeTruthy();
+    expect(screen.getByTestId("reply-header-subject").textContent).toBe("Re: Quarterly review");
+    const meta = screen.getByTestId("reply-thread-meta").textContent ?? "";
+    expect(meta).toBe("Dana · Tue, Nov 10, 4:12 PM ET");
+    expect(meta).not.toMatch(/Z|T\d\d:/);
+    expect(screen.getByTestId("reply-full-thread").getAttribute("href")).toBe("/PKG/inbox/m1");
+    expect(screen.getByTestId("reply-draft-label").textContent).toBe("Your reply");
+  });
+
+  it("with no readable body it still opens and is editable: Thread preview unavailable", async () => {
+    fakeServer({ reply_context: () => ok({ context: baseContext({ aiAllowed: false, preview: null, receivedAt: null }) }) });
+    open();
+    await ready();
+    expect(screen.getByTestId("reply-preview-missing").textContent).toMatch(/^Thread preview unavailable/);
+    fireEvent.change(field("reply-body"), { target: { value: "typed" } });
+    expect(field("reply-body").value).toBe("typed");
+  });
+
+  it("an AI draft with figure placeholders: those sentences never reach the textarea, and a muted note says so", async () => {
+    fakeServer({
+      reply_context: () => ok({ context: baseContext() }),
+      draft_reply: () => ok({ draft: { status: "ready", text: "Hi,\nThe fee is [amount] a month.\nTalk soon." } }),
+    });
+    open();
+    await ready();
+    await waitFor(() => expect(field("reply-body").value).toBe("Hi,\nTalk soon."));
+    expect(field("reply-body").value).not.toMatch(/\[(amount|number)\]/);
+    expect(screen.getByTestId("reply-removed-note").textContent).toBe("Jarvis left out 1 line with figures; add them yourself if needed.");
+    expect(screen.getByTestId("reply-draft-label").textContent).toBe("Draft by Jarvis · edit freely");
+  });
+
+  it("a briefing draft with a placeholder is cleaned the same way", async () => {
+    fakeServer({
+      reply_context: () => ok({ context: baseContext({ proposal: { id: PID, hash: HASH, expiresAt: "2026-11-14T12:00:00Z", to: ["dana@sender.example.test"], cc: [], bcc: [], bodyText: "Hello.\nInvoice [number] is open.\nBest", origin: "briefing", derivedFromRetrieved: true, rationale: null } }) }),
+    });
+    open();
+    await ready();
+    expect(field("reply-body").value).toBe("Hello.\nBest");
+    expect(screen.getByTestId("reply-removed-note")).toBeTruthy();
+  });
+
+  it("warns once about a commitment from the AI draft, and hides it when the owner removes the phrase or types their own", async () => {
+    fakeServer({
+      reply_context: () => ok({ context: baseContext() }),
+      draft_reply: () => ok({ draft: { status: "ready", text: "We will confirm by Thursday noon ET." } }),
+    });
+    open();
+    await ready();
+    const warn = await screen.findByTestId("reply-commitment");
+    expect(warn.textContent).toBe('Check before sending: "Thursday noon ET", "We will confirm" are commitments Jarvis suggested.');
+    fireEvent.change(field("reply-body"), { target: { value: "We will look into it. I can call tomorrow." } });
+    expect(screen.queryByTestId("reply-commitment")).toBeNull();
+  });
+
+  it("two commitments: one notice that lists both, and one is dropped when the owner removes it", async () => {
+    fakeServer({
+      reply_context: () => ok({ context: baseContext() }),
+      draft_reply: () => ok({ draft: { status: "ready", text: "Reply by Friday noon ET and within 2 days." } }),
+    });
+    open();
+    await ready();
+    const warn = await screen.findByTestId("reply-commitment");
+    expect(warn.textContent).toBe('Check before sending: "Friday noon ET", "within 2 days" are commitments Jarvis suggested.');
+    expect(screen.getAllByTestId("reply-commitment")).toHaveLength(1);
+    fireEvent.change(field("reply-body"), { target: { value: "Reply within 2 days." } });
+    expect(screen.getByTestId("reply-commitment").textContent).toBe('Check before sending: "within 2 days" is a commitment Jarvis suggested.');
+  });
+
+  it("a draft with CRLF line endings is checked the same way", async () => {
+    fakeServer({
+      reply_context: () => ok({ context: baseContext() }),
+      draft_reply: () => ok({ draft: { status: "ready", text: "Hi,\r\nThe fee is [amount].\r\nBy Friday noon ET.\r\nBest" } }),
+    });
+    open();
+    await ready();
+    await waitFor(() => expect(field("reply-body").value).toBe("Hi,\nBy Friday noon ET.\nBest")); // a textarea normalises line endings to LF
+    expect((await screen.findByTestId("reply-commitment")).textContent).toBe('Check before sending: "Friday noon ET" is a commitment Jarvis suggested.');
+  });
+
+  it("the warning survives a reload that restores the unsent edits, even after the 30-minute draft cache expired", async () => {
+    fakeServer({
+      reply_context: () => ok({ context: baseContext() }),
+      draft_reply: () => ok({ draft: { status: "ready", text: "We will confirm by Thursday noon ET." } }),
+    });
+    open();
+    await ready();
+    await screen.findByTestId("reply-commitment");
+    fireEvent.change(field("reply-body"), { target: { value: "We will confirm by Thursday noon ET. Thanks, Sam." } });
+    await waitFor(() => expect(stored()?.body).toMatch(/Thanks, Sam/));
+    cleanup();
+    window.sessionStorage.removeItem(aiDrafts.key("PKG", "u1", "m1")); // the cache is gone
+    open();
+    await ready();
+    await waitFor(() => expect(field("reply-body").value).toMatch(/Thanks, Sam/));
+    expect(screen.getByTestId("reply-source-note").textContent).toBe("Your unsent edits were restored.");
+    expect((await screen.findByTestId("reply-commitment")).textContent).toContain('"Thursday noon ET"');
+  });
+
+  it("the warning survives Save draft: the saved proposal reopens with it; a proposal with no recorded origin shows none", async () => {
+    const saved = { id: PID, hash: HASH, expiresAt: "2026-11-14T12:00:00Z", to: ["dana@sender.example.test"], cc: [] as string[], bcc: [] as string[], bodyText: "We will confirm by Thursday noon ET.", origin: "owner" as const, derivedFromRetrieved: true, rationale: null };
+    let proposal: typeof saved | null = null;
+    fakeServer({
+      reply_context: () => ok({ context: baseContext({ proposal }) }),
+      draft_reply: () => ok({ draft: { status: "ready", text: "We will confirm by Thursday noon ET." } }),
+      propose_reply: () => {
+        proposal = saved;
+        return ok({ id: PID, hash: HASH, unchanged: false });
+      },
+    });
+    open();
+    await ready();
+    await screen.findByTestId("reply-commitment");
+    fireEvent.click(screen.getByTestId("reply-save"));
+    await screen.findByTestId("reply-saved");
+    cleanup();
+    window.sessionStorage.removeItem(aiDrafts.key("PKG", "u1", "m1"));
+    open();
+    await ready();
+    expect(field("reply-body").value).toBe("We will confirm by Thursday noon ET.");
+    expect(screen.getByTestId("reply-source-note").textContent).toBe("Your saved draft.");
+    expect((await screen.findByTestId("reply-commitment")).textContent).toContain('"Thursday noon ET"');
+    // A new session (nothing recorded): no warning. Documented limit.
+    cleanup();
+    window.sessionStorage.clear();
+    open();
+    await ready();
+    expect(field("reply-body").value).toBe("We will confirm by Thursday noon ET.");
+    expect(screen.queryByTestId("reply-commitment")).toBeNull();
+  });
+
+  it("nothing about the AI text is kept when the company does not store drafts", async () => {
+    fakeServer({
+      reply_context: () => ok({ context: baseContext({ storesDrafts: false }) }),
+      draft_reply: () => ok({ draft: { status: "ready", text: "We will confirm by Thursday noon ET." } }),
+    });
+    open();
+    await ready();
+    await screen.findByTestId("reply-commitment");
+    expect(Object.keys(window.sessionStorage).filter((k) => k.startsWith("nichols:reply-"))).toEqual([]);
+  });
+
+  it("the autosave label is not a live region and explains itself", async () => {
+    fakeServer({ reply_context: () => ok({ context: baseContext({ aiAllowed: false }) }) });
+    open();
+    await ready();
+    fireEvent.change(field("reply-body"), { target: { value: "x" } });
+    const label = await screen.findByTestId("reply-autosave");
+    expect(label.getAttribute("role")).toBeNull();
+    expect(label.getAttribute("aria-live")).toBeNull();
+    expect(label.getAttribute("title")).toBe("Kept on this device until you send or save");
+    expect(document.getElementById(label.getAttribute("aria-describedby") ?? "")?.textContent).toMatch(/Kept on this device until you send or save/);
+    expect(label.textContent).toMatch(/^Saved just now/);
+  });
+
+  it("the caption describes the textarea, and the already-replied date is Eastern with ET", async () => {
+    fakeServer({ reply_context: () => ok({ context: baseContext({ aiAllowed: false, alreadySent: { at: "2026-11-10T03:30:00Z" } }) }) });
+    open();
+    await ready();
+    const cap = document.getElementById(field("reply-body").getAttribute("aria-describedby") ?? "");
+    expect(cap?.getAttribute("data-testid")).toBe("reply-draft-label");
+    expect(screen.getByTestId("reply-already-sent").textContent).toContain("Nov 9, 2026 ET");
+  });
+
+  it("autosave status: nothing until a write succeeds, then Saved just now; nothing at all when drafts are not stored", async () => {
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "setInterval", "clearInterval", "Date"] });
+    try {
+      fakeServer({ reply_context: () => ok({ context: baseContext({ aiAllowed: false }) }) });
+      open();
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(10);
+      });
+      expect(screen.queryByTestId("reply-autosave")).toBeNull();
+      fireEvent.change(field("reply-body"), { target: { value: "draft text" } });
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(600);
+      });
+      expect(screen.getByTestId("reply-autosave").textContent).toMatch(/^Saved just now/);
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(3 * 60_000);
+      });
+      expect(screen.getByTestId("reply-autosave").textContent).toMatch(/^Saved 3 min ago/);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("never claims a save when the company does not store drafts", async () => {
+    fakeServer({ reply_context: () => ok({ context: baseContext({ aiAllowed: false, storesDrafts: false }) }) });
+    open();
+    await ready();
+    fireEvent.change(field("reply-body"), { target: { value: "x" } });
+    await new Promise((r) => setTimeout(r, 700));
+    expect(screen.queryByTestId("reply-autosave")).toBeNull();
   });
 });

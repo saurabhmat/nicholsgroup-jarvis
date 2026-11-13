@@ -65,6 +65,7 @@ describe("light design tokens (docs/plan-review.md §7, v2; final with D-20)", (
     ["--alert-surface", "#FCEFD9"],
     ["--success", "#166534"],
     ["--success-surface", "#DCFCE7"],
+    ["--danger", "#B42318"],
     ["--sidebar", "#0E2A47"],
     ["--sidebar-foreground", "#D5DEEA"],
     ["--sidebar-section", "#A9B8CC"],
@@ -98,6 +99,10 @@ describe("light design tokens (docs/plan-review.md §7, v2; final with D-20)", (
     ["--alert", "--background"],
     ["--alert-foreground", "--alert-surface"],
     ["--success", "--success-surface"],
+    ["--success", "--card"], // Home KPI / finance figures (T-237)
+    ["--success", "--background"],
+    ["--danger", "--card"],
+    ["--danger", "--background"],
     ["--sidebar-foreground", "--sidebar"],
     ["--sidebar-section", "--sidebar"],
     ["--sidebar-foreground", "--sidebar-active"],
@@ -191,6 +196,10 @@ describe("dark design tokens (docs/design/README.md, Nov 4, 2026)", () => {
     ["--alert", "--card"],
     ["--alert-foreground", "--alert-surface"],
     ["--success", "--success-surface"],
+    ["--success", "--card"],
+    ["--success", "--background"],
+    ["--danger", "--card"],
+    ["--danger", "--background"],
     ["--sidebar-foreground", "--sidebar"],
     ["--sidebar-section", "--sidebar"],
     ["--sidebar-foreground", "--sidebar-active"],
@@ -254,7 +263,7 @@ describe("components use tokens only", () => {
     expect(users.sort()).toEqual(["book-balance.tsx", "kpi-card.tsx"]);
   });
 
-  it("uppercase exists nowhere else in the web app (apps/web/components and apps/web/app), except the KPI strip tile label", () => {
+  it("uppercase exists nowhere else in the web app (apps/web/components and apps/web/app), except the KPI strip tile label and the T-237 section labels", () => {
     const webRoot = join(here, "..", "..", "..", "..", "apps", "web");
     const files: string[] = [];
     const walk = (dir: string) => {
@@ -267,7 +276,9 @@ describe("components use tokens only", () => {
     walk(join(webRoot, "components"));
     walk(join(webRoot, "app"));
     expect(files.length).toBeGreaterThan(10);
-    const ALLOWED = ["components/kpi-strip.tsx"]; // the Home KPI tile label is a KPI label
+    // The Home KPI tile label is a KPI label. T-237 (docs/design/home/*.png): the Finance column titles and the Reply drawer's
+    // "Draft by Jarvis" caption are small uppercase section labels too (text-label size).
+    const ALLOWED = ["components/kpi-strip.tsx", "components/home-finance-section.tsx", "components/reply-drawer.tsx"];
     const users = files.filter((f) => /\buppercase\b/.test(readFileSync(f, "utf8"))).map((f) => f.slice(webRoot.length + 1));
     expect(users.filter((f) => !ALLOWED.includes(f))).toEqual([]);
   });

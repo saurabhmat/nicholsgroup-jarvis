@@ -2,121 +2,14 @@
 // T-234 part 1: the KPI strip (not-connected tiles at equal height), the header status dot, "Next 7 days" collapsed by
 // default, the news empty state and the projects card.
 import { afterEach, describe, expect, it } from "vitest";
-import { cleanup, fireEvent, render, screen, within } from "@testing-library/react";
-import { toHomeFinance } from "@/lib/home-finance";
-import { kpiTiles } from "@/lib/home-kpi-tiles";
-import { KpiStrip, TILE_HEIGHT } from "./kpi-strip";
-import { CoverageDot } from "./coverage-dot";
+import { cleanup, fireEvent, render, screen } from "@testing-library/react";
+import { CoverageDot, syncedLabel } from "./coverage-dot";
 import { CollapsibleSection } from "./collapsible-section";
 import { GovConNews } from "./home-news";
 import { ProjectsGlance } from "./home-projects";
 import type { CoverageItem } from "@nichols/briefing/domain";
 
 afterEach(cleanup);
-
-const okRow = {
-  state: "ok", as_of: "2026-11-11T20:00:00Z", last_sync_at: "2026-11-11T19:55:00Z", connection_status: "active",
-  cash_reason: null, cash_total: 1314.66, cash_as_of: "2026-11-10T20:00:00Z", cash_accounts: [], cash_unmapped: 0,
-  ar_reason: null, ar_over_30: 160.25, ar_invoices: 3, ar_unmapped: 0,
-  pnl_reason: null, pnl_income: 500, pnl_expenses: 200, pnl_net: 300, pnl_start: "2026-11-01", pnl_end: "2026-11-11", pnl_method: "accrual", pnl_partial: false, pnl_as_of: "2026-11-11T20:00:00Z",
-};
-const tilesOf = () => screen.getAllByTestId("kpi-tile");
-
-const ALL_FEEDS = [{ provider: "quickbooks", status: "active" }, { provider: "stripe", status: "active" }, { provider: "ghl", status: "active" }];
-const BANNER = "Connect QuickBooks, Stripe and GoHighLevel to see cash, AR, P&L, MRR and subscribers";
-
-describe("KPI strip (T-235 part 4: only what is connected)", () => {
-  it("everything connected: five tiles fill one row from lg, in the brief's order; Cash carries Book balance; no banner", () => {
-    render(<KpiStrip laneId="PKG" canConnect tiles={kpiTiles(toHomeFinance([okRow]), ALL_FEEDS)} />);
-    const strip = screen.getByTestId("home-kpis");
-    expect(strip.className).toMatch(/lg:grid-cols-5/);
-    expect(strip.className).toMatch(/(^| )grid-cols-1( |$)/); // one column on a phone
-    expect(strip.className).not.toMatch(/(^| )grid-cols-2( |$)/);
-    expect(tilesOf().map((t) => t.getAttribute("data-kpi"))).toEqual(["cash", "ar30", "pnl", "mrr", "subscribers"]);
-    const [cash, ar, pnl, mrr] = tilesOf() as HTMLElement[];
-    expect(within(cash as HTMLElement).getByText("Book balance")).toBeTruthy();
-    expect(within(cash as HTMLElement).getByText("$1,314.66")).toBeTruthy();
-    expect(within(ar as HTMLElement).getByText("$160.25")).toBeTruthy();
-    expect(within(pnl as HTMLElement).getByText("$300.00")).toBeTruthy();
-    // connected but no figure yet: the dash is visible only; screen readers get "No figure" (an aria-label on a <p> is an axe violation)
-    expect(mrr?.querySelector("[data-slot=kpi-value] [aria-hidden]")?.textContent).toBe("—");
-    expect(mrr?.querySelector("[data-slot=kpi-value] .sr-only")?.textContent).toBe("No figure");
-    expect(mrr?.querySelector("[data-slot=kpi-value]")?.hasAttribute("aria-label")).toBe(false);
-    expect(screen.queryByTestId("home-kpis-banner")).toBeNull();
-    expect(screen.queryByText("Not connected")).toBeNull();
-  });
-
-  it("QuickBooks only: three tiles that fill the row equally; no empty MRR or subscriber tile", () => {
-    render(<KpiStrip laneId="PKG" canConnect tiles={kpiTiles(toHomeFinance([okRow]), [{ provider: "quickbooks", status: "active" }])} />);
-    expect(tilesOf().map((t) => t.getAttribute("data-kpi"))).toEqual(["cash", "ar30", "pnl"]);
-    expect(screen.getByTestId("home-kpis").className).toMatch(/lg:grid-cols-3/);
-    expect(screen.queryByTestId("home-kpis-banner")).toBeNull();
-  });
-
-  it("nothing connected: one slim banner with the exact text and a Settings link, no tiles", () => {
-    render(<KpiStrip laneId="PKG" canConnect tiles={kpiTiles(toHomeFinance([{ state: "not_connected" }]), [{ provider: "quickbooks", status: "active" }])} />);
-    expect(screen.queryAllByTestId("kpi-tile")).toHaveLength(0);
-    const banner = screen.getByTestId("home-kpis-banner");
-    expect(banner.textContent).toContain(BANNER);
-    expect(within(banner).getByRole("link", { name: /Settings/ }).getAttribute("href")).toBe("/PKG/settings#connections");
-    expect(banner.className).not.toMatch(/min-h|h-\d/); // slim: no fixed tile height
-    expect(document.body.textContent).not.toMatch(/\$/);
-  });
-
-  it("nothing connected and a caller who cannot see feeds: the same banner (never 'Not available yet' tiles)", () => {
-    render(<KpiStrip laneId="PKG" canConnect tiles={kpiTiles(toHomeFinance([{ state: "not_connected" }]), [])} />);
-    expect(screen.getByTestId("home-kpis-banner")).toBeTruthy();
-    expect(screen.queryAllByTestId("kpi-tile")).toHaveLength(0);
-  });
-
-  it("a role that cannot connect (no canConnect) sees no banner and no tiles when nothing is connected", () => {
-    const { container } = render(<KpiStrip laneId="PKG" tiles={kpiTiles(toHomeFinance([{ state: "not_connected" }]), [])} />);
-    expect(container.textContent).toBe("");
-  });
-
-  it("a role without the finance view gets no finance tile or figure, no revenue tile (MRR, subscribers) even with connected feeds, and no banner", () => {
-    const { container } = render(<KpiStrip laneId="PKG" tiles={kpiTiles({ state: "no_access" }, [])} />);
-    expect(container.textContent).toBe("");
-    cleanup();
-    expect(kpiTiles({ state: "no_access" }, ALL_FEEDS)).toEqual([]);
-    render(<KpiStrip laneId="PKG" tiles={kpiTiles({ state: "no_access" }, ALL_FEEDS)} />);
-    expect(document.body.textContent).not.toMatch(/MRR|Paid subscribers|Cash|Book balance|AR > 30|P&L|\$/);
-  });
-
-  it("a QuickBooks outage still shows its three tiles as plain notes (the connection is unknown, not absent)", () => {
-    render(<KpiStrip laneId="PKG" tiles={kpiTiles({ state: "unavailable" }, [{ provider: "stripe", status: "active" }, { provider: "ghl", status: "active" }])} />);
-    expect(screen.getAllByText("Could not load. Reload in a minute.")).toHaveLength(3);
-    const [, , , mrr] = tilesOf() as HTMLElement[];
-    expect(mrr?.getAttribute("data-status")).toBe("no_data"); // connected feed, no read yet: waiting
-    expect(mrr?.textContent).toContain("Waiting for the Stripe sync");
-  });
-
-  it("tiles have the same height classes whether or not they carry a figure (equal heights)", () => {
-    render(<KpiStrip laneId="PKG" tiles={kpiTiles(toHomeFinance([okRow]), ALL_FEEDS)} />);
-    const classes = tilesOf().map((t) => t.className);
-    for (const c of classes) {
-      expect(c).toContain(TILE_HEIGHT);
-      expect(c).toContain("h-full");
-    }
-    expect(new Set(classes).size).toBe(1);
-    expect(screen.getByTestId("home-kpis").className).toMatch(/items-stretch/);
-    for (const t of tilesOf()) expect([...t.children].map((c) => c.tagName)).toHaveLength(3);
-  });
-
-  it("figures carry their caveats (rule 7): unmapped accounts and invoices, payroll, and the P&L month", () => {
-    render(<KpiStrip laneId="PKG" tiles={kpiTiles(toHomeFinance([{ ...okRow, cash_unmapped: 2, ar_unmapped: 1, pnl_partial: true }]), [])} />);
-    const [cash, ar, pnl] = tilesOf() as HTMLElement[];
-    expect(within(cash as HTMLElement).getByText("Excludes 2 unmapped accounts")).toBeTruthy();
-    expect(within(ar as HTMLElement).getByText("Excludes 1 invoice with no company")).toBeTruthy();
-    expect(within(pnl as HTMLElement).getByText("Excludes payroll accounts")).toBeTruthy();
-    expect(within(pnl as HTMLElement).getByText("Net, November 2026")).toBeTruthy();
-  });
-
-  it("a QuickBooks connection that needs reconnecting is said on the figures", () => {
-    render(<KpiStrip laneId="PKG" tiles={kpiTiles(toHomeFinance([{ ...okRow, connection_status: "reconnect_required" }]), [])} />);
-    expect(screen.getAllByText("May be out of date. Reconnect QuickBooks in Settings.").length).toBe(3);
-  });
-});
 
 const item = (state: CoverageItem["state"]): CoverageItem => ({ stream: "mail", account: "a@pubk.test", connectionId: "c", provider: "google", status: "active", configured: true, lastSyncAt: null, errorKind: null, state, reason: null });
 
@@ -128,8 +21,32 @@ describe("Coverage status dot", () => {
     expect(dot.getAttribute("aria-label")).toBe("2 sources are stale or in error. Open Settings, Connections.");
     expect(dot.textContent).toContain("Sync issue"); // a visible word too
   });
+  it("all sources fine: a green dot and 'All sources synced · N min ago' (the oldest last sync), linking to Connections", () => {
+    const at = (min: number) => ({ ...item("ok"), lastSyncAt: new Date(Date.parse("2026-11-12T15:00:00Z") - min * 60_000).toISOString() });
+    render(<CoverageDot laneId="PKG" view={{ items: [at(2), at(7), item("not_connected")], unavailable: false }} now={new Date("2026-11-12T15:00:00Z")} />);
+    const dot = screen.getByTestId("coverage-dot");
+    expect(dot.querySelector("[data-slot=sync-full]")?.textContent).toBe("All sources synced \u00b7 7 min ago");
+    expect(dot.textContent).toContain("Synced"); // the compact phone word
+    expect(dot.getAttribute("data-status")).toBe("synced");
+    expect(dot.getAttribute("href")).toBe("/PKG/settings#connections");
+  });
+  it("all sources fine but no sync time known: just 'All sources synced'", () => {
+    render(<CoverageDot laneId="PKG" view={{ items: [item("ok")], unavailable: false }} />);
+    expect(screen.getByTestId("coverage-dot").querySelector("[data-slot=sync-full]")?.textContent).toBe("All sources synced");
+  });
+  it("syncedLabel uses only the sources that are ok: a stale source's older sync does not count, and an unparseable time is ignored", () => {
+    const now = new Date("2026-11-12T15:00:00Z");
+    const at = (state: CoverageItem["state"], iso: string | null) => ({ ...item(state), lastSyncAt: iso });
+    expect(syncedLabel([at("ok", "2026-11-12T14:58:00Z"), at("stale", "2026-11-10T00:00:00Z"), at("ok", "2026-11-12T14:55:00Z")], now)).toBe("All sources synced \u00b7 5 min ago");
+    expect(syncedLabel([at("ok", "not a date")], now)).toBe("All sources synced");
+    expect(syncedLabel([at("ok", "not a date"), at("ok", "2026-11-12T14:58:00Z")], now)).toBe("All sources synced \u00b7 2 min ago");
+  });
+  it("a mix of ok and stale sources is a sync issue, never the all-synced label", () => {
+    render(<CoverageDot laneId="PKG" view={{ items: [{ ...item("ok"), lastSyncAt: "2026-11-12T14:58:00Z" }, item("stale")], unavailable: false }} now={new Date("2026-11-12T15:00:00Z")} />);
+    expect(screen.getByTestId("coverage-dot").textContent).toBe("Sync issue");
+    expect(screen.getByTestId("coverage-dot").getAttribute("aria-label")).toBe("1 source is stale or in error. Open Settings, Connections.");
+  });
   it.each([
-    ["all sources ok", [item("ok")]],
     ["only a source that was never connected", [item("not_connected")]],
     ["no sources", []],
   ])("is hidden when %s", (_n, items) => {

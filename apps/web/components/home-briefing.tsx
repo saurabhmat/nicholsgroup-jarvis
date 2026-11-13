@@ -1,10 +1,11 @@
 // Home briefing sections (T-231a): Today's calendar, the 7-day look-ahead (collapsed under it, T-234) and the attention list, from synced metadata only.
 // Coverage moved to Settings -> Connections (coverage-list.tsx) and the Money card was removed from Home (T-234 part 1).
-// Times are in the viewer's zone; an event's own zone is added when its clock differs. Declined and cancelled events
+// Home shows every time in America/New_York (the page passes it); an event's own zone is added when its clock differs. Declined and cancelled events
 // never show; clashes, back-to-backs and unanswered invitations are flagged.
 import Link from "next/link";
 import { Badge, buttonVariants, EmptyState, laneHref, PageSection } from "@nichols/ui";
-import { CollapsibleSection } from "./collapsible-section";
+import { fieldText } from "@/lib/home-text";
+import { DisclosureFooter } from "./collapsible-section";
 import { ReplyAction } from "./reply-action";
 import { inboxHref } from "@/lib/inbox-links";
 import {
@@ -54,11 +55,11 @@ const hostOf = (u: string) => {
 /** The title, a link to the event in the calendar (https only, new tab) when there is one; no separate "Open in Calendar". */
 function EventTitle({ title, url }: { title: string; url: string | null }) {
   return url ? (
-    <a href={url} target="_blank" rel="noopener noreferrer" className="truncate font-medium text-foreground underline-offset-2 hover:underline">
+    <a href={url} target="_blank" rel="noopener noreferrer" className="line-clamp-2 font-medium text-foreground underline-offset-2 hover:underline">
       {title}
     </a>
   ) : (
-    <span className="truncate font-medium text-foreground">{title}</span>
+    <span className="line-clamp-2 font-medium text-foreground">{title}</span>
   );
 }
 
@@ -148,24 +149,27 @@ export function LookAhead({ events, tz }: { events: NotableEvent[]; tz: string }
   );
 }
 
+/** IANA names of US Eastern time: the Today note says "Eastern time" for all of them. */
+const EASTERN_ZONES: ReadonlySet<string> = new Set(["America/New_York", "US/Eastern"]);
+
 /** Right column of row 1: Today's calendar, with "Next 7 days" collapsed below it (one-line summary in its header; expands on click). */
 export function CalendarSections({ view, now }: { view: BriefingView; now: Date }) {
   const c = view.calendar;
-  const summary = c.access && c.aheadSummary ? aheadSummaryText(c.aheadSummary) : undefined;
+  const summary = c.access && c.aheadSummary ? aheadSummaryText(c.aheadSummary).replace(", ", " \u00b7 ") : undefined;
   return (
-    <>
-      <PageSection title="Today's calendar" note={`Times in ${view.viewerTz.replace(/_/g, " ")}`}>
-        <TodayCalendar calendar={view.calendar} tz={view.viewerTz} now={now} />
-      </PageSection>
-      <CollapsibleSection title="Next 7 days" testId="next-7-days" persistId="next-7-days" {...(summary ? { note: summary } : {})}>
+    <PageSection title="Today" ariaLabel="Today's calendar" note={EASTERN_ZONES.has(view.viewerTz) ? "Eastern time" : `Times in ${view.viewerTz.replace(/_/g, " ")}`}>
+      <TodayCalendar calendar={view.calendar} tz={view.viewerTz} now={now} />
+      <DisclosureFooter title="Next 7 days" testId="next-7-days" persistId="next-7-days" {...(summary ? { note: summary } : {})}>
         {c.access ? <LookAhead events={c.ahead} tz={view.viewerTz} /> : <p className="text-body text-muted-foreground">No calendar to look ahead in. See Settings → Connections.</p>}
-      </CollapsibleSection>
-    </>
+      </DisclosureFooter>
+    </PageSection>
   );
 }
 
 /** Avatar colours: text and ground are token pairs checked for 4.5:1 in light and dark (tokens.test.ts). */
 const AVATAR = ["bg-primary-tint text-primary", "bg-alert-surface text-alert-foreground", "bg-success-surface text-success", "bg-muted text-foreground"] as const;
+/** The phone shows the first three attention rows (the iPhone design); desktop shows up to five. */
+const PHONE_ROWS = 3;
 const CHIP_TONE = { alert: "alert", gold: "gold", outline: "outline" } as const;
 
 /**
@@ -190,7 +194,7 @@ const CHIP_TONE = { alert: "alert", gold: "gold", outline: "outline" } as const;
  * (forced-colors) paints, so the focus stays visible there. The divider lines sit on the <li> (no horizontal bleed); only the
  * hover ground and the focus ring bleed 8 px each side, into the card padding.
  */
-export function AttentionSection({ laneId, mail, now, notes, replies, canReply = false }: { laneId: string; mail: MailSection; now: Date; notes?: Map<string, AttentionNote>; replies?: Map<string, string>; canReply?: boolean }) {
+export function AttentionSection({ laneId, mail, now, notes, replies, canReply = false, tz = "America/New_York" }: { laneId: string; mail: MailSection; now: Date; notes?: Map<string, AttentionNote>; replies?: Map<string, string>; canReply?: boolean; tz?: string }) {
   if (!mail.access) {
     return mail.unavailable ? (
       <EmptyState title="Mail could not be read" description="Reload in a minute. Settings → Connections shows the last sync." className="border-0 bg-transparent px-0 py-6" />
@@ -207,16 +211,19 @@ export function AttentionSection({ laneId, mail, now, notes, replies, canReply =
   return (
     <div className="flex flex-col gap-3">
       <ol role="list" data-testid="attention-list" className="flex flex-col divide-y divide-border">
-        {mail.attention.map((a) => {
+        {mail.attention.map((a, index) => {
           const t = a.thread;
           const note = notes?.get(`${t.connectionId}:${t.messageId}`);
           const mailbox = mail.mailboxOf[t.connectionId];
           const who = senderParts(t.fromName, t.fromAddress, AVATAR.length);
-          const subject = a.kind === "repeated_failures" ? a.reason : t.subject ? maskFigures(t.subject) : "(No subject)";
+          // T-237: a subject that still holds a masked-figure placeholder (or is empty) is not shown; the row keeps sender, age, actions.
+          const subject = fieldText(a.kind === "repeated_failures" ? a.reason : t.subject ? maskFigures(t.subject) : null, tz);
+          const why = fieldText(note?.why, tz);
+          const next = fieldText(note?.next, tz);
           const chips = attentionChips(a.kind, t.unreadCount > 0);
           const age = ageShort(t.receivedAt, now);
           return (
-            <li key={a.key} data-testid="attention-item" data-kind={a.kind} className="group relative py-1">
+            <li key={a.key} data-testid="attention-item" data-kind={a.kind} className={`group relative py-1 ${index >= PHONE_ROWS ? "max-md:hidden" : ""}`}>
               <div className="-mx-2 flex flex-col gap-3 rounded-control px-2 py-3 md:flex-row md:items-center md:gap-4 md:group-hover:bg-muted/60">
               <div className="flex min-w-0 flex-1 flex-col gap-2">
                 <div className="flex min-w-0 items-center gap-2">
@@ -233,27 +240,29 @@ export function AttentionSection({ laneId, mail, now, notes, replies, canReply =
                     <span className="sr-only">{age === "now" ? "" : " ago"}</span>
                   </time>
                 </div>
-                <p data-testid="attention-subject" className="truncate text-body text-foreground">
-                  {subject}
-                </p>
-                {note && (note.why || note.next) ? (
+                {subject ? (
+                  <p data-testid="attention-subject" className="text-body text-foreground">
+                    {subject}
+                  </p>
+                ) : null}
+                {why || next ? (
                   <p data-testid="attention-note" className="line-clamp-2 text-small text-muted-foreground">
-                    {note.why ? (
+                    {why ? (
                       <>
                         <span className="sr-only">Why it matters: </span>
-                        {note.why}
+                        {why}
                       </>
                     ) : null}
-                    {note.why && note.next ? (
+                    {why && next ? (
                       <>
                         <span aria-hidden>{" \u2192 "}</span>
                         <span className="sr-only"> </span>
                       </>
                     ) : null}
-                    {note.next ? (
+                    {next ? (
                       <>
                         <span className="sr-only">Next step: </span>
-                        {note.next}
+                        {next}
                       </>
                     ) : null}
                   </p>
@@ -278,7 +287,7 @@ export function AttentionSection({ laneId, mail, now, notes, replies, canReply =
                 <Link
                   href={inboxHref(laneId, t.messageId)}
                   data-testid="attention-open"
-                  aria-label={`Open: ${subject}`}
+                  aria-label={subject ? `Open: ${subject}` : "Open message"}
                   className="inline-flex items-center px-2 text-small font-medium text-primary underline-offset-2 after:absolute after:inset-y-0 after:-inset-x-2 after:rounded-control after:content-[''] hover:underline focus-visible:outline-none focus-visible:after:outline focus-visible:after:outline-2 focus-visible:after:outline-transparent focus-visible:after:ring-2 focus-visible:after:ring-ring"
                 >
                   Open
@@ -290,7 +299,8 @@ export function AttentionSection({ laneId, mail, now, notes, replies, canReply =
         })}
       </ol>
       <Link href={laneHref(laneId, "inbox")} data-testid="attention-view-all" className="self-start py-1 text-small font-medium text-primary underline-offset-2 hover:underline max-md:inline-flex max-md:min-h-11 max-md:items-center">
-        View all in Inbox {"\u00b7"} {total} need attention <span aria-hidden>{"\u2192"}</span>
+        <span className="max-md:hidden">View all in Inbox {"\u00b7"} {total} need attention</span>
+        <span className="md:hidden">View all {"\u00b7"} {total} in Inbox</span> <span aria-hidden>{"\u2192"}</span>
       </Link>
     </div>
   );

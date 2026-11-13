@@ -26,10 +26,17 @@ const card = (over: Partial<PendingCard> = {}): PendingCard => ({
   replyThread: false,
   recipientFlags: [],
   capability: { enabled: true, message: null, settingsHref: null },
+  placeholder: null,
   ...over,
 });
 
 describe("review fixes (T-232)", () => {
+  it("a placeholder in the email turns Approve off and tells the approver to edit it first (T-237); editing stays on", () => {
+    render(<ApprovalCard laneId="PKG" card={card({ bodyText: "Total [amount]", placeholder: "This email still contains a placeholder such as [amount]. Edit the text to replace it, save, then approve." })} canAct />);
+    expect(screen.getByTestId("placeholder-warning").textContent).toContain("Edit the text to replace it");
+    expect((screen.getByRole("button", { name: "Approve & send" }) as HTMLButtonElement).disabled).toBe(true);
+    expect((screen.getByLabelText("To") as HTMLInputElement).disabled).toBe(false);
+  });
   it("shows a warning per external or bcc recipient", () => {
     render(<ApprovalCard laneId="PKG" card={card({ recipientFlags: [{ address: "x@evil.example.test", field: "bcc", flags: ["external", "bcc"] }] })} canAct />);
     const flags = screen.getByTestId("recipient-flags");

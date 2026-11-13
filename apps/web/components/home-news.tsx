@@ -12,6 +12,7 @@ import { newsFailureText, registrableHost, type NewsCard, type NewsItem } from "
 export type { NewsItem } from "@/lib/news-types";
 
 const BUSINESS_TZ = "America/New_York";
+export const NEWS_MAX = 3;
 const safeZone = (tz: string) => {
   try {
     new Intl.DateTimeFormat("en-US", { timeZone: tz });
@@ -42,7 +43,8 @@ export function newsMeta(n: NewsItem, tz: string): string {
 export function GovConNews({ laneId = "", card = null, tz = BUSINESS_TZ, now = new Date() }: { laneId?: string; card?: NewsCard | null; tz?: string; now?: Date }) {
   const configured = card?.configured === true;
   // Render the NORMALISED url (credentials and odd forms stripped by httpsUrl), never the raw string; unusable ones are dropped.
-  const items = card?.configured ? card.items.flatMap((i) => { const url = httpsUrl(i.url); return url ? [{ ...i, url }] : []; }) : [];
+  // T-237: at most three stories on Home.
+  const items = card?.configured ? card.items.flatMap((i) => { const url = httpsUrl(i.url); return url ? [{ ...i, url }] : []; }).slice(0, NEWS_MAX) : [];
   const reason = card?.failure ? newsFailureText(card.failure) : null;
   const refreshReason =
     !card || !card.canRefresh ? null : card.inFlight ? "A fetch is running." : card.budgetReached ? "Monthly news budget reached" : card.nextRefreshAt ? `Next refresh available at ${newsTime(card.nextRefreshAt, tz, now)}` : null;

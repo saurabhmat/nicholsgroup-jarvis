@@ -157,8 +157,8 @@ export function notableAhead(events: BriefEvent[], owners: ReadonlySet<string>, 
     else if (e.allDay) why.push("All day");
     const ext = externalAttendees(e, owners, internalDomains);
     if (ext.length > 0) {
-      const names = ext.slice(0, 2).map((a) => attendeeName(a, e));
-      why.push(`External: ${names.join(", ")}${ext.length > 2 ? ` +${String(ext.length - 2)}` : ""}`);
+      const uniq = uniqueNames(ext, e);
+      why.push(`External: ${uniq.slice(0, 2).join(", ")}${uniq.length > 2 ? ` +${String(uniq.length - 2)}` : ""}`);
     }
     if (resp === "needs_action") why.push("RSVP pending");
     if (why.length > 0) out.push({ ...e, why });
@@ -195,7 +195,39 @@ function attendeeName(email: string, e: BriefEvent): string {
 /** Attendee names (never addresses), the owner's mailboxes and resources excluded: at most `max`, plus how many more. */
 export function attendeeNames(e: BriefEvent, owners: ReadonlySet<string>, max = 3): { names: string[]; more: number } {
   const others = e.attendees.filter((a) => !owners.has(a.email) && !isResource(a.email));
-  return { names: others.slice(0, max).map((a) => attendeeName(a.email, e)), more: Math.max(0, others.length - max) };
+  const uniq = uniqueNames(
+    others.map((a) => a.email),
+    e,
+  );
+  return { names: uniq.slice(0, max), more: Math.max(0, uniq.length - max) };
+}
+
+/** True when the entry has a real display name (not an address, not just the local part made readable). */
+function hasRealName(email: string, e: BriefEvent): boolean {
+  const n = e.attendees.find((x) => x.email === email)?.name?.trim();
+  return Boolean(n) && !(n as string).includes("@");
+}
+
+/**
+ * Display names for addresses, each person once (T-237). The same address (any case) is one person. Two entries with a real display
+ * name are one person only when the name (case and whitespace insensitive) AND the email domain both match, so two "Sam"s at different
+ * domains stay two and an external who is named like an internal colleague is never merged into them. A name made from the address's
+ * local part is no evidence of identity: it dedupes by full address only. The organizer is an attendee entry too.
+ */
+function uniqueNames(emails: readonly string[], e: BriefEvent): string[] {
+  const seen = new Set<string>();
+  const out: string[] = [];
+  for (const email of emails) {
+    const addr = email.trim().toLowerCase();
+    const name = attendeeName(email, e).replace(/\s+/g, " ").trim();
+    const domain = addr.slice(addr.lastIndexOf("@") + 1);
+    const key = hasRealName(email, e) ? `n:${name.toLowerCase()}|${domain}` : `a:${addr}`;
+    if (seen.has(`a:${addr}`) || seen.has(key)) continue;
+    seen.add(`a:${addr}`);
+    seen.add(key);
+    out.push(name);
+  }
+  return out;
 }
 
 /** "Anna Lee, Bob Smith, Cy Wu +2 more" (names, never addresses; at most `max`). */

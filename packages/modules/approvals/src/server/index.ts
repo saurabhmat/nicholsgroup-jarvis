@@ -1,7 +1,7 @@
 import "server-only";
 // @nichols/approvals/server: the Approval Center for email (T-232). Server only. Import the wired dependencies from
 // `./wire` (`approvalsDeps`); tests pass fakes. The public interface the briefing job (T-231d) uses is `proposeEmailAction`.
-export { APPROVALS_ERROR_CODES, ApprovalsError, CHECK_SENT_FIRST_MESSAGE, NOT_ENABLED_MESSAGE, NOT_LIVE_MESSAGE, toApprovalsError } from "./errors";
+export { APPROVALS_ERROR_CODES, ApprovalsError, CHECK_SENT_FIRST_MESSAGE, NOT_ENABLED_MESSAGE, NOT_LIVE_MESSAGE, PLACEHOLDER_MESSAGE, toApprovalsError } from "./errors";
 export type { ApprovalsErrorCode } from "./errors";
 export { capabilityOf, emailWriteCapability } from "./capability";
 export type { Capability, EmailWriteCapability } from "./capability";
@@ -9,6 +9,7 @@ export type { Capability, EmailWriteCapability } from "./capability";
 // `@nichols/approvals/wire`, which keeps the writer private (T-232 security review H1).
 export {
   editEmailProposal,
+  hasEmailPlaceholder,
   getApproval,
   listApprovals,
   pendingApprovalCount,

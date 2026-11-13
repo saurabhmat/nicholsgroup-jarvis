@@ -181,6 +181,9 @@ export function ageLabel(iso: string, now: Date): string {
 
 const senderLabel = (t: ThreadRow) => t.fromName ?? t.fromAddress ?? "Unknown sender";
 
+/** Exclusions no sender can skip in the attention list: promotions and other category labels, newsletters, bulk mail, social. */
+const NEVER_TOP: ReadonlySet<string> = new Set(["bulk", "label", "newsletter", "social"]);
+
 /** Ranks the attention list; returns the top `limit` (default 5) and how many more qualified. */
 export function rankAttention(rows: ThreadRow[], r: AttentionRules, now: Date, limit = 5): { top: AttentionThread[]; more: number } {
   const out: { item: AttentionThread; tier: number }[] = [];
@@ -196,7 +199,8 @@ export function rankAttention(rows: ThreadRow[], r: AttentionRules, now: Date, l
       continue;
     }
     // Authenticated priority senders skip the soft exclusions; the hard ones (codes, calendar and auto-reply header flags) hold for everyone.
-    if (c.excluded && !(priority && !c.hard)) continue;
+    // T-237: promotional / newsletter / bulk / social mail is never in the top list, not even from an authenticated priority sender.
+    if (c.excluded && (NEVER_TOP.has(c.excluded) || !(priority && !c.hard))) continue;
     if (t.lastIsOwner) continue; // the owner answered last: not waiting on anyone
     const unread = t.unreadCount > 0;
     const ago = ageLabel(t.receivedAt, now);

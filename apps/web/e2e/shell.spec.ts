@@ -76,20 +76,22 @@ test("a member sees the shell, a switcher with only the allowed lane, and a 404 
 
   await page.goto("/PKG");
   await expect(page.getByRole("heading", { name: /^Good (morning|afternoon|evening)/, level: 1 })).toBeVisible();
-  for (const title of ["Needs your attention", "Today's calendar"]) {
-    await expect(page.getByRole("heading", { name: title, level: 2 })).toBeVisible();
+  // T-237 part E: the calendar card's heading reads "Today" (its region keeps the name "Today's calendar").
+  for (const title of ["Needs your attention", "Today"]) {
+    await expect(page.getByRole("heading", { name: title, level: 2, exact: true })).toBeVisible();
   }
+  await expect(page.getByRole("region", { name: "Today's calendar" })).toBeVisible();
   // T-235 part 5: news off and no project board are slim one-line cards (labelled regions, no heading).
   await expect(page.getByRole("region", { name: "GovCon news" })).toContainText("GovCon news is off");
   await expect(page.getByRole("region", { name: "Projects at a glance" })).toContainText("No project board connected");
   await expect(page.getByRole("button", { name: /Next 7 days/ })).toHaveAttribute("aria-expanded", "false"); // T-234: collapsed by default
-  // T-235: nothing connected -> one banner, not five empty tiles. The banner is for roles that can connect sources: the desktop
+  // T-237 part B: nothing connected -> one Connect QuickBooks tile, not empty tiles. The tile is for roles that can connect sources: the desktop
   // member is the owner (sees it); the phone member is finance-operator (by design: no banner and no empty tiles).
   if (isMobile) {
-    await expect(page.getByTestId("home-kpis-banner")).toHaveCount(0);
+    await expect(page.getByTestId("kpi-connect")).toHaveCount(0);
     await expect(page.getByTestId("kpi-tile")).toHaveCount(0);
   } else {
-    await expect(page.getByTestId("home-kpis-banner")).toBeVisible();
+    await expect(page.getByTestId("kpi-connect")).toBeVisible();
   }
   await expect(page.getByRole("link", { name: "Ask Jarvis" })).toHaveAttribute("href", "/PKG/assistant");
   if (isMobile) {

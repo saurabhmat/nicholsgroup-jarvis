@@ -27,16 +27,16 @@ export type HomeFinanceView =
 
 const STATES: readonly string[] = ["not_connected", "no_data", "mapping_missing", "ok", "no_access"];
 
-const num = (v: unknown): number | null => {
+export const num = (v: unknown): number | null => {
   const n = typeof v === "string" && v.trim() !== "" ? Number(v) : v;
   return typeof n === "number" && Number.isFinite(n) ? n : null;
 };
-const count = (v: unknown): number => {
+export const count = (v: unknown): number => {
   const n = num(v);
   return n !== null && n >= 0 ? Math.floor(n) : 0;
 };
-const text = (v: unknown): string | null => (typeof v === "string" && v.trim() !== "" ? v : null);
-const instant = (v: unknown): string | null => {
+export const text = (v: unknown): string | null => (typeof v === "string" && v.trim() !== "" ? v : null);
+export const instant = (v: unknown): string | null => {
   if (typeof v !== "string") return null;
   const t = Date.parse(v);
   return Number.isNaN(t) ? null : new Date(t).toISOString();
@@ -232,5 +232,22 @@ export async function homeFinanceFor(g: Pick<Guards, "requireLane">, laneId: str
   } catch (e) {
     console.error("[home] finance unavailable", { laneId, reason: e instanceof Error ? e.name : typeof e });
     return { state: "unavailable" };
+  }
+}
+
+type Rpc = { schema(name: string): { rpc(fn: string, args: Record<string, unknown>): PromiseLike<{ data: unknown; error: unknown }> } };
+
+/**
+ * Whether the signed-in user holds the lane's `finance` view: the existing core.allowed_lanes read (own uid, AAL2), the same check the
+ * database applies. Used only to decide whether a finance OUTAGE may be shown (a role without the view must not learn that finance
+ * exists or is down). Any failure answers false: fail closed.
+ */
+export async function hasFinanceView(g: Pick<Guards, "requireLane">, laneId: string): Promise<boolean> {
+  try {
+    const { client, session } = await g.requireLane(laneId as Parameters<Guards["requireLane"]>[0]);
+    const { data, error } = await (client as unknown as Rpc).schema("core").rpc("allowed_lanes", { p_uid: session.userId, p_view: "finance" });
+    return !error && Array.isArray(data) && data.includes(laneId);
+  } catch {
+    return false;
   }
 }

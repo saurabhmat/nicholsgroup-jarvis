@@ -8,6 +8,7 @@ import { Badge, laneHref, PageSection } from "@nichols/ui";
 import { inboxHref } from "@/lib/inbox-links";
 import { formatDateTimeIn, maskFigures, type BriefRef } from "@nichols/briefing/domain";
 import type { SavedBriefingView } from "@/lib/briefing";
+import { fieldText, sentencesText } from "@/lib/home-text";
 import { CopyTextButton } from "./copy-text-button";
 
 export const REPLY_STATUS = {
@@ -38,10 +39,12 @@ export function ReplyDrafts({ laneId, brief, tz }: { laneId: string; brief: Save
         {replies.map((d) => {
           const r = byRef.get(d.ref);
           const s = REPLY_STATUS[d.status];
+          const subject = fieldText(r?.subject ? maskFigures(r.subject) : null, tz); // T-237: hidden when empty or holding a placeholder
+          const context = sentencesText(d.context, tz);
           return (
             <li key={d.ref} data-testid="reply-draft" className="flex flex-col gap-2 py-3 text-body">
               <div className="flex flex-wrap items-baseline justify-between gap-2">
-                <span className="font-medium text-foreground">{r?.subject ? maskFigures(r.subject) : "(no subject)"}</span>
+                {subject ? <span className="font-medium text-foreground">{subject}</span> : null}
                 <Badge variant={s.variant}>{s.label}</Badge>
               </div>
               <span className="text-small text-muted-foreground">
@@ -55,7 +58,7 @@ export function ReplyDrafts({ laneId, brief, tz }: { laneId: string; brief: Save
                   </>
                 ) : null}
               </span>
-              {d.context ? <p className="text-small text-muted-foreground">{d.context}</p> : null}
+              {context ? <p className="text-small text-muted-foreground">{context}</p> : null}
               {d.text ? (
                 <pre data-testid="reply-text" className="whitespace-pre-wrap rounded-md border border-border bg-muted/40 p-3 font-sans text-body text-foreground">
                   {d.text}

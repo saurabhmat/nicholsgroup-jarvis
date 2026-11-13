@@ -49,6 +49,38 @@ describe("attendeeNames", () => {
     const e = first([{ email: "x@notcalendar.google.com.evil.test", name: "X" }, { email: "y@evilcalendar.google.com", name: "Y" }]);
     expect(attendeeNames(e, owners).names).toEqual(["X", "Y"]);
   });
+  it("T-237: the same person is listed once (name compared case and whitespace insensitively, also the organizer's entry), and 'more' counts people", () => {
+    const e = parseEvents([row({ organizer_email: "dana@x.test", attendees: [
+      { email: "me@pubk.test" },
+      { email: "dana@x.test", name: "Dana  Whitfield" },
+      { email: "dana.whitfield@x.test", name: "dana whitfield" },
+      { email: "d2@x.test", name: "DANA WHITFIELD " },
+      { email: "ann@x.test", name: "Ann Lee" },
+      { email: "ann@x.test", name: "Ann Lee" },
+      { email: "ben@x.test", name: "Ben Ray" },
+      { email: "cy@x.test", name: "Cy Wu" },
+    ] })])[0];
+    if (!e) throw new Error("no event");
+    expect(attendeeNames(e, owners, 3)).toEqual({ names: ["Dana Whitfield", "Ann Lee", "Ben Ray"], more: 1 });
+  });
+  it("two people with the same first name at different domains stay two", () => {
+    const e = first([{ email: "sam@a.test", name: "Sam" }, { email: "sam@b.test", name: "Sam" }]);
+    expect(attendeeNames(e, owners)).toEqual({ names: ["Sam", "Sam"], more: 0 });
+  });
+  it("the same address twice (different case) is one person; local-part names dedupe by full address only", () => {
+    expect(attendeeNames(first([{ email: "Ann@X.test", name: "Ann Lee" }, { email: "ann@x.test", name: "Ann Lee" }]), owners).names).toEqual(["Ann Lee"]);
+    expect(attendeeNames(first([{ email: "sam@a.test" }, { email: "sam@b.test" }, { email: "SAM@a.test" }]), owners).names).toEqual(["Sam", "Sam"]);
+  });
+  it("a look-alike external named like an internal colleague stays separate and is counted in 'more'", () => {
+    const e = first([
+      { email: "me@pubk.test" },
+      { email: "dana@pubk.test", name: "Dana Whitfield" },
+      { email: "dana@lookalike.test", name: "Dana Whitfield" },
+      { email: "b@x.test", name: "Ben" },
+      { email: "c@x.test", name: "Cy" },
+    ]);
+    expect(attendeeNames(e, owners, 3)).toEqual({ names: ["Dana Whitfield", "Dana Whitfield", "Ben"], more: 1 });
+  });
   it("shows a role mailbox as its local part", () => {
     expect(attendeeNames(first([{ email: "support@x.test" }]), owners).names).toEqual(["support"]);
   });

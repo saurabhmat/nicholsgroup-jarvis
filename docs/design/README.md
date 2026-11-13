@@ -87,7 +87,7 @@ Approved by Saurabh from production screenshots of Robert's 2000px screen (conte
 
 | Use | Size | Face |
 |---|---|---|
-| KPI label (and the "Book balance" label) | 12px (`text-label`), **uppercase, tracking-wide, medium**; the only uppercase text in the app | Inter |
+| KPI label (and the "Book balance" label) | 12px (`text-label`), **uppercase, tracking-wide, medium**; also used (T-237, `home/*.png`) for the Finance column titles and the Reply drawer's "Draft by Jarvis" caption; no other uppercase text | Inter |
 | Body, controls, list rows | 15px / line-height 1.55 (`text-body`, also the `<body>` default) | Inter |
 | Secondary ("small"): eyebrow, notes, chips, source lines | 13px (`text-small`) | Inter |
 | Card title (h2/h3), empty-state title | 20px (`text-card-title`) | Source Serif 4, semibold |

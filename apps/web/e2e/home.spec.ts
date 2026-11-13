@@ -127,12 +127,11 @@ test("owner: today's calendar, Next 7 days, the KPI strip and the rule-based att
   await page.reload();
   await expect(page.getByRole("button", { name: /Next 7 days/ })).toHaveAttribute("aria-expanded", "true");
   await expect(page.getByTestId("home-updated")).toHaveText("Updated just now");
-  // T-235 part 4: nothing finance-related is connected in this fixture, so no tiles: one slim banner for the owner.
+  // T-237 part B: QuickBooks is not connected in this fixture: no QuickBooks tiles, one "Connect QuickBooks" tile for the owner.
   await expect(page.getByTestId("kpi-tile")).toHaveCount(0);
-  const banner = page.getByTestId("home-kpis-banner");
-  await expect(banner).toContainText("Connect QuickBooks, Stripe and GoHighLevel to see cash, AR, P&L, MRR and subscribers");
-  await expect(banner.getByRole("link", { name: /Settings/ })).toHaveAttribute("href", "/PKG/settings#connections");
-  if (info.project.name === "desktop") expect((await banner.boundingBox())?.height ?? 999).toBeLessThan(64); // one line
+  const connect = page.getByTestId("kpi-connect");
+  await expect(connect).toContainText("Connect QuickBooks");
+  await expect(connect).toHaveAttribute("href", "/PKG/settings#connections");
 });
 
 test("a finance-only viewer sees no meetings and no mail counts", async ({ page }, info) => {
@@ -170,7 +169,7 @@ test("phone: Home fits 390 px (no horizontal scroll), 44 px row targets, no empt
   // Nothing connected: never five empty tiles. The "Connect …" banner is only for roles that can connect sources AND see finance
   // (the owner; covered on desktop and in kpi-strip tests); the phone member (finance_operator) cannot connect, so no banner.
   await expect(page.getByTestId("kpi-tile")).toHaveCount(0);
-  await expect(page.getByTestId("home-kpis-banner")).toHaveCount(0);
+  await expect(page.getByTestId("kpi-connect")).toHaveCount(0);
   const overflow = await page.evaluate(() => document.documentElement.scrollWidth - document.documentElement.clientWidth);
   expect(overflow).toBeLessThanOrEqual(0);
 });

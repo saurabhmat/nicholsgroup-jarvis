@@ -147,15 +147,22 @@ describe("Next 7 days summary and LookAhead", () => {
     expect(aheadSummaryText(summarizeAhead(two, owners))).toBe("3 meetings, 3 clashes");
   });
 
-  it("the header of the collapsed Next 7 days shows the summary", () => {
+  it("the footer row of the collapsed Next 7 days shows the summary, inside the Today card", () => {
     const view = {
       viewerTz: "America/New_York",
       calendar: { access: true as const, today: [], ahead: [], aheadSummary: { meetings: 12, clashes: 2 }, owners: [] },
     } as unknown as BriefingView;
     render(<CalendarSections view={view} now={now} />);
     const button = screen.getByRole("button", { name: /Next 7 days/ });
-    expect(button.textContent).toContain("12 meetings, 2 clashes");
+    expect(button.textContent).toContain("12 meetings \u00b7 2 clashes");
     expect(button.getAttribute("aria-expanded")).toBe("false");
+    expect(screen.getByRole("region", { name: "Today's calendar" }).contains(button)).toBe(true);
+  });
+
+  it.each([["America/New_York", "Eastern time"], ["US/Eastern", "Eastern time"], ["America/Los_Angeles", "Times in America/Los Angeles"]])("the Today note for %s reads '%s'", (tz, note) => {
+    const view = { viewerTz: tz, calendar: { access: true as const, today: [], ahead: [], aheadSummary: { meetings: 0, clashes: 0 }, owners: [] } } as unknown as BriefingView;
+    render(<CalendarSections view={view} now={now} />);
+    expect(screen.getByText(note)).toBeTruthy();
   });
 
   it("lists notable events with names (never addresses), a time column and a title link", () => {
@@ -174,7 +181,7 @@ describe("Next 7 days summary and LookAhead", () => {
 
 describe("AttentionSection (T-234 part 2, T-235 part 2: scannable rows)", () => {
   const thread = {
-    connectionId: "c1", threadKey: "t1", messageId: "m1", fromAddress: "boss@www.acme.test", fromName: "Dana Whitfield", subject: "Board deck $1,200", receivedAt: "2026-11-12T10:00:00Z",
+    connectionId: "c1", threadKey: "t1", messageId: "m1", fromAddress: "boss@www.acme.test", fromName: "Dana Whitfield", subject: "Board deck", receivedAt: "2026-11-12T10:00:00Z",
     sourceUrl: "https://mail.google.com/mail/u/me/#all/t1", labels: ["INBOX"], isImportant: false, lastIsOwner: false, ownerReplied: false, unreadCount: 1, inboundCount: 1,
   };
   const first = <T,>(l: readonly T[]): T => {
@@ -201,11 +208,31 @@ describe("AttentionSection (T-234 part 2, T-235 part 2: scannable rows)", () => 
     expect(age.getAttribute("title")).toBeNull(); // a tooltip under the stretched link is never reachable
     expect(age.className).toMatch(/ml-auto/);
     const subject = within(item).getByTestId("attention-subject");
-    expect(subject.textContent).toBe("Board deck [amount]");
+    expect(subject.textContent).toBe("Board deck");
     expect(subject.getAttribute("title")).toBeNull();
     expect(within(item).getByText(", from boss@www.acme.test").className).toMatch(/sr-only/); // the full address is reachable
-    expect(subject.className).toMatch(/\btruncate\b/);
-    expect(item.textContent).not.toMatch(/1,200/);
+    expect(subject.className).not.toMatch(/\btruncate\b/); // phone: the subject wraps (T-237 polish)
+  });
+
+  it("T-237: a subject holding a masked-figure placeholder is hidden (never '[amount]'); so are the AI why/next lines that hold one; a missing subject shows no line", () => {
+    const row = (subject: string | null) => ({ ...mail(), attention: [{ key: "k", kind: "priority" as const, reason: "r", thread: { ...thread, subject } }] });
+    const { rerender } = render(<AttentionSection laneId="PKG" now={now} mail={row("Board deck $1,200")} notes={new Map([["c1:m1", { ref: "r1", what: "x", why: "Costs [amount] more", next: "Send comments" }]])} />);
+    const item = screen.getByTestId("attention-item");
+    expect(within(item).queryByTestId("attention-subject")).toBeNull();
+    expect(item.textContent).not.toMatch(/\[(amount|number)\]|1,200/);
+    expect(within(item).getByTestId("attention-note").textContent).toContain("Send comments"); // the other field stays
+    expect(within(item).getByTestId("attention-note").textContent).not.toContain("Costs");
+    expect(within(item).getByTestId("attention-open").getAttribute("aria-label")).toBe("Open message");
+    rerender(<AttentionSection laneId="PKG" now={now} mail={row(null)} notes={new Map([["c1:m1", { ref: "r1", what: "x", why: "Ref [number] open", next: "Account [number]" }]])} />);
+    expect(screen.queryByTestId("attention-subject")).toBeNull();
+    expect(screen.queryByTestId("attention-note")).toBeNull(); // both fields dropped: no empty line
+    expect(screen.getByTestId("attention-item").textContent).not.toMatch(/No subject/);
+  });
+
+  it("T-237: raw ISO times in the AI note are shown in New York time, never with a Z", () => {
+    render(<AttentionSection laneId="PKG" now={now} mail={mail()} notes={new Map([["c1:m1", { ref: "r1", what: "x", why: "Due 2026-11-13T14:00:00Z", next: "Reply" }]])} />);
+    expect(screen.getByTestId("attention-note").textContent).toContain("Due Fri, Nov 13, 9:00 AM");
+    expect(screen.getByTestId("attention-note").textContent).not.toMatch(/\dZ|T14:00/);
   });
 
   it("the company slot is the sender ADDRESS domain; an organisation in the display name never replaces it (rule 9)", () => {
@@ -261,10 +288,19 @@ describe("AttentionSection (T-234 part 2, T-235 part 2: scannable rows)", () => 
   it("the footer counts the ranked items: the rows shown plus the overflow", () => {
     const { rerender } = render(<AttentionSection laneId="PKG" now={now} mail={mail()} />);
     const link = screen.getByTestId("attention-view-all");
-    expect(link.textContent).toBe("View all in Inbox \u00b7 1 need attention \u2192");
+    expect(link.textContent).toBe("View all in Inbox \u00b7 1 need attentionView all \u00b7 1 in Inbox \u2192"); // desktop and phone wording, one of them hidden by CSS
     expect(link.getAttribute("href")).toBe("/PKG/inbox");
     rerender(<AttentionSection laneId="PKG" now={now} mail={mail(30)} />);
-    expect(screen.getByTestId("attention-view-all").textContent).toBe("View all in Inbox \u00b7 31 need attention \u2192");
+    expect(screen.getByTestId("attention-view-all").textContent).toBe("View all in Inbox \u00b7 31 need attentionView all \u00b7 31 in Inbox \u2192");
+  });
+
+  it("T-237: the phone shows the first three rows (the rest are hidden below md); the footer has the phone wording too", () => {
+    const rows = Array.from({ length: 5 }, (_, n) => ({ key: `k${String(n)}`, kind: "priority" as const, reason: "r", thread: { ...thread, messageId: `m${String(n)}`, threadKey: `t${String(n)}` } }));
+    render(<AttentionSection laneId="PKG" now={now} mail={{ ...mail(0), attention: rows }} />);
+    const items = screen.getAllByTestId("attention-item");
+    expect(items).toHaveLength(5);
+    expect(items.map((i) => /max-md:hidden/.test(i.className))).toEqual([false, false, false, true, true]);
+    expect(screen.getByTestId("attention-view-all").textContent).toContain("View all \u00b7 5 in Inbox");
   });
 
   it("Open goes to the thread in Jarvis, never to a Google page (the old link used the stored provider URL)", () => {
@@ -273,7 +309,7 @@ describe("AttentionSection (T-234 part 2, T-235 part 2: scannable rows)", () => 
     expect(open.getAttribute("href")).toBe("/PKG/inbox/m1");
     expect(open.getAttribute("target")).toBeNull();
     expect(open.textContent).toBe("Open");
-    expect(open.getAttribute("aria-label")).toBe("Open: Board deck [amount]");
+    expect(open.getAttribute("aria-label")).toBe("Open: Board deck");
     for (const a of screen.getAllByRole("link")) expect(a.getAttribute("href")).not.toMatch(/google\.com/);
   });
 

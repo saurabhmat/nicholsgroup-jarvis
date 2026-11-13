@@ -204,6 +204,8 @@ export type ReplyContext = {
   subject: string;
   /** Plain-text sender line for "Replying to". */
   replyingTo: string;
+  /** When the message replied to arrived (metadata, an ISO instant; the drawer shows it in Eastern time). Null when unknown. */
+  receivedAt: string | null;
   defaults: { to: string[]; cc: string[] };
   /** Domains of the lane's mailboxes: a recipient outside them is flagged "Outside your company". */
   internalDomains: string[];
@@ -259,6 +261,7 @@ export async function replyContext(ctx: UserCtx, db: Db, approvals: ApprovalsPub
     mailbox: facts.mailbox,
     subject: proposal && typeof proposal.payload.subject === "string" ? proposal.payload.subject : replySubject(ref.subject),
     replyingTo: displayText(ref.fromName && ref.fromAddress ? `${ref.fromName} <${ref.fromAddress}>` : (ref.fromAddress ?? ref.fromName ?? "Unknown sender")),
+    receivedAt: ref.receivedAt !== "" ? ref.receivedAt : null,
     defaults: { to: defaultRecipients(ref, own), cc: [] },
     internalDomains: [...new Set([...own, facts.mailbox].map((m) => domainOf(m)).filter((d) => d !== ""))],
     proposal: proposal

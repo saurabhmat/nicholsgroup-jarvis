@@ -140,6 +140,7 @@ insert into authenticated_exec_ok values
   ('core.briefing_last_failure', 'Home briefing failure reason: the caller''s newest failed attempt; invoker, RLS on brief.briefings applies (T-234)'),
   ('core.briefing_save_own', 'Saves the caller''s own briefing; checks aal2, owner role and the briefing view itself (T-231c)'),
   ('core.home_finance', 'Home finance figures; invoker over fin tables (T-233)'),
+  ('core.home_finance_detail', 'Home finance detail (bills due, AR aging, oldest invoices); invoker over fin tables (T-237)'),
   ('core.home_finance_context', 'Home finance context; definer, checks the finance view at aal2 itself (T-233)'),
   ('core.allowed_lanes', 'used by every RLS policy'),
   ('core.has_lane_role', 'role checks (requireRole)'),

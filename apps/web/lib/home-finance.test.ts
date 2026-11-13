@@ -1,7 +1,7 @@
 // T-233: mapping, formatting and empty states of the Home finance cards. Figures are only formatted here (rule 7); the
 // numbers below are synthetic (rule 10). Never a sample number for an empty state.
 import { describe, expect, it, vi } from "vitest";
-import { connectionNote, emptyStateText, financeCards, formatAsOf, formatMoney, formatMonth, homeFinanceFor, loadHomeFinance, toHomeFinance, type HomeFinanceView } from "./home-finance";
+import { connectionNote, emptyStateText, financeCards, formatAsOf, formatMoney, formatMonth, hasFinanceView, homeFinanceFor, loadHomeFinance, toHomeFinance, type HomeFinanceView } from "./home-finance";
 
 const okRow = {
   state: "ok",
@@ -181,5 +181,21 @@ describe("loading", () => {
     const errors = vi.spyOn(console, "error").mockImplementation(() => undefined);
     expect(await homeFinanceFor({ requireLane: async () => Promise.reject(new Error("forbidden")) } as never, "APK")).toEqual({ state: "unavailable" });
     errors.mockRestore();
+  });
+});
+
+describe("hasFinanceView (T-237 review: outage shown only to the finance view)", () => {
+  const g = (data: unknown, error: unknown = null, calls: unknown[] = []) =>
+    ({ requireLane: async () => ({ client: { schema: () => ({ rpc: async (fn: string, args: unknown) => { calls.push([fn, args]); return { data, error }; } }) }, session: { userId: "u1" } }) }) as never;
+  it("true only when the lane is in the caller's allowed lanes for the finance view", async () => {
+    const calls: unknown[] = [];
+    expect(await hasFinanceView(g(["PKG"], null, calls), "PKG")).toBe(true);
+    expect(calls).toEqual([["allowed_lanes", { p_uid: "u1", p_view: "finance" }]]);
+    expect(await hasFinanceView(g([]), "PKG")).toBe(false);
+    expect(await hasFinanceView(g(["NLG"]), "PKG")).toBe(false);
+  });
+  it("fails closed on an error or a throw", async () => {
+    expect(await hasFinanceView(g(["PKG"], { message: "x" }), "PKG")).toBe(false);
+    expect(await hasFinanceView({ requireLane: async () => { throw new Error("x"); } } as never, "PKG")).toBe(false);
   });
 });

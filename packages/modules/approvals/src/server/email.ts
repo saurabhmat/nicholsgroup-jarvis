@@ -264,6 +264,7 @@ const DEFINITE_SEND_KINDS: ReadonlySet<string> = new Set(["forbidden", "invalid_
 
 function failureOf(e: unknown, stage: "before" | "send" | "verify"): { code: string; outcome: FailureOutcome } {
   if (e instanceof TamperError) return { code: "payload_changed", outcome: "error" };
+  if (e instanceof PlaceholderError) return { code: "placeholder_in_body", outcome: "error" }; // refused before any external call
   if (isConnectorError(e)) {
     if (e.info.message === OUTCOME_UNKNOWN_MESSAGE) return { code: "outcome_unknown", outcome: "outcome_unknown" };
     if (e.info.message === VERIFICATION_MISMATCH_MESSAGE) return { code: "verification_mismatch", outcome: "mismatch" };
@@ -282,6 +283,29 @@ function failureOf(e: unknown, stage: "before" | "send" | "verify"): { code: str
   if (stage === "send") return { code: "outcome_unknown", outcome: "outcome_unknown" };
   return { code: "execution_error", outcome: "error" };
 }
+/**
+ * A placeholder left in an email's text (T-237, Saurabh's rule: never send one): square brackets whose content names a gap
+ * anywhere ("[amount]", "[number]" — Jarvis's masked figures — and "[Client Name]", "[Recipient's name]", "[date and time]",
+ * "[Company]", "[TBD]", "[Insert figure]", "[your title]", ...), and "{{name}}" template fields. Bracketed text that is not a
+ * gap is not matched: a footnote "[1]", "[sic]", "array[0]", a Markdown checkbox "[x]". Bounded quantifiers: linear time.
+ */
+const PLACEHOLDER = /\[[^\]\n]{0,60}?\b(?:amount|number|name|date|time|placeholder|tbd|insert|your|company|address|phone|email|figure|title|recipient|client)s?\b[^\]\n]{0,60}\]|\{\{\s*[^{}\n]{1,60}?\s*\}\}/i;
+
+/**
+ * True when the email still holds a placeholder. A reply's subject is the incoming "Re: ..." subject, written by the sender
+ * and not editable here, so for a reply only the body is checked (otherwise a bracket in the sender's subject would block
+ * the reply forever). A new email's subject and body are both checked.
+ */
+export function hasEmailPlaceholder(payload: { subject?: unknown; bodyText?: unknown }, isReply = false): boolean {
+  return [isReply ? undefined : payload.subject, payload.bodyText].some((t) => typeof t === "string" && PLACEHOLDER.test(t));
+}
+
+const isReplyRow = (row: { target: Record<string, unknown> }): boolean => typeof row.target.thread_id === "string";
+
+class PlaceholderError extends Error {
+  override readonly name = "PlaceholderError";
+}
+
 class TamperError extends Error {
   override readonly name = "TamperError";
 }
@@ -308,6 +332,8 @@ export async function approveAndExecute(deps: ApprovalsDeps, ctx: UserCtx, input
     if (row.approvedBy !== ctx.userId || row.approvedHash !== row.payloadSha256 || input.hashSeen !== row.payloadSha256 || hashOfRow(row) !== row.payloadSha256) {
       return blocked("already_approved");
     }
+    // A placeholder on the resume path: executeApproved refuses it before any external call and ends the row failed /
+    // placeholder_in_body (a terminal state, not an approved row stuck until it expires).
     const capNow = capabilityOf(ctx.laneId, await deps.readFacts(ctx.laneId, row.connectionId), row.actionType);
     if (!capNow.enabled) return blocked(capNow.reason);
     await audit(deps, ctx.laneId, actor, "action.resumed", row.id, { action_type: row.actionType, hash: row.payloadSha256 });
@@ -316,6 +342,8 @@ export async function approveAndExecute(deps: ApprovalsDeps, ctx: UserCtx, input
   if (row.status !== "proposed") return blocked("not_pending");
   // The stored content must still hash to the stored hash, and the hash the approver saw must be that hash.
   if (hashOfRow(row) !== row.payloadSha256 || input.hashSeen !== row.payloadSha256) return blocked("hash_mismatch");
+  // Never approve an email that still holds a placeholder: the approver edits it first (T-237). Nothing is approved or sent.
+  if (hasEmailPlaceholder(row.payload, isReplyRow(row))) return blocked("placeholder_in_body");
   const facts = await deps.readFacts(ctx.laneId, row.connectionId);
   const cap = capabilityOf(ctx.laneId, facts, row.actionType);
   if (!cap.enabled) return blocked(cap.reason);
@@ -358,6 +386,8 @@ export async function executeApproved(deps: ApprovalsDeps, laneId: LaneId, actio
     if (hashOfRow(row) !== row.payloadSha256 || row.approvedHash !== row.payloadSha256) throw new TamperError();
     if (typeof approvedBy !== "string" || !UUID.test(approvedBy)) throw new TamperError();
     if (typeof row.payload.bodyText !== "string") throw new TamperError();
+    // Last line of defence right before the external call (a job-path execute, a row approved before this rule): refuse.
+    if (hasEmailPlaceholder(row.payload, isReplyRow(row))) throw new PlaceholderError();
     const action: GoogleEmailApprovedAction = {
       id: row.id,
       lane_id: laneId,

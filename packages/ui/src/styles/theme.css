@@ -54,6 +54,8 @@
   --alert-surface: #FCEFD9;
   --success: #166534;
   --success-surface: #DCFCE7;
+  /* Negative / overdue figures (T-237): text on card and ground only, never on a coloured surface. */
+  --danger: #B42318;
   /* No separate error colour in the provisional tokens; errors use the alert palette. */
   --destructive: #B45309;
   --destructive-foreground: #FFFFFF;
@@ -117,6 +119,7 @@
     --alert-surface: #3A2512;
     --success: #86EFAC;
     --success-surface: #12321F;
+    --danger: #FCA5A5;
     --destructive: #F0A35E;
     --destructive-foreground: #0B1626;
     --sidebar: #081322;
@@ -165,6 +168,7 @@
   --alert-surface: #3A2512;
   --success: #86EFAC;
   --success-surface: #12321F;
+  --danger: #FCA5A5;
   --destructive: #F0A35E;
   --destructive-foreground: #0B1626;
   --sidebar: #081322;
@@ -215,6 +219,7 @@
   --color-alert-surface: var(--alert-surface);
   --color-success: var(--success);
   --color-success-surface: var(--success-surface);
+  --color-danger: var(--danger);
   --color-destructive: var(--destructive);
   --color-destructive-foreground: var(--destructive-foreground);
   --color-sidebar: var(--sidebar);

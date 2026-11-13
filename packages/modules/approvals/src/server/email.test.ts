@@ -7,8 +7,8 @@ import { OUTCOME_UNKNOWN_MESSAGE, VERIFICATION_MISMATCH_MESSAGE } from "@nichols
 import type { AuditEntry } from "@nichols/core/audit";
 import { createAudit } from "@nichols/core/audit";
 import { emailWriteCapability } from "./capability";
-import { approveAndExecute, editEmailProposal, executeApproved, listApprovals, pendingApprovalCount, proposeEmailAction, rejectAction } from "./email";
-import { ApprovalsError, CHECK_SENT_FIRST_MESSAGE, NOT_ENABLED_MESSAGE, NOT_LIVE_MESSAGE, toApprovalsError } from "./errors";
+import { approveAndExecute, editEmailProposal, executeApproved, hasEmailPlaceholder, listApprovals, pendingApprovalCount, proposeEmailAction, rejectAction } from "./email";
+import { ApprovalsError, CHECK_SENT_FIRST_MESSAGE, NOT_ENABLED_MESSAGE, NOT_LIVE_MESSAGE, PLACEHOLDER_MESSAGE, toApprovalsError } from "./errors";
 import { hashOfRow } from "./rows";
 import type { ApprovalsDeps, CapabilityFacts, Rpc } from "./types";
 
@@ -394,6 +394,68 @@ describe("approveAndExecute", () => {
     (w2.rows.get(p.id)?.payload as Record<string, unknown>).subject = "Forged";
     const res = await executeApproved(w2.deps, "PKG", p.id);
     expect(res).toEqual({ status: "failed", actionId: p.id, failureCode: "payload_changed" });
+    expect(w2.calls.writes).toBe(0);
+  });
+
+  it("never approves or sends an email whose text still holds a placeholder (T-237); the approver gets the edit-first message", async () => {
+    const w = world();
+    const withGap = { ...input, compose: { ...compose, bodyText: "Thanks Dana. The invoice total is [amount] as agreed." } };
+    const { id, hash } = await proposeEmailAction(w.deps, "PKG", withGap);
+    const err = await approveAndExecute(w.deps, w.ctx, { actionId: id, hashSeen: hash }).catch((e: unknown) => e);
+    expect(err).toBeInstanceOf(ApprovalsError);
+    expect(err).toMatchObject({ code: "placeholder_in_body", message: PLACEHOLDER_MESSAGE });
+    expect(w.rows.get(id)?.status).toBe("proposed"); // not approved
+    expect(w.calls.writes).toBe(0); // nothing sent
+    expect(w.audits.at(-1)).toMatchObject({ action: "action.gate_blocked", metadata: { reason: "placeholder_in_body" } });
+
+    // Last line of defence: a row already approved (a job path, or approved before this rule) is refused before any Gmail call.
+    const w2 = world();
+    const p = await proposeEmailAction(w2.deps, "PKG", { ...input, compose: { ...compose, subject: "Re: [number] open items" } });
+    await w2.rpc("act_approve", { p_lane: "PKG", p_id: p.id, p_hash_seen: p.hash });
+    expect(await executeApproved(w2.deps, "PKG", p.id)).toEqual({ status: "failed", actionId: p.id, failureCode: "placeholder_in_body" });
+    expect(w2.calls.writes).toBe(0);
+  });
+
+  it("hasEmailPlaceholder: Jarvis's masked tokens and template gaps, but not footnotes or [sic]", () => {
+    for (const t of ["Total [amount].", "Ref [NUMBER]", "Hi [Name],", "On [date] at [time]", "[placeholder]", "Due [TBD]", "[Insert figure here]", "[your title]", "[ amount ]", "Dear [Client Name],", "Hi [Recipient's name]", "[amount due]", "[date and time]", "at [Company]", "Hello {{first_name}}"]) {
+      expect(hasEmailPlaceholder({ bodyText: t }), t).toBe(true);
+    }
+    for (const t of ["See note [1].", "He wrote [sic] twice.", "[Link](https://example.test)", "Plain text", "array[0]", "- [x] done", "{ a: 1 }"]) {
+      expect(hasEmailPlaceholder({ bodyText: t, subject: "Quarterly update" }), t).toBe(false);
+    }
+    expect(hasEmailPlaceholder({ subject: "Re: [amount] due", bodyText: "ok" })).toBe(true);
+  });
+
+  it("a placeholder refusal is audited with codes only (no subject or body), and a Gmail draft with one is refused too", async () => {
+    const w = world();
+    const withGap = { ...input, actionType: "email.save_draft" as const, compose: { ...compose, bodyText: `Hi [Client Name]. ${CANARY}` } };
+    const { id, hash } = await proposeEmailAction(w.deps, "PKG", withGap);
+    await expect(approveAndExecute(w.deps, w.ctx, { actionId: id, hashSeen: hash })).rejects.toMatchObject({ code: "placeholder_in_body" });
+    expect(w.calls.writes).toBe(0);
+    const blocked = w.audits.at(-1);
+    expect(blocked?.metadata).toEqual({ reason: "placeholder_in_body" });
+    expect(JSON.stringify(w.audits)).not.toContain(CANARY);
+    expect(JSON.stringify(w.audits)).not.toContain("Client Name");
+  });
+
+  it("the resume path (approved, never carried out) ends failed/placeholder_in_body, not stuck approved", async () => {
+    const w = world();
+    const { id, hash } = await proposeEmailAction(w.deps, "PKG", { ...input, compose: { ...compose, bodyText: "Total [amount]." } });
+    await w.rpc("act_approve", { p_lane: "PKG", p_id: id, p_hash_seen: hash }); // approved before this rule, never executed
+    const res = await approveAndExecute(w.deps, w.ctx, { actionId: id, hashSeen: hash });
+    expect(res).toEqual({ status: "failed", actionId: id, failureCode: "placeholder_in_body" });
+    expect(w.rows.get(id)?.status).toBe("failed");
+    expect(w.calls.writes).toBe(0);
+  });
+
+  it("a reply is checked on its body only: a bracket in the sender's (fixed) subject does not block it; one in the body does", async () => {
+    const w = world();
+    const reply = { ...input, compose: { ...compose, subject: "Re: [TBD] kickoff", inReplyTo: { threadId: "t-9", messageId: "m-9" } } };
+    const ok = await proposeEmailAction(w.deps, "PKG", reply);
+    expect(await approveAndExecute(w.deps, w.ctx, { actionId: ok.id, hashSeen: ok.hash })).toMatchObject({ status: "verified" });
+    const w2 = world();
+    const bad = await proposeEmailAction(w2.deps, "PKG", { ...reply, compose: { ...reply.compose, bodyText: "See you on [date]." } });
+    await expect(approveAndExecute(w2.deps, w2.ctx, { actionId: bad.id, hashSeen: bad.hash })).rejects.toMatchObject({ code: "placeholder_in_body" });
     expect(w2.calls.writes).toBe(0);
   });
 

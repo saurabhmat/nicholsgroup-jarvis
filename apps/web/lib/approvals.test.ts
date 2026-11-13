@@ -147,6 +147,14 @@ describe("page view models", () => {
     expect(toCard(row(), { ...facts, composeGranted: false }, "PKG").capability).toEqual({ enabled: false, message: NOT_ENABLED_MESSAGE, settingsHref: "/PKG/settings#connections" });
     expect(toCard(row(), { ...facts, approvalsLive: false }, "PKG").capability).toMatchObject({ enabled: false, message: NOT_LIVE_MESSAGE });
   });
+  it("a card whose email still holds a placeholder carries the edit-first message (T-237); a clean one carries none", () => {
+    expect(toCard(row(), facts, "PKG").placeholder).toBeNull();
+    const gap = row({ payload: { ...row().payload, bodyText: "The total is [amount]." } });
+    expect(toCard(gap, facts, "PKG").placeholder).toMatch(/still contains a placeholder such as \[amount\]/);
+    // A reply: the sender's subject is not ours and can't be edited, so only the body counts.
+    const reply = row({ target: { mailbox: "exec@pubkgroup.example.test", thread_id: "t-1" }, payload: { ...row().payload, subject: "Re: [TBD] plan" } });
+    expect(toCard(reply, facts, "PKG").placeholder).toBeNull();
+  });
   it("history keeps recipients and subject and says the content was purged", () => {
     const h = toHistory(row({ status: "verified", payloadPurgedAt: "2026-11-11T13:00:00Z", payload: { to: ["dana@sender.example.test"], subject: "Update" }, verifiedAt: "2026-11-11T13:00:00Z" }));
     expect(h).toMatchObject({ status: "verified", to: ["dana@sender.example.test"], subject: "Update", contentPurged: true });
