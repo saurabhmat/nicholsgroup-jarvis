@@ -1,3 +1,4 @@
+/* eslint-disable @typescript-eslint/no-non-null-assertion -- tests index into data they just built */
 // The connector side of the shared approval-hash vector (T-050 F-M1, T-195). The approvals module runs the same vectors through
 // `hashOfRow` (packages/modules/approvals/src/server/rows.test.ts).
 import { createHash } from "node:crypto";

@@ -57,7 +57,7 @@ function setup(opts: { role?: "ok" | "forbidden"; stepUp?: "ok" | "required"; ro
     return {} as never;
   });
   const g = {
-    requireRole: vi.fn(async (_lane?: string, _roles?: readonly string[]) => {
+    requireRole: vi.fn<(lane: string, roles: readonly string[]) => Promise<never>>(async () => {
       if (opts.role === "forbidden") throw new AuthError("forbidden");
       return { session: { userId: USER }, laneId: "PKG", client: { schema: () => ({ rpc }) } } as never;
     }),
@@ -194,7 +194,7 @@ const qboFacts: CapabilityFacts = { mailbox: null, composeGranted: false, writeA
 /** setup() with a guard that answers per role list, as requireRole does: `roles` the user holds in the lane. */
 function setupRoles(held: string[], opts: Parameters<typeof setup>[0] = {}) {
   const s = setup(opts);
-  s.g.requireRole.mockImplementation(async (_lane?: string, wanted: readonly string[] = []) => {
+  s.g.requireRole.mockImplementation(async (_lane, wanted) => {
     if (!wanted.some((r) => held.includes(r))) throw new AuthError("forbidden");
     return { session: { userId: USER }, laneId: "PKG", client: { schema: () => ({ rpc: async (fn: string, args: Record<string, unknown>) => { s.calls.push({ fn, args }); if (fn === "has_lane_role") return { data: (args.p_roles as string[]).some((r) => held.includes(r)), error: null };
       return fn === "act_get" || fn === "act_list" ? { data: (opts.rows ?? [row()]).map(snake), error: null } : { data: null, error: null }; } }) } } as never;
@@ -250,7 +250,7 @@ describe("approve and reject by action type (T-195)", () => {
     expect(await res.json()).toMatchObject({ status: "verified", outcome: "disconnected" });
     expect(s.requireStepUp).toHaveBeenCalledWith(300);
     expect(s.approve).toHaveBeenCalledTimes(1);
-    expect(s.g.requireRole.mock.calls.map((c) => c[1] ?? [])).toEqual([["owner", "admin_technical"]]); // never narrowed to owner
+    expect(s.g.requireRole.mock.calls.map((c) => c[1])).toEqual([["owner", "admin_technical"]]); // never narrowed to owner
   });
   it("admin_technical cannot approve or reject an EMAIL action (403), and the module is not reached", async () => {
     const s = setupRoles(["admin_technical"], { rows: [row()] });

@@ -1,3 +1,4 @@
+/* eslint-disable @typescript-eslint/no-non-null-assertion -- tests index into data they just built */
 // T-195 (QB-8): the disconnect executor's read-back and the end state of an approved revoke. The revoke itself
 // (fail-closed table, tamper checks) is covered in connector.test.ts; here: the action type shared with approvals, the
 // row ending `disconnected` with its Vault tokens gone, and the verifier that the approvals executor calls afterwards.

@@ -15,7 +15,7 @@ import { createQuickBooksDisconnectVerifier, createQuickBooksWriter } from "./wr
 import { createDiscovery } from "./discovery";
 import { createQuickBooksOAuthProvider, type QboClientConfig } from "./provider";
 import { createTokenManager } from "./token-manager";
-import { createReconnectRecorder, createReconnectStore } from "./reconnect";
+import { createReconnectRecorder } from "./reconnect";
 import { connAttentionNeeded, sendLaneEvent } from "@nichols/core/inngest";
 
 const discovery = createDiscovery();

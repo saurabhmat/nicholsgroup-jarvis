@@ -1,3 +1,4 @@
+/* eslint-disable @typescript-eslint/no-non-null-assertion -- tests index into data they just built */
 // T-195 (QB-3, QB-4, QB-6, QB-8 reconnect): invalid_grant, a revoked or expired refresh token and the reconnect flow.
 //   * invalid_grant records `reconnect_required` (and last_error), sends ONE admin notification, and is never retried;
 //   * after that conn.sync, the reports job, the webhook-triggered CDC and a direct connector call make no Intuit request;

@@ -1,3 +1,4 @@
+/* eslint-disable @typescript-eslint/no-non-null-assertion -- tests index into data they just built */
 // The approvals module for `qbo.disconnect` (T-195) over an in-memory twin of the act.* functions and a fake QuickBooks writer
 // and verifier. The SQL is pinned by pgTAP (308_approvals_qbo_disconnect); here: the module's own rules. Synthetic data (rule 10).
 import { randomUUID } from "node:crypto";
