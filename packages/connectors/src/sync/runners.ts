@@ -19,7 +19,7 @@ export type SinkFor<P extends string> = (laneId: LaneId, conn: LaneBoundConnecti
 export function createConnectorSyncRunner<P extends string>(deps: { connector: Connector<P>; cursors: SyncCursorStore; sinkFor: SinkFor<P>; logger?: ConnectorLogger }): SyncRunner {
   const log = deps.logger ?? connectorLog;
   const { connector } = deps;
-  return async (laneId, conn, runOptions) => {
+  const runner: SyncRunner = async (laneId, conn, runOptions) => {
     assertLaneBound(laneId, conn);
     if (!connector.sync) throw new ConnectorError({ kind: "unsupported_op", message: "This connector does not sync" });
     const typed = conn as LaneBoundConnection<P>;
@@ -32,8 +32,11 @@ export function createConnectorSyncRunner<P extends string>(deps: { connector: C
     };
     // A targeted run (a webhook named the changed entities) needs a stored cursor to be safe: it never moves the cursor. With none
     // yet, the connection has not had its first full sync, so do that instead of refusing.
-    const objectTypes = runOptions?.objectTypes && stored !== null ? [...runOptions.objectTypes] : undefined;
-    const cursor = stored === null ? null : { value: stored };
+    // T-241: a full run (connect, or no completed full load yet) ignores the stored cursor and any object-type subset. The
+    // compare-and-swap below still expects `stored`, so a concurrent run's cursor is never overwritten blindly.
+    const full = runOptions?.full === true;
+    const objectTypes = !full && runOptions?.objectTypes && stored !== null ? [...runOptions.objectTypes] : undefined;
+    const cursor = stored === null || full ? null : { value: stored };
     let summary;
     try {
       summary = await connector.sync(laneId, typed, cursor, sink, objectTypes ? { objectTypes } : undefined);
@@ -47,6 +50,8 @@ export function createConnectorSyncRunner<P extends string>(deps: { connector: C
     if (stuck) log.child({ laneId, provider: connector.provider, connectionId: conn.id }).warn("conn.sync.cursor_conflict", {});
     return { kind: summary.mode, received, written: summary.records };
   };
+  // T-241: this runner honours `full` (the job asks the run history only for runners that do).
+  return Object.assign(runner, { reloadsOnFull: true as const });
 }
 
 /** `received` for Google = written + skipped + removed items, `written` = items written. */

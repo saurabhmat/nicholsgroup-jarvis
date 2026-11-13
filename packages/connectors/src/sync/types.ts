@@ -17,8 +17,12 @@ export type SyncJob = (typeof SYNC_JOBS)[number];
 /** What one provider runner reports after a run. Counts only: never a record, never a cursor. */
 export type SyncRunnerResult = { kind: "full" | "incremental"; received: number; written: number };
 
-/** Runs one connection's sync. Throws ConnectorError for failures (anything else is reduced to a generic provider_error). */
-export type SyncRunner = (laneId: LaneId, conn: LaneBoundConnection<string>, options?: { objectTypes?: readonly string[]; streams?: readonly SyncStream[] }) => Promise<SyncRunnerResult>;
+/**
+ * Runs one connection's sync. Throws ConnectorError for failures (anything else is reduced to a generic provider_error).
+ * `full` (T-241): ignore the stored cursor and reload everything (a new or reconnected connection, or one that never completed a
+ * full load). Runners that keep their own per-stream cursors (Google) ignore it.
+ */
+export type SyncRunner = (laneId: LaneId, conn: LaneBoundConnection<string>, options?: { objectTypes?: readonly string[]; streams?: readonly SyncStream[]; full?: boolean }) => Promise<SyncRunnerResult>;
 
 export type SyncRunFinish = {
   status: "succeeded" | "failed" | "cancelled";
@@ -45,6 +49,12 @@ export interface SyncRunStore {
    * and a success clears last_error only when it belongs to that stream or to the whole connection (another stream's error stays).
    */
   recordOutcome(laneId: LaneId, conn: LaneBoundConnection<string>, outcome: { ok: true } | { ok: false; error: ConnectorErrorInfo }, stream?: SyncStream | null): Promise<void>;
+  /**
+   * T-241: the connection's FULL sync history (conn.sync rows of kind full). `completed` false means its first load never finished,
+   * so a scheduled or manual sync reloads everything whatever cursor is stored, unless a full attempt started recently
+   * (`lastAttemptAt`, any outcome; back-off so a load that keeps failing is not repeated on every tick). Throws when unreadable.
+   */
+  fullSyncHistory?(laneId: LaneId, conn: LaneBoundConnection<string>): Promise<{ completed: boolean; lastAttemptAt: string | null }>;
 }
 
 /** Cursor of the generic stream (`Connector.sync`), stored in core.sync_cursors. Mail and calendar keep their own streams. */
@@ -52,6 +62,8 @@ export interface SyncCursorStore {
   get(laneId: LaneId, conn: LaneBoundConnection<string>): Promise<string | null>;
   /** Compare-and-swap: stores `next` only if the stored cursor is still `expected`. False = another run advanced it first. */
   put(laneId: LaneId, conn: LaneBoundConnection<string>, expected: string | null, next: string): Promise<boolean>;
+  /** T-241: deletes the generic cursor (a connect or reconnect), so the next sync is a full load whatever ran before. */
+  reset?(laneId: LaneId, conn: LaneBoundConnection<string>): Promise<void>;
 }
 
 /** The run is not retried by Inngest unless `retryable`; `retryAfterSeconds` is the provider's hint for rate limits. */

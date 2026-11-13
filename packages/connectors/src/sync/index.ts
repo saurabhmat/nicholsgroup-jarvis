@@ -23,6 +23,15 @@ export const connSyncJob = createConnSyncJob({
 export const isQuickbooksConnectionUsable = createQuickbooksUsableCheck(connectionLoader);
 
 export { SYNC_TRIGGERS } from "./types";
+
+/**
+ * T-241: before a (re)connected QuickBooks connection's first sync, drop its stored cursor so that sync, and any later one if it is
+ * skipped, is a full load. Lane-checked (the loader binds the connection to the lane; the SQL checks again). Ids in, nothing out.
+ */
+export async function resetSyncCursorForReload(laneId: LaneId, connectionId: string): Promise<void> {
+  const conn = await connectionLoader.loadConnection(laneId, connectionId);
+  await syncCursorStore.reset?.(laneId, conn);
+}
 export type { ConnSyncOutcome, SyncTrigger } from "./types";
 
 /** Ids of a lane's usable calendar-capable connections, for the scheduled cal.ingest_delta fan-out (T-130). */

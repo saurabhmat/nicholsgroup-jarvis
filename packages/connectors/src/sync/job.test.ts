@@ -75,6 +75,88 @@ async function setup(opts: { failFor?: (connId: string) => ConnectorError | null
   return { mock, a, b, job, runs, cursors, entries, delivered };
 }
 
+describe("T-241: a new, reconnected or never fully loaded connection reloads everything", () => {
+  async function fixture(history: "full" | "none" | "none_recent" | "unreadable" | "absent") {
+    const mock = createMockConnector();
+    const a = await mock.connector.connect("PKG", { kind: "oauth_code", code: MOCK_AUTH_CODE, redirect_uri: "https://portal.example.test/api/connect/mock/callback", external_account_id: "acct-full" });
+    const seen: { cursor: unknown; options: unknown }[] = [];
+    const base = mock.connector;
+    const connector = { ...base, sync: async (...args: Parameters<NonNullable<typeof base.sync>>) => {
+      seen.push({ cursor: args[2], options: args[4] });
+      if (!base.sync) throw new Error("no sync");
+      return base.sync(...args);
+    } };
+    const cursors = memoryCursors();
+    await cursors.store.put("PKG", a, null, "2026-11-01T00:00:00.000Z"); // a valid cursor of an earlier run
+    const runs = memoryRuns();
+    const store: SyncRunStore = history === "absent" ? runs.store : {
+      ...runs.store,
+      fullSyncHistory: async () => {
+        if (history === "unreadable") throw new ConnectorError({ kind: "transient", message: "Sync log unavailable" });
+        return { completed: history === "full", lastAttemptAt: history === "none_recent" ? new Date(Date.now() - 3_600_000).toISOString() : null };
+      },
+    };
+    const runner = createConnectorSyncRunner({ connector, cursors: cursors.store, sinkFor: () => async () => {} });
+    const job = createConnSyncJob({ loader: mock.loader, runs: store, runners: { [base.provider]: runner } });
+    return { a, job, seen, runs };
+  }
+  it("trigger connect ignores the stored cursor and any object-type subset", async () => {
+    const f = await fixture("full");
+    await f.job.run("PKG", f.a.id, { trigger: "connect", objectTypes: ["Invoice"] });
+    expect(f.seen).toEqual([{ cursor: null, options: undefined }]);
+  });
+  it("a cursor without a completed full sync is not trusted: full reload", async () => {
+    const f = await fixture("none");
+    await f.job.run("PKG", f.a.id, { trigger: "manual" });
+    expect(f.seen[0]?.cursor).toBeNull();
+  });
+  it("after a completed full sync the cursor is used (incremental), webhook subsets too", async () => {
+    const f = await fixture("full");
+    await f.job.run("PKG", f.a.id, { trigger: "schedule" });
+    await f.job.run("PKG", f.a.id, { trigger: "webhook", objectTypes: ["Invoice"] });
+    expect(f.seen[0]?.cursor).toEqual({ value: "2026-11-01T00:00:00.000Z" });
+    expect(f.seen[1]?.cursor).not.toBeNull();
+    expect(f.seen[1]?.options).toEqual({ objectTypes: ["Invoice"] });
+  });
+  it("review M1: a webhook stays a targeted fetch; a full attempt in the last 6 h is not repeated (back-off)", async () => {
+    const hook = await fixture("none");
+    await hook.job.run("PKG", hook.a.id, { trigger: "webhook", objectTypes: ["Invoice"] });
+    expect(hook.seen[0]).toEqual({ cursor: { value: "2026-11-01T00:00:00.000Z" }, options: { objectTypes: ["Invoice"] } });
+    const recent = await fixture("none_recent");
+    await recent.job.run("PKG", recent.a.id, { trigger: "schedule" });
+    expect(recent.seen[0]?.cursor).not.toBeNull();
+  });
+  it("a failed forced full load is logged as kind full (so the back-off and operators see it)", async () => {
+    const mock = createMockConnector();
+    const a = await mock.connector.connect("PKG", { kind: "oauth_code", code: MOCK_AUTH_CODE, redirect_uri: "https://portal.example.test/api/connect/mock/callback", external_account_id: "acct-fail" });
+    const runs = memoryRuns();
+    const failing = Object.assign((async () => { throw new ConnectorError({ kind: "transient", message: "Intuit unavailable" }); }) as SyncRunner, { reloadsOnFull: true });
+    const job = createConnSyncJob({ loader: mock.loader, runs: runs.store, runners: { [mock.connector.provider]: failing } });
+    await job.run("PKG", a.id, { trigger: "connect" });
+    expect(runs.rows[0]?.result).toMatchObject({ status: "failed", kind: "full" });
+  });
+  it("a runner that does not honour full (Google) is never asked the history and gets no full option", async () => {
+    const mock = createMockConnector();
+    const a = await mock.connector.connect("PKG", { kind: "oauth_code", code: MOCK_AUTH_CODE, redirect_uri: "https://portal.example.test/api/connect/mock/callback", external_account_id: "acct-g" });
+    let asked = 0;
+    const seen: unknown[] = [];
+    const runner: SyncRunner = async (_l, _c, o) => { seen.push(o); return { kind: "incremental", received: 0, written: 0 }; };
+    const runs = memoryRuns();
+    const job = createConnSyncJob({ loader: mock.loader, runs: { ...runs.store, fullSyncHistory: async () => { asked += 1; return { completed: false, lastAttemptAt: null }; } }, runners: { [mock.connector.provider]: runner } });
+    await job.run("PKG", a.id, { trigger: "connect" });
+    await job.run("PKG", a.id, { trigger: "schedule" });
+    expect([asked, seen]).toEqual([0, [undefined, undefined]]);
+  });
+  it("unreadable history keeps the cursor (never fails the sync); a store without the check behaves as before", async () => {
+    for (const h of ["unreadable", "absent"] as const) {
+      const f = await fixture(h);
+      const out = await f.job.run("PKG", f.a.id, { trigger: "manual" });
+      expect(out.ok).toBe(true);
+      expect(f.seen[0]?.cursor).not.toBeNull();
+    }
+  });
+});
+
 describe("targeted runs (T-053)", () => {
   async function targeted(refuseTargeted = false) {
     const mock = createMockConnector();
@@ -315,5 +397,25 @@ describe("SyncRunner type", () => {
   it("is a function of lane and connection", () => {
     const r: SyncRunner = async () => ({ kind: "full", received: 0, written: 0 });
     expect(typeof r).toBe("function");
+  });
+});
+
+describe("T-241: the cursor runner with full", () => {
+  it("passes no cursor and no subset to the connector, and still compare-and-swaps against the stored cursor", async () => {
+    const mock = createMockConnector();
+    const a = await mock.connector.connect("PKG", { kind: "oauth_code", code: MOCK_AUTH_CODE, redirect_uri: "https://portal.example.test/api/connect/mock/callback", external_account_id: "acct-r" });
+    const calls: unknown[][] = [];
+    const puts: unknown[][] = [];
+    const base = mock.connector;
+    const connector = { ...base, sync: async (...args: Parameters<NonNullable<typeof base.sync>>) => { calls.push([args[2], args[4]]); if (!base.sync) throw new Error("no sync"); return base.sync(...args); } };
+    const store = memoryCursors();
+    await store.store.put("PKG", a, null, "2026-11-01T00:00:00.000Z");
+    const cursors: SyncCursorStore = { ...store.store, put: async (l, c, expected, next) => { puts.push([expected, typeof next]); return store.store.put(l, c, expected, next); } };
+    const runner = createConnectorSyncRunner({ connector, cursors, sinkFor: () => async () => {} });
+    const out = await runner("PKG", a, { full: true, objectTypes: ["Invoice"] });
+    expect(calls).toEqual([[null, undefined]]);
+    expect(puts).toEqual([["2026-11-01T00:00:00.000Z", "string"]]);
+    expect(out.kind).toBe("full");
+    expect((runner as { reloadsOnFull?: boolean }).reloadsOnFull).toBe(true);
   });
 });

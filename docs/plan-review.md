@@ -1259,3 +1259,23 @@ Logged, not fixed:
 - (code review L7) The sidebar's `w-60` + `min-w-60` is redundant. Colours not checked by eye.
 - (security L2, L3) pgTAP 313: the viewer denial counts only `last_to_owner` rows. Missing: a test of a role with the comms view but no connections view, and an APK-only member calling PKG.
 - (security L5) A subject (sender-controlled) can lift a person's thread into the Money/Deadline band. By design; no privilege change.
+
+## T-241: review results (security and code review, Nov 13, 2026)
+Neither review found a BLOCKER or HIGH.
+
+Fixed:
+- (security M1, code review MEDIUM 1) A connection with no completed full sync no longer turns every run into a full reload:
+  - only scheduled and manual runs are promoted (a webhook stays a targeted fetch);
+  - promotion happens at most once per 6 h of the last full attempt (`FULL_RETRY_BACKOFF_MS`);
+  - a failed forced full load is logged as `kind = full`, so the back-off and operators see it (security L2, code review LOW 2).
+- (code review MEDIUM 2) The connect sync could be skipped (a run already in progress), and a reconnect kept the old cursor. The callback now deletes the connection's generic cursor (`core.sync_cursor_reset`, lane-checked) before sending the connect sync, so any next sync reloads.
+- (code review MEDIUM 3) The production SQL header no longer says it becomes unnecessary: a connection that already has a succeeded full run on record still needs it.
+- (code review MEDIUM 5) A direct runner test: `full` passes no cursor and no subset, and the compare-and-swap still expects the stored cursor.
+- (security L3, code review LOW 1) The full-load history is read only for runners that honour `full`: not Google, no false log line.
+- (security L4, code review LOW 3) The callback waits at most 3 s for the follow-up.
+- (security L5) Tests use fully synthetic connection ids.
+
+Logged, not fixed:
+- (security L1) A holder of the Inngest event key can queue `conn/sync.requested` with trigger "connect" (a full reload) without a per-connection throttle. Same trust level as today (that key already sends any sync, normalize and approval event). Option: an Inngest throttle keyed on the connection id.
+- (code review MEDIUM 4) The 100 s normalizer timeout abandons the HTTP call, but the Postgres function may keep running and hold its advisory lock. The retry then waits on the lock or reports a lock conflict (now named in the reason). The function's run time itself (production showed 2m35s) is not addressed. Next step if it recurs: read the named reason from the run output.
+- (code review LOW 4) SQLSTATE 42883 is reported as "normalizer function not found" even when an undefined function inside the normalizer raised it. A network error that supabase-js returns as an error object with an empty code reads "unknown database error", not "network".

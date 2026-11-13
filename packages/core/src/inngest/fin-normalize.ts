@@ -40,6 +40,9 @@ export function shouldNormalizeAfterSync(run: { trigger: string; kind: string; w
   return run.trigger !== "schedule" || run.kind !== "incremental" || run.written > 0;
 }
 
+/** A reason shown in the run output: only the normalizer's own fixed texts (by their opening words), plain characters, short. */
+const SAFE_REASON = /^(?:Normalizer |The normalizer |The lane has no QuickBooks |The connection is not usable )[A-Za-z0-9 .,:;()'_-]{0,180}$/;
+
 /** Deterministic Inngest event id for one connection after one sync run. */
 export function finNormalizeEventId(connectionId: string, syncRunId: string): string {
   if (!UUID.test(connectionId) || !RUN_ID.test(syncRunId)) throw new Error("fin.qbo_normalize: invalid event id parts");
@@ -57,12 +60,15 @@ export async function handleFinNormalize(
   if (!deps.enabledLanes().includes(data.laneId)) return { ok: true, skipped: "lane_not_served" };
   const result = await deps.runNormalize(data.laneId, data.connectionId, data.trigger);
   if (result.ok) return result;
-  // Messages are already redacted (ConnectorError); they carry no record content.
-  if (!result.retryable) throw new NonRetriableError(`fin.qbo_normalize failed: ${result.errorKind}`);
+  // Messages are already redacted (ConnectorError: fixed texts and codes); they carry no record content. T-241: the run output
+  // names the reason ("transient: Normalizer unavailable: statement timeout (SQLSTATE 57014)"), not only the kind. A message
+  // outside the safe shape is left out.
+  const why = SAFE_REASON.test(result.message) ? `${result.errorKind}: ${result.message}` : result.errorKind;
+  if (!result.retryable) throw new NonRetriableError(`fin.qbo_normalize failed: ${why}`);
   if (result.retryAfterSeconds !== null && result.retryAfterSeconds > 0) {
-    throw new RetryAfterError(`fin.qbo_normalize failed: ${result.errorKind}`, Math.min(result.retryAfterSeconds, MAX_RETRY_AFTER_SECONDS) * 1000);
+    throw new RetryAfterError(`fin.qbo_normalize failed: ${why}`, Math.min(result.retryAfterSeconds, MAX_RETRY_AFTER_SECONDS) * 1000);
   }
-  throw new Error(`fin.qbo_normalize failed: ${result.errorKind}`);
+  throw new Error(`fin.qbo_normalize failed: ${why}`);
 }
 
 export function finQboNormalizeFunctions(inngest: Inngest, deps: FinQboNormalizeDeps): InngestFunction.Any[] {

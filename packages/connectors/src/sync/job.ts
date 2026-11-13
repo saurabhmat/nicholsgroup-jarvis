@@ -21,6 +21,9 @@ export type ConnSyncJobDeps = {
   logger?: ConnectorLogger;
 };
 
+/** T-241: a connection with no completed full sync is promoted to a full load at most once per this window (any outcome). */
+export const FULL_RETRY_BACKOFF_MS = 6 * 3_600_000;
+
 export function createConnSyncJob(deps: ConnSyncJobDeps) {
   const log = deps.logger ?? connectorLog;
 
@@ -62,6 +65,7 @@ export function createConnSyncJob(deps: ConnSyncJobDeps) {
       // T-238: a run of exactly one stream tags its error with that stream (and clears only that stream's error).
       const oneStream = input.streams && new Set(input.streams).size === 1 ? (input.streams[0] ?? null) : null;
       let outcome: ConnSyncOutcome;
+      let full = false;
       let error: ConnectorError | null = null;
       let result: Awaited<ReturnType<SyncRunner>> | null = null;
       try {
@@ -69,7 +73,27 @@ export function createConnSyncJob(deps: ConnSyncJobDeps) {
         if (!runner) throw new ConnectorError({ kind: "unsupported_op", message: "No sync is available for this provider" });
         const hasTypes = input.objectTypes && input.objectTypes.length > 0;
         const hasStreams = input.streams && input.streams.length > 0;
-        result = await runner(laneId, conn, hasTypes || hasStreams ? { ...(hasTypes ? { objectTypes: input.objectTypes } : {}), ...(hasStreams ? { streams: input.streams } : {}) } : undefined);
+        // T-241: a connect (new or reconnected) always reloads everything; so does a connection whose first full load never
+        // completed (a cursor alone does not prove the data is there). Unreadable history keeps the cursor (the CDC window still
+        // bounds it) rather than failing the sync.
+        // Only runners that honour `full` (the generic cursor runner); Google keeps per-stream cursors and ignores it.
+        const reloads = (runner as { reloadsOnFull?: boolean }).reloadsOnFull === true;
+        full = reloads && input.trigger === "connect";
+        // From the history only for scheduled and manual runs (a webhook stays a cheap targeted fetch), and not again within
+        // FULL_RETRY_BACKOFF_MS of the last full attempt, so a load that keeps failing is not repeated on every tick (review M1).
+        if (reloads && !full && (input.trigger === "schedule" || input.trigger === "manual") && deps.runs.fullSyncHistory) {
+          try {
+            const h = await deps.runs.fullSyncHistory(laneId, conn);
+            const recent = h.lastAttemptAt !== null && Date.now() - Date.parse(h.lastAttemptAt) < FULL_RETRY_BACKOFF_MS;
+            full = !h.completed && !recent;
+            if (!h.completed && recent) child.info("conn.sync.full_reload_backoff", {});
+          } catch {
+            child.warn("conn.sync.full_history_unreadable", {});
+          }
+        }
+        if (full) child.info("conn.sync.full_reload", { reason: input.trigger === "connect" ? "connect" : "no_completed_full_sync" });
+        const options = { ...(hasTypes ? { objectTypes: input.objectTypes } : {}), ...(hasStreams ? { streams: input.streams } : {}), ...(full ? { full: true } : {}) };
+        result = await runner(laneId, conn, Object.keys(options).length > 0 ? options : undefined);
       } catch (e) {
         error = toConnectorError(e);
       }
@@ -97,8 +121,8 @@ export function createConnSyncJob(deps: ConnSyncJobDeps) {
       } else {
         const failed = error as ConnectorError;
         const info = failed.toJSON();
-        const logged = await guarded(() => deps.runs.finish(laneId, conn, started.runId, { status: "failed", kind: conn.last_sync_at ? "incremental" : "full", received: 0, written: 0, error: info }), "conn.sync.log_failed");
-        if (!logged) await guarded(() => deps.runs.finish(laneId, conn, started.runId, { status: "cancelled", kind: conn.last_sync_at ? "incremental" : "full", received: 0, written: 0 }), "conn.sync.log_failed");
+        const logged = await guarded(() => deps.runs.finish(laneId, conn, started.runId, { status: "failed", kind: full || !conn.last_sync_at ? "full" : "incremental", received: 0, written: 0, error: info }), "conn.sync.log_failed");
+        if (!logged) await guarded(() => deps.runs.finish(laneId, conn, started.runId, { status: "cancelled", kind: full || !conn.last_sync_at ? "full" : "incremental", received: 0, written: 0 }), "conn.sync.log_failed");
         if (logged) await guarded(() => deps.runs.recordOutcome(laneId, conn, { ok: false, error: info }, oneStream), "conn.sync.outcome_failed");
         child.warn("conn.sync.failed", { kind: info.kind, disposition: info.disposition });
         outcome = failure(failed);
