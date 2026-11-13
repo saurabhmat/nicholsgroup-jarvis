@@ -8,7 +8,8 @@ import type { LLMOutputSchema } from "@nichols/ai";
 const text = z.string();
 export const BriefingOutputSchema = z.object({
   lines: z.array(text),
-  attention: z.array(z.object({ ref: text, what: text, why: text, next: text })),
+  // T-243: needs_reply false = the owner has nothing to answer or do (Home then drops the item); null/omitted = unknown. Home only ever uses false to remove.
+  attention: z.array(z.object({ ref: text, what: text, why: text, next: text, needs_reply: z.boolean().nullable().default(null) })),
   deadlines: z.array(z.object({ ref: text.nullable(), text, due: text.nullable() })),
   priorities: z.array(z.object({ text, reason: text, refs: z.array(text) })),
   // Lanes with drafts off may omit these two: the default keeps that from costing a retry (the API schema still lists them as required).

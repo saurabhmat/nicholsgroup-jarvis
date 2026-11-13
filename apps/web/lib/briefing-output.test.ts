@@ -36,6 +36,16 @@ describe("briefing output", () => {
       }
     }
   });
+  it("T-243: needs_reply is in the attention item schema (required for the API, boolean or null); a missing one parses as unknown (null), a non-boolean is refused", () => {
+    const item = (BRIEFING_OUTPUT_SCHEMA.schema as { properties: { attention: { items: { properties: Record<string, unknown>; required: string[] } } } }).properties.attention.items;
+    expect(Object.keys(item.properties)).toContain("needs_reply");
+    expect(item.required).toContain("needs_reply");
+    const parse = (a: Record<string, unknown>) => parseBriefingOutput(JSON.stringify({ ...GOOD, attention: [{ ref: "r1", what: "w", why: "y", next: "n", ...a }] }));
+    expect(parse({ needs_reply: false })).toMatchObject({ ok: true, value: { attention: [{ needs_reply: false }] } });
+    expect(parse({ needs_reply: null })).toMatchObject({ ok: true, value: { attention: [{ needs_reply: null }] } });
+    expect(parse({})).toMatchObject({ ok: true, value: { attention: [{ needs_reply: null }] } });
+    expect(parse({ needs_reply: "no" })).toMatchObject({ ok: false });
+  });
   it("replies and more_replies may be omitted (drafts off): no retry needed", () => {
     const rest: Record<string, unknown> = { ...GOOD };
     delete rest.replies;

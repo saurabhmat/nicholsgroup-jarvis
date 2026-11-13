@@ -219,6 +219,9 @@ describe("T-240: tidyModelText (no row refs, no UTC)", () => {
   });
   it("the prompt asks for no refs in sentences and no UTC times", () => {
     expect(BRIEFING_RULES).toMatch(/never write a ref or any internal id/);
+    expect(BRIEFING_RULES).toMatch(/needs_reply: false when the item needs no reply and no action/); // T-243
+    expect(BRIEFING_RULES).toMatch(/"needs_reply": true\|false\|null/);
+    expect(BRIEFING_RULES).toMatch(/When unsure, true/);
     expect(BRIEFING_RULES).toMatch(/Eastern time like "9:42 AM ET"; never UTC/);
   });
 });

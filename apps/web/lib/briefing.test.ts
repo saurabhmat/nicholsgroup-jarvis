@@ -2,7 +2,7 @@
 // dates, "nothing set up" is not "no access", owner domains on public mail providers are not internal, and an events
 // error keeps Coverage.
 import { describe, expect, it } from "vitest";
-import { briefingFor, eventsWindow, internalDomains, knownNamesFrom, loadBriefing, ownMailDomains, viewerZone } from "./briefing";
+import { briefingFor, eventsWindow, internalDomains, knownNamesFrom, loadBriefing, ownMailDomains, parseSavedBriefing, viewerZone, withSummaryApplied, type MailSection, type SavedBriefingView } from "./briefing";
 import { dayWindow } from "@nichols/briefing/domain";
 
 type Res = { data: unknown; error: unknown };
@@ -117,5 +117,37 @@ describe("T-240: names for attendees and the lane's own domains", () => {
     });
     const view = await loadBriefing(client, "PKG", new Date("2026-11-11T17:00:00Z"), "America/New_York");
     expect(view.calendar.access && view.calendar.knownNames).toEqual({ "rnichols@pubk.test": "Robert N" });
+  });
+});
+
+describe("T-243: the summary may only remove items from Home's attention list", () => {
+  const thread = (i: number) => ({ connectionId: "c1", threadKey: `t${String(i)}`, messageId: `m${String(i)}`, fromAddress: "a@x.test", fromName: "A", subject: "s", receivedAt: "2026-11-11T10:00:00Z", sourceUrl: null, labels: [], isImportant: false, lastIsOwner: false, ownerReplied: false, unreadCount: 1, inboundCount: 1 });
+  const item = (i: number) => ({ key: `c1:t${String(i)}`, kind: "unread" as const, reason: "r", flags: { vip: false, money: null, deadline: false, waitingOnYou: false }, thread: thread(i) });
+  const fresh = [1, 2, 3, 4, 5, 6, 7].map(item);
+  const mail: MailSection = { access: true, attention: fresh.slice(0, 5), more: 2, fresh, stillWaiting: [], money: [], mailboxOf: {} };
+  const brief = (needsReply: boolean | undefined, over: Partial<SavedBriefingView> = {}): SavedBriefingView => ({
+    id: "b", status: "ready", trigger: "manual", preparedAt: "2026-11-11T12:00:00Z", windowFrom: "", windowTo: "", lastFailedAt: null, lastRunAt: null,
+    refs: [{ ref: "r1", connectionId: "c1", messageId: "m2", threadKey: "t2", mailbox: null, fromAddress: null, fromName: null, subject: null, receivedAt: "", sourceUrl: null, reason: "", kind: "unread" }],
+    content: { lines: [], attention: [{ ref: "r1", what: "w", why: "y", next: "n", ...(needsReply === undefined ? {} : { needsReply }) }], deadlines: [], priorities: [], replies: [], moreReplies: [], notes: [] }, ...over,
+  });
+  const ids = (m: MailSection) => (m.access ? m.attention.map((a) => a.thread.messageId) : []);
+  it("needs_reply false: the item leaves, the next ranked one moves up, the count drops", () => {
+    const out = withSummaryApplied(mail, brief(false));
+    expect(ids(out)).toEqual(["m1", "m3", "m4", "m5", "m6"]);
+    expect(out.access && out.more).toBe(1);
+  });
+  it("unknown, true, failed, none: the same list object comes back", () => {
+    for (const b of [brief(undefined), brief(true), brief(false, { status: "failed" }), null]) expect(withSummaryApplied(mail, b)).toBe(mail);
+    expect(withSummaryApplied({ access: false }, brief(false))).toEqual({ access: false });
+  });
+  it("a list without `fresh` (older shape) is cut from `attention` and never grows", () => {
+    const { fresh: _unused, ...plain } = mail;
+    expect(ids(withSummaryApplied(plain as MailSection, brief(false)))).toEqual(["m1", "m3", "m4", "m5"]);
+  });
+  it("stored briefings: needsReply is read back as a boolean, any other value is unknown", () => {
+    const row = (needsReply: unknown) => [{ id: "00000000-0000-4000-8000-000000000001", status: "ready", prepared_at: "2026-11-11T12:00:00Z", source_refs: [], content: { attention: [{ ref: "r1", what: "w", why: "y", next: "n", needsReply }] } }];
+    expect(parseSavedBriefing(row(false))?.content.attention[0]).toMatchObject({ needsReply: false });
+    expect(parseSavedBriefing(row(true))?.content.attention[0]).toMatchObject({ needsReply: true });
+    for (const v of ["false", 0, null, undefined]) expect(parseSavedBriefing(row(v))?.content.attention[0]).not.toHaveProperty("needsReply");
   });
 });

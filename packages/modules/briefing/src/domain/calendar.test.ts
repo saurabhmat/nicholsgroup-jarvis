@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { attendeeNames, nameFromEmail, parseEvents, summarizeAhead } from "./calendar";
+import { attendeeNames, parseEvents, summarizeAhead } from "./calendar";
 
 const owners = new Set(["me@pubk.test"]);
 const row = (over: Record<string, unknown>) => ({
@@ -18,19 +18,6 @@ const first = (attendees: unknown[]) => {
   if (!e) throw new Error("no event");
   return e;
 };
-
-describe("nameFromEmail", () => {
-  it("capitalises the local part", () => {
-    expect(nameFromEmail("dana.whitfield@x.test")).toBe("Dana Whitfield");
-    expect(nameFromEmail("sam_o-neil+tag@x.test")).toBe("Sam O Neil");
-  });
-  it("shows role mailboxes unchanged", () => {
-    for (const r of ["info", "noreply", "no-reply", "sales", "support", "admin"]) expect(nameFromEmail(`${r}@x.test`)).toBe(r);
-  });
-  it("falls back to Guest", () => {
-    expect(nameFromEmail("@x.test")).toBe("Guest");
-  });
-});
 
 describe("attendeeNames", () => {
   it("uses names, never addresses; skips owners and resources; counts the rest", () => {

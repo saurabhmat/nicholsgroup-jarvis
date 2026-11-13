@@ -215,19 +215,68 @@ describe("AttentionSection (T-234 part 2, T-235 part 2: scannable rows)", () => 
     expect(subject.className).not.toMatch(/\btruncate\b/); // phone: the subject wraps (T-237 polish)
   });
 
-  it("T-237: a subject holding a masked-figure placeholder is hidden (never '[amount]'); so are the AI why/next lines that hold one; a missing subject shows no line", () => {
+  it("T-243: the subject is ALWAYS shown: figures masked (the token reads as an ellipsis, never the figure or '[amount]'); '(no subject)' when there is none; the AI why/next lines that hold a placeholder are still dropped", () => {
     const row = (subject: string | null) => ({ ...mail(), attention: [{ key: "k", kind: "priority" as const, reason: "r", flags: { vip: true, money: null, deadline: false, waitingOnYou: false }, thread: { ...thread, subject } }] });
     const { rerender } = render(<AttentionSection laneId="PKG" now={now} mail={row("Board deck $1,200")} notes={new Map([["c1:m1", { ref: "r1", what: "x", why: "Costs [amount] more", next: "Send comments" }]])} />);
     const item = screen.getByTestId("attention-item");
-    expect(within(item).queryByTestId("attention-subject")).toBeNull();
+    expect(within(item).getByTestId("attention-subject").textContent).toBe("Board deck \u2026");
     expect(item.textContent).not.toMatch(/\[(amount|number)\]|1,200/);
     expect(within(item).getByTestId("attention-note").textContent).toContain("Send comments"); // the other field stays
     expect(within(item).getByTestId("attention-note").textContent).not.toContain("Costs");
-    expect(within(item).getByTestId("attention-open").getAttribute("aria-label")).toBe("Open message");
-    rerender(<AttentionSection laneId="PKG" now={now} mail={row(null)} notes={new Map([["c1:m1", { ref: "r1", what: "x", why: "Ref [number] open", next: "Account [number]" }]])} />);
-    expect(screen.queryByTestId("attention-subject")).toBeNull();
-    expect(screen.queryByTestId("attention-note")).toBeNull(); // both fields dropped: no empty line
-    expect(screen.getByTestId("attention-item").textContent).not.toMatch(/No subject/);
+    expect(within(item).getByTestId("attention-open").getAttribute("aria-label")).toBe("Open: Board deck \u2026");
+    for (const none of [null, "", "   "]) {
+      rerender(<AttentionSection laneId="PKG" now={now} mail={row(none)} notes={new Map([["c1:m1", { ref: "r1", what: "x", why: "Ref [number] open", next: "Account [number]" }]])} />);
+      expect(screen.getByTestId("attention-subject").textContent).toBe("(no subject)");
+      expect(screen.queryByTestId("attention-note")).toBeNull(); // both fields dropped: no empty line
+      expect(screen.getByTestId("attention-open").getAttribute("aria-label")).toBe("Open: (no subject)");
+    }
+    // A subject that is nothing but a figure is still a line, never empty.
+    rerender(<AttentionSection laneId="PKG" now={now} mail={row("$1,200.00")} />);
+    expect(screen.getByTestId("attention-subject").textContent).toBe("\u2026");
+  });
+
+  it("T-243: every row of a mixed list has a subject line (also on the phone rows), whatever the subject or the reason", () => {
+    const m = mail();
+    const rows = ["Plain", null, "Re: Reason text", "Invoice 12345678 due"].map((subject, i) => ({ ...first(m.attention), key: `k${String(i)}`, reason: "Re: Reason text", thread: { ...thread, messageId: `m${String(i)}`, subject } }));
+    render(<AttentionSection laneId="PKG" now={now} mail={{ ...m, attention: rows }} />);
+    const items = screen.getAllByTestId("attention-item");
+    expect(items).toHaveLength(4);
+    for (const it of items) expect(within(it).getByTestId("attention-subject").textContent?.trim()).not.toBe("");
+    expect(items.map((it) => within(it).getByTestId("attention-subject").textContent)).toEqual(["Plain", "(no subject)", "Re: Reason text", "Invoice \u2026 due"]);
+  });
+
+  it("T-243: a sender with no display name shows the FULL address (truncated by CSS, address as title), never a name made from it; no separate domain", () => {
+    const m = mail();
+    render(<AttentionSection laneId="PKG" now={now} mail={{ ...m, attention: [{ ...first(m.attention), thread: { ...thread, fromName: null, fromAddress: "dana.whitfield@acme.test" } }] }} />);
+    const name = screen.getByTestId("attention-sender");
+    expect(name.textContent).toBe("dana.whitfield@acme.test");
+    expect(name.parentElement?.className).toMatch(/\btruncate\b/);
+    expect(name.parentElement?.getAttribute("title")).toBe("dana.whitfield@acme.test");
+    expect(screen.queryByTestId("attention-company")).toBeNull();
+    expect(screen.getByTestId("attention-avatar").textContent).toBe("D");
+  });
+
+  it("T-243: no 'Waiting on you' chip when the summary says nothing is needed (needs_reply false, or the older wording); a note that does not say so, or says true, keeps it", () => {
+    const m = mail();
+    const waiting = { ...first(m.attention), kind: "waiting" as const, flags: { vip: false, money: null, deadline: false, waitingOnYou: true } };
+    const chips = () => screen.queryAllByTestId("attention-chip").map((c) => c.textContent);
+    const view = (n?: Record<string, unknown>) => <AttentionSection laneId="PKG" now={now} mail={{ ...m, attention: [waiting] }} {...(n ? { notes: new Map([["c1:m1", { ...note, ...n }]]) } : {})} />;
+    const { rerender } = render(view());
+    expect(chips()).toContain("Waiting on you");
+    rerender(view({ needsReply: false }));
+    expect(chips()).not.toContain("Waiting on you");
+    rerender(view({ next: "No action needed." }));
+    expect(chips()).not.toContain("Waiting on you");
+    rerender(view({ why: "FYI from the vendor" }));
+    expect(chips()).not.toContain("Waiting on you");
+    rerender(view({ needsReply: true, next: "No action needed." }));
+    expect(chips()).toContain("Waiting on you"); // the explicit field wins
+    rerender(view({ next: "Send comments, no reply from Sam yet" }));
+    expect(chips()).toContain("Waiting on you");
+    rerender(view({ needsReply: false, what: "x" }));
+    // The summary never ADDS a chip: a row that is not waiting on the owner gets none from the note.
+    rerender(<AttentionSection laneId="PKG" now={now} mail={{ ...m, attention: [{ ...waiting, flags: { ...waiting.flags, waitingOnYou: false } }] }} notes={new Map([["c1:m1", { ...note, needsReply: true }]])} />);
+    expect(chips()).not.toContain("Waiting on you");
   });
 
   it("T-237: raw ISO times in the AI note are shown in New York time, never with a Z", () => {

@@ -216,7 +216,9 @@ export const laneConfigSchema = z.strictObject({
           // Bot/CI mail is shown only as one item when this many failures arrive in the attention window.
           bot_failure_words: patterns.default(["failed", "failure", "error", "broken", "errored"]),
           bot_failure_repeat: z.int().min(2).max(50).default(3),
-          otp_subjects: patterns.default(["verification code", "one-time code", "one-time password", "one time password", "OTP", "security code", "login code", "sign-in code", "passcode", "2FA code", "confirm your email"]),
+          // T-243: sign-in LINK subjects ("Your customer portal login link", "magic link") are automated like codes: a hard exclusion for everyone.
+          // "sign in to" is not listed: a person writes "please sign in to the portal". An explicit list in a lane's own config replaces these defaults.
+          otp_subjects: patterns.default(["verification code", "one-time code", "one-time password", "one time password", "OTP", "security code", "login code", "sign-in code", "passcode", "2FA code", "confirm your email", "login link", "log in link", "log-in link", "sign-in link", "sign in link", "signin link", "magic link", "login url", "sign-in url", "verification link"]),
           bank_alert_subjects: patterns.default(["transaction alert", "you made a purchase", "purchase alert", "debit card", "card transaction", "withdrawal", "deposit posted", "balance alert", "direct deposit"]),
           // Bank mail kept even when it matches an alert pattern.
           bank_keep_subjects: patterns.default(["statement", "payment due", "due date", "is due", "minimum payment"]),
