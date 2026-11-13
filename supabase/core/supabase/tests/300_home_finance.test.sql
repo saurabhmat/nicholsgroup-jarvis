@@ -6,7 +6,7 @@
 -- required, group sums, payroll-partial flag, unreadable figure), the "book balance" key names, and denial: another lane
 -- (rows exist, caller is not a member), AAL1, admin_technical (no finance view), outsider, anon.
 begin;
-select plan(68);
+select plan(70);
 \ir helpers/lane_rls.psql
 
 update core.lanes set enabled = true where code in ('APK', 'NC');
@@ -113,6 +113,12 @@ insert into fin.accounts (lane_id, connection_id, source_id, name, type, is_bank
   ('PKG', '00000000-0000-4000-8000-000000003001', 'bank-synthetic-9', 'Not in any mapping', 'Bank', true, 'unmapped', null, true, false, 5.00),
   ('PKG', '00000000-0000-4000-8000-000000003001', 'bank-synthetic-8', 'Not a bank account', 'Other Current Asset', false, 'PKG', null, true, false, 88888.00),
   ('APK', '00000000-0000-4000-8000-000000003002', 'bank-synthetic-1', 'Operating', 'Bank', true, 'PKG', 'PKG', true, false, 5555555.00);
+-- T-243 review: a replaced (disconnected) QuickBooks connection of PKG keeps its fin.accounts rows, with the same small source ids.
+insert into core.connections (id, lane_id, provider, external_account_id, status, last_sync_at) values
+  ('00000000-0000-4000-8000-000000003003', 'PKG', 'quickbooks', '8800000000233', 'disconnected', now() - interval '30 days');
+insert into fin.accounts (lane_id, connection_id, source_id, name, type, is_bank, entity_code, owner_entity_code, active, deleted, current_balance) values
+  ('PKG', '00000000-0000-4000-8000-000000003003', 'bank-synthetic-1', 'Old sandbox operating', 'Bank', true, 'PKG', 'PKG', true, false, 77777.00),
+  ('PKG', '00000000-0000-4000-8000-000000003003', 'bank-synthetic-8', 'Old sandbox unmapped', 'Bank', true, 'unmapped', null, true, false, 66666.00);
 
 -- Balance sheets. An older PKG report with other figures (must not be used), the current one, and APK's.
 create function pg_temp.bs(p_rows jsonb) returns jsonb language sql as $$
@@ -164,7 +170,9 @@ select is((select (select a ->> 'shared' from jsonb_array_elements(cash_accounts
           'cash: an account whose ledger activity is attributed to another entity is flagged shared');
 select is((select (select a ->> 'shared' from jsonb_array_elements(cash_accounts) a where a ->> 'name' = 'Operating') from core.home_finance('PKG')), 'false', 'cash: a plain account is not shared');
 select is((select cash_unmapped from core.home_finance('PKG')), 1, 'cash: a bank account in no mapping is counted, never allocated');
-select ok((select cash_as_of = last_sync_at and cash_as_of < now() - interval '1 hour 50 minutes' and cash_as_of > now() - interval '2 hours 10 minutes' from core.home_finance('PKG')), 'cash: as_of is the last books sync');
+select ok((select cash_as_of = least(last_sync_at, as_of) and cash_as_of < now() - interval '2 hours 50 minutes' and cash_as_of > now() - interval '3 hours 10 minutes' from core.home_finance('PKG')), 'cash: as_of is the least of the last books sync (2 h ago) and the last normalize (3 h ago), never fresher than the data');
+select is((select cash_total from core.home_finance('PKG')), 1314.66::numeric, 'cash: the balance of a disconnected connection''s account with the same source id (77777.00) is not summed');
+select is((select cash_unmapped from core.home_finance('PKG')) || ':' || (select jsonb_array_length(cash_accounts) from core.home_finance('PKG')), '1:3', 'cash: a disconnected connection''s accounts are neither counted as unmapped nor listed');
 select is((select cash_accounts::text !~ '88888|7000|8000' from core.home_finance('PKG')), true, 'cash: non-bank, inactive and deleted accounts are not read');
 select is((select cash_reason is null and cash_total <> 1.00 from core.home_finance('PKG')), true, 'cash: the older balance sheet (1.00) is not used');
 

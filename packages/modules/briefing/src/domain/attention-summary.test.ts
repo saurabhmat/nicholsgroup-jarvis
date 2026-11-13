@@ -70,6 +70,34 @@ describe("dropNoReplyItems", () => {
   });
 });
 
+describe("T-243 review: the summary can never remove high-value rows", () => {
+  const vipRules: AttentionRules = { ...rules, prioritySenders: ["boss@acme.test"] };
+  const mk = (over: Partial<ThreadRow>[]) => rankAttention(over.map((o, i) => row(i + 1, o)), vipRules, now);
+  const noReply = (n: number) => saved(Array.from({ length: n }, (_, i) => ref(`r${String(i + 1)}`, i + 1)), Array.from({ length: n }, (_, i) => note(`r${String(i + 1)}`, false)));
+  it("security, VIP, money and deadline rows with needs_reply false stay in the top list", () => {
+    const r = mk([
+      { fromAddress: "no-reply@accounts.google.com", fromName: "Accounts", subject: "Security alert: new sign-in on Mac" },
+      { fromAddress: "boss@acme.test", subject: "Quick one", isAuthPass: true },
+      { subject: "Invoice 88 is overdue" },
+      { subject: "Contract deadline Friday" },
+      { subject: "Plain note" },
+    ]);
+    const kinds = r.fresh.map((a) => a.kind + ":" + String(a.flags.vip || a.flags.money !== null || a.flags.deadline));
+    expect(kinds.length).toBe(5);
+    const out = dropNoReplyItems(r.fresh, noReply(5));
+    expect(out.removed).toBe(1); // only the plain row
+    expect(out.top.map((a) => a.thread.subject)).not.toContain("Plain note");
+    expect(out.top).toHaveLength(4);
+    for (const a of r.fresh.filter((x) => x.thread.subject !== "Plain note")) expect(summaryMarksNoReply(a, noReply(5))).toBe(false);
+  });
+  it("two refs for one message: a true wins over a false", () => {
+    const r = ranked(1);
+    const both = saved([ref("r1", 1), ref("r2", 1)], [note("r1", false), note("r2", true)]);
+    expect(dropNoReplyItems(r.fresh, both).removed).toBe(0);
+    expect(dropNoReplyItems(r.fresh, saved([ref("r1", 1), ref("r2", 1)], [note("r1", false), note("r2", false)])).removed).toBe(1);
+  });
+});
+
 describe("noteSaysNoAction", () => {
   const n = (over: Partial<AttentionNote>): AttentionNote => ({ ref: "r1", what: "Receipt arrived", why: "Routine", next: "Archive it", ...over });
   it("the field decides when present", () => {
@@ -77,8 +105,8 @@ describe("noteSaysNoAction", () => {
     expect(noteSaysNoAction(n({ needsReply: true, next: "No action needed" }))).toBe(false);
   });
   it("without the field, the older wording does", () => {
-    for (const next of ["No action needed.", "No further action required", "No reply needed", "Nothing needed from you", "No need to reply", "FYI only"]) expect(noteSaysNoAction(n({ next })), next).toBe(true);
-    for (const next of ["Reply with the figures", "Awaiting your decision", "No reply from Sam yet, follow up", "Call the vendor"]) expect(noteSaysNoAction(n({ next })), next).toBe(false);
+    for (const next of ["No action needed.", "No further action required", "No reply needed", "Nothing needed from you", "No need to reply"]) expect(noteSaysNoAction(n({ next })), next).toBe(true);
+    for (const next of ["FYI only", "For your information", "Reply with the figures", "Awaiting your decision", "No reply from Sam yet, follow up", "Call the vendor"]) expect(noteSaysNoAction(n({ next })), next).toBe(false);
   });
   it("no note: nothing", () => {
     expect(noteSaysNoAction(undefined)).toBe(false);

@@ -5,7 +5,8 @@
 //   * an item whose latest message the summary marks `needs_reply: false` ("no reply needed") leaves the list; the next fresh item the
 //     rules ranked moves up into the top 5 (it was already ranked, nothing is invented);
 //   * "Waiting on you" is not shown on a row whose note says nothing is needed.
-// A note applies to exactly the message it summarized (connection + message id, and the thread key when both sides have one): a newer
+// Security alerts, VIP / priority mail, money and deadline rows are never removed by a note (isProtectedRow): the summary may only hide their
+// "Waiting on you" chip. A note applies to exactly the message it summarized (connection + message id, and the thread key when both sides have one): a newer
 // message in the same thread is not covered by an older summary. A briefing without the field (saved earlier) means unknown: nothing changes.
 import type { AttentionThread } from "./attention";
 import type { AttentionNote, BriefRef } from "./compose";
@@ -26,16 +27,24 @@ export function notesForMessages(saved: SummaryForAttention | null | undefined):
   return out;
 }
 
-/** True when the summary says this exact thread message needs no reply. Never true for a rule-made "repeated failures" row. */
+/**
+ * Rows the summary can never remove (rules 7 and 9: the summary is untrusted AI output, and an injected message could make it say "no reply
+ * needed" about mail that matters): security alerts, VIP / priority mail, money, deadlines, and rule-made repeated-failure rows. For these a
+ * no-reply note may still hide the "Waiting on you" chip, never the row.
+ */
+export const isProtectedRow = (item: AttentionThread): boolean =>
+  item.kind === "repeated_failures" || item.kind === "security" || item.kind === "priority" || item.flags.vip || item.flags.money !== null || item.flags.deadline;
+
+/** True when the summary says this exact thread message needs no reply and the row may be removed. When two refs map to one message, a `true` wins. */
 export function summaryMarksNoReply(item: AttentionThread, saved: SummaryForAttention | null | undefined): boolean {
-  if (item.kind === "repeated_failures" || !saved || saved.status === "failed") return false;
+  if (isProtectedRow(item) || !saved || saved.status === "failed") return false;
   const t = item.thread;
   const byRef = new Map(saved.refs.map((r) => [r.ref, r]));
-  return saved.content.attention.some((a) => {
-    if (a.needsReply !== false) return false;
+  const same = saved.content.attention.filter((a) => {
     const r = byRef.get(a.ref);
     return r !== undefined && r.connectionId === t.connectionId && r.messageId === t.messageId && (r.threadKey === "" || r.threadKey === t.threadKey);
   });
+  return same.length > 0 && same.some((a) => a.needsReply === false) && !same.some((a) => a.needsReply === true);
 }
 
 /**
@@ -48,7 +57,7 @@ export function dropNoReplyItems(fresh: readonly AttentionThread[], saved: Summa
 }
 
 /** The summary says "nothing is needed" in words (an older briefing without needs_reply). Used only to HIDE the "Waiting on you" chip. */
-const NO_ACTION_TEXT = /\b(?:no|not any)\s+(?:further\s+|more\s+)?(?:action|reply|response|follow[- ]?up)\s+(?:is\s+|are\s+)?(?:needed|required|necessary)\b|\bnothing\s+(?:is\s+)?(?:needed|required)\b|\bno\s+need\s+to\s+(?:reply|respond|act)\b|\bfor your information\b|\bfyi\b/i;
+const NO_ACTION_TEXT = /\b(?:no|not any)\s+(?:further\s+|more\s+)?(?:action|reply|response|follow[- ]?up)\s+(?:is\s+|are\s+)?(?:needed|required|necessary)\b|\bnothing\s+(?:is\s+)?(?:needed|required)\b|\bno\s+need\s+to\s+(?:reply|respond|act)\b/i;
 
 /** True when the note (or its needs_reply field) says the owner has nothing to do. Never used to show or add anything. */
 export function noteSaysNoAction(note: AttentionNote | undefined): boolean {

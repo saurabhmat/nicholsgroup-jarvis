@@ -267,8 +267,10 @@ describe("AttentionSection (T-234 part 2, T-235 part 2: scannable rows)", () => 
     expect(chips()).not.toContain("Waiting on you");
     rerender(view({ next: "No action needed." }));
     expect(chips()).not.toContain("Waiting on you");
-    rerender(view({ why: "FYI from the vendor" }));
+    rerender(view({ why: "Nothing needed from you" }));
     expect(chips()).not.toContain("Waiting on you");
+    rerender(view({ why: "FYI from the vendor" })); // no longer a signal: an injected message can make the model write it
+    expect(chips()).toContain("Waiting on you");
     rerender(view({ needsReply: true, next: "No action needed." }));
     expect(chips()).toContain("Waiting on you"); // the explicit field wins
     rerender(view({ next: "Send comments, no reply from Sam yet" }));

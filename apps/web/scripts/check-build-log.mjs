@@ -1,4 +1,4 @@
-// T-243: fails when a `next build` log (read from stdin or a file) holds a clock / prerender error of Cache Components, for example
+// T-243 (manual tool, not wired into CI or a package script gate): fails when a `next build` or runtime log (read from stdin or a file) holds a clock / prerender error of Cache Components, for example
 //   Route "/[laneId]" used `Date.now()` before accessing either uncached data (e.g. `fetch()`) or Request data ...
 // Usage: pnpm --filter @nichols/web build 2>&1 | node scripts/check-build-log.mjs      or      node scripts/check-build-log.mjs build.log
 // Prints only the matching lines (route and message, never environment values). Exit 0 = clean, 1 = found, 2 = no input.

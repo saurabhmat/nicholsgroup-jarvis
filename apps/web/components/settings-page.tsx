@@ -17,7 +17,6 @@ import { onboardingFor } from "@/lib/onboarding-progress";
 import { coverageFor } from "@/lib/coverage";
 import { viewerZone } from "@/lib/briefing";
 import { cookies } from "next/headers";
-import { connection } from "next/server";
 import { timed } from "@/lib/timed";
 import { BrainSection } from "./brain-section";
 import { NewsSection } from "./news-section";
@@ -32,9 +31,6 @@ export async function SettingsPage({
   params: Promise<{ laneId: string }>;
   searchParams: Promise<Record<string, string | string[] | undefined>>;
 }) {
-  // T-243: a dynamic point before anything can read the clock (see HomePage): with cacheComponents + partialPrefetching a clock read ahead of
-  // the request's dynamic data is reported as a prerender error for this route.
-  await connection();
   const lane = await loadLane((await params).laneId); // the lane gate first, as on every page
   const g = await guards(); // one per request (lib/guards.ts): the loaders below share its session, lane and role answers
   const query = await searchParams;

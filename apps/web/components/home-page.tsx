@@ -10,7 +10,6 @@
 // (comms view, AAL2); never a body.
 import Link from "next/link";
 import { cache, Suspense } from "react";
-import { connection } from "next/server";
 import { Alert, AlertDescription, AlertTitle, buttonVariants, homeHeading, laneHref, PageHeader, PageSection } from "@nichols/ui";
 import { eyebrowDate } from "@/lib/format-date";
 import { guards } from "@/lib/guards";
@@ -51,9 +50,6 @@ import { freshWindowText } from "@/lib/fresh-window";
 const HOME_TZ = "America/New_York";
 
 export async function HomePage({ params }: { params: Promise<{ laneId: string }> }) {
-  // T-243: the clock is read only after a dynamic point. With cacheComponents + partialPrefetching a clock read before the request's
-  // dynamic data (even after `await params`) is reported as a prerender error for this route; connection() makes it explicit, first.
-  await connection();
   const lane = await loadLane((await params).laneId);
   const now = new Date();
   // The verified user id (from loadLane's lane check) is only a sessionStorage key part for view state (expanded sections, the open drawer).

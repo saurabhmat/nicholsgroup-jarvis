@@ -5,7 +5,7 @@
 --   * core.home_finance: Cash = sum of current_balance of active, not deleted bank accounts (is_bank) in fin.accounts that are listed in
 --     lane_config.entities.bank_accounts with owner = own_entity (D-18). An account listed under another owner, or also listed under more
 --     than one owner, or whose entity_code is another entity, is flagged shared. A bank account in no mapping is counted in cash_unmapped
---     and not summed. cash_as_of = the last books sync (core.connections.last_sync_at). Reasons: bank_mapping_missing, no_own_bank_accounts,
+--     and not summed. cash_as_of = the least of the last books sync and the last normalize. Only the lane's non-disconnected QuickBooks connections are read. The accounts tombstone also clears current_balance. Reasons: bank_mapping_missing, no_own_bank_accounts,
 --     balance_unreadable (an own account has no balance yet: re-normalize fills it). The balance sheet reasons are gone.
 --   Signature and output columns of core.home_finance are unchanged. No new table; the column inherits fin.accounts RLS.
 
@@ -220,7 +220,7 @@ begin
                               excluded.is_bank, excluded.entity_code, excluded.owner_entity_code, excluded.active, excluded.current_balance, false)
     returning (xmax = 0) as ins)
   select count(*) filter (where ins), count(*) filter (where not ins) into v_ins, v_upd from w;
-  update fin.accounts t set deleted = true, active = false, name = '(deleted account)', subtype = null
+  update fin.accounts t set deleted = true, active = false, name = '(deleted account)', subtype = null, current_balance = null
   from pg_temp.q_eff e
   where e.object_type = 'Account' and e.why is not null and t.connection_id = p_connection_id and t.source_id = e.external_id and not t.deleted;
   get diagnostics v_tomb = row_count;
@@ -572,6 +572,56 @@ comment on function core.fin_qbo_normalize(text, uuid) is
 revoke all on function core.fin_qbo_normalize(text, uuid) from public, anon, authenticated;
 grant execute on function core.fin_qbo_normalize(text, uuid) to service_role;
 
+-- T-243 review: the context also returns the ids of the lane's QuickBooks connections that are not disconnected, so Cash reads only their accounts
+-- (a sandbox connection that was replaced by the real one keeps its fin.accounts rows). The return type changes: drop and create.
+drop function if exists core.home_finance_context(text);
+create function core.home_finance_context(p_lane text)
+returns table (
+  allowed boolean,
+  connected boolean,
+  connection_status text,
+  last_sync_at timestamptz,
+  last_normalized_at timestamptz,
+  own_entity text,
+  mapping_mode text,
+  bank_accounts jsonb,
+  qbo_connections uuid[]
+)
+language plpgsql
+stable
+security definer
+set search_path = ''
+as $$
+declare
+  v_cfg jsonb;
+begin
+  if p_lane is null then
+    raise exception 'lane is required' using errcode = '22004';
+  end if;
+  if coalesce(auth.jwt() ->> 'aal', '') <> 'aal2' or not (p_lane = any (core.allowed_lanes(auth.uid(), 'finance'))) then
+    return query select false, false, null::text, null::timestamptz, null::timestamptz, null::text, null::text, '[]'::jsonb, '{}'::uuid[];
+    return;
+  end if;
+  select cc.config into v_cfg from core.lane_config_current cc where cc.lane_id = p_lane;
+  return query
+  select
+    true,
+    exists (select 1 from core.connections k where k.lane_id = p_lane and k.provider = 'quickbooks' and k.status <> 'disconnected'),
+    (select k.status from core.connections k where k.lane_id = p_lane and k.provider = 'quickbooks' and k.status <> 'disconnected'
+       order by (k.status = 'active') desc, k.created_at desc limit 1),
+    (select max(k.last_sync_at) from core.connections k where k.lane_id = p_lane and k.provider = 'quickbooks' and k.status <> 'disconnected'),
+    (select max(r.finished_at) from fin.normalize_runs r where r.lane_id = p_lane),
+    case when jsonb_typeof(v_cfg #> '{entities,own_entity}') = 'string' then v_cfg #>> '{entities,own_entity}' end,
+    case when jsonb_typeof(v_cfg #> '{qbo,entity_mapping_mode}') = 'string' then v_cfg #>> '{qbo,entity_mapping_mode}' end,
+    case when jsonb_typeof(v_cfg #> '{entities,bank_accounts}') = 'array' then v_cfg #> '{entities,bank_accounts}' else '[]'::jsonb end,
+    coalesce((select array_agg(k.id) from core.connections k where k.lane_id = p_lane and k.provider = 'quickbooks' and k.status <> 'disconnected'), '{}'::uuid[]);
+end;
+$$;
+comment on function core.home_finance_context(text) is
+  'Home finance (T-233): QuickBooks connection facts, last normalizer run and entity/bank mapping for a caller who holds the finance view at AAL2. Definer only to read those; allowed = false for anyone else.';
+revoke all on function core.home_finance_context(text) from public, anon;
+grant execute on function core.home_finance_context(text) to authenticated, service_role;
+
 create or replace function core.home_finance(p_lane text)
 returns table (
   state text,
@@ -655,11 +705,12 @@ begin
   if jsonb_array_length(c.bank_accounts) = 0 then
     v_cash_reason := 'bank_mapping_missing';
   else
-    v_cash_as_of := coalesce(c.last_sync_at, c.last_normalized_at);
+    -- The least of the two: a balance is only as fresh as the older of the last sync and the last normalize that stored it.
+    v_cash_as_of := least(coalesce(c.last_sync_at, c.last_normalized_at), coalesce(c.last_normalized_at, c.last_sync_at));
     with bank as (
       select a.source_id as acct_id, a.name as acct_name, a.current_balance as bal, a.entity_code
       from fin.accounts a
-      where a.lane_id = p_lane and a.is_bank and a.active and not a.deleted
+      where a.lane_id = p_lane and a.is_bank and a.active and not a.deleted and a.connection_id = any (c.qbo_connections)
     ), mapped as (
       select b.*,
         (select count(distinct m.j ->> 'owner_entity') from jsonb_array_elements(c.bank_accounts) m(j) where m.j ->> 'qbo_account_id' = b.acct_id) as owners,

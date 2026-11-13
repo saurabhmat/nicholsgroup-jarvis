@@ -207,6 +207,16 @@ export function createQboSync(deps: QboSyncDeps) {
         mode = "full";
         await loadAll(entities);
       } else {
+        // T-243: an account's CurrentBalance moves without its LastUpdatedTime, so CDC does not report it. The Account query above already read
+        // every account this run: emit each one CDC did not return (payroll still a tombstone). The raw sink upserts by payload hash: unchanged rows are cheap.
+        if (entities.includes("Account")) {
+          const fromCdc = new Set(records.filter((r) => r.objectType === "Account").map((r) => r.externalId));
+          for (const raw of accountItems) {
+            const id = typeof raw === "object" && raw !== null ? (raw as { Id?: unknown }).Id : undefined;
+            if (typeof id === "string" && fromCdc.has(id)) continue;
+            records.push(project("Account", raw, lastTid));
+          }
+        }
         await emit(records);
       }
     }
