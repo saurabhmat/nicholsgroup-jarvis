@@ -1,7 +1,7 @@
 -- T-196: core.connector_api_errors (RLS, service-role-only writes, database guards, purge) and run logging for every QuickBooks
 -- job (core.sync_runs.job). Includes the cross-lane denial.
 begin;
-select plan(33);
+select plan(36);
 \ir helpers/lane_rls.psql
 
 update core.lanes set enabled = true where code = 'APK';
@@ -100,7 +100,8 @@ select ok(has_function_privilege('service_role', 'core.connector_api_errors_purg
           and not has_function_privilege('anon', 'core.connector_api_errors_purge(text)', 'execute'), 'only service_role runs the purge');
 update core.lanes set enabled = false where code = 'APK';
 set local role service_role;
-select throws_ok($$select core.connector_api_errors_purge('APK')$$, '42501', null, 'a disabled lane is refused');
+select is(core.connector_api_errors_purge('APK'), 0, 'a disabled lane may be purged (deleting is always safe)');
+select throws_ok($$select core.connector_api_errors_purge('ZZ')$$, '42501', null, 'a lane that does not exist is refused');
 reset role;
 update core.lanes set enabled = true where code = 'APK';
 
@@ -112,6 +113,22 @@ select throws_ok($$insert into core.sync_runs (lane_id, connection_id, kind, tri
   '23505', null, 'but not two reports runs at once');
 select throws_ok($$insert into core.sync_runs (lane_id, connection_id, kind, trigger, job) values ('PKG', '00000000-0000-4000-8000-000000009601', 'full', 'schedule', 'normalize')$$,
   '23514', null, 'a normalize run is a snapshot, not a full load');
+
+-- briefing coverage: only a sync run counts for stream freshness
+insert into core.connections (id, lane_id, provider, external_account_id, status) values
+  ('00000000-0000-4000-8000-000000009603', 'PKG', 'google', 't196-cov@example.test', 'active');
+insert into core.sync_runs (lane_id, connection_id, kind, trigger, job, status, finished_at) values
+  ('PKG', '00000000-0000-4000-8000-000000009603', 'snapshot', 'schedule', 'reports', 'succeeded', now());
+set local role service_role;
+select is((select max(last_sync_at) from core.briefing_coverage('PKG') where connection_id = '00000000-0000-4000-8000-000000009603'), null::timestamptz,
+  'a succeeded reports run does not make a stream look freshly synced');
+reset role;
+insert into core.sync_runs (lane_id, connection_id, kind, trigger, job, status, finished_at) values
+  ('PKG', '00000000-0000-4000-8000-000000009603', 'incremental', 'schedule', 'sync', 'succeeded', now());
+set local role service_role;
+select isnt((select max(last_sync_at) from core.briefing_coverage('PKG') where connection_id = '00000000-0000-4000-8000-000000009603'), null::timestamptz,
+  'a succeeded sync run does');
+reset role;
 
 select * from finish();
 rollback;
