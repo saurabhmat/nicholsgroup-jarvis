@@ -15,28 +15,46 @@ export type ExportDataset = (typeof EXPORT_DATASETS)[number];
 export type ExportRange = { from: string; to: string };
 export type RangeResult = { ok: true; range: ExportRange } | { ok: false; reason: "invalid_range" | "range_too_long" };
 
-const DATE = /^\d{4}-\d{2}-\d{2}$/;
+const DATE = /^(\d{4})-(\d{2})-(\d{2})$/;
+const STAMP = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}(?::\d{2}(?:\.\d{1,9})?)?(?:Z|[+-]\d{2}:?\d{2})$/i;
+const ZONE = "America/New_York";
+const zoneParts = new Intl.DateTimeFormat("en-US", { timeZone: ZONE, hourCycle: "h23", year: "numeric", month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit" });
+
+/** The instant (ms) at which the America/New_York calendar day y-m-d starts (DST-aware; midnight always exists in New York). */
+function etDayStart(y: number, m: number, d: number): number | null {
+  for (const offsetHours of [4, 5]) {
+    const t = Date.UTC(y, m - 1, d, offsetHours);
+    const p = Object.fromEntries(zoneParts.formatToParts(t).map((x) => [x.type, x.value]));
+    if (Number(p.year) === y && Number(p.month) === m && Number(p.day) === d && Number(p.hour) === 0 && Number(p.minute) === 0) return t;
+  }
+  return null;
+}
 
 function parseBoundary(value: string | null, endOfDay: boolean): number | null {
   if (value === null) return null;
-  if (DATE.test(value)) {
-    const t = Date.parse(`${value}T00:00:00.000Z`);
-    if (Number.isNaN(t) || new Date(t).toISOString().slice(0, 10) !== value) return null;
-    return endOfDay ? t + DAY_MS : t;
+  const m = DATE.exec(value);
+  if (m) {
+    const [y, mo, d] = [Number(m[1]), Number(m[2]), Number(m[3])];
+    const check = new Date(Date.UTC(y, mo - 1, d));
+    if (check.getUTCFullYear() !== y || check.getUTCMonth() !== mo - 1 || check.getUTCDate() !== d) return null;
+    if (!endOfDay) return etDayStart(y, mo, d);
+    const next = new Date(Date.UTC(y, mo - 1, d + 1));
+    return etDayStart(next.getUTCFullYear(), next.getUTCMonth() + 1, next.getUTCDate());
   }
+  if (!STAMP.test(value)) return null; // a timestamp without Z or an offset is ambiguous: refused
   const t = Date.parse(value);
-  return Number.isNaN(t) || !/^\d{4}-\d{2}-\d{2}T/.test(value) ? null : t;
+  return Number.isNaN(t) ? null : t;
 }
 
 /**
- * `from` and `to` are dates (YYYY-MM-DD, whole UTC days, `to` inclusive) or full ISO timestamps (`to` exclusive). The range is
- * [from, to), must be positive and at most 90 days.
+ * `from` and `to` are America/New_York calendar days (YYYY-MM-DD, `to` inclusive: the business time zone, rule 11) or full ISO
+ * timestamps with Z or an offset (`to` exclusive). The range is [from, to), positive, at most 90 days (plus up to 2 h of DST shift).
  */
 export function parseExportRange(from: string | null, to: string | null): RangeResult {
   const a = parseBoundary(from, false);
   const b = parseBoundary(to, true);
   if (a === null || b === null || b <= a) return { ok: false, reason: "invalid_range" };
-  if (b - a > EXPORT_MAX_DAYS * DAY_MS) return { ok: false, reason: "range_too_long" };
+  if (b - a > EXPORT_MAX_DAYS * DAY_MS + 2 * 3_600_000) return { ok: false, reason: "range_too_long" };
   return { ok: true, range: { from: new Date(a).toISOString(), to: new Date(b).toISOString() } };
 }
 

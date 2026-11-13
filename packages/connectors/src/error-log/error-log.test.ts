@@ -98,6 +98,23 @@ describe("the sink", () => {
     expect(text).not.toContain("hunter2");
     expect(text).not.toContain("jane@");
   });
+  it("a store insert or transport that hangs cannot stall the caller (timeout), and is logged by code", async () => {
+    const logs: LogEntry[] = [];
+    const never = new Promise<void>(() => undefined);
+    const sink = createApiErrorSink({
+      store: { insert: () => never },
+      messageFor: (i) => classifyIntuitFailure(i).message,
+      logger: createConnectorLogger({ sink: (e) => logs.push(e) }),
+      transports: [{ name: "slow", send: () => never }],
+      timeoutMs: 20,
+    });
+    const started = Date.now();
+    await sink.record("PKG", conn, info());
+    expect(Date.now() - started).toBeLessThan(1000);
+    const text = JSON.stringify(logs);
+    expect(text).toContain("store_failed");
+    expect(text).toContain("transport_failed");
+  });
   it("a throwing transport does not stop the others or the caller", async () => {
     const seen: string[] = [];
     const { sink } = make({ transports: [{ name: "bad", send: () => { throw new Error("boom"); } }, { name: "good", send: () => void seen.push("ok") }] });
@@ -144,8 +161,15 @@ describe("export encoders", () => {
     expect(r).toMatchObject({ error_kind: "forbidden", error_http_status: 403, error_code: "120", error_tid: "t", error_endpoint: "/v3/x" });
     expect(JSON.stringify(r)).not.toContain("free text");
   });
-  it("range: dates are whole UTC days (to inclusive), max 90 days, order and shape checked", () => {
-    expect(parseExportRange("2026-11-01", "2026-11-02")).toEqual({ ok: true, range: { from: "2026-11-01T00:00:00.000Z", to: "2026-11-03T00:00:00.000Z" } });
+  it("range: dates are America/New_York days (to inclusive), DST-aware, max 90 days, order and shape checked", () => {
+    // 2026-11-01 is the fall-back day: it starts at EDT (04:00Z); 11-03 starts at EST (05:00Z)
+    expect(parseExportRange("2026-11-01", "2026-11-02")).toEqual({ ok: true, range: { from: "2026-11-01T04:00:00.000Z", to: "2026-11-03T05:00:00.000Z" } });
+    // spring forward: 2026-03-08 starts at EST (05:00Z), 03-09 at EDT (04:00Z)
+    expect(parseExportRange("2026-03-08", "2026-03-08")).toEqual({ ok: true, range: { from: "2026-03-08T05:00:00.000Z", to: "2026-03-09T04:00:00.000Z" } });
+    // an ET evening error (Nov 4, 20:00 ET = Nov 5 01:00Z) belongs to Nov 4
+    const r = parseExportRange("2026-11-04", "2026-11-04");
+    expect(r.ok && Date.parse("2026-11-05T01:00:00Z") < Date.parse(r.range.to) && Date.parse("2026-11-05T01:00:00Z") >= Date.parse(r.range.from)).toBe(true);
+    expect(parseExportRange("2026-11-01T00:00:00", "2026-11-02T12:00:00Z")).toEqual({ ok: false, reason: "invalid_range" }); // no zone
     expect(parseExportRange("2026-08-15", "2026-11-12")).toMatchObject({ ok: true }); // 90 days
     expect(parseExportRange("2026-08-14", "2026-11-12")).toEqual({ ok: false, reason: "range_too_long" });
     expect(parseExportRange("2026-11-05", "2026-11-01")).toEqual({ ok: false, reason: "invalid_range" });
@@ -153,6 +177,7 @@ describe("export encoders", () => {
     expect(parseExportRange("yesterday", "2026-03-02")).toEqual({ ok: false, reason: "invalid_range" });
     expect(parseExportRange(null, "2026-03-02")).toEqual({ ok: false, reason: "invalid_range" });
     expect(parseExportRange("2026-11-01T00:00:00Z", "2026-11-02T12:00:00Z")).toMatchObject({ ok: true });
+    expect(parseExportRange("2026-11-01T00:00:00-04:00", "2026-11-02T12:00:00+00:00")).toMatchObject({ ok: true });
   });
 });
 

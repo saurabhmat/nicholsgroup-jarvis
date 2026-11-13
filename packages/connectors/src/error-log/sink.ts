@@ -31,7 +31,21 @@ export type ApiErrorSinkDeps = {
   /** Extra transports (Sentry, T-041). The redacted-logger transport is always present. */
   transports?: readonly ApiErrorTransport[];
   logger?: ConnectorLogger;
+  /** The store insert and each transport are given this long (default 3 s) so a hung database cannot stall a sync call. */
+  timeoutMs?: number;
 };
+
+export const SINK_TIMEOUT_MS = 3000;
+
+function withTimeout<T>(work: () => T | Promise<T>, ms: number): Promise<T> {
+  return new Promise<T>((resolve, reject) => {
+    const timer = setTimeout(() => reject(new Error("timeout")), ms);
+    Promise.resolve()
+      .then(work)
+      .then(resolve, reject)
+      .finally(() => clearTimeout(timer));
+  });
+}
 
 export interface ApiErrorSink {
   record(laneId: LaneId, conn: LaneBoundConnection<string>, info: ConnectorErrorInfo): Promise<void>;
@@ -55,6 +69,7 @@ export function isProviderApiError(info: ConnectorErrorInfo): boolean {
 export function createApiErrorSink(deps: ApiErrorSinkDeps): ApiErrorSink {
   const log = deps.logger ?? connectorLog;
   const transports = [loggerTransport(log), ...(deps.transports ?? [])];
+  const ms = deps.timeoutMs ?? SINK_TIMEOUT_MS;
   return {
     async record(laneId, conn, info) {
       try {
@@ -62,13 +77,13 @@ export function createApiErrorSink(deps: ApiErrorSinkDeps): ApiErrorSink {
         if (!isProviderApiError(info)) return;
         const scrubbed = scrubApiError(conn.provider, info, deps.messageFor(info));
         try {
-          await deps.store.insert(laneId, conn.id, scrubbed);
+          await withTimeout(() => deps.store.insert(laneId, conn.id, scrubbed), ms);
         } catch {
           log.child({ laneId, provider: conn.provider, connectionId: conn.id }).error("connector.api_error.store_failed", { code: "store_failed" });
         }
         for (const t of transports) {
           try {
-            await t.send({ laneId, connectionId: conn.id, scrubbed });
+            await withTimeout(() => t.send({ laneId, connectionId: conn.id, scrubbed }), ms);
           } catch {
             log.child({ laneId, provider: conn.provider, connectionId: conn.id }).error("connector.api_error.transport_failed", { code: "transport_failed", transport: t.name });
           }

@@ -59,6 +59,11 @@ describe("normalizer run log", () => {
     expect(r.started).toEqual([{ job: "normalize", trigger: "schedule" }]);
     expect(r.finished).toEqual([{ status: "succeeded", kind: "snapshot", received: 20, written: 15 }]);
   });
+  it("the caller's trigger is recorded", async () => {
+    const r = memoryRuns();
+    await mk(r.store).job.run("PKG", ID, { trigger: "webhook" });
+    expect(r.started).toEqual([{ job: "normalize", trigger: "webhook" }]);
+  });
   it("a failed run: status failed with the redacted error info, the outcome unchanged", async () => {
     const r = memoryRuns();
     const out = await mk(r.store, async () => { throw new ConnectorError({ kind: "transient", message: "Database busy", http_status: 503 }); }).job.run("PKG", ID);
@@ -119,6 +124,23 @@ describe("report pull run log", () => {
     const out = await mk(r.store, { kinds: ["pnl"], api }).run("PKG", ID);
     expect(out).toMatchObject({ ok: false, retryable: true });
     expect(r.finished[0]).toMatchObject({ status: "failed", error: { kind: "transient", http_status: 503, provider_error_code: "10001" } });
+  });
+  it("a run that failed after storing some reports records how many it stored", async () => {
+    const r = memoryRuns();
+    let n = 0;
+    const api = { get: async (_l: string, _c: unknown, path: string) => {
+      if (path.endsWith("/query")) return { data: { QueryResponse: {} } };
+      n += 1;
+      throw new ConnectorError({ kind: "transient", message: "x", http_status: 503 });
+    } };
+    await mk(r.store, { kinds: ["pnl", "balance_sheet"], api }).run("PKG", ID);
+    expect(n).toBe(2);
+    expect(r.finished[0]).toMatchObject({ status: "failed", received: 0, written: 0 });
+  });
+  it("the caller's trigger is recorded", async () => {
+    const r = memoryRuns();
+    await mk(r.store).run("PKG", ID, { trigger: "manual" });
+    expect(r.started).toEqual([{ job: "reports", trigger: "manual" }]);
   });
   it("a connection that is not usable leaves no run; a run-log outage does not break the pull", async () => {
     const r = memoryRuns();

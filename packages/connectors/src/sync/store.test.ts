@@ -61,10 +61,11 @@ describe("sync run store", () => {
     await store.start("PKG", conn, { trigger: "schedule", jobRunId: null });
     await store.start("PKG", conn, { trigger: "schedule", jobRunId: null, job: "reports" });
     const inserts = f.calls.filter((c) => c.op === "insert");
-    expect(inserts[0]?.values).toMatchObject({ job: "sync", kind: "full" });
+    expect(inserts[0]?.values).toMatchObject({ kind: "full" });
+    expect(inserts[0]?.values).not.toHaveProperty("job"); // the database default applies: old SQL + new code still works for conn.sync
     expect(inserts[1]?.values).toMatchObject({ job: "reports", kind: "snapshot" });
     const cancels = f.calls.filter((c) => c.op === "update");
-    expect(cancels[0]?.filters).toContainEqual(["eq", "job", "sync"]);
+    expect(cancels[0]?.filters.map((f) => f[1])).not.toContain("job");
     expect(cancels[1]?.filters).toContainEqual(["eq", "job", "reports"]);
   });
 

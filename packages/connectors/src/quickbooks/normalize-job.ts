@@ -12,7 +12,7 @@ import { LaneIdSchema } from "../contract/schemas";
 import { connectorLog, type ConnectorLogger } from "../log/index";
 import { createJobRunLog } from "../sync/job-run";
 import type { JobRunResult } from "../sync/job-run";
-import type { SyncRunStore } from "../sync/types";
+import type { SyncRunStore, SyncTrigger } from "../sync/types";
 import { assertQuickbooksConnection } from "./guard";
 import type { NormalizeStore } from "./normalize-store";
 
@@ -46,7 +46,7 @@ export function createQboNormalizeJob(deps: QboNormalizeJobDeps) {
   });
 
   return {
-    async run(laneId: LaneId, connectionId: string): Promise<QboNormalizeOutcome> {
+    async run(laneId: LaneId, connectionId: string, input: { trigger?: SyncTrigger } = {}): Promise<QboNormalizeOutcome> {
       let close: ((r: JobRunResult) => Promise<void>) | undefined;
       try {
         if (!LaneIdSchema.safeParse(laneId).success || !UUID.test(connectionId)) throw new ConnectorError({ kind: "invalid_input", message: "A lane and a connection id are required" });
@@ -58,7 +58,7 @@ export function createQboNormalizeJob(deps: QboNormalizeJobDeps) {
           child.info("qbo.normalize.skipped", { reason: "connection_not_usable", status: conn.status });
           return { ok: true, skipped: "connection_not_usable" };
         }
-        close = await runLog.open(laneId, conn);
+        close = await runLog.open(laneId, conn, input.trigger);
         const r = await deps.store.normalize(laneId, conn);
         const tables = [r.accounts, r.invoices, r.bills, r.payments, r.transactions];
         const written = tables.reduce((n, t) => n + t.inserted + t.updated, 0);

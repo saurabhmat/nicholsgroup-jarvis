@@ -4,9 +4,10 @@
 //    a lane that is not the caller's (or no such lane) 404, the same answer as an unknown lane.
 //  - What: the lane's core.connector_api_errors (default) or core.sync_runs rows in [from, to), at most 90 days, read with the
 //    signed-in user's client, so the database's row-level security is the second guard (another lane's rows can never come back).
+//    Date-only from/to are America/New_York days (business time zone); a timestamp must carry Z or an offset.
 //    Columns are fixed (never `select *`); the sync-run error message is not exported. Rows are capped; over the cap is 413.
 //  - Audit: `connector_errors.export` with who, lane, range, format, dataset and row count, written BEFORE the file leaves; if the
-//    audit write fails nothing is returned (503).
+//    audit write fails nothing is returned (503). A request with Sec-Fetch-Site other than same-origin/none is 403.
 //  - CSV is formula-injection safe (a cell starting with = + - @ gets a leading apostrophe).
 import { AuthError, authErrorResponse, type Guards } from "@nichols/core/auth";
 import type { Audit } from "@nichols/core/audit";
@@ -16,19 +17,24 @@ import {
 } from "@nichols/connectors/error-log";
 import { CONNECT_ROLES } from "@nichols/connectors/oauth";
 
-/** Rows per request to the database (PostgREST caps a response at 1000) and the most one export returns. */
+/** Rows per request to the database and the most one export returns. */
 const PAGE = 1000;
 export const EXPORT_MAX_ROWS = 10_000;
 
 const NO_STORE = { "cache-control": "no-store" } as const;
 const json = (body: unknown, status: number) => Response.json(body, { status, headers: NO_STORE });
 
-const RUN_SELECT = "started_at, finished_at, connection_id, job, kind, trigger, status, records_received, records_written, error";
+const RUN_SELECT = "id, started_at, finished_at, connection_id, job, kind, trigger, status, records_received, records_written, error";
+const ERROR_SELECT = `id, ${ERROR_COLUMNS.join(", ")}`;
 
 type Row = Record<string, unknown>;
 type Page = { data: Row[] | null; error: unknown };
-/** The one query the export makes: rows of a table for a lane in [from, to) ordered by time, a page at a time. */
-type PageQuery = (table: "connector_api_errors" | "sync_runs", columns: string, timeColumn: string, laneId: string, from: string, to: string, offset: number, limit: number) => Promise<Page>;
+/**
+ * One page: the lane's rows in [from, to) with `id` greater than `afterId`, ordered by `id`, at most `limit`. Keyset paging on the
+ * unique id: rows with equal timestamps cannot be skipped or repeated across a page boundary, and no precision is lost in a
+ * timestamp round trip. The export sorts by time afterwards (the cap keeps that small).
+ */
+type PageQuery = (table: "connector_api_errors" | "sync_runs", columns: string, timeColumn: string, laneId: string, from: string, to: string, afterId: string | null, limit: number) => Promise<Page>;
 
 export type ExportHandlerDeps = {
   guards: () => Promise<Pick<Guards, "requireLane" | "requireRole">>;
@@ -38,25 +44,29 @@ export type ExportHandlerDeps = {
   now?: () => Date;
 };
 
-type LaneQueryClient = {
-  schema(s: "core"): {
-    from(t: string): {
-      select(c: string): {
-        eq(col: string, v: string): {
-          gte(col: string, v: string): { lt(col: string, v: string): { order(col: string, o: { ascending: boolean }): { range(a: number, b: number): PromiseLike<Page> } } };
-        };
-      };
-    };
-  };
-};
+interface Q {
+  eq(col: string, v: string): Q;
+  gte(col: string, v: string): Q;
+  lt(col: string, v: string): Q;
+  gt(col: string, v: string): Q;
+  order(col: string, o: { ascending: boolean }): Q;
+  limit(n: number): PromiseLike<Page>;
+}
+type LaneQueryClient = { schema(s: "core"): { from(t: string): { select(c: string): Q } } };
 
-const userQuery = (client: unknown): PageQuery => async (table, columns, timeColumn, laneId, from, to, offset, limit) =>
-  (client as LaneQueryClient).schema("core").from(table).select(columns).eq("lane_id", laneId).gte(timeColumn, from).lt(timeColumn, to).order(timeColumn, { ascending: true }).range(offset, offset + limit - 1);
+const userQuery = (client: unknown): PageQuery => async (table, columns, timeColumn, laneId, from, to, afterId, limit) => {
+  let q = (client as LaneQueryClient).schema("core").from(table).select(columns).eq("lane_id", laneId).gte(timeColumn, from).lt(timeColumn, to);
+  if (afterId !== null) q = q.gt("id", afterId);
+  return q.order("id", { ascending: true }).limit(limit);
+};
 
 const oneOf = <T extends string>(list: readonly T[], value: string | null, fallback: T): T | null => (value === null ? fallback : (list as readonly string[]).includes(value) ? (value as T) : null);
 
 export function createConnectorErrorExportHandler(deps: ExportHandlerDeps) {
   return async function GET(request: Request, laneId: string): Promise<Response> {
+    // A GET that writes an audit row: refuse a cross-site request (browsers send Sec-Fetch-Site; other clients omit it).
+    const site = request.headers.get("sec-fetch-site");
+    if (site !== null && site !== "same-origin" && site !== "none") return json({ error: "forbidden" }, 403);
     try {
       const g = await deps.guards();
       try {
@@ -76,16 +86,21 @@ export function createConnectorErrorExportHandler(deps: ExportHandlerDeps) {
 
       const query = (deps.pageQuery ?? userQuery)(client);
       const table = dataset === "errors" ? "connector_api_errors" : "sync_runs";
-      const columns = dataset === "errors" ? ERROR_COLUMNS.join(", ") : RUN_SELECT;
+      const columns = dataset === "errors" ? ERROR_SELECT : RUN_SELECT;
       const timeColumn = dataset === "errors" ? "at" : "started_at";
       const rows: Row[] = [];
-      for (let offset = 0; ; offset += PAGE) {
-        const { data, error } = await query(table, columns, timeColumn, laneId, range.range.from, range.range.to, offset, PAGE);
+      // Stop only on an EMPTY page: a server that caps a response below PAGE (PostgREST max_rows) must not cut the file short.
+      for (let afterId: string | null = null; ; ) {
+        const { data, error } = await query(table, columns, timeColumn, laneId, range.range.from, range.range.to, afterId, PAGE);
         if (error || !Array.isArray(data)) throw new Error("export read failed");
+        if (data.length === 0) break;
+        const last = data[data.length - 1]?.id;
+        if (typeof last !== "string" || (afterId !== null && last <= afterId)) throw new Error("export read failed"); // no progress
+        afterId = last;
         rows.push(...data);
-        if (rows.length > EXPORT_MAX_ROWS) return json({ error: "too_many_rows" }, 413);
-        if (data.length < PAGE) break;
+        if (rows.length > EXPORT_MAX_ROWS) return json({ error: "too_many_rows", message: "Too many rows for one export. Narrow the date range and try again." }, 413);
       }
+      rows.sort((x, y) => String(x[timeColumn]).localeCompare(String(y[timeColumn])) || String(x.id).localeCompare(String(y.id)));
 
       // Audit first: an export nobody can see in the log never leaves. Ids and counts only, no row content.
       await deps.audit().log({
@@ -103,7 +118,7 @@ export function createConnectorErrorExportHandler(deps: ExportHandlerDeps) {
       if (format === "json") {
         return new Response(JSON.stringify({ lane: laneId, dataset, from: range.range.from, to: range.range.to, rows: exported }), { status: 200, headers: { ...headers, "content-type": "application/json; charset=utf-8" } });
       }
-      return new Response(toCsv(dataset === "errors" ? ERROR_COLUMNS : RUN_COLUMNS, exported), { status: 200, headers: { ...headers, "content-type": "text/csv; charset=utf-8" } });
+      return new Response(`\uFEFF${toCsv(dataset === "errors" ? ERROR_COLUMNS : RUN_COLUMNS, exported)}`, { status: 200, headers: { ...headers, "content-type": "text/csv; charset=utf-8" } });
     } catch (e) {
       const res = authErrorResponse(e);
       if (res) return res;

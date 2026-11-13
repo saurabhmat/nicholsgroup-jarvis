@@ -12,7 +12,7 @@ import type { LaneBoundConnection } from "../contract/lane-bound";
 import type { ConnectorLogger } from "../log/index";
 import type { SyncJob, SyncRunStore, SyncTrigger } from "./types";
 
-export type JobRunResult = { ok: true; received: number; written: number } | { ok: false; error: ConnectorError };
+export type JobRunResult = { ok: true; received: number; written: number } | { ok: false; error: ConnectorError; received?: number; written?: number };
 
 export interface JobRunLog {
   /** Starts the row; returns a closer. Always returns one (a no-op when nothing was started). */
@@ -46,7 +46,7 @@ export function createJobRunLog(deps: { runs: SyncRunStore | undefined; job: Exc
             runId,
             result.ok
               ? { status: "succeeded", kind: "snapshot", received: result.received, written: result.written }
-              : { status: "failed", kind: "snapshot", received: 0, written: 0, error: result.error.toJSON() },
+              : { status: "failed", kind: "snapshot", received: result.received ?? 0, written: result.written ?? 0, error: result.error.toJSON() },
           );
         } catch {
           child.error(`${job}.run_log_failed`, { code: "finish_failed" });

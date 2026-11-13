@@ -17,7 +17,8 @@ export type FinQboNormalizeResult =
   | { ok: false; retryable: boolean; retryAfterSeconds: number | null; errorKind: string; message: string };
 
 export type FinQboNormalizeDeps = {
-  runNormalize: (laneId: string, connectionId: string) => Promise<FinQboNormalizeResult>;
+  /** `trigger` is the event's (the run log records it, T-196); the wiring ignores a value that is not a sync trigger. */
+  runNormalize: (laneId: string, connectionId: string, trigger?: string) => Promise<FinQboNormalizeResult>;
   enabledLanes: () => readonly string[];
 };
 
@@ -54,7 +55,7 @@ export async function handleFinNormalize(
   const parsed = await finQboNormalizeRequested.schema["~standard"].validate(data);
   if (parsed.issues) throw new NonRetriableError("fin.qbo_normalize: invalid event data");
   if (!deps.enabledLanes().includes(data.laneId)) return { ok: true, skipped: "lane_not_served" };
-  const result = await deps.runNormalize(data.laneId, data.connectionId);
+  const result = await deps.runNormalize(data.laneId, data.connectionId, data.trigger);
   if (result.ok) return result;
   // Messages are already redacted (ConnectorError); they carry no record content.
   if (!result.retryable) throw new NonRetriableError(`fin.qbo_normalize failed: ${result.errorKind}`);

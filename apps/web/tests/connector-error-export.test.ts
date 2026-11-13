@@ -15,11 +15,12 @@ const ROW = {
   // a careless database layer might return more than the fixed columns; the export must not pass it on
   lane_id: "PKG", id: "row-id-leak",
 };
+const withIds = (rows: Record<string, unknown>[]) => rows.map((r, i) => ({ ...r, id: `id-${String(i).padStart(6, "0")}` }));
 
-type B = { lane?: AuthError | null; role?: AuthError | null; rows?: Record<string, unknown>[]; auditFails?: boolean; queryError?: boolean };
+type B = { pageSize?: number; lane?: AuthError | null; role?: AuthError | null; rows?: Record<string, unknown>[]; auditFails?: boolean; queryError?: boolean };
 function setup(b: B = {}) {
   const calls = { requireLane: [] as string[], requireRole: [] as { lane: string; roles: readonly string[] }[], audit: [] as unknown[], queries: [] as unknown[][] };
-  const all = b.rows ?? [ROW];
+  const all = withIds(b.rows ?? [ROW]);
   const handler = createConnectorErrorExportHandler({
     guards: async () => ({
       requireLane: async (lane: string) => {
@@ -37,9 +38,10 @@ function setup(b: B = {}) {
     pageQuery: () => async (...args) => {
       calls.queries.push(args);
       if (b.queryError) return { data: null, error: { message: "db text jane@example.test" } };
-      const offset = args[6] as number;
-      const limit = args[7] as number;
-      return { data: all.slice(offset, offset + limit), error: null };
+      const afterId = args[6] as string | null;
+      // the server may cap a response below the requested limit (PostgREST max_rows)
+      const limit = Math.min(args[7] as number, b.pageSize ?? Infinity);
+      return { data: all.filter((r) => afterId === null || (r.id as string) > afterId).slice(0, limit), error: null };
     },
     now: () => new Date("2026-11-13T09:00:00.000Z"),
   });
@@ -103,13 +105,15 @@ describe("result", () => {
     expect(res.headers.get("content-type")).toContain("text/csv");
     expect(res.headers.get("cache-control")).toBe("no-store");
     expect(res.headers.get("content-disposition")).toBe('attachment; filename="connector-errors-PKG-2026-11-13.csv"');
-    const text = await res.text();
+    const bytes = new Uint8Array(await res.arrayBuffer());
+    expect([...bytes.slice(0, 3)]).toEqual([0xef, 0xbb, 0xbf]); // UTF-8 BOM for Excel
+    const text = new TextDecoder("utf-8", { ignoreBOM: true }).decode(bytes).replace(/^\uFEFF/, "");
     const [header, line] = text.split("\r\n");
     expect(header).toBe("at,connection_id,provider,endpoint,http_status,provider_error_code,provider_message,provider_tid,kind,disposition,retry_after_seconds");
     expect(line).toContain(`"'=HYPERLINK(""http://x"")"`);
     expect(text).not.toContain("row-id-leak");
     // the query is lane scoped and covers [from, to + 1 day)
-    expect(calls.queries[0]?.slice(0, 6)).toEqual(["connector_api_errors", expect.not.stringContaining("*"), "at", "PKG", "2026-11-01T00:00:00.000Z", "2026-11-13T00:00:00.000Z"]);
+    expect(calls.queries[0]?.slice(0, 6)).toEqual(["connector_api_errors", expect.not.stringContaining("*"), "at", "PKG", "2026-11-01T04:00:00.000Z", "2026-11-13T05:00:00.000Z"]);
   });
   it("JSON: the same rows with the lane and range", async () => {
     const { handler } = setup();
@@ -134,7 +138,7 @@ describe("result", () => {
     const { handler, calls } = setup({ rows: [ROW, ROW] });
     await get(handler, "from=2026-11-01&to=2026-11-12&format=json");
     expect(calls.audit).toEqual([
-      { laneId: "PKG", actor: { kind: "user", userId: USER }, action: "connector_errors.export", target: "lane:PKG", metadata: { from: "2026-11-01T00:00:00.000Z", to: "2026-11-13T00:00:00.000Z", format: "json", dataset: "errors", rows: 2 } },
+      { laneId: "PKG", actor: { kind: "user", userId: USER }, action: "connector_errors.export", target: "lane:PKG", metadata: { from: "2026-11-01T04:00:00.000Z", to: "2026-11-13T05:00:00.000Z", format: "json", dataset: "errors", rows: 2 } },
     ]);
     expect(JSON.stringify(calls.audit)).not.toContain("HYPERLINK");
   });
@@ -153,10 +157,56 @@ describe("result", () => {
     const ok = setup({ rows: many });
     const res = await get(ok.handler, "from=2026-11-01&to=2026-11-12&format=json");
     expect(((await res.json()) as { rows: unknown[] }).rows).toHaveLength(2500);
-    expect(ok.calls.queries).toHaveLength(3);
+    expect(ok.calls.queries).toHaveLength(4); // 1000 + 1000 + 500 + the empty page that ends it
     const tooMany = setup({ rows: Array.from({ length: EXPORT_MAX_ROWS + 1 }, () => ROW) });
-    expect((await get(tooMany.handler)).status).toBe(413);
+    const tm = await get(tooMany.handler);
+    expect(tm.status).toBe(413);
+    expect(((await tm.json()) as { message: string }).message).toMatch(/Narrow the date range/);
     expect(tooMany.calls.audit).toEqual([]);
+  });
+});
+
+describe("paging", () => {
+  it("rows with equal timestamps across a page boundary: no duplicates, no gaps", async () => {
+    const same = Array.from({ length: 2300 }, () => ({ ...ROW, at: "2026-11-05T10:00:00.000Z" }));
+    const { handler } = setup({ rows: same });
+    const body = (await (await get(handler, "from=2026-11-01&to=2026-11-12&format=json")).json()) as { rows: unknown[] };
+    expect(body.rows).toHaveLength(2300);
+  });
+  it("a server that caps a page below 1000 (max_rows) still returns everything", async () => {
+    const { handler, calls } = setup({ rows: Array.from({ length: 450 }, () => ROW), pageSize: 100 });
+    const body = (await (await get(handler, "from=2026-11-01&to=2026-11-12&format=json")).json()) as { rows: unknown[] };
+    expect(body.rows).toHaveLength(450);
+    expect(calls.queries).toHaveLength(6);
+  });
+  it("rows come back in time order", async () => {
+    const rows = [{ ...ROW, at: "2026-11-05T12:00:00.000Z" }, { ...ROW, at: "2026-11-05T09:00:00.000Z" }];
+    const body = (await (await get(setup({ rows }).handler, "from=2026-11-01&to=2026-11-12&format=json")).json()) as { rows: { at: string }[] };
+    expect(body.rows.map((r) => r.at)).toEqual(["2026-11-05T09:00:00.000Z", "2026-11-05T12:00:00.000Z"]);
+  });
+});
+
+describe("cross-site requests", () => {
+  it.each(["cross-site", "same-site"])("Sec-Fetch-Site %s is refused before anything is read or audited", async (site) => {
+    const { handler, calls } = setup();
+    const res = await handler(new Request(`${ORIGIN}/api/lanes/PKG/connector-errors/export?from=2026-11-01&to=2026-11-12`, { headers: { "sec-fetch-site": site } }), "PKG");
+    expect(res.status).toBe(403);
+    expect(calls.requireLane).toEqual([]);
+    expect(calls.audit).toEqual([]);
+  });
+  it.each(["same-origin", "none"])("%s is allowed", async (site) => {
+    const res = await setup().handler(new Request(`${ORIGIN}/api/lanes/PKG/connector-errors/export?from=2026-11-01&to=2026-11-12`, { headers: { "sec-fetch-site": site } }), "PKG");
+    expect(res.status).toBe(200);
+  });
+});
+
+describe("time zone", () => {
+  it("date-only boundaries are America/New_York days; a timestamp without a zone is refused", async () => {
+    const { handler, calls } = setup();
+    await get(handler, "from=2026-11-04&to=2026-11-04");
+    expect(calls.queries[0]?.slice(4, 6)).toEqual(["2026-11-04T05:00:00.000Z", "2026-11-05T05:00:00.000Z"]); // 20:00 ET on Nov 4 = 01:00Z Nov 5 is inside
+    const res = await get(handler, "from=2026-11-04T00:00:00&to=2026-11-05T00:00:00Z");
+    expect(res.status).toBe(400);
   });
 });
 

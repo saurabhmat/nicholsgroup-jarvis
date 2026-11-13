@@ -32,7 +32,13 @@ export function createSyncRunStore(clientFor: JobClientFor, now: () => Date = ()
       try {
         const cancel = { status: "cancelled", finished_at: at.toISOString() };
         const job = input.job ?? "sync";
-        const base = () => runs().update(cancel).eq("lane_id", laneId).eq("connection_id", conn.id).eq("job", job).eq("status", "running");
+        // Deploy-order tolerance (T-196 security M1): a plain sync neither writes nor filters on `job`, so new code still works against
+        // a database that has not run migration 20261117100000 yet (the column default is 'sync'). Stale and own-run cancels of a
+        // sync may therefore also close a stale row of another job of the same connection, which is harmless.
+        const base = () => {
+          const q = runs().update(cancel).eq("lane_id", laneId).eq("connection_id", conn.id);
+          return (job === "sync" ? q : q.eq("job", job)).eq("status", "running");
+        };
         const stale = await base().lt("started_at", new Date(at.getTime() - STALE_RUN_MS).toISOString());
         if (stale.error) throw stale.error;
         if (input.jobRunId) {
@@ -40,7 +46,7 @@ export function createSyncRunStore(clientFor: JobClientFor, now: () => Date = ()
           if (own.error) throw own.error;
         }
         const inserted = await runs()
-          .insert({ lane_id: laneId, connection_id: conn.id, kind: job !== "sync" ? "snapshot" : conn.last_sync_at ? "incremental" : "full", job, trigger: input.trigger, started_at: at.toISOString(), job_run_id: input.jobRunId })
+          .insert({ lane_id: laneId, connection_id: conn.id, kind: job !== "sync" ? "snapshot" : conn.last_sync_at ? "incremental" : "full", ...(job !== "sync" ? { job } : {}), trigger: input.trigger, started_at: at.toISOString(), job_run_id: input.jobRunId })
           .select("id")
           .single();
         if (inserted.error) {

@@ -16,7 +16,7 @@ import { assertLaneBound, type ConnectionLoader } from "../contract/lane-bound";
 import { LaneIdSchema } from "../contract/schemas";
 import { connectorLog, type ConnectorLogger } from "../log/index";
 import { createJobRunLog } from "../sync/job-run";
-import type { SyncRunStore } from "../sync/types";
+import type { SyncRunStore, SyncTrigger } from "../sync/types";
 import type { QboApi } from "./api";
 import { assertQuickbooksConnection, type QboConnection } from "./guard";
 import { planReports, projectReport, reportPolicy, REPORT_MAX_BYTES, type ProjectedReport, type QboReportKind, type ReportSettings } from "./reports";
@@ -89,7 +89,7 @@ export function createQboReportsJob(deps: QboReportsJobDeps) {
   }
 
   return {
-    async run(laneId: LaneId, connectionId: string): Promise<QboReportsOutcome> {
+    async run(laneId: LaneId, connectionId: string, input: { trigger?: SyncTrigger } = {}): Promise<QboReportsOutcome> {
       const stored: QboReportKind[] = [];
       let close: ((r: JobRunResult) => Promise<void>) | undefined;
       let error: ConnectorError | undefined;
@@ -105,7 +105,7 @@ export function createQboReportsJob(deps: QboReportsJobDeps) {
           child.info("qbo.reports.skipped", { reason: "connection_not_usable", status: conn.status });
           return { ok: true, skipped: "connection_not_usable" };
         }
-        close = await runLog.open(laneId, conn);
+        close = await runLog.open(laneId, conn, input.trigger);
         // Fail closed: nothing is fetched until both settings are known.
         const settings = await deps.settings(laneId);
         const payroll = await deps.payroll(laneId);
@@ -157,7 +157,7 @@ export function createQboReportsJob(deps: QboReportsJobDeps) {
         outcome = failure(error, stored);
       }
       // The run row is closed after the work, whatever happened (never throws).
-      if (close) await close(error ? { ok: false, error } : { ok: true, received: stored.length, written: stored.length });
+      if (close) await close(error ? { ok: false, error, received: stored.length, written: stored.length } : { ok: true, received: stored.length, written: stored.length });
       return outcome;
     },
   };
