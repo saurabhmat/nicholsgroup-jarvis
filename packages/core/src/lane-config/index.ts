@@ -153,8 +153,9 @@ export const laneConfigSchema = z.strictObject({
     })
     .refine((e) => Object.hasOwn(e.by_entity, e.own_entity), { message: "own_entity needs a mapping", path: ["own_entity"] })
     .optional(),
-  // Pilot-only switches that are removed with the feature they guard. `connection_test_enabled` shows the temporary
-  // "Temporary: connection test" section on Settings (T-198, until T-045 replaces it). Off unless set to true.
+  // Retired (T-197): `connection_test_enabled` used to show the temporary connection-test section (T-198). Nothing reads it any
+  // more (Check connection is part of Settings -> Connections for the connect roles). The key stays only so a stored config that
+  // still holds it parses; remove it when no stored version has it.
   pilot: z.strictObject({ connection_test_enabled: z.boolean().default(false) }).optional(),
   mailboxes: z.array(email).max(20).default([]),
   // How the lane's Gmail + Calendar are reached (T-219, D-30, D-37): `native` = our own Google OAuth client and Vault tokens
