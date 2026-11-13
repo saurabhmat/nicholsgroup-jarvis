@@ -32,8 +32,11 @@ export function createConnectorSyncRunner<P extends string>(deps: { connector: C
     };
     // A targeted run (a webhook named the changed entities) needs a stored cursor to be safe: it never moves the cursor. With none
     // yet, the connection has not had its first full sync, so do that instead of refusing.
-    const objectTypes = runOptions?.objectTypes && stored !== null ? [...runOptions.objectTypes] : undefined;
-    const cursor = stored === null ? null : { value: stored };
+    // T-241: a full run (connect, or no completed full load yet) ignores the stored cursor and any object-type subset. The
+    // compare-and-swap below still expects `stored`, so a concurrent run's cursor is never overwritten blindly.
+    const full = runOptions?.full === true;
+    const objectTypes = !full && runOptions?.objectTypes && stored !== null ? [...runOptions.objectTypes] : undefined;
+    const cursor = stored === null || full ? null : { value: stored };
     let summary;
     try {
       summary = await connector.sync(laneId, typed, cursor, sink, objectTypes ? { objectTypes } : undefined);

@@ -89,3 +89,36 @@ describe("createNormalizeStore", () => {
     expect(parsed.some_unknown_key).toBeUndefined();
   });
 });
+
+describe("T-241: a failed call says why (codes only, never database text)", () => {
+  const infoOf = async (p: Promise<unknown>) => {
+    try { await p; } catch (e) { return (e as { info: { kind: string; message: string } }).info; }
+    throw new Error("expected a failure");
+  };
+  const fails = (error: { code?: string; message?: string }) => createNormalizeStore(client({ error }).clientFor).normalize("PKG", conn);
+  it("the timeout is below the Inngest route's 120 s maxDuration", () => {
+    expect(NORMALIZE_TIMEOUT_MS).toBeLessThan(120_000);
+  });
+  it.each([
+    ["57014", "transient", "statement timeout (SQLSTATE 57014)"],
+    ["40P01", "transient", "lock or serialization conflict (SQLSTATE 40P01)"],
+    ["08006", "transient", "database connection or resources (SQLSTATE 08006)"],
+    ["PGRST301", "transient", "database API error (PGRST301)"],
+    ["XX000", "transient", "SQLSTATE XX000"],
+    ["PGRST202", "provider_error", "Normalizer function not found (PGRST202)"],
+    ["42883", "provider_error", "Normalizer function not found (42883)"],
+  ])("%s -> %s with a safe reason", async (code, kind, text) => {
+    const info = await infoOf(fails({ code, message: "duplicate key ... Key (name)=(Acme Escrow) SECRET-ROW-TEXT" }));
+    expect(info.kind).toBe(kind);
+    expect(info.message).toContain(text);
+    expect(info.message).not.toContain("SECRET");
+    expect(info.message).not.toContain("Acme");
+  });
+  it("our own timeout (the signal fired) and a network failure are told apart", async () => {
+    const aborted = createNormalizeStore(client(() => { throw Object.assign(new Error("x"), { name: "TimeoutError" }); }).clientFor).normalize("PKG", conn);
+    expect((await infoOf(aborted)).message).toBe(`Normalizer unavailable: timed out after ${String(NORMALIZE_TIMEOUT_MS / 1000)} s`);
+    const network = createNormalizeStore(client(() => { throw new TypeError("fetch failed SECRET"); }).clientFor).normalize("PKG", conn);
+    expect(await infoOf(network)).toEqual(expect.objectContaining({ kind: "transient", message: "Normalizer unavailable: no answer from the database (network)" }));
+    expect((await infoOf(fails({ message: "weird" }))).message).toBe("Normalizer unavailable: unknown database error");
+  });
+});

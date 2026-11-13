@@ -87,6 +87,20 @@ export function createSyncRunStore(clientFor: JobClientFor, now: () => Date = ()
       }
     },
 
+    async hasCompletedFullSync(laneId, conn) {
+      assertLaneBound(laneId, conn);
+      const db = await client(laneId);
+      try {
+        // job = 'sync' is the column default, so this also reads rows written before the column existed (T-196).
+        const { data, error } = await db.schema("core").from("sync_runs").select("id").eq("lane_id", laneId).eq("connection_id", conn.id)
+          .eq("job", "sync").eq("status", "succeeded").eq("kind", "full").limit(1);
+        if (error) throw error;
+        return Array.isArray(data) && data.length > 0;
+      } catch {
+        throw unavailable();
+      }
+    },
+
     async recordOutcome(laneId, conn, outcome, stream = null) {
       assertLaneBound(laneId, conn);
       // The stream ends up in a PostgREST filter below: only the known values, whatever the caller's types say.

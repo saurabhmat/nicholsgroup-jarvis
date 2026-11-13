@@ -9,8 +9,31 @@ import { assertLaneBound } from "../contract/lane-bound";
 import type { JobClientFor } from "../vault/tokens";
 import { assertQuickbooksConnection, type QboConnection } from "./guard";
 
-/** The normalizer may touch many rows; the call is abandoned after this long (the run then fails as transient and is retried). */
-export const NORMALIZE_TIMEOUT_MS = 120_000;
+/**
+ * The normalizer may touch many rows; the call is abandoned after this long (the run then fails as transient, reason "timeout",
+ * and is retried). T-241: under the Inngest route's maxDuration (120 s), so the run can still record its outcome before Vercel stops it.
+ */
+export const NORMALIZE_TIMEOUT_MS = 100_000;
+
+/**
+ * Why a call failed (T-241), from the error CODE only (a SQLSTATE or a PostgREST code: schema-level, never row data). Before this
+ * every non-refusal became "Normalizer unavailable" (kind transient), so the run log could not tell a timeout from a missing function.
+ */
+export function failureReason(code: string | null, aborted: boolean): { kind: "transient" | "provider_error"; message: string } {
+  const t = (why: string) => ({ kind: "transient" as const, message: `Normalizer unavailable: ${why}` });
+  if (aborted) return t(`timed out after ${String(NORMALIZE_TIMEOUT_MS / 1000)} s`);
+  if (code === null) return t("no answer from the database (network)");
+  // The function is not there: the production SQL that adds it was not run. Retrying cannot help.
+  if (code === "PGRST202" || code === "42883") return { kind: "provider_error", message: `Normalizer function not found (${code}): run the production SQL for the normalizer` };
+  if (code === "57014") return t("statement timeout (SQLSTATE 57014)");
+  if (code === "40P01" || code === "40001" || code === "55P03") return t(`lock or serialization conflict (SQLSTATE ${code})`);
+  if (/^(08|53|57P)/.test(code)) return t(`database connection or resources (SQLSTATE ${code})`);
+  if (/^PGRST\d{3}$/.test(code)) return t(`database API error (${code})`);
+  if (/^[0-9A-Z]{5}$/.test(code)) return t(`SQLSTATE ${code}`);
+  return t("unknown database error");
+}
+
+const isAbort = (e: unknown): boolean => e instanceof Error && (e.name === "AbortError" || e.name === "TimeoutError");
 
 const Count = z.int().min(0);
 const TableCounts = z.object({ inserted: Count, updated: Count, tombstoned: Count, invalid: Count.optional() });
@@ -65,15 +88,16 @@ export function createNormalizeStore(clientFor: JobClientFor): NormalizeStore {
       let data: unknown;
       let code: string | undefined;
       let message = "";
+      const signal = AbortSignal.timeout(NORMALIZE_TIMEOUT_MS);
       try {
-        const res = await client.schema("core").rpc("fin_qbo_normalize", { p_lane: laneId, p_connection_id: conn.id }).abortSignal(AbortSignal.timeout(NORMALIZE_TIMEOUT_MS));
+        const res = await client.schema("core").rpc("fin_qbo_normalize", { p_lane: laneId, p_connection_id: conn.id }).abortSignal(signal);
         if (res.error) {
           code = res.error.code || "unknown";
           message = typeof res.error.message === "string" ? res.error.message : "";
         }
         else data = res.data;
-      } catch {
-        throw new ConnectorError({ kind: "transient", message: "Normalizer unavailable" });
+      } catch (e) {
+        throw new ConnectorError(failureReason(null, signal.aborted || isAbort(e)));
       }
       if (code !== undefined) {
         // 22xxx / 23xxx: the database refused a value (constant message from the function). Retrying repeats it.
@@ -82,7 +106,8 @@ export function createNormalizeStore(clientFor: JobClientFor): NormalizeStore {
         }
         if (/^2[23]/.test(code)) throw new ConnectorError({ kind: "provider_error", message: refusalMessage(message) });
         if (code === "42501") throw new ConnectorError({ kind: "connection_unavailable", message: "The connection is not usable for normalization" });
-        throw new ConnectorError({ kind: "transient", message: "Normalizer unavailable" });
+        // supabase-js reports an aborted fetch as an error object without a code; the signal says it was our timeout.
+        throw new ConnectorError(failureReason(code === "unknown" ? (signal.aborted ? null : "unknown") : code, signal.aborted));
       }
       const parsed = NormalizeResultSchema.safeParse(data);
       if (!parsed.success) throw new ConnectorError({ kind: "provider_error", message: "The normalizer returned an unexpected result" });

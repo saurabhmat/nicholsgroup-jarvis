@@ -84,6 +84,19 @@ describe("worker", () => {
   });
 });
 
+describe("T-241: the run output names a safe reason", () => {
+  const data = { laneId: "PKG", connectionId: "00000000-0000-4000-8000-000000000391", trigger: "manual" };
+  const run = async (message: string, retryable = true) =>
+    ((await handleFinNormalize({ runNormalize: async () => ({ ok: false, retryable, retryAfterSeconds: null, errorKind: "transient", message }), enabledLanes: () => ["PKG"] }, data).catch((e: unknown) => e)) as Error).message;
+  it("the normalizer's fixed texts are shown after the kind", async () => {
+    expect(await run("Normalizer unavailable: statement timeout (SQLSTATE 57014)")).toBe("fin.qbo_normalize failed: transient: Normalizer unavailable: statement timeout (SQLSTATE 57014)");
+    expect(await run("Normalizer function not found (PGRST202): run the production SQL for the normalizer", false)).toContain("PGRST202");
+  });
+  it("any other message is left out (only the kind)", async () => {
+    for (const m of ["m SECRET", "Normalizer unavailable: <script>", "duplicate key value violates unique constraint, Key (name)=(Acme)"]) expect(await run(m)).toBe("fin.qbo_normalize failed: transient");
+  });
+});
+
 describe("conn.sync afterSync hook", () => {
   const CONN = "00000000-0000-4000-8000-000000000381";
   const synced: ConnSyncResult = { ok: true, skipped: null, runId: "run-9", provider: "quickbooks", kind: "full", received: 1, written: 1 };

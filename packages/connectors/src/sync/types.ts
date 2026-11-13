@@ -17,8 +17,12 @@ export type SyncJob = (typeof SYNC_JOBS)[number];
 /** What one provider runner reports after a run. Counts only: never a record, never a cursor. */
 export type SyncRunnerResult = { kind: "full" | "incremental"; received: number; written: number };
 
-/** Runs one connection's sync. Throws ConnectorError for failures (anything else is reduced to a generic provider_error). */
-export type SyncRunner = (laneId: LaneId, conn: LaneBoundConnection<string>, options?: { objectTypes?: readonly string[]; streams?: readonly SyncStream[] }) => Promise<SyncRunnerResult>;
+/**
+ * Runs one connection's sync. Throws ConnectorError for failures (anything else is reduced to a generic provider_error).
+ * `full` (T-241): ignore the stored cursor and reload everything (a new or reconnected connection, or one that never completed a
+ * full load). Runners that keep their own per-stream cursors (Google) ignore it.
+ */
+export type SyncRunner = (laneId: LaneId, conn: LaneBoundConnection<string>, options?: { objectTypes?: readonly string[]; streams?: readonly SyncStream[]; full?: boolean }) => Promise<SyncRunnerResult>;
 
 export type SyncRunFinish = {
   status: "succeeded" | "failed" | "cancelled";
@@ -45,6 +49,11 @@ export interface SyncRunStore {
    * and a success clears last_error only when it belongs to that stream or to the whole connection (another stream's error stays).
    */
   recordOutcome(laneId: LaneId, conn: LaneBoundConnection<string>, outcome: { ok: true } | { ok: false; error: ConnectorErrorInfo }, stream?: SyncStream | null): Promise<void>;
+  /**
+   * T-241: whether the connection has ever completed a FULL sync (a succeeded conn.sync row of kind full). False means its first
+   * load never finished, so the next sync must reload everything whatever cursor is stored. Throws when it cannot be read.
+   */
+  hasCompletedFullSync?(laneId: LaneId, conn: LaneBoundConnection<string>): Promise<boolean>;
 }
 
 /** Cursor of the generic stream (`Connector.sync`), stored in core.sync_cursors. Mail and calendar keep their own streams. */

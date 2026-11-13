@@ -19,7 +19,7 @@ function fakeClient(respond: (c: Call) => { data?: unknown; error?: { code?: str
   const rpcs: { fn: string; args: Record<string, unknown> }[] = [];
   const builder = (call: Call) => {
     const b: Record<string, unknown> = {};
-    for (const op of ["eq", "lt", "or"]) b[op] = (col: string, v?: unknown) => { call.filters.push([op, col, v]); return b; };
+    for (const op of ["eq", "lt", "or", "limit"]) b[op] = (col: string, v?: unknown) => { call.filters.push([op, col, v]); return b; };
     b.select = () => b;
     b.single = () => Promise.resolve({ data: respond(call).data ?? null, error: respond(call).error ?? null });
     b.then = (res: (v: unknown) => unknown) => Promise.resolve({ data: Array.isArray(respond(call).data) ? respond(call).data : [{ id: "run-1" }], error: respond(call).error ?? null }).then(res);
@@ -29,6 +29,7 @@ function fakeClient(respond: (c: Call) => { data?: unknown; error?: { code?: str
     from: (table: string) => ({
       insert: (values: unknown) => { const c: Call = { table, op: "insert", values, filters: [] }; calls.push(c); return builder(c); },
       update: (values: unknown) => { const c: Call = { table, op: "update", values, filters: [] }; calls.push(c); return builder(c); },
+      select: (values: unknown) => { const c: Call = { table, op: "select", values, filters: [] }; calls.push(c); return builder(c); },
     }),
     rpc: (fn: string, args: Record<string, unknown>) => { rpcs.push({ fn, args }); return Promise.resolve({ data: fn === "sync_cursor_put" ? true : "cur-1", error: null }); },
   };
@@ -130,6 +131,19 @@ describe("sync run store", () => {
     const store = createSyncRunStore(f.clientFor, () => NOW);
     await expect(store.recordOutcome("PKG", conn, { ok: true }, "mail,id.neq.x" as never)).rejects.toMatchObject({ info: { kind: "transient" } });
     expect(f.calls).toHaveLength(0);
+  });
+
+  it("T-241: hasCompletedFullSync looks for a succeeded full conn.sync run of this lane's connection", async () => {
+    const yes = fakeClient(() => ({ data: [{ id: "r1" }] }));
+    await expect(createSyncRunStore(yes.clientFor).hasCompletedFullSync?.("PKG", conn)).resolves.toBe(true);
+    expect(yes.calls[0]).toMatchObject({ table: "sync_runs", op: "select" });
+    expect(yes.calls[0]?.filters).toEqual(expect.arrayContaining([["eq", "lane_id", "PKG"], ["eq", "connection_id", CONN_ID], ["eq", "job", "sync"], ["eq", "status", "succeeded"], ["eq", "kind", "full"]]));
+    const none = fakeClient(() => ({ data: [] }));
+    // the fake answers [{id}] for an empty array; an explicit empty list must read as "never"
+    const emptyList = { ...none, clientFor: async () => ({ schema: () => ({ from: () => ({ select: () => { const b: Record<string, unknown> = {}; for (const op of ["eq", "limit"]) b[op] = () => b; b.then = (r: (v: unknown) => unknown) => Promise.resolve({ data: [], error: null }).then(r); return b; } }) }) }) as never };
+    await expect(createSyncRunStore(emptyList.clientFor).hasCompletedFullSync?.("PKG", conn)).resolves.toBe(false);
+    const broken = fakeClient(() => ({ error: { code: "XX000" } }));
+    await expect(createSyncRunStore(broken.clientFor).hasCompletedFullSync?.("PKG", conn)).rejects.toMatchObject({ info: { kind: "transient" } });
   });
 
   it("refuses a connection that is not bound to the lane", async () => {

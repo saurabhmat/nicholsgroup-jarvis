@@ -69,7 +69,20 @@ export function createConnSyncJob(deps: ConnSyncJobDeps) {
         if (!runner) throw new ConnectorError({ kind: "unsupported_op", message: "No sync is available for this provider" });
         const hasTypes = input.objectTypes && input.objectTypes.length > 0;
         const hasStreams = input.streams && input.streams.length > 0;
-        result = await runner(laneId, conn, hasTypes || hasStreams ? { ...(hasTypes ? { objectTypes: input.objectTypes } : {}), ...(hasStreams ? { streams: input.streams } : {}) } : undefined);
+        // T-241: a connect (new or reconnected) always reloads everything; so does a connection whose first full load never
+        // completed (a cursor alone does not prove the data is there). Unreadable history keeps the cursor (the CDC window still
+        // bounds it) rather than failing the sync.
+        let full = input.trigger === "connect";
+        if (!full && deps.runs.hasCompletedFullSync) {
+          try {
+            full = !(await deps.runs.hasCompletedFullSync(laneId, conn));
+          } catch {
+            child.warn("conn.sync.full_history_unreadable", {});
+          }
+        }
+        if (full) child.info("conn.sync.full_reload", { reason: input.trigger === "connect" ? "connect" : "no_completed_full_sync" });
+        const options = { ...(hasTypes ? { objectTypes: input.objectTypes } : {}), ...(hasStreams ? { streams: input.streams } : {}), ...(full ? { full: true } : {}) };
+        result = await runner(laneId, conn, Object.keys(options).length > 0 ? options : undefined);
       } catch (e) {
         error = toConnectorError(e);
       }
