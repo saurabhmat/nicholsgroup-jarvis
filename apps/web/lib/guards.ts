@@ -2,6 +2,7 @@
 // components. The session comes from the request cookies and is verified in @nichols/core/auth (server-only).
 import { cache } from "react";
 import { cookies } from "next/headers";
+import { connection } from "next/server";
 import {
   authActions,
   cookieSessionReader,
@@ -72,6 +73,12 @@ const guardsFor = cache(async (authCookies: string): Promise<Guards> => {
 });
 
 export async function guards(): Promise<Guards> {
+  // T-243 (production: "Next.js encountered the unstable value `Date.now()` while prerendering" at GoTrueClient.__loadSession, on
+  // /[laneId] and /[laneId]/settings). With runtime prefetching, Next prerenders with the request's cookies, so cookies() resolves while
+  // connection() does not. The layout called guards() for the first name alongside loadLane (which awaits connection()), so the
+  // Supabase auth client read its session (Date.now) inside that prerender. Waiting for the request here first makes every caller safe:
+  // nothing under guards() (session read, clients, clocks) is part of a prerender. A no-op in route handlers and server actions.
+  await connection();
   const store = await cookies();
   const authCookies = store
     .getAll()

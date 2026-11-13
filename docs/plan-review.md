@@ -1306,3 +1306,4 @@ Open / LOW (not fixed):
   - **Display names containing "@":** such a name (e.g. "Bob @ Acme") is shown as the From address. That is safer against spoofing, but loses the name.
   - **Login-link exclusion can hide real alerts:** a genuine security-sender alert whose subject contains "OTP" or "verification link" (e.g. "Your OTP settings changed") is now hard-excluded. Narrow those two patterns if security alerts go missing.
 - (T-243 security re-check) LOW, open: `qbo.sync.done` `excluded_objects` counts re-emitted payroll accounts on every incremental run (cosmetic).
+- (T-243 part 3) ROOT CAUSE confirmed from the production log: the layout's first-name lookup called guards() without connection(); runtime-prefetch prerender resolved cookies() and supabase-js read the session (Date.now). Fixed: guards() awaits connection() first (tested).
