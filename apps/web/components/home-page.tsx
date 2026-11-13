@@ -43,7 +43,7 @@ import { onboardingFor } from "@/lib/onboarding-progress";
 import { timed } from "@/lib/timed";
 import { hasFinanceView, homeFinanceFor } from "@/lib/home-finance";
 import { homeFinanceDetailFor } from "@/lib/home-finance-detail";
-import { kpiTiles } from "@/lib/home-kpi-tiles";
+import { kpiTiles, quickbooksStrip } from "@/lib/home-kpi-tiles";
 import { freshWindowText } from "@/lib/fresh-window";
 
 /** Home's display zone: always Eastern, never the tz cookie (the cookie is still refreshed for other pages). */
@@ -228,7 +228,7 @@ const loadFinance = cache(async (laneId: string) => {
 
 async function KpiSection({ laneId, feeds, canConnect }: { laneId: string; feeds: HomeView["feeds"]; canConnect: boolean }) {
   const [finance, detail] = await loadFinance(laneId);
-  return <KpiStrip laneId={laneId} tiles={kpiTiles(finance, detail, feeds, canConnect)} />;
+  return <KpiStrip laneId={laneId} tiles={kpiTiles(finance, detail, feeds)} strip={quickbooksStrip(finance, canConnect)} />;
 }
 
 async function FinanceSlot({ laneId }: { laneId: string }) {

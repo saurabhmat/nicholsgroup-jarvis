@@ -1,41 +1,56 @@
 // Home KPI row (T-234 part 1, T-237 part B): an auto-fit grid of tiles (two per row on a phone). Every tile has the same three
 // rows (label, figure, note), a minimum height and `h-full`. Cash always carries the "Book balance" label (rule 7). No figure is
-// ever invented. With QuickBooks not connected the row holds one "Connect QuickBooks" tile (only built for a role that can connect).
+// ever invented. T-240: QuickBooks not connected (or needing a reconnect) is a slim one-line strip above the row, not a full-size tile.
 import Link from "next/link";
 import { BookBalanceLabel, laneHref } from "@nichols/ui";
-import type { KpiTile } from "@/lib/home-kpi-tiles";
+import type { KpiTile, QuickbooksStrip } from "@/lib/home-kpi-tiles";
 
 export const TILE_HEIGHT = "min-h-[8rem]";
-// Several tiles share the row (auto-fit); a lone tile (Connect QuickBooks) keeps one tile's width (auto-fill keeps the empty tracks).
+// Several tiles share the row (auto-fit); a lone tile (MRR only) keeps one tile's width (auto-fill keeps the empty tracks).
 const FIT_COLUMNS = "md:grid-cols-[repeat(auto-fit,minmax(12rem,1fr))]";
 const LONE_COLUMNS = "md:grid-cols-[repeat(auto-fill,minmax(12rem,1fr))]";
 const TONE = { danger: "text-danger", success: "text-success" } as const;
 
-/** No tiles: nothing (a role that cannot connect and has no finance view must not be told about finance figures). */
-export function KpiStrip({ laneId, tiles }: { laneId: string; tiles: KpiTile[] }) {
-  if (tiles.length === 0) return null;
+/** No tiles and no strip: nothing (a role that cannot connect and has no finance view must not be told about finance figures). */
+export function KpiStrip({ laneId, tiles, strip = null }: { laneId: string; tiles: KpiTile[]; strip?: QuickbooksStrip | null }) {
+  if (tiles.length === 0 && !strip) return null;
+  const row =
+    tiles.length === 0 ? null : (
+      <section aria-labelledby="kpi-heading" data-testid="home-kpis" className={`grid grid-cols-2 items-stretch gap-3 md:gap-5 ${tiles.length === 1 ? LONE_COLUMNS : FIT_COLUMNS}`}>
+        <h2 id="kpi-heading" className="sr-only">Key figures</h2>
+        {tiles.map((t) => (
+          <Tile key={t.key} tile={t} />
+        ))}
+      </section>
+    );
+  if (!strip) return row;
   return (
-    <section aria-labelledby="kpi-heading" data-testid="home-kpis" className={`grid grid-cols-2 items-stretch gap-3 md:gap-5 ${tiles.length === 1 ? LONE_COLUMNS : FIT_COLUMNS}`}>
-      <h2 id="kpi-heading" className="sr-only">Key figures</h2>
-      {tiles.map((t) => (t.connect ? <ConnectTile key={t.key} laneId={laneId} tile={t} /> : <Tile key={t.key} tile={t} />))}
-    </section>
+    <div className="flex flex-col gap-3">
+      <QuickbooksStripLine laneId={laneId} strip={strip} />
+      {row}
+    </div>
   );
 }
 
-function ConnectTile({ laneId, tile }: { laneId: string; tile: KpiTile }) {
-  // Same shape as a figure tile: label, a short line, then the link text (the whole tile is the link).
+/**
+ * One line, not a tile: the text, and (owner / admin_technical only) a link to Settings -> Connections. A status region so a screen reader
+ * hears it; the link says what it does ("Connect QuickBooks in Settings") and has a 44 px target on a phone. Colours are tokens.
+ */
+function QuickbooksStripLine({ laneId, strip }: { laneId: string; strip: QuickbooksStrip }) {
   return (
-    <Link
-      href={`${laneHref(laneId, "settings")}#connections`}
-      data-testid="kpi-connect"
-      className={`flex h-full min-w-0 flex-col justify-between gap-2 rounded-card border border-border bg-card p-5 text-card-foreground shadow-card hover:bg-muted/40 ${TILE_HEIGHT}`}
-    >
-      <p className="font-sans text-label font-medium uppercase tracking-wide text-muted-foreground">QuickBooks</p>
-      <p className="text-small text-muted-foreground">Cash, bills and net income show here once connected.</p>
-      <p className="font-sans text-small font-semibold text-primary">
-        {tile.label} <span aria-hidden>{"\u2192"}</span>
-      </p>
-    </Link>
+    <div role="status" data-testid="qb-strip" data-kind={strip.kind} className="flex flex-wrap items-center justify-between gap-x-4 gap-y-1 rounded-control border border-border bg-card px-4 py-2 text-small text-muted-foreground">
+      <p className="min-w-0 flex-1">{strip.text}</p>
+      {strip.canConnect ? (
+        <Link
+          href={`${laneHref(laneId, "settings")}#connections`}
+          data-testid="kpi-connect"
+          aria-label={`${strip.actionLabel} QuickBooks in Settings`}
+          className="inline-flex shrink-0 items-center font-sans text-small font-semibold text-primary underline-offset-2 hover:underline max-md:min-h-11"
+        >
+          {strip.actionLabel} <span aria-hidden>{"\u2192"}</span>
+        </Link>
+      ) : null}
+    </div>
   );
 }
 
