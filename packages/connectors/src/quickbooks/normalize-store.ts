@@ -45,6 +45,8 @@ export const NormalizeResultSchema = z.object({
   unmapped_rows: Count,
   null_account_lines: Count,
   invalid_records: Count,
+  /** T-242: input rows dropped so each target key had one row (latest source version kept). 0 on clean data; absent before the migration. */
+  deduped_rows: Count.optional(),
   dead_deleted: Count,
   dead_unseen: Count,
   dead_payroll: Count,
@@ -68,10 +70,16 @@ export interface NormalizeStore {
  * object names, never row data). Only a message of exactly that shape is passed on, so an operator can see which constraint
  * refused a record without any database text of another kind reaching a log.
  */
-const REFUSAL = /^fin\.qbo_normalize failed: SQLSTATE ([0-9A-Z]{5}), table ([a-z_]{1,63}|-), constraint ([a-z0-9_]{1,63}|-)$/;
+const REFUSAL = /^fin\.qbo_normalize failed: SQLSTATE ([0-9A-Z]{5}), table ([a-z_]{1,63}|-), constraint ([a-z0-9_]{1,63}|-)(?:, step ([a-z]{1,20}))?$/;
 function refusalMessage(message: string): string {
   const m = REFUSAL.exec(message);
-  return m ? `The normalizer refused the synced data (SQLSTATE ${m[1] ?? ""}, table ${m[2] ?? ""}, constraint ${m[3] ?? ""})` : "The normalizer refused the synced data";
+  // T-242: the function also names the section that was running (a fixed word such as "payments"), when it is the new version.
+  const step = m?.[4] ? `, step ${m[4]}` : "";
+  return m ? `The normalizer refused the synced data (SQLSTATE ${m[1] ?? ""}, table ${m[2] ?? ""}, constraint ${m[3] ?? ""}${step})` : "The normalizer refused the synced data";
+}
+/** The step named in the function's constant failure message ("payments"), or null. */
+function stepOf(message: string): string | null {
+  return REFUSAL.exec(message)?.[4] ?? null;
 }
 
 export function createNormalizeStore(clientFor: JobClientFor): NormalizeStore {
@@ -105,6 +113,12 @@ export function createNormalizeStore(clientFor: JobClientFor): NormalizeStore {
           throw new ConnectorError({ kind: "invalid_input", message: "The lane has no QuickBooks entity mapping in lane_config" });
         }
         if (/^2[23]/.test(code)) throw new ConnectorError({ kind: "provider_error", message: refusalMessage(message) });
+        // T-242: 21000 (cardinality violation: two input rows for one target row, or a subquery with more than one row) comes from
+        // the data and repeats on every attempt: permanent, not "transient" (production retried it for minutes).
+        if (code === "21000") {
+          const step = stepOf(message);
+          throw new ConnectorError({ kind: "provider_error", message: `The normalizer found two rows for one record (SQLSTATE 21000${step ? `, step ${step}` : ""})` });
+        }
         if (code === "42501") throw new ConnectorError({ kind: "connection_unavailable", message: "The connection is not usable for normalization" });
         // supabase-js reports an aborted fetch as an error object without a code; the signal says it was our timeout.
         throw new ConnectorError(failureReason(code === "unknown" ? (signal.aborted ? null : "unknown") : code, signal.aborted));
