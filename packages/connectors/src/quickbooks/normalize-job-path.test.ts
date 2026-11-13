@@ -1,5 +1,5 @@
-// T-242: the FULL normalizer job path with the real job, the real normalizer store and the real run log, over a fake job client
-// that answers each database call like PostgREST does. Production: the function succeeds when called directly, the job fails
+// T-242: the normalizer job path with the real job, the real normalizer store and the real Inngest handler, over a fake job client
+// that answers the RPC like PostgREST does, and an in-memory run log (the real core.sync_runs store is tested in sync/store.test.ts). Production: the function succeeds when called directly, the job fails
 // with SQLSTATE 21000. These tests pin which call each failure is reported under, so the run output names the real failing call.
 import { describe, expect, it } from "vitest";
 import { mintLaneBoundConnection } from "../contract/lane-bound";
@@ -54,23 +54,23 @@ describe("T-242: the normalizer job path, end to end", () => {
     expect([...p.runs.calls.slice(0, 1), ...p.db.calls, ...p.runs.calls.slice(1)]).toEqual(["sync_runs.start(normalize)", "core.fin_qbo_normalize", "sync_runs.finish(succeeded)"]);
   });
 
-  it("21000 raised OUTSIDE the function's main block (production: the direct call succeeds): permanent, named as the rpc, outside", async () => {
+  it("21000 with no step (production: pg-safeupdate through PostgREST): permanent, named as the rpc, no step reported", async () => {
     const p = path({ error: { code: "21000", message: "more than one row returned by a subquery used as an expression" } });
     const out = await p.job.run("PKG", ID, { trigger: "manual" });
     expect(out).toMatchObject({ ok: false, retryable: false, errorKind: "provider_error",
-      message: "The normalizer found two rows for one record (SQLSTATE 21000, rpc fin_qbo_normalize, outside the function's main block)" });
-    expect(p.runs.rows[0]).toMatchObject({ status: "failed", error: { message: expect.stringContaining("outside the function's main block") } });
+      message: "The normalizer hit SQLSTATE 21000: a cardinality violation or an UPDATE or DELETE without WHERE (rpc fin_qbo_normalize, no step reported)" });
+    expect(p.runs.rows[0]).toMatchObject({ status: "failed", error: { message: expect.stringContaining("no step reported") } });
     // The Inngest run output shows the same reason (and Inngest does not retry it).
     const err = (await handleFinNormalize({ runNormalize: async () => out as never, enabledLanes: () => ["PKG"] }, { laneId: "PKG", connectionId: ID, trigger: "manual" }).catch((e: unknown) => e)) as Error;
-    expect(err.message).toBe("fin.qbo_normalize failed: provider_error: The normalizer found two rows for one record (SQLSTATE 21000, rpc fin_qbo_normalize, outside the function's main block)");
+    expect(err.message).toBe("fin.qbo_normalize failed: provider_error: The normalizer hit SQLSTATE 21000: a cardinality violation or an UPDATE or DELETE without WHERE (rpc fin_qbo_normalize, no step reported)");
     expect(err.constructor.name).toBe("NonRetriableError");
   });
 
   it("21000 inside the function names the step; other database codes name the rpc and where too; no database text anywhere", async () => {
     const inside = await path({ error: { code: "21000", message: "fin.qbo_normalize failed: SQLSTATE 21000, table -, constraint -, step transaction_keys" } }).job.run("PKG", ID, { trigger: "manual" });
-    expect(inside).toMatchObject({ message: "The normalizer found two rows for one record (SQLSTATE 21000, rpc fin_qbo_normalize, step transaction_keys)" });
+    expect(inside).toMatchObject({ message: "The normalizer hit SQLSTATE 21000: a cardinality violation or an UPDATE or DELETE without WHERE (rpc fin_qbo_normalize, step transaction_keys)" });
     const lock = await path({ error: { code: "55P03", message: "could not obtain lock on row in relation \"invoices\" Acme SECRET" } }).job.run("PKG", ID, { trigger: "manual" });
-    expect(lock).toMatchObject({ ok: false, retryable: true, message: "Normalizer unavailable: lock or serialization conflict (SQLSTATE 55P03), rpc fin_qbo_normalize, outside the function's main block" });
+    expect(lock).toMatchObject({ ok: false, retryable: true, message: "Normalizer unavailable: lock or serialization conflict (SQLSTATE 55P03), rpc fin_qbo_normalize, no step reported" });
     expect(JSON.stringify([inside, lock])).not.toMatch(/Acme|SECRET|subquery/);
   });
 });

@@ -113,12 +113,15 @@ export function createNormalizeStore(clientFor: JobClientFor): NormalizeStore {
         if (/^2[23]/.test(code)) throw new ConnectorError({ kind: "provider_error", message: refusalMessage(message) });
         // T-242: 21000 (cardinality violation: two input rows for one target row, or a subquery with more than one row) comes from
         // the data and repeats on every attempt: permanent, not "transient" (production retried it for minutes).
-        // Where it failed (T-242, production: the function succeeds when called directly, the job's call fails): inside the
-        // function's main block the message carries the step; anything else (the function's opening checks, the PostgREST call
-        // around it, a trigger or setting outside the repository) has no step. Fixed words only.
-        const where = stepOf(message) ? `rpc fin_qbo_normalize, step ${stepOf(message) ?? ""}` : "rpc fin_qbo_normalize, outside the function's main block";
+        // Where it failed (T-242): inside the function's main block the message carries the step; otherwise "no step reported" (the
+        // function's opening checks, an older function version, the PostgREST call around it, or something outside the repository).
+        // Fixed words only.
+        const step = stepOf(message);
+        const where = step ? `rpc fin_qbo_normalize, step ${step}` : "rpc fin_qbo_normalize, no step reported";
+        // 21000 is a cardinality violation OR pg-safeupdate's "UPDATE/DELETE requires a WHERE clause" (PostgREST sessions): the
+        // text names both, so nobody chases duplicate data for the second (T-242 production).
         if (code === "21000") {
-          throw new ConnectorError({ kind: "provider_error", message: `The normalizer found two rows for one record (SQLSTATE 21000, ${where})` });
+          throw new ConnectorError({ kind: "provider_error", message: `The normalizer hit SQLSTATE 21000: a cardinality violation or an UPDATE or DELETE without WHERE (${where})` });
         }
         if (code === "42501") throw new ConnectorError({ kind: "connection_unavailable", message: "The connection is not usable for normalization" });
         // supabase-js reports an aborted fetch as an error object without a code; the signal says it was our timeout.
