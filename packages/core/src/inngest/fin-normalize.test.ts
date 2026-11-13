@@ -57,7 +57,7 @@ describe("worker", () => {
   it("runs the normalizer for the event's lane and connection", async () => {
     const d = deps();
     expect(await handleFinNormalize(d, data)).toEqual(OK);
-    expect(d.runNormalize).toHaveBeenCalledWith("PKG", A);
+    expect(d.runNormalize).toHaveBeenCalledWith("PKG", A, "sync");
   });
 
   it("validates the event again and refuses a lane this deployment does not serve (nothing runs)", async () => {

@@ -15,6 +15,8 @@ export function defaultRetentionTables(deps: { store: RetentionStore; webhooks: 
     { id: "core.webhook_events", class: "webhooks", purge: async (lane, days) => webhooks.purge(lane, need(days)) },
     // Stored bodies must not outlive store_content_bodies (T-039 note). Decided by the lane policy in SQL, not by days.
     { id: "raw.source_records", class: "policy", purge: (lane) => store.purgeSourceRecordBodies(lane) },
+    // Fixed 90-day window set in SQL (T-196): operational error rows for provider support, not a lane setting.
+    { id: "core.connector_api_errors", class: "policy", purge: (lane) => store.purgeConnectorApiErrors(lane) },
   ];
 }
 

@@ -143,6 +143,32 @@ isOneToOne: false
       referencedColumns: ["code"]
     }
                   ]
+                },"connector_api_errors": {
+                  Row: {
+                    "at": string,"connection_id": string,"disposition": string,"endpoint": string | null,"http_status": number | null,"id": string,"kind": string,"lane_id": string,"provider": string,"provider_error_code": string | null,"provider_message": string,"provider_tid": string | null,"retry_after_seconds": number | null
+                  }
+                  ComputedFields: never
+                  Insert: {
+                    "at"?: string,"connection_id": string,"disposition": string,"endpoint"?: string | null,"http_status"?: number | null,"id"?: string,"kind": string,"lane_id": string,"provider": string,"provider_error_code"?: string | null,"provider_message": string,"provider_tid"?: string | null,"retry_after_seconds"?: number | null
+                  }
+                  Update: {
+                    "at"?: string,"connection_id"?: string,"disposition"?: string,"endpoint"?: string | null,"http_status"?: number | null,"id"?: string,"kind"?: string,"lane_id"?: string,"provider"?: string,"provider_error_code"?: string | null,"provider_message"?: string,"provider_tid"?: string | null,"retry_after_seconds"?: number | null
+                  }
+                  Relationships: [
+                    {
+      foreignKeyName: "connector_api_errors_connection_id_lane_id_fkey"
+      columns: ["connection_id","lane_id"]
+isOneToOne: false
+      referencedRelation: "connections"
+      referencedColumns: ["id","lane_id"]
+    },{
+      foreignKeyName: "connector_api_errors_lane_id_fkey"
+      columns: ["lane_id"]
+isOneToOne: false
+      referencedRelation: "lanes"
+      referencedColumns: ["code"]
+    }
+                  ]
                 },"lane_config": {
                   Row: {
                     "config": NonNullable<Json>,"created_at": string,"created_by": string | null,"lane_id": string,"version": number
@@ -305,14 +331,14 @@ isOneToOne: false
                   ]
                 },"sync_runs": {
                   Row: {
-                    "connection_id": string,"created_at": string,"error": Json | null,"finished_at": string | null,"id": string,"job_run_id": string | null,"kind": string,"lane_id": string,"records_received": number,"records_written": number,"started_at": string,"status": string,"trigger": string,"updated_at": string
+                    "connection_id": string,"created_at": string,"error": Json | null,"finished_at": string | null,"id": string,"job": string,"job_run_id": string | null,"kind": string,"lane_id": string,"records_received": number,"records_written": number,"started_at": string,"status": string,"trigger": string,"updated_at": string
                   }
                   ComputedFields: never
                   Insert: {
-                    "connection_id": string,"created_at"?: string,"error"?: Json | null,"finished_at"?: string | null,"id"?: string,"job_run_id"?: string | null,"kind": string,"lane_id": string,"records_received"?: number,"records_written"?: number,"started_at"?: string,"status"?: string,"trigger": string,"updated_at"?: string
+                    "connection_id": string,"created_at"?: string,"error"?: Json | null,"finished_at"?: string | null,"id"?: string,"job"?: string,"job_run_id"?: string | null,"kind": string,"lane_id": string,"records_received"?: number,"records_written"?: number,"started_at"?: string,"status"?: string,"trigger": string,"updated_at"?: string
                   }
                   Update: {
-                    "connection_id"?: string,"created_at"?: string,"error"?: Json | null,"finished_at"?: string | null,"id"?: string,"job_run_id"?: string | null,"kind"?: string,"lane_id"?: string,"records_received"?: number,"records_written"?: number,"started_at"?: string,"status"?: string,"trigger"?: string,"updated_at"?: string
+                    "connection_id"?: string,"created_at"?: string,"error"?: Json | null,"finished_at"?: string | null,"id"?: string,"job"?: string,"job_run_id"?: string | null,"kind"?: string,"lane_id"?: string,"records_received"?: number,"records_written"?: number,"started_at"?: string,"status"?: string,"trigger"?: string,"updated_at"?: string
                   }
                   Relationships: [
                     {
@@ -636,6 +662,9 @@ isOneToOne: false
                            },
 "connection_token_store":
 { Args: { "p_actor_id"?: string,"p_connection_id": string,"p_expires_at": string,"p_lane_id": string,"p_secret": string }; Returns: undefined
+                           },
+"connector_api_errors_purge":
+{ Args: { "p_lane": string }; Returns: number
                            },
 "fin_qbo_normalize":
 { Args: { "p_connection_id": string,"p_lane": string }; Returns: Json

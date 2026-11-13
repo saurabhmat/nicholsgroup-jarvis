@@ -6,6 +6,10 @@ import type { ConnectorErrorInfo } from "../contract/schemas";
 export const SYNC_TRIGGERS = ["schedule", "manual", "webhook", "connect"] as const;
 export type SyncTrigger = (typeof SYNC_TRIGGERS)[number];
 
+/** Which job wrote a core.sync_runs row (T-196): conn.sync (any trigger, webhook CDC included), the report pull, the normalizer. */
+export const SYNC_JOBS = ["sync", "reports", "normalize"] as const;
+export type SyncJob = (typeof SYNC_JOBS)[number];
+
 /** What one provider runner reports after a run. Counts only: never a record, never a cursor. */
 export type SyncRunnerResult = { kind: "full" | "incremental"; received: number; written: number };
 
@@ -14,7 +18,8 @@ export type SyncRunner = (laneId: LaneId, conn: LaneBoundConnection<string>, opt
 
 export type SyncRunFinish = {
   status: "succeeded" | "failed" | "cancelled";
-  kind: "full" | "incremental";
+  /** `snapshot` for the report pull and the normalizer (no cursor); full / incremental for a sync. */
+  kind: "full" | "incremental" | "snapshot";
   received: number;
   written: number;
   /** Required for `failed`, forbidden otherwise (database check). Already redacted by ConnectorError. */
@@ -28,7 +33,7 @@ export interface SyncRunStore {
    * (an earlier attempt) or that has been running longer than the stale limit (a crashed worker): both become
    * `cancelled`. Returns null when another run is genuinely running (the database allows one per connection).
    */
-  start(laneId: LaneId, conn: LaneBoundConnection<string>, input: { trigger: SyncTrigger; jobRunId: string | null }): Promise<{ runId: string } | null>;
+  start(laneId: LaneId, conn: LaneBoundConnection<string>, input: { trigger: SyncTrigger; jobRunId: string | null; job?: SyncJob }): Promise<{ runId: string } | null>;
   finish(laneId: LaneId, conn: LaneBoundConnection<string>, runId: string, result: SyncRunFinish): Promise<void>;
   /** Success: last_sync_at = now, last_error cleared. Failure: last_error = the redacted error (status is not changed here). */
   recordOutcome(laneId: LaneId, conn: LaneBoundConnection<string>, outcome: { ok: true } | { ok: false; error: ConnectorErrorInfo }): Promise<void>;

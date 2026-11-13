@@ -1186,3 +1186,11 @@ Reviews (security and code): no BLOCKER, no HIGH. All MEDIUM and the listed LOW 
 - (LOW) The "only active/degraded/reconnect_required may be disconnected" rule is enforced by a BEFORE INSERT trigger (`act.qbo_disconnect_status_guard`) plus `act.connection_ok`, not inside `act.insert_proposal`, to avoid copying that long function a third time. Same effect on every insert path.
 - (LOW) The Intuit error codes in `quickbooks/errors.ts` and the fixtures are from the documented format, not recorded; the QB-14 sandbox check confirms them. A 403 with code 3100 records `reconnect_required`; if Intuit uses 3100 for a transient condition a connection could need a reconnect it does not need.
 - (INFO) An admin_technical who calls approve/reject with an EMAIL action id now gets `not_found` (no id probing); the coarse role check still answers 42501 for roles that hold neither role.
+
+## T-196: logged, not fixed (Nov 13, 2026)
+Reviews (security and code): no BLOCKER, no HIGH. The MEDIUM items and the LOW items listed in the review-fix commit were fixed. Remaining:
+- (LOW) Intuit errors from `quickbooks/discovery.ts` (the public OpenID discovery document: no connection, no tenant) and `fetchCompanyInfoWithToken` in `company-info.ts` (the connect callback, before the connection row exists) are NOT written to `core.connector_api_errors`: the table needs a `connection_id`, and these calls have none. They still go through the shared HTTP client's redacted log line (with `intuit_tid`). Revisit if Intuit support asks for them.
+- (LOW) The export pages by the unique `id` (keyset) and sorts by time in memory (capped at 10,000 rows), instead of paging by (time, id): a timestamp round trip through a PostgREST filter can lose microseconds and skip rows.
+- (LOW) `core.sync_runs` is not purged (the normalizer's full-reload cutoff reads it); `connector_api_errors` is, at a fixed 90 days.
+- (INFO) Deploy order: part 16 should run before the T-196 code. A plain sync tolerates a database without `sync_runs.job` (it neither writes nor filters on it); the reports and normalizer run logging does not, but it only logs (a failure never breaks the job).
+- (INFO) Sentry (T-041) is a seam only (`ApiErrorTransport`); nothing is sent to Sentry yet.

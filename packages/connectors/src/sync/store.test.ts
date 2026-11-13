@@ -55,6 +55,20 @@ describe("sync run store", () => {
     expect(insert.values).toMatchObject({ lane_id: "PKG", connection_id: CONN_ID, trigger: "schedule", job_run_id: "run1", kind: "full" });
   });
 
+  it("T-196: a sync is job sync, full or incremental; reports and normalize are snapshots, and the stale cancel is scoped to the same job", async () => {
+    const f = fakeClient();
+    const store = createSyncRunStore(f.clientFor, () => NOW);
+    await store.start("PKG", conn, { trigger: "schedule", jobRunId: null });
+    await store.start("PKG", conn, { trigger: "schedule", jobRunId: null, job: "reports" });
+    const inserts = f.calls.filter((c) => c.op === "insert");
+    expect(inserts[0]?.values).toMatchObject({ kind: "full" });
+    expect(inserts[0]?.values).not.toHaveProperty("job"); // the database default applies: old SQL + new code still works for conn.sync
+    expect(inserts[1]?.values).toMatchObject({ job: "reports", kind: "snapshot" });
+    const cancels = f.calls.filter((c) => c.op === "update");
+    expect(cancels[0]?.filters.map((f) => f[1])).not.toContain("job");
+    expect(cancels[1]?.filters).toContainEqual(["eq", "job", "reports"]);
+  });
+
   it("start returns null when the one-running index refuses the insert", async () => {
     const f = fakeClient((c) => (c.op === "insert" ? { error: { code: "23505" } } : {}));
     await expect(createSyncRunStore(f.clientFor).start("PKG", conn, { trigger: "manual", jobRunId: null })).resolves.toBeNull();

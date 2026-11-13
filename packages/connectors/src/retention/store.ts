@@ -20,6 +20,8 @@ export interface RetentionStore {
   purgeEventIndex(laneId: LaneId, keepDays: number): Promise<number>;
   /** core.source_records_purge_bodies: deletes stored raw bodies when the lane policy has store_content_bodies off. */
   purgeSourceRecordBodies(laneId: LaneId): Promise<number>;
+  /** core.connector_api_errors_purge (T-196): deletes the lane's connector API errors older than the fixed 90-day window in SQL. */
+  purgeConnectorApiErrors(laneId: LaneId): Promise<number>;
 }
 
 export function createRetentionStore(clientFor: JobClientFor): RetentionStore {
@@ -43,5 +45,6 @@ export function createRetentionStore(clientFor: JobClientFor): RetentionStore {
     purgeMessageIndex: async (laneId, d) => call(laneId, "retention_comms_purge", { p_keep: keep(d) }),
     purgeEventIndex: async (laneId, d) => call(laneId, "retention_cal_purge", { p_keep: keep(d) }),
     purgeSourceRecordBodies: (laneId) => call(laneId, "source_records_purge_bodies", {}),
+    purgeConnectorApiErrors: (laneId) => call(laneId, "connector_api_errors_purge", {}),
   };
 }

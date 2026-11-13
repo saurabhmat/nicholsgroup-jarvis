@@ -139,6 +139,7 @@ describe("default tables", () => {
       purgeMessageIndex: vi.fn(async () => 1),
       purgeEventIndex: vi.fn(async () => 2),
       purgeSourceRecordBodies: vi.fn(async () => 3),
+      purgeConnectorApiErrors: vi.fn(async () => 5),
     };
     const webhooks = { purge: vi.fn(async () => 4) };
     return { store, webhooks, registry: createRetentionRegistry(defaultRetentionTables({ store, webhooks })) };
@@ -151,12 +152,15 @@ describe("default tables", () => {
       "cal.event_index:calendar",
       "core.webhook_events:webhooks",
       "raw.source_records:policy",
+      "core.connector_api_errors:policy",
     ]);
     const r = await createRetentionPurgeJob({ registry, settings: async () => ({ comms: 90, calendar: 120, conversations: 180, webhooks: 14 }), logger: silent() }).run("PKG");
     expect(store.purgeMessageIndex).toHaveBeenCalledWith("PKG", 90);
     expect(store.purgeEventIndex).toHaveBeenCalledWith("PKG", 120);
     expect(webhooks.purge).toHaveBeenCalledWith("PKG", 14);
     expect(store.purgeSourceRecordBodies).toHaveBeenCalledWith("PKG");
+    // T-196: the connector error log has a fixed 90-day window in SQL; the job passes the lane only (no days to widen it).
+    expect(store.purgeConnectorApiErrors).toHaveBeenCalledWith("PKG");
     expect(r.ok).toBe(true);
   });
 
@@ -195,11 +199,13 @@ describe("store", () => {
     expect(await store.purgeMessageIndex("PKG", 90)).toBe(5);
     await store.purgeEventIndex("PKG", 180);
     await store.purgeSourceRecordBodies("PKG");
+    await store.purgeConnectorApiErrors("PKG");
     expect(clientFor).toHaveBeenCalledWith("PKG");
     expect(calls).toEqual([
       { schema: "core", fn: "retention_comms_purge", args: { p_lane: "PKG", p_keep: "90 days" } },
       { schema: "core", fn: "retention_cal_purge", args: { p_lane: "PKG", p_keep: "180 days" } },
       { schema: "core", fn: "source_records_purge_bodies", args: { p_lane: "PKG" } },
+      { schema: "core", fn: "connector_api_errors_purge", args: { p_lane: "PKG" } },
     ]);
   });
 

@@ -82,7 +82,7 @@ export const { GET, POST, PUT } = inngestRoute((inngest) => [
   }),
   // fin.qbo_normalize (T-056): raw.source_records -> fin.* for one QuickBooks connection, lane-scoped.
   ...finQboNormalizeFunctions(inngest, {
-    runNormalize: (laneId, connectionId) => qboNormalizeJob.run(laneId, connectionId),
+    runNormalize: (laneId, connectionId, trigger) => qboNormalizeJob.run(laneId, connectionId, { ...(trigger === "schedule" || trigger === "manual" || trigger === "webhook" || trigger === "connect" ? { trigger } : {}) }),
     enabledLanes: () => getServerEnv().ENABLED_LANES,
   }),
   // conn.token_health and conn.subscriptions_renew (T-040): daily cron scans fan out per lane and connection.

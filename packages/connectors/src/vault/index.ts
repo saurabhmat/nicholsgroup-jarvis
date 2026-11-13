@@ -20,6 +20,7 @@ import { createSyncCursorStore, createSyncRunStore } from "../sync/store";
 import { createSyncTargetLister } from "../sync/targets";
 import { createCalendarIndexStore } from "../google/cal-store";
 import { createMailIndexStore } from "../google/mail-store";
+import { createApiErrorStore } from "../error-log/store";
 import { createComposioConnectionStore } from "../composio/store";
 
 const vault = createTokenVault(getLaneJobClient);
@@ -57,6 +58,9 @@ export const syncRunStore = createSyncRunStore(getLaneJobClient);
 
 /** Lists usable connections and flags health on core.connections with the lane's job client (T-040). */
 export const tokenHealthStore = createTokenHealthStore(getLaneJobClient);
+
+/** Inserts scrubbed provider API errors into core.connector_api_errors with the lane's job client (T-196). */
+export const apiErrorStore = createApiErrorStore(getLaneJobClient);
 
 /** Lists a lane's usable calendar-capable connections for the scheduled calendar sync (T-130). */
 export const syncTargetLister = createSyncTargetLister(getLaneJobClient);
