@@ -19,7 +19,7 @@ import type { Provider } from "../contract/schemas";
 import { createHttpClient, basicCredentials, type HttpClient } from "../http/client";
 import { connectorLog, type ConnectorLogger } from "../log/index";
 import { SecretValue } from "../vault/secret";
-import { codeChallenge, hashState, laneOfState, newCodeVerifier, newState } from "./pkce";
+import { codeChallenge, connectionOfState, hashState, laneOfState, newCodeVerifier, newState } from "./pkce";
 import type { StateStore } from "./state";
 
 /** Who may connect or reconnect an account (T-050: owner or admin_technical of the lane). */
@@ -79,6 +79,11 @@ export type OAuthFlowDeps = {
   states: StateStore;
   connections: {
     ensureConnection(laneId: LaneId, provider: Provider, externalAccountId: string, createdBy?: string): Promise<LaneBoundConnection>;
+    /**
+     * One connection of the lane by id, for a reconnect (T-238): null when it is not this lane's, not this provider's or not a native
+     * connection. Required for `start`/`callback` with a connection id; without it such a connect is refused.
+     */
+    findById?(laneId: LaneId, provider: Provider, connectionId: string): Promise<{ id: string; externalAccountId: string; status: string } | null>;
     /** Merges boolean features into the connection row (T-232); required only for providers whose `identify` returns features. */
     setFeatures?(laneId: LaneId, connection: LaneBoundConnection, features: Record<string, boolean>): Promise<void>;
   };
@@ -96,6 +101,7 @@ export type ConnectFailure =
   | "denied"
   | "exchange_failed"
   | "account_refused"
+  | "wrong_account"
   | "unavailable";
 
 export type CallbackResult =
@@ -144,25 +150,35 @@ export function createOAuthFlow(deps: OAuthFlowDeps) {
     },
 
     /** The provider authorization URL to redirect the user to. Throws AuthError (from `authorize`) or ConnectorError. */
-    async start(slug: string, laneId: LaneId, authorize: AuthorizeFn): Promise<string> {
+    async start(slug: string, laneId: LaneId, authorize: AuthorizeFn, opts: { connectionId?: string } = {}): Promise<string> {
       const p = bySlug.get(slug);
       if (!p) throw new ConnectorError({ kind: "not_found", message: "Unknown provider" });
       const { userId, client } = await authorize(laneId);
+      // A reconnect (T-238): the connection must be this lane's own, for this provider; its account is the only one the callback accepts.
+      let bound: { id: string; externalAccountId: string } | null = null;
+      if (opts.connectionId !== undefined) {
+        const found = deps.connections.findById ? await deps.connections.findById(laneId, p.provider, opts.connectionId).catch(() => "error" as const) : null;
+        if (found === "error") throw new ConnectorError({ kind: "transient", message: "Connection store unavailable" });
+        if (!found) throw new ConnectorError({ kind: "not_found", message: "Connection not found" });
+        bound = found;
+      }
       const { clientId, redirectUri } = p.client();
       const { authorization } = await p.endpoints(laneId);
       const url = new URL(authorization);
       if (url.protocol !== "https:") throw new ConnectorError({ kind: "provider_error", message: "Authorization endpoint must be https" });
-      const state = newState(laneId, deps.random);
+      const state = newState(laneId, deps.random, bound?.id);
       const verifier = newCodeVerifier(deps.random);
       await deps.states.create(client, laneId, p.provider, hashState(state), verifier, redirectUri);
       await deps.audit.log({
         laneId,
         actor: { kind: "user", userId },
-        action: "connection.connect_started",
-        target: `provider:${p.provider}`,
+        action: bound ? "connection.reconnect_started" : "connection.connect_started",
+        target: bound ? `connection:${bound.id}` : `provider:${p.provider}`,
       });
       const params = {
         ...p.authorizationParams,
+        // The stored address of a reconnect is only a hint to Google's account chooser; the callback still checks the account.
+        ...(bound && p.provider === "google" && /^[^\s@]{1,64}@[^\s@]{1,255}$/.test(bound.externalAccountId) ? { login_hint: bound.externalAccountId } : {}),
         response_type: "code",
         client_id: clientId,
         redirect_uri: redirectUri,
@@ -227,6 +243,16 @@ export function createOAuthFlow(deps: OAuthFlowDeps) {
             if (isConnectorError(e) && OUTAGE_KINDS.has(e.info.kind)) throw e;
             throw new RefusedAccount(e);
           }
+          // A reconnect (T-238) accepts only the account of the connection it was started for: a different Google account is refused
+          // here, before any row or token is written. The connection is read again (it may have changed since the start).
+          let account = identity.externalAccountId;
+          const boundId = connectionOfState(query.get("state"));
+          if (boundId !== null) {
+            const found = deps.connections.findById ? await deps.connections.findById(laneId, p.provider, boundId) : null;
+            if (!found) throw new RefusedAccount(new ConnectorError({ kind: "not_found", message: "Connection not found" }));
+            if (found.externalAccountId.toLowerCase() !== identity.externalAccountId.toLowerCase()) throw new WrongAccount();
+            account = found.externalAccountId; // the stored spelling: the same row, never a second one
+          }
           // D-23: the account may already be connected to another lane; the database refuses it (unique index).
           const refuseInUse = async <T>(call: () => Promise<T>): Promise<T> => {
             try {
@@ -236,7 +262,7 @@ export function createOAuthFlow(deps: OAuthFlowDeps) {
               throw e;
             }
           };
-          const connection = await refuseInUse(() => deps.connections.ensureConnection(laneId, p.provider, identity.externalAccountId, userId));
+          const connection = await refuseInUse(() => deps.connections.ensureConnection(laneId, p.provider, account, userId));
           await refuseInUse(() =>
             deps.storeToken(laneId, connection, new SecretValue(JSON.stringify({ ...tokens, obtained_at: new Date().toISOString() })), identity.expiresAt, userId),
           );
@@ -248,7 +274,7 @@ export function createOAuthFlow(deps: OAuthFlowDeps) {
         });
         return { ok: true, provider: p.provider, laneId, connectionId: conn.id };
       } catch (e) {
-        const reason: ConnectFailure = e instanceof RefusedAccount ? "account_refused" : e instanceof ExchangeFailed ? "exchange_failed" : "unavailable";
+        const reason: ConnectFailure = e instanceof WrongAccount ? "wrong_account" : e instanceof RefusedAccount ? "account_refused" : e instanceof ExchangeFailed ? "exchange_failed" : "unavailable";
         const cause = e instanceof RefusedAccount || e instanceof ExchangeFailed ? e.cause : e;
         (deps.logger ?? connectorLog).child({ laneId, provider: p.provider }).warn("connector.oauth_callback_failed", {
           reason,
@@ -329,6 +355,14 @@ class ExchangeFailed extends Error {
   override readonly name = "ExchangeFailed";
   constructor(override readonly cause: unknown) {
     super("token exchange failed");
+  }
+}
+
+/** A reconnect came back with a different account than the connection it was started for (T-238). */
+class WrongAccount extends Error {
+  override readonly name = "WrongAccount";
+  constructor() {
+    super("wrong account");
   }
 }
 

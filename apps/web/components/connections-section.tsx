@@ -9,7 +9,7 @@ import type { CoverageView } from "@/lib/coverage";
 import { CoverageList } from "./coverage-list";
 import { ComposioNotes, ComposioNotices, ComposioRows } from "./composio-connection-section";
 import { ConnectionsHeader } from "./connection-rows";
-import { GoogleNotes, GoogleNotices, GoogleRows } from "./google-connection-section";
+import { GoogleNotes, GoogleNotices, GoogleRows, GoogleSyncBar } from "./google-connection-section";
 import { QuickBooksNotes, QuickBooksNotices, QuickBooksRows } from "./quickbooks-connection-section";
 
 export function ConnectionsSection({ laneId, google, quickbooks, composio, coverage = null, tz = "America/New_York", now = new Date() }: { laneId: string; google: GoogleSectionView | null; quickbooks: QuickBooksSectionView | null; composio: ComposioSectionView | null; coverage?: CoverageView | null; tz?: string; now?: Date }) {
@@ -23,6 +23,7 @@ export function ConnectionsSection({ laneId, google, quickbooks, composio, cover
           <CardDescription>The accounts that feed this company&apos;s mail, calendar and files into the portal.</CardDescription>
         </CardHeader>
         {google ? <GoogleNotices view={google} /> : null}
+        {google ? <GoogleSyncBar laneId={laneId} view={google} /> : null}
         {quickbooks ? <QuickBooksNotices view={quickbooks} /> : null}
         {composio ? <ComposioNotices view={composio} /> : null}
         <ul data-testid="connections-list" className="flex flex-col divide-y divide-border">

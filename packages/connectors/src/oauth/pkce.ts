@@ -4,7 +4,7 @@
 import { createHash, randomBytes } from "node:crypto";
 
 const LANE_ID = /^[A-Z]{1,8}$/;
-const STATE = /^([A-Z]{1,8})\.([A-Za-z0-9_-]{43})$/;
+const STATE = /^([A-Z]{1,8})\.([A-Za-z0-9_-]{43})(?:\.([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}))?$/;
 
 /** 32 random bytes, base64url (43 characters): a valid PKCE verifier. */
 export function newCodeVerifier(random: (n: number) => Buffer = randomBytes): string {
@@ -15,9 +15,22 @@ export function codeChallenge(verifier: string): string {
   return createHash("sha256").update(verifier, "ascii").digest("base64url");
 }
 
-export function newState(laneId: string, random: (n: number) => Buffer = randomBytes): string {
+/**
+ * A reconnect (T-238) names the connection it is for as a third part (`PKG.<random>.<connection uuid>`). The whole value is hashed
+ * and only the hash is stored, so the connection id cannot be changed after the fact: a changed value is a different, unknown state.
+ */
+export function newState(laneId: string, random: (n: number) => Buffer = randomBytes, connectionId?: string): string {
   if (!LANE_ID.test(laneId)) throw new TypeError("invalid lane");
-  return `${laneId}.${random(32).toString("base64url")}`;
+  const base = `${laneId}.${random(32).toString("base64url")}`;
+  if (connectionId === undefined) return base;
+  if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/.test(connectionId)) throw new TypeError("invalid connection id");
+  return `${base}.${connectionId}`;
+}
+
+/** The connection a reconnect state is bound to (T-238), or null for an ordinary connect or an invalid value. */
+export function connectionOfState(state: unknown): string | null {
+  if (typeof state !== "string") return null;
+  return STATE.exec(state)?.[3] ?? null;
 }
 
 /** The lane named in a state value, or null when the value is not one this flow produced. */

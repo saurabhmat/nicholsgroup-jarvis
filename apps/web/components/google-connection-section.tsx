@@ -1,7 +1,11 @@
 // "Google" rows of Settings -> Connections (T-199, restyled in T-230 B). Shown only to owner or admin_technical at AAL2
-// (see settings-page.tsx). "Connect Google" / "Reconnect Google" start the existing T-063 flow with a same-origin form POST:
-// the route checks the origin, the role and AAL2, then sends you to Google's consent page. There is no Disconnect button (D-24).
+// (see settings-page.tsx). "Connect Google" / "Connect another Google account" start the existing T-063 flow with a same-origin form POST:
+// the route checks the origin, the role and AAL2, then sends you to Google's consent page. T-238: every row has its OWN "Reconnect"
+// (the same flow bound to that connection: the callback accepts only that row's account, replaces its tokens and never creates a
+// second row). It is the primary button for a row that needs it (reconnect needed, disconnected, with problems) and an outline
+// button on a healthy row (to refresh access, for example to grant a new permission). "Sync now" sits above the list. There is no Disconnect button (D-24).
 import { Alert, AlertDescription, AlertTitle, Badge, buttonVariants } from "@nichols/ui";
+import { SyncNowButton } from "./sync-now-button";
 import type { GoogleConnectionState, GoogleSectionView } from "@/lib/google-connection";
 import { ConnectionRow, when } from "./connection-rows";
 
@@ -10,9 +14,12 @@ const LABEL: Record<GoogleConnectionState, { text: string; variant: "success" | 
   connecting: { text: "Connecting", variant: "muted" },
   degraded: { text: "Connected, with problems", variant: "alert" },
   reconnect_required: { text: "Reconnect needed", variant: "alert" },
+  disconnected: { text: "Disconnected", variant: "alert" },
 };
 
-const needsReconnect = (view: GoogleSectionView) => view.connections.some((c) => c.state === "reconnect_required");
+const needsReconnect = (view: GoogleSectionView) => view.connections.some((c) => c.state === "reconnect_required" || c.state === "disconnected");
+/** The states in which Reconnect is the main action of the row. */
+const URGENT: ReadonlySet<GoogleConnectionState> = new Set(["reconnect_required", "disconnected", "degraded"]);
 
 export function GoogleNotices({ view }: { view: GoogleSectionView }) {
   return (
@@ -20,7 +27,7 @@ export function GoogleNotices({ view }: { view: GoogleSectionView }) {
       {needsReconnect(view) ? (
         <Alert variant="alert">
           <AlertTitle>Google needs to be reconnected</AlertTitle>
-          <AlertDescription>Google access was revoked or has expired, so mail and calendar are no longer syncing. Use Reconnect Google below.</AlertDescription>
+          <AlertDescription>Google access was revoked or has expired, so mail and calendar are no longer syncing. Use the Reconnect button on the account below.</AlertDescription>
         </Alert>
       ) : null}
       {view.unavailable ? (
@@ -33,19 +40,36 @@ export function GoogleNotices({ view }: { view: GoogleSectionView }) {
   );
 }
 
+/** "Sync now" for the Google accounts (owner or admin_technical: the view is null for everyone else). Drawn only with a connected account. */
+export function GoogleSyncBar({ laneId, view }: { laneId: string; view: GoogleSectionView }) {
+  if (view.unavailable || !view.connections.some((c) => c.state === "connected" || c.state === "degraded")) return null;
+  return (
+    <div data-testid="google-sync-bar" className="flex flex-wrap items-center gap-3 text-small text-muted-foreground">
+      <span>Mail and calendar sync every 15 minutes. To check for new items right now:</span>
+      <SyncNowButton laneId={laneId} testId="settings-sync-now" />
+    </div>
+  );
+}
+
 export function GoogleRows({ laneId, view }: { laneId: string; view: GoogleSectionView }) {
-  const action = `/api/connect/google/start?lane=${encodeURIComponent(laneId)}`;
-  const reconnect = needsReconnect(view);
-  const connected = view.connections.length > 0;
+  const start = `/api/connect/google/start?lane=${encodeURIComponent(laneId)}`;
+  const connected = view.connections.some((c) => c.state !== "disconnected");
   const button = view.unavailable ? null : (
-    <form method="post" action={action}>
-      <button type="submit" className={buttonVariants({ variant: connected && !reconnect ? "outline" : "default" })}>
-        {reconnect ? "Reconnect Google" : connected ? "Connect another Google account" : "Connect Google"}
+    <form method="post" action={start}>
+      <button type="submit" className={buttonVariants({ variant: connected ? "outline" : "default" })}>
+        {connected ? "Connect another Google account" : "Connect Google"}
+      </button>
+    </form>
+  );
+  const reconnectButton = (c: GoogleSectionView["connections"][number]) => (
+    <form method="post" action={`${start}&connection=${encodeURIComponent(c.id)}`}>
+      <button type="submit" aria-label={`Reconnect ${c.mailbox}`} className={buttonVariants({ variant: URGENT.has(c.state) ? "default" : "outline" })}>
+        Reconnect
       </button>
     </form>
   );
   const sub = "Mail, calendar and Drive, read-only";
-  if (!connected) {
+  if (view.connections.length === 0) {
     return (
       <ConnectionRow
         testId="google-not-connected"
@@ -74,7 +98,14 @@ export function GoogleRows({ laneId, view }: { laneId: string; view: GoogleSecti
               <span className="block">Calendar: {when(c.lastCalendarSyncAt)}</span>
             </>
           }
-          actions={i === view.connections.length - 1 ? button : null}
+          actions={
+            view.unavailable ? null : (
+              <>
+                {reconnectButton(c)}
+                {i === view.connections.length - 1 ? button : null}
+              </>
+            )
+          }
           note={!c.mailboxAllowed ? <>This mailbox is not in the lane&apos;s mailbox list, so it is not syncing. Ask your administrator to add it.</> : null}
         />
       ))}

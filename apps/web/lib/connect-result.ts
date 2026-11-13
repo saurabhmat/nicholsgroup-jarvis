@@ -49,7 +49,7 @@ export function connectResultMessage(params: SearchParams): ConnectResultMessage
   // A Composio connect is named by its toolkit ("Gmail via Composio"); the notice text still keys on "Composio".
   const name = baseName === "Composio" && toolkit ? `${toolkit} via Composio` : baseName;
   // The server sets the notice only when a grant was obtained but not stored (flow.ts: account_refused or unavailable).
-  const removeAccess = one(params.notice) === "remove_app_access" && (code === "account_refused" || code === "unavailable") ? ` ${REMOVE_ACCESS[baseName] ?? "Remove the portal's access at the provider, then try again."}` : "";
+  const removeAccess = one(params.notice) === "remove_app_access" && (code === "account_refused" || code === "wrong_account" || code === "unavailable") ? ` ${REMOVE_ACCESS[baseName] ?? "Remove the portal's access at the provider, then try again."}` : "";
   switch (code) {
     case "ok":
       if (baseName === "Composio") return { tone: "success", title: `${name} connected`, description: "The account was checked and saved. If it replaced an earlier account, the earlier one stays in Composio until it is removed by hand. Mail and calendar keep syncing through the Google connection until this company is switched to Composio." };
@@ -64,6 +64,12 @@ export function connectResultMessage(params: SearchParams): ConnectResultMessage
             : name === "Google"
             ? "The Google account you chose is not in this company's mailbox list, or is already connected to another company. Nothing was saved. Ask your administrator to add the address to the mailbox list."
             : `The ${name} account you chose is not the one set up for this company, or is already connected to another company. Nothing was saved.`) + removeAccess,
+      };
+    case "wrong_account":
+      return {
+        tone: "alert",
+        title: `${name} account does not match`,
+        description: `You chose a different ${name} account than the one being reconnected. Nothing was saved and the connection was not changed. Reconnect again with the same account, or use "Connect another Google account" to add a new one.${removeAccess}`,
       };
     case "denied":
       return { tone: "alert", title: "Connection cancelled", description: `Access was not granted at ${name}. Nothing was saved.` };

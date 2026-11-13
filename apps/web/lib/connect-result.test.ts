@@ -29,6 +29,15 @@ describe("connectResultMessage", () => {
     expect(m?.description).toMatch(/Third-party connections/);
   });
 
+  it("explains a reconnect with a different Google account (T-238): nothing saved, and the leftover grant", () => {
+    const m = connectResultMessage({ connect: "wrong_account", provider: "google", notice: "remove_app_access" });
+    expect(m?.tone).toBe("alert");
+    expect(m?.title).toBe("Google account does not match");
+    expect(m?.description).toMatch(/Nothing was saved and the connection was not changed/);
+    expect(m?.description).toMatch(/Third-party connections/);
+    expect(connectResultMessage({ connect: "wrong_account", provider: "google" })?.description).not.toMatch(/Third-party connections/);
+  });
+
   it("names a Composio connect by its toolkit and does not promise sync (T-219)", () => {
     const ok = connectResultMessage({ connect: "ok", provider: "composio", toolkit: "gmail" });
     expect(ok).toMatchObject({ tone: "success", title: "Gmail via Composio connected" });
