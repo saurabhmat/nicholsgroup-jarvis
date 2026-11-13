@@ -77,7 +77,7 @@ describe("jobFailureBannerFor", () => {
     }),
   });
   const guards = (over: { role?: unknown; client?: unknown } = {}) => ({
-    requireRole: vi.fn(async (_lane: string, _roles: readonly string[]) => {
+    requireRole: vi.fn<(lane: string, roles: readonly string[]) => Promise<never>>(async () => {
       if (over.role) throw over.role;
       return { client: over.client } as never;
     }),
