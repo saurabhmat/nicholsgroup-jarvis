@@ -41,7 +41,7 @@ import { qboNormalizeJob } from "@nichols/connectors/normalize";
 import { purgeBriefingRuns, purgeBriefings, purgeNews } from "@nichols/briefing/jobs";
 import { expireStaleActions, reconcileStuckLane } from "@nichols/approvals/wire";
 import { createFailureTracker } from "@/lib/job-failures";
-import { dueOwners, ownersWithViews, runRefresh, runScheduled } from "@/lib/briefing-schedule";
+import { dueOwners, refreshOwners, runRefresh, runScheduled } from "@/lib/briefing-schedule";
 import { newsDue, runScheduledNews } from "@/lib/news-schedule";
 
 // A scheduled news fetch (one model call with web search and up to 2 resumes, 80 s abort) runs inside this route's step.
@@ -132,7 +132,8 @@ const functionsFor = (inngest: Parameters<Parameters<typeof inngestRoute>[0]>[0]
   // (stale after 3 h, 6 a day, one running); a refusal never calls the model. Needs a sync of this function in Inngest Cloud.
   briefingRefreshFunction(inngest, {
     enabledLanes: () => getServerEnv().ENABLED_LANES,
-    owners: (laneId) => ownersWithViews(briefingClient, laneId),
+    // Follows the schedule switch (Saurabh, Nov 13): schedule_enabled off = no automatic refresh after new mail.
+    owners: (laneId) => refreshOwners(briefingClient, laneId),
     refresh: (laneId, owner, now) => runRefresh(briefingClient, laneId, owner, now),
   }),
   // fin.sync QuickBooks (T-090): hourly tick; each lane's usable QuickBooks connections get a backup CDC poll every

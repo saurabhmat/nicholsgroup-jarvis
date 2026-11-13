@@ -1215,7 +1215,7 @@ Fixed:
 - (LOW, security L6) The reconnect callback now refuses (wrong_account, nothing stored) if the row `ensureConnection` returns is not the bound row (test in `oauth/reconnect.test.ts`).
 
 Logged, not fixed:
-- (MEDIUM, security M1, DECISION for Saurabh) The new-mail briefing refresh runs even when `lane_config.briefing.schedule_enabled` is off. Saurabh asked for "then trigger a briefing refresh" (Nov 13), so it is on.
+- (MEDIUM, security M1) DECIDED by Saurabh Nov 13: the refresh follows the schedule switch, and is now FIXED (`refreshOwners`: schedule_enabled off = nobody; Sync now unaffected). Original note: The new-mail briefing refresh runs even when `lane_config.briefing.schedule_enabled` is off. Saurabh asked for "then trigger a briefing refresh" (Nov 13), so it is on.
   - Cost gates hold: 3 h stale, 6 a day per lane, one running, 10-minute cooldown.
   - It runs unattended: it reads Gmail bodies for the summary and drafts replies (proposals only).
   - If unattended runs should need the schedule switch, gate `runRefresh` on `schedule_enabled` or a new `briefing.refresh_on_mail` (default off).
