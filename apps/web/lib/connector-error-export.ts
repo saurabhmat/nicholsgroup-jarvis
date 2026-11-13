@@ -128,8 +128,4 @@ export function createConnectorErrorExportHandler(deps: ExportHandlerDeps) {
   };
 }
 
-/** The export URL for Settings -> Connections (T-197): same-origin, relative. Dates are YYYY-MM-DD (UTC days, `to` inclusive). */
-export function connectorErrorExportUrl(laneId: string, input: { from: string; to: string; format?: ExportFormat; dataset?: ExportDataset }): string {
-  const p = new URLSearchParams({ from: input.from, to: input.to, format: input.format ?? "csv", dataset: input.dataset ?? "errors" });
-  return `/api/lanes/${encodeURIComponent(laneId)}/connector-errors/export?${p.toString()}`;
-}
+export { connectorErrorExportUrl } from "./connector-error-export-url";
