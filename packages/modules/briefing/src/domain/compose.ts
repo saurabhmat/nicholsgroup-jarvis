@@ -3,6 +3,7 @@
 // from metadata (never from the model), and any money amount, percentage or date it writes must appear in that item's
 // own source material, otherwise the field becomes "Awaiting your input" (never invent prices, dates, commitments).
 // Pure: no zod here (the module may depend on core only), hand-written validation instead.
+import { BUSINESS_TZ, formatDayIn, formatTimeIn, localDate } from "./time";
 
 export const AWAITING = "Awaiting your input";
 /** URLs, bare domains with a path, and email addresses (T-231d security review M2). */
@@ -123,6 +124,70 @@ export function maskContent(c: BriefContent): BriefContent {
   };
 }
 
+// ---------------------------------------------------------------------------------------------------- display clean-up (T-240)
+
+/** "9:42 AM ET" for an instant on `now`'s Eastern date, "Nov 11, 9:42 AM ET" otherwise. Eastern is the business zone (rule 11). */
+export function easternStamp(iso: string | Date, now: Date): string {
+  const at = typeof iso === "string" ? new Date(iso) : iso;
+  if (Number.isNaN(at.getTime())) return "";
+  const time = formatTimeIn(at.toISOString(), BUSINESS_TZ);
+  return localDate(at, BUSINESS_TZ) === localDate(now, BUSINESS_TZ) ? `${time} ET` : `${formatDayIn(at.toISOString(), BUSINESS_TZ).replace(/^\w+,\s*/, "")}, ${time} ET`;
+}
+
+/** "Nov 11, 9:42 AM ET": always with the date (facts for the model; never UTC). */
+export function easternDateTime(iso: string): string {
+  const at = new Date(iso);
+  if (Number.isNaN(at.getTime())) return "unknown time";
+  return `${formatDayIn(at.toISOString(), BUSINESS_TZ).replace(/^\w+,\s*/, "")}, ${formatTimeIn(at.toISOString(), BUSINESS_TZ)} ET`;
+}
+
+const ISO_STAMP = /\b\d{4}-\d{2}-\d{2}[T ]\d{2}:\d{2}(?::\d{2}(?:\.\d+)?)?(?:\s?(?:Z|UTC|GMT)\b|[+-]\d{2}:?\d{2}\b)?/g;
+const CLOCK_UTC = /\b(\d{1,2}):(\d{2})\s?(am|pm)?\s?(?:UTC|GMT|Z)\b/gi;
+const REF_GROUP = /\s?[([]\s*(?:(?:refs?|ids?)\s*:?\s*)?r\d{1,2}(?:\s*(?:,|;|and|&)\s*r\d{1,2})*\s*[)\]]/gi;
+const REF_BARE = /(?:\b(?:[Ss]ee|[Rr]efs?|[Pp]er)\s+)?(?<![\w./@#-])r\d{1,2}(?!\.?\d|[\w'@-]):?/g;
+
+/**
+ * Display clean-up of model-written text (T-240), applied before saving: internal row refs ("r4", "(r4)", "[r6]") are removed and any
+ * ISO or UTC timestamp is rewritten in Eastern ("9:42 AM ET"; the date is added when it is not today). The prompt asks for neither;
+ * this is the deterministic backstop. The `ref` fields of the briefing are not text and are never passed through here.
+ */
+export function tidyModelText(text: string, now: Date): string {
+  const withTimes = text
+    .replace(ISO_STAMP, (m) => {
+      const hasZone = /(?:Z|UTC|GMT|[+-]\d{2}:?\d{2})$/i.test(m);
+      const iso = m.replace(/\s?(?:UTC|GMT)$/i, "Z").replace(" ", "T");
+      const at = new Date(hasZone ? iso : `${iso}Z`); // no zone given: the database and the facts are UTC
+      return Number.isNaN(at.getTime()) ? "" : easternStamp(at, now);
+    })
+    .replace(CLOCK_UTC, (_m, h: string, min: string, ap?: string) => {
+      let hour = Number(h) % (ap ? 12 : 24);
+      if (ap?.toLowerCase() === "pm") hour += 12;
+      if (hour > 23 || Number(min) > 59) return "";
+      const at = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate(), hour, Number(min)));
+      return `${formatTimeIn(at.toISOString(), BUSINESS_TZ)} ET`;
+    });
+  return withTimes
+    .replace(REF_GROUP, "")
+    .replace(REF_BARE, "")
+    .replace(/\s+([,.;:!?])/g, "$1")
+    .replace(/\(\s*\)/g, "")
+    .replace(/[ \t]{2,}/g, " ")
+    .trim();
+}
+
+/** tidyModelText over the summary-facing strings (lines, notes, deadlines, priorities, reply context); reply bodies are the owner's draft and stay as written. Run BEFORE maskContent (masking would split a timestamp). */
+export function tidyContent(c: BriefContent, now: Date): BriefContent {
+  const t = (v: string) => tidyModelText(v, now);
+  return {
+    ...c,
+    lines: c.lines.map(t).filter((l) => l !== ""),
+    attention: c.attention.map((a) => ({ ...a, what: t(a.what), why: t(a.why), next: t(a.next) })),
+    deadlines: c.deadlines.map((d) => ({ ...d, text: t(d.text), due: d.due === null ? null : t(d.due) })),
+    priorities: c.priorities.map((p) => ({ ...p, text: t(p.text), reason: t(p.reason) })),
+    replies: c.replies.map((r) => ({ ...r, context: t(r.context) })),
+  };
+}
+
 /**
  * Validates the model's JSON against the refs and grounds every field. `sourcesFor(ref)` = the metadata line and (when
  * read) the body of that ref; `allSources` = everything the model saw (for lines and priorities). Unknown refs are
@@ -223,5 +288,7 @@ export const BRIEFING_RULES = [
   "Answer with one JSON object only, no prose: {\"lines\": [3-5 short sentences], \"attention\": [{\"ref\",\"what\",\"why\",\"next\"}],",
   "\"deadlines\": [{\"ref\",\"text\",\"due\"}], \"priorities\": [{\"text\",\"reason\",\"refs\": []}] (top 3),",
   "\"replies\": [{\"ref\",\"status\": \"ready\"|\"awaiting_input\",\"context\",\"text\"}] (at most 3), \"more_replies\": [refs]}.",
-  "Use only refs from the facts (r1, r2, ...).",
+  "Use only refs from the facts (r1, r2, ...), and only inside the \"ref\" / \"refs\" fields: never write a ref or any internal id (r1, r2) in a sentence.",
+  "Times: write them in Eastern time like \"9:42 AM ET\"; never UTC, GMT or ISO timestamps (no 2026-11-11T14:42:00Z).",
+  "Lead with the newest items. The mail list is already limited to recent mail; \"older threads still waiting\" is only a number: mention it in at most one short clause and never describe those threads.",
 ].join(" ");

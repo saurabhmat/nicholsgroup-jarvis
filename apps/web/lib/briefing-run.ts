@@ -16,7 +16,7 @@
 import { wrapUntrusted, UNTRUSTED_DATA_RULE, type LLMProvider } from "@nichols/ai";
 import { assemblePrompt, BRAIN_RULES, withUserContext } from "@nichols/ai/prompts";
 import type { LaneId } from "@nichols/core";
-import { BRIEFING_RULES, checkContent, classifyFailure, failureNote, maskContent, maskFigures, type BriefContent, type BriefRef, type FailureCode } from "@nichols/briefing/domain";
+import { BRIEFING_RULES, checkContent, classifyFailure, easternDateTime, formatTimeIn, failureNote, maskContent, maskFigures, tidyContent, type BriefContent, type BriefRef, type FailureCode } from "@nichols/briefing/domain";
 import type { BrainPromptContext } from "@nichols/brain/server";
 import { loadBriefing, type BriefingView } from "./briefing";
 import { BRIEFING_OUTPUT_SCHEMA, correctionMessage, parseBriefingOutput } from "./briefing-output";
@@ -152,8 +152,12 @@ const MAX_BODY_CHARS = 4000;
 const MAX_REFS = 8;
 const DAY_MS = 86_400_000;
 
-/** The refs given to the model: attention first, then money threads not already in it. */
-export function refsFrom(view: BriefingView): BriefRef[] {
+/**
+ * The refs given to the model: the attention list (already limited to the fresh window, T-240), then money threads not already in it.
+ * With `now`, money threads older than the same window are left out too, so the summary does not lead with week-old mail
+ * (they stay in the Money data and in "Still waiting", which the model gets only as a count).
+ */
+export function refsFrom(view: BriefingView, now?: Date): BriefRef[] {
   if (!view.mail.access) return [];
   const out: BriefRef[] = [];
   const seen = new Set<string>();
@@ -178,14 +182,18 @@ export function refsFrom(view: BriefingView): BriefRef[] {
     });
   };
   for (const a of view.mail.attention) if (a.kind !== "repeated_failures") push(a.thread, a.reason, a.kind);
-  for (const m of view.mail.money) push(m.thread, m.kind.replace("_", " "), `money:${m.kind}`);
+  const freshMs = view.config.attention.fresh_hours * 3_600_000;
+  for (const m of view.mail.money) if (!now || now.getTime() - Date.parse(m.thread.receivedAt) <= freshMs) push(m.thread, m.kind.replace("_", " "), `money:${m.kind}`);
   return out;
 }
 
 /** One ref for the model: the ref id and rule reason are ours; everything sender-written is wrapped as untrusted data. */
 const metaLine = (r: BriefRef) =>
-  `${r.ref}: ${r.kind} | received ${r.receivedAt} | rule: ${r.reason} | ` +
+  `${r.ref}: ${r.kind} | received ${easternDateTime(r.receivedAt)} | rule: ${r.reason} | ` +
   wrapUntrusted(`from ${r.fromName ?? ""} <${r.fromAddress ?? "unknown"}> to mailbox ${r.mailbox ?? "unknown"}, subject "${r.subject ? maskFigures(r.subject).replace(/\s+/g, " ") : ""}"`, { source: "email-metadata", id: r.ref });
+
+/** "9:30 AM ET" for a calendar instant. */
+const etClock = (iso: string): string => `${formatTimeIn(iso, "America/New_York")} ET`;
 
 function factsText(view: BriefingView, refs: BriefRef[], now: Date, policy: BriefingPolicy): string {
   const cal = !policy.calendar
@@ -193,13 +201,17 @@ function factsText(view: BriefingView, refs: BriefRef[], now: Date, policy: Brie
     : view.calendar.access
       ? [
           "Today's calendar:",
-          ...view.calendar.today.map((e, i) => `- ${e.allDay ? "all day" : `${e.startAt}–${e.endAt}`} ${wrapUntrusted(e.title, { source: "calendar", id: `today${String(i + 1)}` })}${e.rsvpPending ? " (RSVP pending)" : ""}${e.clashesWith.length ? ` (clashes with ${wrapUntrusted(e.clashesWith.join(", "), { source: "calendar", id: `clash${String(i + 1)}` })})` : ""}`),
+          ...view.calendar.today.map((e, i) => `- ${e.allDay ? "all day" : `${etClock(e.startAt)}–${etClock(e.endAt)}`} ${wrapUntrusted(e.title, { source: "calendar", id: `today${String(i + 1)}` })}${e.rsvpPending ? " (RSVP pending)" : ""}${e.clashesWith.length ? ` (clashes with ${wrapUntrusted(e.clashesWith.join(", "), { source: "calendar", id: `clash${String(i + 1)}` })})` : ""}`),
           "Next 7 days (notable):",
-          ...view.calendar.ahead.map((e, i) => `- ${e.startAt} ${wrapUntrusted(e.title, { source: "calendar", id: `ahead${String(i + 1)}` })} (${e.why.join(", ")})`),
+          ...view.calendar.ahead.map((e, i) => `- ${easternDateTime(e.startAt)} ${wrapUntrusted(e.title, { source: "calendar", id: `ahead${String(i + 1)}` })} (${e.why.join(", ")})`),
         ]
       : ["Calendar: not available."];
-  const mail = policy.email ? ["Mail items needing attention (metadata):", ...refs.map(metaLine)] : ["Mail: not shared with the AI for this company."];
-  return [`Now: ${now.toISOString()} (owner's zone ${view.viewerTz}).`, view.coverageLine, ...cal, ...mail].join("\n");
+  // Older qualifying threads are given as a NUMBER only (T-240): the summary must not lead with, or describe, week-old mail.
+  const older = view.mail.access ? view.mail.stillWaiting.length : 0;
+  const mail = policy.email
+    ? ["Mail items needing attention (metadata, newest first; all times Eastern):", ...refs.map(metaLine), ...(older > 0 ? [`Older threads still waiting (not listed, number only): ${String(older)}`] : [])]
+    : ["Mail: not shared with the AI for this company."];
+  return [`Now: ${easternDateTime(now.toISOString())} (Eastern time; all times below are Eastern).`, view.coverageLine, ...cal, ...mail].join("\n");
 }
 
 /** Runs one briefing and saves it. Returns the saved id and the content. */
@@ -210,7 +222,7 @@ export async function runBriefing(deps: RunDeps, input: { laneId: LaneId; ownerU
   const view = await loadBriefing(deps.client, laneId, now, input.viewerTz);
   const { policy } = deps;
   // Without "email" the model gets no mail at all, so no refs either (nothing to attach notes or drafts to).
-  const refs = policy.email ? refsFrom(view) : [];
+  const refs = policy.email ? refsFrom(view, now) : [];
   const notes: string[] = [];
   const bodies = new Map<string, string>();
   if (!policy.email) notes.push("email_not_allowed");
@@ -311,7 +323,8 @@ export async function runBriefing(deps: RunDeps, input: { laneId: LaneId; ownerU
       }
     }
     const raw: unknown = parsed.value;
-    content = maskContent(checkContent(raw, refs, sourcesFor, allSources, { replies: policy.storeDrafts }));
+    // Tidy first (refs and UTC times out of the sentences), then mask: masking would split a timestamp.
+    content = maskContent(tidyContent(checkContent(raw, refs, sourcesFor, allSources, { replies: policy.storeDrafts }), now));
     if (!policy.storeDrafts) notes.push("reply_drafts_off");
   } catch (e) {
     // Class name and the fixed reason code only: never a provider message, a value or a prompt.

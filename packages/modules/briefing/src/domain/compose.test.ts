@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { AWAITING, checkContent, extractJson, grounded, maskContent, maskText, type BriefRef } from "./compose";
+import { AWAITING, BRIEFING_RULES, checkContent, easternDateTime, easternStamp, extractJson, grounded, maskContent, maskText, tidyContent, tidyModelText, type BriefContent, type BriefRef } from "./compose";
 
 const ref = (n: number): BriefRef => ({
   ref: `r${String(n)}`,
@@ -153,5 +153,57 @@ describe("reply drafts: links and addresses must come from the thread itself (T-
   });
   it("the model's own placeholder is never a ready draft", () => {
     expect(run(AWAITING).replies[0]).toMatchObject({ status: "awaiting_input", text: "" });
+  });
+});
+
+describe("T-240: tidyModelText (no row refs, no UTC)", () => {
+  const now = new Date("2026-11-11T15:00:00Z"); // 10:00 AM EST
+  it("removes bare row refs, parenthesised and bracketed ones, and tidies the spacing", () => {
+    expect(tidyModelText("Client asked about the renewal (r4).", now)).toBe("Client asked about the renewal.");
+    expect(tidyModelText("Two threads [r6] and (r2, r3) need a reply.", now)).toBe("Two threads and need a reply.");
+    expect(tidyModelText("See r4 for the contract, then reply to r6.", now)).toBe("for the contract, then reply to.");
+    expect(tidyModelText("r1: the board deck is due", now)).toBe("the board deck is due");
+  });
+  it("leaves words and ids that only look like refs", () => {
+    for (const keep of ["The r2d2 project", "Route 4r", "Invoice #r4", "email r4@acme.test", "Plan R2 is next", "the 2026-r4 cycle"]) expect(tidyModelText(keep, now)).toBe(keep);
+  });
+  it("rewrites ISO and UTC timestamps in Eastern: time only for today, with the date otherwise", () => {
+    expect(tidyModelText("Replied at 2026-11-11T14:42:00Z.", now)).toBe("Replied at 9:42 AM ET.");
+    expect(tidyModelText("Sent 2026-11-09T14:42:00.000Z by the client", now)).toBe("Sent Nov 9, 9:42 AM ET by the client");
+    expect(tidyModelText("Meeting 2026-11-11T19:00:00+00:00", now)).toBe("Meeting 2:00 PM ET");
+    expect(tidyModelText("Call at 14:42 UTC today", now)).toBe("Call at 9:42 AM ET today");
+    expect(tidyModelText("Call at 2:42 pm GMT", now)).toBe("Call at 9:42 AM ET");
+  });
+  it("uses daylight time in summer (EDT) and standard time in winter", () => {
+    expect(tidyModelText("At 2026-07-01T14:00:00Z", new Date("2026-07-01T16:00:00Z"))).toBe("At 10:00 AM ET");
+    expect(tidyModelText("At 2026-01-05T14:00:00Z", new Date("2026-01-05T16:00:00Z"))).toBe("At 9:00 AM ET");
+  });
+  it("easternStamp and easternDateTime", () => {
+    expect(easternStamp("2026-11-11T14:42:00Z", now)).toBe("9:42 AM ET");
+    expect(easternDateTime("2026-11-11T14:42:00Z")).toBe("Nov 11, 9:42 AM ET");
+    expect(easternDateTime("nonsense")).toBe("unknown time");
+  });
+  it("tidyContent cleans the summary text but never touches ref fields or reply bodies", () => {
+    const c: BriefContent = {
+      lines: ["Contract thread (r1) needs you before 2026-11-12T15:00:00Z.", "(r2)"],
+      attention: [{ ref: "r1", what: "Renewal r1", why: "Due at 14:00 UTC", next: "Confirm" }],
+      deadlines: [{ ref: "r1", text: "Renewal (r1)", due: "2026-11-12T15:00:00Z" }],
+      priorities: [{ text: "Reply (r1)", reason: "VIP", refs: ["r1"] }],
+      replies: [{ ref: "r1", status: "ready", context: "About r1", text: "Hi, see r1 at 2026-11-12T15:00:00Z" }],
+      moreReplies: ["r2"],
+      notes: ["body_unreadable:r2"],
+    };
+    const out = tidyContent(c, now);
+    expect(out.lines).toEqual(["Contract thread needs you before Nov 12, 10:00 AM ET."]); // the line that was only a ref is dropped
+    expect(out.attention[0]).toEqual({ ref: "r1", what: "Renewal", why: "Due at 9:00 AM ET", next: "Confirm" });
+    expect(out.deadlines[0]).toEqual({ ref: "r1", text: "Renewal", due: "Nov 12, 10:00 AM ET" });
+    expect(out.priorities[0]).toEqual({ text: "Reply", reason: "VIP", refs: ["r1"] });
+    expect(out.replies[0]).toEqual({ ref: "r1", status: "ready", context: "About", text: "Hi, see r1 at 2026-11-12T15:00:00Z" });
+    expect(out.moreReplies).toEqual(["r2"]);
+    expect(out.notes).toEqual(["body_unreadable:r2"]);
+  });
+  it("the prompt asks for no refs in sentences and no UTC times", () => {
+    expect(BRIEFING_RULES).toMatch(/never write a ref or any internal id/);
+    expect(BRIEFING_RULES).toMatch(/Eastern time like "9:42 AM ET"; never UTC/);
   });
 });

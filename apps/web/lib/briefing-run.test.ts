@@ -561,3 +561,52 @@ describe("a reply cut off at the output limit (T-236)", () => {
     expect(saved[0]?.content.notes).toContain("ungrounded:r1.why");
   });
 });
+
+// T-240: the model gets the same fresh list as Home, the older count as a number only, Eastern times, and the saved text has no refs or UTC.
+describe("T-240: fresh input, Eastern times, clean summary", () => {
+  const th = (n: number, over: Record<string, unknown>) => ({ connection_id: "c1", thread_key: `t${String(n)}`, message_id: `m${String(n)}`, from_address: `person${String(n)}@acme.test`, from_name: `Person ${String(n)}`, subject: `Subject ${String(n)}`, received_at: "2026-11-11T13:00:00Z", source_url: null, labels: ["INBOX"], last_is_owner: false, owner_replied: false, unread_count: 1, inbound_count: 1, ...over });
+  const cov = { data: [{ stream: "mail", account: "me@pubk.test", connection_id: "c1", provider: "google", status: "active", configured: true, last_sync_at: "2026-11-11T14:59:00Z" }], error: null };
+  const rows = [th(1, {}), th(2, { received_at: "2026-11-05T10:00:00Z", unread_count: 0, subject: "Week-old thread" }), th(3, { received_at: "2026-11-04T10:00:00Z", subject: "Another old one" })];
+
+  it("the week-old threads are not in the refs or the facts; their count is", async () => {
+    const c = fakeClient({ briefing_coverage: cov, briefing_threads: { data: rows, error: null } });
+    const view = await loadBriefing(c, "PKG", NOW, "America/New_York");
+    expect(view.mail.access && view.mail.stillWaiting).toHaveLength(2);
+    expect(refsFrom(view, NOW).map((r) => r.messageId)).toEqual(["m1"]);
+    const { d, provider } = deps({ client: c, reply: '{"lines": ["ok"]}' });
+    await runBriefing(d, input);
+    const sent = String((provider.calls[0]?.messages ?? []).map((m) => JSON.stringify(m.content)).join(""));
+    expect(sent).toContain("Older threads still waiting (not listed, number only): 2");
+    for (const gone of ["Week-old thread", "Another old one", "m2", "m3"]) expect(sent).not.toContain(gone);
+    expect(sent).toContain("Subject 1");
+  });
+
+  it("times in the model input are Eastern, never ISO or UTC", async () => {
+    const c = fakeClient({ briefing_coverage: cov, briefing_threads: { data: rows, error: null } });
+    const { d, provider } = deps({ client: c, reply: '{"lines": ["ok"]}' });
+    await runBriefing(d, input);
+    const sent = String((provider.calls[0]?.messages ?? []).map((m) => JSON.stringify(m.content)).join(""));
+    expect(sent).toContain("received Nov 11, 8:00 AM ET");
+    expect(sent).toContain("Now: Nov 11, 10:00 AM ET");
+    expect(sent).not.toMatch(/\d{4}-\d{2}-\d{2}T\d{2}:\d{2}/);
+  });
+
+  it("the saved summary has no row refs and no UTC; the ref fields keep linking to their threads", async () => {
+    const reply = JSON.stringify({ lines: ["Person 1 wrote about Subject 1 (r1), sent at 2026-11-11T13:00:00Z."], attention: [{ ref: "r1", what: "Subject 1 (r1)", why: "Needs a reply", next: "Reply" }] });
+    const c = fakeClient({ briefing_coverage: cov, briefing_threads: { data: rows, error: null } });
+    const { d, saved } = deps({ client: c, reply });
+    await runBriefing(d, input);
+    // The line's UTC stamp is not in the facts (Eastern only), so grounding may drop it; whatever is kept is clean.
+    for (const line of saved[0]?.content.lines ?? []) expect(line).not.toMatch(/\br\d+\b|T\d{2}:\d{2}|UTC/);
+    expect(saved[0]?.content.attention).toEqual([{ ref: "r1", what: "Subject 1", why: "Needs a reply", next: "Reply" }]);
+    expect(saved[0]?.sourceRefs.map((r) => r.ref)).toEqual(["r1"]);
+  });
+
+  it("a model line with a ref and an Eastern time is cleaned, not dropped", async () => {
+    const reply = JSON.stringify({ lines: ["Person 1 wrote at Nov 11 (r1)."] });
+    const c = fakeClient({ briefing_coverage: cov, briefing_threads: { data: rows, error: null } });
+    const { d, saved } = deps({ client: c, reply });
+    await runBriefing(d, input);
+    expect(saved[0]?.content.lines).toEqual(["Person 1 wrote at Nov 11."]);
+  });
+});
