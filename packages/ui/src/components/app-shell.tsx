@@ -73,13 +73,15 @@ export function AppShell({ brand, lanes, currentLaneId, pathname, approvalsCount
       </a>
 
       {/* Desktop side menu */}
-      <aside data-slot="side-menu" className="hidden w-60 shrink-0 flex-col gap-4 bg-sidebar p-4 text-sidebar-foreground md:flex">
-        <div>
-          <p className="flex items-center gap-2 font-heading text-xl font-semibold text-sidebar-strong">
-            {brand.wordmark}
-            <Star />
+      <aside data-slot="side-menu" className="hidden w-60 min-w-60 shrink-0 flex-col gap-4 bg-sidebar p-4 text-sidebar-foreground md:flex">
+        {/* T-240: the brand is never truncated or clipped: it may wrap at any width (break-words), the star keeps its size, and the line
+            height leaves room for descenders. The side menu itself never shrinks below its width (min-w-60). */}
+        <div data-slot="brand" className="min-w-0 overflow-visible">
+          <p className="flex min-w-0 flex-wrap items-center gap-x-2 gap-y-0.5 break-words py-0.5 font-heading text-xl font-semibold leading-tight text-sidebar-strong">
+            <span data-slot="brand-wordmark" className="min-w-0 break-words">{brand.wordmark}</span>
+            <Star className="shrink-0" />
           </p>
-          <p className="text-xs text-sidebar-section">{brand.product}</p>
+          <p data-slot="brand-product" className="break-words text-xs leading-snug text-sidebar-section">{brand.product}</p>
         </div>
         <LaneSwitcher lanes={lanes} currentLaneId={currentLaneId} segment={segment} Link={Link} />
         <nav aria-label="Main" className="flex flex-1 flex-col gap-1">
