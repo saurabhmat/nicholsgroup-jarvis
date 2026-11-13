@@ -196,6 +196,16 @@ describe("callback (reconnect)", () => {
     expect(t2.ensured).toEqual([]);
   });
 
+  it("defence in depth: if the account's row is not the bound row (two rows for one account), nothing is stored on either", async () => {
+    tokenEndpoint("new-token");
+    const rows = rowsOf();
+    (rows[1] as Row).account = "ann@pubk.test"; // simulates a changed unique key: ensureConnection finds ROW_B first
+    const t = setup([rows[1] as Row, rows[0] as Row]);
+    const url = await t.flow.start("google", "PKG", t.as, { connectionId: ROW_A });
+    await expect(t.flow.callback("google", back(url), t.as)).resolves.toMatchObject({ ok: false, reason: "wrong_account" });
+    expect(t.rows.map((r) => [r.id, r.token])).toEqual([[ROW_B, "token-b"], [ROW_A, "old-token-a"]]);
+  });
+
   it("the route redirects a wrong account with a coarse code and the remove-access notice", async () => {
     tokenEndpoint("new-token");
     const t = setup(rowsOf(), { current: "bob@pubk.test" });

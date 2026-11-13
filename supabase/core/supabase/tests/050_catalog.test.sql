@@ -134,7 +134,8 @@ insert into security_definer_ok values
   ('core.briefing_claim_refresh_close', 'the briefing.refresh job finishes the owner''s open auto claim; service_role only (T-238)'),
   ('core.job_failure_record', 'a scheduled function failed: increments its streak, alerts once at 3; service_role only (T-238)'),
   ('core.job_failure_clear', 'a scheduled function succeeded: resets its streak; service_role only (T-238)'),
-  ('core.sync_now_claim', 'Sync now rate limit (one per lane per 2 minutes): aal2 + owner or admin_technical + connections view (T-238)');
+  ('core.sync_now_claim', 'Sync now rate limit (one per lane per 2 minutes): aal2 + owner or admin_technical + connections view (T-238)'),
+  ('core.connections_clear_job_failures', 'trigger: a connection leaving active/degraded drops its own job_failures rows (same lane and id only); no API execute (T-238 review M1)');
 
 -- App functions authenticated may execute (callable through the API). Each one is reviewed.
 create temp table authenticated_exec_ok (name text primary key, why text not null) on commit drop;

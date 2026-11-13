@@ -1202,3 +1202,31 @@ Reviews (security and code): no BLOCKER, no HIGH. Fixed in the review-fix commit
 - (LOW) The gate shown for a pending disconnect is read for the first disconnectable connection and applied to all rows of the lane (the policy class and `approvals_live` are lane-level; only "the connection exists" differs, and every listed row is disconnectable).
 - (LOW) The Playwright spec `settings-qbo.spec.ts` has not been run (it resets the local database); the QB-1 manual checklist is in `.agent/pr/T-197.md`.
 - (INFO) Deploy order: run production part 17 before the T-197 code. Without it the pending read fails and is swallowed: the page still works, the button just does not turn into "waiting for approval".
+
+## T-238: review results (security and code review, Nov 13, 2026)
+Fixed:
+- (HIGH, code review H1) One connection-level `last_error` was read as a per-stream error once mail and calendar synced on separate ticks: a calendar failure showed as "Mail sync failed", and the next mail success erased it. Fix:
+  - `core.connections.last_error_stream`, set by the sync job for a one-stream run;
+  - a one-stream success clears only that stream's (or an untagged) error;
+  - `core.briefing_coverage` shows an error only on its own stream;
+  - a trigger clears the tag whenever `last_error` is cleared.
+  Migration 20261119110000, part 18, pgTAP 312, unit tests in `sync/store.test.ts` and `sync/job.test.ts`.
+- (MEDIUM, code review M1) The "3 in a row" banner could stick forever for a connection that stopped being synced. A trigger now deletes a connection's `core.job_failures` rows when it leaves active/degraded (pgTAP 312).
+- (LOW, security L6) The reconnect callback now refuses (wrong_account, nothing stored) if the row `ensureConnection` returns is not the bound row (test in `oauth/reconnect.test.ts`).
+
+Logged, not fixed:
+- (MEDIUM, security M1, DECISION for Saurabh) The new-mail briefing refresh runs even when `lane_config.briefing.schedule_enabled` is off. Saurabh asked for "then trigger a briefing refresh" (Nov 13), so it is on.
+  - Cost gates hold: 3 h stale, 6 a day per lane, one running, 10-minute cooldown.
+  - It runs unattended: it reads Gmail bodies for the summary and drafts replies (proposals only).
+  - If unattended runs should need the schedule switch, gate `runRefresh` on `schedule_enabled` or a new `briefing.refresh_on_mail` (default off).
+- (MEDIUM, code review M2) The refresh event id uses the time `afterSync` runs, not the tick. Two mailboxes finishing either side of a 15-minute boundary can send two refresh events. The run claim still caps model calls (no cost leak).
+- (MEDIUM, code review M3) No test covers the route-level wiring: `afterSync` → `briefing/refresh.requested`, and the registration of `mail-ingest-delta` / `briefing-refresh`. The pieces are unit-tested.
+- (LOW, security L1/L2) `briefing_claim_refresh_close` closes the owner's open `auto` claims, not the one claim by id, and the refresh is recorded as trigger `schedule`. Overlap with Home or the 06:30 run is prevented by timing only (10-minute cooldown, 2-minute running gate, 100 s bound). Fix later: close by claim id and record a distinct trigger.
+- (LOW, security L3)
+  - `core.job_failure_record` does not check that the connection belongs to the lane. Forged events (needs the Inngest event key) could add rows.
+  - Rows are bounded per (lane, function, connection). Rows of connections that leave the syncable states are now deleted (M1 fix).
+- (LOW, security L4) A cross-lane cron failure is recorded against every enabled lane. No effect while only PKG is enabled. Fix later: record `lane_unavailable` only for the failed lanes.
+- (LOW, security L5 / code review L3) Sync now uses up the 2-minute limit before the audit write; an audit failure answers 503 and blocks the lane for 2 minutes (safe direction).
+- (LOW, security L7) `core.sync_now_claim` checks the `connections` view; the RLS on the new tables uses `health`. Same roles today.
+- (LOW, code review L1) A `reconnect_required` failure flips the connection's status on the first failure, so it never reaches the "3 in a row" banner. It shows in the Home status line and on the Settings row instead.
+- (LOW, code review L2) Every tracked cron writes one `job_failure_clear` per enabled lane per successful run.

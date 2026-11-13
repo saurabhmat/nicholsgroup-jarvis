@@ -263,6 +263,8 @@ export function createOAuthFlow(deps: OAuthFlowDeps) {
             }
           };
           const connection = await refuseInUse(() => deps.connections.ensureConnection(laneId, p.provider, account, userId));
+          // Defence in depth (T-238 review): a reconnect stores tokens only on the row it was started for, never on another row.
+          if (boundId !== null && connection.id !== boundId) throw new WrongAccount();
           await refuseInUse(() =>
             deps.storeToken(laneId, connection, new SecretValue(JSON.stringify({ ...tokens, obtained_at: new Date().toISOString() })), identity.expiresAt, userId),
           );

@@ -59,6 +59,8 @@ export function createConnSyncJob(deps: ConnSyncJobDeps) {
         return { ok: true, skipped: "already_running" };
       }
 
+      // T-238: a run of exactly one stream tags its error with that stream (and clears only that stream's error).
+      const oneStream = input.streams && new Set(input.streams).size === 1 ? (input.streams[0] ?? null) : null;
       let outcome: ConnSyncOutcome;
       let error: ConnectorError | null = null;
       let result: Awaited<ReturnType<SyncRunner>> | null = null;
@@ -89,7 +91,7 @@ export function createConnSyncJob(deps: ConnSyncJobDeps) {
         // The connection's last-sync fields follow only a run row that was actually closed by this run (a run cancelled
         // meanwhile as stale must not overwrite the state of the run that replaced it).
         const logged = await guarded(() => deps.runs.finish(laneId, conn, started.runId, { status: "succeeded", kind: done.kind, received: done.received, written: done.written }), "conn.sync.log_failed");
-        if (logged) await guarded(() => deps.runs.recordOutcome(laneId, conn, { ok: true }), "conn.sync.outcome_failed");
+        if (logged) await guarded(() => deps.runs.recordOutcome(laneId, conn, { ok: true }, oneStream), "conn.sync.outcome_failed");
         child.info("conn.sync.succeeded", { kind: done.kind, received: done.received, written: done.written });
         outcome = { ok: true, skipped: null, runId: started.runId, provider: conn.provider, ...done };
       } else {
@@ -97,7 +99,7 @@ export function createConnSyncJob(deps: ConnSyncJobDeps) {
         const info = failed.toJSON();
         const logged = await guarded(() => deps.runs.finish(laneId, conn, started.runId, { status: "failed", kind: conn.last_sync_at ? "incremental" : "full", received: 0, written: 0, error: info }), "conn.sync.log_failed");
         if (!logged) await guarded(() => deps.runs.finish(laneId, conn, started.runId, { status: "cancelled", kind: conn.last_sync_at ? "incremental" : "full", received: 0, written: 0 }), "conn.sync.log_failed");
-        if (logged) await guarded(() => deps.runs.recordOutcome(laneId, conn, { ok: false, error: info }), "conn.sync.outcome_failed");
+        if (logged) await guarded(() => deps.runs.recordOutcome(laneId, conn, { ok: false, error: info }, oneStream), "conn.sync.outcome_failed");
         child.warn("conn.sync.failed", { kind: info.kind, disposition: info.disposition });
         outcome = failure(failed);
       }

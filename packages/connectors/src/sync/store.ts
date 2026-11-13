@@ -87,13 +87,24 @@ export function createSyncRunStore(clientFor: JobClientFor, now: () => Date = ()
       }
     },
 
-    async recordOutcome(laneId, conn, outcome) {
+    async recordOutcome(laneId, conn, outcome, stream = null) {
       assertLaneBound(laneId, conn);
       const db = await client(laneId);
+      const table = () => db.schema("core").from("connections");
       try {
-        const patch = outcome.ok ? { last_sync_at: now().toISOString(), last_error: null } : { last_error: outcome.error };
-        const { error } = await db.schema("core").from("connections").update(patch).eq("lane_id", laneId).eq("id", conn.id);
-        if (error) throw error;
+        if (!outcome.ok) {
+          const { error } = await table().update({ last_error: outcome.error, last_error_stream: stream }).eq("lane_id", laneId).eq("id", conn.id);
+          if (error) throw error;
+        } else if (stream === null) {
+          const { error } = await table().update({ last_sync_at: now().toISOString(), last_error: null }).eq("lane_id", laneId).eq("id", conn.id);
+          if (error) throw error;
+        } else {
+          // One stream succeeded: the other stream's error must stay (it is still failing until its own tick succeeds).
+          const at = await table().update({ last_sync_at: now().toISOString() }).eq("lane_id", laneId).eq("id", conn.id);
+          if (at.error) throw at.error;
+          const cleared = await table().update({ last_error: null }).eq("lane_id", laneId).eq("id", conn.id).or(`last_error_stream.is.null,last_error_stream.eq.${stream}`);
+          if (cleared.error) throw cleared.error;
+        }
       } catch {
         throw unavailable();
       }

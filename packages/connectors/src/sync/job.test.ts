@@ -15,6 +15,7 @@ type RunRow = { id: string; connectionId: string; laneId: string; status: "runni
 function memoryRuns() {
   const rows: RunRow[] = [];
   const outcomes = new Map<string, { ok: boolean; error?: unknown }>();
+  const outcomeStreams = new Map<string, string | null>();
   let n = 0;
   const store: SyncRunStore = {
     async start(laneId, conn, input) {
@@ -30,11 +31,12 @@ function memoryRuns() {
       row.status = result.status;
       row.result = result;
     },
-    async recordOutcome(_laneId, conn, outcome) {
+    async recordOutcome(_laneId, conn, outcome, stream) {
       outcomes.set(conn.id, outcome);
+      outcomeStreams.set(conn.id, stream ?? null);
     },
   };
-  return { store, rows, outcomes };
+  return { store, rows, outcomes, outcomeStreams };
 }
 
 function memoryCursors() {
@@ -285,6 +287,27 @@ describe("Google runner streams (T-238)", () => {
     await job.run("PKG", s.a.id, { trigger: "schedule" });
     await job.run("PKG", s.a.id, { trigger: "webhook", objectTypes: ["Invoice"], streams: [] });
     expect(seen).toEqual([{ streams: ["mail"] }, undefined, { objectTypes: ["Invoice"] }]);
+  });
+
+  it("records the outcome against the one stream that ran (failure tagged, success scoped); both streams record null", async () => {
+    const s = await setup();
+    const runs = memoryRuns();
+    let fail = true;
+    const runner: SyncRunner = async () => {
+      if (fail) throw new ConnectorError({ kind: "forbidden", message: "Calendar access was refused" });
+      return { kind: "incremental", received: 1, written: 1 };
+    };
+    const job = createConnSyncJob({ loader: s.mock.loader, runs: runs.store, runners: { [s.a.provider]: runner } });
+    await job.run("PKG", s.a.id, { trigger: "schedule", streams: ["calendar"] });
+    expect(runs.outcomes.get(s.a.id)).toMatchObject({ ok: false });
+    expect(runs.outcomeStreams.get(s.a.id)).toBe("calendar");
+    fail = false;
+    await job.run("PKG", s.a.id, { trigger: "schedule", streams: ["mail"] });
+    expect(runs.outcomeStreams.get(s.a.id)).toBe("mail");
+    await job.run("PKG", s.a.id, { trigger: "manual" });
+    expect(runs.outcomeStreams.get(s.a.id)).toBeNull();
+    await job.run("PKG", s.a.id, { trigger: "manual", streams: ["mail", "calendar"] });
+    expect(runs.outcomeStreams.get(s.a.id)).toBeNull();
   });
 });
 

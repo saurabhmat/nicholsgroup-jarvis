@@ -39,8 +39,12 @@ export interface SyncRunStore {
    */
   start(laneId: LaneId, conn: LaneBoundConnection<string>, input: { trigger: SyncTrigger; jobRunId: string | null; job?: SyncJob }): Promise<{ runId: string } | null>;
   finish(laneId: LaneId, conn: LaneBoundConnection<string>, runId: string, result: SyncRunFinish): Promise<void>;
-  /** Success: last_sync_at = now, last_error cleared. Failure: last_error = the redacted error (status is not changed here). */
-  recordOutcome(laneId: LaneId, conn: LaneBoundConnection<string>, outcome: { ok: true } | { ok: false; error: ConnectorErrorInfo }): Promise<void>;
+  /**
+   * Success: last_sync_at = now, last_error cleared. Failure: last_error = the redacted error (status is not changed here).
+   * T-238: `stream` is set when the run synced ONE stream (mail or calendar): a failure is tagged with it (last_error_stream),
+   * and a success clears last_error only when it belongs to that stream or to the whole connection (another stream's error stays).
+   */
+  recordOutcome(laneId: LaneId, conn: LaneBoundConnection<string>, outcome: { ok: true } | { ok: false; error: ConnectorErrorInfo }, stream?: SyncStream | null): Promise<void>;
 }
 
 /** Cursor of the generic stream (`Connector.sync`), stored in core.sync_cursors. Mail and calendar keep their own streams. */
