@@ -7,6 +7,7 @@ import { createGoogleHarness } from "../testing/google-harness";
 import { useMockServer } from "../testing/msw/index";
 import { createFakeGoogle, GOOGLE_BODY_CANARY, GOOGLE_SNIPPET_CANARY, seedMessage } from "../testing/msw/google/handlers";
 import { createMailSync } from "./mail-sync";
+import { createGoogleSyncRunner } from "../sync/runners";
 import type { MailProvider } from "../comms/provider";
 
 const server = useMockServer();
@@ -83,6 +84,25 @@ describe("sync run", () => {
     expect(r).toMatchObject({ mode: "full", resynced: true, written: 6 });
     expect(h.indexStats.resets).toBe(1);
     expect(h.cursors.get(`PKG\u0000${conn.id}`)).toMatch(/\.h:\d+$/);
+  });
+
+  it("T-238: the scheduled mail-only run (Google runner, streams [mail]) falls back to a full resync when Gmail answers 404 for an expired startHistoryId", async () => {
+    const { fake, h, conn, account } = setup();
+    let calendarRuns = 0;
+    const calendar = { run: async () => { calendarRuns += 1; return { written: 0, skipped: 0, removed: 0, mode: "incremental" as const }; } };
+    const runner = createGoogleSyncRunner({ mail: h.sync, calendar });
+    await runner("PKG", conn, { streams: ["mail"] });
+    fake.expireHistory(account); // Gmail forgot the stored historyId: history.list answers 404
+    fake.addMessage(account);
+    const r = await runner("PKG", conn, { streams: ["mail"] });
+    // Not a failure and not a silent no-op: the run reloads the mailbox and the new message is written.
+    expect(r).toMatchObject({ kind: "full", written: 6 });
+    expect(h.indexStats.resets).toBe(1);
+    expect(h.cursors.get(`PKG\u0000${conn.id}`)).toMatch(/\.h:\d+$/);
+    expect(calendarRuns).toBe(0);
+    // The next tick is incremental again from the fresh historyId.
+    fake.addMessage(account);
+    expect(await runner("PKG", conn, { streams: ["mail"] })).toMatchObject({ kind: "incremental", written: 1 });
   });
 
   it("the persisted rows hold metadata only: no body, snippet or preview anywhere in what was written", async () => {
