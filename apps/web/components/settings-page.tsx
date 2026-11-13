@@ -1,6 +1,7 @@
 // Settings (T-023 placeholder), the connect result banner, Connections (Google T-199, QuickBooks T-233 and Composio T-219 rows) and AI brain, in two columns with a sub-nav (T-230 B). The lane
 // gate runs first, as on every page; the connection rows are shown only to owner or admin_technical at AAL2, and the
 // routes behind their buttons enforce the same on their own (this only decides what is drawn).
+import { approvalsDeps } from "@nichols/approvals/wire";
 import { Alert, AlertDescription, AlertTitle } from "@nichols/ui";
 import { connectResultFor } from "@/lib/connect-result";
 import { loadLane } from "@/lib/lane-page";
@@ -38,7 +39,7 @@ export async function SettingsPage({
   const [result, quickbooks, google, composio, brain, coverage, news] = await Promise.all([
     // The result of a connect the OAuth callback sent back here (fixed, allowlisted text; connect roles only).
     timed("load.connect_result", () => connectResultFor(g, lane.laneId, query)),
-    timed("load.quickbooks", () => quickbooksSectionFor(g, lane.laneId)),
+    timed("load.quickbooks", () => quickbooksSectionFor(g, lane.laneId, undefined, approvalsDeps)),
     timed("load.google", () => googleSectionFor(g, lane.laneId)),
     timed("load.composio", () => composioSectionFor(g, lane.laneId, availability, undefined, missingSettings)),
     onboardingFor(lane.laneId), // null unless the owner has the brain view here

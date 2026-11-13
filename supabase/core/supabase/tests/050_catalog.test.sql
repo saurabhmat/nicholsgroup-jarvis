@@ -192,6 +192,7 @@ insert into authenticated_exec_ok values
   ('core.act_approve', 'approvals: wrapper over act.approve; invoker (T-232)'),
   ('core.act_reject', 'approvals: wrapper over act.reject; invoker (T-232)'),
   ('core.act_list', 'approvals: the lane''s actions; invoker, RLS applies (T-232)'),
+  ('core.act_pending_qbo_disconnects', 'Settings: ids of pending qbo.disconnect proposals; invoker, RLS applies, read-only (T-197)'),
   ('core.act_get', 'approvals: one action; invoker, RLS applies (T-232)'),
   ('core.act_pending_count', 'approvals: pending count for Home; invoker, RLS applies (T-232)'),
   ('core.act_reply_state', 'reply drawer: pending proposal, in-doubt block and last verified reply for one thread; invoker, RLS applies (T-234)'),
