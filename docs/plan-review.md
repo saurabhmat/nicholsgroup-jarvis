@@ -1307,3 +1307,4 @@ Open / LOW (not fixed):
   - **Login-link exclusion can hide real alerts:** a genuine security-sender alert whose subject contains "OTP" or "verification link" (e.g. "Your OTP settings changed") is now hard-excluded. Narrow those two patterns if security alerts go missing.
 - (T-243 security re-check) LOW, open: `qbo.sync.done` `excluded_objects` counts re-emitted payroll accounts on every incremental run (cosmetic).
 - (T-243 part 3) ROOT CAUSE confirmed from the production log: the layout's first-name lookup called guards() without connection(); runtime-prefetch prerender resolved cookies() and supabase-js read the session (Date.now). Fixed: guards() awaits connection() first (tested).
+- (T-243 guards review) MEDIUM fixed: auth()/mfa() also wait for connection() (cookieStore); LOW fixed: the guards.ts comment now says server actions call guards(). LOW open: guards.test.ts uses a 20 ms wait to show a hung connection() blocks everything.
