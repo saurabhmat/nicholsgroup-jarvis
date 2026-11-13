@@ -113,13 +113,17 @@ export function createNormalizeStore(clientFor: JobClientFor): NormalizeStore {
         if (/^2[23]/.test(code)) throw new ConnectorError({ kind: "provider_error", message: refusalMessage(message) });
         // T-242: 21000 (cardinality violation: two input rows for one target row, or a subquery with more than one row) comes from
         // the data and repeats on every attempt: permanent, not "transient" (production retried it for minutes).
+        // Where it failed (T-242, production: the function succeeds when called directly, the job's call fails): inside the
+        // function's main block the message carries the step; anything else (the function's opening checks, the PostgREST call
+        // around it, a trigger or setting outside the repository) has no step. Fixed words only.
+        const where = stepOf(message) ? `rpc fin_qbo_normalize, step ${stepOf(message) ?? ""}` : "rpc fin_qbo_normalize, outside the function's main block";
         if (code === "21000") {
-          const step = stepOf(message);
-          throw new ConnectorError({ kind: "provider_error", message: `The normalizer found two rows for one record (SQLSTATE 21000${step ? `, step ${step}` : ""})` });
+          throw new ConnectorError({ kind: "provider_error", message: `The normalizer found two rows for one record (SQLSTATE 21000, ${where})` });
         }
         if (code === "42501") throw new ConnectorError({ kind: "connection_unavailable", message: "The connection is not usable for normalization" });
         // supabase-js reports an aborted fetch as an error object without a code; the signal says it was our timeout.
-        throw new ConnectorError(failureReason(code === "unknown" ? (signal.aborted ? null : "unknown") : code, signal.aborted));
+        const reason = failureReason(code === "unknown" ? (signal.aborted ? null : "unknown") : code, signal.aborted);
+        throw new ConnectorError(signal.aborted || code === "unknown" ? reason : { ...reason, message: `${reason.message}, ${where}` });
       }
       const parsed = NormalizeResultSchema.safeParse(data);
       if (!parsed.success) throw new ConnectorError({ kind: "provider_error", message: "The normalizer returned an unexpected result" });

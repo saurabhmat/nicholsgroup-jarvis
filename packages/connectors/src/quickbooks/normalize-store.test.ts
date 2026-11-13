@@ -131,13 +131,13 @@ describe("T-242: SQLSTATE 21000 is permanent and names the step", () => {
   const fails = (error: { code?: string; message?: string }) => createNormalizeStore(client({ error }).clientFor).normalize("PKG", conn);
   it("the function's 21000 with a step: provider_error (not retried), the step kept, no other text", async () => {
     const info = await infoOf(fails({ code: "21000", message: "fin.qbo_normalize failed: SQLSTATE 21000, table -, constraint -, step payments" }));
-    expect(info).toMatchObject({ kind: "provider_error", disposition: "fail", message: "The normalizer found two rows for one record (SQLSTATE 21000, step payments)" });
+    expect(info).toMatchObject({ kind: "provider_error", disposition: "fail", message: "The normalizer found two rows for one record (SQLSTATE 21000, rpc fin_qbo_normalize, step payments)" });
     const keys = await infoOf(fails({ code: "21000", message: "fin.qbo_normalize failed: SQLSTATE 21000, table -, constraint -, step transaction_keys" }));
-    expect(keys.message).toBe("The normalizer found two rows for one record (SQLSTATE 21000, step transaction_keys)");
+    expect(keys.message).toBe("The normalizer found two rows for one record (SQLSTATE 21000, rpc fin_qbo_normalize, step transaction_keys)");
   });
   it("21000 without the function's shape (older function or other text) is still permanent, with no step and no database text", async () => {
     const info = await infoOf(fails({ code: "21000", message: "more than one row returned by a subquery used as an expression SECRET-ROW" }));
-    expect(info).toMatchObject({ kind: "provider_error", message: "The normalizer found two rows for one record (SQLSTATE 21000)" });
+    expect(info).toMatchObject({ kind: "provider_error", message: "The normalizer found two rows for one record (SQLSTATE 21000, rpc fin_qbo_normalize, outside the function's main block)" });
   });
   it("a refusal from the new function keeps its step; the old message shape still parses", async () => {
     const withStep = await infoOf(fails({ code: "23514", message: "fin.qbo_normalize failed: SQLSTATE 23514, table payments, constraint -, step payments" }));

@@ -1287,3 +1287,4 @@ Fixed:
 - (LOW) `check-part-20.sql` compares `md5(prosrc)` with the repository body, and the diagnostics show it. The diagnostics note that their last query needs part 16.
 
 Open: the production root cause of 21000 is not found. The review confirmed none of the paths. The next failure names its step; if that step's input is proven unique, compare production with the repository (raw unique index, function md5).
+- (Nov 13, production) The function body is not the cause of 21000: called directly it succeeds; the job's PostgREST call fails in about 0.4 s. The RPC (step E) is the only job call reported as "Normalizer unavailable". Next: the replay script (`pkg-qbo-normalize-job-replay.sql`) and the job's new "outside the function's main block" wording will tell PostgREST's wrapper from production-only triggers or role settings.
