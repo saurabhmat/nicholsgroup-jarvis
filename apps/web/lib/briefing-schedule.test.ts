@@ -1,7 +1,7 @@
 // T-231c: the schedule is off unless lane_config.briefing.schedule_enabled; only the lane's New York hour; owners are
 // re-checked for the briefing, comms and calendar views on every run.
 import { describe, expect, it } from "vitest";
-import { dueOwners, type ClientFor } from "./briefing-schedule";
+import { dueOwners, refreshOwners, type ClientFor } from "./briefing-schedule";
 
 const A = "00000000-0000-4000-8000-00000000000a";
 const B = "00000000-0000-4000-8000-00000000000b";
@@ -39,5 +39,20 @@ describe("dueOwners", () => {
     const views = { [A]: ["briefing", "comms", "calendar"] };
     await expect(dueOwners(client(cfg, views), "PKG", new Date("2026-11-11T11:30:00Z"))).resolves.toEqual([A]); // Wed 06:30
     await expect(dueOwners(client(cfg, views), "PKG", new Date("2026-11-14T11:30:00Z"))).resolves.toEqual([]); // Sat 06:30
+  });
+});
+
+describe("refreshOwners (T-238: the refresh after new mail follows the schedule switch)", () => {
+  const views = { [A]: ["briefing", "comms", "calendar"], [B]: ["briefing", "comms"] };
+  it("schedule off (default, or explicitly false): nobody, so no automatic refresh", async () => {
+    await expect(refreshOwners(client({}, views), "PKG")).resolves.toEqual([]);
+    await expect(refreshOwners(client({ briefing: { schedule_enabled: false } }, views), "PKG")).resolves.toEqual([]);
+  });
+  it("schedule on: owners holding all three views, at any hour or day (the run claim still gates)", async () => {
+    await expect(refreshOwners(client({ briefing: { schedule_enabled: true } }, views), "PKG")).resolves.toEqual([A]);
+  });
+  it("an unreadable config is off", async () => {
+    const broken: ClientFor = async () => ({ schema: () => ({ from: () => ({ select: () => ({ eq: () => ({ maybeSingle: async () => ({ data: null, error: { message: "x" } }) }) }) }) }) }) as never;
+    await expect(refreshOwners(broken, "PKG")).resolves.toEqual([]);
   });
 });

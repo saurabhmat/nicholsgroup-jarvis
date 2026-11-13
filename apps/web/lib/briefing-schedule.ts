@@ -41,6 +41,20 @@ export async function dueOwners(clientFor: ClientFor, laneId: string, now: Date)
   return ownersWithViews(clientFor, laneId);
 }
 
+/**
+ * Owners for the refresh after new mail (T-238). Saurabh, Nov 13: it follows the schedule switch: when
+ * lane_config.briefing.schedule_enabled is off (the default) or the config cannot be read, nobody (no automatic refresh).
+ * Not limited to the schedule's hour or days: new mail can arrive any time, and the run claim's gates (3 h, 6 a day) still apply.
+ * Sync now and the owner's own Home visit are unaffected.
+ */
+export async function refreshOwners(clientFor: ClientFor, laneId: string): Promise<string[]> {
+  const c = await clientFor(laneId);
+  const cfg = await c.schema("core").from("lane_config_current").select("config").eq("lane_id", laneId).maybeSingle();
+  if (cfg.error) return [];
+  if (!briefingConfigFrom(cfg.data?.config).briefing.schedule_enabled) return [];
+  return ownersWithViews(clientFor, laneId);
+}
+
 /** The scheduled run's bound: under the Inngest route's maxDuration (120 s), leaving time for the save. */
 export const SCHEDULE_RUN_TIMEOUT_MS = 100_000;
 
