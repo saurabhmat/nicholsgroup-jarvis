@@ -22,7 +22,8 @@
     "./health": "./src/health/index.ts",
     "./retention": "./src/retention/index.ts",
     "./reports": "./src/reports/index.ts",
-    "./normalize": "./src/normalize/index.ts"
+    "./normalize": "./src/normalize/index.ts",
+    "./error-log": "./src/error-log/index.ts"
   },
   "scripts": {
     "typecheck": "tsc -b",

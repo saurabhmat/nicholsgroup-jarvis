@@ -119,14 +119,14 @@ isOneToOne: false
                   ]
                 },"connections": {
                   Row: {
-                    "account_identity": string | null,"created_at": string,"created_by": string | null,"external_account_id": string,"features": NonNullable<Json>,"features_checked_at": string | null,"id": string,"lane_id": string,"last_error": Json | null,"last_sync_at": string | null,"provider": string,"reconnect_notified_at": string | null,"status": string,"token_expires_at": string | null,"toolkit": string | null,"transport": string,"updated_at": string
+                    "account_identity": string | null,"created_at": string,"created_by": string | null,"external_account_id": string,"features": NonNullable<Json>,"features_checked_at": string | null,"id": string,"lane_id": string,"last_error": Json | null,"last_error_stream": string | null,"last_sync_at": string | null,"provider": string,"reconnect_notified_at": string | null,"status": string,"token_expires_at": string | null,"toolkit": string | null,"transport": string,"updated_at": string
                   }
                   ComputedFields: never
                   Insert: {
-                    "account_identity"?: string | null,"created_at"?: string,"created_by"?: string | null,"external_account_id": string,"features"?: NonNullable<Json>,"features_checked_at"?: string | null,"id"?: string,"lane_id": string,"last_error"?: Json | null,"last_sync_at"?: string | null,"provider": string,"reconnect_notified_at"?: string | null,"status"?: string,"token_expires_at"?: string | null,"toolkit"?: string | null,"transport"?: string,"updated_at"?: string
+                    "account_identity"?: string | null,"created_at"?: string,"created_by"?: string | null,"external_account_id": string,"features"?: NonNullable<Json>,"features_checked_at"?: string | null,"id"?: string,"lane_id": string,"last_error"?: Json | null,"last_error_stream"?: string | null,"last_sync_at"?: string | null,"provider": string,"reconnect_notified_at"?: string | null,"status"?: string,"token_expires_at"?: string | null,"toolkit"?: string | null,"transport"?: string,"updated_at"?: string
                   }
                   Update: {
-                    "account_identity"?: string | null,"created_at"?: string,"created_by"?: string | null,"external_account_id"?: string,"features"?: NonNullable<Json>,"features_checked_at"?: string | null,"id"?: string,"lane_id"?: string,"last_error"?: Json | null,"last_sync_at"?: string | null,"provider"?: string,"reconnect_notified_at"?: string | null,"status"?: string,"token_expires_at"?: string | null,"toolkit"?: string | null,"transport"?: string,"updated_at"?: string
+                    "account_identity"?: string | null,"created_at"?: string,"created_by"?: string | null,"external_account_id"?: string,"features"?: NonNullable<Json>,"features_checked_at"?: string | null,"id"?: string,"lane_id"?: string,"last_error"?: Json | null,"last_error_stream"?: string | null,"last_sync_at"?: string | null,"provider"?: string,"reconnect_notified_at"?: string | null,"status"?: string,"token_expires_at"?: string | null,"toolkit"?: string | null,"transport"?: string,"updated_at"?: string
                   }
                   Relationships: [
                     {
@@ -137,6 +137,52 @@ isOneToOne: false
       referencedColumns: ["id"]
     },{
       foreignKeyName: "connections_lane_id_fkey"
+      columns: ["lane_id"]
+isOneToOne: false
+      referencedRelation: "lanes"
+      referencedColumns: ["code"]
+    }
+                  ]
+                },"connector_api_errors": {
+                  Row: {
+                    "at": string,"connection_id": string,"disposition": string,"endpoint": string | null,"http_status": number | null,"id": string,"kind": string,"lane_id": string,"provider": string,"provider_error_code": string | null,"provider_message": string,"provider_tid": string | null,"retry_after_seconds": number | null
+                  }
+                  ComputedFields: never
+                  Insert: {
+                    "at"?: string,"connection_id": string,"disposition": string,"endpoint"?: string | null,"http_status"?: number | null,"id"?: string,"kind": string,"lane_id": string,"provider": string,"provider_error_code"?: string | null,"provider_message": string,"provider_tid"?: string | null,"retry_after_seconds"?: number | null
+                  }
+                  Update: {
+                    "at"?: string,"connection_id"?: string,"disposition"?: string,"endpoint"?: string | null,"http_status"?: number | null,"id"?: string,"kind"?: string,"lane_id"?: string,"provider"?: string,"provider_error_code"?: string | null,"provider_message"?: string,"provider_tid"?: string | null,"retry_after_seconds"?: number | null
+                  }
+                  Relationships: [
+                    {
+      foreignKeyName: "connector_api_errors_connection_id_lane_id_fkey"
+      columns: ["connection_id","lane_id"]
+isOneToOne: false
+      referencedRelation: "connections"
+      referencedColumns: ["id","lane_id"]
+    },{
+      foreignKeyName: "connector_api_errors_lane_id_fkey"
+      columns: ["lane_id"]
+isOneToOne: false
+      referencedRelation: "lanes"
+      referencedColumns: ["code"]
+    }
+                  ]
+                },"job_failures": {
+                  Row: {
+                    "alerted_at": string | null,"connection_id": string,"consecutive_failures": number,"function_id": string,"lane_id": string,"last_error_code": string | null,"last_failure_at": string | null,"last_success_at": string | null,"streak_started_at": string | null,"updated_at": string
+                  }
+                  ComputedFields: never
+                  Insert: {
+                    "alerted_at"?: string | null,"connection_id"?: string,"consecutive_failures"?: number,"function_id": string,"lane_id": string,"last_error_code"?: string | null,"last_failure_at"?: string | null,"last_success_at"?: string | null,"streak_started_at"?: string | null,"updated_at"?: string
+                  }
+                  Update: {
+                    "alerted_at"?: string | null,"connection_id"?: string,"consecutive_failures"?: number,"function_id"?: string,"lane_id"?: string,"last_error_code"?: string | null,"last_failure_at"?: string | null,"last_success_at"?: string | null,"streak_started_at"?: string | null,"updated_at"?: string
+                  }
+                  Relationships: [
+                    {
+      foreignKeyName: "job_failures_lane_id_fkey"
       columns: ["lane_id"]
 isOneToOne: false
       referencedRelation: "lanes"
@@ -303,16 +349,42 @@ isOneToOne: false
       referencedColumns: ["code"]
     }
                   ]
-                },"sync_runs": {
+                },"sync_now_requests": {
                   Row: {
-                    "connection_id": string,"created_at": string,"error": Json | null,"finished_at": string | null,"id": string,"job_run_id": string | null,"kind": string,"lane_id": string,"records_received": number,"records_written": number,"started_at": string,"status": string,"trigger": string,"updated_at": string
+                    "lane_id": string,"requested_at": string,"requested_by": string
                   }
                   ComputedFields: never
                   Insert: {
-                    "connection_id": string,"created_at"?: string,"error"?: Json | null,"finished_at"?: string | null,"id"?: string,"job_run_id"?: string | null,"kind": string,"lane_id": string,"records_received"?: number,"records_written"?: number,"started_at"?: string,"status"?: string,"trigger": string,"updated_at"?: string
+                    "lane_id": string,"requested_at"?: string,"requested_by": string
                   }
                   Update: {
-                    "connection_id"?: string,"created_at"?: string,"error"?: Json | null,"finished_at"?: string | null,"id"?: string,"job_run_id"?: string | null,"kind"?: string,"lane_id"?: string,"records_received"?: number,"records_written"?: number,"started_at"?: string,"status"?: string,"trigger"?: string,"updated_at"?: string
+                    "lane_id"?: string,"requested_at"?: string,"requested_by"?: string
+                  }
+                  Relationships: [
+                    {
+      foreignKeyName: "sync_now_requests_lane_id_fkey"
+      columns: ["lane_id"]
+isOneToOne: true
+      referencedRelation: "lanes"
+      referencedColumns: ["code"]
+    },{
+      foreignKeyName: "sync_now_requests_requested_by_fkey"
+      columns: ["requested_by"]
+isOneToOne: false
+      referencedRelation: "users"
+      referencedColumns: ["id"]
+    }
+                  ]
+                },"sync_runs": {
+                  Row: {
+                    "connection_id": string,"created_at": string,"error": Json | null,"finished_at": string | null,"id": string,"job": string,"job_run_id": string | null,"kind": string,"lane_id": string,"records_received": number,"records_written": number,"started_at": string,"status": string,"trigger": string,"updated_at": string
+                  }
+                  ComputedFields: never
+                  Insert: {
+                    "connection_id": string,"created_at"?: string,"error"?: Json | null,"finished_at"?: string | null,"id"?: string,"job"?: string,"job_run_id"?: string | null,"kind": string,"lane_id": string,"records_received"?: number,"records_written"?: number,"started_at"?: string,"status"?: string,"trigger": string,"updated_at"?: string
+                  }
+                  Update: {
+                    "connection_id"?: string,"created_at"?: string,"error"?: Json | null,"finished_at"?: string | null,"id"?: string,"job"?: string,"job_run_id"?: string | null,"kind"?: string,"lane_id"?: string,"records_received"?: number,"records_written"?: number,"started_at"?: string,"status"?: string,"trigger"?: string,"updated_at"?: string
                   }
                   Relationships: [
                     {
@@ -445,6 +517,11 @@ isOneToOne: false
 "act_pending_count":
 { Args: { "p_lane": string }; Returns: number
                            },
+"act_pending_qbo_disconnects":
+{ Args: { "p_lane": string }; Returns: {
+              "connection_id": string,"id": string
+            }[]
+                           },
 "act_propose":
 { Args: { "p_connection": string,"p_derived": boolean,"p_hash": string,"p_lane": string,"p_payload": Json,"p_proposer_kind": string,"p_proposer_user": string,"p_rationale": string,"p_source_refs": Json,"p_target": Json,"p_type": string,"p_version": number }; Returns: string
                            },
@@ -559,6 +636,12 @@ isOneToOne: false
 "briefing_claim_auto":
 { Args: { "p_lane": string }; Returns: Json
                            },
+"briefing_claim_refresh":
+{ Args: { "p_lane": string,"p_owner": string }; Returns: Json
+                           },
+"briefing_claim_refresh_close":
+{ Args: { "p_lane": string,"p_owner": string,"p_status": string }; Returns: number
+                           },
 "briefing_claim_regenerate":
 { Args: { "p_lane": string }; Returns: Json
                            },
@@ -637,6 +720,9 @@ isOneToOne: false
 "connection_token_store":
 { Args: { "p_actor_id"?: string,"p_connection_id": string,"p_expires_at": string,"p_lane_id": string,"p_secret": string }; Returns: undefined
                            },
+"connector_api_errors_purge":
+{ Args: { "p_lane": string }; Returns: number
+                           },
 "fin_qbo_normalize":
 { Args: { "p_connection_id": string,"p_lane": string }; Returns: Json
                            },
@@ -689,6 +775,14 @@ isOneToOne: false
                            },
 "is_connector_error":
 { Args: { "p_error": Json }; Returns: boolean
+                           },
+"job_failure_clear":
+{ Args: { "p_connection": string,"p_function": string,"p_lane": string }; Returns: undefined
+                           },
+"job_failure_record":
+{ Args: { "p_code": string,"p_connection": string,"p_function": string,"p_lane": string }; Returns: {
+              "alert": boolean,"consecutive_failures": number
+            }[]
                            },
 "jsonb_has_secret":
 { Args: { "p_config": Json }; Returns: boolean
@@ -764,6 +858,9 @@ isOneToOne: false
                            },
 "sync_cursor_reset":
 { Args: { "p_connection_id": string,"p_lane": string,"p_stream": string }; Returns: boolean
+                           },
+"sync_now_claim":
+{ Args: { "p_lane": string }; Returns: Json
                            },
 "view_names":
 { Args: Record<PropertyKey, never>; Returns: (string)[]

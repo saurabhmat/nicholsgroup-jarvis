@@ -33,8 +33,11 @@ export function createConnectHandlers(flow: Pick<ReturnType<typeof createOAuthFl
       if (!flow.has(provider)) return json("not_found", 404);
       const url = new URL(request.url);
       if (request.headers.get("origin") !== url.origin) return json("forbidden", 403);
+      // A reconnect names its connection (T-238); anything but a UUID is refused before any state is stored.
+      const connection = url.searchParams.get("connection");
+      if (connection !== null && !/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(connection)) return json("not_found", 404);
       try {
-        const location = await flow.start(provider, url.searchParams.get("lane") ?? "", await authorizer());
+        const location = await flow.start(provider, url.searchParams.get("lane") ?? "", await authorizer(), connection === null ? {} : { connectionId: connection.toLowerCase() });
         return new Response(null, { status: 303, headers: { ...NO_STORE, location } });
       } catch (e) {
         const res = authErrorResponse(e);
@@ -51,6 +54,7 @@ export function createConnectHandlers(flow: Pick<ReturnType<typeof createOAuthFl
         }
         const kind = isConnectorError(e) ? e.info.kind : undefined;
         if (kind === "forbidden") return json("forbidden", 403);
+        if (kind === "not_found") return json("not_found", 404);
         if (kind === "rate_limited") return json("too_many_connects", 429);
         console.error("[api/connect/start] unavailable:", e instanceof Error ? e.name : typeof e);
         return json("unavailable", 503);

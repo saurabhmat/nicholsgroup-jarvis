@@ -54,14 +54,20 @@ type GoogleRun = { written: number; skipped: number; removed: number; mode: "ful
 
 /** Mail then calendar; one failing never stops the other. The first failure is rethrown so the job retries both (cheap: their cursors are kept). */
 export function createGoogleSyncRunner(deps: { mail: { run(laneId: LaneId, conn: LaneBoundConnection<"google">): Promise<GoogleRun> }; calendar: { run(laneId: LaneId, conn: LaneBoundConnection<"google">): Promise<GoogleRun> } }): SyncRunner {
-  return async (laneId, conn) => {
+  return async (laneId, conn, options) => {
     assertLaneBound(laneId, conn);
     const g = conn as LaneBoundConnection<"google">;
+    // T-238: a run can ask for one stream (the scheduled mail delta and the calendar delta are separate ticks). No streams = both.
+    const wanted = options?.streams && options.streams.length > 0 ? new Set(options.streams) : null;
+    const streams = [
+      ...(!wanted || wanted.has("mail") ? [deps.mail] : []),
+      ...(!wanted || wanted.has("calendar") ? [deps.calendar] : []),
+    ];
     // Sequential: both share one token manager, and a rate-limited account should not be hit twice at once.
     const runs: GoogleRun[] = [];
     let failure: unknown;
     let retryable: unknown;
-    for (const stream of [deps.mail, deps.calendar]) {
+    for (const stream of streams) {
       try {
         runs.push(await stream.run(laneId, g));
       } catch (e) {

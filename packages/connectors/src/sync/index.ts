@@ -27,8 +27,10 @@ export type { ConnSyncOutcome, SyncTrigger } from "./types";
 
 /** Ids of a lane's usable calendar-capable connections, for the scheduled cal.ingest_delta fan-out (T-130). */
 export const listCalendarConnectionIds = (laneId: LaneId) => syncTargetLister.listCalendarConnectionIds(laneId);
+/** Ids of a lane's usable mail-capable connections (each connected mailbox), for the scheduled mail.ingest_delta fan-out (T-238). */
+export const listMailConnectionIds = (laneId: LaneId) => syncTargetLister.listMailConnectionIds(laneId);
 export { QBO_SYNC_ENTITIES } from "../quickbooks/entities";
-export { CALENDAR_PROVIDERS } from "./targets";
+export { CALENDAR_PROVIDERS, MAIL_PROVIDERS } from "./targets";
 
 /** Ids of a lane's usable QuickBooks connections for the scheduled backup poll (T-090); same list as the nightly report pull. */
 export const listQuickbooksSyncConnectionIds = (laneId: LaneId) => syncTargetLister.listQuickbooksConnectionIds(laneId);

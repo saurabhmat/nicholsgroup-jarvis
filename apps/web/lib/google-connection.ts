@@ -6,7 +6,7 @@ import { AuthError, type Guards } from "@nichols/core/auth";
 import type { LaneClient } from "@nichols/core/lane-router";
 import { CONNECT_ROLES } from "@nichols/connectors/oauth";
 
-export type GoogleConnectionState = "connected" | "connecting" | "degraded" | "reconnect_required";
+export type GoogleConnectionState = "connected" | "connecting" | "degraded" | "reconnect_required" | "disconnected";
 
 export type GoogleConnectionView = {
   /** core.connections.id (a UUID; used as the list key). */
@@ -32,10 +32,11 @@ const STATES: Record<string, GoogleConnectionState | undefined> = {
   pending: "connecting",
   degraded: "degraded",
   reconnect_required: "reconnect_required",
-  // 'disconnected' is deliberately absent: such a row is shown as not connected.
+  // T-238: a disconnected row is listed so it can be reconnected (the same row is reused, never a second one).
+  disconnected: "disconnected",
 };
 
-/** Pure mapping of a connection status; undefined = not shown (disconnected or unknown). */
+/** Pure mapping of a connection status; undefined = not shown (an unknown status). */
 export function mapGoogleStatus(status: unknown): GoogleConnectionState | undefined {
   return typeof status === "string" ? STATES[status] : undefined;
 }

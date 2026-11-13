@@ -43,7 +43,7 @@ const TOP_PRIORITIES = 3;
  * hint continues that same line, only when the server passed one (admins only).
  * `failure`: why the newest attempt (or the AI setup) failed, a fixed code; `failureHint`: the admin hint, set server-side only for owner or admin_technical.
  */
-export function AiBriefing({ brief, fallbackLines, tz, controls = null, now = new Date(), failure = null, failureHint = null }: { laneId?: string; brief: SavedBriefingView | null; fallbackLines: string[]; tz: string; controls?: ReactNode; now?: Date; failure?: FailureCode | null; failureHint?: string | null }) {
+export function AiBriefing({ brief, fallbackLines, tz, controls = null, now = new Date(), failure = null, failureHint = null, staleLine = null }: { laneId?: string; brief: SavedBriefingView | null; fallbackLines: string[]; tz: string; controls?: ReactNode; now?: Date; failure?: FailureCode | null; failureHint?: string | null; /** T-238 F: the one deterministic line when mail or calendar data (or the summary) is older than 24 hours; null when fresh. */ staleLine?: string | null }) {
   // T-237: a line or sentence holding a masked-figure placeholder is dropped, never shown; raw ISO times become the viewer's time.
   const shownLines = brief && brief.status !== "failed" ? brief.content.lines.flatMap((l) => sentencesText(l, tz) ?? []) : [];
   const lines = shownLines.length > 0 ? shownLines : null;
@@ -59,6 +59,11 @@ export function AiBriefing({ brief, fallbackLines, tz, controls = null, now = ne
       <h3 id="glance-title" className="font-sans text-small font-semibold text-foreground">
         Today at a glance
       </h3>
+      {staleLine ? (
+        <p data-testid="stale-data-line" className="text-small font-medium text-foreground">
+          {staleLine}
+        </p>
+      ) : null}
       {lines ? (
         <div className="max-w-4xl">
           <p data-testid="briefing" className="text-body text-foreground">

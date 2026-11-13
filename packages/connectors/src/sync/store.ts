@@ -6,7 +6,7 @@ import { ConnectorError } from "../contract/errors";
 import { assertLaneBound } from "../contract/lane-bound";
 import { createIndexRpc } from "../google/index-rpc";
 import type { JobClientFor } from "../vault/tokens";
-import type { SyncCursorStore, SyncRunStore } from "./types";
+import { SYNC_STREAMS, type SyncCursorStore, type SyncRunStore } from "./types";
 
 /** A run still `running` after this long belonged to a crashed worker; the next start cancels it. */
 export const STALE_RUN_MS = 30 * 60_000;
@@ -31,7 +31,14 @@ export function createSyncRunStore(clientFor: JobClientFor, now: () => Date = ()
       const runs = () => db.schema("core").from("sync_runs");
       try {
         const cancel = { status: "cancelled", finished_at: at.toISOString() };
-        const base = () => runs().update(cancel).eq("lane_id", laneId).eq("connection_id", conn.id).eq("status", "running");
+        const job = input.job ?? "sync";
+        // Deploy-order tolerance (T-196 security M1): a plain sync neither writes nor filters on `job`, so new code still works against
+        // a database that has not run migration 20261117100000 yet (the column default is 'sync'). Stale and own-run cancels of a
+        // sync may therefore also close a stale row of another job of the same connection, which is harmless.
+        const base = () => {
+          const q = runs().update(cancel).eq("lane_id", laneId).eq("connection_id", conn.id);
+          return (job === "sync" ? q : q.eq("job", job)).eq("status", "running");
+        };
         const stale = await base().lt("started_at", new Date(at.getTime() - STALE_RUN_MS).toISOString());
         if (stale.error) throw stale.error;
         if (input.jobRunId) {
@@ -39,7 +46,7 @@ export function createSyncRunStore(clientFor: JobClientFor, now: () => Date = ()
           if (own.error) throw own.error;
         }
         const inserted = await runs()
-          .insert({ lane_id: laneId, connection_id: conn.id, kind: conn.last_sync_at ? "incremental" : "full", trigger: input.trigger, started_at: at.toISOString(), job_run_id: input.jobRunId })
+          .insert({ lane_id: laneId, connection_id: conn.id, kind: job !== "sync" ? "snapshot" : conn.last_sync_at ? "incremental" : "full", ...(job !== "sync" ? { job } : {}), trigger: input.trigger, started_at: at.toISOString(), job_run_id: input.jobRunId })
           .select("id")
           .single();
         if (inserted.error) {
@@ -80,13 +87,26 @@ export function createSyncRunStore(clientFor: JobClientFor, now: () => Date = ()
       }
     },
 
-    async recordOutcome(laneId, conn, outcome) {
+    async recordOutcome(laneId, conn, outcome, stream = null) {
       assertLaneBound(laneId, conn);
+      // The stream ends up in a PostgREST filter below: only the known values, whatever the caller's types say.
+      if (stream !== null && !(SYNC_STREAMS as readonly string[]).includes(stream)) throw unavailable();
       const db = await client(laneId);
+      const table = () => db.schema("core").from("connections");
       try {
-        const patch = outcome.ok ? { last_sync_at: now().toISOString(), last_error: null } : { last_error: outcome.error };
-        const { error } = await db.schema("core").from("connections").update(patch).eq("lane_id", laneId).eq("id", conn.id);
-        if (error) throw error;
+        if (!outcome.ok) {
+          const { error } = await table().update({ last_error: outcome.error, last_error_stream: stream }).eq("lane_id", laneId).eq("id", conn.id);
+          if (error) throw error;
+        } else if (stream === null) {
+          const { error } = await table().update({ last_sync_at: now().toISOString(), last_error: null }).eq("lane_id", laneId).eq("id", conn.id);
+          if (error) throw error;
+        } else {
+          // One stream succeeded: the other stream's error must stay (it is still failing until its own tick succeeds).
+          const at = await table().update({ last_sync_at: now().toISOString() }).eq("lane_id", laneId).eq("id", conn.id);
+          if (at.error) throw at.error;
+          const cleared = await table().update({ last_error: null }).eq("lane_id", laneId).eq("id", conn.id).or(`last_error_stream.is.null,last_error_stream.eq.${stream}`);
+          if (cleared.error) throw cleared.error;
+        }
       } catch {
         throw unavailable();
       }

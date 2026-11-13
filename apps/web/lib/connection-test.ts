@@ -1,7 +1,7 @@
 // The QuickBooks "Check connection" route's logic (T-198, now the action of the QuickBooks row in Settings -> Connections,
 // T-233). Callable only for owner or admin_technical of the lane at AAL2 (the same guard as connecting). The check is one
 // read-only CompanyInfo GET (rule 5); the response is a status, a time and Intuit's request id, never a token, the realm
-// id or company data. The old `lane_config.pilot.connection_test_enabled` switch is no longer read (the key still parses).
+// id or company data. The old `lane_config.pilot.connection_test_enabled` switch is no longer read (the key still parses, T-197).
 import { AuthError, authErrorResponse, type Guards } from "@nichols/core/auth";
 import { CONNECT_ROLES } from "@nichols/connectors/oauth";
 import type { ConnectionCheck } from "@nichols/connectors/connection-test";

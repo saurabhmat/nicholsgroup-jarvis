@@ -71,8 +71,10 @@ test("owner: connect form, connected state and reconnect banner", async ({ page 
   sql(`update core.connections set status = 'reconnect_required' where id = '${CID}';`);
   await page.goto("/PKG/settings");
   await expect(page.getByRole("alert").filter({ hasText: "Google needs to be reconnected" })).toBeVisible();
-  await expect(section.getByRole("button", { name: "Reconnect Google" })).toBeVisible();
-  await expect(section.locator("form")).toHaveAttribute("action", "/api/connect/google/start?lane=PKG");
+  // T-238: each Google row has its own Reconnect, bound to that connection; "Connect another Google account" stays.
+  await expect(section.getByRole("button", { name: "Reconnect ops@example.test" })).toBeVisible();
+  await expect(section.locator("form").first()).toHaveAttribute("action", `/api/connect/google/start?lane=PKG&connection=${CID}`);
+  await expect(section.getByRole("button", { name: "Connect another Google account" })).toBeVisible();
 });
 
 test("a role that may not connect sees no Google controls and no connection details", async ({ page }, info) => {

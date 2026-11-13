@@ -1,9 +1,11 @@
 // @vitest-environment jsdom
 // T-234 part 1: the KPI strip (not-connected tiles at equal height), the header status dot, "Next 7 days" collapsed by
 // default, the news empty state and the projects card.
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
+
+vi.mock("next/navigation", () => ({ useRouter: () => ({ refresh: vi.fn(), push: vi.fn() }) }));
 import { cleanup, fireEvent, render, screen } from "@testing-library/react";
-import { CoverageDot, syncedLabel } from "./coverage-dot";
+import { CoverageDot } from "./coverage-dot";
 import { CollapsibleSection } from "./collapsible-section";
 import { GovConNews } from "./home-news";
 import { ProjectsGlance } from "./home-projects";
@@ -13,45 +15,55 @@ afterEach(cleanup);
 
 const item = (state: CoverageItem["state"]): CoverageItem => ({ stream: "mail", account: "a@pubk.test", connectionId: "c", provider: "google", status: "active", configured: true, lastSyncAt: null, errorKind: null, state, reason: null });
 
-describe("Coverage status dot", () => {
-  it("shows for a stale or errored source, links to Settings -> Connections and has an accessible name (not colour only)", () => {
-    render(<CoverageDot laneId="PKG" view={{ items: [item("ok"), item("stale"), item("error")], unavailable: false }} />);
+describe("Sync status line (T-238 part D)", () => {
+  const NOW = new Date("2026-11-12T15:00:00Z"); // 10:00 AM ET
+  const at = (stream: "mail" | "calendar", min: number, over: Partial<CoverageItem> = {}): CoverageItem => ({ ...item("ok"), stream, lastSyncAt: new Date(NOW.getTime() - min * 60_000).toISOString(), ...over });
+  it("says when mail and calendar last synced (the oldest per stream), links to Connections, with Eastern times in the name and title", () => {
+    render(<CoverageDot laneId="PKG" view={{ items: [at("mail", 4), at("mail", 7), at("calendar", 12), item("not_connected")], unavailable: false }} now={NOW} />);
     const dot = screen.getByTestId("coverage-dot");
-    expect(dot.getAttribute("href")).toBe("/PKG/settings#connections");
-    expect(dot.getAttribute("aria-label")).toBe("2 sources are stale or in error. Open Settings, Connections.");
-    expect(dot.textContent).toContain("Sync issue"); // a visible word too
-  });
-  it("all sources fine: a green dot and 'All sources synced · N min ago' (the oldest last sync), linking to Connections", () => {
-    const at = (min: number) => ({ ...item("ok"), lastSyncAt: new Date(Date.parse("2026-11-12T15:00:00Z") - min * 60_000).toISOString() });
-    render(<CoverageDot laneId="PKG" view={{ items: [at(2), at(7), item("not_connected")], unavailable: false }} now={new Date("2026-11-12T15:00:00Z")} />);
-    const dot = screen.getByTestId("coverage-dot");
-    expect(dot.querySelector("[data-slot=sync-full]")?.textContent).toBe("All sources synced \u00b7 7 min ago");
+    expect(dot.querySelector("[data-slot=sync-full]")?.textContent).toBe("Mail synced 7 min ago \u00b7 Calendar synced 12 min ago");
     expect(dot.textContent).toContain("Synced"); // the compact phone word
     expect(dot.getAttribute("data-status")).toBe("synced");
     expect(dot.getAttribute("href")).toBe("/PKG/settings#connections");
+    expect(dot.getAttribute("aria-label")).toBe("Mail last synced 9:53 AM ET. Calendar last synced 9:48 AM ET. Open Settings, Connections.");
+    expect(dot.getAttribute("title")).toBe(dot.getAttribute("aria-label"));
+    expect(dot.textContent).not.toContain("Sync issue");
   });
-  it("all sources fine but no sync time known: just 'All sources synced'", () => {
-    render(<CoverageDot laneId="PKG" view={{ items: [item("ok")], unavailable: false }} />);
-    expect(screen.getByTestId("coverage-dot").querySelector("[data-slot=sync-full]")?.textContent).toBe("All sources synced");
+  it("a failed stream shows its real error as fixed text, and the compact word is 'Sync issue' (not colour only)", () => {
+    render(<CoverageDot laneId="PKG" view={{ items: [at("mail", 3, { errorKind: "reconnect_required", state: "error", status: "reconnect_required" }), at("calendar", 5)], unavailable: false }} now={NOW} />);
+    const dot = screen.getByTestId("coverage-dot");
+    expect(dot.getAttribute("data-status")).toBe("failed");
+    expect(dot.querySelector("[data-slot=sync-full]")?.textContent).toBe("Mail sync failed: Google access expired. Reconnect in Settings. \u00b7 Calendar synced 5 min ago");
+    expect(dot.textContent).toContain("Sync issue");
+    expect(dot.getAttribute("aria-label")).toContain("Mail sync failed: Google access expired. Reconnect in Settings.");
+    expect(dot.getAttribute("href")).toBe("/PKG/settings#connections");
   });
-  it("syncedLabel uses only the sources that are ok: a stale source's older sync does not count, and an unparseable time is ignored", () => {
-    const now = new Date("2026-11-12T15:00:00Z");
-    const at = (state: CoverageItem["state"], iso: string | null) => ({ ...item(state), lastSyncAt: iso });
-    expect(syncedLabel([at("ok", "2026-11-12T14:58:00Z"), at("stale", "2026-11-10T00:00:00Z"), at("ok", "2026-11-12T14:55:00Z")], now)).toBe("All sources synced \u00b7 5 min ago");
-    expect(syncedLabel([at("ok", "not a date")], now)).toBe("All sources synced");
-    expect(syncedLabel([at("ok", "not a date"), at("ok", "2026-11-12T14:58:00Z")], now)).toBe("All sources synced \u00b7 2 min ago");
+  it("with several mailboxes it says how many failed; provider text never appears", () => {
+    render(<CoverageDot laneId="PKG" view={{ items: [at("mail", 3), at("mail", 3, { errorKind: "Bearer secret" })], unavailable: false }} now={NOW} />);
+    const text = screen.getByTestId("coverage-dot").querySelector("[data-slot=sync-full]")?.textContent;
+    expect(text).toBe("Mail sync failed for 1 of 2 mailboxes: The last sync did not finish. Try Sync now; if it continues, check Settings.");
+    expect(text).not.toMatch(/secret/);
   });
-  it("a mix of ok and stale sources is a sync issue, never the all-synced label", () => {
-    render(<CoverageDot laneId="PKG" view={{ items: [{ ...item("ok"), lastSyncAt: "2026-11-12T14:58:00Z" }, item("stale")], unavailable: false }} now={new Date("2026-11-12T15:00:00Z")} />);
-    expect(screen.getByTestId("coverage-dot").textContent).toBe("Sync issue");
-    expect(screen.getByTestId("coverage-dot").getAttribute("aria-label")).toBe("1 source is stale or in error. Open Settings, Connections.");
+  it("a source that never synced says so", () => {
+    render(<CoverageDot laneId="PKG" view={{ items: [at("mail", 0, { lastSyncAt: null, state: "stale" })], unavailable: false }} now={NOW} />);
+    expect(screen.getByTestId("coverage-dot").querySelector("[data-slot=sync-full]")?.textContent).toBe("Mail not synced yet");
+    expect(screen.getByTestId("coverage-dot").getAttribute("data-status")).toBe("attention");
+  });
+  it("shows Sync now beside it only when the caller may sync", () => {
+    const view = { items: [at("mail", 4)], unavailable: false };
+    render(<CoverageDot laneId="PKG" view={view} now={NOW} />);
+    expect(screen.queryByTestId("home-sync-now")).toBeNull();
+    cleanup();
+    render(<CoverageDot laneId="PKG" view={view} now={NOW} canSync />);
+    expect(screen.getByTestId("home-sync-now").tagName).toBe("BUTTON");
   });
   it.each([
     ["only a source that was never connected", [item("not_connected")]],
     ["no sources", []],
   ])("is hidden when %s", (_n, items) => {
-    render(<CoverageDot laneId="PKG" view={{ items, unavailable: false }} />);
+    render(<CoverageDot laneId="PKG" view={{ items, unavailable: false }} canSync />);
     expect(screen.queryByTestId("coverage-dot")).toBeNull();
+    expect(screen.queryByTestId("home-sync-now")).toBeNull();
   });
   it("when Coverage could not be read it says 'Status unknown' (accessible label, links to Settings), never a silent all-clear", () => {
     render(<CoverageDot laneId="PKG" view={{ items: [], unavailable: true }} />);

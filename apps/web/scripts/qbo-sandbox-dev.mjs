@@ -1,13 +1,12 @@
 #!/usr/bin/env node
-// QuickBooks SANDBOX run on the local stack (T-050 / T-198 manual checks, QB-1 – QB-20). Run by a person, not by
+// QuickBooks SANDBOX run on the local stack (T-050 / T-197 manual checks, QB-1 – QB-20). Run by a person, not by
 // agents. Starts `next dev` on port 3000 (the redirect URI registered with Intuit) against the LOCAL Supabase stack.
 //
 // Secrets: only the four INTUIT_* names are taken from the repo-root `.env.local` (or the file given with --env). They
 // go straight into the child's environment and are never printed or written anywhere. Anything else in that file is
 // ignored. The script refuses to start unless INTUIT_ENVIRONMENT=sandbox and the redirect URI is localhost:3000.
 //
-// Usage (from the repo root):  node apps/web/scripts/qbo-sandbox-dev.mjs [--enable-connection-test] [--env <file>]
-//   --enable-connection-test  adds a PKG lane_config version with pilot.connection_test_enabled = true (local DB only)
+// Usage (from the repo root):  node apps/web/scripts/qbo-sandbox-dev.mjs [--env <file>]
 import { spawn, spawnSync } from "node:child_process";
 import { existsSync, readFileSync, readdirSync } from "node:fs";
 import path from "node:path";
@@ -53,16 +52,6 @@ const local = Object.fromEntries(
 for (const name of ["API_URL", "PUBLISHABLE_KEY", "SECRET_KEY", "DB_URL"]) if (!local[name]) fail(`${name} missing from \`supabase status\`.`);
 if (!/^http:\/\/(127\.0\.0\.1|localhost):/.test(local.API_URL)) fail("refusing a non-local Supabase URL.");
 if (!/@(127\.0\.0\.1|localhost):/.test(local.DB_URL)) fail("refusing a non-local database URL.");
-
-if (args.includes("--enable-connection-test")) {
-  // Local database only (checked above). Adds a new lane_config version; earlier versions are kept.
-  const sql =
-    "insert into core.lane_config (lane_id, version, config) select lane_id, version + 1, " +
-    "config || '{\"pilot\":{\"connection_test_enabled\":true}}'::jsonb from core.lane_config_current where lane_id = 'PKG';";
-  const r = spawnSync("psql", [local.DB_URL, "-v", "ON_ERROR_STOP=1", "-q", "-c", sql], { encoding: "utf8" });
-  if (r.error || r.status !== 0) fail("could not switch the connection test on (is psql installed?).");
-  console.log("qbo-sandbox-dev: connection test switched on for PKG (local database).");
-}
 
 console.log(`qbo-sandbox-dev: open http://localhost:${PORT} (use localhost, not 127.0.0.1). Sign-in codes: http://localhost:54324`);
 const child = spawn("pnpm", ["exec", "next", "dev", "--hostname", "127.0.0.1", "--port", String(PORT)], {

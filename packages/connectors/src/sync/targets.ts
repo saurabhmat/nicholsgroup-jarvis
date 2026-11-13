@@ -7,6 +7,8 @@ import type { JobClientFor } from "../vault/tokens";
 
 /** Providers whose connector indexes calendar events. Add Microsoft here when its calendar sync lands. */
 export const CALENDAR_PROVIDERS = ["google"] as const;
+/** Providers whose connector indexes mail (T-238: the scheduled Gmail delta). Add Microsoft here when its mail sync lands. */
+export const MAIL_PROVIDERS = ["google"] as const;
 /** Same states conn.sync accepts (job.ts USABLE). */
 export const SYNCABLE_STATUSES = ["active", "degraded"] as const;
 /** A lane has a handful of connections; the cap only bounds a runaway table (more than this many per lane would be dropped silently). */
@@ -20,6 +22,8 @@ export interface SyncTargetLister {
   listQuickbooksConnectionIds(laneId: LaneId): Promise<string[]>;
   /** Ids of the lane's usable connections of calendar-capable providers, sorted. Throws ConnectorError when unreadable. */
   listCalendarConnectionIds(laneId: LaneId): Promise<string[]>;
+  /** Ids of the lane's usable connections of mail-capable providers (each connected mailbox), sorted. Throws ConnectorError when unreadable. */
+  listMailConnectionIds(laneId: LaneId): Promise<string[]>;
 }
 
 export function createSyncTargetLister(clientFor: JobClientFor): SyncTargetLister {
@@ -53,5 +57,5 @@ export function createSyncTargetLister(clientFor: JobClientFor): SyncTargetListe
     }
     return ids;
   };
-  return { listCalendarConnectionIds: list(CALENDAR_PROVIDERS), listQuickbooksConnectionIds: list(["quickbooks"]) };
+  return { listCalendarConnectionIds: list(CALENDAR_PROVIDERS), listMailConnectionIds: list(MAIL_PROVIDERS), listQuickbooksConnectionIds: list(["quickbooks"]) };
 }

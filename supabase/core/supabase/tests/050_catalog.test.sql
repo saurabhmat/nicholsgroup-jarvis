@@ -79,6 +79,7 @@ insert into security_definer_ok values
   ('core.webhook_event_claim', 'webhook receiver: records an event once per (lane, provider, event id); service_role only, lane-checked (T-036)'),
   ('core.webhook_event_mark', 'webhook receiver: received -> enqueued | failed, lane-bound; service_role only (T-036)'),
   ('core.webhook_events_purge', 'webhook receipt retention, per lane, minimum 7 days; service_role only (T-036)'),
+  ('core.connector_api_errors_purge', 'retention: deletes a lane''s connector API errors older than a fixed 90 days; service_role only, enabled lanes only (T-196)'),
   ('core.source_records_purge_bodies', 'retention: deletes a lane''s stored raw bodies when store_content_bodies is off; service_role only, lane-checked (T-042)'),
   ('core.sync_cursor_get', 'reads the private sync cursor table; service_role only, lane-checked (T-063)'),
   ('core.sync_cursor_reset', 'deletes a sync cursor; service_role only, lane-checked (T-063)'),
@@ -128,11 +129,18 @@ insert into security_definer_ok values
   ('core.briefing_claim_schedule', 'the 06:30 job records its run; service_role only, owner role and view re-checked; never gated (T-235)'),
   ('core.briefing_run_state', 'Home: a run is open, last Regenerate, runs today, newest briefing times; aal2 + lane owner + briefing view, else no row (T-235)'),
   ('core.briefing_claim_release', 'the claiming owner releases their own open run claim (closed as lost); aal2 + lane owner + briefing view, own row only (T-235)'),
-  ('brief.briefing_runs_purge', 'retention of run claims older than N New York days (floor 1); service_role only (T-235)');
+  ('brief.briefing_runs_purge', 'retention of run claims older than N New York days (floor 1); service_role only (T-235)'),
+  ('core.briefing_claim_refresh', 'the briefing.refresh job claims a run after new mail through the same gates as Home auto; service_role only, owner role and view re-checked (T-238)'),
+  ('core.briefing_claim_refresh_close', 'the briefing.refresh job finishes the owner''s open auto claim; service_role only (T-238)'),
+  ('core.job_failure_record', 'a scheduled function failed: increments its streak, alerts once at 3; service_role only (T-238)'),
+  ('core.job_failure_clear', 'a scheduled function succeeded: resets its streak; service_role only (T-238)'),
+  ('core.sync_now_claim', 'Sync now rate limit (one per lane per 2 minutes): aal2 + owner or admin_technical + connections view (T-238)'),
+  ('core.connections_clear_job_failures', 'trigger: a connection leaving active/degraded drops its own job_failures rows (same lane and id only); no API execute (T-238 review M1)');
 
 -- App functions authenticated may execute (callable through the API). Each one is reviewed.
 create temp table authenticated_exec_ok (name text primary key, why text not null) on commit drop;
 insert into authenticated_exec_ok values
+  ('core.sync_now_claim', 'Sync now rate limit; definer, checks aal2, the role and the connections view itself (T-238)'),
   ('core.briefing_coverage', 'Home briefing coverage; definer, checks the caller''s views itself (T-231a)'),
   ('core.briefing_events', 'Home calendar; invoker, RLS on cal.event_index applies (T-231a)'),
   ('core.briefing_threads', 'Home attention and money threads; invoker, RLS on comms.message_index applies (T-231b)'),
@@ -191,6 +199,7 @@ insert into authenticated_exec_ok values
   ('core.act_approve', 'approvals: wrapper over act.approve; invoker (T-232)'),
   ('core.act_reject', 'approvals: wrapper over act.reject; invoker (T-232)'),
   ('core.act_list', 'approvals: the lane''s actions; invoker, RLS applies (T-232)'),
+  ('core.act_pending_qbo_disconnects', 'Settings: ids of pending qbo.disconnect proposals; invoker, RLS applies, read-only (T-197)'),
   ('core.act_get', 'approvals: one action; invoker, RLS applies (T-232)'),
   ('core.act_pending_count', 'approvals: pending count for Home; invoker, RLS applies (T-232)'),
   ('core.act_reply_state', 'reply drawer: pending proposal, in-doubt block and last verified reply for one thread; invoker, RLS applies (T-234)'),

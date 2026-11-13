@@ -15,6 +15,7 @@ type RunRow = { id: string; connectionId: string; laneId: string; status: "runni
 function memoryRuns() {
   const rows: RunRow[] = [];
   const outcomes = new Map<string, { ok: boolean; error?: unknown }>();
+  const outcomeStreams = new Map<string, string | null>();
   let n = 0;
   const store: SyncRunStore = {
     async start(laneId, conn, input) {
@@ -30,11 +31,12 @@ function memoryRuns() {
       row.status = result.status;
       row.result = result;
     },
-    async recordOutcome(_laneId, conn, outcome) {
+    async recordOutcome(_laneId, conn, outcome, stream) {
       outcomes.set(conn.id, outcome);
+      outcomeStreams.set(conn.id, stream ?? null);
     },
   };
-  return { store, rows, outcomes };
+  return { store, rows, outcomes, outcomeStreams };
 }
 
 function memoryCursors() {
@@ -252,6 +254,60 @@ describe("provider runners", () => {
     // A permanent failure on one stream does not hide a retryable one on the other.
     const permanent = { run: async () => { throw new ConnectorError({ kind: "reconnect_required", message: "grant" }); } };
     await expect(createGoogleSyncRunner({ mail: permanent, calendar: bad("cal") })("PKG", s.a)).rejects.toMatchObject({ info: { kind: "rate_limited" } });
+  });
+});
+
+describe("Google runner streams (T-238)", () => {
+  it("mail-only never touches the calendar, calendar-only never touches mail, no streams runs both", async () => {
+    const s = await setup();
+    const calls: string[] = [];
+    const ok = (name: string, written: number) => ({ run: async () => { calls.push(name); return { written, skipped: 0, removed: 0, mode: "incremental" as const }; } });
+    const runner = createGoogleSyncRunner({ mail: ok("mail", 3), calendar: ok("cal", 5) });
+    await expect(runner("PKG", s.a, { streams: ["mail"] })).resolves.toEqual({ kind: "incremental", received: 3, written: 3 });
+    expect(calls).toEqual(["mail"]);
+    calls.length = 0;
+    await expect(runner("PKG", s.a, { streams: ["calendar"] })).resolves.toEqual({ kind: "incremental", received: 5, written: 5 });
+    expect(calls).toEqual(["cal"]);
+    calls.length = 0;
+    await runner("PKG", s.a, { streams: [] });
+    await runner("PKG", s.a, { objectTypes: ["x"] });
+    await runner("PKG", s.a);
+    expect(calls).toEqual(["mail", "cal", "mail", "cal", "mail", "cal"]);
+    calls.length = 0;
+    await runner("PKG", s.a, { streams: ["mail", "calendar"] });
+    expect(calls).toEqual(["mail", "cal"]);
+  });
+
+  it("the job hands streams to the runner and omits them when absent", async () => {
+    const s = await setup();
+    const seen: unknown[] = [];
+    const runner: SyncRunner = async (_l, _c, options) => { seen.push(options); return { kind: "incremental", received: 0, written: 0 }; };
+    const job = createConnSyncJob({ loader: s.mock.loader, runs: memoryRuns().store, runners: { [s.a.provider]: runner } });
+    await job.run("PKG", s.a.id, { trigger: "schedule", streams: ["mail"] });
+    await job.run("PKG", s.a.id, { trigger: "schedule" });
+    await job.run("PKG", s.a.id, { trigger: "webhook", objectTypes: ["Invoice"], streams: [] });
+    expect(seen).toEqual([{ streams: ["mail"] }, undefined, { objectTypes: ["Invoice"] }]);
+  });
+
+  it("records the outcome against the one stream that ran (failure tagged, success scoped); both streams record null", async () => {
+    const s = await setup();
+    const runs = memoryRuns();
+    let fail = true;
+    const runner: SyncRunner = async () => {
+      if (fail) throw new ConnectorError({ kind: "forbidden", message: "Calendar access was refused" });
+      return { kind: "incremental", received: 1, written: 1 };
+    };
+    const job = createConnSyncJob({ loader: s.mock.loader, runs: runs.store, runners: { [s.a.provider]: runner } });
+    await job.run("PKG", s.a.id, { trigger: "schedule", streams: ["calendar"] });
+    expect(runs.outcomes.get(s.a.id)).toMatchObject({ ok: false });
+    expect(runs.outcomeStreams.get(s.a.id)).toBe("calendar");
+    fail = false;
+    await job.run("PKG", s.a.id, { trigger: "schedule", streams: ["mail"] });
+    expect(runs.outcomeStreams.get(s.a.id)).toBe("mail");
+    await job.run("PKG", s.a.id, { trigger: "manual" });
+    expect(runs.outcomeStreams.get(s.a.id)).toBeNull();
+    await job.run("PKG", s.a.id, { trigger: "manual", streams: ["mail", "calendar"] });
+    expect(runs.outcomeStreams.get(s.a.id)).toBeNull();
   });
 });
 
