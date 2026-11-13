@@ -71,8 +71,10 @@ describe("health reads CompanyInfo", () => {
       ),
     );
     const health = await h.connector.health(LANE, conn);
-    expect(health).toMatchObject({ ok: false, status: "degraded" });
-    expect(health.error?.kind).toBe("forbidden");
+    // T-195 error map: Intuit saying the app is not authorized for the company means the connection must be reconnected.
+    expect(health).toMatchObject({ ok: false, status: "reconnect_required" });
+    expect(health.error?.kind).toBe("reconnect_required");
+    expect(health.error?.http_status).toBe(403);
   });
 
   it("a connection that is not usable is reported without calling Intuit", async () => {

@@ -3,19 +3,23 @@
 // Every response's `intuit_tid` is captured by the shared HTTP client into the redacted connector log (QB-9).
 // The access token is picked up per attempt from the token manager; a 401 refreshes once and retries once (QB-2).
 import type { LaneId } from "@nichols/core";
-import { isConnectorError } from "../contract/errors";
+import { isConnectorError, toConnectorError } from "../contract/errors";
 import type { LaneBoundConnection } from "../contract/lane-bound";
 import { assertQuickbooksConnection } from "./guard";
 import { createHttpClient, type ConnectorResponse, type HttpClient, type HttpClientOptions } from "../http/client";
 import type { ConnectorLogger } from "../log/index";
 import type { SecretValue } from "../vault/secret";
 import { API_BASE, API_RATE_LIMIT, INTUIT_TID_HEADER, MINOR_VERSION, type IntuitEnvironment } from "./constants";
+import { mapIntuitError, QBO_RETRY } from "./errors";
+import type { OnReconnectRequired } from "./reconnect";
 import type { TokenManager } from "./token-manager";
 
 export type QboApiDeps = {
   tokens: TokenManager;
   environment: () => IntuitEnvironment;
   logger?: ConnectorLogger;
+  /** Called when a call ends in reconnect_required (a 401 that survived a refresh, an app authorization refusal): records the status and notifies (T-195). Never throws. */
+  onReconnectRequired?: OnReconnectRequired;
   /** Test hook: extra HTTP client options (fast backoff, injected fetch). */
   httpOptions?: Partial<HttpClientOptions>;
   httpFor?: (laneId: LaneId, conn: LaneBoundConnection<string>) => HttpClient;
@@ -32,10 +36,16 @@ export interface QboApi {
   ): Promise<ConnectorResponse<T>>;
 }
 
-/** Intuit error bodies: `{ Fault: { Error: [{ code, Message, Detail }] } }`. Only the code is kept. */
+/**
+ * Intuit error bodies: `{ Fault: { Error: [{ code, Message, Detail }] } }`. Some responses (401 from the gateway) use the same
+ * shape with lower-case keys (`fault`, `error`, `code`). Only the code is kept (never the message or detail).
+ */
 export function intuitErrorCode(body: unknown): string | undefined {
-  const fault = (body as { Fault?: { Error?: { code?: unknown }[] } } | null)?.Fault;
-  const code = fault?.Error?.[0]?.code;
+  const root = body as { Fault?: unknown; fault?: unknown } | null;
+  const fault = (root?.Fault ?? root?.fault) as { Error?: unknown; error?: unknown } | undefined;
+  const list = fault?.Error ?? fault?.error;
+  const first = Array.isArray(list) ? (list[0] as { code?: unknown } | undefined) : undefined;
+  const code = first?.code;
   return typeof code === "string" || typeof code === "number" ? String(code) : undefined;
 }
 
@@ -52,6 +62,9 @@ export function createQboApi(deps: QboApiDeps): QboApi {
         rateLimit: API_RATE_LIMIT,
         requestIdHeader: INTUIT_TID_HEADER,
         errorCode: intuitErrorCode,
+        maxRetries: QBO_RETRY.maxRetries,
+        retryBaseMs: QBO_RETRY.baseMs,
+        retryMaxMs: QBO_RETRY.maxMs,
         ...(deps.logger ? { logger: deps.logger } : {}),
         ...deps.httpOptions,
       }));
@@ -76,11 +89,22 @@ export function createQboApi(deps: QboApiDeps): QboApi {
           },
         });
       try {
-        return await request();
+        try {
+          return await request();
+        } catch (e) {
+          // 401 is `forbidden` with that status (HTTP client contract). Refresh once, retry once; a second 401 is final.
+          if (isConnectorError(e) && e.info.kind === "forbidden" && e.info.http_status === 401 && used) return await request(used);
+          throw e;
+        }
       } catch (e) {
-        // 401 is `forbidden` with that status (HTTP client contract). Refresh once, retry once; a second 401 is final.
-        if (isConnectorError(e) && e.info.kind === "forbidden" && e.info.http_status === 401 && used) return request(used);
-        throw e;
+        // The error map (QB-14, ./errors.ts): every Intuit failure leaves as retry, reconnect_required or failed-with-message.
+        if (!isConnectorError(e)) throw e;
+        const mapped = toConnectorError(mapIntuitError(e));
+        if (mapped.info.kind === "reconnect_required" && e.info.kind !== "reconnect_required") {
+          // 401 after a refresh, or an app-authorization refusal: the grant is dead although the refresh did not say so.
+          await deps.onReconnectRequired?.(laneId, conn, mapped.toJSON());
+        }
+        throw mapped;
       }
     },
   };

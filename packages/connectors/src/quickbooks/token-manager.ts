@@ -13,7 +13,7 @@
 // repeat with the old one is `invalid_grant`. When the POST times out, or Intuit answers `invalid_grant`, the Vault is
 // read again: if the stored set changed, another instance won the race and its set is used, whatever grace period
 // Intuit does or does not give the previous refresh token. Only an unchanged store means `reconnect_required` (QB-3,
-// QB-4); recording that status and notifying the admin is T-195.
+// QB-4); recording that status and notifying the admin is `onReconnectRequired` (T-195, ./reconnect.ts).
 import type { LaneId } from "@nichols/core";
 import { z } from "zod";
 import { ConnectorError, isConnectorError } from "../contract/errors";
@@ -25,6 +25,7 @@ import type { TokenVault } from "../vault/tokens";
 import { SecretValue } from "../vault/secret";
 import { INTUIT_TID_HEADER, REFRESH_SKEW_MS } from "./constants";
 import { assertQuickbooksConnection } from "./guard";
+import type { OnReconnectRequired } from "./reconnect";
 
 const StoredSchema = z.looseObject({
   access_token: z.string().min(1).max(8192),
@@ -54,6 +55,8 @@ export type TokenManagerDeps = {
   logger?: ConnectorLogger;
   /** Pauses between re-reads of the Vault after a failed refresh (a winner may not have stored yet). Test hook. */
   sleep?: (ms: number) => Promise<void>;
+  /** Called once Intuit has refused the refresh token and no other instance holds a newer one (T-195: records the status, notifies). Never throws. */
+  onReconnectRequired?: OnReconnectRequired;
 };
 
 /** Re-reads of the Vault after a failed refresh, and the pause before each: the winner stores right after Intuit answers. */
@@ -151,7 +154,7 @@ export function createTokenManager(deps: TokenManagerDeps): TokenManager {
         }
       }
       if (isConnectorError(e) && e.info.provider_error_code === "invalid_grant") {
-        throw new ConnectorError({
+        const reconnect = new ConnectorError({
           kind: "reconnect_required",
           message: "QuickBooks rejected the refresh token; the connection must be reconnected",
           http_status: e.info.http_status,
@@ -159,6 +162,8 @@ export function createTokenManager(deps: TokenManagerDeps): TokenManager {
           provider_tid: e.info.provider_tid,
           endpoint: e.info.endpoint,
         });
+        await deps.onReconnectRequired?.(laneId, conn, reconnect.toJSON());
+        throw reconnect;
       }
       throw e;
     }

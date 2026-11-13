@@ -4,7 +4,7 @@
 // Token health: (1) the credential-expiry rule: `core.connections.token_expires_at` (the credential whose loss forces a
 // reconnect) within 7 days, or already past, raises an alert; (2) the provider's read-only `health` check: a failure
 // raises an alert and flags the connection (last_error = redacted error; active -> degraded). Not done here:
-// moving a connection to reconnect_required, stopping its sync or notifying anyone (T-195 / the notification consumer).
+// notifying anyone (the notification consumer). Moving a connection to reconnect_required is done where the failure happens (T-195, quickbooks/reconnect.ts).
 // A transient health-check failure (timeout, rate limit, 5xx) is inconclusive: it changes nothing and raises nothing.
 //
 // Failure isolation: one connection per call; every error is reduced to a redacted kind.
@@ -77,10 +77,11 @@ export function createTokenHealthJob(deps: Common & { checkers: Readonly<Record<
         } else {
           // Marked as the health check's own error, so a later good check may clear it (and only it).
           const error = { ...(health.error ?? toConnectorError(new Error("health check failed")).toJSON()), endpoint: HEALTH_CHECK_ENDPOINT };
-          alerts.push({ provider: conn.provider, reason: "health_check_failed", errorKind: error.kind });
+          // A refused grant is its own reason (T-195): the same event id as the one the token manager sent, so Inngest drops the repeat.
+          alerts.push({ provider: conn.provider, reason: error.kind === "reconnect_required" ? "reconnect_required" : "health_check_failed", errorKind: error.kind });
           child.warn("conn.token_health.failed", { kind: error.kind, disposition: error.disposition });
           try {
-            // reconnect_required is T-195's transition: here only flagged, status unchanged.
+            // reconnect_required is recorded where the failure happens (T-195); here it is only flagged, the status is not touched.
             const applied = await deps.store.applyHealth(laneId, conn, { ...(conn.status === "active" && error.kind !== "reconnect_required" ? { status: "degraded" as const } : {}), last_error: error });
             if (!applied) child.warn("conn.token_health.superseded", {}); // the row changed meanwhile (e.g. T-195): not overwritten
           } catch (e) {

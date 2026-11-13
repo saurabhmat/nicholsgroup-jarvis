@@ -106,10 +106,10 @@ describe("conn.token_health job", () => {
     expect(other.patches).toEqual([]);
   });
 
-  it("reconnect_required from the check is flagged, not applied as a status change (T-195)", async () => {
+  it("reconnect_required from the check is flagged, not applied as a status change (the status is recorded where the failure happens, T-195)", async () => {
     const s = setup([row(1)]);
     const out = await createTokenHealthJob({ ...s, checkers: { quickbooks: bad("reconnect_required") }, now: () => NOW }).run("PKG", id(1));
-    expect(out).toMatchObject({ ok: true, alerts: [{ reason: "health_check_failed", errorKind: "reconnect_required" }] });
+    expect(out).toMatchObject({ ok: true, alerts: [{ reason: "reconnect_required", errorKind: "reconnect_required" }] });
     expect(s.patches[0]?.patch.status).toBeUndefined();
     expect(s.patches[0]?.patch.last_error).toMatchObject({ kind: "reconnect_required" });
   });

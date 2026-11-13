@@ -13,9 +13,9 @@
 // Verified before anything is sent to Intuit or changed in the Vault (security W1): the action's `payload_sha256` is
 // recomputed (JCS + SHA-256 over lane, action type, connection, target, payload, schema version) and compared in
 // constant time, and `target.realm_id` must be the connection's own QuickBooks company. A tampered payload or hash, or
-// a target naming another company, is refused with `invalid_input`. Remaining gap until T-193: `approved_by` is
-// carried by the caller and only checked to be a UUID; the approvals executor must read it from the approval row
-// (`act.proposed_actions.approved_by`), which this connector cannot verify on its own.
+// a target naming another company, is refused with `invalid_input`. `approved_by` is carried by the
+// caller and only checked to be a UUID; the approvals executor (T-195, modules/approvals/src/server/qbo.ts) reads it from the
+// locked approval row (`act.proposed_actions.approved_by`), which this connector cannot verify on its own.
 import { timingSafeEqual } from "node:crypto";
 import type { LaneId } from "@nichols/core";
 import { computePayloadSha256, type ConnectorWriter, type ApprovedActionShape } from "../contract/writer";
@@ -33,7 +33,12 @@ import type { QboClientConfig } from "./provider";
 import { isAlreadyRevoked, revokeGrant } from "./revoke";
 import type { TokenManager } from "./token-manager";
 
-export const QBO_REVOKE_ACTION = "qbo.revoke_grant";
+/**
+ * The approvals action type that disconnects QuickBooks (T-195). It is the same string end to end: the type stored in
+ * act.proposed_actions, the one inside the approved hash and the one this writer accepts. (Before T-195 it was named
+ * "qbo.revoke_grant"; the hash covers the type, so the connector and the proposal must agree on one name.)
+ */
+export const QBO_REVOKE_ACTION = "qbo.disconnect";
 
 /**
  * T-193 replaces this with the branded `ApprovedAction`. Until then the approver is carried explicitly so the audit row
@@ -150,5 +155,42 @@ export function createQuickBooksWriter(deps: QboWriterDeps): ConnectorWriter<Qbo
     provider: "quickbooks",
     actionTypes: [QBO_REVOKE_ACTION],
     executeWrite: (laneId, conn, action) => revoker.run(laneId, conn, action),
+  };
+}
+
+/** Shown (and stored as the failure) when the read-back finds the connection still usable after the revoke. Fixed text. */
+export const QBO_VERIFICATION_MISMATCH_MESSAGE = "The QuickBooks connection is still connected after the disconnect";
+
+export type QboDisconnectVerifierDeps = {
+  connections: { load(laneId: LaneId, connectionId: string): Promise<LaneBoundConnection<string>> };
+  vault: Pick<TokenVault, "getToken">;
+};
+
+/**
+ * The read-back after a disconnect (T-195): the authoritative connection row is `disconnected`, and the Vault no longer hands
+ * out a token for it. (The database also guarantees the first implies the second: a connection cannot be marked disconnected
+ * while a credential is stored, trigger connections_no_orphan_secret; the second read checks it anyway.) Read-only: no call to
+ * Intuit. Throws a `provider_error` with the fixed message when either is not the case; a store that cannot be read throws as
+ * it is (the approvals executor treats a failed read-back as "outcome unknown", never as "not disconnected").
+ */
+export function createQuickBooksDisconnectVerifier(deps: QboDisconnectVerifierDeps) {
+  return {
+    async verify(laneId: LaneId, conn: LaneBoundConnection<string>, action: Pick<QboApprovedAction, "lane_id" | "connection_id" | "target">): Promise<void> {
+      assertLaneBound(laneId, conn);
+      assertQuickbooksConnection(conn);
+      if (action.lane_id !== laneId || action.connection_id !== conn.id) throw new ConnectorError({ kind: "lane_mismatch", message: "The approved action is for another lane or connection" });
+      const row = await deps.connections.load(laneId, conn.id);
+      assertQuickbooksConnection(row);
+      assertTargetIsConnection(action as QboApprovedAction, row);
+      if (row.status !== "disconnected") throw new ConnectorError({ kind: "provider_error", message: QBO_VERIFICATION_MISMATCH_MESSAGE });
+      try {
+        await deps.vault.getToken(laneId, row);
+      } catch (e) {
+        // The Vault refuses a disconnected connection (connection_unavailable) or has nothing stored (not_found): both are "gone".
+        if (isConnectorError(e) && (e.info.kind === "connection_unavailable" || e.info.kind === "not_found")) return;
+        throw e;
+      }
+      throw new ConnectorError({ kind: "provider_error", message: QBO_VERIFICATION_MISMATCH_MESSAGE });
+    },
   };
 }

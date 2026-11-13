@@ -4,7 +4,7 @@ import type { LaneBoundConnection } from "../contract/lane-bound";
 import type { ConnectorErrorInfo, HealthStatus } from "../contract/schemas";
 
 /** The reasons a connection needs attention. Mirrors CONN_ATTENTION_REASONS in @nichols/core/inngest (structural). */
-export type AttentionReason = "token_expiring" | "token_expired" | "health_check_failed" | "subscription_renewal_failed";
+export type AttentionReason = "token_expiring" | "token_expired" | "health_check_failed" | "subscription_renewal_failed" | "reconnect_required";
 
 /** Ids and enums only; becomes a `conn/attention.needed` event. Never a message, token or provider text. */
 export type AttentionAlert = { provider: string; reason: AttentionReason; errorKind?: string; daysLeft?: number };

@@ -57,11 +57,12 @@ export const connSubscriptionRenewRequested = eventType("conn/subscription.renew
   schema: z.strictObject({ laneId: laneIdSchema, connectionId: z.uuid() }),
 });
 
-export const CONN_ATTENTION_REASONS = ["token_expiring", "token_expired", "health_check_failed", "subscription_renewal_failed"] as const;
+export const CONN_ATTENTION_REASONS = ["token_expiring", "token_expired", "health_check_failed", "subscription_renewal_failed", "reconnect_required"] as const;
 
 /**
- * A connection needs a person's attention (T-040): its credential expires within 7 days, a health check failed, or a
- * subscription could not be renewed. Notification event; no consumer exists yet (the notification module that sends it
+ * A connection needs a person's attention (T-040): its credential expires within 7 days, a health check failed, a
+ * subscription could not be renewed, or (T-195) the provider refused the refresh token / grant (`reconnect_required`: the
+ * connection is already recorded as reconnect_required and its sync has stopped; an admin must reconnect it). Notification event; no consumer exists yet (the notification module that sends it
  * to the admin is not built; the backlog's "T-181" reference is stale, see plan-review Nov 5 T-040). Ids and enums
  * only: never an error message, token or provider text. `errorKind` is a ConnectorErrorKind; `daysLeft` is whole days
  * until the credential expires (negative once expired).

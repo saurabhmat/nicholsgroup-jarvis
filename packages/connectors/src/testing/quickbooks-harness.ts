@@ -25,6 +25,7 @@ import { computePayloadSha256 } from "../contract/writer";
 import { createDiscovery } from "../quickbooks/discovery";
 import { createQuickBooksOAuthProvider } from "../quickbooks/provider";
 import { createTokenManager } from "../quickbooks/token-manager";
+import { createReconnectRecorder, type ReconnectNotice, type ReconnectStore } from "../quickbooks/reconnect";
 import { SecretValue } from "../vault/secret";
 import type { TokenVault } from "../vault/tokens";
 import { FAKE_CLIENT_ID, FAKE_CLIENT_SECRET, FAKE_REALM, type FakeIntuit } from "./msw/quickbooks/handlers";
@@ -96,6 +97,7 @@ export function createQboHarness(options: QboHarnessOptions) {
       if (holder) throw new ConnectorError({ kind: "forbidden", message: ACCOUNT_IN_USE_MESSAGE });
       secrets.set(row.id, secret.reveal());
       row.status = "active";
+      row.last_error = null; // T-195: a (re)connect clears the error that made it reconnect_required
       row.token_expires_at = expiresAt ? expiresAt.toISOString() : null;
       stats.stores += 1;
     },
@@ -185,6 +187,20 @@ export function createQboHarness(options: QboHarnessOptions) {
     httpFor: (laneId, baseUrl) => fastHttp(laneId, undefined, baseUrl),
   });
 
+  // ---- T-195 twins: the reconnect_required status update (core.connections) and the admin notification event.
+  const notices: ReconnectNotice[] = [];
+  const reconnectStore: ReconnectStore = {
+    async markReconnectRequired(laneId, conn, error) {
+      assertLaneBound(laneId, conn);
+      const row = rowOf(laneId, conn);
+      if (row.status !== "active" && row.status !== "degraded") return false;
+      row.status = "reconnect_required";
+      row.last_error = error;
+      return true;
+    },
+  };
+  const onReconnectRequired = createReconnectRecorder({ store: reconnectStore, notify: async (n) => void notices.push(n), logger });
+
   /** A token manager of its own (a second serverless instance sharing the same Vault). */
   const newTokenManager = () =>
     createTokenManager({
@@ -194,10 +210,11 @@ export function createQboHarness(options: QboHarnessOptions) {
       httpFor: fastHttp,
       now,
       logger,
+      onReconnectRequired,
       sleep: (ms) => new Promise((resolve) => setTimeout(resolve, Math.min(ms, 5))),
     });
   const tokens = newTokenManager();
-  const api = createQboApi({ tokens, environment: () => environment, logger, httpOptions: { retryBaseMs: 1, retryMaxMs: 5 } });
+  const api = createQboApi({ tokens, environment: () => environment, logger, onReconnectRequired, httpOptions: { retryBaseMs: 1, retryMaxMs: 5 } });
   // Twin of the real feature store: merges the flags into the row (service-role update of core.connections).
   const featureStore: QboFeatureStore = {
     async save(laneId, conn, features, checkedAt) {
@@ -341,6 +358,7 @@ export function createQboHarness(options: QboHarnessOptions) {
     logs,
     audits,
     rows,
+    notices,
     secrets,
     realms,
     stats,
