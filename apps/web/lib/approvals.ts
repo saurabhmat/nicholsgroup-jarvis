@@ -123,7 +123,8 @@ const STATUS: Record<string, number> = {
 async function actionOf(ctx: ApprovalsCtx, id: string): Promise<{ type: string; connectionId: string } | null> {
   const got = await ctx.rpc("act_get", { p_lane: ctx.laneId, p_id: id });
   const row = !got.error && Array.isArray(got.data) && got.data.length > 0 ? (got.data[0] as { action_type?: unknown; connection_id?: unknown }) : null;
-  return row && typeof row.action_type === "string" && typeof row.connection_id === "string" ? { type: row.action_type, connectionId: row.connection_id } : null;
+  // Anything that is not exactly qbo.disconnect is treated as an email action (owner only): the narrower role is the safe default.
+  return row && typeof row.connection_id === "string" ? { type: typeof row.action_type === "string" ? row.action_type : "", connectionId: row.connection_id } : null;
 }
 
 export async function handleApprovals(request: Request, laneId: string, deps: ApprovalsApiDeps): Promise<Response> {
