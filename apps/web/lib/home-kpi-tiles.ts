@@ -72,7 +72,7 @@ export function kpiTiles(finance: HomeFinanceView, detail: HomeFinanceDetail, fe
       const out: KpiTile = { ...base(k), value: c.value, flags: [...c.flags, ...staleFlag] };
       if (k === "cash") {
         const n = finance.cash.accounts.length;
-        out.note = n > 0 ? `${plural(n, "account", "accounts")} \u00b7 ${SOURCE}` : SOURCE;
+        out.note = n > 0 ? `${plural(n, "account", "accounts")} \u00b7 ${SOURCE} account balances` : `${SOURCE} account balances`;
       } else if (k === "ar30") {
         out.note = `${plural(finance.ar.invoices, "invoice", "invoices")} \u00b7 ${SOURCE}`;
         if ((finance.ar.over30 ?? 0) > 0) out.tone = "danger";

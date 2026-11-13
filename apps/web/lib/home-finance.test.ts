@@ -132,13 +132,26 @@ describe("cards with figures", () => {
     expect(financeCards(v)[1]?.value).toBe("$0.00");
   });
   it("a figure with a reason shows the reason, not the number (other cards unaffected)", () => {
-    const v = ok({ cash_reason: "balance_sheet_not_cached", cash_total: null, pnl_reason: "month_report_not_cached", pnl_net: null, pnl_income: null, pnl_expenses: null });
+    const v = ok({ cash_reason: "balance_unreadable", cash_total: null, pnl_reason: "month_report_not_cached", pnl_net: null, pnl_income: null, pnl_expenses: null });
     const [c, a, p] = financeCards(v);
     expect(c?.value).toBeUndefined();
-    expect(c?.statusText).toBe("The balance sheet is not part of the QuickBooks sync yet");
+    expect(c?.statusText).toBe("A bank account has no balance yet. It fills in the next time QuickBooks data is re-processed");
     expect(c?.bookBalance).toBe(true);
     expect(a?.value).toBe("$160.25");
     expect(p?.statusText).toBe("The month-to-date report is not synced yet");
+  });
+  it("T-243: every cash reason has its own text, none mentions the balance sheet, a re-normalize is named for an unreadable balance", () => {
+    const texts = ["balance_unreadable", "bank_mapping_missing", "no_own_bank_accounts"].map((r) => financeCards(ok({ cash_reason: r, cash_total: null }))[0]?.statusText ?? "");
+    expect(new Set(texts).size).toBe(3);
+    for (const t of texts) {
+      expect(t.toLowerCase()).not.toContain("balance sheet");
+      expect(t).not.toBe("Not available yet");
+    }
+    expect(texts[0]).toContain("re-processed");
+    // The retired balance-sheet reasons fall back to the generic text and never show a figure.
+    const old = financeCards(ok({ cash_reason: "balance_sheet_not_cached", cash_total: 5 }))[0];
+    expect(old?.statusText).toBe("Not available yet");
+    expect(old?.value).toBeUndefined();
   });
   it("an unknown reason still shows a text and never a figure", () => {
     const v = ok({ ar_reason: "something_new", ar_over_30: 5 });

@@ -6,7 +6,7 @@
 -- required, group sums, payroll-partial flag, unreadable figure), the "book balance" key names, and denial: another lane
 -- (rows exist, caller is not a member), AAL1, admin_technical (no finance view), outsider, anon.
 begin;
-select plan(64);
+select plan(68);
 \ir helpers/lane_rls.psql
 
 update core.lanes set enabled = true where code in ('APK', 'NC');
@@ -80,7 +80,9 @@ select lane_id, version + 1,
       jsonb_build_object('qbo_account_id', 'bank-synthetic-2', 'owner_entity', 'APK'),
       jsonb_build_object('qbo_account_id', 'bank-synthetic-3', 'owner_entity', 'PKG'),
       jsonb_build_object('qbo_account_id', 'bank-synthetic-4', 'owner_entity', 'PKG'),
-      jsonb_build_object('qbo_account_id', 'bank-synthetic-4', 'owner_entity', 'APK'))))
+      jsonb_build_object('qbo_account_id', 'bank-synthetic-4', 'owner_entity', 'APK'),
+      jsonb_build_object('qbo_account_id', 'bank-synthetic-5', 'owner_entity', 'PKG'),
+      jsonb_build_object('qbo_account_id', 'bank-synthetic-6', 'owner_entity', 'PKG'))))
 from core.lane_config_current where lane_id = 'PKG';
 
 -- Invoices (today's New York date is the business date). PKG own entity: 100.00 (45 d), 50.25 (31 d), 10.00 (no due date, issued 40 d ago).
@@ -100,9 +102,17 @@ insert into fin.invoices (lane_id, connection_id, source_id, issue_date, due_dat
   ('APK', '00000000-0000-4000-8000-000000003002', 'a-1', pg_temp.d(120), pg_temp.d(90), 7777.00, 7777.00, 'PKG', false, false, 'USD');
 
 -- Bank accounts: account 4's ledger activity is attributed to APK elsewhere? No: 3 is attributed to APK (shared by activity).
-insert into fin.accounts (lane_id, connection_id, source_id, name, type, is_bank, entity_code, owner_entity_code) values
-  ('PKG', '00000000-0000-4000-8000-000000003001', 'bank-synthetic-1', 'Operating', 'Bank', true, 'PKG', 'PKG'),
-  ('PKG', '00000000-0000-4000-8000-000000003001', 'bank-synthetic-3', 'Reserve', 'Bank', true, 'APK', 'PKG');
+-- T-243: cash is the sum of fin.accounts.current_balance of the own-entity mapped bank accounts (the balance sheet below is ignored).
+insert into fin.accounts (lane_id, connection_id, source_id, name, type, is_bank, entity_code, owner_entity_code, active, deleted, current_balance) values
+  ('PKG', '00000000-0000-4000-8000-000000003001', 'bank-synthetic-1', 'Operating', 'Bank', true, 'PKG', 'PKG', true, false, 1234.56),
+  ('PKG', '00000000-0000-4000-8000-000000003001', 'bank-synthetic-2', 'Other company account', 'Bank', true, 'APK', 'APK', true, false, 999.00),
+  ('PKG', '00000000-0000-4000-8000-000000003001', 'bank-synthetic-3', 'Reserve', 'Bank', true, 'APK', 'PKG', true, false, -20.00),
+  ('PKG', '00000000-0000-4000-8000-000000003001', 'bank-synthetic-4', 'Shared account', 'Bank', true, 'PKG', 'PKG', true, false, 100.10),
+  ('PKG', '00000000-0000-4000-8000-000000003001', 'bank-synthetic-5', 'Closed account', 'Bank', true, 'PKG', 'PKG', false, false, 7000.00),
+  ('PKG', '00000000-0000-4000-8000-000000003001', 'bank-synthetic-6', 'Deleted account', 'Bank', true, 'PKG', 'PKG', false, true, 8000.00),
+  ('PKG', '00000000-0000-4000-8000-000000003001', 'bank-synthetic-9', 'Not in any mapping', 'Bank', true, 'unmapped', null, true, false, 5.00),
+  ('PKG', '00000000-0000-4000-8000-000000003001', 'bank-synthetic-8', 'Not a bank account', 'Other Current Asset', false, 'PKG', null, true, false, 88888.00),
+  ('APK', '00000000-0000-4000-8000-000000003002', 'bank-synthetic-1', 'Operating', 'Bank', true, 'PKG', 'PKG', true, false, 5555555.00);
 
 -- Balance sheets. An older PKG report with other figures (must not be used), the current one, and APK's.
 create function pg_temp.bs(p_rows jsonb) returns jsonb language sql as $$
@@ -145,7 +155,7 @@ select is((select ar_unmapped from core.home_finance('PKG')), 1, 'AR > 30: one o
 select is((select ar_reason from core.home_finance('PKG')), null, 'AR > 30: no reason when present');
 
 -- Cash
-select is((select cash_total from core.home_finance('PKG')), 1314.66::numeric, 'cash: own-entity accounts 1234.56 - 20.00 + 100.10 (other owner and unmapped left out, older report ignored)');
+select is((select cash_total from core.home_finance('PKG')), 1314.66::numeric, 'cash: own-entity accounts 1234.56 - 20.00 + 100.10 (other owner, unmapped, inactive, deleted and non-bank accounts left out; the balance sheet is not read)');
 select is((select jsonb_array_length(cash_accounts) from core.home_finance('PKG')), 3, 'cash: three accounts listed, each in full');
 select is((select (cash_accounts -> 0 ->> 'name') || ':' || (cash_accounts -> 0 ->> 'book_balance') from core.home_finance('PKG')), 'Operating:1234.56', 'cash: per-account book balance, ordered by name');
 select is((select (select a ->> 'shared' from jsonb_array_elements(cash_accounts) a where a ->> 'name' = 'Shared account') from core.home_finance('PKG')), 'true',
@@ -154,8 +164,9 @@ select is((select (select a ->> 'shared' from jsonb_array_elements(cash_accounts
           'cash: an account whose ledger activity is attributed to another entity is flagged shared');
 select is((select (select a ->> 'shared' from jsonb_array_elements(cash_accounts) a where a ->> 'name' = 'Operating') from core.home_finance('PKG')), 'false', 'cash: a plain account is not shared');
 select is((select cash_unmapped from core.home_finance('PKG')), 1, 'cash: a bank account in no mapping is counted, never allocated');
-select ok((select cash_as_of > now() - interval '1 day 1 hour' and cash_as_of < now() - interval '23 hours' from core.home_finance('PKG')), 'cash: as_of is the balance sheet''s');
-select is((select cash_accounts::text !~ '88888' from core.home_finance('PKG')), true, 'cash: rows outside the Bank Accounts group are not read');
+select ok((select cash_as_of = last_sync_at and cash_as_of < now() - interval '1 hour 50 minutes' and cash_as_of > now() - interval '2 hours 10 minutes' from core.home_finance('PKG')), 'cash: as_of is the last books sync');
+select is((select cash_accounts::text !~ '88888|7000|8000' from core.home_finance('PKG')), true, 'cash: non-bank, inactive and deleted accounts are not read');
+select is((select cash_reason is null and cash_total <> 1.00 from core.home_finance('PKG')), true, 'cash: the older balance sheet (1.00) is not used');
 
 -- P&L month to date: nothing cached for the month yet
 select is((select pnl_reason from core.home_finance('PKG')), 'month_report_not_cached', 'P&L: no month report cached, nothing is derived');
@@ -223,16 +234,32 @@ set local role authenticated;
 select is((select pnl_reason from core.home_finance('PKG')), 'figure_unreadable', 'P&L: an unreadable figure gives a reason, not a guess');
 reset role;
 
--- A class-filtered balance sheet is not a book balance: refused.
+-- A class-filtered balance sheet in the cache changes nothing: the balance sheet is not read for cash.
 insert into fin.report_cache (lane_id, connection_id, report, params, payload, as_of, fetched_at) values
   ('PKG', '00000000-0000-4000-8000-000000003001', 'balance_sheet', '{"start_date":"2026-01-01","end_date":"2026-11-11","class":"class-synthetic-pkg"}',
    pg_temp.bs(jsonb_build_array(pg_temp.bank('bank-synthetic-1', 'Operating', '42.00'))), now(), now());
 select pg_temp.claims('owner@example.test', 'aal2');
 set local role authenticated;
-select is((select cash_reason from core.home_finance('PKG')), 'balance_sheet_class_filtered', 'cash: a class-filtered balance sheet is refused');
-select is((select cash_total is null and jsonb_array_length(cash_accounts) = 0 from core.home_finance('PKG')), true, 'cash: refused means no figure and no accounts');
+select is((select cash_total from core.home_finance('PKG')), 1314.66::numeric, 'cash: a class-filtered balance sheet in the cache has no effect');
 reset role;
 delete from fin.report_cache where lane_id = 'PKG' and report = 'balance_sheet' and params ? 'class';
+
+-- An own account with no balance yet (normalized before the column existed): a reason, not a guess.
+update fin.accounts set current_balance = null where lane_id = 'PKG' and source_id = 'bank-synthetic-3';
+select pg_temp.claims('owner@example.test', 'aal2');
+set local role authenticated;
+select is((select cash_reason from core.home_finance('PKG')), 'balance_unreadable', 'cash: an own account without a balance gives balance_unreadable');
+select is((select cash_total is null and jsonb_array_length(cash_accounts) = 0 from core.home_finance('PKG')), true, 'cash: unreadable means no figure and no accounts');
+reset role;
+update fin.accounts set current_balance = -20.00 where lane_id = 'PKG' and source_id = 'bank-synthetic-3';
+
+-- Mapped, but none of the own accounts is a live bank account in the ledger.
+update fin.accounts set active = false where lane_id = 'PKG' and source_id in ('bank-synthetic-1', 'bank-synthetic-3', 'bank-synthetic-4');
+select pg_temp.claims('owner@example.test', 'aal2');
+set local role authenticated;
+select is((select cash_reason from core.home_finance('PKG')), 'no_own_bank_accounts', 'cash: no live own bank account gives no_own_bank_accounts');
+reset role;
+update fin.accounts set active = true where lane_id = 'PKG' and source_id in ('bank-synthetic-1', 'bank-synthetic-3', 'bank-synthetic-4');
 
 -- No bank-account mapping: cash is not guessed.
 insert into core.lane_config (lane_id, version, config)
@@ -263,11 +290,12 @@ select is((select cash_total is null and ar_over_30 is null and pnl_net is null 
 select is((select allowed from core.home_finance_context('APK')), false, 'another lane: the context helper says not allowed');
 select is((select connected is false and own_entity is null and bank_accounts = '[]'::jsonb from core.home_finance_context('APK')), true, 'another lane: the context helper returns nothing of the lane');
 select is((select ar_over_30 from core.home_finance('PKG')), 160.25::numeric, 'PKG''s figures never include the other lane''s 7777.00 invoice');
-select is((select cash_total from core.home_finance('PKG')) is null, true, 'PKG cash (mapping removed above) never shows the other lane''s balance sheet');
+select is((select cash_total from core.home_finance('PKG')) is null, true, 'PKG cash (mapping removed above) never shows the other lane''s balance');
 reset role;
 -- The APK fixture is real: without RLS it is there.
 select is((select sum(balance) from fin.invoices where lane_id = 'APK'), 7777.00::numeric, 'fixture check: APK has an overdue invoice');
 select is((select count(*)::int from fin.report_cache where lane_id = 'APK' and report = 'balance_sheet'), 1, 'fixture check: APK has a balance sheet');
+select is((select sum(current_balance) from fin.accounts where lane_id = 'APK'), 5555555.00::numeric, 'fixture check: APK has a bank balance');
 
 -- ---------------------------------------------------------------- AAL1, admin_technical, outsider, anon
 select pg_temp.claims('owner@example.test', 'aal1');

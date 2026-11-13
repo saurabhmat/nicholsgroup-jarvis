@@ -891,14 +891,14 @@ isOneToOne: false
           Tables: {
             "accounts": {
                   Row: {
-                    "active": boolean,"connection_id": string,"created_at": string,"deleted": boolean,"entity_code": string,"id": string,"is_bank": boolean,"lane_id": string,"name": string,"owner_entity_code": string | null,"provider": string,"raw_record_id": string | null,"source_id": string,"source_updated_at": string | null,"subtype": string | null,"type": string,"updated_at": string
+                    "active": boolean,"connection_id": string,"created_at": string,"current_balance": number | null,"deleted": boolean,"entity_code": string,"id": string,"is_bank": boolean,"lane_id": string,"name": string,"owner_entity_code": string | null,"provider": string,"raw_record_id": string | null,"source_id": string,"source_updated_at": string | null,"subtype": string | null,"type": string,"updated_at": string
                   }
                   ComputedFields: never
                   Insert: {
-                    "active"?: boolean,"connection_id": string,"created_at"?: string,"deleted"?: boolean,"entity_code"?: string,"id"?: string,"is_bank"?: boolean,"lane_id": string,"name": string,"owner_entity_code"?: string | null,"provider"?: string,"raw_record_id"?: string | null,"source_id": string,"source_updated_at"?: string | null,"subtype"?: string | null,"type": string,"updated_at"?: string
+                    "active"?: boolean,"connection_id": string,"created_at"?: string,"current_balance"?: number | null,"deleted"?: boolean,"entity_code"?: string,"id"?: string,"is_bank"?: boolean,"lane_id": string,"name": string,"owner_entity_code"?: string | null,"provider"?: string,"raw_record_id"?: string | null,"source_id": string,"source_updated_at"?: string | null,"subtype"?: string | null,"type": string,"updated_at"?: string
                   }
                   Update: {
-                    "active"?: boolean,"connection_id"?: string,"created_at"?: string,"deleted"?: boolean,"entity_code"?: string,"id"?: string,"is_bank"?: boolean,"lane_id"?: string,"name"?: string,"owner_entity_code"?: string | null,"provider"?: string,"raw_record_id"?: string | null,"source_id"?: string,"source_updated_at"?: string | null,"subtype"?: string | null,"type"?: string,"updated_at"?: string
+                    "active"?: boolean,"connection_id"?: string,"created_at"?: string,"current_balance"?: number | null,"deleted"?: boolean,"entity_code"?: string,"id"?: string,"is_bank"?: boolean,"lane_id"?: string,"name"?: string,"owner_entity_code"?: string | null,"provider"?: string,"raw_record_id"?: string | null,"source_id"?: string,"source_updated_at"?: string | null,"subtype"?: string | null,"type"?: string,"updated_at"?: string
                   }
                   Relationships: [
                     
