@@ -2,7 +2,7 @@
 --   Root cause of "not synced yet": core.home_finance reads the cached P&L whose params.start_date is the first day of this month, but
 --   the reports job only fetched the configured period (year to date or trailing 12 months). The job now also fetches week, month
 --   and year to date (packages/connectors reports.ts); this file adds the readers.
---   * core.finance_pnl_window(lane, start, end_from, end_to, mapping_mode): the P&L extraction that was inline in home_finance, as a
+--   * core.finance_pnl_window(lane, start, end_from, end_to, mapping_mode, connections): the P&L extraction that was inline in home_finance, as a
 --     read-only invoker function (reasons: report_not_cached, report_not_split_by_class, report_has_columns, report_empty,
 --     figure_unreadable). core.home_finance now calls it (its reason for a missing month stays month_report_not_cached). Output
 --     columns of home_finance are unchanged.
@@ -14,7 +14,7 @@
 --     current QuickBooks connections.
 --   All three: SECURITY INVOKER (RLS: AAL2 + the lane's finance view), stable, empty search_path, no table, no write.
 
-create function core.finance_pnl_window(p_lane text, p_start date, p_end_from date, p_end_to date, p_mapping_mode text)
+create function core.finance_pnl_window(p_lane text, p_start date, p_end_from date, p_end_to date, p_mapping_mode text, p_connections uuid[])
 returns table (
   pnl_reason text,
   pnl_income numeric(18,2),
@@ -42,7 +42,7 @@ begin
     raise exception 'lane and window are required' using errcode = '22004';
   end if;
   select r.* into rep from fin.report_cache r
-  where r.lane_id = p_lane and r.report = 'pnl'
+  where r.lane_id = p_lane and r.report = 'pnl' and r.connection_id = any (p_connections)
     and r.params ->> 'start_date' = pg_catalog.to_char(p_start, 'YYYY-MM-DD')
     and r.params ->> 'end_date' >= pg_catalog.to_char(p_end_from, 'YYYY-MM-DD')
     and r.params ->> 'end_date' <= pg_catalog.to_char(p_end_to, 'YYYY-MM-DD')
@@ -83,10 +83,10 @@ begin
   end if;
 end;
 $$;
-comment on function core.finance_pnl_window(text, date, date, date, text) is
-  'P&L figures (T-244) from the newest cached pnl report whose params.start_date = p_start and end_date in [p_end_from, p_end_to]; income and expenses summed from Data rows, a reason when absent. Invoker: RLS applies. Shared by home_finance and finance_pnl.';
-revoke all on function core.finance_pnl_window(text, date, date, date, text) from public, anon;
-grant execute on function core.finance_pnl_window(text, date, date, date, text) to authenticated, service_role;
+comment on function core.finance_pnl_window(text, date, date, date, text, uuid[]) is
+  'P&L figures (T-244) from the newest cached pnl report of one of p_connections (the lane current QuickBooks connections) whose params.start_date = p_start and end_date in [p_end_from, p_end_to]; income and expenses summed from Data rows, a reason when absent. Invoker: RLS applies. Shared by home_finance and finance_pnl.';
+revoke all on function core.finance_pnl_window(text, date, date, date, text, uuid[]) from public, anon;
+grant execute on function core.finance_pnl_window(text, date, date, date, text, uuid[]) to authenticated, service_role;
 
 
 create or replace function core.home_finance(p_lane text)
@@ -215,7 +215,7 @@ begin
   -- T-244: the extraction is core.finance_pnl_window (shared with core.finance_pnl, the Finance page). The cached request is
   -- the one the reports job makes for this month: start_date = first day of the month, end_date inside the month (New York).
   select * into pw from core.finance_pnl_window(p_lane, v_month_start, v_month_start,
-    (v_month_start + interval '1 month' - interval '1 day')::date, c.mapping_mode);
+    (v_month_start + interval '1 month' - interval '1 day')::date, c.mapping_mode, c.qbo_connections);
   v_pnl_reason := case when pw.pnl_reason = 'report_not_cached' then 'month_report_not_cached' else pw.pnl_reason end;
   v_inc := pw.pnl_income; v_exp := pw.pnl_expenses; v_pstart := pw.pnl_start; v_pend := pw.pnl_end;
   v_pmethod := pw.pnl_method; v_ppartial := pw.pnl_partial; v_pas := pw.pnl_as_of;
@@ -308,7 +308,7 @@ begin
       null::text, null::numeric, null::numeric, null::numeric, null::date, null::date, null::text, false, null::timestamptz;
     return;
   end if;
-  select * into pw from core.finance_pnl_window(p_lane, v_start, v_start, v_end_to, c.mapping_mode);
+  select * into pw from core.finance_pnl_window(p_lane, v_start, v_start, v_end_to, c.mapping_mode, c.qbo_connections);
   return query select 'ok'::text, v_as_of, c.last_sync_at, c.connection_status, p_period, v_start, v_today,
     pw.pnl_reason, pw.pnl_income, pw.pnl_expenses, pw.pnl_net, pw.pnl_start, pw.pnl_end, pw.pnl_method, coalesce(pw.pnl_partial, false), pw.pnl_as_of;
 end;
@@ -376,14 +376,14 @@ begin
   from fin.bills b
   where b.lane_id = p_lane and b.entity_code = 'unmapped' and not b.voided and not b.deleted and b.balance > 0;
 
-  -- Report metadata only (never the payload): the newest cached report per type and range, current connections only.
+  -- Report metadata only (never the payload): the newest cached report per type and start date (one per aging type), current connections only: nightly re-fetches of the same period do not pile up.
   select coalesce(pg_catalog.jsonb_agg(pg_catalog.jsonb_build_object(
            'report', t.report, 'start_date', t.start_date, 'end_date', t.end_date, 'report_date', t.report_date,
            'method', t.method, 'class_filtered', t.class_filtered, 'as_of', t.as_of) order by t.report, t.as_of desc), '[]'::jsonb)
   into v_reports
   from (
     select * from (
-      select distinct on (r.report, r.params ->> 'start_date', r.params ->> 'end_date', r.params ->> 'report_date')
+      select distinct on (r.report, r.params ->> 'start_date', r.params ->> 'method', (r.params ? 'class'))
              r.report,
              pg_catalog.left(r.params ->> 'start_date', 10) as start_date,
              pg_catalog.left(r.params ->> 'end_date', 10) as end_date,
@@ -393,7 +393,7 @@ begin
              r.as_of
       from fin.report_cache r
       where r.lane_id = p_lane and r.connection_id = any (c.qbo_connections)
-      order by r.report, r.params ->> 'start_date', r.params ->> 'end_date', r.params ->> 'report_date', r.as_of desc, r.fetched_at desc
+      order by r.report, r.params ->> 'start_date', r.params ->> 'method', (r.params ? 'class'), r.as_of desc, r.fetched_at desc
     ) d
     order by d.as_of desc
     limit 50

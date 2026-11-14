@@ -195,6 +195,8 @@ export function controlRows(input: {
   lastSyncAt: string | null;
   lastNormalizedAt: string | null;
   unmappedBankAccounts: number;
+  /** The lane has no bank account mapping at all (cash reason bank_mapping_missing): "none unmapped" would be wrong. */
+  bankMappingMissing?: boolean;
   unmappedInvoices: number | null;
   unmappedBills: number | null;
   sharedAccountNames: string[];
@@ -214,8 +216,8 @@ export function controlRows(input: {
     {
       key: "unmapped_bank_accounts",
       label: "Bank accounts not mapped to a company",
-      status: input.unmappedBankAccounts === 0 ? "ok" : "warn",
-      text: input.unmappedBankAccounts === 0 ? "None" : plural(input.unmappedBankAccounts, "account", "accounts"),
+      status: input.bankMappingMissing || input.unmappedBankAccounts > 0 ? "warn" : "ok",
+      text: input.bankMappingMissing ? "Mapping missing" : input.unmappedBankAccounts === 0 ? "None" : plural(input.unmappedBankAccounts, "account", "accounts"),
     },
   ];
   if (input.unmappedInvoices !== null) {

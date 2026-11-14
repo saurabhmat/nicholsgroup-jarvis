@@ -164,6 +164,13 @@ describe("Finance page, non-ok states", () => {
     expect(screen.getByRole("region", { name: "Cash by account" }).textContent).toContain("Bank accounts are not mapped to this company yet");
   });
 
+  it("controls: a missing bank mapping shows 'Mapping missing' as a warning", () => {
+    draw(data({ finance: { cash_reason: "bank_mapping_missing", cash_total: null, cash_accounts: [], cash_unmapped: 0 } }));
+    const row = screen.getByTestId("finance-controls").querySelector("[data-control='unmapped_bank_accounts']");
+    expect(row?.getAttribute("data-status")).toBe("warn");
+    expect(row?.textContent).toContain("Mapping missing");
+  });
+
   it("a reconnect-required connection is noted", () => {
     draw(data({ finance: { connection_status: "reconnect_required" } }));
     expect(screen.getByTestId("finance-connection-note").textContent).toMatch(/needs reconnecting/);

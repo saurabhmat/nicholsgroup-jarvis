@@ -90,7 +90,6 @@ export function businessDate(ms: number): { y: number; m: number; d: number; iso
   const parts = new Intl.DateTimeFormat("en-CA", { timeZone: BUSINESS_TZ, year: "numeric", month: "2-digit", day: "2-digit" }).formatToParts(new Date(ms));
   const n = (t: string) => Number(parts.find((p) => p.type === t)?.value);
   const y = n("year"), m = n("month"), d = n("day");
-  const two = (v: number) => String(v).padStart(2, "0");
   return { y, m, d, iso: `${String(y)}-${two(m)}-${two(d)}` };
 }
 

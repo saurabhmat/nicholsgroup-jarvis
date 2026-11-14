@@ -91,6 +91,10 @@ describe("controlRows", () => {
     expect(by.unmapped_bills?.text).toBe("3 bills");
     expect(by.shared_bank_account).toMatchObject({ status: "warn", text: "Reserve" });
   });
+  it("a missing bank mapping is flagged, not reported as 'none unmapped'", () => {
+    const row = controlRows({ ...base, bankMappingMissing: true }).find((r) => r.key === "unmapped_bank_accounts");
+    expect(row).toMatchObject({ status: "warn", text: "Mapping missing" });
+  });
   it("a check whose source failed to load is left out; the missing checks are stated", () => {
     expect(controlRows({ ...base, unmappedInvoices: null, unmappedBills: null }).map((r) => r.key)).not.toContain("unmapped_invoices");
     expect(CONTROLS_MISSING).toMatch(/Reconciliation/);

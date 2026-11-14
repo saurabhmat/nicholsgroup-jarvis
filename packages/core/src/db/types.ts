@@ -740,7 +740,7 @@ isOneToOne: false
             }[]
                            },
 "finance_pnl_window":
-{ Args: { "p_end_from": string,"p_end_to": string,"p_lane": string,"p_mapping_mode": string,"p_start": string }; Returns: {
+{ Args: { "p_connections": (string)[],"p_end_from": string,"p_end_to": string,"p_lane": string,"p_mapping_mode": string,"p_start": string }; Returns: {
               "pnl_as_of": string,"pnl_end": string,"pnl_expenses": number,"pnl_income": number,"pnl_method": string,"pnl_net": number,"pnl_partial": boolean,"pnl_reason": string,"pnl_start": string
             }[]
                            },

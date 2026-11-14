@@ -245,6 +245,7 @@ function ControlsSection({ data }: { data: FinanceData }) {
     lastSyncAt: finance.lastSyncAt,
     lastNormalizedAt: overview.state === "ok" ? overview.lastNormalizedAt : null,
     unmappedBankAccounts: finance.cash.unmapped,
+    bankMappingMissing: finance.cash.reason === "bank_mapping_missing",
     unmappedInvoices: detail.state === "ok" ? detail.unmappedInvoices : null,
     unmappedBills: overview.state === "ok" ? overview.unmappedBillsOpen : null,
     sharedAccountNames: finance.cash.accounts.filter((a) => a.shared).map((a) => a.name),
