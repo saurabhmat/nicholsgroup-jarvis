@@ -89,7 +89,11 @@ export type AttentionRules = {
 export type AttentionKind = "priority" | "security" | "waiting" | "unread" | "repeated_failures";
 
 /** Why a row is on the list, beyond its kind (T-240): drives the chips. */
-export type AttentionFlags = { vip: boolean; money: MoneyKind | null; deadline: boolean; /** Owner in To and no later reply from the owner. */ waitingOnYou: boolean };
+export type AttentionFlags = {
+  vip: boolean; money: MoneyKind | null; deadline: boolean; /** Owner in To and no later reply from the owner. */ waitingOnYou: boolean;
+  /** T-243 re-check: a security alert by the rules (security sender and subject), whatever kind the row was ranked as. Protects the row from the summary. */
+  security?: boolean;
+};
 
 export type AttentionThread = {
   key: string;
@@ -165,7 +169,8 @@ export function classify(t: ThreadRow, r: AttentionRules): Classified {
   const security = subjectHas(t.subject, r.securitySubjects) && senderHas(t.fromAddress, r.securitySenders);
   const bot = senderHas(t.fromAddress, x.bot_senders);
   const automated = bot || t.isGenerated === true || senderHas(t.fromAddress, x.automated_senders);
-  if (security) return { excluded: null, hard: false, automated, bot, security };
+  // T-243: a sign-in code or link is never a security alert, whatever the sender claims (a subject is sender-controlled text).
+  if (security && !subjectHas(t.subject, x.otp_subjects)) return { excluded: null, hard: false, automated, bot, security };
   // Hard: one-time codes and the header flags (calendar part, true auto-reply). Soft: everything else, including a subject-prefix-only
   // calendar/auto-reply match and auto-generated mail; an authenticated priority sender skips the soft ones.
   let excluded: string | null = null;
@@ -240,7 +245,7 @@ export const waitingOnYou = (t: ThreadRow): boolean => t.lastToOwner === true &&
  * returned in `stillWaiting` (newest first, no exception for priority senders). Old security alerts and old repeated failures
  * are dropped (they do not wait on a reply).
  */
-export function rankAttention(rows: ThreadRow[], r: AttentionRules, now: Date, limit = 5): { top: AttentionThread[]; more: number; stillWaiting: AttentionThread[] } {
+export function rankAttention(rows: ThreadRow[], r: AttentionRules, now: Date, limit = 5): { top: AttentionThread[]; more: number; stillWaiting: AttentionThread[]; /** T-243: every fresh qualifying thread in rank order (top is its first `limit`), so Home can drop items the summary marks "no reply needed" and promote the next. */ fresh: AttentionThread[] } {
   const out: { item: AttentionThread; band: number }[] = [];
   const old: AttentionThread[] = [];
   const failures = new Map<string, ThreadRow[]>();
@@ -267,7 +272,7 @@ export function rankAttention(rows: ThreadRow[], r: AttentionRules, now: Date, l
     const money = MONEY_KINDS.find((k) => subjectHas(t.subject, r.money[k])) ?? null;
     const deadline = subjectHas(t.subject, r.deadlineSubjects);
     // "Waiting on you" only for mail from a person (code review M1): an automated security alert addressed to the owner waits on nobody.
-    const flags: AttentionFlags = { vip: priority, money, deadline, waitingOnYou: toOwner && person };
+    const flags: AttentionFlags = { vip: priority, money, deadline, waitingOnYou: toOwner && person, security: c.security };
     let item: { band: number; kind: AttentionKind; reason: string } | null = null;
     if (priority) item = { band: BAND.vip, kind: "priority", reason: `Priority sender${unread ? ", unread" : ", not answered"} \u00b7 ${ago}` };
     else if (person && (t.ownerReplied || !unread)) {
@@ -289,7 +294,7 @@ export function rankAttention(rows: ThreadRow[], r: AttentionRules, now: Date, l
   }
   const newest = (a: AttentionThread, b: AttentionThread) => Date.parse(b.thread.receivedAt) - Date.parse(a.thread.receivedAt) || a.key.localeCompare(b.key);
   out.sort((a, b) => a.band - b.band || newest(a.item, b.item));
-  return { top: out.slice(0, limit).map((o) => o.item), more: Math.max(0, out.length - limit), stillWaiting: old.sort(newest) };
+  return { top: out.slice(0, limit).map((o) => o.item), more: Math.max(0, out.length - limit), stillWaiting: old.sort(newest), fresh: out.map((o) => o.item) };
 }
 
 const MONEY_ORDER: MoneyKind[] = ["failed_payment", "invoice", "bill", "renewal"];

@@ -24,8 +24,10 @@ async function LaneShell({ children, params }: { children: ReactNode; params: Pr
   // does not wait for the lane check: both run at once. A failed setup lookup is "no entry" (null), so it can never win over the lane check's 404 or redirect. A refused lane still ends in the lane check's 404 or redirect.
   // The first name (the user's own profile row, never throws) is read alongside, for the phone header band's "Good morning, {name}".
   const [lane, onboarding, firstName] = await Promise.all([loadLane(laneId), onboardingFor(laneId).catch(() => null), guards().then((g) => firstNameFor(g, laneId)).catch(() => undefined)]);
+  // After the lane check (which waits for the request): reading the clock here is never part of a prerendered shell (T-243).
+  const now = new Date();
   return (
-    <Shell brand={BRAND} lanes={lane.lanes} currentLaneId={lane.laneId} onboarding={onboarding ? { done: onboarding.done, total: onboarding.total } : null} signOut={signOut} {...(firstName ? { firstName } : {})}>
+    <Shell now={now} brand={BRAND} lanes={lane.lanes} currentLaneId={lane.laneId} onboarding={onboarding ? { done: onboarding.done, total: onboarding.total } : null} signOut={signOut} {...(firstName ? { firstName } : {})}>
       {children}
     </Shell>
   );

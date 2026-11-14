@@ -20,6 +20,7 @@ vi.mock("react", async (orig) => ({
 
 let cookieList: { name: string; value: string }[] = [];
 vi.mock("next/headers", () => ({ cookies: async () => ({ getAll: () => cookieList, set: () => undefined }) }));
+vi.mock("next/server", () => ({ connection: async () => undefined })); // T-243: guards() waits for the request first
 
 const read = vi.fn();
 const getLaneClient = vi.fn();

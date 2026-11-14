@@ -25,6 +25,7 @@ import {
   type CoverageItem,
   parseThreads,
   rankAttention,
+  dropNoReplyItems,
   moneyThreads,
   type AttentionRules,
   type BriefContent,
@@ -44,7 +45,7 @@ export type CalendarSection = { access: true; today: DayEvent[]; ahead: NotableE
 
 /** "Needs your attention" + Money from mail metadata; `access: false` when the caller may not read the lane's mail. */
 export type MailSection =
-  | { access: true; attention: AttentionThread[]; more: number; /** T-240: qualifying threads older than the fresh window, newest first (Home shows the count; Inbox ?view=waiting lists them). */ stillWaiting: AttentionThread[]; money: MoneyThread[]; mailboxOf: Record<string, string> }
+  | { access: true; attention: AttentionThread[]; more: number; /** T-243: every fresh qualifying thread in rank order (attention is its first 5); Home re-cuts it after the summary's "no reply needed" items are removed. Absent: attention is all there is. */ fresh?: AttentionThread[]; /** T-240: qualifying threads older than the fresh window, newest first (Home shows the count; Inbox ?view=waiting lists them). */ stillWaiting: AttentionThread[]; money: MoneyThread[]; mailboxOf: Record<string, string> }
   | { access: false; unavailable?: true };
 
 export type BriefingView = {
@@ -146,9 +147,20 @@ export async function loadBriefing(client: Db, laneId: string, now: Date, viewer
     const rules: AttentionRules = { prioritySenders, freshHours: briefing.attention.fresh_hours, deadlineSubjects: briefing.deadline_subjects, ownDomains: ownMailDomains(owners), securitySubjects: briefing.security_subjects, securitySenders: briefing.security_senders, exclusions: briefing.exclusions, money: briefing.money };
     const ranked = rankAttention(rows, rules, now);
     const mailboxOf = Object.fromEntries(coverage.filter((c) => c.connectionId && c.stream === "mail").map((c) => [c.connectionId as string, c.account]));
-    mail = { access: true, attention: ranked.top, more: ranked.more, stillWaiting: ranked.stillWaiting, money: moneyThreads(rows, rules), mailboxOf };
+    mail = { access: true, attention: ranked.top, more: ranked.more, fresh: ranked.fresh, stillWaiting: ranked.stillWaiting, money: moneyThreads(rows, rules), mailboxOf };
   }
   return { viewerTz, coverage, coverageLine: coverageLine(coverage, mailAccess || calendarAccess), calendar, mail, config: briefing, mailboxes };
+}
+
+/**
+ * T-243: Home's mail section after the AI summary's "no reply needed" items are removed (the next fresh item the RULES ranked moves up).
+ * The summary can only remove: the result is a subset of what the rules ranked, never a new item. No summary, or none with the field: unchanged.
+ */
+export function withSummaryApplied(mail: MailSection, saved: SavedBriefingView | null): MailSection {
+  if (!mail.access || !saved || saved.status === "failed") return mail;
+  const { top, more, removed, kept } = dropNoReplyItems(mail.fresh ?? mail.attention, saved);
+  if (removed === 0) return mail;
+  return { ...mail, attention: top, more, fresh: kept };
 }
 
 /** Home's briefing view; an outage gives `unavailable` (with a Coverage line that says so), never an empty day. */
@@ -250,7 +262,7 @@ export function parseSavedBriefing(data: unknown): SavedBriefingView | null {
     refs,
     content: {
       lines: strs(c.lines),
-      attention: list(c.attention, (a) => (typeof a.ref === "string" ? { ref: a.ref, what: s(a.what) ?? "", why: s(a.why) ?? "", next: s(a.next) ?? "" } : null)),
+      attention: list(c.attention, (a) => (typeof a.ref === "string" ? { ref: a.ref, what: s(a.what) ?? "", why: s(a.why) ?? "", next: s(a.next) ?? "", ...(typeof a.needsReply === "boolean" ? { needsReply: a.needsReply } : {}) } : null)),
       deadlines: list(c.deadlines, (d) => (typeof d.text === "string" ? { ref: s(d.ref), text: d.text, due: s(d.due) } : null)),
       priorities: list(c.priorities, (p) => (typeof p.text === "string" ? { text: p.text, reason: s(p.reason) ?? "", refs: strs(p.refs) } : null)),
       replies: list(c.replies, (r) =>

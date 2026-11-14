@@ -25,7 +25,7 @@ select is(
    where n.nspname = 'fin' and c.relname in ('accounts', 'transactions', 'invoices', 'payments', 'bills', 'report_cache')
      and c.relkind = 'r' and a.attnum > 0 and not a.attisdropped
      and format_type(a.atttypid, a.atttypmod) = 'numeric(18,2)'),
-  array['bills.balance', 'bills.total', 'invoices.balance', 'invoices.total', 'payments.amount', 'transactions.amount'],
+  array['accounts.current_balance', 'bills.balance', 'bills.total', 'invoices.balance', 'invoices.total', 'payments.amount', 'transactions.amount'],
   'money columns are exactly these, all numeric(18,2)'
 );
 select is(
@@ -82,8 +82,8 @@ select is(
    join pg_class c on c.oid = a.attrelid join pg_namespace n on n.oid = c.relnamespace
    where n.nspname = 'fin' and c.relname in ('accounts', 'report_cache', 'transactions', 'payments')
      and c.relkind = 'r' and a.attnum > 0 and not a.attisdropped and a.attname ~* 'balance'),
-  null, 'only invoices and bills carry a balance column (the open document amount)');
-select hasnt_column('fin', 'accounts', 'balance', 'fin.accounts stores no balance (cash comes from the Balance Sheet cache as book balance)');
+  array['accounts.current_balance'], 'only invoices and bills carry a balance column (the open document amount), plus fin.accounts.current_balance (T-243: the account book balance)');
+select hasnt_column('fin', 'accounts', 'balance', 'fin.accounts has no column named balance (T-243: the book balance is current_balance)');
 select hasnt_column('fin', 'accounts', 'book_balance', 'fin.accounts has no book_balance either');
 
 -- ---------------------------------------------------------------- triggers

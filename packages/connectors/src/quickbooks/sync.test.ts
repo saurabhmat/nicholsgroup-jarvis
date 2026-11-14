@@ -122,7 +122,30 @@ describe("CDC (acceptance: CDC for the entities; deleted entities recorded)", ()
     // Preferences and CompanyInfo are read on every run.
     expect(types.Preferences).toHaveLength(1);
     expect(types.CompanyInfo).toHaveLength(1);
-    expect(Object.keys(types).sort()).toEqual(["CompanyInfo", "Customer", "Invoice", "Preferences"]);
+    expect(Object.keys(types).sort()).toEqual(["Account", "CompanyInfo", "Customer", "Invoice", "Preferences"]); // T-243: accounts are re-emitted every run (balances)
+  });
+
+  it("T-243: an incremental run emits every account even when CDC returns none (a balance moves without LastUpdatedTime); payroll accounts stay tombstoned; an account CDC returned is not emitted twice", async () => {
+    const { intuit, h, conn } = await setup();
+    const first = await run(h, conn, null);
+    intuit.state.queries.length = 0;
+    const accounts = intuit.state.data.Account!;
+    for (const e of Object.keys(intuit.state.data)) for (const o of intuit.state.data[e]!) touch(o, h.clock.t - 3 * DAY);
+    // The balance changes, the account's own timestamp does not, so CDC reports no Account.
+    accounts[0]!.CurrentBalance = 4321.09;
+    h.clock.t += 120_000;
+    const second = await run(h, conn, first.summary.cursor.value);
+    expect(second.summary.mode).toBe("incremental");
+    const acc = byType(second.records).Account ?? [];
+    expect(acc).toHaveLength(accounts.length);
+    expect(acc.find((r) => r.external_id === String(accounts[0]!.Id))).toMatchObject({ deleted: false, payload: expect.objectContaining({ CurrentBalance: 4321.09 }) });
+    // One that CDC does return is emitted once.
+    touch(accounts[1]!, h.clock.t + 1000);
+    h.clock.t += 120_000;
+    const third = await run(h, conn, second.summary.cursor.value);
+    const ids = (byType(third.records).Account ?? []).map((r) => r.external_id);
+    expect(new Set(ids).size).toBe(ids.length);
+    expect(ids).toHaveLength(accounts.length);
   });
 
   it("a CDC answer cut off at Intuit's per-entity cap is not trusted: the run reloads everything instead", async () => {
@@ -580,6 +603,11 @@ describe("payroll and compensation are never stored (D-25 default: excluded; spe
     expect(intuit.state.queries).toEqual([ACCOUNT_QUERY]);
     expect(byType(second.records).JournalEntry).toEqual([expect.objectContaining({ external_id: "2", deleted: true, payload: { Id: "2" } })]);
     expect(JSON.stringify(second.records)).not.toMatch(/31337|SECRET/);
+    // T-243: an incremental run re-emits every account (fresh balances); payroll accounts stay tombstoned ({ Id } only, no figures).
+    const accounts = byType(second.records).Account ?? [];
+    expect(accounts.filter((r) => r.deleted).map((r) => [r.external_id, r.payload])).toEqual([["2", { Id: "2" }], ["3", { Id: "3" }]]);
+    expect(accounts.filter((r) => !r.deleted).map((r) => r.external_id)).toEqual(["1"]);
+    expect(JSON.stringify(second.records)).not.toMatch(SECRET_AMOUNTS);
   });
 
   it("a payroll account named generically is still caught by the name safety net, and its sub-accounts follow it", async () => {

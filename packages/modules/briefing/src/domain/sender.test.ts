@@ -11,7 +11,8 @@ describe("domainOf and senderLabel", () => {
   it("senderLabel is name · domain of the address, never a name alone when there is an address", () => {
     expect(senderLabel("Dana Whitfield", "dana@www.acme.test")).toBe("Dana Whitfield · acme.test");
     expect(senderLabel("CEO (paypal.com)", "x@evil.test")).toBe("CEO (paypal.com) · evil.test");
-    expect(senderLabel(null, "dana.w@acme.test")).toBe("Dana W · acme.test");
+    expect(senderLabel(null, "dana.w@acme.test")).toBe("dana.w@acme.test"); // T-243: no name made from the address: the full address
+    expect(senderLabel("dana.w@acme.test", "dana.w@acme.test")).toBe("dana.w@acme.test");
     expect(senderLabel("Dana", null)).toBe("Dana");
   });
 });
@@ -31,11 +32,16 @@ describe("senderParts", () => {
   it("the domain is taken from the LAST @", () => {
     expect(senderParts("x", '"a@paypal.com"@evil.test').company).toBe("evil.test");
   });
-  it("no name: the local part, capitalised (a role mailbox unchanged); no address: Unknown sender", () => {
-    expect(senderParts(null, "dana.whitfield@acme.test")).toMatchObject({ name: "Dana Whitfield", initials: "DW" });
-    expect(senderParts(null, "noreply@acme.test")).toMatchObject({ name: "noreply", initials: "N" });
-    expect(senderParts("dana@acme.test", "dana@acme.test").name).toBe("Dana");
-    expect(senderParts(null, null)).toMatchObject({ name: "Unknown sender", company: null });
+  it("T-243: never a name built from an address: a real display name as written, else the FULL address, else Unknown sender", () => {
+    expect(senderParts(null, "dana.whitfield@acme.test")).toMatchObject({ name: "dana.whitfield@acme.test", nameIsAddress: true, initials: "D", company: "acme.test" });
+    expect(senderParts("", "rnichols@acme.test")).toMatchObject({ name: "rnichols@acme.test", nameIsAddress: true });
+    expect(senderParts("  ", "noreply@acme.test")).toMatchObject({ name: "noreply@acme.test", nameIsAddress: true });
+    expect(senderParts("dana@acme.test", "dana@acme.test")).toMatchObject({ name: "dana@acme.test", nameIsAddress: true });
+    // A display name that is another address is not trusted as a name: the real From address is shown.
+    expect(senderParts("ceo@bank.test", "x@evil.test")).toMatchObject({ name: "x@evil.test", nameIsAddress: true, company: "evil.test" });
+    expect(senderParts("Dana Whitfield", "dana@acme.test")).toMatchObject({ name: "Dana Whitfield", nameIsAddress: false });
+    expect(senderParts(null, null)).toMatchObject({ name: "Unknown sender", nameIsAddress: false, company: null });
+    for (const [n, a] of [[null, "sam_o-neil+tag@x.test"], ["", "info@x.test"]] as const) expect(senderParts(n, a).name).not.toMatch(/^[A-Z]/);
   });
   it("one initial for one word; unicode letters; no letters", () => {
     expect(senderParts("Madonna", "m@x.test").initials).toBe("M");

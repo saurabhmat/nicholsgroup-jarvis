@@ -43,6 +43,41 @@ describe("exclusions", () => {
   });
 });
 
+// T-243: sign-in LINK mail (a billing portal's "customer portal login link", a magic link) is automated, like a one-time code.
+describe("T-243 login-link mail is never in the top list", () => {
+  const stripe = { fromAddress: "billing@pay-portal.test", fromName: "Synthetic Billing", subject: "Your customer portal login link" };
+  const kept = (over: Partial<ThreadRow>, r = rules) => rankAttention([t(over)], r, now).top.length === 1;
+  it.each(["Your customer portal login link", "Here is your log in link", "Your log-in link", "Sign-in link for Synthetic App", "Sign in link", "Your signin link", "Your magic link", "Login URL for your account", "Use this verification link", "Re: LOGIN LINK"])("%s is excluded as a hard exclusion", (subject) => {
+    const c = classify(t({ ...stripe, subject }), rules);
+    expect(c.excluded).toBe("otp");
+    expect(c.hard).toBe(true);
+  });
+  it("it is out of the top 5 for everyone: a stranger, a colleague, an authenticated VIP, an authenticated @domain VIP, a billing system", () => {
+    expect(kept(stripe)).toBe(false);
+    expect(kept({ ...stripe, fromAddress: "colleague@pubk.test", fromName: "A Colleague" })).toBe(false);
+    expect(kept({ ...stripe, fromAddress: "boss@pubk.test", isAuthPass: true })).toBe(false);
+    expect(kept({ ...stripe, fromAddress: "anyone@bigclient.test", isAuthPass: true })).toBe(false);
+    expect(kept({ ...stripe, isAuthPass: true, unreadCount: 0, ownerReplied: true })).toBe(false);
+  });
+  it("a security sender cannot lift it back through a security-looking subject", () => {
+    const row = t({ fromAddress: "no-reply@accounts.google.com", subject: "Security alert: new sign-in link" });
+    expect(classify(row, rules).excluded).toBe("otp");
+    expect(rankAttention([row], rules, now).top).toHaveLength(0);
+    // The real alert without a link subject is unchanged.
+    expect(classify(t({ fromAddress: "no-reply@accounts.google.com", subject: "Security alert: new sign-in on Mac" }), rules)).toMatchObject({ excluded: null, security: true });
+  });
+  it("a person's normal mail is unaffected, including words next to the patterns", () => {
+    for (const subject of ["Board deck", "Can you sign in to the call at 3?", "Link to the contract", "Login page redesign", "Magic Johnson tickets", "Please review the linked doc", "Log in the hours, thanks"]) {
+      expect(kept({ fromAddress: "dana@acme.test", fromName: "Dana Whitfield", subject }), subject).toBe(true);
+    }
+  });
+  it("the pattern list is a lane_config default, not a code constant: an explicit list replaces it", () => {
+    expect(b.exclusions.otp_subjects).toEqual(expect.arrayContaining(["login link", "magic link", "sign-in link"]));
+    const custom = { ...rules, exclusions: { ...b.exclusions, otp_subjects: ["otp"] } };
+    expect(kept(stripe, custom)).toBe(true);
+  });
+});
+
 // T-234 part 2: synthetic look-alikes of two real false positives, plus auto-reply, OTP and CI, and the negatives.
 describe("T-234 part 2 exclusions", () => {
   const orgRules: AttentionRules = { ...rules, exclusions: { ...b.exclusions, org_newsletter_senders: ["weekly@pubk.test"] } };

@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
-import { fieldText, hasPlaceholder, localizeTimes, sentencesText } from "./home-text";
+import { maskFigures } from "@nichols/briefing/domain";
+import { fieldText, hasPlaceholder, localizeTimes, sentencesText, subjectLine } from "./home-text";
 
 describe("hasPlaceholder", () => {
   it.each([["Pay [amount] today", true], ["Account [number] is late", true], ["[AMOUNT]", true], ["Pay $5 today", false], ["a [note] here", false]])("%s -> %s", (t, v) => expect(hasPlaceholder(t)).toBe(v));
@@ -49,5 +50,22 @@ describe("localizeTimes (T-237 review)", () => {
     expect(localizeTimes("Call 2026-07-01T14:00:00.", "America/New_York")).toBe("Call Wed, Jul 1, 2:00 PM.");
     expect(localizeTimes("2026-11-12T14:00", "America/Los_Angeles")).toBe("Thu, Nov 12, 11:00 AM");
     expect(localizeTimes("2026-11-12T14:00:00", "America/New_York")).not.toMatch(/\d{4}-\d{2}-\d{2}T/);
+  });
+});
+
+describe("subjectLine (T-243: always a subject)", () => {
+  const tz = "America/New_York";
+  it("shows the subject; '(no subject)' for none, blank or whitespace", () => {
+    expect(subjectLine("Board deck", maskFigures, tz)).toBe("Board deck");
+    for (const none of [null, undefined, "", "  \n "]) expect(subjectLine(none, maskFigures, tz)).toBe("(no subject)");
+  });
+  it("figures stay masked and read as an ellipsis, never the figure or the raw token", () => {
+    const out = subjectLine("Invoice $1,200.00 due, ref 12345678", maskFigures, tz);
+    expect(out).toBe("Invoice \u2026 due, ref \u2026");
+    expect(out).not.toMatch(/\[|1,200|12345678/);
+    expect(subjectLine("$5,000", maskFigures, tz)).toBe("\u2026");
+  });
+  it("collapses whitespace and keeps plain text unchanged (no markup interpretation)", () => {
+    expect(subjectLine("Re:   <b>hi</b>\n there", maskFigures, tz)).toBe("Re: <b>hi</b> there");
   });
 });

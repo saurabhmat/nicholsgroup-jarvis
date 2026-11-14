@@ -1,15 +1,16 @@
 // How a sender is shown on a Needs-your-attention row (T-235 part 2): a name, a company or domain, initials and a stable
 // palette slot for the avatar. Pure; the inputs are untrusted message metadata and the outputs are plain text.
-import { nameFromEmail } from "./calendar";
-
-export type SenderParts = { name: string; /** The domain of the sender ADDRESS (last "@", without "www."), never from the display name; null when there is no address. */ company: string | null; initials: string; /** 0..palette-1 from a hash of the address (or the name): the same sender always gets the same colour. */ slot: number };
+export type SenderParts = { name: string; /** True when `name` is the full address (no real display name): the row shows it truncated by CSS, with the address as its title, and no separate domain. */ nameIsAddress: boolean; /** The domain of the sender ADDRESS (last "@", without "www."), never from the display name; null when there is no address. */ company: string | null; initials: string; /** 0..palette-1 from a hash of the address (or the name): the same sender always gets the same colour. */ slot: number };
 
 export function senderParts(fromName: string | null, fromAddress: string | null, palette = 4): SenderParts {
   const address = fromAddress?.trim().toLowerCase() || null;
   // The display name is untrusted text (rule 9): it is shown as the name and never as the company or domain.
-  let name = fromName?.trim().replace(/^["']|["']$/g, "") ?? "";
-  if (name.includes("@")) name = nameFromEmail(name);
-  if (name === "") name = address ? nameFromEmail(address) : "Unknown sender";
+  // T-243: a name is NEVER built from an address ("rnichols@x.com" is not "Rnichols"). A real display name is shown as written; with none
+  // (or one that is itself an address) the full address is shown; with neither, "Unknown sender".
+  let name = fromName?.trim().replace(/^["']|["']$/g, "").replace(/\s+/g, " ") ?? "";
+  if (name.includes("@")) name = address ?? name;
+  const nameIsAddress = name === "" ? address !== null : name.includes("@");
+  if (name === "") name = address ?? "Unknown sender";
   // The domain of the ADDRESS, from the last "@" ("a@paypal.com"@evil.test is evil.test), never parsed from the display name.
   const at = address?.lastIndexOf("@") ?? -1;
   const domain = address && at >= 0 ? address.slice(at + 1).replace(/^www\./, "") : "";
@@ -19,13 +20,13 @@ export function senderParts(fromName: string | null, fromAddress: string | null,
   const seed = address ?? name.toLowerCase();
   let h = 0;
   for (const c of seed) h = (h * 31 + (c.codePointAt(0) ?? 0)) % 100_003;
-  return { name, company, initials, slot: h % Math.max(1, palette) };
+  return { name, nameIsAddress, company, initials, slot: h % Math.max(1, palette) };
 }
 
-/** "Name · domain" for a sender line, never a display name alone (the name is untrusted text; the domain is of the ADDRESS). Name only when there is no address. */
+/** "Name · domain" for a sender line, never a display name alone (the name is untrusted text; the domain is of the ADDRESS). The full address alone when there is no display name; the name only when there is no address. */
 export function senderLabel(fromName: string | null, fromAddress: string | null): string {
-  const { name, company } = senderParts(fromName, fromAddress);
-  return company ? `${name} · ${company}` : name;
+  const { name, nameIsAddress, company } = senderParts(fromName, fromAddress);
+  return company && !nameIsAddress ? `${name} · ${company}` : name;
 }
 
 export type AttentionChip = { key: string; label: string; tone: "alert" | "outline" | "gold" };

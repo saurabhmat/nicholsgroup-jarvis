@@ -19,6 +19,8 @@ export type AppShellProps = {
   onboarding?: OnboardingProgress | null;
   /** First name for the Home title on the iPhone header band; omitted when unknown. */
   firstName?: string;
+  /** The server's time, for the Home title's greeting on the phone band (the shell never reads the clock itself). */
+  now?: Date;
   /** Form action that signs the user out. */
   signOut: (formData: FormData) => void | Promise<void>;
   /** Optional control above Sign out in the side menu (the theme toggle). */
@@ -59,9 +61,9 @@ function CountBadge({ count, className }: { count?: number; className?: string }
  * bottom tabs on iPhone. Presentational only: the app decides what the user may see and passes the lanes in.
  * Light theme, colours from the T-022 tokens only.
  */
-export function AppShell({ brand, lanes, currentLaneId, pathname, approvalsCount, onboarding, firstName, signOut, menuExtra, Link = DefaultLink, children }: AppShellProps) {
+export function AppShell({ brand, lanes, currentLaneId, pathname, approvalsCount, onboarding, firstName, now, signOut, menuExtra, Link = DefaultLink, children }: AppShellProps) {
   const active = activeKey(currentLaneId, pathname);
-  const heading = pageHeading(active, firstName);
+  const heading = pageHeading(active, firstName, now);
   const segment = NAV_ITEMS.find((i) => i.key === active)?.segment ?? "";
   return (
     <div className="flex min-h-dvh flex-col md:flex-row">

@@ -115,12 +115,9 @@ export type FinanceCard = {
 };
 
 const CASH_REASONS: Record<string, string> = {
-  balance_sheet_not_cached: "The balance sheet is not part of the QuickBooks sync yet",
-  balance_sheet_class_filtered: "The balance sheet report is filtered by class, so it is not a book balance",
-  report_has_columns: "The balance sheet report could not be read",
-  balance_unreadable: "A bank account balance could not be read",
+  balance_unreadable: "A bank account has no balance yet. It fills in the next time QuickBooks data is re-processed",
   bank_mapping_missing: "Bank accounts are not mapped to this company yet",
-  no_own_bank_accounts: "No bank account in the report is mapped to this company",
+  no_own_bank_accounts: "No active bank account is mapped to this company",
 };
 const AR_REASONS: Record<string, string> = { no_invoices: "No invoices synced yet" };
 const PNL_REASONS: Record<string, string> = {

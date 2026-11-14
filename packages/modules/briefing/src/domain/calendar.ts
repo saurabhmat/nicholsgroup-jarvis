@@ -173,18 +173,6 @@ const isResource = (email: string) => {
   return d === "calendar.google.com" || d.endsWith(".calendar.google.com");
 };
 
-/** Shared mailboxes are not people: shown as the local part, unchanged. */
-const ROLE_MAILBOXES: ReadonlySet<string> = new Set(["info", "noreply", "no-reply", "sales", "support", "admin"]);
-
-/** "dana.whitfield@x.com" -> "Dana Whitfield". Never the address itself. */
-export function nameFromEmail(email: string): string {
-  const local = (email.split("@")[0] ?? "").replace(/\+.*$/, "");
-  if (ROLE_MAILBOXES.has(local.toLowerCase())) return local;
-  const words = local.split(/[._\-\s]+/).filter((w) => w !== "");
-  if (words.length === 0) return "Guest";
-  return words.map((w) => w.charAt(0).toUpperCase() + w.slice(1).toLowerCase()).join(" ");
-}
-
 /** Names we already hold for exact addresses (lower case), for example a `from_name` in the lane's mail index. */
 export type KnownNames = ReadonlyMap<string, string>;
 

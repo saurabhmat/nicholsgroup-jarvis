@@ -108,6 +108,12 @@ describe("lane config schema", () => {
     expect(() => parseLaneConfig({ entities: { own_entity: "PKG", by_entity: { pkg: {} } } })).toThrow(z.ZodError);
     expect(() => parseLaneConfig({ approvals: { expire_after_hours: { "qbo.post": 1 } } })).toThrow(z.ZodError);
   });
+  it("T-243: the one-time-code exclusion defaults include the generic sign-in link subjects (but not 'sign in to')", () => {
+    const otp = parseLaneConfig({}).briefing.exclusions.otp_subjects;
+    expect(otp).toEqual(expect.arrayContaining(["verification code", "login link", "log in link", "log-in link", "sign-in link", "sign in link", "magic link", "login url"]));
+    expect(otp).not.toContain("sign in to");
+    expect(parseLaneConfig({ briefing: { exclusions: { otp_subjects: ["otp"] } } }).briefing.exclusions.otp_subjects).toEqual(["otp"]);
+  });
 
   it("rejects secret-looking values anywhere, naming the path but never the value", () => {
     const cases: [unknown, string][] = [

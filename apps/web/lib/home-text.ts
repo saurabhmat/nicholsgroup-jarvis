@@ -70,3 +70,16 @@ export function sentencesText(text: string | null | undefined, tz: string): stri
   const out = kept.join(" ").trim();
   return out === "" ? null : localizeTimes(out, tz);
 }
+
+/**
+ * The subject line of a Home row (T-243): ALWAYS a line, never dropped. Figures stay masked (maskFigures: amounts and long digit runs become
+ * "[amount]" / "[number]"); the mask token is shown as "\u2026" so a masked subject still reads ("Invoice \u2026 is due"), never the
+ * figure and never the raw token. A missing or blank subject is "(no subject)". Sender-written text: plain text only, never markup.
+ */
+export const NO_SUBJECT = "(no subject)";
+export function subjectLine(subject: string | null | undefined, mask: (s: string) => string, tz: string): string {
+  const t = typeof subject === "string" ? subject.replace(/\s+/g, " ").trim() : "";
+  if (t === "") return NO_SUBJECT;
+  const shown = mask(t).replace(/\[(?:amount|number)\]/gi, "\u2026").trim();
+  return shown === "" ? NO_SUBJECT : localizeTimes(shown, tz);
+}

@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { fireEvent, render, screen, within } from "@testing-library/react";
 import { AppShell } from "./app-shell";
 import { PageHeader } from "./page-header";
@@ -76,16 +76,12 @@ describe("TabIcon", () => {
 });
 
 describe("AppShell iPhone header and tabs", () => {
-  // The greeting follows the clock (T-240): fix it at 9:00 AM Eastern so these tests do not depend on the time they run.
-  beforeEach(() => {
-    vi.useFakeTimers({ toFake: ["Date"] });
-    vi.setSystemTime(new Date("2026-11-11T14:00:00Z"));
-  });
-  afterEach(() => vi.useRealTimers());
+  // The greeting follows the time the server passes (T-240, T-243: the shell never reads the clock itself): 9:00 AM Eastern.
+  const NOW = new Date("2026-11-11T14:00:00Z");
   const lanes = [{ laneId: "PKG", name: "Pub K Group" }];
   const shell = (pathname: string, firstName?: string) =>
     render(
-      <AppShell brand={{ wordmark: "Jarvis", product: "Executive Portal" }} lanes={lanes} currentLaneId="PKG" pathname={pathname} signOut={noop} firstName={firstName}>
+      <AppShell brand={{ wordmark: "Jarvis", product: "Executive Portal" }} lanes={lanes} currentLaneId="PKG" pathname={pathname} signOut={noop} firstName={firstName} now={NOW}>
         x
       </AppShell>,
     );
@@ -117,5 +113,30 @@ describe("AppShell iPhone header and tabs", () => {
       expect(link.querySelector("svg")?.getAttribute("aria-hidden")).toBe("true");
     }
     expect(within(tabs).getAllByRole("link").map((l) => l.textContent)).toEqual(["Home", "Approvals", "Inbox", "Ask", "More"]);
+  });
+});
+
+describe("AppShell never reads the clock (T-243)", () => {
+  it("without a time from the server the Home title is the neutral nav heading, and no Date is constructed", () => {
+    const RealDate = Date;
+    const seen = { constructed: 0 };
+    class Spy extends RealDate {
+      constructor(...a: unknown[]) {
+        if (a.length === 0) seen.constructed++;
+        super(...(a as [string]));
+      }
+    }
+    vi.stubGlobal("Date", Spy);
+    try {
+      const { container } = render(
+        <AppShell brand={{ wordmark: "Jarvis", product: "Executive Portal" }} lanes={[{ laneId: "PKG", name: "Pub K Group" }]} currentLaneId="PKG" pathname="/PKG" signOut={noop} firstName="Robert">
+          x
+        </AppShell>,
+      );
+      expect(container.querySelector("[data-slot=mobile-title]")?.textContent).toBe("Good morning");
+      expect(seen.constructed).toBe(0);
+    } finally {
+      vi.unstubAllGlobals();
+    }
   });
 });

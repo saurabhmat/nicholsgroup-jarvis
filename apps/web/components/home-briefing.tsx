@@ -4,7 +4,7 @@
 // never show; clashes, back-to-backs and unanswered invitations are flagged.
 import Link from "next/link";
 import { Badge, buttonVariants, EmptyState, laneHref, PageSection } from "@nichols/ui";
-import { fieldText } from "@/lib/home-text";
+import { fieldText, subjectLine } from "@/lib/home-text";
 import { DisclosureFooter } from "./collapsible-section";
 import { ReplyAction } from "./reply-action";
 import { inboxHref } from "@/lib/inbox-links";
@@ -13,6 +13,7 @@ import {
   aheadSummaryText,
   attendeeSummary,
   attentionChips,
+  noteSaysNoAction,
   senderParts,
   eventChips,
   formatDayIn,
@@ -233,11 +234,11 @@ export function AttentionSection({ laneId, mail, now, notes, replies, canReply =
           const note = notes?.get(`${t.connectionId}:${t.messageId}`);
           const mailbox = mail.mailboxOf[t.connectionId];
           const who = senderParts(t.fromName, t.fromAddress, AVATAR.length);
-          // T-237: a subject that still holds a masked-figure placeholder (or is empty) is not shown; the row keeps sender, age, actions.
-          const subject = fieldText(a.kind === "repeated_failures" ? a.reason : t.subject ? maskFigures(t.subject) : null, tz);
+          // T-243: the subject is always shown ("(no subject)" when there is none). Figures stay masked; a mask token reads as an ellipsis.
+          const subject = a.kind === "repeated_failures" ? (fieldText(a.reason, tz) ?? subjectLine(null, maskFigures, tz)) : subjectLine(t.subject, maskFigures, tz);
           const why = fieldText(note?.why, tz);
           const next = fieldText(note?.next, tz);
-          const chips = attentionChips({ kind: a.kind, unread: t.unreadCount > 0, vip: a.flags.vip, money: a.flags.money !== null, deadline: a.flags.deadline, waitingOnYou: a.flags.waitingOnYou });
+          const chips = attentionChips({ kind: a.kind, unread: t.unreadCount > 0, vip: a.flags.vip, money: a.flags.money !== null, deadline: a.flags.deadline, waitingOnYou: a.flags.waitingOnYou && !noteSaysNoAction(note) });
           const age = ageShort(t.receivedAt, now);
           return (
             <li key={a.key} data-testid="attention-item" data-kind={a.kind} className={`group relative py-1 ${index >= PHONE_ROWS ? "max-md:hidden" : ""}`}>
@@ -247,9 +248,9 @@ export function AttentionSection({ laneId, mail, now, notes, replies, canReply =
                   <span aria-hidden data-testid="attention-avatar" className={`flex size-8 shrink-0 items-center justify-center rounded-full text-small font-medium ${AVATAR[who.slot] ?? AVATAR[0]}`}>
                     {who.initials}
                   </span>
-                  <span className="min-w-0 truncate text-body">
+                  <span className="min-w-0 truncate text-body" {...(who.nameIsAddress ? { title: who.name } : {})}>
                     <span data-testid="attention-sender" className="font-medium text-foreground">{who.name}</span>
-                    {who.company ? <span data-testid="attention-company" className="text-muted-foreground">{` \u00b7 ${who.company}`}</span> : null}
+                    {who.company && !who.nameIsAddress ? <span data-testid="attention-company" className="text-muted-foreground">{` \u00b7 ${who.company}`}</span> : null}
                     {t.fromAddress ? <span className="sr-only">{`, from ${t.fromAddress}`}</span> : null}
                   </span>
                   <time data-testid="attention-age" dateTime={t.receivedAt} className="ml-auto shrink-0 text-small text-muted-foreground">
@@ -257,11 +258,9 @@ export function AttentionSection({ laneId, mail, now, notes, replies, canReply =
                     <span className="sr-only">{age === "now" ? "" : " ago"}</span>
                   </time>
                 </div>
-                {subject ? (
-                  <p data-testid="attention-subject" className="text-body text-foreground">
-                    {subject}
-                  </p>
-                ) : null}
+                <p data-testid="attention-subject" className="break-words text-body text-foreground">
+                  {subject}
+                </p>
                 {why || next ? (
                   <p data-testid="attention-note" className="line-clamp-2 text-small text-muted-foreground">
                     {why ? (
@@ -304,7 +303,7 @@ export function AttentionSection({ laneId, mail, now, notes, replies, canReply =
                 <Link
                   href={inboxHref(laneId, t.messageId)}
                   data-testid="attention-open"
-                  aria-label={subject ? `Open: ${subject}` : "Open message"}
+                  aria-label={`Open: ${subject}`}
                   className="inline-flex items-center px-2 text-small font-medium text-primary underline-offset-2 after:absolute after:inset-y-0 after:-inset-x-2 after:rounded-control after:content-[''] hover:underline focus-visible:outline-none focus-visible:after:outline focus-visible:after:outline-2 focus-visible:after:outline-transparent focus-visible:after:ring-2 focus-visible:after:ring-ring"
                 >
                   Open
