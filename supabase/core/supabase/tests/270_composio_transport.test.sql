@@ -153,7 +153,7 @@ end;
 $$;
 
 select is(pg_temp.mk('owner@example.test', 'aal2', 'PKG', 'c-1'), null, 'owner at aal2 starts a connect with the original five-argument create');
-select is(pg_temp.mk('viewer@example.test', 'aal2', 'PKG', 'c-5'), '42501', 'a viewer cannot start it');
+select is(pg_temp.mk('finance-operator@example.test', 'aal2', 'PKG', 'c-5'), '42501', 'a member without own_mail (finance operator) cannot start it (T-247: a viewer now can start a Google connect of their own)');
 select is(pg_temp.mk('admin-technical@example.test', 'aal2', 'APK', 'c-6'), '42501', 'cross-lane: a PKG-only admin cannot start it in APK');
 select throws_ok($$set local role authenticated; select core.oauth_state_create('PKG', 'google', repeat('a', 64), repeat('v', 43), 'http://localhost:3000/x', 'gmail', 'ca_forged')$$,
                  '42883', null, 'a caller cannot pass a toolkit or account ref to create (no such function)');

@@ -10,13 +10,13 @@ select plan(19);
 update core.lanes set enabled = true where code = 'APK';
 delete from core.memberships where lane_id = 'APK' and user_id = pg_temp.uid('owner@example.test');
 
-insert into core.connections (id, lane_id, provider, external_account_id, status, last_error, last_error_stream) values
+insert into core.connections (id, lane_id, provider, external_account_id, status, last_error, last_error_stream, owner_user_id) values
   ('00000000-0000-4000-8000-000000003121', 'PKG', 'google', 'stream-pkg@example.test', 'active',
    '{"kind": "forbidden", "message": "Calendar access was refused", "disposition": "fail", "endpoint": null, "http_status": 403, "provider_error_code": null, "provider_tid": null, "retry_after_seconds": null}'::jsonb,
-   'calendar'),
+   'calendar', pg_temp.uid('owner@example.test')),
   ('00000000-0000-4000-8000-000000003122', 'APK', 'google', 'stream-apk@example.test', 'active',
    '{"kind": "timeout", "message": "t", "disposition": "retry", "endpoint": null, "http_status": null, "provider_error_code": null, "provider_tid": null, "retry_after_seconds": null}'::jsonb,
-   'mail');
+   'mail', pg_temp.uid('owner@example.test'));
 
 -- ---------------------------------------------------------------- shape
 select throws_ok($$update core.connections set last_error_stream = 'documents' where id = '00000000-0000-4000-8000-000000003121'$$,

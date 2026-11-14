@@ -9,9 +9,9 @@ select plan(9);
 update core.lanes set enabled = true where code = 'APK';
 delete from core.memberships where lane_id = 'APK' and user_id = pg_temp.uid('owner@example.test');
 delete from comms.message_index where lane_id in ('PKG', 'APK');
-insert into core.connections (id, lane_id, provider, external_account_id, status) values
-  ('00000000-0000-4000-8000-000000003131', 'PKG', 'google', 'Boss@Example.test', 'active'),
-  ('00000000-0000-4000-8000-000000003132', 'APK', 'google', 'apkboss@example.test', 'active');
+insert into core.connections (id, lane_id, provider, external_account_id, status, owner_user_id) values
+  ('00000000-0000-4000-8000-000000003131', 'PKG', 'google', 'Boss@Example.test', 'active', pg_temp.uid('owner@example.test')),
+  ('00000000-0000-4000-8000-000000003132', 'APK', 'google', 'apkboss@example.test', 'active', pg_temp.uid('owner@example.test'));
 
 insert into comms.message_index (lane_id, connection_id, provider, message_id, thread_id, from_address, subject, received_at, is_read, folder, labels, to_recipients, cc_recipients, deleted, source_updated_at) values
   ('PKG', '00000000-0000-4000-8000-000000003131', 'google', 'to1', 'tt1', 'a@acme.test', 'In To', now() - interval '1 hour', false, 'INBOX', '{INBOX}', '[{"address": "BOSS@example.test"}, {"address": "x@acme.test"}]', '[]', false, now()),
@@ -27,7 +27,7 @@ select is((select last_to_owner from core.briefing_threads('PKG', now() - interv
 select is((select last_to_owner from core.briefing_threads('PKG', now() - interval '7 days') where thread_key = 'tt2'), false, 'owner only in Cc: false');
 select is((select last_to_owner from core.briefing_threads('PKG', now() - interval '7 days') where thread_key = 'tt3'), false, 'a list address in To: false');
 select is((select last_to_owner from core.briefing_threads('PKG', now() - interval '7 days') where thread_key = 'tt4'), false, 'the latest inbound message decides, not an earlier one');
-select is((select count(*)::int from pg_proc p, unnest(p.proargnames) n where p.oid = 'core.briefing_threads(text, timestamptz)'::regprocedure and n ~* 'recipient|to_addr'), 0, 'no recipient column is returned');
+select is((select count(*)::int from pg_proc p, unnest(p.proargnames) n where p.oid = 'core.briefing_threads(text, timestamptz, uuid)'::regprocedure and n ~* 'recipient|to_addr'), 0, 'no recipient column is returned');
 select is((select count(*)::int from core.briefing_threads('APK', now() - interval '7 days')), 0, 'another lane: nothing');
 reset role;
 
@@ -40,7 +40,7 @@ set local role authenticated;
 select is((select count(*)::int from core.briefing_threads('PKG', now() - interval '7 days') where last_to_owner), 0, 'viewer (no comms view): nothing');
 reset role;
 set local role service_role;
-select is((select last_to_owner from core.briefing_threads('APK', now() - interval '7 days') where thread_key = 'tx1'), true, 'fixture check: APK thread is to its own owner');
+select ok(exists (select 1 from comms.message_index m where m.lane_id = 'APK' and m.thread_id = 'tx1' and m.to_recipients::text ilike '%apkboss@example.test%'), 'fixture check: APK thread is to its own owner');
 reset role;
 
 select * from finish();

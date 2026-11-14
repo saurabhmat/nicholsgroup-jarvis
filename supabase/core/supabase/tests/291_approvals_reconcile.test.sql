@@ -15,9 +15,9 @@ update core.lane_policies set store_outbound_drafts = true, write_actions_allowe
 insert into core.lane_config (lane_id, version, config)
 select lane_id, version + 1, jsonb_set(config, '{approvals}', coalesce(config -> 'approvals', '{}'::jsonb) || '{"approvals_live": true}'::jsonb)
 from core.lane_config where lane_id in ('PKG', 'APK') and version = (select max(version) from core.lane_config l2 where l2.lane_id = core.lane_config.lane_id);
-insert into core.connections (id, lane_id, provider, external_account_id, status, features) values
-  ('00000000-0000-4000-8000-000000001921', 'PKG', 'google', 'rec-pkg@example.test', 'active', '{"gmail_compose": true}'),
-  ('00000000-0000-4000-8000-000000001922', 'APK', 'google', 'rec-apk@example.test', 'active', '{"gmail_compose": true}');
+insert into core.connections (id, lane_id, provider, external_account_id, status, features, owner_user_id) values
+  ('00000000-0000-4000-8000-000000001921', 'PKG', 'google', 'rec-pkg@example.test', 'active', '{"gmail_compose": true}', pg_temp.uid('owner@example.test')),
+  ('00000000-0000-4000-8000-000000001922', 'APK', 'google', 'rec-apk@example.test', 'active', '{"gmail_compose": true}', pg_temp.uid('owner@example.test'));
 create function pg_temp.hash(p_n text) returns text language sql as $$ select encode(sha256(convert_to('rec-' || p_n, 'utf8')), 'hex'); $$;
 create function pg_temp.payload(p_from text) returns jsonb language sql as $$
   select jsonb_build_object('fromMailbox', p_from, 'to', jsonb_build_array('dana@sender.example.test'), 'cc', '[]'::jsonb, 'bcc', '[]'::jsonb,

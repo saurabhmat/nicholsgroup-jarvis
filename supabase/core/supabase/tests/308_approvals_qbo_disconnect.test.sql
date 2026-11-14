@@ -26,14 +26,14 @@ insert into core.lane_config (lane_id, version, config)
 select lane_id, version + 1, jsonb_set(config, '{approvals}', coalesce(config -> 'approvals', '{}'::jsonb) || '{"approvals_live": true}'::jsonb)
 from core.lane_config where lane_id = 'PKG' order by version desc limit 1;
 
-insert into core.connections (id, lane_id, provider, external_account_id, status, features) values
-  ('00000000-0000-4000-8000-000000003081', 'PKG', 'quickbooks', 'realm-t195-pkg-1', 'active', '{}'),
-  ('00000000-0000-4000-8000-000000003082', 'PKG', 'quickbooks', 'realm-t195-pkg-2', 'reconnect_required', '{}'),
-  ('00000000-0000-4000-8000-000000003083', 'PKG', 'google', 'act-t195@example.test', 'active', '{"gmail_compose": true}'),
-  ('00000000-0000-4000-8000-000000003084', 'APK', 'quickbooks', 'realm-t195-apk-1', 'active', '{}'),
-  ('00000000-0000-4000-8000-000000003085', 'PKG', 'quickbooks', 'realm-t195-pkg-3', 'active', '{}'),
-  ('00000000-0000-4000-8000-000000003086', 'PKG', 'quickbooks', 'realm-t195-pkg-4', 'active', '{}'),
-  ('00000000-0000-4000-8000-000000003087', 'PKG', 'quickbooks', 'realm-t195-pkg-5', 'active', '{}');
+insert into core.connections (id, lane_id, provider, external_account_id, status, features, owner_user_id) values
+  ('00000000-0000-4000-8000-000000003081', 'PKG', 'quickbooks', 'realm-t195-pkg-1', 'active', '{}', null),
+  ('00000000-0000-4000-8000-000000003082', 'PKG', 'quickbooks', 'realm-t195-pkg-2', 'reconnect_required', '{}', null),
+  ('00000000-0000-4000-8000-000000003083', 'PKG', 'google', 'act-t195@example.test', 'active', '{"gmail_compose": true}', pg_temp.uid('owner@example.test')),
+  ('00000000-0000-4000-8000-000000003084', 'APK', 'quickbooks', 'realm-t195-apk-1', 'active', '{}', null),
+  ('00000000-0000-4000-8000-000000003085', 'PKG', 'quickbooks', 'realm-t195-pkg-3', 'active', '{}', null),
+  ('00000000-0000-4000-8000-000000003086', 'PKG', 'quickbooks', 'realm-t195-pkg-4', 'active', '{}', null),
+  ('00000000-0000-4000-8000-000000003087', 'PKG', 'quickbooks', 'realm-t195-pkg-5', 'active', '{}', null);
 
 create function pg_temp.hash(p_n text) returns text language sql as $$ select encode(sha256(convert_to('hash-' || p_n, 'utf8')), 'hex'); $$;
 
@@ -41,7 +41,7 @@ create function pg_temp.hash(p_n text) returns text language sql as $$ select en
 select ok(act.is_allowed_type('qbo.disconnect') and not act.is_denied_type('qbo.disconnect'), 'qbo.disconnect is an allowed, not deny-listed type');
 select ok(not act.is_allowed_type('qbo.revoke_grant') and act.is_denied_type('qbo.delete'), 'other qbo types stay refused');
 select is(act.write_roles('qbo.disconnect'), array['owner', 'admin_technical']::text[], 'qbo.disconnect: owner or admin_technical');
-select is(act.write_roles('email.send'), array['owner']::text[], 'email stays owner only');
+select is(act.write_roles('email.send'), array['owner', 'admin_technical']::text[], 'T-247: email: owner or admin_technical, but only as the owner of the mailbox (act.approve checks that)');
 select throws_ok($$update core.lane_policies set write_actions_allowed = array['qbo_post'] where lane_id = 'PKG'$$, '23514', null, 'the lane policy class list still refuses anything else (qbo_post)');
 select ok(not has_function_privilege('authenticated', 'act.write_roles(text)', 'execute') and not has_function_privilege('authenticated', 'act.connection_ok(text, act.proposed_actions)', 'execute'), 'the new helpers are not callable by API roles');
 

@@ -10,9 +10,9 @@ select plan(16);
 update core.lanes set enabled = true where code = 'APK';
 delete from core.memberships where lane_id = 'APK' and user_id = pg_temp.uid('owner@example.test');
 delete from comms.message_index where lane_id in ('PKG', 'APK');
-insert into core.connections (id, lane_id, provider, external_account_id, status) values
-  ('00000000-0000-4000-8000-000000003031', 'PKG', 'google', 'flags-pkg@example.test', 'active'),
-  ('00000000-0000-4000-8000-000000003032', 'APK', 'google', 'flags-apk@example.test', 'active');
+insert into core.connections (id, lane_id, provider, external_account_id, status, owner_user_id) values
+  ('00000000-0000-4000-8000-000000003031', 'PKG', 'google', 'flags-pkg@example.test', 'active', pg_temp.uid('owner@example.test')),
+  ('00000000-0000-4000-8000-000000003032', 'APK', 'google', 'flags-apk@example.test', 'active', pg_temp.uid('owner@example.test'));
 insert into comms.message_index (lane_id, connection_id, provider, message_id, thread_id, from_address, subject, received_at, is_read, folder, labels, deleted, source_updated_at) values
   ('APK', '00000000-0000-4000-8000-000000003032', 'google', 'fa1', '18c2f0a1b2c3d400', 'x@acme.test', 'Other company', now() - interval '1 hour', false, 'INBOX', '{INBOX}', false, now());
 
@@ -68,7 +68,7 @@ set local role authenticated;
 select is((select count(*)::int from core.briefing_threads('PKG', now() - interval '14 days')) + (select count(*)::int from core.inbox_message_ref('PKG', 'f2')), 0, 'no comms view: nothing');
 reset role;
 select ok(not has_function_privilege('anon', 'core.inbox_message_ref(text, text)', 'execute') and not has_function_privilege('service_role', 'core.inbox_message_ref(text, text)', 'execute')
-          and has_function_privilege('authenticated', 'core.briefing_threads(text, timestamptz)', 'execute') and not has_function_privilege('anon', 'core.briefing_threads(text, timestamptz)', 'execute'),
+          and has_function_privilege('authenticated', 'core.briefing_threads(text, timestamptz, uuid)', 'execute') and not has_function_privilege('anon', 'core.briefing_threads(text, timestamptz, uuid)', 'execute'),
           'grants are unchanged after the recreate');
 
 select * from finish();

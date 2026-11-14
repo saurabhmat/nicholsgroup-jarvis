@@ -4,17 +4,17 @@
 -- zone, cancelled excluded, de-duplicated, window checks), and denial: other lane, AAL1, member without the views,
 -- outsider.
 begin;
-select plan(31);
+select plan(37);
 \ir helpers/lane_rls.psql
 
 update core.lanes set enabled = true where code = 'APK';
 delete from core.memberships where lane_id = 'APK' and user_id = pg_temp.uid('owner@example.test');
 delete from cal.event_index where lane_id in ('PKG', 'APK');
 
-insert into core.connections (id, lane_id, provider, external_account_id, status, last_error) values
+insert into core.connections (id, lane_id, provider, external_account_id, status, last_error, owner_user_id) values
   ('00000000-0000-4000-8000-000000002801', 'PKG', 'google', 'brief-pkg@example.test', 'degraded',
-   '{"kind": "rate_limited", "message": "provider text that must not leak", "disposition": "retry", "endpoint": null, "http_status": 429, "provider_error_code": null, "provider_tid": null, "retry_after_seconds": null}'::jsonb),
-  ('00000000-0000-4000-8000-000000002802', 'APK', 'google', 'brief-apk@example.test', 'active', null);
+   '{"kind": "rate_limited", "message": "provider text that must not leak", "disposition": "retry", "endpoint": null, "http_status": 429, "provider_error_code": null, "provider_tid": null, "retry_after_seconds": null}'::jsonb, pg_temp.uid('owner@example.test')),
+  ('00000000-0000-4000-8000-000000002802', 'APK', 'google', 'brief-apk@example.test', 'active', null, pg_temp.uid('owner@example.test'));
 
 -- PKG configures two mailboxes: one connected above, one not connected at all.
 insert into core.lane_config (lane_id, version, config)
@@ -40,23 +40,23 @@ insert into cal.event_index (lane_id, connection_id, provider, calendar_id, even
    null, 'confirmed', '[]', null, now());
 
 -- ---------------------------------------------------------------- privileges
-select ok(has_function_privilege('authenticated', 'core.briefing_coverage(text)', 'execute')
-          and has_function_privilege('authenticated', 'core.briefing_events(text, timestamptz, timestamptz)', 'execute'), 'authenticated executes both');
-select ok(not has_function_privilege('anon', 'core.briefing_coverage(text)', 'execute')
-          and not has_function_privilege('anon', 'core.briefing_events(text, timestamptz, timestamptz)', 'execute'), 'anon executes neither');
-select ok((select prosecdef and proconfig = array['search_path=""'] from pg_proc where oid = 'core.briefing_coverage(text)'::regprocedure),
+select ok(has_function_privilege('authenticated', 'core.briefing_coverage(text, uuid)', 'execute')
+          and has_function_privilege('authenticated', 'core.briefing_events(text, timestamptz, timestamptz, uuid)', 'execute'), 'authenticated executes both');
+select ok(not has_function_privilege('anon', 'core.briefing_coverage(text, uuid)', 'execute')
+          and not has_function_privilege('anon', 'core.briefing_events(text, timestamptz, timestamptz, uuid)', 'execute'), 'anon executes neither');
+select ok((select prosecdef and proconfig = array['search_path=""'] from pg_proc where oid = 'core.briefing_coverage(text, uuid)'::regprocedure),
           'coverage is security definer with an empty search_path');
-select ok((select not prosecdef and proconfig = array['search_path=""'] from pg_proc where oid = 'core.briefing_events(text, timestamptz, timestamptz)'::regprocedure),
+select ok((select not prosecdef and proconfig = array['search_path=""'] from pg_proc where oid = 'core.briefing_events(text, timestamptz, timestamptz, uuid)'::regprocedure),
           'events is security invoker with an empty search_path');
 
 -- ---------------------------------------------------------------- owner, aal2, own lane
 select pg_temp.claims('owner@example.test', 'aal2');
 set local role authenticated;
 
-select is((select count(*)::int from core.briefing_coverage('PKG')), 4, 'coverage: two accounts x two streams');
-select is((select status from core.briefing_coverage('PKG') where account = 'missing@example.test' and stream = 'mail'), 'not_connected',
-          'a configured mailbox without a connection is not_connected (never silently absent)');
-select is((select configured from core.briefing_coverage('PKG') where account = 'missing@example.test' and stream = 'mail'), true, '...and marked configured');
+select is((select count(*)::int from core.briefing_coverage('PKG')), 2, 'coverage: the owner''s one account x two streams (T-247: own accounts only)');
+select is((select count(*)::int from core.briefing_coverage('PKG') where account = 'missing@example.test'), 0,
+          'T-247: a lane-configured mailbox nobody connected is not listed (coverage shows the caller''s own accounts only)');
+select is((select configured from core.briefing_coverage('PKG') where account = 'brief-pkg@example.test' and stream = 'mail'), true, '...and the own account is marked configured (it is on the lane''s mailbox list)');
 select is((select status || '|' || error_kind from core.briefing_coverage('PKG') where account = 'brief-pkg@example.test' and stream = 'mail'), 'degraded|rate_limited',
           'connected account: status and the error kind only');
 select is((select last_sync_at from core.briefing_coverage('PKG') where account = 'brief-pkg@example.test' and stream = 'mail'), '2026-11-11 10:01Z'::timestamptz,
@@ -79,8 +79,18 @@ select is((select string_agg(stream || ':' || status || ':' || coalesce(account,
 select is((select count(*)::int from core.briefing_events('APK', '2026-11-12 05:00Z', '2026-11-13 05:00Z')), 0, 'another lane: no events');
 reset role;
 set local role service_role;
-select is((select count(*)::int from core.briefing_events('APK', '2026-11-12 05:00Z', '2026-11-13 05:00Z')), 1, 'fixture check: APK has an event');
-select ok((select count(*)::int from core.briefing_coverage('APK')) >= 2, 'fixture check: APK has coverage rows for service_role');
+select is((select count(*)::int from cal.event_index where lane_id = 'APK'), 1, 'fixture check: APK has an event');
+select ok((select count(*)::int from core.connections where lane_id = 'APK' and provider = 'google') >= 1, 'fixture check: APK has a connection');
+-- the job path names the owner (service_role only): the owner's own rows, nobody else's
+select pg_temp.uid('owner@example.test') as owner_id \gset
+select pg_temp.uid('admin-technical@example.test') as admin_id \gset
+select set_config('request.jwt.claims', '{"role":"service_role"}', true);
+set local role service_role;
+select is((select count(*)::int from core.briefing_events('PKG', '2026-11-12 05:00Z', '2026-11-13 05:00Z', :'owner_id')), 1, 'service_role with the owner named: that owner''s events');
+select is((select count(*)::int from core.briefing_events('PKG', '2026-11-12 05:00Z', '2026-11-13 05:00Z', :'admin_id')), 0, 'service_role naming another member: none of the owner''s events');
+select is((select count(*)::int from core.briefing_events('PKG', '2026-11-12 05:00Z', '2026-11-13 05:00Z')), 0, 'service_role naming nobody: no events');
+select is((select count(*)::int from core.briefing_coverage('PKG', :'owner_id') where connection_id is not null), 2, 'service_role: coverage of the named owner');
+select is((select count(*)::int from core.briefing_coverage('PKG', :'admin_id') where connection_id is not null), 0, 'service_role: the named admin owns no account');
 reset role;
 
 -- ---------------------------------------------------------------- AAL1
@@ -93,18 +103,19 @@ reset role;
 -- ---------------------------------------------------------------- members without comms/calendar views, outsider
 select pg_temp.claims('admin-technical@example.test', 'aal2');
 set local role authenticated;
-select is((select count(*)::int from core.briefing_coverage('PKG')), 0, 'admin_technical (connections view only): no coverage');
+select is((select string_agg(stream || ':' || status || ':' || coalesce(account, '-'), ',' order by stream) from core.briefing_coverage('PKG')), 'calendar:not_configured:-,mail:not_configured:-', 'admin_technical (own_mail, no account of their own): nothing set up, none of the owner''s accounts (T-247)');
+select is((select count(*)::int from core.briefing_coverage('PKG', pg_temp.uid('owner@example.test'))), 2, 'a caller who is not service_role cannot name another owner: p_owner is ignored (the rows are their own)');
 select is((select count(*)::int from core.briefing_events('PKG', '2026-11-12 05:00Z', '2026-11-13 05:00Z')), 0, 'admin_technical: no events');
 reset role;
 select pg_temp.claims('viewer@example.test', 'aal2');
 set local role authenticated;
-select is((select count(*)::int from core.briefing_coverage('PKG')), 0, 'viewer: no coverage');
+select is((select count(*)::int from core.briefing_coverage('PKG') where connection_id is not null), 0, 'viewer: no accounts of their own, none of the owner''s');
 reset role;
 -- per-stream: a viewer holding only the calendar view gets calendar rows only, and the reverse
 update core.memberships set views = '{calendar}' where lane_id = 'PKG' and user_id = pg_temp.uid('viewer@example.test');
 select pg_temp.claims('viewer@example.test', 'aal2');
 set local role authenticated;
-select is((select string_agg(distinct stream, ',') from core.briefing_coverage('PKG')), 'calendar', 'calendar view only: calendar rows only');
+select is((select string_agg(distinct stream, ',') from core.briefing_coverage('PKG') where connection_id is not null), null, 'T-247: a viewer with the old calendar view still sees none of the owner''s accounts (own_mail decides)');
 reset role;
 -- (viewers cannot hold the comms view: memberships_views_check; the mail-only case needs no separate role)
 update core.memberships set views = '{finance}' where lane_id = 'PKG' and user_id = pg_temp.uid('viewer@example.test');

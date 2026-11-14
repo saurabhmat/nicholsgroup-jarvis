@@ -90,22 +90,23 @@ create or replace function core.act_reply_state(p_lane text, p_connection uuid, 
 returns table (pending_id uuid, blocked boolean, already_sent_at timestamptz)
 language sql stable security invoker set search_path = ''
 as $$
+  -- T-247: every answer needs a mailbox the caller owns (RLS says the same; stated here too, and service_role, which has no
+  -- auth.uid(), learns nothing). The function still always returns exactly one row (false/null for a mailbox that is not theirs).
+  with own as (select p_connection = any (core.mailbox_ids((select auth.uid()), p_lane)) as ok)
   select
     (select a.id from act.proposed_actions a
-     where a.lane_id = p_lane and a.connection_id = p_connection and a.action_type in ('email.send', 'email.save_draft')
+     where (select ok from own) and a.lane_id = p_lane and a.connection_id = p_connection and a.action_type in ('email.send', 'email.save_draft')
        and a.status = 'proposed' and a.expires_at > pg_catalog.now() and a.payload_purged_at is null
        and a.payload -> 'inReplyTo' ->> 'messageId' = p_message_id
      order by a.created_at desc limit 1),
     exists (select 1 from act.proposed_actions a
-            where a.lane_id = p_lane and a.connection_id = p_connection and a.payload -> 'inReplyTo' ->> 'threadId' = p_thread_id
+            where (select ok from own) and a.lane_id = p_lane and a.connection_id = p_connection and a.payload -> 'inReplyTo' ->> 'threadId' = p_thread_id
               and (a.status in ('approved', 'executing')
                    or (a.status = 'failed' and act.is_unknown_failure(a.failure_code) and a.updated_at > pg_catalog.now() - interval '24 hours'))),
     (select a.verified_at from act.proposed_actions a
-     where a.lane_id = p_lane and a.connection_id = p_connection and a.action_type = 'email.send' and a.status = 'verified'
+     where (select ok from own) and a.lane_id = p_lane and a.connection_id = p_connection and a.action_type = 'email.send' and a.status = 'verified'
        and a.payload -> 'inReplyTo' ->> 'threadId' = p_thread_id
-     order by a.verified_at desc nulls last limit 1)
-  -- T-247: only for a mailbox the caller owns (RLS says the same; stated here too, and it answers nothing to service_role).
-  where p_connection = any (core.mailbox_ids((select auth.uid()), p_lane));
+     order by a.verified_at desc nulls last limit 1);
 $$;
 comment on function core.act_reply_state(text, uuid, text, text) is 'Reply drawer state (T-234; T-247: own mailboxes only): the pending proposal for a message, whether an earlier action in the thread may have gone out, and when a reply was last verified. Invoker, RLS applies.';
 
@@ -153,7 +154,11 @@ begin
     raise exception 'act: the connection does not belong to this lane and provider' using errcode = '23503';
   end if;
   -- T-247: an email proposal is made for the mailbox owner (a job names them as proposer_user_id): nobody else's mailbox, and the owner must still hold own_mail here.
-  if p_type like 'email.%' and (v_owner is null or p_proposer_user is distinct from v_owner or not core.may_brief(v_owner, p_lane)) then
+  -- (membership read directly, not through core.allowed_lanes: this definer function is reached only by service_role code, and the check
+  -- must not depend on the caller's role setting)
+  if p_type like 'email.%' and (v_owner is null or p_proposer_user is distinct from v_owner
+       or not exists (select 1 from core.memberships m join core.lanes l on l.code = m.lane_id
+                      where m.user_id = v_owner and m.lane_id = p_lane and l.enabled and 'own_mail' = any (core.role_views(m.role) || m.views))) then
     raise exception 'act: an email proposal must be made for the mailbox owner' using errcode = '42501';
   end if;
   -- One proposal writer per lane at a time: the cap and the duplicate check below cannot race (T-232 review M2, T-231d).
@@ -359,7 +364,7 @@ begin
   if not core.has_lane_role(v_row.approved_by, p_lane, act.write_roles(v_row.action_type)) then
     raise exception 'act: approver_revoked' using errcode = 'P0001';
   end if;
-  if act.is_email_type(v_row.action_type) and not (v_row.connection_id = any (core.mailbox_ids(v_row.approved_by, p_lane))) then
+  if act.is_email_type(v_row.action_type) and not exists (select 1 from core.connections c where c.id = v_row.connection_id and c.lane_id = p_lane and c.owner_user_id = v_row.approved_by) then
     raise exception 'act: approver_revoked' using errcode = 'P0001';
   end if;
   if not act.connection_ok(p_lane, v_row) then

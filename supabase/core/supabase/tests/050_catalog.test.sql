@@ -44,6 +44,11 @@ insert into custom_policy_ok values
   ('brain.imports', 'standard expression AND user_id = auth.uid(): an import is its user''s alone (T-210)'),
   ('brain.import_candidates', 'standard expression AND user_id = auth.uid() AND created_at within 24 h: candidates are their user''s alone and expire (T-210)'),
   ('brain.section_completions', 'standard expression AND user_id = auth.uid(): completion is its user''s alone (T-227)'),
+  ('core.connections', 'standard expression for the connections view (health of the lane) OR (owner_user_id = auth.uid() AND own_mail view): a member''s own mailbox rows (T-247)'),
+  ('comms.message_index', 'AAL2 + own_mail view + connection_id in the caller''s own mailboxes (core.mailbox_ids): mail is readable only through mailbox ownership (T-247)'),
+  ('cal.event_index', 'AAL2 + own_mail view + connection_id in the caller''s own mailboxes (core.mailbox_ids): events are readable only through mailbox ownership (T-247)'),
+  ('act.status_history', 'AAL2 + act.action_rows_visible: an email action''s history only to its mailbox owner, other actions through the approvals view (T-247)'),
+  ('act.execution_claims', 'AAL2 + act.action_rows_visible: an email action''s claim only to its mailbox owner, other actions through the approvals view (T-247)'),
   ('act.proposed_actions', 'standard expression for the approvals view (owner) OR (proposer_user_id = auth.uid() AND lane member): a proposer sees their own proposals (T-232, approvals spec §4)');
 
 -- Tables where authenticated may write directly (grants or write policies). Empty: writes go through service code or
@@ -56,6 +61,9 @@ create temp table unprotected_read_ok (name text primary key, why text not null)
 -- Security-definer functions (they bypass RLS and run as their owner). Each one is reviewed.
 create temp table security_definer_ok (name text primary key, why text not null) on commit drop;
 insert into security_definer_ok values
+  ('core.mailbox_ids', 'the connection ids a user owns (core.may_resolve: the caller at aal2, or service_role for jobs); reads core.connections without the connections view; ids only (T-247)'),
+  ('core.may_brief', 'p_uid holds own_mail in p_lane (allowed_lanes rules); a boolean (T-247)'),
+  ('act.action_rows_visible', 'policy helper: may the caller read an action''s history/claim rows (email: connection owner with own_mail; others: approvals view); a boolean (T-247)'),
   ('brief.briefings_guard', 'insert trigger: reply drafts only with store_outbound_drafts; lane enabled; owner holds the owner role and the briefing view (T-231c)'),
   ('core.briefing_coverage', 'Home coverage strip: answers only the caller''s comms/calendar views at aal2; connection facts, no tokens (T-231a)'),
   ('core.briefing_save_own', 'Owner briefing writer: aal2 + owner role + briefing view, owner = auth.uid(), 2-minute cooldown under an advisory lock (T-231c)'),
@@ -140,6 +148,11 @@ insert into security_definer_ok values
 -- App functions authenticated may execute (callable through the API). Each one is reviewed.
 create temp table authenticated_exec_ok (name text primary key, why text not null) on commit drop;
 insert into authenticated_exec_ok values
+  ('core.mailbox_ids', 'RLS and reader helper; answers only for the caller''s own uid at aal2 (T-247)'),
+  ('core.may_brief', 'gate helper; same resolution rules as allowed_lanes (T-247)'),
+  ('core.mail_reader', 'whose mailboxes a read covers: auth.uid(), or the named owner for service_role only (T-247)'),
+  ('act.action_rows_visible', 'RLS helper of act.status_history / act.execution_claims (T-247)'),
+  ('act.is_email_type', 'pure: p_type is an email.* action type (T-247)'),
   ('core.sync_now_claim', 'Sync now rate limit; definer, checks aal2, the role and the connections view itself (T-238)'),
   ('core.briefing_coverage', 'Home briefing coverage; definer, checks the caller''s views itself (T-231a)'),
   ('core.briefing_events', 'Home calendar; invoker, RLS on cal.event_index applies (T-231a)'),

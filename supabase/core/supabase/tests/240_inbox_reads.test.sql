@@ -11,9 +11,9 @@ delete from core.memberships where lane_id = 'APK' and user_id = pg_temp.uid('ow
 -- Start PKG and APK with no mail (a developer's own synced rows are removed inside this transaction only).
 delete from comms.message_index where lane_id in ('PKG', 'APK');
 
-insert into core.connections (id, lane_id, provider, external_account_id, status) values
-  ('00000000-0000-4000-8000-000000002401', 'PKG', 'google', 'inbox-pkg@example.test', 'active'),
-  ('00000000-0000-4000-8000-000000002402', 'APK', 'google', 'inbox-apk@example.test', 'active');
+insert into core.connections (id, lane_id, provider, external_account_id, status, owner_user_id) values
+  ('00000000-0000-4000-8000-000000002401', 'PKG', 'google', 'inbox-pkg@example.test', 'active', pg_temp.uid('owner@example.test')),
+  ('00000000-0000-4000-8000-000000002402', 'APK', 'google', 'inbox-apk@example.test', 'active', pg_temp.uid('owner@example.test'));
 
 insert into comms.message_index (lane_id, connection_id, provider, message_id, from_address, from_name, subject, received_at, is_read, is_important, folder, labels, deleted, source_updated_at) values
   ('PKG', '00000000-0000-4000-8000-000000002401', 'google', 'i1', 'a@example.test', 'A', 'newest unread important', '2026-11-06 15:00Z', false, true, 'INBOX', '{}', false, now()),
