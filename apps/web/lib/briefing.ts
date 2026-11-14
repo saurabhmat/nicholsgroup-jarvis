@@ -1,6 +1,6 @@
 // Home briefing sections from synced metadata (T-231a, T-231b): Coverage, today's calendar, the 7-day look-ahead. No AI
 // here. Read-only SQL through the signed-in user's lane client: core.briefing_coverage (definer, answers only for the
-// caller's comms/calendar views) and core.briefing_events (invoker, RLS on cal.event_index). Times are rendered in the
+// caller's own_mail view, own accounts only) and core.briefing_events (invoker, RLS on cal.event_index). Times are rendered in the
 // viewer's zone (the `tz` cookie set by the browser; America/New_York when absent or invalid).
 import { laneConfigSchema, type LaneConfig } from "@nichols/core/lane-config";
 import type { LaneClient } from "@nichols/core/lane-router";

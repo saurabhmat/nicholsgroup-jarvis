@@ -104,7 +104,9 @@ reset role;
 -- The APK fixture is real: without RLS (service_role) the same call sees the list and the message.
 select set_config('request.jwt.claims', '{"role":"service_role"}', true); -- the service key carries no sub
 set local role service_role;
-select ok((select count(*) from comms.message_index where lane_id = 'APK' and not is_read and not deleted) >= 1, 'fixture check: APK has an unread message (the owner has no APK membership, so none of it is counted above)');
+select is((select (count(*) filter (where lower(m.from_address) = 'boss@example.test'))::text || '/' || ((select c.config -> 'priority_senders' from core.lane_config_current c where c.lane_id = 'APK') ? 'boss@example.test')::text
+             from comms.message_index m where m.lane_id = 'APK' and not m.is_read and not m.deleted and m.folder = 'INBOX'), '1/true',
+          'fixture check: APK has a priority sender and an unread message from it (so the zero counts above come from denial, not from an empty fixture)');
 -- T-247: the service role reads no mail through the Home functions (they answer for a signed-in user's own mailboxes only).
 select is((select count(*)::int from core.home_mail_attention('PKG', now() - interval '24 hours')), 0, 'service_role: home_mail_attention returns no row (no user)');
 select is((select count(*)::int from core.home_meetings('PKG', '2026-11-06 05:00Z', '2026-11-07 05:00Z')), 0, 'service_role: home_meetings returns no rows (no user)');

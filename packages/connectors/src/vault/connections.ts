@@ -64,7 +64,7 @@ export function createConnectionStore(clientFor: JobClientFor): ConnectionStore 
         if (inserted.error?.code === "23505" && typeof inserted.error.message === "string" && inserted.error.message.includes(ONE_LANE_INDEX)) throw new ConnectorError({ kind: "forbidden", message: ACCOUNT_IN_USE_MESSAGE });
         if (inserted.error?.code === "23514") throw new ConnectorError({ kind: "invalid_input", message: "The provider account id was refused" });
         if (inserted.error) throw inserted.error;
-        // A row without an owner (made before T-247) is claimed by the user who just proved control of the account; a row that has an
+        // A row without an owner (made before T-247) is claimed only by the user who started it (created_by) and just proved control of the account; a row that has an
         // owner is never touched (the callback refuses a different user: one mailbox, one owner).
         if (createdBy && MAIL_PROVIDERS.includes(provider)) {
           const claimed = await table()
@@ -72,6 +72,7 @@ export function createConnectionStore(clientFor: JobClientFor): ConnectionStore 
             .eq("lane_id", laneId)
             .eq("provider", provider)
             .eq("external_account_id", externalAccountId)
+            .eq("created_by", createdBy) // never a first-come takeover: only the user who started that row can claim it
             .is("owner_user_id", null);
           if (claimed.error) throw claimed.error;
         }

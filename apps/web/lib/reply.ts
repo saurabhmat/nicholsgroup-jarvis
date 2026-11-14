@@ -48,7 +48,8 @@ type Db = Pick<LaneClient, "schema">;
 
 export type ReplyDeps = {
   /** The one message's text, live, through the caller's own guarded reader (the same one the thread view uses). */
-  readBody: (laneId: string, connectionId: string, messageId: string) => Promise<{ text: string; truncated: boolean }>;
+  /** `expectedOwnerId`: the signed-in user; the connection must be theirs (T-247 defence in depth). */
+  readBody: (laneId: string, connectionId: string, messageId: string, expectedOwnerId?: string) => Promise<{ text: string; truncated: boolean }>;
   /** The AI provider (the mock in tests). */
   llm: () => { configured: true; provider: LLMProvider } | { configured: false };
   /** At most one draft per thread per user per minute. `wait` = whole seconds until a draft is allowed (0 = now); `take` uses the slot (called only after a successful draft). */
@@ -249,7 +250,7 @@ export async function replyContext(ctx: UserCtx, db: Db, approvals: ApprovalsPub
   const cap = capabilityOf(ctx.laneId, facts, "email.send");
   let preview: ReplyContext["preview"] = null;
   try {
-    const b = await deps.readBody(ctx.laneId, ref.connectionId, ref.messageId);
+    const b = await deps.readBody(ctx.laneId, ref.connectionId, ref.messageId, ctx.userId);
     const text = displayText(b.text);
     preview = { text: text.slice(0, PREVIEW_CHARS), truncated: b.truncated || text.length > PREVIEW_CHARS };
   } catch {
@@ -395,7 +396,7 @@ export async function draftReply(ctx: UserCtx, db: Db, approvals: ApprovalsPubli
 async function draftOnce(ctx: UserCtx, approvals: ApprovalsPublicDeps, deps: ReplyDeps, ref: MessageRef, provider: LLMProvider, limitKey: string): Promise<DraftResult> {
   let body: string;
   try {
-    body = (await deps.readBody(ctx.laneId, ref.connectionId, ref.messageId)).text.slice(0, MAX_BODY_CHARS);
+    body = (await deps.readBody(ctx.laneId, ref.connectionId, ref.messageId, ctx.userId)).text.slice(0, MAX_BODY_CHARS);
   } catch {
     throw new ReplyError("body_unavailable");
   }

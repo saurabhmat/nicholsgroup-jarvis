@@ -7,7 +7,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 
 const m = vi.hoisted(() => ({ view: null as unknown }));
 vi.mock("@/lib/lane-page", () => ({ loadLane: async () => ({ laneId: "PKG", name: "Pub K Group", lanes: [] }) }));
-vi.mock("@/lib/guards", () => ({ guards: async () => ({}) }));
+vi.mock("@/lib/guards", () => ({ guards: async () => ({ requireLane: async () => ({ session: { userId: "00000000-0000-4000-8000-0000000000a1" } }) }) }));
 vi.mock("@/lib/timed", () => ({ timed: async <T,>(_n: string, f: () => Promise<T>) => f() }));
 vi.mock("@/lib/inbox", async (orig) => ({ ...(await orig<typeof import("@/lib/inbox")>()), messageFor: async () => m.view }));
 vi.mock("@nichols/connectors/google", () => ({ readGmailBody: async () => ({ text: "", truncated: false }) }));

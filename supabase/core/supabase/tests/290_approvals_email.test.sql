@@ -6,7 +6,7 @@
 -- the state machine and immutability, the single claim, the D-19 body purge in every terminal state, edit = supersede,
 -- history insert-only, pending count.
 begin;
-select plan(106);
+select plan(107);
 \ir helpers/lane_rls.psql
 
 -- A token whose amr carries a TOTP verification at p_at (epoch seconds), or none when p_at is null.
@@ -96,6 +96,7 @@ select throws_ok($$insert into act.proposed_actions (lane_id, action_type, conne
 select pg_temp.claims_amr('owner@example.test', 'aal2', extract(epoch from now())::bigint);
 set local role authenticated;
 select is((select count(*)::int from act.proposed_actions where lane_id = 'PKG'), 6, 'the owner sees every PKG action');
+select is((select array_agg(k order by k) from ids where id in (select id from act.proposed_actions) and k in ('a1', 'a2', 'a3', 'a4', 'a5')), array['a1','a2','a3','a4','a5'], 'T-247: positive case: the mailbox owner sees each of their own actions by id (including the job-proposed one)');
 select is((select count(*)::int from act.proposed_actions where lane_id = 'APK'), 0, 'CROSS-LANE: the owner (not a member of APK) sees no APK action');
 select is((select count(*)::int from core.act_list('APK')), 0, 'CROSS-LANE: act_list of another lane is empty');
 select is((select count(*)::int from core.act_get('APK', (select id from ids where k = 'a6'))), 0, 'CROSS-LANE: act_get of another lane''s action is empty');

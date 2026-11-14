@@ -1,6 +1,6 @@
 import "server-only";
 // briefing.refresh (T-238): new mail arrived (a scheduled mail sync wrote at least one message), so the lane's summary may be
-// out of date. For each owner who still holds the briefing view, the injected `refresh` asks the EXISTING run claim
+// out of date. For each user who owns an active mailbox and still holds own_mail (T-247), the injected `refresh` asks the EXISTING run claim
 // (brief.briefing_claim, kind 'auto'): stale after 3 hours, 6 runs per lane and New York day, one running, 10-minute pause. When
 // the claim refuses, nothing is called: no model, no cost. This function never bypasses those gates; it only offers a run.
 //   - One event per lane per 15-minute slot (event id from mail-ingest), so one tick starts at most one refresh per lane.

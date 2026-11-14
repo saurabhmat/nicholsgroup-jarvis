@@ -5,7 +5,7 @@
 -- functions. Also: cross-lane denial, the service-role job path (explicit owner), the connect gate (own_mail), the own_mail view
 -- mapping, several accounts of one user, and the ownership rules on core.connections.
 begin;
-select plan(83);
+select plan(89);
 \ir helpers/lane_rls.psql
 
 -- A token whose amr carries a TOTP verification now (the step-up the approval needs).
@@ -260,6 +260,26 @@ select pg_temp.claims('admin-technical@example.test', 'aal2');
 set local role authenticated;
 select lives_ok($$select core.oauth_state_create('PKG', 'quickbooks', repeat('5', 64), repeat('v', 43), 'https://app.example.test/cb')$$, 'admin_technical still starts a QuickBooks connect');
 select is((select count(*)::int from core.oauth_state_consume('PKG', repeat('1', 64))), 0, 'a state started by someone else is not consumable');
+reset role;
+
+-- ---------------------------------------------------------------- review fixes: cut-over, role of the owner, per-owner caps
+-- the cut-over statements of migration 20261124150000 (briefings made before it are derived from the whole lane's mail and are removed)
+delete from brief.briefings where prepared_at < pg_catalog.clock_timestamp() and owner_user_id = pg_temp.uid('owner@example.test');
+select pg_temp.claims('owner@example.test', 'aal2');
+set local role authenticated;
+select is((select count(*)::int from brief.briefings), 0, 'after the cut-over delete the owner has no briefing: nothing built from the old lane-wide mail remains');
+select is((select count(*)::int from core.briefing_latest('PKG')), 0, '...and briefing_latest returns nothing for them');
+reset role;
+set local role service_role;
+select throws_ok($$select act.propose('PKG', 'email.send', '00000000-0000-4000-8000-000000031904', '{"mailbox":"viewer-box@example.test"}', '{"fromMailbox":"viewer-box@example.test"}', 1, repeat('e', 64), null, '[]', 'job', pg_temp.uid('viewer@example.test'), false)$$, '42501', null, 'a draft for a viewer''s mailbox is refused: the owner cannot approve it (no undecidable draft)');
+-- per-owner caps: Robert fills his 20 slots; Saurabh can still propose
+select count(*) from (select act.propose('PKG', 'email.send', '00000000-0000-4000-8000-000000031901', '{"mailbox":"robert@example.test"}', '{"fromMailbox":"robert@example.test"}', 1, lpad(to_hex(g), 64, 'f'), null, '[]', 'user', pg_temp.uid('owner@example.test'), false) from generate_series(1, 20) g) x;
+select throws_ok($$select act.propose('PKG', 'email.send', '00000000-0000-4000-8000-000000031901', '{"mailbox":"robert@example.test"}', '{"fromMailbox":"robert@example.test"}', 1, repeat('9', 64), null, '[]', 'user', pg_temp.uid('owner@example.test'), false)$$, '54000', null, 'one user''s 21st pending draft is refused (the cap is 20 per mailbox owner)');
+select lives_ok($$select act.propose('PKG', 'email.send', '00000000-0000-4000-8000-000000031903', '{"mailbox":"saurabh2@example.test"}', '{"fromMailbox":"saurabh2@example.test"}', 1, repeat('8', 64), null, '[]', 'user', pg_temp.uid('admin-technical@example.test'), false)$$, '...but Saurabh can still propose: caps are per mailbox owner');
+reset role;
+select pg_temp.claims('admin-technical@example.test', 'aal2');
+set local role authenticated;
+select is((select runs_today from core.briefing_run_state('PKG')), 1, 'runs_today shows only the caller''s own runs');
 reset role;
 
 select * from finish();

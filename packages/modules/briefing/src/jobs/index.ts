@@ -66,6 +66,7 @@ export async function briefingOwners(client: Rpc, laneId: LaneId): Promise<strin
     .select("owner_user_id")
     .eq("lane_id", laneId)
     .in("provider", ["google", "microsoft"])
+    .eq("transport", "native") // Composio rows index no mail yet (T-247 review)
     .in("status", ["active", "degraded"])
     .not("owner_user_id", "is", null);
   if (error || !Array.isArray(data)) return [];

@@ -4,9 +4,9 @@
 //                              briefing is older than 3 hours;
 //   regenerateBriefing(lane)   the "Regenerate" menu item (once per 30 minutes);
 //   briefingRunState(lane)     the cheap poll: is a run open, and what is the newest briefing time.
-// Order for a start: lane id shape -> AAL2 session + owner role (requireRole) -> model configured -> the lane policy (unreadable:
+// Order for a start: lane id shape -> AAL2 session + a member who may have a briefing (owner, admin_technical, viewer: own_mail; the database checks it again) -> model configured -> the lane policy (unreadable:
 // no run) -> the tz cookie (read BEFORE the claim) -> sources (the owner must hold the mail view: gate `no_sources`, before the
-// claim) -> the SQL CLAIM (core.briefing_claim_auto / _regenerate: stale, one running per lane, 6 per lane per New York day,
+// claim) -> the SQL CLAIM (core.briefing_claim_auto / _regenerate: stale, one running per owner, 6 per owner per New York day,
 // 10-minute pause, Regenerate 30 minutes; refusals come back as a gate code, nothing is raised) -> the brain context is loaded
 // (while cookies are available, 1.5 s limit; every lane client it needs is resolved through requireLane in that window, never
 // the current lane's client for another lane) -> the run goes into Next's after(): the action returns {started: true} at once
@@ -14,7 +14,7 @@
 // closed as lost; it still counts toward the daily cap), so no claim leaks. The run reuses runBriefingBounded: a 60 s abort whose timer
 // starts at the action's start (the brain load is inside the budget), single-flight, coded failure reasons; its save through
 // core.briefing_save_own closes the claim. Home's maxDuration (90 s) covers the action and the after().
-// The run state and the cap are lane-wide by design: one cost cap per lane, whichever owner opens Home.
+// T-247: the run state and the cap are per owner (one cost cap per person), so two users never starve each other.
 // No service client on this path; reply drafts become proposals through the approvals module. Errors are codes; logs carry the class only.
 import { getLLMProvider } from "@nichols/ai/config";
 import type { LaneId } from "@nichols/core";
@@ -60,7 +60,7 @@ async function start(laneId: string, kind: "auto" | "regenerate"): Promise<Brief
   };
   try {
     const g = await guards();
-    const role = await g.requireRole(laneId as LaneId, ["owner"]);
+    const role = await g.requireRole(laneId as LaneId, ["owner", "admin_technical", "viewer"]);
     client = role.client;
     const { session } = role;
     const lane = client;
@@ -173,7 +173,7 @@ export async function briefingRunState(laneId: string): Promise<BriefingRunState
   if (typeof laneId !== "string" || !LANE.test(laneId)) return null;
   try {
     const g = await guards();
-    const { client } = await g.requireRole(laneId as LaneId, ["owner"]);
+    const { client } = await g.requireRole(laneId as LaneId, ["owner", "admin_technical", "viewer"]);
     const { data, error } = await client.schema("core").rpc("briefing_run_state", { p_lane: laneId });
     return error ? null : briefingRunStateFrom(data);
   } catch {

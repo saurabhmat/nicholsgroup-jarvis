@@ -21,7 +21,7 @@ describe("briefingOwners", () => {
   it("reads only this lane's active or degraded Google/Microsoft connections that have an owner", async () => {
     const f = fake([]);
     await briefingOwners(f.client, "PKG");
-    expect(f.seen).toEqual(["from connections", "select owner_user_id", "lane_id=PKG", "provider in google,microsoft", "status in active,degraded", "owner_user_id not is null"]);
+    expect(f.seen).toEqual(["from connections", "select owner_user_id", "lane_id=PKG", "provider in google,microsoft", "transport=native", "status in active,degraded", "owner_user_id not is null"]);
   });
   it("an error or an unexpected answer is nobody (fail closed)", async () => {
     expect(await briefingOwners(fake(null, { message: "x" }).client, "PKG")).toEqual([]);

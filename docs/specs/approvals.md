@@ -71,7 +71,7 @@ All tables in the lane's data plane (`act` schema), `lane_id not null`, RLS (AAL
 
 `payload`, `payload_sha256`, `target`, `connection_id`, `action_type` are immutable once `status <> 'proposed'` (trigger). `verified`, `failed`, `rejected`, `expired`, `invalidated` are terminal. The `authenticated` role has no insert/update/delete on `act.*`; it calls security-definer functions. `claim_execution`, `mark_verified`, `mark_failed` are granted to the service role only.
 
-**RLS (select):** owner sees all actions in the lane; a proposer sees their own; finance_operator and viewer see nothing else; admin_technical sees none (index only).
+**RLS (select), amended by T-247 (Nov 14, 2026):** an **email** action (`email.*`) is visible only to the **owner of its connection's mailbox** (`core.connections.owner_user_id = auth.uid()`, holding the `own_mail` view): a lane owner, a proposer or an admin sees nobody else's draft. `act.status_history` and `act.execution_claims` follow the same rule for email rows. Every other type (`qbo.disconnect`) keeps the lane rules: the `approvals` view (owner) sees all, a proposer sees their own, the `connections` view sees `qbo.disconnect`.
 
 ## 5. Services and APIs (`packages/modules/approvals`)
 
@@ -133,7 +133,7 @@ The execute function is configured with **Inngest retries = 0**: a failed or tim
 ### 8a. `qbo.disconnect` (T-195, decided D-24)
 
 Revoking our QuickBooks grant at Intuit is an external write, so it is an approvals action. Same state machine, hash, step-up and single claim as email, with these differences (SQL: migration `20261116100000`, pgTAP 308):
-- **Who:** owner or admin_technical of the lane may propose, approve and reject (`act.write_roles`); email stays owner only. A person proposes it (`proposer_kind = user`); jobs and the assistant cannot.
+- **Who:** owner or admin_technical of the lane may propose, approve and reject (`act.write_roles`); email actions belong to the mailbox owner: the owner or admin_technical role AND the connection must be the caller's own (T-247; `act.approve`/`reject` answer `not_found` for anyone else's draft, and email proposals must name the mailbox owner as proposer, who must hold that write role). A person proposes it (`proposer_kind = user`); jobs and the assistant cannot.
 - **Content:** `target = {"realm_id": <the connection's realm>}` and `payload = {}` exactly; the database refuses anything else. No tokens, no company name. One pending proposal per connection.
 - **Gate (same as email):** lane policy class `qbo_disconnect` in `core.lane_policies.write_actions_allowed` and `lane_config.approvals.approvals_live`, at approve and at claim. The connection must be the lane's QuickBooks connection, not `disconnected` (a `reconnect_required` one may be disconnected).
 - **Execute (no T-113: inline after the approval, like email):** the connector's approvals-only writer revokes the refresh token at Intuit once (a 400 `invalid_token`/`invalid_grant` counts as already revoked; any other failure keeps the Vault tokens and fails), the Vault deletes the tokens and sets `disconnected`. Read-back: the row is `disconnected` and the Vault hands out no token. `payload_sha256` and `approved_by` come from the claimed row. Failures before the read-back are plain `failed` (propose again); a read-back that mismatches or cannot run is `failed / outcome_unknown`.

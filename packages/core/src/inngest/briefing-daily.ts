@@ -2,7 +2,7 @@ import "server-only";
 // briefing.daily (T-231c, refines T-162): a tick every 15 minutes. For each served lane the injected `dueOwners` decides,
 // from lane_config.briefing (schedule_enabled, default FALSE; time + days, America/New_York, D-32 06:30 Mon-Fri), whether
 // the lane is due in this tick's 15-minute window
-// and which owners still hold the briefing view; each (lane, owner) then runs in its own step with an idempotency id of
+// and which users own an active mailbox and still hold own_mail (T-247: a briefing is per person); each (lane, owner) then runs in its own step with an idempotency id of
 // lane + owner + New York date, so a retried tick never prepares the same day's briefing twice. One run failing never
 // stops the others; the tick fails after all were tried, with lane ids only. core cannot import modules: apps/web injects
 // the run (lib/briefing-run with the job client).

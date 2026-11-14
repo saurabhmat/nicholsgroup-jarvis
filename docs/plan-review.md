@@ -1331,3 +1331,15 @@ Home and Finance read only the current QuickBooks connection (go-live prep, H-06
   - A `pending` QuickBooks row counts as connected in `home_finance_context`, so the connect window shows `no_data` rather than `not_connected` (cosmetic).
   - golive-1 treats `pending` as not live for other lanes but as live for PKG (harmless, inconsistent).
   - golive-0's audit row says actor "service" (operator script, no user id).
+
+## T-247: logged, not fixed (Nov 14, 2026)
+Per-person mail privacy and several Google accounts per user. Review round fixed: old briefings removed at the cut-over, owner/email verification in part 25, per-owner caps, owner role on drafts.
+- **No mailbox reassignment path.** An owner is immutable. A wrongly owned, departed user's, or disconnected-but-owned mailbox cannot move to someone else. A disconnected row that still has an owner blocks other users from connecting that account in the lane (intended: one mailbox, one owner); an admin release/reassign path is a follow-up.
+- **`core.oauth_state_create` provider note.** The provider `google` covers both the native flow and the Composio bind (Composio sets the toolkit later through the service-role bind). A member with `own_mail` can therefore start a Composio state, but the Composio connect itself is switched off for lanes that set `mail.allowed_domains`; lanes without domains keep the old one-account-per-lane-per-toolkit Composio behaviour (second connect replaces the first).
+- **Other lanes need `mail.allowed_domains`.** An empty list allows nothing (fail closed); the exact `mailboxes` list only narrows. PKG's is in part 25; any other lane that connects Google must set it.
+- **Owner column is nullable for mail rows.** An owner-less Google/Microsoft row is invisible to everyone; enforced in code and in part 25's check rather than by a NOT NULL-style constraint (would break ~20 fixtures and later updates).
+- **admin_technical still has no assistant** (gate), so no assistant mail tools for Saurabh.
+- **Per-user priority senders and briefing settings** remain lane-wide.
+- **Connection health is lane-visible** to owner and admin_technical, now including `owner_user_id` and the account address of other people's accounts (no content).
+- **Settings "Loading"**: the connect buttons are plain form POSTs; without JS they work as before (no change), the per-user sections render on the server.
+- **Specs:** only `docs/specs/approvals.md` exists for these modules and was updated; comms, calendar and briefing have no spec files to amend.
