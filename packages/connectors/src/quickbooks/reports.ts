@@ -90,14 +90,35 @@ export function businessDate(ms: number): { y: number; m: number; d: number; iso
   const parts = new Intl.DateTimeFormat("en-CA", { timeZone: BUSINESS_TZ, year: "numeric", month: "2-digit", day: "2-digit" }).formatToParts(new Date(ms));
   const n = (t: string) => Number(parts.find((p) => p.type === t)?.value);
   const y = n("year"), m = n("month"), d = n("day");
-  const two = (v: number) => String(v).padStart(2, "0");
   return { y, m, d, iso: `${String(y)}-${two(m)}-${two(d)}` };
 }
 
-/** The requests for a connection at an instant, for the configured kinds. Pure. */
+const two = (v: number) => String(v).padStart(2, "0");
+const ymd = (y: number, m: number, d: number) => `${String(y)}-${two(m)}-${two(d)}`;
+
+/**
+ * First day (Saturday) of the business week (Sat-Fri, rule 11) that contains a New York calendar date. Pure calendar arithmetic
+ * on the date (UTC fields of a UTC midnight), so no time zone or DST shift can move it.
+ */
+export function businessWeekStart(day: { y: number; m: number; d: number }): string {
+  const t = Date.UTC(day.y, day.m - 1, day.d);
+  const dow = new Date(t).getUTCDay(); // 0 = Sunday ... 6 = Saturday
+  const back = (dow + 1) % 7; // Saturday 0, Sunday 1 ... Friday 6
+  const s = new Date(t - back * 86_400_000);
+  return ymd(s.getUTCFullYear(), s.getUTCMonth() + 1, s.getUTCDate());
+}
+
+/**
+ * The requests for a connection at an instant, for the configured kinds. Pure.
+ *
+ * The P&L is requested for the configured period (as before) AND, so the Finance page and Home can read it, for this business
+ * week to date, this month to date and this calendar year to date (T-244): same end date (today, New York), same method and class
+ * rules. Windows with the same start are one request (Saturday: week = today; the 1st: month = today; Jan 1; year-to-date
+ * configured). The extras come after the configured kinds. Nothing is added to `params` for them: the date range is the key, and
+ * a request of the same range is the same cached figure. Calendar year, not fiscal: no fiscal-year start exists in lane_config.
+ */
 export function planReports(settings: ReportSettings, classTracking: boolean, nowMs: number): ReportRequest[] {
   const today = businessDate(nowMs);
-  const two = (v: number) => String(v).padStart(2, "0");
   let start: string;
   if (settings.period === "year_to_date") {
     start = `${String(today.y)}-01-01`;
@@ -107,14 +128,14 @@ export function planReports(settings: ReportSettings, classTracking: boolean, no
     start = back >= 1 ? `${String(today.y)}-${two(back)}-01` : `${String(today.y - 1)}-${two(back + 12)}-01`;
   }
   const classIds = [...new Set(settings.classIds)].filter((c) => CLASS_ID.test(c)).sort();
-  return QBO_REPORT_KINDS.filter((k) => settings.kinds.includes(k)).map((kind): ReportRequest => {
+  const build = (kind: QboReportKind, from: string): ReportRequest => {
     const def = REPORT_DEFS[kind];
     const query: Record<string, string> = {};
     const params: Record<string, string> = {};
     if (def.window === "range") {
-      query.start_date = start;
+      query.start_date = from;
       query.end_date = today.iso;
-      params.start_date = start;
+      params.start_date = from;
       params.end_date = today.iso;
     } else {
       query.report_date = today.iso;
@@ -133,7 +154,17 @@ export function planReports(settings: ReportSettings, classTracking: boolean, no
       }
     }
     return { kind, path: `/v3/company/{realm}/reports/${def.name}`, query, params };
-  });
+  };
+  const requests = QBO_REPORT_KINDS.filter((k) => settings.kinds.includes(k)).map((kind) => build(kind, start));
+  if (settings.kinds.includes("pnl")) {
+    const seen = new Set([start]);
+    for (const from of [businessWeekStart(today), ymd(today.y, today.m, 1), `${String(today.y)}-01-01`]) {
+      if (seen.has(from)) continue;
+      seen.add(from);
+      requests.push(build("pnl", from));
+    }
+  }
+  return requests;
 }
 
 // ------------------------------------------------------------------------------------------------------ projection

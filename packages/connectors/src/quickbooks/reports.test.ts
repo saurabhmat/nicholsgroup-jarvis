@@ -31,6 +31,8 @@ async function setup(opts: { classTracking?: boolean; accounts?: FakeObject[] } 
   intuit.state.apiRequests.length = 0;
   return { intuit, h, conn };
 }
+/** What the job asks for now: the configured kinds plus the extra P&L windows (week, month; the number depends on today's date). */
+const planned = (h: QboHarness) => planReports(h.reportState.settings, false, h.clock.t);
 const entry = (h: QboHarness, kind: string) => h.reportState.stored.find((e) => e.report === kind)!;
 
 describe("what is asked for: date range, accounting method and class come from lane_config (acceptance)", () => {
@@ -39,14 +41,15 @@ describe("what is asked for: date range, accounting method and class come from l
   const by = (reqs: ReportRequest[], kind: string) => reqs.find((r) => r.kind === kind)!;
 
   it("plans only the listed kinds (the default list leaves out balance_sheet and cash_flow, D-27)", () => {
-    expect(planReports({ ...base, kinds: ["pnl", "ar_aging_summary", "ap_aging_summary"] }, false, NOW).map((r) => r.kind)).toEqual(["pnl", "ar_aging_summary", "ap_aging_summary"]);
+    expect(planReports({ ...base, kinds: ["pnl", "ar_aging_summary", "ap_aging_summary"] }, false, NOW).map((r) => r.kind)).toEqual(["pnl", "ar_aging_summary", "ap_aging_summary", "pnl", "pnl"]);
+    expect(planReports({ ...base, kinds: ["ar_aging_summary", "balance_sheet"] }, false, NOW).map((r) => r.kind)).toEqual(["balance_sheet", "ar_aging_summary"]);
     expect(planReports({ ...base, kinds: [] }, false, NOW)).toEqual([]);
   });
 
   it("plans exactly the five summary reports, GET paths under /reports, with the cache report names", () => {
     const reqs = planReports(base, false, NOW);
-    expect(reqs.map((r) => r.kind)).toEqual([...QBO_REPORT_KINDS]);
-    expect(reqs.map((r) => r.path.split("/").pop())).toEqual(["ProfitAndLoss", "BalanceSheet", "CashFlow", "AgedReceivables", "AgedPayables"]);
+    expect(reqs.map((r) => r.kind)).toEqual([...QBO_REPORT_KINDS, "pnl", "pnl"]); // the extras: week to date (Fri Nov 6: since Sat Oct 31) and month to date
+    expect(reqs.map((r) => r.path.split("/").pop())).toEqual(["ProfitAndLoss", "BalanceSheet", "CashFlow", "AgedReceivables", "AgedPayables", "ProfitAndLoss", "ProfitAndLoss"]);
     expect(QBO_REPORT_KINDS).toEqual(["pnl", "balance_sheet", "cash_flow", "ar_aging_summary", "ap_aging_summary"]);
   });
 
@@ -104,13 +107,85 @@ describe("what is asked for: date range, accounting method and class come from l
   });
 });
 
+describe("P&L windows for Finance and Home (T-244): week, month and year to date, America/New_York", () => {
+  const base: ReportSettings = { method: "accrual", period: "year_to_date", classIds: [], kinds: ALL };
+  const t12: ReportSettings = { ...base, period: "trailing_12_months" };
+  const pnls = (settings: ReportSettings, at: string) => planReports(settings, false, Date.parse(at)).filter((r) => r.kind === "pnl").map((r) => `${r.params.start_date}..${r.params.end_date}`);
+
+  it("a mid-week day: configured year to date (deduplicated), this week since Saturday, this month", () => {
+    // Wed 2026-11-18 -> week starts Sat 2026-11-14
+    expect(pnls(base, "2026-11-18T15:00:00Z")).toEqual(["2026-01-01..2026-11-18", "2026-11-14..2026-11-18", "2026-11-01..2026-11-18"]);
+  });
+
+  it("trailing 12 months stays as configured and the three windows are added", () => {
+    expect(pnls(t12, "2026-11-18T15:00:00Z")).toEqual(["2025-12-01..2026-11-18", "2026-11-14..2026-11-18", "2026-11-01..2026-11-18", "2026-01-01..2026-11-18"]);
+  });
+
+  it("23:30 on the last day of a month in New York is already the next month in UTC: the New York date wins", () => {
+    // 2026-11-30 23:30 EST = 2026-12-01T04:30Z. Monday Nov 30 -> week since Sat Nov 28; month since Nov 1 (not Dec 1)
+    const at = "2026-12-01T04:30:00Z";
+    expect(new Date(at).toISOString().slice(0, 10)).toBe("2026-12-01");
+    expect(pnls(base, at)).toEqual(["2026-01-01..2026-11-30", "2026-11-28..2026-11-30", "2026-11-01..2026-11-30"]);
+  });
+
+  it("an instant just after midnight in New York is the new day", () => {
+    // 2026-12-01 00:30 EST = 05:30Z -> Tuesday Dec 1: month = today
+    expect(pnls(base, "2026-12-01T05:30:00Z")).toEqual(["2026-01-01..2026-12-01", "2026-11-28..2026-12-01", "2026-12-01..2026-12-01"]);
+  });
+
+  it("on a Saturday the week is just today; the week crosses a month boundary", () => {
+    expect(pnls(base, "2026-11-14T15:00:00Z")).toEqual(["2026-01-01..2026-11-14", "2026-11-14..2026-11-14", "2026-11-01..2026-11-14"]);
+    // Tue 2026-12-01 week began Sat 2026-11-28 (previous month); Fri 2026-11-27 week began Sat 2026-11-21
+    expect(pnls(base, "2026-11-27T15:00:00Z")[1]).toBe("2026-11-21..2026-11-27");
+  });
+
+  it("on Jan 1 all windows are the same one request (a Friday: the week began Sat Dec 26, last year)", () => {
+    expect(pnls(base, "2027-01-01T15:00:00Z")).toEqual(["2027-01-01..2027-01-01", "2026-12-26..2027-01-01"]);
+    // Jan 2 2027 is a Saturday: week, month and year are all today's window or the year start
+    expect(pnls(base, "2027-01-02T15:00:00Z")).toEqual(["2027-01-01..2027-01-02", "2027-01-02..2027-01-02"]);
+  });
+
+  it("the month start equals the configured trailing start only when they coincide (no duplicate request)", () => {
+    // Trailing 12 months on 2026-12-15 starts 2026-01-01 = the year start: one request, plus week and month
+    expect(pnls(t12, "2026-12-15T15:00:00Z")).toEqual(["2026-01-01..2026-12-15", "2026-12-12..2026-12-15", "2026-12-01..2026-12-15"]);
+  });
+
+  it("no pnl in the kinds: no extra windows; other kinds are unchanged", () => {
+    const reqs = planReports({ ...base, kinds: ["ar_aging_summary", "cash_flow"] }, false, Date.parse("2026-11-18T15:00:00Z"));
+    expect(reqs.map((r) => r.kind)).toEqual(["cash_flow", "ar_aging_summary"]);
+  });
+
+  it("the extra windows carry the same method and class rules, and no new params key", () => {
+    const withClasses: ReportSettings = { ...base, method: "cash", classIds: ["7"], kinds: ["pnl"] };
+    const on = planReports(withClasses, true, Date.parse("2026-11-18T15:00:00Z"));
+    expect(on).toHaveLength(3);
+    for (const r of on) {
+      expect(Object.keys(r.params).sort()).toEqual(["class", "end_date", "method", "start_date"]);
+      expect(r.params).toMatchObject({ method: "cash", class: "7" });
+      expect(r.query).toMatchObject({ accounting_method: "Cash", class: "7" });
+    }
+    const off = planReports(withClasses, false, Date.parse("2026-11-18T15:00:00Z"));
+    for (const r of off) expect(r.params.unsplit).toBe("class_tracking_off");
+  });
+
+  it("the job fetches and stores each window once (one QuickBooks call per window)", async () => {
+    const { intuit, h, conn } = await setup();
+    await h.reportsJob.run(LANE, conn.id);
+    const want = planned(h).filter((r) => r.kind === "pnl").map((r) => r.params.start_date);
+    expect(new Set(want).size).toBe(want.length);
+    expect(h.reportState.stored.filter((e) => e.report === "pnl").map((e) => e.params.start_date)).toEqual(want);
+    expect(intuit.state.reportRequests.filter((r) => r.name === "ProfitAndLoss")).toHaveLength(want.length);
+  });
+});
+
 describe("a pull: five reports into the cache, GET only (acceptance: stored with params and as_of)", () => {
   it("fetches and stores all five with params, as_of and fetched_at", async () => {
     const { intuit, h, conn } = await setup();
     const out = await h.reportsJob.run(LANE, conn.id);
     expect(out).toMatchObject({ ok: true, skipped: null });
-    expect(h.reportState.stored.map((e) => e.report)).toEqual([...QBO_REPORT_KINDS]);
-    expect(intuit.state.reportRequests.map((r) => r.name)).toEqual(["ProfitAndLoss", "BalanceSheet", "CashFlow", "AgedReceivables", "AgedPayables"]);
+    expect(h.reportState.stored.map((e) => e.report)).toEqual(planned(h).map((r) => r.kind));
+    expect(h.reportState.stored.slice(0, 5).map((e) => e.report)).toEqual([...QBO_REPORT_KINDS]);
+    expect(intuit.state.reportRequests.slice(0, 5).map((r) => r.name)).toEqual(["ProfitAndLoss", "BalanceSheet", "CashFlow", "AgedReceivables", "AgedPayables"]);
     const today = businessDate(h.clock.t).iso;
     expect(entry(h, "pnl").params).toMatchObject({ method: "accrual", end_date: today });
     expect(intuit.state.reportRequests[0]?.query).toMatchObject({ accounting_method: "Accrual", end_date: today });
@@ -129,12 +204,13 @@ describe("a pull: five reports into the cache, GET only (acceptance: stored with
     const { intuit, h, conn } = await setup();
     await h.reportsJob.run(LANE, conn.id);
     await h.reportsJob.run(LANE, conn.id);
-    expect(h.reportState.stored).toHaveLength(5);
+    const n = planned(h).length;
+    expect(h.reportState.stored).toHaveLength(n);
     const first = h.reportState.stored.map((e) => e.asOf);
     intuit.state.reports = syntheticReports(new Date(h.clock.t - 60_000).toISOString().replace(/\.\d{3}Z$/, "Z"));
     await h.reportsJob.run(LANE, conn.id);
-    expect(h.reportState.stored).toHaveLength(10);
-    expect(h.reportState.stored.slice(0, 5).map((e) => e.asOf)).toEqual(first);
+    expect(h.reportState.stored).toHaveLength(2 * n);
+    expect(h.reportState.stored.slice(0, n).map((e) => e.asOf)).toEqual(first);
   });
 
   it("an id that is not digits is dropped (it could trip the database value guard); the row stays", async () => {
@@ -181,8 +257,9 @@ describe("kinds (D-27): fail closed", () => {
   it("only listed kinds are fetched and cached; an empty list fetches nothing", async () => {
     const { intuit, h, conn } = await setup();
     h.reportState.settings = { ...h.reportState.settings, kinds: ["pnl", "ar_aging_summary", "ap_aging_summary"] };
-    expect(await h.reportsJob.run(LANE, conn.id)).toMatchObject({ ok: true, stored: ["pnl", "ar_aging_summary", "ap_aging_summary"] });
-    expect(intuit.state.reportRequests.map((r) => r.name)).toEqual(["ProfitAndLoss", "AgedReceivables", "AgedPayables"]);
+    const extra = planned(h).length - 3;
+    expect(await h.reportsJob.run(LANE, conn.id)).toMatchObject({ ok: true, stored: ["pnl", "ar_aging_summary", "ap_aging_summary", ...Array<string>(extra).fill("pnl")] });
+    expect(intuit.state.reportRequests.map((r) => r.name)).toEqual(["ProfitAndLoss", "AgedReceivables", "AgedPayables", ...Array<string>(extra).fill("ProfitAndLoss")]);
     expect(h.reportState.stored.map((e) => e.report)).not.toContain("balance_sheet");
     const none = await setup();
     none.h.reportState.settings = { ...none.h.reportState.settings, kinds: [] };
@@ -221,7 +298,8 @@ describe("default settings from an empty lane_config", () => {
     const { intuit, h, conn } = await setup();
     h.reportState.settings = await reader.reportSettings(LANE);
     await h.reportsJob.run(LANE, conn.id);
-    expect(intuit.state.reportRequests.map((r) => r.name)).toEqual(["ProfitAndLoss", "AgedReceivables", "AgedPayables"]);
+    const extra = planned(h).length - 3;
+    expect(intuit.state.reportRequests.map((r) => r.name)).toEqual(["ProfitAndLoss", "AgedReceivables", "AgedPayables", ...Array<string>(extra).fill("ProfitAndLoss")]);
   });
 });
 
@@ -324,7 +402,7 @@ describe("the stored projection: strict allowlist, flat, Id kept (acceptance)", 
     intuit.state.reports.CashFlow = { Header: "not an object", Rows: { Row: [{ ColData: "oops SECRET-ROW-TEXT" }] } };
     const out = await h.reportsJob.run(LANE, conn.id);
     expect(out).toMatchObject({ ok: false, retryable: false, errorKind: "provider_error" });
-    expect(h.reportState.stored.map((e) => e.report)).toEqual(["pnl", "balance_sheet", "ar_aging_summary", "ap_aging_summary"]);
+    expect(h.reportState.stored.map((e) => e.report)).toEqual(planned(h).map((r) => r.kind).filter((k) => k !== "cash_flow"));
     expect(text(out)).not.toContain("SECRET-ROW-TEXT");
     expect(text(h.logs)).not.toContain("SECRET-ROW-TEXT");
   });
@@ -458,8 +536,8 @@ describe("lane and connection safety", () => {
     const { h, conn } = await setup();
     h.reportState.failStore = { reports: ["cash_flow"], kind: "provider_error" };
     const out = await h.reportsJob.run(LANE, conn.id);
-    expect(out).toMatchObject({ ok: false, retryable: false, errorKind: "provider_error", stored: ["pnl", "balance_sheet", "ar_aging_summary", "ap_aging_summary"] });
-    expect(h.reportState.stored).toHaveLength(4);
+    expect(out).toMatchObject({ ok: false, retryable: false, errorKind: "provider_error", stored: planned(h).map((r) => r.kind).filter((k) => k !== "cash_flow") });
+    expect(h.reportState.stored).toHaveLength(planned(h).length - 1);
   });
 
   it("a transient failure is not hidden by an earlier permanent one (the run is retried)", async () => {

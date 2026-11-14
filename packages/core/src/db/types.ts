@@ -729,6 +729,21 @@ isOneToOne: false
 "fin_report_cache_put":
 { Args: { "p_as_of": string,"p_connection_id": string,"p_fetched_at": string,"p_lane": string,"p_params": Json,"p_payload": Json,"p_report": string }; Returns: string
                            },
+"finance_overview":
+{ Args: { "p_lane": string }; Returns: {
+              "ar_invoices": number,"ar_total": number,"as_of": string,"connection_status": string,"last_normalized_at": string,"last_sync_at": string,"reports": Json,"state": string,"unmapped_bills_open": number
+            }[]
+                           },
+"finance_pnl":
+{ Args: { "p_lane": string,"p_period": string }; Returns: {
+              "as_of": string,"connection_status": string,"last_sync_at": string,"period": string,"pnl_as_of": string,"pnl_end": string,"pnl_expenses": number,"pnl_income": number,"pnl_method": string,"pnl_net": number,"pnl_partial": boolean,"pnl_reason": string,"pnl_start": string,"state": string,"window_end": string,"window_start": string
+            }[]
+                           },
+"finance_pnl_window":
+{ Args: { "p_connections": (string)[],"p_end_from": string,"p_end_to": string,"p_lane": string,"p_mapping_mode": string,"p_start": string }; Returns: {
+              "pnl_as_of": string,"pnl_end": string,"pnl_expenses": number,"pnl_income": number,"pnl_method": string,"pnl_net": number,"pnl_partial": boolean,"pnl_reason": string,"pnl_start": string
+            }[]
+                           },
 "has_lane_role":
 { Args: { "p_lane": string,"p_roles": (string)[],"p_uid": string }; Returns: boolean
                            },

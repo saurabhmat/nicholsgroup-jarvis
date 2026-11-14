@@ -8,6 +8,7 @@ import { createConnectorLogger, type LogEntry } from "../log/index";
 import { createQboNormalizeJob } from "../quickbooks/normalize-job";
 import type { NormalizeResult } from "../quickbooks/normalize-store";
 import { createQboReportsJob } from "../quickbooks/reports-job";
+import { planReports } from "../quickbooks/reports";
 import type { SyncRunFinish, SyncRunStore, SyncJob } from "./types";
 
 const ID = "00000000-0000-4000-8000-0000000000c1";
@@ -90,6 +91,7 @@ describe("normalizer run log", () => {
 });
 
 describe("report pull run log", () => {
+  const CLOCK = Date.parse("2026-11-18T15:00:00Z"); // a Wednesday: week, month and year windows all differ
   const settings = (kinds: string[]) => ({ kinds, method: "Accrual", period: "month_to_date" } as never);
   const mk = (runs: SyncRunStore, opts: { kinds?: string[]; api?: unknown; settingsThrow?: boolean; conn?: ReturnType<typeof mint> } = {}) => {
     const l = logs();
@@ -101,6 +103,7 @@ describe("report pull run log", () => {
       payroll: async () => ({ accountIds: [], accountSubtypes: [], excludedEntityIds: [] }),
       logger: l.logger,
       runs,
+      now: () => CLOCK,
     });
   };
 
@@ -134,7 +137,7 @@ describe("report pull run log", () => {
       throw new ConnectorError({ kind: "transient", message: "x", http_status: 503 });
     } };
     await mk(r.store, { kinds: ["pnl", "balance_sheet"], api }).run("PKG", ID);
-    expect(n).toBe(2);
+    expect(n).toBe(planReports(settings(["pnl", "balance_sheet"]) as never, false, CLOCK).length); // every planned report is tried: pnl, balance_sheet and the extra P&L windows (T-244)
     expect(r.finished[0]).toMatchObject({ status: "failed", received: 0, written: 0 });
   });
   it("the caller's trigger is recorded", async () => {
