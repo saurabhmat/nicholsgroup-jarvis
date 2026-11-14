@@ -31,4 +31,24 @@ describe("Finance card error boundary", () => {
       log.mockRestore();
     }
   });
+
+  it("a card that failed recovers when the period link changes (the boundary is keyed on the period)", () => {
+    const d = data();
+    const broken: FinanceData = {
+      ...d,
+      get pnl(): FinanceData["pnl"] {
+        throw new TypeError("synthetic failure");
+      },
+    };
+    const log = vi.spyOn(console, "error").mockImplementation(() => undefined);
+    try {
+      const view = render(<FinanceView laneId="PKG" laneName="Pub K Group" period="mtd" data={broken} />);
+      expect(card("Net income").textContent).toContain("Could not load");
+      view.rerender(<FinanceView laneId="PKG" laneName="Pub K Group" period="ytd" data={data({}, "ytd")} />);
+      expect(card("Net income").textContent).not.toContain("Could not load");
+      expect(card("Net income").textContent).toContain("$600.00");
+    } finally {
+      log.mockRestore();
+    }
+  });
 });

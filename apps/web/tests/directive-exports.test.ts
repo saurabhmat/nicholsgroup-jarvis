@@ -13,8 +13,8 @@ import ts from "typescript";
 import { describe, expect, it } from "vitest";
 
 const ROOT = fileURLToPath(new URL("../../../", import.meta.url));
-const SCAN = ["apps/web/app", "apps/web/components", "apps/web/lib", "packages"];
-const SKIP_DIR = new Set(["node_modules", "dist", ".next", ".turbo", "coverage"]);
+const SCAN = ["apps/web", "packages"];
+const SKIP_DIR = new Set(["node_modules", "dist", ".next", ".turbo", "coverage", "test-results", "e2e", "public"]);
 const DIRECTIVE_HEAD = /^\s*(\/\/[^\n]*\n|\/\*[\s\S]*?\*\/\s*)*\s*["']use (client|server)["']/;
 const COMPONENT_WRAPPERS = new Set(["memo", "forwardRef", "lazy"]);
 
@@ -78,6 +78,22 @@ export function badExports(code: string, fileName = "x.tsx"): string[] {
   if (directive === null) return [];
   const server = directive === "use server";
   const bad: string[] = [];
+  // Top-level names bound to a component (client) or an async function (server): `export default X` must name one of them.
+  const componentNames = new Set<string>();
+  const asyncNames = new Set<string>();
+  for (const st of sf.statements) {
+    if ((ts.isFunctionDeclaration(st) || ts.isClassDeclaration(st)) && st.name) {
+      componentNames.add(st.name.text);
+      if (ts.isFunctionDeclaration(st) && isAsync(st)) asyncNames.add(st.name.text);
+    }
+    if (ts.isVariableStatement(st)) {
+      for (const d of st.declarationList.declarations) {
+        if (!ts.isIdentifier(d.name)) continue;
+        if (isComponentValue(d.initializer)) componentNames.add(d.name.text);
+        if (isAsyncFunctionValue(d.initializer)) asyncNames.add(d.name.text);
+      }
+    }
+  }
   for (const st of sf.statements) {
     if (ts.isTypeAliasDeclaration(st) || ts.isInterfaceDeclaration(st)) continue;
     if (ts.isFunctionDeclaration(st) && hasExport(st)) {
@@ -102,7 +118,7 @@ export function badExports(code: string, fileName = "x.tsx"): string[] {
     }
     if (ts.isExportAssignment(st)) {
       const e = st.expression;
-      const ok = server ? isAsyncFunctionValue(e) : ts.isIdentifier(e) || isComponentValue(e);
+      const ok = server ? isAsyncFunctionValue(e) || (ts.isIdentifier(e) && asyncNames.has(e.text)) : (ts.isIdentifier(e) && componentNames.has(e.text)) || isComponentValue(e);
       if (!ok) bad.push("default (export default value)");
       continue;
     }
@@ -115,13 +131,65 @@ export function badExports(code: string, fileName = "x.tsx"): string[] {
   return bad;
 }
 
-const EXT = ["", ".ts", ".tsx", "/index.ts", "/index.tsx"];
+/** A workspace import the check could not resolve: reported, so a client module behind it cannot be skipped silently. */
+const UNRESOLVED = "<unresolved>";
+const EXT = ["", ".ts", ".tsx", ".js", ".mjs", "/index.ts", "/index.tsx"];
+
+type Pkg = { dir: string; exports: Record<string, unknown> };
+let packages: Map<string, Pkg> | undefined;
+/** The workspace packages by name (packages/* and packages/modules/*), with their package.json `exports`. */
+function workspacePackages(): Map<string, Pkg> {
+  if (packages) return packages;
+  packages = new Map();
+  const dirs = [join(ROOT, "packages"), join(ROOT, "packages/modules")];
+  for (const parent of dirs) {
+    for (const name of readdirSync(parent)) {
+      const dir = join(parent, name);
+      try {
+        const pj = JSON.parse(readFileSync(join(dir, "package.json"), "utf8")) as { name?: string; exports?: Record<string, unknown> };
+        if (pj.name) packages.set(pj.name, { dir, exports: pj.exports ?? {} });
+      } catch {
+        /* not a package */
+      }
+    }
+  }
+  return packages;
+}
+
+const exportTarget = (v: unknown): string | null => {
+  if (typeof v === "string") return v;
+  if (v && typeof v === "object") for (const k of ["import", "default", "types"]) { const t = exportTarget((v as Record<string, unknown>)[k]); if (t) return t; }
+  return null;
+};
+
+/** `@nichols/x[/sub]` through the package's exports map (exact key, then one `*` pattern). Null when it cannot be resolved. */
+function resolvePackage(spec: string): string | null {
+  const m = /^(@nichols\/[^/]+)(\/.*)?$/.exec(spec);
+  if (!m?.[1]) return null;
+  const pkg = workspacePackages().get(m[1]);
+  if (!pkg) return null;
+  const key = `.${m[2] ?? ""}`;
+  let target = exportTarget(pkg.exports[key]);
+  if (!target) {
+    for (const [k, v] of Object.entries(pkg.exports)) {
+      const star = k.indexOf("*");
+      if (star < 0 || !key.startsWith(k.slice(0, star)) || !key.endsWith(k.slice(star + 1))) continue;
+      const t = exportTarget(v);
+      if (t) target = t.replace("*", key.slice(star, key.length - (k.length - star - 1)));
+      break;
+    }
+  }
+  return target ? join(pkg.dir, target) : null;
+}
+
 function resolveImport(from: string, spec: string): string | null {
   let base: string;
   if (spec.startsWith("@/")) base = join(ROOT, "apps/web", spec.slice(2));
-  else if (spec.startsWith("@nichols/ui/components/")) base = join(ROOT, "packages/ui/src/components", spec.slice("@nichols/ui/components/".length));
-  else if (spec === "@nichols/ui") base = join(ROOT, "packages/ui/src/index.ts");
-  else if (spec.startsWith(".")) base = join(from, "..", spec);
+  else if (spec.startsWith("@nichols/")) {
+    const r = resolvePackage(spec);
+    if (r === null) return UNRESOLVED;
+    base = r;
+  } else if (spec.startsWith(".")) base = join(from, "..", spec);
   else return null;
   for (const e of EXT) {
     try {
@@ -130,7 +198,7 @@ function resolveImport(from: string, spec: string): string | null {
       /* next extension */
     }
   }
-  return null;
+  return spec.startsWith("@nichols/") || spec.startsWith("@/") || spec.startsWith(".") ? UNRESOLVED : null;
 }
 
 /**
@@ -155,6 +223,10 @@ export function clientHelperImports(file: string, code: string, isClient: (resol
     }
     if (spec === null) continue;
     const target = resolveImport(file, spec);
+    if (target === UNRESOLVED) {
+      bad.push(`${spec} (cannot resolve)`);
+      continue;
+    }
     if (target === null || !isClient(target)) continue;
     for (const n of names) if (!/^[A-Z]/.test(n) || /^[A-Z0-9_]+$/.test(n)) bad.push(`${n} from ${spec}`);
   }
@@ -166,6 +238,8 @@ describe("directive module exports (T-245)", () => {
     expect(badExports(`"use client";\nexport const PERIODS = [{ key: "mtd" }] as const;\nexport function T() { return null; }`)).toEqual(["PERIODS (not a component)"]);
     expect(badExports(`'use client'\nexport const LABEL = "x"; export enum E { A }`)).toEqual(["LABEL (not a component)", "E (enum)"]);
     expect(badExports(`"use client";\nexport { X } from "./x";\nexport type { Y } from "./y";`)).toEqual(["X (re-export)"]);
+    expect(badExports(`"use client";\nconst LIST = [1];\nexport default LIST;`)).toEqual(["default (export default value)"]);
+    expect(badExports(`"use client";\nfunction Page() { return null; }\nexport default Page;`)).toEqual([]);
     expect(badExports(`"use server";\nexport function sync() {}\nexport const LIMIT = 3;\nexport async function ok() {}\nexport const ok2 = async () => {};`)).toEqual([
       "sync (not async)",
       "LIMIT (not an async function)",
@@ -197,10 +271,8 @@ describe("directive module exports (T-245)", () => {
     const all = SCAN.flatMap((d) => sourceFiles(join(ROOT, d)));
     const code = new Map(all.map((f) => [f, readFileSync(f, "utf8")]));
     const client = new Set(all.filter((f) => DIRECTIVE_HEAD.test(code.get(f) ?? "") && directiveOf(ts.createSourceFile(f, code.get(f) ?? "", ts.ScriptTarget.Latest)) === "use client"));
-    // Only files that mention a client module's name can import it (keeps the full parse to a few files).
-    const stems = [...client].map((f) => f.slice(f.lastIndexOf("/") + 1).replace(/\.tsx?$/, ""));
     const offenders = all
-      .filter((f) => !client.has(f) && (stems.some((s) => (code.get(f) ?? "").includes(s)) || (code.get(f) ?? "").includes("@nichols/ui\"")))
+      .filter((f) => !client.has(f))
       .flatMap((f) => clientHelperImports(f, code.get(f) ?? "", (t) => client.has(t)).map((b) => `${relative(ROOT, f)}: ${b}`));
     expect(client.size).toBeGreaterThan(10);
     expect(offenders).toEqual([]);
@@ -214,5 +286,10 @@ describe("directive module exports (T-245)", () => {
       "periodLabel from @nichols/ui/components/period-toggle",
     ]);
     expect(clientHelperImports(page, `"use client";\nimport { periodLabel } from "@nichols/ui/components/period-toggle";`, isClient)).toEqual([]);
+    expect(clientHelperImports(page, `import { x } from "@nichols/no-such-package";\nimport { y } from "./no-such-file";`, () => false)).toEqual([
+      "@nichols/no-such-package (cannot resolve)",
+      "./no-such-file (cannot resolve)",
+    ]);
+    expect(clientHelperImports(page, `import { PERIODS } from "@nichols/ui/lib/periods";\nimport { guards } from "@/lib/guards";`, () => false)).toEqual([]);
   });
 });

@@ -2,8 +2,9 @@
 // T-245: one failing Finance card or section must not take down the page. A server component that throws is sent to the client as
 // an error at its own position. During server rendering the Suspense boundary contains it (React sends the "Loading" fallback and
 // retries on the client), and on the client this error boundary catches it and shows "could not load". The Suspense fallback is a
-// neutral "Loading": React also streams large boundaries after the shell, so the fallback can show briefly on a healthy page. Only the
-// error's name is logged: no figures, ids or messages (rule 4).
+// neutral "Loading": React also streams large boundaries after the shell, so the fallback can show briefly on a healthy page. This
+// boundary's own log line carries the card label and the error's name only. React's default caught-error log in the browser console
+// still prints the error; in production Next replaces server component messages with a digest.
 import { Component, Suspense, type ReactNode } from "react";
 import { KpiCard, PageSection } from "@nichols/ui";
 

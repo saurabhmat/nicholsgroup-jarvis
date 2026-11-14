@@ -308,27 +308,28 @@ export function FinanceView({ laneId, laneName, period, data }: { laneId: string
     <div className="flex flex-col gap-6">
       {header}
       {note ? <p data-testid="finance-connection-note" className="text-small text-muted-foreground">{note}</p> : null}
+      {/* Keyed on the period: a card that failed gets a fresh boundary when the period link changes (soft navigation). */}
       <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
         {KPI_CARDS.map(({ key, label, Card }) => (
-          <CardBoundary key={key} label={label} kind="kpi">
+          <CardBoundary key={`${key}-${period}`} label={label} kind="kpi">
             <Card laneId={laneId} period={period} data={data} />
           </CardBoundary>
         ))}
       </div>
       <div className="grid gap-6 lg:grid-cols-2">
         <PageSection title="Subscriptions" note="Revenue: Stripe · Subscribers: GoHighLevel" emptyTitle="No subscription data yet" emptyDescription="MRR, revenue churn and paid subscribers appear here once the payment and subscriber sources are connected." />
-        <CardBoundary label="Receivables aging" kind="section">
+        <CardBoundary key={period} label="Receivables aging" kind="section">
           <AgingSection finance={data.finance} detail={data.detail} overview={data.overview} />
         </CardBoundary>
       </div>
-      <CardBoundary label="Cash by account" kind="section">
+      <CardBoundary key={period} label="Cash by account" kind="section">
         <CashSection finance={data.finance} />
       </CardBoundary>
       <div className="grid gap-6 lg:grid-cols-2">
-        <CardBoundary label="Controls" kind="section">
+        <CardBoundary key={period} label="Controls" kind="section">
           <ControlsSection data={data} />
         </CardBoundary>
-        <CardBoundary label="Reports" kind="section">
+        <CardBoundary key={period} label="Reports" kind="section">
           <ReportsSection data={data} />
         </CardBoundary>
       </div>
