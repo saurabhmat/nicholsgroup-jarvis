@@ -6,6 +6,7 @@ import { ConnectorError } from "../contract/errors";
 import { assertStatusUsable } from "../contract/guards";
 import { assertLaneBound, type LaneBoundConnection } from "../contract/lane-bound";
 import type { LaneConfigReader } from "../vault/lane-config";
+import { assertMailAccountAllowed, readMailPolicy } from "../vault/mail-policy";
 
 export type GoogleConnection = LaneBoundConnection<"google">;
 
@@ -25,8 +26,8 @@ export function assertGoogleHost(baseUrl: string, allowed: ReadonlySet<string>):
 export type ProviderGuardDeps = {
   /** The authoritative connection row (status, lane, provider), read on every call. */
   connections: { load(laneId: LaneId, connectionId: string): Promise<LaneBoundConnection<string>> };
-  /** `mailboxes` is re-read on every call that reaches Google (a mailbox removed from the lane stops working at once). */
-  laneConfig: Pick<LaneConfigReader, "mailboxes">;
+  /** The mail policy (`mail.allowed_domains`, optional `mailboxes`) is re-read on every call that reaches Google (an account removed from the lane stops working at once). */
+  laneConfig: Pick<LaneConfigReader, "mailboxes" | "mailDomains">;
 };
 
 /**
@@ -43,11 +44,9 @@ export function createProviderGuard(deps: ProviderGuardDeps) {
     if (row.id !== conn.id) throw new ConnectorError({ kind: "lane_mismatch", message: "Connection row does not match" });
     assertStatusUsable(row.status);
     if (opts.mailbox) {
-      // Fail closed: a mailbox no longer on the lane's list (or an empty list) is not read.
-      const allowed = await deps.laneConfig.mailboxes(laneId);
-      if (!allowed.includes(row.external_account_id.toLowerCase())) {
-        throw new ConnectorError({ kind: "forbidden", message: "This mailbox is not one of the lane's configured mailboxes" });
-      }
+      // Fail closed (T-247): an account whose domain is not allowed for the lane (or an empty domain list), or that is no longer on the
+      // lane's exact mailbox list when it keeps one, is not read. This is in addition to D-23 and to the connect-time check.
+      assertMailAccountAllowed(await readMailPolicy(deps.laneConfig, laneId), row.external_account_id);
     }
     return row;
   };

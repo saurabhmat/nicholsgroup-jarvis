@@ -199,7 +199,7 @@ describe("callback", () => {
 
 describe("provider wiring", () => {
   it("only Gmail's host is called for the profile, and the endpoints are Google's", async () => {
-    const p = createGoogleOAuthProvider({ client: () => ({ clientId: "id", clientSecret: new SecretValue("synthetic-secret-0001"), redirectUri: REDIRECT }), laneConfig: { mailboxes: async () => [EXEC] } });
+    const p = createGoogleOAuthProvider({ client: () => ({ clientId: "id", clientSecret: new SecretValue("synthetic-secret-0001"), redirectUri: REDIRECT }), laneConfig: { mailboxes: async () => [EXEC], mailDomains: async () => [EXEC.split("@")[1] as string] } });
     expect(await p.endpoints("PKG")).toEqual({ authorization: "https://accounts.google.com/o/oauth2/v2/auth", token: "https://oauth2.googleapis.com/token" });
     expect(p.client().tokenAuth).toBe("post");
     expect(p.scopes).toEqual(GOOGLE_SCOPES);

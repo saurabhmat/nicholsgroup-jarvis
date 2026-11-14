@@ -2,7 +2,7 @@ import "server-only";
 // The approvals module over the real lane router, audit and Google connector (T-232). Server only; a separate subpath
 // (`@nichols/approvals/wire`) so tests of the module logic never import the connector wiring. The job client bypasses RLS:
 // every call below passes the lane and the database re-checks it (act.* functions are lane-scoped definer functions).
-import { prepareEmailWrite, laneMailboxes } from "@nichols/connectors/google";
+import { prepareEmailWrite, laneMailboxes, mailboxAllowed } from "@nichols/connectors/google";
 import { googleEmailReconciler, googleEmailWriter, loadGoogleWriteConnection, loadQuickbooksWriteConnection, quickbooksDisconnectVerifier, quickbooksWriter } from "@nichols/connectors/write";
 import type { LaneId } from "@nichols/core";
 import { getAudit, getLaneJobClient } from "@nichols/core/lane-router";
@@ -59,6 +59,7 @@ export const approvalsDeps: ApprovalsPublicDeps = Object.freeze({
   jobRpc,
   prepareEmailWrite,
   laneMailboxes,
+  mailboxAllowed,
   readFacts,
   audit: getAudit(),
 });

@@ -30,7 +30,7 @@ export type ComposioConnectDeps = {
   composio: GuardedComposio;
   states: StateStore;
   connections: ComposioConnectionStore;
-  laneConfig: Pick<LaneConfigReader, "mailboxes">;
+  laneConfig: Pick<LaneConfigReader, "mailboxes" | "mailDomains">;
   /** The toolkit's auth config id from configuration, or null when not configured. Never hard-coded. */
   authConfigId(toolkit: Toolkit): string | null;
   /** The app origin the callback URL is built on (the app's own origin; https outside local). */
@@ -62,6 +62,17 @@ export type ComposioAvailability = Record<Toolkit, boolean>;
 export function createComposioConnect(deps: ComposioConnectDeps) {
   const log = () => (deps.logger ?? connectorLog).child({ provider: COMPOSIO_PROVIDER });
 
+  /**
+   * T-247: a lane that uses the per-person domain rule (`lane_config.mail.allowed_domains`) does not use the Composio connect yet. Composio
+   * allows ONE account per lane per toolkit and replaces the earlier one, so a second person's connect would silently replace the first
+   * person's account; per-person, several-account Composio comes later (after H-041). Fail closed: an unreadable config refuses too.
+   */
+  async function assertDomainRuleOff(laneId: LaneId): Promise<void> {
+    if ((await deps.laneConfig.mailDomains(laneId)).length > 0) {
+      throw new ConnectorError({ kind: "forbidden", message: "The Composio connect is off for lanes that allow mail domains" });
+    }
+  }
+
   async function mailboxes(laneId: LaneId): Promise<string[]> {
     const list = await deps.laneConfig.mailboxes(laneId);
     if (list.length === 0) throw new ConnectorError({ kind: "forbidden", message: "No mailboxes are configured for this lane" });
@@ -75,6 +86,7 @@ export function createComposioConnect(deps: ComposioConnectDeps) {
       const { userId, client } = await authorize(laneId);
       const authConfigId = deps.authConfigId(toolkit);
       if (!authConfigId) throw new ConnectorError({ kind: "connection_unavailable", message: "This toolkit is not configured" });
+      await assertDomainRuleOff(laneId);
       await mailboxes(laneId); // fail closed: a lane with no mailbox list never starts a connect
       const origin = deps.appOrigin();
       const state = newState(laneId, deps.random);
@@ -141,6 +153,7 @@ export function createComposioConnect(deps: ComposioConnectDeps) {
           if (!expectedConfig || account.authConfigId !== expectedConfig) throw new Refused(new ConnectorError({ kind: "forbidden", message: "The Composio account is from a different auth config" }));
           const owned = await call(() => deps.composio.listAccountIds({ userId, authConfigId: expectedConfig }));
           if (!owned.includes(accountRef)) throw new Refused(new ConnectorError({ kind: "forbidden", message: "The Composio account does not belong to this user" }));
+          await refuseOrOutage(() => assertDomainRuleOff(laneId));
           const allowed = await refuseOrOutage(() => mailboxes(laneId));
           const res = await call(() => deps.composio.execute(toolkit, TOOLKIT_SPECS[toolkit].identityTool, { userId, accountId: accountRef, arguments: {} }));
           const identity = res.successful ? extractIdentity(res.data) : null;

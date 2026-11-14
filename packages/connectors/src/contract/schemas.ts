@@ -172,6 +172,8 @@ export function buildProviderSchemas<P extends z.ZodType<string>>(provider: P) {
     token_expires_at: InstantSchema.nullable(),
     last_sync_at: InstantSchema.nullable(),
     last_error: ConnectorErrorInfoSchema.nullable(),
+    /** T-247: the user who owns this mail/calendar connection (Google, Microsoft); null/absent for the other providers. Set at connect time, never changed. */
+    owner_user_id: z.uuid().nullable().optional(),
   });
 
   /** Envelope for every live read: provenance, `as_of` and freshness (architecture §2 principle 6). */

@@ -71,7 +71,7 @@ function fakeGmail() {
   return { api, http, messages, calls, queries, state, posts: () => calls.filter((c) => c.method === "POST") };
 }
 
-function setup(over: { features?: Record<string, boolean>; mailboxes?: string[]; status?: Connection<"google">["status"]; claimOpen?: boolean } = {}) {
+function setup(over: { features?: Record<string, boolean>; mailboxes?: string[]; status?: Connection<"google">["status"]; claimOpen?: boolean; owner?: string | null; domains?: string[] } = {}) {
   const gmail = fakeGmail();
   const claimChecks: { actionId: string; hash: string; approvedBy: string }[] = [];
   const row = {
@@ -85,13 +85,14 @@ function setup(over: { features?: Record<string, boolean>; mailboxes?: string[];
     token_expires_at: null,
     last_sync_at: null,
     last_error: null,
+    owner_user_id: over.owner === undefined ? APPROVER : over.owner, // T-247: only the mailbox's owner (the approver) sends from it
   } as unknown as Connection<"google">;
   const conn = mintLaneBoundConnection<"google">(row);
   const writer = createGoogleEmailWriter({
     connections: { load: async () => mintLaneBoundConnection<"google">({ ...row, features: { ...row.features } }) as LaneBoundConnection<string> },
     tokens: { accessToken: async () => new SecretValue("synthetic-access-token"), refreshToken: async () => new SecretValue("synthetic-refresh-token") },
     api: gmail.api,
-    laneConfig: { mailboxes: async () => over.mailboxes ?? [MAILBOX] },
+    laneConfig: { mailboxes: async () => over.mailboxes ?? [MAILBOX], mailDomains: async () => over.domains ?? [MAILBOX.split("@")[1] as string] },
     claims: {
       claimOpen: async (_lane, actionId, hash, approvedBy) => {
         claimChecks.push({ actionId, hash, approvedBy });
@@ -254,6 +255,22 @@ describe("refusals happen before any Gmail request", () => {
     const { gmail, conn, writer, action } = setup({ mailboxes: ["someone@else.example.test"] });
     await expect(writer.executeWrite("PKG", conn, action())).rejects.toBeInstanceOf(ConnectorError);
     expect(gmail.calls).toEqual([]);
+  });
+
+  it("T-247: only the mailbox's owner sends from it: an approver who is not the owner (or a row with no owner) is refused before any call", async () => {
+    for (const owner of ["00000000-0000-4000-8000-0000000000b9", null]) {
+      const { gmail, conn, writer, action } = setup({ owner });
+      await expect(writer.executeWrite("PKG", conn, action())).rejects.toMatchObject({ info: { kind: "forbidden", message: "Only the mailbox's owner can send from it" } });
+      expect(gmail.calls).toEqual([]);
+    }
+  });
+
+  it("T-247: a sender whose domain is not allowed for the lane (or an empty domain list) is refused before any call", async () => {
+    for (const domains of [["elsewhere.example.test"], []]) {
+      const { gmail, conn, writer, action } = setup({ domains });
+      await expect(writer.executeWrite("PKG", conn, action())).rejects.toMatchObject({ info: { kind: "forbidden" } });
+      expect(gmail.calls).toEqual([]);
+    }
   });
 
   it("another lane or connection id on the action", async () => {

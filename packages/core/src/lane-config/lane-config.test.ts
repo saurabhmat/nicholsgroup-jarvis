@@ -293,3 +293,31 @@ describe("T-240: briefing.attention.fresh_hours, deadline_subjects, own_domain_b
     expect(parse({ deadline_subjects: [""] }).success).toBe(false);
   });
 });
+
+describe("mail section (T-247)", () => {
+  it("defaults to empty lists (fail closed): no domain is allowed until a lane lists it", () => {
+    const c = parseLaneConfig(VALID);
+    expect(c.mail).toEqual({ allowed_domains: [], self_connect_domains: [] });
+  });
+  it("accepts lower-case domains for both keys", () => {
+    const c = parseLaneConfig({ ...VALID, mail: { allowed_domains: ["example.test", "mail.example.test"], self_connect_domains: ["gmail.example.test"] } });
+    expect(c.mail.allowed_domains).toEqual(["example.test", "mail.example.test"]);
+    expect(c.mail.self_connect_domains).toEqual(["gmail.example.test"]);
+  });
+  it.each([["Example.Test"], ["example"], ["@example.test"], ["https://example.test"], ["*.example.test"], ["example.test/path"], ["ex ample.test"], [" example.test"], ["example..test"], ["-a.example.test"]])(
+    "rejects %j as a domain",
+    (d) => {
+      expect(() => parseLaneConfig({ ...VALID, mail: { allowed_domains: [d] } })).toThrow();
+      expect(() => parseLaneConfig({ ...VALID, mail: { self_connect_domains: [d] } })).toThrow();
+    },
+  );
+  it("rejects unknown keys and more than 20 entries", () => {
+    expect(() => parseLaneConfig({ ...VALID, mail: { allowed: ["example.test"] } })).toThrow();
+    expect(() => parseLaneConfig({ ...VALID, mail: { allowed_domains: Array.from({ length: 21 }, (_, i) => `d${String(i)}.example.test`) } })).toThrow();
+  });
+  it("keeps the exact mailbox list next to it", () => {
+    const c = parseLaneConfig({ ...VALID, mail: { allowed_domains: ["example.test"] } });
+    expect(c.mailboxes).toEqual(["ops@example.test"]);
+    expect(c.mail.allowed_domains).toEqual(["example.test"]);
+  });
+});

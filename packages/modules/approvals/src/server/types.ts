@@ -14,8 +14,9 @@ export type ActionType = (typeof ACTION_TYPES)[number];
 export const isEmailType = (t: ActionType): t is EmailActionType => (EMAIL_ACTION_TYPES as readonly string[]).includes(t);
 /** The roles that may propose, approve and reject an action type (mirrors act.write_roles in the database). */
 export const WRITE_ROLES: Readonly<Record<ActionType, readonly ["owner"] | readonly ["owner", "admin_technical"]>> = {
-  "email.send": ["owner"],
-  "email.save_draft": ["owner"],
+  // T-247: whoever owns the mailbox (the database also requires the connection to be the caller's own).
+  "email.send": ["owner", "admin_technical"],
+  "email.save_draft": ["owner", "admin_technical"],
   "qbo.disconnect": ["owner", "admin_technical"],
 };
 export type ActionStatus = "proposed" | "approved" | "executing" | "verified" | "failed" | "rejected" | "expired" | "invalidated";
@@ -86,8 +87,10 @@ export type ApprovalsDeps = {
   jobRpc(laneId: LaneId): Promise<Rpc>;
   /** Builds the proposed payload for an email action and loads the connection (no external effect). */
   prepareEmailWrite(laneId: LaneId, connectionId: string, intent: { action_type: EmailActionType; compose: Record<string, unknown> }): Promise<ProposedEmail>;
-  /** `lane_config.mailboxes` of the lane, lower-cased. */
+  /** The lane's own mail addresses, lower-cased (configured list plus connected accounts): for "never reply to ourselves". */
   laneMailboxes(laneId: LaneId): Promise<string[]>;
+  /** T-247: whether this address may be a sender in the lane (allowed domain, and the exact list when the lane keeps one). */
+  mailboxAllowed(laneId: LaneId, address: string): Promise<boolean>;
   readFacts(laneId: LaneId, connectionId: string): Promise<CapabilityFacts>;
   loadWriteConnection(laneId: LaneId, connectionId: string): Promise<LaneBoundConnection<"google">>;
   writer: GoogleEmailWriter;

@@ -18,7 +18,7 @@ const USER = "11111111-1111-4111-8111-111111111111";
 const LANE = "PKG";
 const BOSS = "boss@pkg.example.test";
 
-function harness(opts: { mailboxes?: string[]; authConfig?: string | null } = {}) {
+function harness(opts: { mailboxes?: string[]; mailDomains?: string[]; authConfig?: string | null } = {}) {
   const calls: string[] = [];
   const accounts = new Map<string, ComposioAccount>();
   const tools = new Map<string, { successful: boolean; data: Record<string, unknown> }>();
@@ -103,7 +103,7 @@ function harness(opts: { mailboxes?: string[]; authConfig?: string | null } = {}
   const audits: AuditEntry[] = [];
   const audit: Audit = { async log(e) { audits.push(e); } };
   const laneMailboxes = opts.mailboxes ?? [BOSS];
-  const laneConfig = { async mailboxes() { return laneMailboxes; } };
+  const laneConfig = { async mailboxes() { return laneMailboxes; }, async mailDomains() { return opts.mailDomains ?? []; } };
   const composio = guardComposio(port);
   const authorize = async (laneId: string) => ({ userId: USER, client: { laneId } as never });
   const flow = createComposioConnect({
@@ -164,9 +164,16 @@ describe("start", () => {
     expect(h.calls).toEqual([]);
   });
 
+  it("T-247: a lane that allows mail domains does not use the Composio connect (it replaces one account per lane): no state, no link", async () => {
+    const h = harness({ mailDomains: ["example.test"] });
+    await expect(h.flow.start("gmail", LANE, h.authorize)).rejects.toMatchObject({ info: { kind: "forbidden" } });
+    expect(h.calls).toEqual([]);
+    expect(h.states.size).toBe(0);
+  });
+
   it("a failing state create (role, aal2 or in-flight cap) means Composio is never called: no orphan account", async () => {
     const h = harness();
-    const flow = createComposioConnect({ composio: guardComposio({ link: async () => { throw new Error("must not be called"); }, getAccount: async () => { throw new Error("no"); }, listAccountIds: async () => [], execute: async () => { throw new Error("no"); } }), states: { create: async () => { throw new ConnectorError({ kind: "rate_limited", message: "Too many connects in progress" }); }, consume: async () => null }, connections: {} as never, laneConfig: { async mailboxes() { return [BOSS]; } }, authConfigId: () => "ac", appOrigin: () => "https://app.example.test", audit: { async log() {} } });
+    const flow = createComposioConnect({ composio: guardComposio({ link: async () => { throw new Error("must not be called"); }, getAccount: async () => { throw new Error("no"); }, listAccountIds: async () => [], execute: async () => { throw new Error("no"); } }), states: { create: async () => { throw new ConnectorError({ kind: "rate_limited", message: "Too many connects in progress" }); }, consume: async () => null }, connections: {} as never, laneConfig: { async mailboxes() { return [BOSS]; }, async mailDomains() { return []; } }, authConfigId: () => "ac", appOrigin: () => "https://app.example.test", audit: { async log() {} } });
     await expect(flow.start("gmail", LANE, h.authorize)).rejects.toMatchObject({ info: { kind: "rate_limited" } });
   });
 

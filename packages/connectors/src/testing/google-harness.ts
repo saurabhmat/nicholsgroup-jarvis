@@ -47,11 +47,15 @@ type EventRow = EventMeta & { connection_id: string; lane_id: string };
 
 /** The harness clock (calendar windows): the synthetic fixtures live in Oct/Nov 2026, so time stands still. */
 export const HARNESS_NOW = Date.parse("2026-11-05T12:00:00.000Z");
+/** The user who owns every seeded mail connection of the harness (T-247: a mail connection has an owner). */
+export const HARNESS_OWNER_ID = "00000000-0000-4000-8000-00000000a247";
 
 export type GoogleHarnessOptions = {
   fake: FakeGoogle;
   /** `lane_config.mailboxes` per lane. */
   mailboxes?: Record<string, string[]>;
+  /** `lane_config.mail.allowed_domains` per lane. Default: the domains of the lane's `mailboxes` (so existing fixtures keep working); an explicit entry replaces that. */
+  mailDomains?: Record<string, string[]>;
   /** Lanes whose policy allows email writes (`write_actions_allowed` has email_send or email_draft, T-232). Default: none. */
   composeLanes?: readonly string[];
   /** `core.lane_policies.retention_days` per lane (default 90). */
@@ -76,6 +80,7 @@ export function createGoogleHarness(options: GoogleHarnessOptions) {
   const rows = new Map<string, Row>();
   const secrets = new Map<string, string>();
   const mailboxes: Record<string, string[]> = { ...options.mailboxes };
+  const mailDomainsCfg: Record<string, string[]> = { ...options.mailDomains };
   const stats = { tokenReads: 0, loads: 0, rotations: 0, stores: 0, revokes: 0, revokeActors: [] as (string | undefined)[] };
   let accountCounter = 0;
 
@@ -138,7 +143,7 @@ export function createGoogleHarness(options: GoogleHarnessOptions) {
       const row = rowOf(laneId, conn);
       row.features = { ...row.features, ...features };
     },
-    async ensureConnection(laneId: string, provider: string, externalAccountId: string) {
+    async ensureConnection(laneId: string, provider: string, externalAccountId: string, createdBy?: string) {
       let row = [...rows.values()].find((r) => r.lane_id === laneId && r.provider === provider && r.external_account_id === externalAccountId);
       if (!row) {
         row = {
@@ -152,8 +157,11 @@ export function createGoogleHarness(options: GoogleHarnessOptions) {
           token_expires_at: null,
           last_sync_at: null,
           last_error: null,
+          owner_user_id: createdBy ?? null,
         };
         rows.set(row.id, row);
+      } else if (createdBy && row.owner_user_id == null) {
+        row.owner_user_id = createdBy; // claimed by the user who proved control of the account (as the real store does)
       }
       return bind(row) as LaneBoundConnection;
     },
@@ -172,6 +180,10 @@ export function createGoogleHarness(options: GoogleHarnessOptions) {
   const laneConfig = {
     async mailboxes(laneId: string) {
       return (mailboxes[laneId] ?? []).map((m) => m.toLowerCase());
+    },
+    async mailDomains(laneId: string) {
+      if (Object.hasOwn(mailDomainsCfg, laneId)) return [...(mailDomainsCfg[laneId] ?? [])];
+      return [...new Set((mailboxes[laneId] ?? []).map((m) => m.toLowerCase().split("@")[1] ?? "").filter((d) => d !== ""))];
     },
     async calendarSettings(laneId: string): Promise<CalendarSettings> {
       const c = calendarConfig[laneId];
@@ -380,6 +392,7 @@ export function createGoogleHarness(options: GoogleHarnessOptions) {
       token_expires_at: null,
       last_sync_at: null,
       last_error: null,
+      owner_user_id: HARNESS_OWNER_ID,
     };
     rows.set(row.id, row);
     return row;
@@ -473,6 +486,7 @@ export function createGoogleHarness(options: GoogleHarnessOptions) {
     rows,
     secrets,
     mailboxes,
+    mailDomains: mailDomainsCfg,
     retention,
     stats,
     indexStats,

@@ -196,6 +196,8 @@ function world(over: { facts?: Partial<CapabilityFacts>; mailboxes?: string[]; w
       };
     },
     laneMailboxes: async () => over.mailboxes ?? [MAILBOX],
+    // T-247: the sender must be allowed for the lane (an allowed domain, and the exact list when the lane keeps one); the fixture lists `mailboxes`.
+    mailboxAllowed: async (_lane, address) => (over.mailboxes ?? [MAILBOX]).includes(address.toLowerCase()),
     readFacts: async () => facts,
     loadWriteConnection: async () => ({ id: CONN }) as never,
     writer: writer as never,
@@ -696,5 +698,14 @@ describe("send-stage failures are unknown unless the provider certainly did noth
   it("a kind the provider certainly did not act on stays a definite failure", async () => {
     await expect(run("refused")).resolves.toMatchObject({ status: "failed", failureCode: "execution_refused" });
     await expect(run("rate_limited")).resolves.toMatchObject({ status: "failed", failureCode: "execution_error" });
+  });
+});
+
+describe("roles (T-247)", () => {
+  it("email actions are for whoever owns the mailbox: owner or admin_technical (the database also requires the connection to be the caller's own)", async () => {
+    const { WRITE_ROLES } = await import("./types");
+    expect([...WRITE_ROLES["email.send"]]).toEqual(["owner", "admin_technical"]);
+    expect([...WRITE_ROLES["email.save_draft"]]).toEqual(["owner", "admin_technical"]);
+    expect([...WRITE_ROLES["qbo.disconnect"]]).toEqual(["owner", "admin_technical"]);
   });
 });

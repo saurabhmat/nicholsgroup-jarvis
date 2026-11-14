@@ -119,14 +119,14 @@ isOneToOne: false
                   ]
                 },"connections": {
                   Row: {
-                    "account_identity": string | null,"created_at": string,"created_by": string | null,"external_account_id": string,"features": NonNullable<Json>,"features_checked_at": string | null,"id": string,"lane_id": string,"last_error": Json | null,"last_error_stream": string | null,"last_sync_at": string | null,"provider": string,"reconnect_notified_at": string | null,"status": string,"token_expires_at": string | null,"toolkit": string | null,"transport": string,"updated_at": string
+                    "account_identity": string | null,"created_at": string,"created_by": string | null,"external_account_id": string,"features": NonNullable<Json>,"features_checked_at": string | null,"id": string,"lane_id": string,"last_error": Json | null,"last_error_stream": string | null,"last_sync_at": string | null,"owner_user_id": string | null,"provider": string,"reconnect_notified_at": string | null,"status": string,"token_expires_at": string | null,"toolkit": string | null,"transport": string,"updated_at": string
                   }
                   ComputedFields: never
                   Insert: {
-                    "account_identity"?: string | null,"created_at"?: string,"created_by"?: string | null,"external_account_id": string,"features"?: NonNullable<Json>,"features_checked_at"?: string | null,"id"?: string,"lane_id": string,"last_error"?: Json | null,"last_error_stream"?: string | null,"last_sync_at"?: string | null,"provider": string,"reconnect_notified_at"?: string | null,"status"?: string,"token_expires_at"?: string | null,"toolkit"?: string | null,"transport"?: string,"updated_at"?: string
+                    "account_identity"?: string | null,"created_at"?: string,"created_by"?: string | null,"external_account_id": string,"features"?: NonNullable<Json>,"features_checked_at"?: string | null,"id"?: string,"lane_id": string,"last_error"?: Json | null,"last_error_stream"?: string | null,"last_sync_at"?: string | null,"owner_user_id"?: string | null,"provider": string,"reconnect_notified_at"?: string | null,"status"?: string,"token_expires_at"?: string | null,"toolkit"?: string | null,"transport"?: string,"updated_at"?: string
                   }
                   Update: {
-                    "account_identity"?: string | null,"created_at"?: string,"created_by"?: string | null,"external_account_id"?: string,"features"?: NonNullable<Json>,"features_checked_at"?: string | null,"id"?: string,"lane_id"?: string,"last_error"?: Json | null,"last_error_stream"?: string | null,"last_sync_at"?: string | null,"provider"?: string,"reconnect_notified_at"?: string | null,"status"?: string,"token_expires_at"?: string | null,"toolkit"?: string | null,"transport"?: string,"updated_at"?: string
+                    "account_identity"?: string | null,"created_at"?: string,"created_by"?: string | null,"external_account_id"?: string,"features"?: NonNullable<Json>,"features_checked_at"?: string | null,"id"?: string,"lane_id"?: string,"last_error"?: Json | null,"last_error_stream"?: string | null,"last_sync_at"?: string | null,"owner_user_id"?: string | null,"provider"?: string,"reconnect_notified_at"?: string | null,"status"?: string,"token_expires_at"?: string | null,"toolkit"?: string | null,"transport"?: string,"updated_at"?: string
                   }
                   Relationships: [
                     {
@@ -141,6 +141,12 @@ isOneToOne: false
 isOneToOne: false
       referencedRelation: "lanes"
       referencedColumns: ["code"]
+    },{
+      foreignKeyName: "connections_owner_user_id_fkey"
+      columns: ["owner_user_id"]
+isOneToOne: false
+      referencedRelation: "users"
+      referencedColumns: ["id"]
     }
                   ]
                 },"connector_api_errors": {
@@ -652,12 +658,12 @@ isOneToOne: false
 { Args: { "p_lane": string,"p_owner": string }; Returns: Json
                            },
 "briefing_coverage":
-{ Args: { "p_lane": string }; Returns: {
+{ Args: { "p_lane": string,"p_owner"?: string }; Returns: {
               "account": string,"configured": boolean,"connection_id": string,"error_kind": string,"last_sync_at": string,"provider": string,"status": string,"stream": string
             }[]
                            },
 "briefing_events":
-{ Args: { "p_from": string,"p_lane": string,"p_to": string }; Returns: {
+{ Args: { "p_from": string,"p_lane": string,"p_owner"?: string,"p_to": string }; Returns: {
               "all_day": boolean,"attendees": Json,"calendar_id": string,"connection_id": string,"end_at": string,"end_date": string,"event_id": string,"location": string,"online_meeting_url": string,"organizer_email": string,"organizer_name": string,"source_url": string,"start_at": string,"start_date": string,"status": string,"timezone": string,"title": string
             }[]
                            },
@@ -686,7 +692,7 @@ isOneToOne: false
 { Args: { "p_content": Json,"p_coverage": Json,"p_lane": string,"p_model": string,"p_source_refs": Json,"p_status": string,"p_window_from": string,"p_window_to": string }; Returns: string
                            },
 "briefing_threads":
-{ Args: { "p_lane": string,"p_since": string }; Returns: {
+{ Args: { "p_lane": string,"p_owner"?: string,"p_since": string }; Returns: {
               "connection_id": string,"from_address": string,"from_name": string,"inbound_count": number,"is_auth_pass": boolean,"is_auto": boolean,"is_bulk": boolean,"is_calendar": boolean,"is_generated": boolean,"is_important": boolean,"labels": (string)[],"last_at": string,"last_is_owner": boolean,"last_to_owner": boolean,"message_id": string,"owner_replied": boolean,"received_at": string,"source_url": string,"subject": string,"thread_key": string,"unread_count": number
             }[]
                            },
@@ -804,6 +810,15 @@ isOneToOne: false
                            },
 "lane_config_public":
 { Args: { "p_lane_id": string }; Returns: Json
+                           },
+"mail_reader":
+{ Args: { "p_owner": string }; Returns: string
+                           },
+"mailbox_ids":
+{ Args: { "p_lane"?: string,"p_uid": string }; Returns: (string)[]
+                           },
+"may_brief":
+{ Args: { "p_lane": string,"p_uid": string }; Returns: boolean
                            },
 "may_resolve":
 { Args: { "p_uid": string }; Returns: boolean

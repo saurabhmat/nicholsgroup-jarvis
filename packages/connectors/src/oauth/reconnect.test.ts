@@ -24,7 +24,7 @@ const ROW_B = "00000000-0000-4000-8000-0000000000c2";
 const FOREIGN = "00000000-0000-4000-8000-0000000000f1"; // a connection of another lane
 const server = useMockServer();
 
-type Row = { id: string; lane: string; provider: string; account: string; status: string; token: string | null };
+type Row = { id: string; lane: string; provider: string; account: string; status: string; token: string | null; owner?: string | null };
 
 function setup(rows: Row[], chosenAccount = { current: "ann@pubk.test" }) {
   const states = new Map<string, { laneId: string; provider: string; verifier: string; redirectUri: string }>();
@@ -41,7 +41,7 @@ function setup(rows: Row[], chosenAccount = { current: "ann@pubk.test" }) {
   };
   const ensured: string[] = [];
   const asLane = (r: Row): LaneBoundConnection =>
-    mintLaneBoundConnection({ id: r.id, lane_id: r.lane, provider: r.provider, external_account_id: r.account, status: r.status as "active", features: {}, features_checked_at: null, token_expires_at: null, last_sync_at: null, last_error: null }) as LaneBoundConnection;
+    mintLaneBoundConnection({ id: r.id, lane_id: r.lane, provider: r.provider, external_account_id: r.account, status: r.status as "active", features: {}, features_checked_at: null, token_expires_at: null, last_sync_at: null, last_error: null, owner_user_id: r.owner ?? null }) as LaneBoundConnection;
   const provider: OAuthProvider = {
     provider: "google",
     slug: "google",
@@ -58,13 +58,13 @@ function setup(rows: Row[], chosenAccount = { current: "ann@pubk.test" }) {
     connections: {
       async findById(laneId, prov, id) {
         const r = rows.find((x) => x.id === id && x.lane === laneId && x.provider === prov);
-        return r ? { id: r.id, externalAccountId: r.account, status: r.status } : null;
+        return r ? { id: r.id, externalAccountId: r.account, status: r.status, ownerUserId: r.owner ?? null } : null;
       },
-      async ensureConnection(laneId, prov, account) {
+      async ensureConnection(laneId, prov, account, createdBy) {
         ensured.push(account);
         let r = rows.find((x) => x.lane === laneId && x.provider === prov && x.account === account);
         if (!r) {
-          r = { id: `00000000-0000-4000-8000-00000000099${String(rows.length)}`, lane: laneId, provider: prov, account, status: "pending", token: null };
+          r = { id: `00000000-0000-4000-8000-00000000099${String(rows.length)}`, lane: laneId, provider: prov, account, status: "pending", token: null, owner: createdBy ?? null };
           rows.push(r);
         }
         return asLane(r);
@@ -88,8 +88,8 @@ const tokenEndpoint = (access: string) =>
   server.use(http.post(`${OAUTH}/token`, () => HttpResponse.json({ access_token: access, refresh_token: `${access}-refresh`, token_type: "bearer", expires_in: 3600 })));
 const back = (url: string) => new URLSearchParams({ state: new URL(url).searchParams.get("state") ?? "", code: "synthetic-code" });
 const rowsOf = (): Row[] => [
-  { id: ROW_A, lane: "PKG", provider: "google", account: "ann@pubk.test", status: "reconnect_required", token: "old-token-a" },
-  { id: ROW_B, lane: "PKG", provider: "google", account: "bob@pubk.test", status: "active", token: "token-b" },
+  { id: ROW_A, lane: "PKG", provider: "google", account: "ann@pubk.test", status: "reconnect_required", token: "old-token-a", owner: USER },
+  { id: ROW_B, lane: "PKG", provider: "google", account: "bob@pubk.test", status: "active", token: "token-b", owner: USER },
 ];
 
 afterEach(() => {
@@ -235,6 +235,16 @@ describe("callback (reconnect)", () => {
     await expect(t.flow.callback("google", back(url), t.as)).resolves.toMatchObject({ ok: false, reason: "account_refused" });
     expect(t.rows).toHaveLength(1);
     expect(t.ensured).toEqual([]);
+  });
+
+  it("T-247: a user cannot reconnect a mailbox that another user owns: the connection is 'not found' to them and no state is stored", async () => {
+    const rows = rowsOf();
+    (rows[0] as Row).owner = "00000000-0000-4000-8000-0000000000a9"; // owned by someone else
+    const t = setup(rows);
+    await expect(t.flow.start("google", "PKG", t.as, { connectionId: ROW_A })).rejects.toMatchObject({ info: { kind: "not_found" } });
+    expect(t.states.size).toBe(0);
+    // their own connection still works
+    await expect(t.flow.start("google", "PKG", t.as, { connectionId: ROW_B })).resolves.toContain("https://");
   });
 
   it("an ordinary connect (no connection id) still reuses the row of the same account and creates a new row for a new one", async () => {
