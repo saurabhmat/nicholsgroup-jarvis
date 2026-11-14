@@ -1308,3 +1308,26 @@ Open / LOW (not fixed):
 - (T-243 security re-check) LOW, open: `qbo.sync.done` `excluded_objects` counts re-emitted payroll accounts on every incremental run (cosmetic).
 - (T-243 part 3) ROOT CAUSE confirmed from the production log: the layout's first-name lookup called guards() without connection(); runtime-prefetch prerender resolved cookies() and supabase-js read the session (Date.now). Fixed: guards() awaits connection() first (tested).
 - (T-243 guards review) MEDIUM fixed: auth()/mfa() also wait for connection() (cookieStore); LOW fixed: the guards.ts comment now says server actions call guards(). LOW open: guards.test.ts uses a 20 ms wait to show a hung connection() blocks everything.
+
+## T-246: review results (security and code review, Nov 14, 2026)
+Home and Finance read only the current QuickBooks connection (go-live prep, H-061). Security and code review found no BLOCKER and no HIGH.
+- **Fixed after review:**
+  - (code M) The go-live checklist now says what to do if the real company's first normalize fails with 57014: switch-day step 5 runs the timeout check, then the apply file, then re-sends the normalize.
+  - (security M1) `golive-1` requires the other two companies' ids: exactly two, different from each other, not the sandbox, and v_realm may not be one of them.
+  - (security M2) `golive-2` confirms the connected company by name: PART A shows CompanyName and LegalName from `raw.source_records`, and PART B refuses if they don't contain the pasted text. The check repeats this.
+  - (security M4) Cash accounts are no longer chosen by a regex. The operator pastes the exact ids to count, and the Stripe/clearing pattern is only the preview's suggestion.
+  - (code L) pgTAP 318 adds three cases: the current connection has data but no invoices while the sandbox has some (`no_invoices`); a sandbox left in `reconnect_required` still counts; all connections disconnected gives `not_connected`.
+  - (security L1) golive-0's notice now uses the revoke result and says whether anything changed.
+  - (security L6, code L) The rollback wording no longer depends on the deleted sandbox scripts.
+  - (security L5) The checklist says real account names stay in the SQL Editor.
+  - (security L7) The timeout plan is now three files: check, apply, undo.
+- **Decision recorded (security M3):** `golive-timeout-b-apply.sql` (`alter role service_role set statement_timeout = '60s'` plus `notify pgrst, 'reload config'`) reverses the T-052 choice above against a role-wide timeout.
+  - It is applied only if the real normalize nears or exceeds 8 s, and only with Saurabh's go-ahead; that choice is logged here when made.
+  - Known costs: every service_role request gets 60 s; lock_timeout stays 8 s; the hosted role may refuse the change (then use the Supabase dashboard).
+  - The real proof is a normalize run through PostgREST succeeding.
+  - Better long-term fix (not built): a dedicated job role, or a batched normalizer.
+- **LOW, open:**
+  - `check-part-24.sql` compares md5s of function bodies, which change if the SQL Editor alters whitespace. If only the md5 rows fail, trust the "filter present in each body" row and compare the bodies.
+  - A `pending` QuickBooks row counts as connected in `home_finance_context`, so the connect window shows `no_data` rather than `not_connected` (cosmetic).
+  - golive-1 treats `pending` as not live for other lanes but as live for PKG (harmless, inconsistent).
+  - golive-0's audit row says actor "service" (operator script, no user id).
