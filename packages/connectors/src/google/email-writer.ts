@@ -21,7 +21,7 @@ import { computePayloadSha256, type ApprovedActionShape, type ConnectorWriter } 
 import type { ConnectorResponse, HttpClient } from "../http/client";
 import type { ConnectorLogger } from "../log/index";
 import type { LaneConfigReader } from "../vault/lane-config";
-import { assertMailAccountAllowed, readMailPolicy } from "../vault/mail-policy";
+import { assertMailAccountAllowed, readMailPolicy } from "../mail-policy";
 import type { ActionClaimReader } from "../vault/write-policy";
 import type { SecretValue } from "../vault/secret";
 import type { GoogleApi } from "./api";

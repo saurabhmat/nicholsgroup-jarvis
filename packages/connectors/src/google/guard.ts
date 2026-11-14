@@ -6,7 +6,7 @@ import { ConnectorError } from "../contract/errors";
 import { assertStatusUsable } from "../contract/guards";
 import { assertLaneBound, type LaneBoundConnection } from "../contract/lane-bound";
 import type { LaneConfigReader } from "../vault/lane-config";
-import { assertMailAccountAllowed, readMailPolicy } from "../vault/mail-policy";
+import { assertMailAccountAllowed, readMailPolicy } from "../mail-policy";
 
 export type GoogleConnection = LaneBoundConnection<"google">;
 

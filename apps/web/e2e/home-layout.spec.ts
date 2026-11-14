@@ -29,7 +29,7 @@ const cleanup = () =>
 
 // A Google connection with one meeting later today (or the all-day event, always today) and three unread important messages.
 const seed = () =>
-  sql(`insert into core.connections (id, lane_id, provider, external_account_id, status) values ('${CID}', 'PKG', 'google', 'layout-e2e@example.test', 'active');
+  sql(`insert into core.connections (id, lane_id, provider, external_account_id, status, owner_user_id) values ('${CID}', 'PKG', 'google', 'layout-e2e@example.test', 'active', (select id from auth.users where email = 'owner@example.test'));
        insert into cal.event_index (lane_id, connection_id, provider, calendar_id, event_id, title, location, online_meeting_url, start_at, end_at, all_day, start_date, end_date, status, attendees, source_updated_at)
        select 'PKG', '${CID}', 'google', 'primary', 'lay-m2', 'Synthetic layout offsite', null, null,
               (d::timestamp at time zone 'America/New_York'), ((d + 1)::timestamp at time zone 'America/New_York'), true, d, d + 1, 'confirmed', '[]', now()

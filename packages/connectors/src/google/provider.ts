@@ -18,7 +18,7 @@ import type { HttpClient } from "../http/client";
 import type { ConnectorLogger } from "../log/index";
 import type { OAuthProvider, TokenResponse } from "../oauth/flow";
 import type { LaneConfigReader } from "../vault/lane-config";
-import { assertMailAccountAllowed, assertMailDomainsConfigured, readMailPolicy } from "../vault/mail-policy";
+import { assertMailAccountAllowed, assertMailDomainsConfigured, readMailPolicy } from "../mail-policy";
 import { SecretValue } from "../vault/secret";
 import { GMAIL_BASE, GMAIL_COMPOSE, GMAIL_RATE_LIMIT, GOOGLE_GMAIL_HOSTS, GOOGLE_AUTHORIZATION_PARAMS, GOOGLE_AUTHORIZATION_URL, GOOGLE_CALLBACK_PATH, GOOGLE_SCOPES, GOOGLE_SLUG, GOOGLE_TOKEN_URL } from "./constants";
 import { createGoogleHttp } from "./http";

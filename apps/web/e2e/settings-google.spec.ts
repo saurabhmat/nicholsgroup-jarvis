@@ -22,7 +22,7 @@ async function signIn(page: Page, email: string): Promise<void> {
 // one exists in PKG the specs stop rather than delete it (they need the lane to start with no Google connection).
 const cleanup = () => sql(`delete from core.connections where id = '${CID}';`);
 const seedConnected = () =>
-  sql(`insert into core.connections (id, lane_id, provider, external_account_id, status) values ('${CID}', 'PKG', 'google', 'ops@example.test', 'active');
+  sql(`insert into core.connections (id, lane_id, provider, external_account_id, status, owner_user_id) values ('${CID}', 'PKG', 'google', 'ops@example.test', 'active', (select id from auth.users where email = 'owner@example.test'));
        insert into core.sync_cursors (lane_id, connection_id, stream, cursor_value, updated_at) values
          ('PKG', '${CID}', 'mail', 'synthetic-cursor-mail', '2026-11-05 14:00:00+00'),
          ('PKG', '${CID}', 'calendar', 'synthetic-cursor-cal', '2026-11-05 14:05:00+00');`);
@@ -50,7 +50,7 @@ test("owner: connect form, connected state and reconnect banner", async ({ page 
   await expect(section.getByText(/Third-party connections/)).toBeVisible();
 
   // Connected, never synced.
-  sql(`insert into core.connections (id, lane_id, provider, external_account_id, status) values ('${CID}', 'PKG', 'google', 'ops@example.test', 'active');`);
+  sql(`insert into core.connections (id, lane_id, provider, external_account_id, status, owner_user_id) values ('${CID}', 'PKG', 'google', 'ops@example.test', 'active', (select id from auth.users where email = 'owner@example.test'));`);
   await page.goto("/PKG/settings");
   const conn = page.getByTestId("google-connection");
   await expect(conn).toContainText("ops@example.test");

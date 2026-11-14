@@ -5,7 +5,7 @@ import type { LaneId } from "@nichols/core";
 import { requireConnectorEnv } from "@nichols/core/env/server";
 import { ConnectorError } from "../contract/errors";
 import type { LaneBoundConnection } from "../contract/lane-bound";
-import { mailAccountAllowed, readMailPolicy } from "../vault/mail-policy";
+import { mailAccountAllowed, readMailPolicy } from "../mail-policy";
 import { actionClaimReader, calendarIndexStore, connectionLoader, connectionStore, getToken, laneConfigReader, mailIndexStore, revokeToken, rotateToken, storeToken, writePolicyReader } from "../vault/index";
 import { SecretValue } from "../vault/secret";
 import { createGoogleApi } from "./api";

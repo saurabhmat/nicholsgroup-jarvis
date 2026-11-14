@@ -2,8 +2,8 @@
 //   lane_config.mail.allowed_domains  lower-case domains whose accounts may be connected (empty = nothing: fail closed)
 //   lane_config.mailboxes             OPTIONAL exact addresses; when not empty the address must ALSO be listed (it narrows, never widens)
 // One rule for the connect callback, every Google call (the provider guard) and the email writer. D-23 (one account, one lane) is separate.
-import { ConnectorError } from "../contract/errors";
-import type { LaneConfigReader } from "./lane-config";
+import { ConnectorError } from "./contract/errors";
+import type { LaneConfigReader } from "./vault/lane-config";
 import type { LaneId } from "@nichols/core";
 
 export type MailPolicy = { readonly domains: readonly string[]; readonly mailboxes: readonly string[] };
