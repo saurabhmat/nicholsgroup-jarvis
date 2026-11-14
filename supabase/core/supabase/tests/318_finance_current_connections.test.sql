@@ -6,7 +6,7 @@
 -- rows are ignored; "no_data" until the current connection has data; the same rows count again if that connection is live (control);
 -- privileges unchanged; denial for another lane and at AAL1. Dates are relative to today (business date) and safe on any date.
 begin;
-select plan(26);
+select plan(28);
 \ir helpers/lane_rls.psql
 
 update core.lanes set enabled = true where code in ('APK');
@@ -69,14 +69,21 @@ select is((select state from core.finance_overview('PKG')), 'no_data', 'finance_
 select is((select state from core.finance_pnl('PKG', 'mtd')), 'no_data', 'finance_pnl: no_data');
 reset role;
 
+-- ================================================================ the real company normalized, no invoices yet (the sandbox has some)
+insert into fin.normalize_runs (lane_id, connection_id, class_tracking, class_fallback, counts, started_at, finished_at)
+values ('PKG', '00000000-0000-4000-8000-000000004601', false, false, '{}', now() - interval '61 minutes', now() - interval '1 hour');
+select pg_temp.claims('owner@example.test', 'aal2');
+set local role authenticated;
+select is((select state || '/' || ar_reason from core.home_finance('PKG')), 'ok/no_invoices',
+          'home_finance: the current connection has no invoices; the sandbox''s invoices do not count (no_invoices)');
+reset role;
+
 -- ================================================================ the real company's rows arrive
 insert into fin.invoices (lane_id, connection_id, source_id, customer_name, issue_date, due_date, total, balance, entity_code) values
   ('PKG', '00000000-0000-4000-8000-000000004601', 'r-1', 'Real Current', pg_temp.today() - 20, pg_temp.today() + 5, 10.50, 10.50, 'PKG'),
   ('PKG', '00000000-0000-4000-8000-000000004601', 'r-2', 'Real Overdue', pg_temp.today() - 75, pg_temp.today() - 45, 200.25, 200.25, 'PKG');
 insert into fin.bills (lane_id, connection_id, source_id, issue_date, due_date, total, balance, entity_code) values
   ('PKG', '00000000-0000-4000-8000-000000004601', 'rb-1', pg_temp.today() - 5, pg_temp.today() + 7, 50.00, 50.00, 'PKG');
-insert into fin.normalize_runs (lane_id, connection_id, class_tracking, class_fallback, counts, started_at, finished_at)
-values ('PKG', '00000000-0000-4000-8000-000000004601', false, false, '{}', now() - interval '61 minutes', now() - interval '1 hour');
 -- APK (another lane) with its own overdue invoice.
 insert into fin.invoices (lane_id, connection_id, source_id, customer_name, issue_date, due_date, total, balance, entity_code) values
   ('APK', '00000000-0000-4000-8000-000000004603', 'a-1', 'Other Lane', pg_temp.today() - 90, pg_temp.today() - 60, 777.00, 777.00, 'APK');
@@ -116,11 +123,18 @@ select is((select ar_over_30 from core.home_finance('PKG')), null::numeric, 'AAL
 reset role;
 
 -- ================================================================ control: the filter is the connection status, not the rows
--- If the sandbox were still live (the go-live mistake golive-1 refuses), its rows would count again.
-update core.connections set status = 'active' where id = '00000000-0000-4000-8000-000000004602';
+-- Any status other than disconnected counts as current: a sandbox left in reconnect_required (not disconnected) would add its AR.
+-- That is why golive-0 must reach 'disconnected' (and golive-1 refuses otherwise).
+update core.connections set status = 'reconnect_required' where id = '00000000-0000-4000-8000-000000004602';
 select pg_temp.claims('owner@example.test', 'aal2');
 set local role authenticated;
-select is((select ar_over_30 from core.home_finance('PKG')), 5481.77::numeric, 'control: a live sandbox connection would add its AR (why it must be disconnected first)');
+select is((select ar_over_30 from core.home_finance('PKG')), 5481.77::numeric, 'control: a sandbox in reconnect_required still counts (it must be disconnected)');
+reset role;
+-- Every QuickBooks connection disconnected: not_connected, no figures from anyone's rows.
+update core.connections set status = 'disconnected' where lane_id = 'PKG' and provider = 'quickbooks';
+select pg_temp.claims('owner@example.test', 'aal2');
+set local role authenticated;
+select is((select state || '/' || coalesce(ar_over_30::text, 'null') from core.home_finance('PKG')), 'not_connected/null', 'all disconnected: not_connected and no AR figure');
 reset role;
 
 select * from finish();

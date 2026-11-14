@@ -13,7 +13,7 @@ Decisions:
 1. **T-246 deployed, with part 24 run** (`part-24-T-246.sql`, then `check-part-24.sql`: 9 rows, all true).
    - Every Home and Finance figure now reads only the current QuickBooks connection: AR over 30 days, aging, oldest invoices, bills due, the AR total, the unmapped counts and the "has data" test. Cash, Net income and Reports already did.
    - Without it, the sandbox's invoices (AR over 30 today $5,281.52) would be added to the real company's AR.
-   - Part 24 is safe to run before the T-246 deploy, and it must be in place before switch-day step 2.
+   - Part 24 is safe to run before the T-246 deploy. Run it before switch day; it must be in place before the real company is connected (step 5).
 2. **T-245 deployed** (the Finance page crash).
 3. **Intuit production keys approved** (see "Intuit production keys" below).
 4. **Confirm the company ids.** The real Pub K Group company id and the other two companies' ids come from QuickBooks: Settings gear > Account and settings > Billing & subscription > Company ID.
@@ -22,35 +22,50 @@ Decisions:
 
 ## Switch day, in order
 1. **Baseline (read-only).**
-   - Run `pkg-report-cache-list.sql`.
-   - Run section A of `golive-timeout-service-role.sql`.
+   - Run `pkg-report-cache-list.sql` and `golive-timeout-a-check.sql`.
    - Note the sandbox connection id: `select id, status from core.connections where lane_id='PKG' and provider='quickbooks';`
 2. **Disconnect the sandbox while Vercel still has the development keys.**
    - Preferred: Settings > Connections > QuickBooks > Disconnect, then approve it on the Approvals page. This also asks Intuit to end the grant, and that call needs the development keys. It needs `qbo_disconnect` in PKG's write actions and approvals switched live.
-   - Fallback: `golive-0-pkg-qbo-sandbox-disconnect.sql`. It deletes the stored token, marks the connection disconnected and writes an audit row, but does not tell Intuit. The grant only reaches sandbox data, so let it lapse or remove it in the Intuit sandbox.
-   - Nothing is deleted: the sandbox's raw rows, `fin.*` rows and cached reports stay, and the figures ignore them (after T-246).
+   - Fallback: `golive-0-pkg-qbo-sandbox-disconnect.sql`. It deletes the stored token, marks the connection disconnected and writes an audit row (actor "service"), but does not tell Intuit. After that the grant cannot be revoked from the app either. It only reaches sandbox data, so let it lapse or remove it in the Intuit sandbox.
+   - The status must end as `disconnected`. Any other status, including `reconnect_required`, still counts as current, and its figures would be added (pgTAP 318 shows this).
+   - Nothing is deleted: the sandbox's raw rows, `fin.*` rows and cached reports stay, and the figures ignore them.
 3. **Vercel: switch to the production Intuit keys** (below), then redeploy production.
-4. **Run `golive-1-pkg-qbo-realm.sql`**, after pasting the real id and the other two ids. Then run `check-golive-1-pkg-qbo-realm.sql` (6 rows, all true).
-   - It refuses: the sandbox id, either of the other two ids, an id another lane is configured for or connected to, and any PKG connection that is still live to a different company.
+4. **Run `golive-1-pkg-qbo-realm.sql`**, after pasting the real id and the other two companies' ids (both required). Then run `check-golive-1-pkg-qbo-realm.sql` (6 rows, all true).
+   - It refuses: a missing or duplicate "other" id, the sandbox id, either of the other two ids, an id another lane is configured for or connected to, and any PKG connection that is still live to a different company.
    - It also clears the bank account list, because sandbox account ids mean nothing in the real file. In the local test, id 35 was "Checking" in the sandbox and "Stripe Clearing" in the real file.
 5. **Connect QuickBooks.** In the portal: Settings > Connections > Connect QuickBooks (owner or admin, with a recent authenticator code), signed in to Intuit, choosing Pub K Group.
    - The callback refuses any other company for PKG ("not the one configured for the lane").
    - The connect step starts a full sync automatically (T-241). Watch it in Inngest until the sync and the normalize finish.
-6. **Map the bank accounts.**
-   - Run the read-only preview at the bottom of `golive-2-pkg-qbo-entity-mapping.sql` and check which accounts are counted.
-   - Run golive-2 itself with the real id pasted, then `check-golive-2-pkg-qbo-entity-mapping.sql` (6 rows, all true, plus a line with the Cash total).
+   - **If the normalize fails with 57014 (statement timeout):**
+     - run `golive-timeout-a-check.sql`;
+     - with Saurabh's go-ahead, run `golive-timeout-b-apply.sql`;
+     - re-send `fin/qbo-normalize.requested` for the real connection.
+   - If it still fails after the reload, undo with `golive-timeout-c-undo.sql` and stop.
+6. **Map the bank accounts** (`golive-2-pkg-qbo-entity-mapping.sql`).
+   - First check that exactly one PKG QuickBooks connection is not disconnected: `select id, status, external_account_id from core.connections where lane_id='PKG' and provider='quickbooks';`. A leftover `pending` or `error` row from an aborted connect must be disconnected first.
+   - Run **PART A** (the read-only preview at the bottom):
+     - Check that the company name is Pub K Group.
+     - Check the fiscal year start month. If it isn't January, tell Saurabh: the portal's "Year to date" is the calendar year.
+     - Decide with Sophie or Robert which bank accounts are Cash. The suggestion leaves out Stripe, clearing, undeposited and in-transit accounts. A PayPal, Square or sweep account is NOT left out automatically: decide each one.
+     - Account names can include the last digits of an account number. Keep them in the SQL Editor; don't copy them into chat or documents.
+   - Paste three values into **PART B**: the real id, a part of the company name (for example `Pub K`), and the exact account ids to count. Run PART B. It refuses if the connected company's name does not contain that text, or if an id is not an active bank account of the real connection.
+   - Run `check-golive-2-pkg-qbo-entity-mapping.sql` with the same three values (6 rows, all true, plus the Cash total).
 7. **Refresh the figures.** Send `fin/qbo-normalize.requested` with `{ "laneId": "PKG", "connectionId": "<real connection id>", "trigger": "manual" }`, then `fin/qbo-reports.requested` with the same payload.
-8. **Timeout.** Run section A of `golive-timeout-service-role.sql` again. If the p95 time is above about 5 s, or a normalize run failed with 57014, apply section B (service_role 60 s plus `notify pgrst, 'reload config'`). Section C undoes it.
+8. **Timeout review.** Run `golive-timeout-a-check.sql` again.
+   - If p95 is above about 5 s, decide on `golive-timeout-b-apply.sql`.
+   - That file reverses the T-052 decision against a role-wide timeout: it affects every service_role request, and the hosted role may refuse the change. If you apply it, log it in `docs/plan-review.md`.
 9. **Verify against QuickBooks with Sophie.**
    - Home and Finance Cash equal the check-2 total, labelled "book balance".
    - AR equals QuickBooks' A/R Aging Summary total.
    - Bills due in 14 days.
    - Net income for month to date and year to date equals the QuickBooks P&L for the same dates and accounting basis.
-   - Controls shows the Stripe clearing account as "not mapped", which is expected.
+   - Controls shows the left-out accounts (for example Stripe clearing) as "not mapped", which is expected.
    - The Vercel logs are clean.
 10. **Close H-061** in the backlog, and record the realm and the go-live date.
 
-**Rollback.** Disconnect the real connection through approvals. The realm stays pinned, and nothing is deleted. To go back to the sandbox, reverse steps 2 to 4 with the development keys.
+**Rollback.** Disconnect the real connection through approvals (Settings > Connections > QuickBooks > Disconnect). The realm stays pinned to the real company, and nothing is deleted.
+- Going back to the sandbox is not a one-step undo, because the sandbox helper scripts are deleted. It needs a new, guarded realm switch: ask Saurabh.
+- In practice, stay pinned to the real company and fix forward.
 
 ## Intuit production keys (one app for all three companies)
 1. developer.intuit.com > the app > Keys & credentials > **Production**. Complete "Get production keys" (domain: `nicholsgroup-jarvis-git-main-saurabhmats-projects.vercel.app`):
@@ -80,5 +95,5 @@ Decisions:
   - never sum the two.
   
   Tie-out point for Sophie: if the Stripe sync creates QuickBooks invoices that stay open until payout, AR includes them.
-- **Clearing account.** golive-2 leaves out of Cash any bank account whose name or subtype matches `stripe|clearing|undeposited|in transit`. Use `v_include_ids` to count one anyway, and `v_exclude_ids` to leave out others. The excluded account appears in Controls as "not mapped". Robert or Sophie should confirm that Stripe money in transit is not cash. If they want a dedicated "excluded from cash" list instead of "not mapped", that is a small schema task.
-- Re-run golive-2 after new bank accounts are added in QuickBooks. It rebuilds the list from the live connection.
+- **Clearing account.** In golive-2 you list the exact accounts to count in Cash. The preview suggests leaving out any bank account whose name or subtype looks like Stripe, clearing, undeposited funds or payments in transit. An account left out appears in Controls as "not mapped". Robert or Sophie should confirm that Stripe money in transit is not cash. If they want a dedicated "excluded from cash" list instead of "not mapped", that is a small schema task.
+- After new bank accounts are added in QuickBooks, run golive-2 again: PART A shows them, and PART B takes the full list of ids to count.
