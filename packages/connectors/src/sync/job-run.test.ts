@@ -134,7 +134,7 @@ describe("report pull run log", () => {
       throw new ConnectorError({ kind: "transient", message: "x", http_status: 503 });
     } };
     await mk(r.store, { kinds: ["pnl", "balance_sheet"], api }).run("PKG", ID);
-    expect(n).toBe(2);
+    expect(n).toBeGreaterThanOrEqual(2); // every planned report is tried (pnl, balance_sheet and, from T-244, the extra P&L windows: 0-3 more, by date)
     expect(r.finished[0]).toMatchObject({ status: "failed", received: 0, written: 0 });
   });
   it("the caller's trigger is recorded", async () => {
