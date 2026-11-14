@@ -14,7 +14,7 @@ import { useRouter } from "next/navigation";
 import { useEffect, useRef, useState } from "react";
 import { isRefreshHeld, lastRefreshAttempt, requestRefresh, subscribeRefreshGate } from "@/lib/refresh-gate";
 
-export const REFRESH_INTERVAL_MS = 5 * 60_000;
+const REFRESH_INTERVAL_MS = 5 * 60_000;
 const LABEL_TICK_MS = 30_000;
 const SLACK_MS = 5_000; // a tick fires a moment before the previous refresh's render time + the interval
 const TEXT_FIELD = 'input:not([type="button"]):not([type="submit"]):not([type="checkbox"]):not([type="radio"]):not([type="reset"]):not([type="file"]), textarea, select, [contenteditable]:not([contenteditable="false"])';

@@ -17,10 +17,9 @@ import { useCallback, useEffect, useId, useRef, useState } from "react";
 import { briefingRunState, ensureFreshBriefing, regenerateBriefing, type BriefingStartState } from "@/app/[laneId]/briefing-actions";
 import { DAILY_RUN_CAP, isStale, regenerateAvailableAt, type BriefingRunStateView } from "@/lib/briefing-runs";
 import { isRefreshHeld, requestRefresh, subscribeRefreshGate } from "@/lib/refresh-gate";
+import { POLL_EVERY_MS, POLL_FOR_MS } from "@/lib/client-constants";
 
-export const POLL_EVERY_MS = 12_000;
-export const POLL_FOR_MS = 3 * 60_000;
-export const ENSURE_GUARD_MS = 10 * 60_000;
+const ENSURE_GUARD_MS = 10 * 60_000;
 
 /** Per-tab guard: true when this lane asked for a fresh summary less than 10 minutes ago in this tab (sessionStorage). */
 function ensuredRecently(laneId: string, nowMs: number): boolean {

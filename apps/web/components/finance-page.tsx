@@ -6,6 +6,7 @@ import Link from "next/link";
 import { EmptyState, KpiCard, PageHeader, PageSection, PERIODS, laneHref } from "@nichols/ui";
 import { guards } from "@/lib/guards";
 import { loadLane } from "@/lib/lane-page";
+import { CardBoundary } from "./card-boundary";
 import { timed } from "@/lib/timed";
 import { CONNECT_TEXT, connectionNote, emptyStateText, financeCards, formatAsOf, formatMoney, hasFinanceView, homeFinanceFor, type HomeFinanceView } from "@/lib/home-finance";
 import { AGING_LABEL, barWidths, homeFinanceDetailFor, type HomeFinanceDetail } from "@/lib/home-finance-detail";
@@ -88,87 +89,84 @@ function Footer({ lines, connectLink, laneId }: { lines: string[]; connectLink?:
   );
 }
 
-function cards(laneId: string, period: FinancePeriod, d: FinanceData) {
-  const { finance, detail, pnl, overview } = d;
-  const empty = finance.state !== "no_access" && finance.state !== "unavailable" ? emptyStateText(finance) : finance.state === "unavailable" ? UNAVAILABLE : null;
-  const link = finance.state === "not_connected";
-  if (empty !== null) {
-    const base = { statusText: empty, footer: <Footer lines={[]} connectLink={link} laneId={laneId} /> };
-    return [
-      <KpiCard key="cash" label="Cash" headingLevel="h2" bookBalance qualifier="Per QuickBooks, not the bank" {...base} />,
-      <KpiCard key="ar" label="Accounts receivable" headingLevel="h2" {...base} />,
-      <KpiCard key="bills" label="Bills due in 14 days" headingLevel="h2" qualifier="Point in time" {...base} />,
-      <KpiCard key="net" label="Net income" headingLevel="h2" qualifier={PERIOD_LABEL[period]} {...base} />,
-    ];
-  }
-  if (finance.state === "no_access") return [];
-  const cash = financeCards(finance).find((c) => c.key === "cash");
-  const unavailable = { statusText: UNAVAILABLE };
+type CardProps = { laneId: string; period: FinancePeriod; data: FinanceData };
+const asOfLine = (iso: string | null) => (iso ? `As of ${formatAsOf(iso)}` : null);
+const present = (xs: (string | null)[]) => xs.filter((x): x is string => x !== null);
 
-  const asOfLine = (iso: string | null) => (iso ? `As of ${formatAsOf(iso)}` : null);
-  const cashLines = [cash?.asOf ?? null, ...(cash?.flags ?? [])].filter((x): x is string => x !== null);
+/** The page-wide state text for every card (not connected, mapping missing, no data, outage), or null when figures can show. */
+function pageEmpty(finance: HomeFinanceView): { text: string; connectLink: boolean } | null {
+  if (finance.state === "no_access") return null;
+  if (finance.state === "unavailable") return { text: UNAVAILABLE, connectLink: false };
+  const text = emptyStateText(finance);
+  return text === null ? null : { text, connectLink: finance.state === "not_connected" };
+}
 
-  const arOk = overview.state === "ok" && overview.arTotal !== null;
-  const arLines = [
+function emptyProps(e: { text: string; connectLink: boolean }, laneId: string) {
+  return { statusText: e.text, footer: <Footer lines={[]} connectLink={e.connectLink} laneId={laneId} /> };
+}
+
+function CashCard({ laneId, data }: CardProps) {
+  const head = { label: "Cash", headingLevel: "h2", bookBalance: true, qualifier: "Per QuickBooks, not the bank" } as const;
+  const e = pageEmpty(data.finance);
+  if (e) return <KpiCard {...head} {...emptyProps(e, laneId)} />;
+  const cash = financeCards(data.finance).find((c) => c.key === "cash");
+  const lines = present([cash?.asOf ?? null, ...(cash?.flags ?? [])]);
+  return <KpiCard {...head} {...(cash?.value ? { value: cash.value } : { statusText: cash?.statusText ?? UNAVAILABLE })} footer={<Footer lines={lines} laneId={laneId} />} />;
+}
+
+function ArCard({ laneId, data }: CardProps) {
+  const { detail, overview } = data;
+  const head = { label: "Accounts receivable", headingLevel: "h2", qualifier: "Open invoices" } as const;
+  const e = pageEmpty(data.finance);
+  if (e) return <KpiCard label={head.label} headingLevel="h2" {...emptyProps(e, laneId)} />;
+  const lines = present([
     overview.state === "ok" ? "All open invoices; equals the receivables aging total" : null,
     asOfLine(overview.state === "ok" ? overview.asOf : null),
     detail.state === "ok" && detail.unmappedInvoices > 0 ? `Excludes ${plural(detail.unmappedInvoices, "invoice", "invoices")} with no company` : null,
-  ].filter((x): x is string => x !== null);
+  ]);
+  const value = overview.state === "ok" && overview.arTotal !== null ? { value: formatMoney(overview.arTotal) } : { statusText: overview.state === "unavailable" ? UNAVAILABLE : "No invoices synced yet" };
+  return <KpiCard {...head} {...value} footer={<Footer lines={lines} laneId={laneId} />} />;
+}
 
-  const billsOk = detail.state === "ok" && detail.bills.total !== null;
-  const billsLines = [
+function BillsCard({ laneId, data }: CardProps) {
+  const { detail } = data;
+  const head = { label: "Bills due in 14 days", headingLevel: "h2", qualifier: "Point in time" } as const;
+  const e = pageEmpty(data.finance);
+  if (e) return <KpiCard {...head} {...emptyProps(e, laneId)} />;
+  const lines = present([
     detail.state === "ok" ? plural(detail.bills.count, "bill", "bills") : null,
     asOfLine(detail.state === "ok" ? detail.asOf : null),
     detail.state === "ok" && detail.unmappedBills > 0 ? `Excludes ${plural(detail.unmappedBills, "bill", "bills")} with no company` : null,
-  ].filter((x): x is string => x !== null);
-
-  const pnlOk = pnl.state === "ok" && pnl.reason === null && pnl.net !== null && pnl.income !== null && pnl.expenses !== null;
-  const window = pnl.state === "ok" && pnl.windowStart && pnl.windowEnd ? formatRange(pnl.windowStart, pnl.windowEnd) : null;
-  const pnlLines = pnl.state === "ok" && pnlOk
-    ? [
-        `Income ${formatMoney(pnl.income as number)} · Expenses ${formatMoney(pnl.expenses as number)}`,
-        pnl.start && pnl.end ? `Report covers ${formatRange(pnl.start, pnl.end)}${pnl.method ? ` · ${pnl.method === "cash" ? "Cash" : "Accrual"} basis` : ""}` : null,
-        asOfLine(pnl.reportAsOf),
-        pnl.partial ? "Excludes payroll accounts" : null,
-      ].filter((x): x is string => x !== null)
-    : [];
-
-  return [
-    <KpiCard
-      key="cash"
-      label="Cash"
-      headingLevel="h2"
-      bookBalance
-      qualifier="Per QuickBooks, not the bank"
-      {...(cash?.value ? { value: cash.value } : { statusText: cash?.statusText ?? UNAVAILABLE })}
-      footer={<Footer lines={cashLines} laneId={laneId} />}
-    />,
-    <KpiCard
-      key="ar"
-      label="Accounts receivable"
-      headingLevel="h2"
-      qualifier="Open invoices"
-      {...(arOk ? { value: formatMoney(overview.state === "ok" ? (overview.arTotal as number) : 0) } : { statusText: overview.state === "unavailable" ? UNAVAILABLE : "No invoices synced yet" })}
-      footer={<Footer lines={arLines} laneId={laneId} />}
-    />,
-    <KpiCard
-      key="bills"
-      label="Bills due in 14 days"
-      headingLevel="h2"
-      qualifier="Point in time"
-      {...(billsOk ? { value: formatMoney(detail.state === "ok" ? (detail.bills.total as number) : 0) } : { statusText: detail.state === "unavailable" ? UNAVAILABLE : "Not available yet" })}
-      footer={<Footer lines={billsLines} laneId={laneId} />}
-    />,
-    <KpiCard
-      key="net"
-      label="Net income"
-      headingLevel="h2"
-      qualifier={window ? `${PERIOD_LABEL[period]} · ${window}` : PERIOD_LABEL[period]}
-      {...(pnlOk ? { value: formatMoney(pnl.state === "ok" ? (pnl.net as number) : 0) } : pnl.state === "unavailable" ? unavailable : { statusText: pnl.state === "ok" && pnl.reason ? pnlReasonText(pnl.reason) : "Not available yet" })}
-      footer={<Footer lines={pnlLines} laneId={laneId} />}
-    />,
-  ];
+  ]);
+  const value = detail.state === "ok" && detail.bills.total !== null ? { value: formatMoney(detail.bills.total) } : { statusText: detail.state === "unavailable" ? UNAVAILABLE : "Not available yet" };
+  return <KpiCard {...head} {...value} footer={<Footer lines={lines} laneId={laneId} />} />;
 }
+
+function NetIncomeCard({ laneId, period, data }: CardProps) {
+  const { pnl } = data;
+  const e = pageEmpty(data.finance);
+  if (e) return <KpiCard label="Net income" headingLevel="h2" qualifier={PERIOD_LABEL[period]} {...emptyProps(e, laneId)} />;
+  const window = pnl.state === "ok" && pnl.windowStart && pnl.windowEnd ? formatRange(pnl.windowStart, pnl.windowEnd) : null;
+  const qualifier = window ? `${PERIOD_LABEL[period]} · ${window}` : PERIOD_LABEL[period];
+  if (pnl.state === "ok" && pnl.reason === null && pnl.net !== null && pnl.income !== null && pnl.expenses !== null) {
+    const lines = present([
+      `Income ${formatMoney(pnl.income)} · Expenses ${formatMoney(pnl.expenses)}`,
+      pnl.start && pnl.end ? `Report covers ${formatRange(pnl.start, pnl.end)}${pnl.method ? ` · ${pnl.method === "cash" ? "Cash" : "Accrual"} basis` : ""}` : null,
+      asOfLine(pnl.reportAsOf),
+      pnl.partial ? "Excludes payroll accounts" : null,
+    ]);
+    return <KpiCard label="Net income" headingLevel="h2" qualifier={qualifier} value={formatMoney(pnl.net)} footer={<Footer lines={lines} laneId={laneId} />} />;
+  }
+  const statusText = pnl.state === "unavailable" ? UNAVAILABLE : pnl.state === "ok" && pnl.reason ? pnlReasonText(pnl.reason) : "Not available yet";
+  return <KpiCard label="Net income" headingLevel="h2" qualifier={qualifier} statusText={statusText} footer={<Footer lines={[]} laneId={laneId} />} />;
+}
+
+const KPI_CARDS = [
+  { key: "cash", label: "Cash", Card: CashCard },
+  { key: "ar", label: "Accounts receivable", Card: ArCard },
+  { key: "bills", label: "Bills due in 14 days", Card: BillsCard },
+  { key: "net", label: "Net income", Card: NetIncomeCard },
+] as const;
 
 function emptySection(title: string, note: string | undefined, text: string) {
   return <PageSection title={title} {...(note ? { note } : {})} emptyTitle={text} />;
@@ -310,15 +308,30 @@ export function FinanceView({ laneId, laneName, period, data }: { laneId: string
     <div className="flex flex-col gap-6">
       {header}
       {note ? <p data-testid="finance-connection-note" className="text-small text-muted-foreground">{note}</p> : null}
-      <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-4">{cards(laneId, period, data)}</div>
+      {/* Keyed on the period: a card that failed gets a fresh boundary when the period link changes (soft navigation). */}
+      <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
+        {KPI_CARDS.map(({ key, label, Card }) => (
+          <CardBoundary key={`${key}-${period}`} label={label} kind="kpi">
+            <Card laneId={laneId} period={period} data={data} />
+          </CardBoundary>
+        ))}
+      </div>
       <div className="grid gap-6 lg:grid-cols-2">
         <PageSection title="Subscriptions" note="Revenue: Stripe · Subscribers: GoHighLevel" emptyTitle="No subscription data yet" emptyDescription="MRR, revenue churn and paid subscribers appear here once the payment and subscriber sources are connected." />
-        <AgingSection finance={data.finance} detail={data.detail} overview={data.overview} />
+        <CardBoundary key={period} label="Receivables aging" kind="section">
+          <AgingSection finance={data.finance} detail={data.detail} overview={data.overview} />
+        </CardBoundary>
       </div>
-      <CashSection finance={data.finance} />
+      <CardBoundary key={period} label="Cash by account" kind="section">
+        <CashSection finance={data.finance} />
+      </CardBoundary>
       <div className="grid gap-6 lg:grid-cols-2">
-        <ControlsSection data={data} />
-        <ReportsSection data={data} />
+        <CardBoundary key={period} label="Controls" kind="section">
+          <ControlsSection data={data} />
+        </CardBoundary>
+        <CardBoundary key={period} label="Reports" kind="section">
+          <ReportsSection data={data} />
+        </CardBoundary>
       </div>
     </div>
   );

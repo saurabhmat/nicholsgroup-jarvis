@@ -22,7 +22,8 @@ export { LaneSwitcher, type LaneSwitcherProps, type ShellLane, type ShellLink } 
 export { PageHeader, type PageHeaderProps } from "./components/page-header";
 export { PageSection, type PageSectionProps } from "./components/page-section";
 export { SlimCard, type SlimCardProps } from "./components/slim-card";
-export { PERIODS, PeriodToggle, type PeriodKey, type PeriodToggleProps } from "./components/period-toggle";
+export { PERIODS, type PeriodKey } from "./lib/periods";
+export { PeriodToggle, type PeriodToggleProps } from "./components/period-toggle";
 export { TabIcon } from "./components/tab-icon";
 export {
   activeKey,

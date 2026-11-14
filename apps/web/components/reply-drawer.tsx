@@ -23,12 +23,12 @@ import { aiDrafts, debounced, openDrawer, replyDrafts, replyOrigins, type ReplyD
 import { CapabilityMessage } from "./approval-card";
 import { useHomeScope } from "./home-scope";
 import { CopyTextButton } from "./copy-text-button";
+import { STALE_NOTE } from "@/lib/client-constants";
 
 const control =
   "min-h-11 w-full min-w-0 rounded-control border border-border bg-card px-3 py-2 text-body text-foreground placeholder:text-muted-foreground focus:outline-none focus:ring-2 focus:ring-ring disabled:opacity-60";
 const row = "grid grid-cols-[3.5rem_minmax(0,1fr)] items-center gap-3 text-small font-medium text-muted-foreground";
 const FOCUSABLE = 'a[href], button:not([disabled]), input:not([disabled]), textarea:not([disabled]), select:not([disabled]), [tabindex]:not([tabindex="-1"])';
-export const STALE_NOTE = "Your earlier unsaved edits were discarded because the draft changed.";
 const WRITE_DELAY_MS = 500;
 const KEPT_NOTE = "Kept on this device until you send or save";
 

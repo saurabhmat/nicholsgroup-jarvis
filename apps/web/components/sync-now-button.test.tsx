@@ -5,7 +5,8 @@ import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-libra
 
 const refresh = vi.fn();
 vi.mock("next/navigation", () => ({ useRouter: () => ({ refresh, push: vi.fn() }) }));
-import { SYNC_NOW_TEXT, SyncNowButton, rateLimitedText, syncNowText } from "./sync-now-button";
+import { SYNC_NOW_TEXT } from "@/lib/client-constants";
+import { SyncNowButton, rateLimitedText, syncNowText } from "./sync-now-button";
 
 afterEach(() => {
   cleanup();
