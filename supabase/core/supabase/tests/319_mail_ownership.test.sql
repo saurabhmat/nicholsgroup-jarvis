@@ -5,7 +5,7 @@
 -- functions. Also: cross-lane denial, the service-role job path (explicit owner), the connect gate (own_mail), the own_mail view
 -- mapping, several accounts of one user, and the ownership rules on core.connections.
 begin;
-select plan(89);
+select plan(94);
 \ir helpers/lane_rls.psql
 
 -- A token whose amr carries a TOTP verification now (the step-up the approval needs).
@@ -280,6 +280,41 @@ reset role;
 select pg_temp.claims('admin-technical@example.test', 'aal2');
 set local role authenticated;
 select is((select runs_today from core.briefing_run_state('PKG')), 1, 'runs_today shows only the caller''s own runs');
+reset role;
+
+-- ---------------------------------------------------------------- cut-over on real rows (migration 20261124150000, second block)
+set local role service_role;
+insert into ids select 'cj', act.propose('PKG', 'email.send', '00000000-0000-4000-8000-000000031902', '{"mailbox":"saurabh@example.test"}', '{"fromMailbox":"saurabh@example.test"}', 1, repeat('1', 64), null, '[]', 'job', pg_temp.uid('admin-technical@example.test'), true);
+insert into ids select 'fs', act.propose('PKG', 'email.send', '00000000-0000-4000-8000-000000031902', '{"mailbox":"saurabh@example.test"}', '{"fromMailbox":"saurabh@example.test"}', 1, repeat('2', 64), null, '[]', 'user', pg_temp.uid('admin-technical@example.test'), false);
+insert into ids select 'keep', act.propose('PKG', 'email.send', '00000000-0000-4000-8000-000000031902', '{"mailbox":"saurabh@example.test"}', '{"fromMailbox":"saurabh@example.test"}', 1, repeat('3', 64), null, '[]', 'user', pg_temp.uid('admin-technical@example.test'), false);
+reset role;
+-- make 'fs' look like a pre-T-247 row: Robert (a lane owner) proposed it on Saurabh's mailbox
+alter table act.proposed_actions disable trigger proposed_actions_guard;
+update act.proposed_actions set proposer_user_id = pg_temp.uid('owner@example.test') where id = (select id from ids where k = 'fs');
+alter table act.proposed_actions enable trigger proposed_actions_guard;
+do $w$
+declare r record;
+begin
+  for r in select a.lane_id, a.id from act.proposed_actions a where a.status = 'proposed' and a.proposer_kind = 'job' and a.action_type like 'email.%' loop
+    perform act.withdraw_proposed(r.lane_id, r.id, 'cut-over: made before drafts became private');
+  end loop;
+  perform pg_catalog.set_config('act.reason', 'cut-over: proposer is not the mailbox owner', true);
+  update act.proposed_actions a set status = 'invalidated' from core.connections c
+   where c.id = a.connection_id and a.status = 'proposed' and a.action_type like 'email.%' and a.proposer_user_id is distinct from c.owner_user_id;
+end
+$w$;
+select is((select status from act.proposed_actions where id = (select id from ids where k = 'cj')), 'invalidated', 'cut-over: a pending JOB draft is withdrawn');
+select is((select status from act.proposed_actions where id = (select id from ids where k = 'fs')), 'invalidated', 'cut-over: a pending draft whose proposer is not the mailbox owner is invalidated');
+select is((select status from act.proposed_actions where id = (select id from ids where k = 'keep')), 'proposed', 'cut-over: the owner''s own pending draft stays');
+select is((select (payload_purged_at is not null)::text from act.proposed_actions where id = (select id from ids where k = 'fs')), 'true', '...and the foreign draft''s body is purged');
+-- one owner with two connections: the 20-pending cap is per owner, not per connection
+create temp table cap_n as select (20 - count(*))::int as n from act.proposed_actions a where a.proposer_user_id = pg_temp.uid('admin-technical@example.test') and a.status = 'proposed' and a.expires_at > now();
+grant all on cap_n to public;
+select n as cap_room from cap_n \gset
+set local role service_role;
+select count(*) from (select act.propose('PKG', 'email.send', case when g % 2 = 0 then '00000000-0000-4000-8000-000000031902'::uuid else '00000000-0000-4000-8000-000000031903'::uuid end, '{"mailbox":"x@example.test"}', '{"fromMailbox":"x@example.test"}', 1, lpad(to_hex(1000 + g), 64, 'a'), null, '[]', 'user', pg_temp.uid('admin-technical@example.test'), false)
+  from generate_series(1, :cap_room) g) x;
+select throws_ok($$select act.propose('PKG', 'email.send', '00000000-0000-4000-8000-000000031903', '{"mailbox":"x@example.test"}', '{"fromMailbox":"x@example.test"}', 1, repeat('7', 64), null, '[]', 'user', pg_temp.uid('admin-technical@example.test'), false)$$, '54000', null, 'one owner with two connections: the cap is 20 pending in total');
 reset role;
 
 select * from finish();

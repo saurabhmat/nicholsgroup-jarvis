@@ -7,6 +7,8 @@
 --  2. act.insert_proposal: the mailbox owner must hold the role that may approve the type (no undecidable draft, e.g. for a viewer); the pending caps
 --     (20 and 6 for jobs) are per mailbox owner for email.
 --  3. The briefing daily cap (6) is per owner, and runs_today shows only the caller's runs (decision: the cap is a cost bound per person, so one user cannot starve the other).
+-- Lock first: a briefing the OLD app saves while this runs would otherwise survive (it waits, then is deleted too).
+lock table brief.briefings in share row exclusive mode;
 delete from brief.briefings where prepared_at < pg_catalog.clock_timestamp();
 do $w$
 declare r record;
@@ -14,6 +16,18 @@ begin
   for r in select a.lane_id, a.id from act.proposed_actions a where a.status = 'proposed' and a.proposer_kind = 'job' and a.action_type like 'email.%' loop
     perform act.withdraw_proposed(r.lane_id, r.id, 'cut-over: made before drafts became private');
   end loop;
+  -- Pending USER drafts whose proposer is not the mailbox's owner (before T-247 only lane owners proposed, e.g. Robert's draft on Saurabh's mailbox):
+  -- the owner would otherwise see and send another person's text, and it would count against the proposer's cap. invalidated = terminal, body purged by the guard.
+  lock table act.proposed_actions in share row exclusive mode;
+  perform pg_catalog.set_config('act.reason', 'cut-over: proposer is not the mailbox owner', true);
+  update act.proposed_actions a set status = 'invalidated'
+    from core.connections c
+   where c.id = a.connection_id and a.status = 'proposed' and a.action_type like 'email.%'
+     and a.proposer_user_id is distinct from c.owner_user_id;
+  -- The cut-over time, readable by check-part-25.sql (schema_migrations has no timestamp).
+  execute pg_catalog.format('comment on table brief.briefings is %L',
+    coalesce(pg_catalog.regexp_replace(pg_catalog.obj_description('brief.briefings'::regclass, 'pg_class'), ' \[T-247 cut-over [^]]*\]$', ''), '')
+    || ' [T-247 cut-over ' || pg_catalog.clock_timestamp()::text || ']');
 end
 $w$;
 
@@ -60,7 +74,7 @@ begin
     raise exception 'act: the connection does not belong to this lane and provider' using errcode = '23503';
   end if;
   -- T-247: an email proposal is made for the mailbox owner (a job names them as proposer_user_id): nobody else's mailbox, and the owner must still hold own_mail here.
-  -- (membership read directly, not through core.allowed_lanes: this definer function is reached only by service_role code, and the check
+  -- (membership read directly, not through core.allowed_lanes: this function is security invoker and reached only by service_role code (through act.propose / supersede), and the check
   -- must not depend on the caller's role setting)
   if p_type like 'email.%' and (v_owner is null or p_proposer_user is distinct from v_owner
        or not exists (select 1 from core.memberships m join core.lanes l on l.code = m.lane_id
@@ -169,7 +183,7 @@ begin
       return pg_catalog.jsonb_build_object('id', null, 'gate', 'running');
     end if;
     -- Every claim of the day counts, lost ones too (T-235 part 1 re-check H1): a released or crashed run may already have
-    -- paid for a model call, so the 6 per lane and day stay a hard bound.
+    -- paid for a model call, so the 6 per owner and day stay a hard bound.
     if (select count(*) from brief.briefing_runs r where r.lane_id = p_lane and r.owner_user_id = p_uid and r.day = v_today) >= 6 then
       return pg_catalog.jsonb_build_object('id', null, 'gate', 'cap_reached');
     end if;
@@ -187,7 +201,7 @@ begin
 end;
 $$;
 comment on function brief.briefing_claim(text, uuid, text) is
-  'T-235: claims one briefing run: stale (auto: latest briefing older than 3 h), one running per lane (2 min), 6 per lane and New York day (every claim counts, lost ones too), Regenerate once per 30 min, 10 min pause after an auto/regenerate/manual attempt. A schedule claim is never gated by the cap; a running one is reused, a finished day answers gate done, a failed retry adds a counted claim. Returns {id, gate}. Definer wrappers only.';
+  'T-235: claims one briefing run: stale (auto: latest briefing older than 3 h), one running per owner (2 min), 6 per owner and New York day (every claim counts, lost ones too), Regenerate once per 30 min, 10 min pause after an auto/regenerate/manual attempt. A schedule claim is never gated by the cap; a running one is reused, a finished day answers gate done, a failed retry adds a counted claim. Returns {id, gate}. Definer wrappers only.';
 
 create or replace function core.briefing_run_state(p_lane text)
 returns table (running boolean, last_regenerate_at timestamptz, runs_today integer, latest_prepared_at timestamptz, last_attempt_at timestamptz)
@@ -214,7 +228,7 @@ begin
 end;
 $$;
 comment on function core.briefing_run_state(text) is
-  'T-235: for the lane owner (AAL2, briefing view): a run is open (2 min), the last Regenerate, runs today (New York day, every claim incl. lost; lane-wide by design), the caller''s newest non-failed and newest briefing times. No row for anyone else.';
+  'T-235: for a member holding own_mail (AAL2): a run is open (2 min), the last Regenerate, runs today (New York day, every claim incl. lost; per owner, T-247), the caller''s newest non-failed and newest briefing times. No row for anyone else.';
 
 revoke all on function act.insert_proposal(text, text, uuid, jsonb, jsonb, integer, text, text, jsonb, text, uuid, boolean, uuid) from public, anon, authenticated;
 revoke all on function brief.briefing_claim(text, uuid, text) from public, anon, authenticated, service_role;
