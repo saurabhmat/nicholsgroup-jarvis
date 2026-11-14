@@ -1,14 +1,7 @@
 "use client";
 import { useState } from "react";
 import { cn } from "../lib/utils";
-
-export const PERIODS = [
-  { key: "week", label: "This week (Sat–Fri)" },
-  { key: "mtd", label: "Month to date" },
-  { key: "ytd", label: "Year to date" },
-] as const;
-
-export type PeriodKey = (typeof PERIODS)[number]["key"];
+import { PERIODS, type PeriodKey } from "../lib/periods";
 
 export type PeriodToggleProps = {
   defaultPeriod?: PeriodKey;

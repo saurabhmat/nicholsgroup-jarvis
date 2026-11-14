@@ -6,15 +6,8 @@
 import { useRouter } from "next/navigation";
 import { useEffect, useRef, useState } from "react";
 import { Button } from "@nichols/ui";
+import { SYNC_NOW_TEXT } from "@/lib/client-constants";
 
-export const SYNC_NOW_TEXT = {
-  started: "Sync started. The times below update in a few seconds.",
-  none: "No Google account is connected to sync.",
-  forbidden: "Only an owner or technical administrator can start a sync.",
-  signedOut: "You are signed out. Sign in again and retry.",
-  failed: "Could not start the sync. Try again in a minute.",
-  network: "Could not reach the portal. Check your connection and try again.",
-} as const;
 export const rateLimitedText = (seconds: number): string => `A sync was just started. You can start another in ${String(Math.max(1, Math.min(120, Math.ceil(seconds))))} seconds.`;
 
 /** The fixed text for a response (status plus the JSON body's `status` / `error` / `retryAfterSeconds`). */

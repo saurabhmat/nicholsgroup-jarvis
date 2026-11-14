@@ -15,7 +15,8 @@ vi.mock("@/app/[laneId]/briefing-actions", () => ({
   regenerateBriefing: (l: string) => act_.regen(l),
   briefingRunState: (l: string) => act_.state(l),
 }));
-import { BriefingAuto, POLL_EVERY_MS, POLL_FOR_MS } from "./briefing-auto";
+import { POLL_EVERY_MS, POLL_FOR_MS } from "@/lib/client-constants";
+import { BriefingAuto } from "./briefing-auto";
 
 const T0 = new Date("2026-11-12T15:00:00.000Z");
 const OLD = "2026-11-12T08:00:00.000Z"; // 7 h before T0: stale

@@ -7,7 +7,7 @@ import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-libra
 import type { ReplyContext } from "@/lib/reply-client";
 import { aiDrafts, clearAllDrafts, debounced, draftNamespace, replyDrafts } from "@/lib/reply-draft-store";
 import { ReplyAction, type ReplyTarget } from "./reply-action";
-import { STALE_NOTE } from "./reply-drawer";
+import { STALE_NOTE } from "@/lib/client-constants";
 
 const nav = vi.hoisted(() => ({ push: vi.fn(), refresh: vi.fn() }));
 vi.mock("next/navigation", () => ({ useRouter: () => nav }));
