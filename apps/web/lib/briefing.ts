@@ -106,10 +106,10 @@ export function internalDomains(configured: readonly string[], owners: Iterable<
 }
 
 /**
- * Loads Coverage + calendar for one lane. Throws only when Coverage itself cannot be read (Home then says
+ * Loads Coverage + calendar for one lane, for one person's own mailboxes (T-247). Throws only when Coverage itself cannot be read (Home then says
  * "unavailable", never an empty day); an events error keeps Coverage and marks the calendar unavailable.
  */
-export async function loadBriefing(client: Db, laneId: string, now: Date, viewerTz: string): Promise<BriefingView> {
+export async function loadBriefing(client: Db, laneId: string, now: Date, viewerTz: string, ownerUserId?: string): Promise<BriefingView> {
   const core = client.schema("core");
   const { from, to } = dayWindow(now, viewerTz);
   const win = eventsWindow(from, to);
@@ -118,9 +118,11 @@ export async function loadBriefing(client: Db, laneId: string, now: Date, viewer
   // A role that may not read the config still gets the defaults (the config read is optional).
   const { briefing, mailboxes, prioritySenders } = briefingConfigFrom(cfg.error ? null : cfg.data?.config);
   const [cov, events, threads] = await Promise.all([
-    core.rpc("briefing_coverage", { p_lane: laneId }),
-    core.rpc("briefing_events", { p_lane: laneId, p_from: win.from.toISOString(), p_to: win.to.toISOString() }),
-    core.rpc("briefing_threads", { p_lane: laneId, p_since: new Date(now.getTime() - briefing.attention_days * DAY_MS).toISOString() }),
+    // T-247: `ownerUserId` names whose mailboxes to read. The three functions use it ONLY for the job client (service_role); a signed-in
+    // caller always gets their own mail whatever is passed, so the owner's own run can pass it too.
+    core.rpc("briefing_coverage", { p_lane: laneId, ...(ownerUserId ? { p_owner: ownerUserId } : {}) }),
+    core.rpc("briefing_events", { p_lane: laneId, p_from: win.from.toISOString(), p_to: win.to.toISOString(), ...(ownerUserId ? { p_owner: ownerUserId } : {}) }),
+    core.rpc("briefing_threads", { p_lane: laneId, p_since: new Date(now.getTime() - briefing.attention_days * DAY_MS).toISOString(), ...(ownerUserId ? { p_owner: ownerUserId } : {}) }),
   ]);
   if (cov.error) throw new Error("briefing data unavailable: coverage");
   if (events.error) console.error("[home] briefing events unavailable", { laneId });

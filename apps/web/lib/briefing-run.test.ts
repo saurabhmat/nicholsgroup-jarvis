@@ -110,6 +110,51 @@ describe("runBriefing", () => {
     expect(saved[0]?.content.notes).toContain("fail:model_not_allowed");
   });
 
+  it("T-247: two users in one lane: each run reads, sends to the model and saves only its own owner's threads and events", async () => {
+    const A = "00000000-0000-4000-8000-0000000000aa";
+    const B = "00000000-0000-4000-8000-0000000000bb";
+    // Stands in for the SQL functions: they answer for the owner NAMED in p_owner (the job client is service_role), nobody else's.
+    const byOwner: Record<string, { conn: string; subject: string; event: string }> = {
+      [A]: { conn: "cA", subject: "Alpha renewal", event: "Alpha board call" },
+      [B]: { conn: "cB", subject: "Bravo contract", event: "Bravo dentist" },
+    };
+    const asked: { fn: string; owner: unknown }[] = [];
+    const shared = {
+      schema: () => ({
+        from: () => ({ select: () => ({ eq: () => ({ maybeSingle: async () => ({ data: { config: { mailboxes: [] } }, error: null }) }) }) }),
+        rpc: async (fn: string, args: { p_owner?: string }) => {
+          asked.push({ fn, owner: args.p_owner });
+          const mine = args.p_owner ? byOwner[args.p_owner] : undefined;
+          if (!mine) return { data: [], error: null };
+          if (fn === "briefing_coverage") return { data: [{ stream: "mail", account: `${mine.conn}@pubk.test`, connection_id: mine.conn, provider: "google", status: "active", configured: false, last_sync_at: "2026-11-11T14:59:00Z" }, { stream: "calendar", account: `${mine.conn}@pubk.test`, connection_id: mine.conn, provider: "google", status: "active", configured: false, last_sync_at: "2026-11-11T14:59:00Z" }], error: null };
+          if (fn === "briefing_threads") return { data: [{ connection_id: mine.conn, thread_key: `t-${mine.conn}`, message_id: `m-${mine.conn}`, from_address: "client@acme.test", from_name: "Client", subject: mine.subject, received_at: "2026-11-11T10:00:00Z", source_url: null, labels: ["INBOX"], last_is_owner: false, owner_replied: false, unread_count: 1, inbound_count: 1, last_to_owner: true }], error: null };
+          if (fn === "briefing_events") return { data: [{ connection_id: mine.conn, calendar_id: "primary", event_id: `e-${mine.conn}`, title: mine.event, start_at: "2026-11-11T18:00:00Z", end_at: "2026-11-11T19:00:00Z", all_day: false, attendees: [] }], error: null };
+          return { data: [], error: null };
+        },
+      }),
+    } as unknown as Parameters<typeof loadBriefing>[0];
+    const runFor = async (owner: string) => {
+      const { d, saved, provider } = deps({ client: shared, reply: "{}" });
+      await runBriefing(d, { ...input, ownerUserId: owner, trigger: "schedule" });
+      const prompt = String((provider.calls[0]?.messages ?? []).map((m) => JSON.stringify(m.content)).join(""));
+      return { saved: saved[0] as SavedBriefing, prompt };
+    };
+    const a = await runFor(A);
+    const b = await runFor(B);
+    expect(a.saved.ownerUserId).toBe(A);
+    expect(b.saved.ownerUserId).toBe(B);
+    expect(a.saved.sourceRefs.map((r) => r.subject)).toEqual(["Alpha renewal"]);
+    expect(b.saved.sourceRefs.map((r) => r.subject)).toEqual(["Bravo contract"]);
+    expect(a.prompt).toContain("Alpha");
+    expect(a.prompt).not.toMatch(/Bravo/);
+    expect(b.prompt).toContain("Bravo");
+    expect(b.prompt).not.toMatch(/Alpha/);
+    expect(JSON.stringify(a.saved)).not.toMatch(/Bravo|cB/);
+    expect(JSON.stringify(b.saved)).not.toMatch(/Alpha|cA/);
+    // every one of the three reads of a run named that run's owner
+    expect(asked.filter((x) => ["briefing_coverage", "briefing_events", "briefing_threads"].includes(x.fn)).every((x) => x.owner === A || x.owner === B)).toBe(true);
+  });
+
   it("policyFrom fails closed", () => {
     expect(policyFrom(null)).toEqual({ email: false, calendar: false, storeDrafts: false });
     expect(policyFrom({ llm_allowed_categories: ["calendar"], store_outbound_drafts: true })).toEqual({ email: false, calendar: true, storeDrafts: true });

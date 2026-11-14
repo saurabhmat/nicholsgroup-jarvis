@@ -122,7 +122,7 @@ async function start(laneId: string, kind: "auto" | "regenerate"): Promise<Brief
           {
             client: lane,
             provider,
-            readBody: async (l, c, m) => (await readGmailBody(l, c, m)).text,
+            readBody: async (l, c, m) => (await readGmailBody(l, c, m, userId)).text, // the connection must be the user's own (T-247)
             brain,
             policy,
             save: (l, r) => saveOwnBriefing(lane, l, r),

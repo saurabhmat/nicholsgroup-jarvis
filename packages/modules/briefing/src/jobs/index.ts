@@ -54,11 +54,23 @@ export async function saveOwnBriefing(client: Rpc, laneId: LaneId, r: Omit<Brief
   return data;
 }
 
-/** Lane owners (re-checked on every scheduled run; the views are checked by the caller). */
+/**
+ * T-247: the users who own at least one active mailbox in the lane: a briefing is per person, built from that person's own mailboxes
+ * only, so the scheduled job runs once per such user (not per lane owner). Distinct, in a stable order. `client` must be the job client.
+ * The caller re-checks that each still holds own_mail in the lane (core.allowed_lanes) before running.
+ */
 export async function briefingOwners(client: Rpc, laneId: LaneId): Promise<string[]> {
-  const { data, error } = await client.schema("core").from("memberships").select("user_id").eq("lane_id", laneId).eq("role", "owner");
+  const { data, error } = await client
+    .schema("core")
+    .from("connections")
+    .select("owner_user_id")
+    .eq("lane_id", laneId)
+    .in("provider", ["google", "microsoft"])
+    .in("status", ["active", "degraded"])
+    .not("owner_user_id", "is", null);
   if (error || !Array.isArray(data)) return [];
-  return data.flatMap((m: { user_id?: unknown }) => (typeof m.user_id === "string" ? [m.user_id] : []));
+  const ids = data.flatMap((m: { owner_user_id?: unknown }) => (typeof m.owner_user_id === "string" ? [m.owner_user_id] : []));
+  return [...new Set(ids)].sort();
 }
 
 /** Retention purge (brief.briefings_purge enforces floor, cap and enabled lane). `client` must be the job client. */

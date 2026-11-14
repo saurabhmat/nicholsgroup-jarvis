@@ -25,7 +25,8 @@ describe("connectResultMessage", () => {
     const m = connectResultMessage({ connect: "account_refused", provider: "google", notice: "remove_app_access" });
     expect(m?.tone).toBe("alert");
     expect(m?.title).toBe("Google account not accepted");
-    expect(m?.description).toMatch(/mailbox list/);
+    expect(m?.description).toMatch(/domain this company allows/);
+    expect(m?.description).toMatch(/another person/);
     expect(m?.description).toMatch(/Third-party connections/);
   });
 

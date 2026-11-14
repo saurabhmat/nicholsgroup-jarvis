@@ -4,7 +4,7 @@
 // like nothing happened.
 
 import { AuthError, type Guards } from "@nichols/core/auth";
-import { CONNECT_ROLES } from "@nichols/connectors/oauth";
+import { MAIL_CONNECT_ROLES } from "@nichols/connectors/oauth";
 
 export type ConnectResultMessage = { tone: "success" | "alert"; title: string; description: string };
 
@@ -62,7 +62,7 @@ export function connectResultMessage(params: SearchParams): ConnectResultMessage
           (baseName === "Composio"
             ? `The ${toolkit ?? "account"} you chose is not in this company's mailbox list, is for a different service, or is already connected to another company. Nothing was saved in Jarvis. Ask your administrator to add the address to the mailbox list.`
             : name === "Google"
-            ? "The Google account you chose is not in this company's mailbox list, or is already connected to another company. Nothing was saved. Ask your administrator to add the address to the mailbox list."
+            ? "The Google account you chose is not on a domain this company allows, or is already connected to another company or to another person. Nothing was saved. Ask your administrator if you think it should be allowed."
             : `The ${name} account you chose is not the one set up for this company, or is already connected to another company. Nothing was saved.`) + removeAccess,
       };
     case "wrong_account":
@@ -92,7 +92,7 @@ export async function connectResultFor(g: Pick<Guards, "requireRole">, laneId: s
   const message = connectResultMessage(params);
   if (!message) return null;
   try {
-    await g.requireRole(laneId, CONNECT_ROLES);
+    await g.requireRole(laneId, [...MAIL_CONNECT_ROLES]); // T-247: anyone who may connect their own Google account sees the result
   } catch (e) {
     if (e instanceof AuthError) return null;
     throw e;

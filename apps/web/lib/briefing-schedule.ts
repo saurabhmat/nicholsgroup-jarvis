@@ -1,8 +1,9 @@
 // The scheduled briefing (T-231c): which owners are due, and one run. Wired into the Inngest route, which passes
 // `clientFor` (the job client: only the route creates it). Off unless lane_config.briefing.schedule_enabled is true.
-// Every run re-checks the owner's membership and views (briefing, comms, calendar). The job client reads the whole lane's
-// mail index: today an owner may see every mailbox in the lane (comms RLS is per lane, not per mailbox), so this equals
-// what the owner's own Home sees. If RLS ever narrows to a mailbox or connection, this path must filter by owner.
+// T-247: a briefing is per PERSON. The schedule runs once for every user who owns an active mailbox in the lane (not per lane owner), and
+// every run re-checks that user still holds the own_mail view. The job client bypasses RLS, so every read names the owner explicitly
+// (loadBriefing passes ownerUserId to core.briefing_coverage / briefing_events / briefing_threads, which read only that user's mailboxes),
+// and the live body reads check the connection's owner. One user's briefing never contains another user's mail or events.
 // The brain profile needs the owner's session, so a scheduled run goes without it (note "no_brain_in_schedule").
 import { getLLMProvider } from "@nichols/ai/config";
 import type { LaneId } from "@nichols/core";
@@ -17,9 +18,9 @@ import { replyProposer } from "./briefing-proposals";
 type Db = Parameters<typeof briefingOwners>[0] & Parameters<typeof runBriefing>[0]["client"];
 export type ClientFor = (laneId: string) => Promise<Db>;
 
-const VIEWS = ["briefing", "comms", "calendar"] as const;
+const VIEWS = ["own_mail"] as const;
 
-/** Owners of the lane who still hold the briefing, comms and calendar views (re-checked on every run). */
+/** Users who own an active mailbox in the lane and still hold the own_mail view (re-checked on every run). */
 export async function ownersWithViews(clientFor: ClientFor, laneId: string): Promise<string[]> {
   const c = await clientFor(laneId);
   const owners = await briefingOwners(c, laneId as LaneId);
@@ -90,7 +91,8 @@ async function runModel(c: Db, provider: Extract<ReturnType<typeof getLLMProvide
     {
       client: c,
       provider,
-      readBody: async (l, conn, m) => (await readGmailBody(l, conn, m)).text,
+      // The connection must be this user's own (a job reads a mailbox only on behalf of its owner).
+      readBody: async (l, conn, m) => (await readGmailBody(l, conn, m, ownerUserId)).text,
       brain: { brainUser: null, laneBrain: {}, notes: ["no_brain_in_schedule"] },
       policy: policyFrom(policyRow as Parameters<typeof policyFrom>[0]),
       save: (l, r) => saveBriefing(c, l, r),

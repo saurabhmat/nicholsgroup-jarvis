@@ -123,8 +123,8 @@ export type CallbackResult =
   | { ok: true; provider: Provider; laneId: LaneId; connectionId: string }
   | { ok: false; reason: ConnectFailure; provider?: Provider; laneId?: LaneId; message?: string };
 
-/** Thrown by `authorize` callbacks; the route maps it to 401/403. Anything else is an outage. */
-export type AuthorizeFn = (laneId: LaneId) => Promise<Authorized>;
+/** Thrown by `authorize` callbacks; the route maps it to 401/403. Anything else is an outage. The provider is passed so the roles can differ (a person's own Google account: any own_mail member, T-247). */
+export type AuthorizeFn = (laneId: LaneId, provider?: Provider) => Promise<Authorized>;
 
 const OUTAGE_KINDS: ReadonlySet<string> = new Set(["transient", "rate_limited", "connection_unavailable"]);
 /** Scopes any OpenID provider adds on its own; everything else the token carries must have been requested. */
@@ -168,7 +168,7 @@ export function createOAuthFlow(deps: OAuthFlowDeps) {
     async start(slug: string, laneId: LaneId, authorize: AuthorizeFn, opts: { connectionId?: string } = {}): Promise<string> {
       const p = bySlug.get(slug);
       if (!p) throw new ConnectorError({ kind: "not_found", message: "Unknown provider" });
-      const { userId, client } = await authorize(laneId);
+      const { userId, client } = await authorize(laneId, p.provider);
       // A reconnect (T-238): the connection must be this lane's own, for this provider; its account is the only one the callback accepts.
       let bound: { id: string; externalAccountId: string } | null = null;
       if (opts.connectionId !== undefined) {
@@ -217,7 +217,7 @@ export function createOAuthFlow(deps: OAuthFlowDeps) {
       if (!p) return { ok: false, reason: "unknown_provider" };
       const laneId = laneOfState(query.get("state"));
       if (!laneId) return { ok: false, reason: "invalid_state", provider: p.provider };
-      const { userId, client } = await authorize(laneId);
+      const { userId, client } = await authorize(laneId, p.provider);
 
       let stored: Awaited<ReturnType<StateStore["consume"]>>;
       try {

@@ -108,7 +108,7 @@ describe("guard order", () => {
     for (const body of [{ action: "reply_context", messageId: "m1" }, { action: "draft_reply", messageId: "m1" }, SAVE]) {
       expect((await handleApprovals(post(body), "PKG", s.deps)).status).toBe(403);
     }
-    expect(s.requireRole).toHaveBeenCalledWith("PKG", ["owner"]);
+    expect(s.requireRole).toHaveBeenCalledWith("PKG", ["owner", "admin_technical"]); // T-247: the mailbox owner, whatever their role (the database checks the mailbox)
     expect(s.calls).toEqual([]);
     expect(s.readBody).not.toHaveBeenCalled();
     expect(s.provider.calls).toHaveLength(0);

@@ -11,6 +11,7 @@
     "./internal": "./src/contract/internal.ts",
     "./redact": "./src/redact.ts",
     "./oauth": "./src/oauth/index.ts",
+    "./mail-policy": "./src/vault/mail-policy.ts",
     "./raw": "./src/raw/index.ts",
     "./webhooks": "./src/webhooks/index.ts",
     "./write": "./src/write/index.ts",
