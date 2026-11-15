@@ -1,8 +1,9 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { LLMProviderError } from "@nichols/ai";
 import { createMockProvider, textResult, webSearchResult } from "@nichols/ai/testing";
-import { newsConfigFrom, reserveUsd } from "./news-domain";
+import { actualUsd, newsConfigFrom, reserveUsd } from "./news-domain";
 import { gateCodeFrom, NewsGateError, runNewsFetch, type NewsFinish } from "./news-run";
+import { NEWS_RETRY_BEFORE_MS } from "./news-types";
 
 const NOW = new Date("2026-11-12T15:00:00Z");
 const cfg = newsConfigFrom({ news: { enabled: true } });
@@ -190,6 +191,17 @@ describe("T-236: a reply cut off at the output limit", () => {
     expect(provider.calls).toHaveLength(1);
     expect(logged()).toContain("news.retry_skipped");
   });
+  it("T-249: retryOnlyBeforeMs moves the cut-off (the background paths retry up to 100 s in)", async () => {
+    for (const [elapsed, calls] of [[90_000, 2], [110_000, 1]] as const) {
+      const provider = createMockProvider([cut(), good()]);
+      let t = 0;
+      await runNewsFetch(
+        { provider, begin: async () => "d", finish: async () => undefined, clock: () => (t += elapsed), retryOnlyBeforeMs: NEWS_RETRY_BEFORE_MS },
+        { laneId: "PKG", laneName: "Pub K", cfg, now: NOW },
+      );
+      expect(provider.calls, String(elapsed)).toHaveLength(calls);
+    }
+  });
   it("a context-window stop is not retried (a higher output limit cannot fix it)", async () => {
     const h = harness([{ ...(cut() as object), stopReason: "model_context_window_exceeded" } as never, good()]);
     expect(await h.run()).toMatchObject({ failureCode: "output_truncated" });
@@ -200,6 +212,12 @@ describe("T-236: a reply cut off at the output limit", () => {
     const r = await h.run();
     expect(r).toMatchObject({ status: "failed", failureCode: "model_busy" });
     expect(h.calls.finish[0]?.r.estCostUsd).toBeGreaterThanOrEqual(reserveUsd(cfg));
+  });
+  it("T-249: a retry that times out counts the first call in full PLUS a reserve floor for the retry (an aborted retry is never free)", async () => {
+    const first = cut() as { usage: Parameters<typeof actualUsd>[0] };
+    const h = harness([cut(), new LLMProviderError("timeout")]);
+    expect(await h.run()).toMatchObject({ status: "failed", failureCode: "timed_out" });
+    expect(h.calls.finish[0]?.r.estCostUsd).toBeGreaterThanOrEqual(actualUsd(first.usage, cfg) + reserveUsd(cfg) - 0.01);
   });
   it("forgiving: bad stories are dropped, the rest stored; the log has counts and reason codes only", async () => {
     const text = JSON.stringify({

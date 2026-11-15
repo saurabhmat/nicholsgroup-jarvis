@@ -7,7 +7,7 @@ const results = new Map<string, { data: unknown; error: { name: string } | null 
 vi.mock("@supabase/ssr", () => ({
   createServerClient: () => ({
     auth: Object.fromEntries(
-      ["signInWithOtp", "verifyOtp", "signOut", "getClaims", "getSession"].map((m) => [
+      ["signInWithOtp", "verifyOtp", "signOut", "getClaims", "getSession", "refreshSession"].map((m) => [
         m,
         async (args?: unknown) => {
           calls.push({ method: m, args });
@@ -22,7 +22,7 @@ vi.mock("../env/server", () => ({
   requireSupabasePublicEnv: () => ({ NEXT_PUBLIC_SUPABASE_URL: "http://127.0.0.1:54321", NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY: "sb_publishable_test" }),
 }));
 
-const { authActions, refreshSession, safeNextPath, AuthError } = await import("./index");
+const { authActions, refreshSession, renewSessionIfExpiring, safeNextPath, AuthError } = await import("./index");
 const actions = authActions({ getAll: () => [] });
 
 beforeEach(() => {
@@ -138,5 +138,34 @@ describe("session cookie options (T-018 review M3)", () => {
     expect(SESSION_COOKIE_OPTIONS("production")).toEqual({ httpOnly: true, secure: true, sameSite: "lax", path: "/" });
     expect(SESSION_COOKIE_OPTIONS("preview").secure).toBe(true);
     expect(SESSION_COOKIE_OPTIONS("local")).toEqual({ httpOnly: true, secure: false, sameSite: "lax", path: "/" });
+  });
+});
+
+describe("renewSessionIfExpiring (T-249)", () => {
+  const NOW_S = 1_800_000_000;
+  const withExpiry = (expiresAt: number | undefined) => results.set("getSession", { data: { session: { access_token: "tok", expires_at: expiresAt } }, error: null });
+  it("leaves a token with enough time alone; renews one that is close to expiry or has no expiry", async () => {
+    withExpiry(NOW_S + 900);
+    expect(await renewSessionIfExpiring({ getAll: () => [] }, 300, NOW_S)).toBe("fresh");
+    expect(calls.some((c) => c.method === "refreshSession")).toBe(false);
+    for (const exp of [NOW_S + 120, undefined]) {
+      calls.length = 0;
+      withExpiry(exp);
+      results.set("refreshSession", { data: { session: { access_token: "new" } }, error: null });
+      expect(await renewSessionIfExpiring({ getAll: () => [] }, 300, NOW_S)).toBe("renewed");
+      expect(calls.filter((c) => c.method === "refreshSession")).toHaveLength(1);
+    }
+  });
+  it("no session, a refused renewal or an outage is 'failed', never a throw", async () => {
+    results.set("getSession", { data: { session: null }, error: null });
+    expect(await renewSessionIfExpiring({ getAll: () => [] }, 300, NOW_S)).toBe("failed");
+    withExpiry(NOW_S + 10);
+    results.set("refreshSession", { data: { session: null }, error: { name: "AuthApiError" } });
+    expect(await renewSessionIfExpiring({ getAll: () => [] }, 300, NOW_S)).toBe("failed");
+  });
+  it("the verified session carries the token's exp claim", async () => {
+    results.set("getSession", { data: { session: { access_token: "tok" } }, error: null });
+    results.set("getClaims", { data: { claims: { sub: "u1", aal: "aal2", exp: NOW_S + 900 } }, error: null });
+    expect((await refreshSession({ getAll: () => [] })).session?.expiresAt).toBe(NOW_S + 900);
   });
 });

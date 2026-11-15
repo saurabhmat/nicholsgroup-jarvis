@@ -44,8 +44,8 @@ import { createFailureTracker } from "@/lib/job-failures";
 import { dueOwners, refreshOwners, runRefresh, runScheduled } from "@/lib/briefing-schedule";
 import { newsDue, runScheduledNews } from "@/lib/news-schedule";
 
-// A scheduled news fetch (one model call with web search and up to 2 resumes, 80 s abort) runs inside this route's step.
-export const maxDuration = 120;
+// A scheduled news fetch (one model call with web search and up to 2 resumes, 240 s abort, T-249) runs inside this route's step.
+export const maxDuration = 300;
 
 const importPurge = createImportPurge({ clientFor: (laneId) => getLaneJobClient(laneId) });
 // The brain tables in the retention catalog: kept until deleted, or cleaned by brain-import-purge (never by retention.purge).

@@ -1167,6 +1167,12 @@ Spec: `docs/specs/brain-and-employees.md`, `docs/specs/brain-interview.md`; seed
 - note: approved by Saurabh Nov 13, 2026 ("New task from main (after T-242 merges)"). Brief in `.agent/tasks/T-243-brief.md`. Branch agent/T-243 from origin/main; security + code review; don't push; any SQL as a gitignored manual part with a check.
 - acceptance: (1) Cash (book balance) = sum of the current balances (QuickBooks Account.CurrentBalance) of PKG's mapped bank accounts, as of the last books sync; no balance sheet. (2) Home: automated/login-link mail (e.g. a "customer portal login link") never in the top 5; no "Waiting on you" on items the summary says need no action; items the summary marks "no reply needed" leave the top 5; the subject is always shown; sender names are never built from an email address. (3) no Date.now() prerender errors on /[laneId] and /[laneId]/settings. Unit tests and pgTAP with synthetic data.
 
+### T-249 GovCon news time budget (async Refresh) and no Reply for no-reply / security-alert senders
+- status: done
+- depends: T-247
+- note: requested by Saurabh Nov 15, 2026 after T-247 went live ("Small follow-ups for one task"). Numbered T-249 because T-248 is held for the cash-basis P&L / parent-account / golive-2 work (not yet in this backlog). Branch agent/T-249 from origin/main; security + code review; no SQL; not pushed.
+- acceptance: (1) A news fetch no longer ends as "the fetch took too long" because of our own bounds: scheduled job 150 s per model request and 240 s per fetch (Inngest route maxDuration 300 s); the owner's Refresh reserves in SQL (gates answer at once) and runs the fetch in after() with the same bound (Home maxDuration 300 s); the card shows "Fetching news in the background" and re-reads the page every 20 s while the fetch is in flight (at most 6 min). The retry after a cut-off reply may start up to 100 s in. SQL unchanged (a pending row is lost after 10 min). (2) Home offers no Reply for automated senders, no-reply addresses (`isNoReplyAddress`, a structural local-part rule, no company data), security alerts and repeated failures (fail closed when the flag is absent); the reply server path refuses a no-reply sender with `no_reply_sender` before reading the body; the briefing auto-draft guard uses the same rule. Tests for each.
+
 ### T-174 Lane onboarding playbook + dry run
 - status: proposed
 - depends: T-090, T-047

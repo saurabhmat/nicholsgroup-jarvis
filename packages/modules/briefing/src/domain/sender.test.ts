@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { ageShort, attentionChips, senderLabel, senderParts } from "./sender";
+import { ageShort, attentionChips, isNoReplyAddress, senderLabel, senderParts } from "./sender";
 import { domainOf } from "./calendar";
 
 describe("domainOf and senderLabel", () => {
@@ -88,5 +88,21 @@ describe("ageShort", () => {
     expect(ageShort("2026-11-12T10:00:00Z", now)).toBe("2h");
     expect(ageShort("2026-11-09T12:00:00Z", now)).toBe("3d");
     expect(ageShort("2026-11-13T12:00:00Z", now)).toBe("now"); // a future clock skew never shows a negative age
+  });
+});
+
+describe("isNoReplyAddress (T-249)", () => {
+  it("no-reply, do-not-reply and mailer-daemon tokens anywhere in the local part, as their own segment", () => {
+    for (const a of ["no-reply@accounts.google.com", "noreply@x.test", "NO_REPLY@x.test", "no.reply@x.test", "do-not-reply@x.test", "donotreply@x.test", "accounts-noreply@x.test", "noreply+abc@x.test", "mailer-daemon@x.test", "billing.noreply@x.test", "noreply2@x.test", "Google <no-reply@accounts.google.com>"]) {
+      expect(isNoReplyAddress(a), a).toBe(true);
+    }
+  });
+  it("system mailboxes only at the start of the local part", () => {
+    for (const a of ["postmaster@x.test", "notifications@github.test", "notification@x.test", "bounce-123@x.test", "bounces@x.test"]) expect(isNoReplyAddress(a), a).toBe(true);
+  });
+  it("a person, an empty value or a token inside a word is not matched; the domain is never read", () => {
+    for (const a of ["dana@x.test", "noreplyable.dana@x.test", "snoreply@x.test", "joe.notifications.fan@x.test", "dana@no-reply.test", "", "@x.test"]) expect(isNoReplyAddress(a), a).toBe(false);
+    expect(isNoReplyAddress(null)).toBe(false);
+    expect(isNoReplyAddress(undefined)).toBe(false);
   });
 });

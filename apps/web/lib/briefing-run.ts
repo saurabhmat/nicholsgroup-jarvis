@@ -16,7 +16,7 @@
 import { wrapUntrusted, UNTRUSTED_DATA_RULE, type LLMProvider } from "@nichols/ai";
 import { assemblePrompt, BRAIN_RULES, withUserContext } from "@nichols/ai/prompts";
 import type { LaneId } from "@nichols/core";
-import { BRIEFING_RULES, checkContent, classifyFailure, easternDateTime, formatTimeIn, failureNote, maskContent, maskFigures, tidyContent, type BriefContent, type BriefRef, type FailureCode } from "@nichols/briefing/domain";
+import { BRIEFING_RULES, checkContent, classifyFailure, easternDateTime, formatTimeIn, failureNote, isNoReplyAddress, maskContent, maskFigures, tidyContent, type BriefContent, type BriefRef, type FailureCode } from "@nichols/briefing/domain";
 import type { BrainPromptContext } from "@nichols/brain/server";
 import { loadBriefing, type BriefingView } from "./briefing";
 import { BRIEFING_OUTPUT_SCHEMA, correctionMessage, parseBriefingOutput } from "./briefing-output";
@@ -54,7 +54,6 @@ export type ReplyProposal = {
 };
 
 const MASKED = /\[(?:amount|number)\]/;
-const NO_REPLY = /^(?:no-?reply|do-?not-?reply|mailer-daemon|notifications?)[@+.]/i;
 export const reSubject = (s: string | null) => {
   const t = (s ?? "").replace(/[\r\n]+/g, " ").trim();
   return /^re:/i.test(t) ? t : `Re: ${t}`.trim();
@@ -80,7 +79,7 @@ async function proposeReplies(deps: RunDeps, laneId: LaneId, content: BriefConte
       continue;
     }
     // Only a draft checked as ready is proposed (T-231d security review M1): "Awaiting your input" stays on Home.
-    if (d.status !== "ready" || !r || !d.text || !to || !r.threadKey || r.threadKey.startsWith("m:") || ownMailboxes.has(to) || NO_REPLY.test(to)) {
+    if (d.status !== "ready" || !r || !d.text || !to || !r.threadKey || r.threadKey.startsWith("m:") || ownMailboxes.has(to) || isNoReplyAddress(to)) {
       content.notes.push(`reply_not_proposed:${d.ref}`);
       continue;
     }

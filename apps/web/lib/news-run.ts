@@ -46,9 +46,11 @@ export type NewsRunDeps = {
   signal?: AbortSignal;
   /** Milliseconds clock (tests only); default Date.now. Used for the retry budget. */
   clock?: () => number;
+  /** No retry after a cut-off reply once this much of the fetch has elapsed (it could not finish inside the time bound). Default NEWS_RETRY_ONLY_BEFORE_MS. */
+  retryOnlyBeforeMs?: number;
 };
 
-/** No retry after a cut-off reply once this much of the fetch has elapsed: it could not finish inside the Refresh bound (70 s). */
+/** Default retry cut-off (a caller with a short bound); the scheduled job and Refresh pass NEWS_RETRY_BEFORE_MS (T-249). */
 export const NEWS_RETRY_ONLY_BEFORE_MS = 30_000;
 
 type Usage = LLMResult["usage"];
@@ -104,7 +106,7 @@ export async function runNewsFetch(deps: NewsRunDeps, input: { laneId: string; l
       messages: [{ role: "user", content: buildNewsUser(now) }],
       maxTokens: retry ? retryMaxTokens(cfg) : cfg.max_tokens,
       // The retry after a cut-off reply runs at effort "low" (less thinking: fewer tokens and a shorter call). Best effort: it
-      // starts only in the first 30 s and the Refresh bound (70 s) still applies.
+      // starts only before the retry cut-off and the fetch's time bound still applies.
       ...(retry ? { effort: "low" as const } : {}),
       serverTools: { webSearch: { maxUses: cfg.max_searches, maxResumes: NEWS_MAX_RESUMES, ...(cfg.blocked_domains.length ? { blockedDomains: cfg.blocked_domains } : {}) } },
       ...(deps.signal ? { signal: deps.signal } : {}),
@@ -120,7 +122,7 @@ export async function runNewsFetch(deps: NewsRunDeps, input: { laneId: string; l
     if (result.status === "max_tokens" && result.stopReason === "max_tokens") {
       // Never parse a truncated reply. One retry with a higher limit and fewer stories, only while it can still finish in time.
       spent = result.usage;
-      if (clock() - startedMs > NEWS_RETRY_ONLY_BEFORE_MS) {
+      if (clock() - startedMs > (deps.retryOnlyBeforeMs ?? NEWS_RETRY_ONLY_BEFORE_MS)) {
         console.error("[news] news.retry_skipped", { laneId: input.laneId, elapsedMs: clock() - startedMs });
       } else {
         const second = await ask(true);
@@ -135,7 +137,12 @@ export async function runNewsFetch(deps: NewsRunDeps, input: { laneId: string; l
     // reserve floor or what the provider saw, whichever is higher: never $0 after a call ran.
     const thrown = e instanceof LLMProviderError ? e.usage : undefined;
     const used = spent && thrown ? addUsage(spent, thrown) : (spent ?? thrown);
-    const estimate = f.cost === "zero" && !used ? 0 : Math.max(reserve, used ? actualUsd(used, cfg) : 0);
+    let estimate = f.cost === "zero" && !used ? 0 : Math.max(reserve, used ? actualUsd(used, cfg) : 0);
+    // T-249 (security review M): the retry after a cut-off reply failed or was aborted. The reserve covers ONE call with its
+    // resumes, so the first call is counted in full and the failed retry adds its own floor (the reserve, or what the provider
+    // reported, whichever is higher): an aborted retry is never free, and the monthly cap sees both calls.
+    // Rounded up to cents and capped at the SQL check (0..1000), so the closing call can never be refused for the sum.
+    if (spent && f.cost !== "zero") estimate = Math.min(1000, Math.ceil((actualUsd(spent, cfg) + Math.max(reserve, thrown ? actualUsd(thrown, cfg) : 0)) * 100 - 1e-9) / 100);
     console.error("[news] news.model_failed", { laneId: input.laneId, code: f.code });
     return failed(f.code, estimate, Math.min(50, used?.webSearchRequests ?? 0));
   }

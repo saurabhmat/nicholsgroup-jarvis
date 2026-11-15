@@ -423,3 +423,19 @@ describe("moneyThreads", () => {
     ]);
   });
 });
+
+describe("replyable (T-249)", () => {
+  it("a person's mail is replyable; a security alert, a no-reply or automated sender and repeated failures are not", () => {
+    expect(rankAttention([t({ fromAddress: "dana@acme.test", subject: "Contract question" })], rules, now).top[0]?.replyable).toBe(true);
+    const alert = rankAttention([t({ fromAddress: "no-reply@accounts.google.com", subject: "Security alert: new sign-in on Mac" })], rules, now).top[0];
+    expect(alert?.kind).toBe("security");
+    expect(alert?.replyable).toBe(false);
+    // An authenticated priority sender from a no-reply mailbox is still listed, but without Reply.
+    const prio = rankAttention([t({ fromAddress: "noreply@bigclient.test", subject: "Your order", isAuthPass: true })], rules, now).top[0];
+    expect(prio?.kind).toBe("priority");
+    expect(prio?.replyable).toBe(false);
+    const ci = (subject: string) => t({ fromAddress: "builds@ci.github.com", subject });
+    const failures = rankAttention([ci("Run failed"), ci("Build failed"), ci("Run failed")], rules, now).top.find((i) => i.kind === "repeated_failures");
+    expect(failures?.replyable).toBe(false);
+  });
+});

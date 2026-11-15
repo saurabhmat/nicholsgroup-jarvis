@@ -121,6 +121,7 @@ const STATUS: Record<string, number> = {
   unavailable: 503,
   // reply actions (lib/reply.ts)
   not_replyable: 409,
+  no_reply_sender: 409,
   ai_not_allowed: 409,
   ai_not_configured: 503,
   ai_failed: 502,

@@ -22,7 +22,12 @@ import { getLaneClient, LANE_ID, listLanes, LaneAccessError, type LaneClient, ty
 
 export type Aal = "aal1" | "aal2";
 /** `mfaVerifiedAt`: when the user last entered a TOTP code (epoch seconds, from the verified `amr` claim). */
-export type VerifiedSession = LaneSession & { aal: Aal; mfaVerifiedAt: number | null };
+export type VerifiedSession = LaneSession & {
+  aal: Aal;
+  mfaVerifiedAt: number | null;
+  /** T-249: when the verified access token expires (epoch seconds, the `exp` claim). Background work that keeps the token checks it. */
+  expiresAt?: number;
+};
 export type SessionReader = () => Promise<VerifiedSession | null>;
 export type Role = "owner" | "finance_operator" | "viewer" | "admin_technical";
 
@@ -74,7 +79,28 @@ async function verifiedSession(supabase: ReturnType<typeof authClient>): Promise
     accessToken: token,
     aal: claims.aal === "aal2" ? "aal2" : "aal1",
     mfaVerifiedAt: totpVerifiedAt(claims.amr),
+    ...(typeof claims.exp === "number" && Number.isFinite(claims.exp) ? { expiresAt: claims.exp } : {}),
   };
+}
+
+/**
+ * T-249: renews the session (writing the refreshed cookies back) when the access token in the cookies has fewer than
+ * `minRemainingS` seconds left, so a server action can hand its lane client to background work (Next's after()) that outlives
+ * the usual renewal margin. The cookie expiry only decides WHETHER to renew; callers still check the verified `expiresAt` of
+ * the session they then read. Never throws: "failed" for no session, a refused renewal or an Auth outage.
+ */
+export async function renewSessionIfExpiring(cookies: CookieStore, minRemainingS: number, nowS: number = Math.floor(Date.now() / 1000)): Promise<"fresh" | "renewed" | "failed"> {
+  try {
+    const supabase = authClient(cookies);
+    const { data } = await supabase.auth.getSession();
+    if (!data.session) return "failed";
+    const exp = data.session.expires_at;
+    if (typeof exp === "number" && exp - nowS >= minRemainingS) return "fresh";
+    const r = await supabase.auth.refreshSession();
+    return !r.error && r.data.session ? "renewed" : "failed";
+  } catch {
+    return "failed";
+  }
 }
 
 export function cookieSessionReader(cookies: CookieStore): SessionReader {

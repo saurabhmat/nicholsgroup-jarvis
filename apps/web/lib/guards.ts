@@ -8,6 +8,7 @@ import {
   cookieSessionReader,
   createGuards,
   mfaActions,
+  renewSessionIfExpiring,
   type AuthActions,
   type CookieStore,
   type Guards,
@@ -98,4 +99,13 @@ export async function auth(): Promise<AuthActions> {
 
 export async function mfa(): Promise<MfaActions> {
   return mfaActions(await cookieStore());
+}
+
+/**
+ * T-249: for a server action that hands its lane client to after(): renews the session cookies when the access token has fewer than
+ * `minRemainingS` seconds left. Call it BEFORE guards() so the guards read the renewed cookies. Best effort; the caller still checks
+ * the verified session's `expiresAt`.
+ */
+export async function renewSessionFor(minRemainingS: number): Promise<"fresh" | "renewed" | "failed"> {
+  return renewSessionIfExpiring(await cookieStore(), minRemainingS);
 }

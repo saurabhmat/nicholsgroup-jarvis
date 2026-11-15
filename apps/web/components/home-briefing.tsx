@@ -295,7 +295,8 @@ export function AttentionSection({ laneId, mail, now, notes, replies, canReply =
                 ) : null}
               </div>
               <div data-testid="attention-actions" className="flex shrink-0 items-center gap-3 max-md:[&_a]:min-h-11 max-md:[&_button]:min-h-11">
-                {a.kind === "repeated_failures" ? null : (
+                {/* T-249: no Reply for automated / no-reply senders, security alerts and repeated failures (attention.ts `replyable`). */}
+                {a.kind === "repeated_failures" || a.replyable !== true ? null : (
                   <span className="relative z-[1] inline-flex">
                     <ReplyAction canReply={canReply} target={{ laneId, connectionId: t.connectionId, messageId: t.messageId, threadKey: t.threadKey, proposalId: replies?.get(`${t.connectionId}:${t.messageId}`) ?? null }} />
                   </span>

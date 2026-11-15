@@ -1343,3 +1343,18 @@ Per-person mail privacy and several Google accounts per user. Review round fixed
 - **Connection health is lane-visible** to owner and admin_technical, now including `owner_user_id` and the account address of other people's accounts (no content).
 - **Settings "Loading"**: the connect buttons are plain form POSTs; without JS they work as before (no change), the per-user sections render on the server.
 - **Specs:** only `docs/specs/approvals.md` exists for these modules and was updated; comms, calendar and briefing have no spec files to amend.
+
+## T-249: review results (security and code review, Nov 15, 2026)
+No BLOCKER. Fixed:
+- (security HIGH) The Refresh fetch runs in `after()` with the owner's lane client, which keeps a fixed access token (local `jwt_expiry` 900 s), so a 240 s fetch could outlive it: the paid result would be refused at `news_finish_own` and the row left pending. Now the action renews the session when the token has under 300 s left (`renewSessionIfExpiring`, core auth) and refuses with `unavailable` before reserving anything unless the VERIFIED token (`expiresAt` from the `exp` claim) lasts 300 s. If Next does not show the renewed cookie to `guards()` in the same action, this fails closed (the next request's proxy refresh fixes it).
+- (security MEDIUM) The reserve covers one call with its resumes; a retry after a cut-off reply that is then aborted is now counted as the first call in full plus a reserve floor (or the retry's reported usage).
+- (code M1, security L4) Stale "Home's maxDuration (90 s)" comment in `briefing-actions.ts`.
+- (code M2, security L3) The card stopped polling at 6 min while SQL keeps a lost row in flight for 10: the poll cap is now 10 min, then a fixed "Still running. Reload the page…" note.
+- (code L3, security L2) `isNoReplyAddress` also matches a digit suffix (`noreply2@`) and reads a `Name <address>` form by its address.
+- (code L2) Test: a fetch in flight that the page did not start (scheduled) is never polled.
+Logged, not changed (intended):
+- (code M3) Reply is hidden for every `automated` sender (the lane's `automated_senders` patterns, auto-generated mail), priority senders included, as asked ("no Reply on no-reply / alert senders"). A lane pattern that is too broad hides Reply for that sender; narrow the lane's `automated_senders` if that happens.
+- (security L1) A pending reply draft to a now non-replyable sender (made before T-249, or by the briefing to a Reply-To person) no longer shows its Reply button on Home; it stays on Approvals and can be approved there. The no-reply rule is a usability rule, not a permission.
+- (code L1) After a background Refresh ends, the button note shows the next-refresh time; the result shows as new stories or the card's "Last refresh failed: …" line ("Updated just now" is no longer shown).
+- `maxDuration` 300 s on the Inngest route and Home: every server action on Home may now run up to 300 s; each keeps its own bound (briefing 60/75 s, news 240 s).
+- Security re-check (Nov 15): no BLOCKER/HIGH/MEDIUM. Fixed LOW: the aborted-retry estimate is rounded to cents and capped at 1000 (the SQL check). Logged LOW: the session renewal runs before the role check (by design: the guards must read the renewed cookies; it only rotates the caller's own session); no test shows `guards()` reading the renewed cookie in the same action (true in Next 16.4.2 per the reviewer; fails closed if a framework change breaks it). Manual check after deploy.

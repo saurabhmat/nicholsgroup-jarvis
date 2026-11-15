@@ -26,6 +26,7 @@
 // lane's OWN domains that is not a person mailbox (no-reply, newsletter, updates ... local parts, a list-style label, auto-generated mail).
 
 import { domainOf } from "./calendar";
+import { isNoReplyAddress } from "./sender";
 import { httpsUrl } from "./url";
 
 export type ThreadRow = {
@@ -104,6 +105,11 @@ export type AttentionThread = {
   thread: ThreadRow;
   /** For repeated failures: how many failure messages from this sender. */
   count?: number;
+  /**
+   * T-249: whether Home offers Reply. False for automated senders (the lane's automated/bot sender patterns, auto-generated
+   * mail), no-reply addresses (isNoReplyAddress), security alerts and repeated failures. Absent counts as false (fail closed).
+   */
+  replyable?: boolean;
 };
 
 export type MoneyKind = "invoice" | "bill" | "renewal" | "failed_payment";
@@ -282,7 +288,8 @@ export function rankAttention(rows: ThreadRow[], r: AttentionRules, now: Date, l
     } else if (person && unread) item = { band: money || deadline ? BAND.moneyOrDeadline : BAND.unread, kind: "unread", reason: `Unread from ${senderLabel(t)} \u00b7 ${ago}` };
     else if (c.security) item = { band: BAND.security, kind: "security", reason: `Security alert from ${senderLabel(t)} \u00b7 ${ago}` };
     if (!item) continue;
-    const built: AttentionThread = { key: `${t.connectionId}:${t.threadKey}`, kind: item.kind, flags, reason: item.reason, thread: t };
+    const replyable = item.kind !== "security" && !c.automated && !c.security && !isNoReplyAddress(t.fromAddress);
+    const built: AttentionThread = { key: `${t.connectionId}:${t.threadKey}`, kind: item.kind, flags, reason: item.reason, thread: t, replyable };
     if (isFresh(t.receivedAt)) out.push({ band: item.band, item: built });
     else if (item.kind === "priority" || item.kind === "waiting" || item.kind === "unread") old.push(built);
   }
@@ -290,7 +297,7 @@ export function rankAttention(rows: ThreadRow[], r: AttentionRules, now: Date, l
     if (list.length < r.exclusions.bot_failure_repeat) continue;
     const latest = [...list].sort((a, b) => b.receivedAt.localeCompare(a.receivedAt))[0];
     if (!latest || !isFresh(latest.receivedAt)) continue;
-    out.push({ band: BAND.failures, item: { key: `failures:${domain}`, kind: "repeated_failures", flags: { vip: false, money: null, deadline: false, waitingOnYou: false }, reason: `${String(list.length)} failure alerts from ${domain}`, thread: latest, count: list.length } });
+    out.push({ band: BAND.failures, item: { key: `failures:${domain}`, kind: "repeated_failures", flags: { vip: false, money: null, deadline: false, waitingOnYou: false }, reason: `${String(list.length)} failure alerts from ${domain}`, thread: latest, count: list.length, replyable: false } });
   }
   const newest = (a: AttentionThread, b: AttentionThread) => Date.parse(b.thread.receivedAt) - Date.parse(a.thread.receivedAt) || a.key.localeCompare(b.key);
   out.sort((a, b) => a.band - b.band || newest(a.item, b.item));
