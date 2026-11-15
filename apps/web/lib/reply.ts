@@ -24,7 +24,7 @@ import {
   type CapabilityFacts,
   type UserCtx,
 } from "@nichols/approvals/server";
-import { checkContent, domainOf, extractJson, maskContent, maskFigures, type BriefRef } from "@nichols/briefing/domain";
+import { checkContent, domainOf, extractJson, isNoReplyAddress, maskContent, maskFigures, type BriefRef } from "@nichols/briefing/domain";
 import type { LaneClient } from "@nichols/core/lane-router";
 import { displayText, isMessageId } from "./inbox";
 import { reSubject } from "./briefing-run";
@@ -115,12 +115,15 @@ export async function loadMessageRef(ctx: UserCtx, messageId: string): Promise<M
   if (!row || typeof row.connection_id !== "string" || row.provider !== "google") throw new ApprovalsError("not_found");
   const threadId = str(row.thread_id);
   if (!threadId || threadId.startsWith("m:")) throw new ReplyError("not_replyable");
+  // T-249: a no-reply / system sender ("no-reply@accounts.google.com") takes no replies: no drawer context, no AI draft, no save.
+  const fromAddress = str(row.from_address);
+  if (isNoReplyAddress(fromAddress)) throw new ReplyError("no_reply_sender");
   return {
     messageId,
     connectionId: row.connection_id,
     threadId,
     fromName: str(row.from_name),
-    fromAddress: str(row.from_address),
+    fromAddress,
     subject: str(row.subject),
     receivedAt: typeof row.received_at === "string" ? row.received_at : "",
   };

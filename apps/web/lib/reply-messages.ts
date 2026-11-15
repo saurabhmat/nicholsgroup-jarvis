@@ -1,6 +1,6 @@
 // Fixed texts of the Reply drawer (T-234 part 3). Client-safe (no server imports): the server refuses with these codes and
 // texts, and the drawer shows the same strings. Never row text, provider text or a prompt.
-export const REPLY_ERROR_CODES = ["not_replyable", "ai_not_allowed", "ai_not_configured", "ai_failed", "rate_limited", "body_unavailable", "check_sent_first", "already_replied", "draft_exists"] as const;
+export const REPLY_ERROR_CODES = ["not_replyable", "ai_not_allowed", "ai_not_configured", "ai_failed", "rate_limited", "body_unavailable", "check_sent_first", "already_replied", "draft_exists", "no_reply_sender"] as const;
 export type ReplyErrorCode = (typeof REPLY_ERROR_CODES)[number];
 
 export const REPLY_MESSAGES: Record<ReplyErrorCode, string> = {
@@ -13,6 +13,7 @@ export const REPLY_MESSAGES: Record<ReplyErrorCode, string> = {
   check_sent_first: "An earlier reply to this conversation may already have gone out. Check your Sent folder first.",
   already_replied: "You already replied to this conversation. Confirm that you want to send another reply.",
   draft_exists: "A draft for this message is already saved. Open it to edit it.",
+  no_reply_sender: "This message came from an automated address that does not accept replies.",
 };
 
 /** Shown instead of Save draft and Send when the lane does not store outbound drafts (D-19). Copy still works. */

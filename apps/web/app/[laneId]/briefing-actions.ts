@@ -13,7 +13,7 @@
 // and the page is never blocked. Whatever fails between the claim and after() releases the claim (core.briefing_claim_release,
 // closed as lost; it still counts toward the daily cap), so no claim leaks. The run reuses runBriefingBounded: a 60 s abort whose timer
 // starts at the action's start (the brain load is inside the budget), single-flight, coded failure reasons; its save through
-// core.briefing_save_own closes the claim. Home's maxDuration (90 s) covers the action and the after().
+// core.briefing_save_own closes the claim. Home's maxDuration (300 s since T-249) covers the action and the after().
 // T-247: the run state and the cap are per owner (one cost cap per person), so two users never starve each other.
 // No service client on this path; reply drafts become proposals through the approvals module. Errors are codes; logs carry the class only.
 import { getLLMProvider } from "@nichols/ai/config";

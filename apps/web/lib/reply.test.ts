@@ -298,6 +298,16 @@ describe("saveReply: server-derived payload", () => {
     await expect(saveReply(ctxWith().ctx, db(), approvals(), { now: () => NOW }, { messageId: "m1", to: ["a@b.example.test"], cc: [], bodyText: "x" })).rejects.toMatchObject({ code: "check_sent_first" });
     expect(mod.propose).not.toHaveBeenCalled();
   });
+  it("T-249: a no-reply sender (security alert from no-reply@accounts.google.com) gets no drawer context, no AI draft and no saved reply", async () => {
+    const reads = vi.fn();
+    const { d } = deps({ readBody: reads });
+    const noReply = () => ctxWith([refRow({ from_address: "no-reply@accounts.google.com", from_name: "Google" })]).ctx;
+    await expect(replyContext(noReply(), db(), approvals(), d, "m1")).rejects.toMatchObject({ code: "no_reply_sender" });
+    await expect(draftReply(noReply(), db(), approvals(), d, "m1")).rejects.toMatchObject({ code: "no_reply_sender" });
+    await expect(saveReply(noReply(), db(), approvals(), { now: () => NOW }, { messageId: "m1", to: ["someone@x.example.test"], cc: [], bodyText: "x" })).rejects.toMatchObject({ code: "no_reply_sender" });
+    expect(mod.propose).not.toHaveBeenCalled();
+    expect(reads).not.toHaveBeenCalled(); // refused before the body is read
+  });
 
   it("already replied: refused without the owner's confirmation, allowed with confirmResend", async () => {
     setState({ already_sent_at: "2026-11-10T09:00:00Z" });

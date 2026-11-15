@@ -29,7 +29,7 @@ function row(over: Partial<ActionRow> = {}): ActionRow {
     supersedesId: null,
     supersededById: null,
     status: "proposed",
-    expiresAt: "2026-11-14T12:00:00Z",
+    expiresAt: "2027-11-14T12:00:00Z", // far ahead: loadApprovals drops a proposal past its expiry against the real clock,
     approvedBy: null,
     approvedAt: null,
     approvedHash: null,

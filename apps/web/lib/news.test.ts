@@ -129,6 +129,8 @@ describe("scheduled news", () => {
     expect(provider.calls).toHaveLength(0);
     const ok = fake({ news_begin_scheduled: { data: { id: "id-1", gate: null }, error: null }, news_finish: { data: null, error: null } });
     expect(await runScheduledNews(async () => ok.client, "PKG", NOW)).toBe("fetched");
+    // T-249: 150 s per model request and no SDK retry (the whole fetch is bounded at 240 s inside the 300 s Inngest route).
+    expect(mocked).toHaveBeenLastCalledWith({ timeoutMs: 150_000, maxRetries: 0 });
     expect(ok.calls.map((x) => x.fn)).toEqual(["news_begin_scheduled", "news_finish"]);
     expect((ok.calls[0]?.args as { p_lane: string }).p_lane).toBe("PKG");
     // a model failure is stored (not thrown) and reported with its code

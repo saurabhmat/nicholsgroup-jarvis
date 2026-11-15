@@ -2,16 +2,21 @@
 // T-234 part 4: the GovCon news card. States (not configured / none yet / could not be fetched / items), safe links, "Updated",
 // the owner's Refresh states (disabled with the next time, monthly budget, in flight), and that rendering never fetches.
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { registrableHost, type NewsCard } from "@/lib/news-types";
 
 const refreshNews = vi.fn<(lane: string) => Promise<unknown>>(async () => ({ ok: true, status: "ok" }));
 vi.mock("@/app/[laneId]/news-actions", () => ({ refreshNews: (l: string) => refreshNews(l) }));
+const routerRefresh = vi.fn();
+const router = { refresh: routerRefresh }; // stable, like Next's router
+vi.mock("next/navigation", () => ({ useRouter: () => router }));
 import { GovConNews, newsTime } from "./home-news";
 
 afterEach(() => {
   cleanup();
   refreshNews.mockClear();
+  routerRefresh.mockClear();
+  vi.useRealTimers();
 });
 const NOW = new Date("2026-11-12T15:00:00Z");
 const card = (over: Partial<NewsCard> = {}): NewsCard => ({
@@ -191,6 +196,45 @@ describe("Refresh (owner only)", () => {
     render_(card({ canRefresh: true }));
     fireEvent.click(screen.getByTestId("news-refresh"));
     await waitFor(() => expect(screen.getByTestId("news-refresh-note").textContent).toBe("News could not be fetched: web search was unavailable"));
+  });
+  it("T-249: a started fetch says so, re-reads the page every 20 s while it is in flight, and stops once it is not", async () => {
+    refreshNews.mockResolvedValueOnce({ ok: true, status: "started" });
+    const { rerender } = render(<GovConNews card={card({ canRefresh: true })} laneId="PKG" tz="America/New_York" now={NOW} />);
+    fireEvent.click(screen.getByTestId("news-refresh"));
+    await waitFor(() => expect(refreshNews).toHaveBeenCalledTimes(1));
+    // The action's revalidation brings the in-flight card back.
+    vi.useFakeTimers();
+    rerender(<GovConNews card={card({ canRefresh: true, inFlight: true })} laneId="PKG" tz="America/New_York" now={NOW} />);
+    expect(screen.getByTestId("news-refresh-note").textContent).toBe("Fetching news in the background. The stories appear here in a minute or two.");
+    expect((screen.getByTestId("news-refresh") as HTMLButtonElement).disabled).toBe(true);
+    vi.advanceTimersByTime(20_000);
+    expect(routerRefresh).toHaveBeenCalledTimes(1);
+    vi.advanceTimersByTime(40_000);
+    expect(routerRefresh).toHaveBeenCalledTimes(3);
+    rerender(<GovConNews card={card({ canRefresh: true, inFlight: false, nextRefreshAt: "2026-11-12T16:00:00Z" })} laneId="PKG" tz="America/New_York" now={NOW} />);
+    vi.advanceTimersByTime(60_000);
+    expect(routerRefresh).toHaveBeenCalledTimes(3);
+    expect(screen.getByTestId("news-refresh-note").textContent).toBe("Next refresh available at 11:00 AM");
+  });
+  it("T-249: a fetch in flight that this page did not start (the scheduled job) is never polled", () => {
+    vi.useFakeTimers();
+    render(<GovConNews card={card({ canRefresh: true, inFlight: true })} laneId="PKG" tz="America/New_York" now={NOW} />);
+    vi.advanceTimersByTime(5 * 60_000);
+    expect(routerRefresh).not.toHaveBeenCalled();
+  });
+  it("T-249: polling stops after 10 minutes (SQL's lost-attempt window) and the note says to reload later", async () => {
+    refreshNews.mockResolvedValueOnce({ ok: true, status: "started" });
+    const { rerender } = render(<GovConNews card={card({ canRefresh: true })} laneId="PKG" tz="America/New_York" now={NOW} />);
+    fireEvent.click(screen.getByTestId("news-refresh"));
+    await waitFor(() => expect(refreshNews).toHaveBeenCalledTimes(1));
+    vi.useFakeTimers();
+    rerender(<GovConNews card={card({ canRefresh: true, inFlight: true })} laneId="PKG" tz="America/New_York" now={NOW} />);
+    act(() => vi.advanceTimersByTime(11 * 60_000));
+    // Every 20 s for 10 minutes; the stop timer was set first, so at exactly 10:00 it wins over the 30th tick.
+    expect(routerRefresh).toHaveBeenCalledTimes(29);
+    vi.advanceTimersByTime(30 * 60_000);
+    expect(routerRefresh).toHaveBeenCalledTimes(29);
+    expect(screen.getByTestId("news-refresh-note").textContent).toBe("Still running. Reload the page in a few minutes to see the result.");
   });
   it("the owner can refresh from the empty state too", () => {
     render_(card({ canRefresh: true, items: [], updatedAt: null }));

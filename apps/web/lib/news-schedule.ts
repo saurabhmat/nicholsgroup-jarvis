@@ -9,6 +9,7 @@ import { isNewsTimeReached } from "@nichols/core/inngest";
 import { beginNews, finishNews } from "./news";
 import { newsConfigFrom } from "./news-domain";
 import { NewsGateError, runNewsFetch } from "./news-run";
+import { NEWS_CALL_TIMEOUT_MS, NEWS_FETCH_TIMEOUT_MS, NEWS_RETRY_BEFORE_MS } from "./news-types";
 import type { LaneClient } from "@nichols/core/lane-router";
 
 type Db = Pick<LaneClient, "schema">;
@@ -24,7 +25,8 @@ export async function newsDue(clientFor: ClientFor, laneId: string, now: Date): 
 
 /** One scheduled fetch. Returns "fetched" | "failed:<code>" | "skipped:<reason>"; throws only for infrastructure faults. */
 export async function runScheduledNews(clientFor: ClientFor, laneId: string, now: Date): Promise<string> {
-  const p = getLLMProvider({ timeoutMs: 60_000, maxRetries: 0 });
+  // T-249: 150 s per request, no SDK retry; the whole fetch is bounded at 240 s (the Inngest route's maxDuration is 300 s).
+  const p = getLLMProvider({ timeoutMs: NEWS_CALL_TIMEOUT_MS, maxRetries: 0 });
   if (!p.configured) return "skipped:ai_not_set_up";
   const c = await clientFor(laneId);
   const [cfg, lane] = await Promise.all([
@@ -38,7 +40,8 @@ export async function runScheduledNews(clientFor: ClientFor, laneId: string, now
         provider: p.provider,
         begin: (reserve) => beginNews(c, laneId, "schedule", reserve),
         finish: (id, r) => finishNews(c, laneId, "schedule", id, r),
-        signal: AbortSignal.timeout(80_000),
+        signal: AbortSignal.timeout(NEWS_FETCH_TIMEOUT_MS),
+        retryOnlyBeforeMs: NEWS_RETRY_BEFORE_MS,
       },
       { laneId, laneName: lane.data?.name ?? laneId, cfg: newsConfigFrom(cfg.data?.config), now },
     );

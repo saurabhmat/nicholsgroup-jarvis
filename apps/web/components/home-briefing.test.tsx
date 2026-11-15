@@ -190,7 +190,7 @@ describe("AttentionSection (T-234 part 2, T-235 part 2: scannable rows)", () => 
     if (x === undefined) throw new Error("empty");
     return x;
   };
-  const mail = (more = 0, mailboxOf: Record<string, string> = { c1: "me@pubk.test" }) => ({ access: true as const, attention: [{ key: "k", kind: "priority" as const, reason: "Priority sender, unread · 1h", flags: { vip: true, money: null as "invoice" | null, deadline: false, waitingOnYou: false }, thread }], more, stillWaiting: [] as never[], money: [], mailboxOf });
+  const mail = (more = 0, mailboxOf: Record<string, string> = { c1: "me@pubk.test" }) => ({ access: true as const, attention: [{ key: "k", kind: "priority" as const, reason: "Priority sender, unread · 1h", flags: { vip: true, money: null as "invoice" | null, deadline: false, waitingOnYou: false }, thread, replyable: true }], more, stillWaiting: [] as never[], money: [], mailboxOf });
   const note = { ref: "r1", what: "Deck", why: "Board meets Friday", next: "Send comments" };
 
   it("line 1: initials avatar (hidden from assistive tech), name, domain, age as <time> with the full date; line 2: the masked subject with a title", () => {
@@ -455,6 +455,19 @@ describe("AttentionSection (T-234 part 2, T-235 part 2: scannable rows)", () => 
     expect(reply.tagName).toBe("BUTTON");
     expect(reply.getAttribute("href")).toBeNull();
     expect(reply.getAttribute("aria-haspopup")).toBe("dialog");
+  });
+
+  it("T-249: a row that is not replyable (security alert, no-reply sender) or has no replyable flag keeps Open but has no Reply, for every role", () => {
+    const base = first(mail().attention);
+    const alert = { ...base, kind: "security" as const, replyable: false, thread: { ...thread, fromName: "Google", fromAddress: "no-reply@accounts.google.com", subject: "Security alert" } };
+    const { rerender } = render(<AttentionSection laneId="PKG" now={now} mail={{ ...mail(), attention: [alert] }} canReply />);
+    expect(screen.queryByTestId("attention-reply")).toBeNull();
+    expect(screen.getByTestId("attention-open")).toBeTruthy();
+    const noFlag = { ...base, replyable: undefined };
+    rerender(<AttentionSection laneId="PKG" now={now} mail={{ ...mail(), attention: [noFlag] }} canReply />);
+    expect(screen.queryByTestId("attention-reply")).toBeNull(); // absent flag = no Reply (fail closed)
+    rerender(<AttentionSection laneId="PKG" now={now} mail={mail()} canReply />);
+    expect(screen.getByTestId("attention-reply")).toBeTruthy();
   });
 
   it("a repeated-failures item has Open but no Reply", () => {

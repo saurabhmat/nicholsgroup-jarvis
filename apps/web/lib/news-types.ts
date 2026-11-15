@@ -37,8 +37,25 @@ export type StoredNewsItem = { headline: string; why: string; source_name: strin
  */
 export const NEWS_REFRESH_INTERVAL_MS = 60 * 60_000;
 
-/** The whole owner-refresh fetch (model call with its searches and resumes) is cut off here (Home's maxDuration is 90 s); the SQL row is then closed as failed/timed_out. */
-export const NEWS_REFRESH_TIMEOUT_MS = 70_000;
+/**
+ * T-249: the time budget of one news fetch, for the scheduled job and the owner's Refresh alike. Both run in the background (the
+ * Inngest step; Refresh in after()), so neither waits on a page: one analysis-tier call with up to max_searches web searches and
+ * 2 pause_turn resumes regularly needs 1 to 3 minutes, and the old 70 s / 80 s bounds ended it as "the fetch took too long".
+ *   - NEWS_CALL_TIMEOUT_MS: one HTTP request to the model (each resume is its own request); no SDK retry (a retry could bill twice).
+ *   - NEWS_FETCH_TIMEOUT_MS: the whole fetch (both calls, every resume); the SQL row is then closed as failed/timed_out.
+ *   - NEWS_RETRY_BEFORE_MS: the one retry after a reply cut off at the output limit starts only before this point.
+ * NEWS_FETCH_TIMEOUT_MS + the closing database call must fit inside the maxDuration of the Inngest route and of Home (300 s), and
+ * stay below the 10 minutes after which SQL treats a pending attempt as lost.
+ */
+export const NEWS_CALL_TIMEOUT_MS = 150_000;
+export const NEWS_FETCH_TIMEOUT_MS = 240_000;
+export const NEWS_RETRY_BEFORE_MS = 100_000;
+/** T-249: while a Refresh started from this page runs, the card re-reads the page this often (and stops after NEWS_POLL_MAX_MS). */
+export const NEWS_POLL_MS = 20_000;
+/** Matches the 10 minutes after which SQL closes a pending attempt as lost, so the card never stops polling before the row resolves. */
+export const NEWS_POLL_MAX_MS = 10 * 60_000;
+export const NEWS_STALLED_NOTE = "Still running. Reload the page in a few minutes to see the result.";
+export const NEWS_STARTED_NOTE = "Fetching news in the background. The stories appear here in a minute or two.";
 
 /** Why a stored attempt failed (brief.news_digests.failure_code): fixed codes only, never a vendor message. */
 export const NEWS_FAILURE_CODES = ["model_failed", "model_busy", "timed_out", "model_refused", "output_unusable", "no_valid_items", "search_failed", "incomplete", "output_truncated"] as const;

@@ -56,3 +56,19 @@ export function ageShort(iso: string, now: Date): string {
   const h = Math.floor(mins / 60);
   return h < 48 ? `${String(h)}h` : `${String(Math.floor(h / 24))}d`;
 }
+
+// T-249: addresses that do not take replies. A fixed, structural rule on the LOCAL part only (no company data): a no-reply /
+// do-not-reply / mailer-daemon token as its own segment ("no-reply@accounts.google.com", "accounts-noreply@x", "noreply+abc@x"),
+// or a system mailbox at the start ("postmaster@", "notifications@", "bounce-123@"). The From address is sender-controlled, so
+// this only HIDES or REFUSES a reply; it never grants anything.
+const NO_REPLY_TOKEN = /(?:^|[+._-])(?:no[-_.]?reply|do[-_.]?not[-_.]?reply|mailer[-_.]?daemon)(?:$|[+._\d-])/;
+const SYSTEM_LOCAL = /^(?:postmaster|notifications?|bounces?)(?:$|[+._-])/;
+
+export function isNoReplyAddress(address: string | null | undefined): boolean {
+  if (!address) return false;
+  // A "Name <address>" form (should a store ever keep one) is read from its address part.
+  const a = address.trim().toLowerCase().replace(/^.*<([^<>]*)>?\s*$/, "$1").trim();
+  const at = a.lastIndexOf("@");
+  const local = at >= 0 ? a.slice(0, at) : a;
+  return local !== "" && (NO_REPLY_TOKEN.test(local) || SYSTEM_LOCAL.test(local));
+}

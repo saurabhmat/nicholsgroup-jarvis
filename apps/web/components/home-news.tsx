@@ -97,7 +97,7 @@ export function GovConNews({ laneId = "", card = null, tz = BUSINESS_TZ, now = n
       )}
       {card?.canRefresh && laneId ? (
         <div data-testid="news-footer" className="mt-auto flex flex-wrap items-center gap-2 border-t border-border pt-3">
-          <NewsRefresh laneId={laneId} disabledReason={refreshReason} />
+          <NewsRefresh laneId={laneId} disabledReason={refreshReason} inFlight={card.inFlight} />
         </div>
       ) : null}
     </PageSection>
