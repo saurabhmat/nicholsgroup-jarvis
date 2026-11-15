@@ -83,7 +83,7 @@ export function createComposioConnectionStore(clientFor: JobClientFor, now: () =
       try {
         const table = () => db.schema("core").from("connections");
         const inserted = await table().upsert(
-          { lane_id: laneId, provider: COMPOSIO_PROVIDER, external_account_id: accountId, transport: "composio", toolkit, status: "pending", created_by: createdBy },
+          { lane_id: laneId, provider: COMPOSIO_PROVIDER, external_account_id: accountId, transport: "composio", toolkit, status: "pending", created_by: createdBy, owner_user_id: createdBy /* T-247: a mailbox has an owner: the signed-in user who connected it */ },
           { onConflict: "lane_id,provider,external_account_id", ignoreDuplicates: true },
         );
         if (inserted.error) throw inserted.error;

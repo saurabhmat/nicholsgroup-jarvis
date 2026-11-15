@@ -139,8 +139,9 @@ async function HomeSections({ laneId, now }: { laneId: string; now: Date }) {
     timed("load.briefing", async () => briefingFor(await laneClient(), laneId, now, tz)),
     timed("load.briefing_latest", async () => latestBriefing(await laneClient(), laneId)),
     g.requireRole(laneId as Parameters<typeof g.requireLane>[0], ["owner", "admin_technical"]).then(() => true, () => false),
-    // Reply is a drawer only for the owner (T-234 part 3): it proposes and sends through approvals, which are owner-only.
-    g.requireRole(laneId as Parameters<typeof g.requireLane>[0], ["owner"]).then(() => true, () => false),
+    // Reply and the briefing controls are for the mailbox owner (T-234 part 3; T-247): owner or admin_technical acting on their OWN mail,
+    // since email proposals and approvals belong to the mailbox's owner (the database enforces it).
+    g.requireRole(laneId as Parameters<typeof g.requireLane>[0], ["owner", "admin_technical"]).then(() => true, () => false),
     // The stored GovCon news digest, read only: a render (or the 5-minute auto-refresh) never starts a fetch (T-234 part 4).
     timed("load.news", async () => {
       const [admin, owner] = await Promise.all([

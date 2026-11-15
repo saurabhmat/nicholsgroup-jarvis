@@ -124,6 +124,7 @@ function world(over: { facts?: Partial<CapabilityFacts> | null; writer?: Writer;
     jobRpc: async () => rpc,
     prepareEmailWrite: async () => { throw new Error("not used"); },
     laneMailboxes: async () => [],
+    mailboxAllowed: async () => false,
     readFacts: async () => (over.facts === null ? { ...facts, qbo: null } : facts),
     audit,
     loadWriteConnection: async () => ({ id: CONN }) as never,

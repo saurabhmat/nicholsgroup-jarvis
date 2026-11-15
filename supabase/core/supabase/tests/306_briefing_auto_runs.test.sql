@@ -17,8 +17,8 @@ select col_not_null('brief', 'briefing_runs', 'lane_id', 'lane_id is not null');
 select ok((select relrowsecurity from pg_class where oid = 'brief.briefing_runs'::regclass), 'RLS is on');
 select is((select count(*)::int from pg_policy where polrelid = 'brief.briefing_runs'::regclass), 1, 'one policy');
 select ok((select polcmd = 'r' and polroles = array[(select oid from pg_roles where rolname = 'authenticated')]::oid[]
-                  and pg_get_expr(polqual, polrelid) like '%aal2%' and pg_get_expr(polqual, polrelid) like '%owner_user_id%' and pg_get_expr(polqual, polrelid) like '%briefing%'
-           from pg_policy where polrelid = 'brief.briefing_runs'::regclass), 'the policy: SELECT, authenticated, aal2 + briefing view + own rows');
+                  and pg_get_expr(polqual, polrelid) like '%aal2%' and pg_get_expr(polqual, polrelid) like '%owner_user_id%' and pg_get_expr(polqual, polrelid) like '%own_mail%'
+           from pg_policy where polrelid = 'brief.briefing_runs'::regclass), 'the policy: SELECT, authenticated, aal2 + own_mail view + own rows (T-247)');
 select ok(not has_table_privilege('authenticated', 'brief.briefing_runs', 'insert, update, delete') and not has_table_privilege('anon', 'brief.briefing_runs', 'select')
           and not has_table_privilege('service_role', 'brief.briefing_runs', 'insert, update, delete'), 'no writes for API roles, nothing for anon');
 select ok(has_function_privilege('authenticated', 'core.briefing_claim_auto(text)', 'execute') and has_function_privilege('authenticated', 'core.briefing_claim_regenerate(text)', 'execute')
@@ -181,9 +181,9 @@ select ok(not core.briefing_claim_release('PKG', '00000000-0000-4000-8000-000000
 select ok(not core.briefing_claim_release('PKG', '00000000-0000-4000-8000-0000000235a2'), 'a schedule claim is not released');
 reset role;
 select is((select string_agg(status, ',' order by id) from brief.briefing_runs where id in ('00000000-0000-4000-8000-0000000235a1', '00000000-0000-4000-8000-0000000235a2')), 'running,running', 'both stay running');
-select pg_temp.claims('viewer@example.test', 'aal2');
+select pg_temp.claims('finance-operator@example.test', 'aal2');
 set local role authenticated;
-select throws_ok($$select core.briefing_claim_release('PKG', '00000000-0000-4000-8000-0000000235a1')$$, '42501', 'not allowed', 'a viewer cannot release');
+select throws_ok($$select core.briefing_claim_release('PKG', '00000000-0000-4000-8000-0000000235a1')$$, '42501', 'not allowed', 'a member without own_mail (finance operator) cannot release');
 reset role;
 delete from brief.briefing_runs where id in ('00000000-0000-4000-8000-0000000235a1', '00000000-0000-4000-8000-0000000235a2');
 delete from core.memberships where lane_id = 'PKG' and user_id = pg_temp.uid('outsider@example.test');

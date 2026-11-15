@@ -12,7 +12,7 @@ export const TOOL_CATEGORIES = ["email", "calendar", "docs", "finance", "finance
 export type ToolCategory = (typeof TOOL_CATEGORIES)[number];
 
 /** Content views (core.view_names()) a tool may require. Administration and operations views are never tool views. */
-export const TOOL_VIEWS = ["finance", "comms", "calendar", "documents", "projects", "commitments", "briefing", "memory", "approvals"] as const;
+export const TOOL_VIEWS = ["finance", "comms", "calendar", "own_mail", "documents", "projects", "commitments", "briefing", "memory", "approvals"] as const;
 export type ToolView = (typeof TOOL_VIEWS)[number];
 
 export type ToolEffect = "read" | "propose";

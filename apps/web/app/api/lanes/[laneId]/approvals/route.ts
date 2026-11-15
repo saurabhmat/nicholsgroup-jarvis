@@ -20,7 +20,7 @@ export async function POST(request: Request, ctx: { params: Promise<{ laneId: st
     approvals: approvalsDeps,
     approve: approveAndExecuteEmail,
     reply: {
-      readBody: (l, c, m) => readGmailBody(l as LaneId, c, m),
+      readBody: (l, c, m, owner) => readGmailBody(l as LaneId, c, m, owner),
       llm: () => {
         const p = getLLMProvider({ timeoutMs: 45_000, maxRetries: 1 });
         return p.configured ? { configured: true, provider: p.provider } : { configured: false };

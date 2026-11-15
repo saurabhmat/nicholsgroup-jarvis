@@ -3,8 +3,10 @@
 // env at call time (`requireConnectorEnv("google")` fails closed naming missing variables, never printing values).
 import type { LaneId } from "@nichols/core";
 import { requireConnectorEnv } from "@nichols/core/env/server";
+import { ConnectorError } from "../contract/errors";
 import type { LaneBoundConnection } from "../contract/lane-bound";
-import { actionClaimReader, calendarIndexStore, connectionLoader, getToken, laneConfigReader, mailIndexStore, revokeToken, rotateToken, storeToken, writePolicyReader } from "../vault/index";
+import { mailAccountAllowed, readMailPolicy } from "../mail-policy";
+import { actionClaimReader, calendarIndexStore, connectionLoader, connectionStore, getToken, laneConfigReader, mailIndexStore, revokeToken, rotateToken, storeToken, writePolicyReader } from "../vault/index";
 import { SecretValue } from "../vault/secret";
 import { createGoogleApi } from "./api";
 import { createCalendarSync } from "./cal-sync";
@@ -39,8 +41,11 @@ export const mailSync = createMailSync({ mail: gmailProvider, store: mailIndexSt
  * this lane (core.inbox_message_ref); the provider's guard then re-checks lane, provider, connection status and the
  * lane's mailbox list before any call to Google. Read-only (gmail.readonly).
  */
-export async function readGmailBody(laneId: LaneId, connectionId: string, messageId: string): Promise<{ text: string; truncated: boolean }> {
+export async function readGmailBody(laneId: LaneId, connectionId: string, messageId: string, expectedOwnerId?: string): Promise<{ text: string; truncated: boolean }> {
   const conn = await connectionLoader.loadConnection(laneId, connectionId);
+  // T-247: when the caller names the user it reads for (the scheduled briefing, the reply and message pages), the connection must be
+  // that user's own: a mailbox is read only on behalf of its owner.
+  if (expectedOwnerId !== undefined && conn.owner_user_id !== expectedOwnerId) throw new ConnectorError({ kind: "forbidden", message: "This mailbox belongs to another user" });
   const res = await gmailProvider.readBody(laneId, conn as LaneBoundConnection<"google">, messageId);
   // Revealed here, for display to the signed-in user only: the caller renders it as plain text and must not store or log it.
   return { text: res.data.reveal(), truncated: res.data.truncated };
@@ -56,9 +61,18 @@ export async function prepareEmailWrite(laneId: LaneId, connectionId: string, in
   return { connection: conn as LaneBoundConnection<"google">, proposed: await gmailProvider.prepareWrite(laneId, conn as LaneBoundConnection<"google">, intent) };
 }
 
-/** The lane's configured mailboxes (`lane_config.mailboxes`), lower-cased; the approvals module checks a proposal's sender against them. */
-export function laneMailboxes(laneId: LaneId): Promise<string[]> {
-  return laneConfigReader.mailboxes(laneId);
+/**
+ * The lane's mail addresses, lower-cased: the configured exact list plus every connected mail account (whoever owns it). Used to
+ * recognise "our own" addresses (never reply to ourselves). It does NOT decide whether a sender is allowed: that is `mailAccountAllowed`.
+ */
+export async function laneMailboxes(laneId: LaneId): Promise<string[]> {
+  const [configured, connected] = await Promise.all([laneConfigReader.mailboxes(laneId), connectionStore.listMailAccounts(laneId)]);
+  return [...new Set([...configured, ...connected])];
+}
+
+/** Whether `address` may be a sender in this lane: allowed domain (and on the exact list when the lane keeps one). Fails closed when the config cannot be read. */
+export async function mailboxAllowed(laneId: LaneId, address: string): Promise<boolean> {
+  return mailAccountAllowed(await readMailPolicy(laneConfigReader, laneId), address);
 }
 
 /** Google Calendar event metadata sync, live description. Polling (calendar push is not built). */

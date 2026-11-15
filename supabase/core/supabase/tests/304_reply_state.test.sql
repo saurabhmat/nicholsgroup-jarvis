@@ -15,14 +15,13 @@ create temp table ids (k text primary key, id uuid);
 grant all on ids to public;
 
 update core.lanes set enabled = true where code = 'APK';
-delete from core.memberships where lane_id = 'APK' and user_id = pg_temp.uid('owner@example.test');
 update core.lane_policies set store_outbound_drafts = true, write_actions_allowed = array['email_send', 'email_draft'] where lane_id in ('PKG', 'APK');
 insert into core.lane_config (lane_id, version, config)
 select lane_id, version + 1, jsonb_set(config, '{approvals}', coalesce(config -> 'approvals', '{}'::jsonb) || '{"approvals_live": true}'::jsonb)
 from core.lane_config where lane_id = 'PKG' order by version desc limit 1;
-insert into core.connections (id, lane_id, provider, external_account_id, status, features) values
-  ('00000000-0000-4000-8000-000000003041', 'PKG', 'google', 'rs-pkg@example.test', 'active', '{"gmail_compose": true}'),
-  ('00000000-0000-4000-8000-000000003042', 'APK', 'google', 'rs-apk@example.test', 'active', '{"gmail_compose": true}');
+insert into core.connections (id, lane_id, provider, external_account_id, status, features, owner_user_id) values
+  ('00000000-0000-4000-8000-000000003041', 'PKG', 'google', 'rs-pkg@example.test', 'active', '{"gmail_compose": true}', pg_temp.uid('owner@example.test')),
+  ('00000000-0000-4000-8000-000000003042', 'APK', 'google', 'rs-apk@example.test', 'active', '{"gmail_compose": true}', pg_temp.uid('owner@example.test'));
 
 -- A reply proposal for message p_msg in thread p_thread, as the service does it.
 create function pg_temp.mk(p_k text, p_lane text, p_conn uuid, p_thread text, p_msg text, p_kind text) returns void language plpgsql as $$
@@ -32,7 +31,7 @@ begin
     jsonb_build_object('fromMailbox', 'rs@example.test', 'to', jsonb_build_array('dana@sender.example.test'), 'cc', '[]'::jsonb, 'bcc', '[]'::jsonb,
                        'subject', 'Re: S', 'bodyText', 'CANARY body', 'inReplyTo', jsonb_build_object('threadId', p_thread, 'messageId', p_msg)),
     1, encode(sha256(convert_to('rs-' || p_k, 'utf8')), 'hex'), null, '[]', p_kind,
-    case when p_kind = 'user' then pg_temp.uid('owner@example.test') else null end, false);
+    pg_temp.uid('owner@example.test') /* T-247: a job's email proposal names the mailbox owner too */, false);
   insert into ids values (p_k, v_id);
 end;
 $$;
@@ -49,6 +48,8 @@ select pg_temp.mk('fe', 'PKG', '00000000-0000-4000-8000-000000003041', 'T4', 'M4
 select pg_temp.mk('ve', 'PKG', '00000000-0000-4000-8000-000000003041', 'T5', 'M5', 'user');
 select pg_temp.mk('fo', 'PKG', '00000000-0000-4000-8000-000000003041', 'T6', 'M6', 'user');
 select pg_temp.mk('apk', 'APK', '00000000-0000-4000-8000-000000003042', 'T1', 'M1', 'user');
+-- The owner is a member of APK in the seed; drop that now (after its proposal) so APK is a lane the owner may NOT see.
+delete from core.memberships where lane_id = 'APK' and user_id = pg_temp.uid('owner@example.test');
 -- Walk the rows into their states through the real functions (as the owner of the test transaction).
 create function pg_temp.advance(p_k text, p_final text, p_code text default null) returns void language plpgsql as $$
 declare v_id uuid := (select id from ids where k = p_k);

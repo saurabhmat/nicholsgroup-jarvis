@@ -191,3 +191,17 @@ describe("qboSyncIntervalHours (T-090)", () => {
     expect(await cfg({ finance: { payroll: { account_ids: "bad" }, reports: { kinds: ["x"] } } }).qboSyncIntervalHours("PKG")).toBe(4);
   });
 });
+
+describe("mailDomains (T-247)", () => {
+  it("returns the lane's allowed domains, empty when unset (fail closed for the connect), and refuses malformed ones", async () => {
+    const reader = (config: unknown) => createLaneConfigReader(client({ data: { config } }).clientFor);
+    expect(await reader({ mail: { allowed_domains: ["example.test", "mail.example.test"] } }).mailDomains("PKG")).toEqual(["example.test", "mail.example.test"]);
+    expect(await reader({}).mailDomains("PKG")).toEqual([]);
+    expect(await reader({ mail: {} }).mailDomains("PKG")).toEqual([]);
+    for (const bad of ["Example.test", "example", "@example.test", "ex ample.test", 5, null]) {
+      expect(await kindOf(reader({ mail: { allowed_domains: [bad] } }).mailDomains("PKG")), String(bad)).toBe("provider_error");
+    }
+    expect(await kindOf(reader({ mail: "x" }).mailDomains("PKG"))).toBe("provider_error");
+    expect(await kindOf(reader({ mail: { allowed_domains: "example.test" } }).mailDomains("PKG"))).toBe("provider_error");
+  });
+});

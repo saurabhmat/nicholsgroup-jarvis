@@ -85,8 +85,10 @@ const body = z.discriminatedUnion("action", [
 ]);
 
 type Req = z.infer<typeof body>;
-const OWNER_ONLY = ["owner"] as const;
+// T-247: email is the MAILBOX OWNER's (any member with own_mail whose role may write: owner or admin_technical); the database checks that the
+// connection is the caller's own (act.approve / act.reject / RLS), so these lists only keep the wrong roles out early.
 const OWNER_OR_ADMIN = [...WRITE_ROLES[QBO_DISCONNECT]] as const;
+const OWNER_ONLY = OWNER_OR_ADMIN;
 const FIRST_CHECK_ROLES: Record<Req["action"], readonly ("owner" | "admin_technical")[]> = {
   save: OWNER_ONLY,
   reply_context: OWNER_ONLY,
@@ -160,10 +162,9 @@ export async function handleApprovals(request: Request, laneId: string, deps: Ap
 
   try {
     const g = await deps.guards();
-    // The role the action needs, from a table that must list EVERY action (the Record type fails to compile for a new one), so email
-    // can never fall into the wide list by accident. Email-only actions: owner. propose_qbo_disconnect: owner or admin_technical.
-    // approve and reject cover both types, so they pass with either role here and the action's own type (read from its row, below)
-    // narrows an email action back to the owner.
+    // The role the action needs, from a table that must list EVERY action (the Record type fails to compile for a new one).
+    // T-247: email actions: owner or admin_technical, and only as the owner of the mailbox (the database enforces that: another user's
+    // draft is "not found" to them). propose_qbo_disconnect: owner or admin_technical, lane-wide as before.
     const { session, client } = await g.requireRole(laneId, [...FIRST_CHECK_ROLES[req.action]]);
     const ctx = { laneId, userId: session.userId, rpc: coreRpc(client) };
     switch (req.action) {
@@ -177,7 +178,7 @@ export async function handleApprovals(request: Request, laneId: string, deps: Ap
       }
       case "reject": {
         const found = await actionOf(ctx, req.id);
-        if (!found || found.type !== QBO_DISCONNECT) await g.requireRole(laneId, ["owner"]); // email (or unknown): owner only
+        if (!found || found.type !== QBO_DISCONNECT) await g.requireRole(laneId, [...OWNER_OR_ADMIN]); // email (or unknown): owner or admin_technical, as the mailbox owner (database rule)
         await rejectAction(deps.approvals, ctx, req.id, req.reason);
         return json(200, { ok: true });
       }
@@ -185,7 +186,7 @@ export async function handleApprovals(request: Request, laneId: string, deps: Ap
         // The step-up age is the lane's setting; the facts are read for the action's own connection.
         const found = await actionOf(ctx, req.id);
         if (!found) return json(404, { error: "not_found" });
-        if (found.type !== QBO_DISCONNECT) await g.requireRole(laneId, ["owner"]);
+        if (found.type !== QBO_DISCONNECT) await g.requireRole(laneId, [...OWNER_OR_ADMIN]);
         const facts = await deps.approvals.readFacts(laneId, found.connectionId);
         await g.requireStepUp(facts.stepUpMaxAgeS);
         const result = await deps.approve(ctx, { actionId: req.id, hashSeen: req.hashSeen });
@@ -353,7 +354,8 @@ export async function loadApprovals(
       return false;
     }
   };
-  const isOwner = await can(["owner"]);
+  // T-247: `isOwner` = may act on email (owner or admin_technical, as the mailbox owner: the list holds only the caller's own drafts).
+  const isOwner = await can([...WRITE_ROLES["email.send"]]);
   const canActDisconnect = isOwner || (await can([...WRITE_ROLES[QBO_DISCONNECT]]));
   try {
     const rows = await listApprovals(approvals, { laneId, userId: lane.session.userId, rpc: coreRpc(lane.client) }, 100);

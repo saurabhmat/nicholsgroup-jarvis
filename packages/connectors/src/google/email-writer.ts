@@ -21,6 +21,7 @@ import { computePayloadSha256, type ApprovedActionShape, type ConnectorWriter } 
 import type { ConnectorResponse, HttpClient } from "../http/client";
 import type { ConnectorLogger } from "../log/index";
 import type { LaneConfigReader } from "../vault/lane-config";
+import { assertMailAccountAllowed, readMailPolicy } from "../mail-policy";
 import type { ActionClaimReader } from "../vault/write-policy";
 import type { SecretValue } from "../vault/secret";
 import type { GoogleApi } from "./api";
@@ -45,7 +46,7 @@ export type GoogleEmailWriterDeps = {
   tokens: GoogleTokenManager;
   /** GET-only API (reads: lookup by Message-ID, the message replied to, read-back). */
   api: GoogleApi;
-  laneConfig: Pick<LaneConfigReader, "mailboxes">;
+  laneConfig: Pick<LaneConfigReader, "mailboxes" | "mailDomains">;
   /** The approvals database's check that this action is executing with an open claim (security review H1). */
   claims: Pick<ActionClaimReader, "claimOpen">;
   logger?: ConnectorLogger;
@@ -131,7 +132,10 @@ export function createGoogleEmailWriter(deps: GoogleEmailWriterDeps): GoogleEmai
     assertStatusUsable(row.status);
     if (row.features[GMAIL_COMPOSE_FEATURE] !== true) throw new ConnectorError({ kind: "forbidden", message: "This connection was not granted permission to send or save drafts" });
     const mailbox = row.external_account_id.toLowerCase();
-    if (!(await deps.laneConfig.mailboxes(laneId)).includes(mailbox)) throw new ConnectorError({ kind: "forbidden", message: "This mailbox is not one of the lane's configured mailboxes" });
+    // T-247: the account's domain must be allowed for the lane (and listed, when the lane keeps an exact list); only the mailbox's owner
+    // sends from it (the approver recorded by the database is the owner: act.approve), checked again here.
+    assertMailAccountAllowed(await readMailPolicy(deps.laneConfig, laneId), mailbox);
+    if (typeof row.owner_user_id !== "string" || row.owner_user_id !== action.approved_by) throw new ConnectorError({ kind: "forbidden", message: "Only the mailbox's owner can send from it" });
     const target = action.target as Record<string, unknown> | null;
     const keys = target && typeof target === "object" ? Object.keys(target).sort() : [];
     const okKeys = keys.length === 1 ? keys[0] === "mailbox" : keys.length === 2 && keys[0] === "mailbox" && keys[1] === "thread_id";

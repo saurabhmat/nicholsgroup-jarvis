@@ -61,7 +61,7 @@ export type GmailProviderDeps = {
    * `mailboxes` is re-read on every sync, read and search (a mailbox removed from the lane stops working at once);
    * `retentionDays` bounds the first load to the lane policy and fails closed when unreadable.
    */
-  laneConfig: Pick<LaneConfigReader, "mailboxes" | "retentionDays">;
+  laneConfig: Pick<LaneConfigReader, "mailboxes" | "mailDomains" | "retentionDays">;
   now?: () => number;
   logger?: ConnectorLogger;
   /** Upper bound on days of mail the first load covers: min(this, the lane policy's retention_days). Default 90. */

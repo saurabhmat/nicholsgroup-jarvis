@@ -8,8 +8,12 @@ select plan(164);
 -- ---------------------------------------------------------------- structure
 select has_table('comms', 'message_index', 'comms.message_index exists');
 select has_table('cal', 'event_index', 'cal.event_index exists');
-select pg_temp.has_standard_lane_policy('comms.message_index'::regclass, 'comms');
-select pg_temp.has_standard_lane_policy('cal.event_index'::regclass, 'calendar');
+-- T-247: not the standard lane policy any more: AAL2 + own_mail view + connection_id in the caller's own mailboxes.
+select ok((select count(*) = 1 from pg_policy p where p.polrelid = t::regclass and p.polcmd = 'r' and p.polpermissive
+                 and pg_get_expr(p.polqual, p.polrelid) like '%''own_mail''%' and pg_get_expr(p.polqual, p.polrelid) like '%mailbox_ids%'
+                 and pg_get_expr(p.polqual, p.polrelid) !~ '''(comms|calendar)'''),
+          t || ': one SELECT policy: aal2 + own_mail + own mailboxes only (T-247)')
+from unnest(array['comms.message_index', 'cal.event_index']) t;
 select ok(not has_schema_privilege('anon', s, 'usage') and has_schema_privilege('authenticated', s, 'usage') and has_schema_privilege('service_role', s, 'usage'),
           'schema ' || s || ': no anon usage; authenticated and service_role have usage') from unnest(array['comms', 'cal']) s;
 select ok(has_table_privilege('service_role', t::regclass, 'select, insert, update, delete') and not has_table_privilege('service_role', t::regclass, 'truncate'),
@@ -53,11 +57,11 @@ from unnest(array['lane_id', 'connection_id', 'provider', 'calendar_id', 'event_
 
 -- ---------------------------------------------------------------- fixtures
 update core.lanes set enabled = true where code = 'APK';
-insert into core.connections (id, lane_id, provider, external_account_id, status) values
-  ('00000000-0000-4000-8000-000000000611', 'PKG', 'google', 'exec-synthetic@example.test', 'active'),
-  ('00000000-0000-4000-8000-000000000612', 'APK', 'google', 'apk-synthetic@example.test', 'active'),
-  ('00000000-0000-4000-8000-000000000613', 'PKG', 'quickbooks', 'realm-synthetic-61', 'active'),
-  ('00000000-0000-4000-8000-000000000614', 'PKG', 'microsoft', 'exec-synthetic-ms@example.test', 'active');
+insert into core.connections (id, lane_id, provider, external_account_id, status, owner_user_id) values
+  ('00000000-0000-4000-8000-000000000611', 'PKG', 'google', 'exec-synthetic@example.test', 'active', pg_temp.uid('owner@example.test')),
+  ('00000000-0000-4000-8000-000000000612', 'APK', 'google', 'apk-synthetic@example.test', 'active', pg_temp.uid('owner@example.test')),
+  ('00000000-0000-4000-8000-000000000613', 'PKG', 'quickbooks', 'realm-synthetic-61', 'active', null),
+  ('00000000-0000-4000-8000-000000000614', 'PKG', 'microsoft', 'exec-synthetic-ms@example.test', 'active', pg_temp.uid('owner@example.test'));
 set local role service_role;
 insert into comms.message_index (lane_id, connection_id, provider, message_id, thread_id, from_address, from_name, to_recipients, subject, received_at, priority_score, classified_at, classifier_model)
 values ('PKG', '00000000-0000-4000-8000-000000000611', 'google', 'm-1', 't-1', 'a@example.test', 'A Sender',
@@ -177,7 +181,7 @@ update core.lanes set enabled = true where code = 'APK';
 
 select pg_temp.claims('viewer@example.test', 'aal2');
 set local role authenticated;
-select is(pg_temp.visible(), '{"messages": 0, "events": 2}'::jsonb, 'a viewer with the calendar view reads PKG events only (APK denied) and no messages');
+select is(pg_temp.visible(), '{"messages": 0, "events": 0}'::jsonb, 'T-247: a viewer with the old calendar view reads nobody else''s events or messages (content is readable only through mailbox ownership)');
 reset role;
 select pg_temp.claims('viewer@example.test', 'aal1');
 set local role authenticated;

@@ -46,6 +46,20 @@ describe("loadBriefing", () => {
     expect(v.calendar.ahead.map((e) => e.title)).toEqual(["Holiday tomorrow"]);
   });
 
+  it("T-247: names whose mailboxes to read: p_owner goes to all three reads when an owner is given (the job path), and to none otherwise", async () => {
+    const OWNER = "00000000-0000-4000-8000-0000000000a1";
+    const a = fakeClient({ briefing_coverage: { data: [covRow], error: null } });
+    await loadBriefing(a.client, "PKG", new Date("2026-11-11T20:00:00Z"), "America/New_York", OWNER);
+    expect(a.calls.filter((c) => ["briefing_coverage", "briefing_events", "briefing_threads"].includes(c.fn)).map((c) => [c.fn, c.args.p_owner])).toEqual([
+      ["briefing_coverage", OWNER],
+      ["briefing_events", OWNER],
+      ["briefing_threads", OWNER],
+    ]);
+    const b = fakeClient({ briefing_coverage: { data: [covRow], error: null } });
+    await loadBriefing(b.client, "PKG", new Date("2026-11-11T20:00:00Z"), "America/New_York");
+    expect(b.calls.every((c) => !("p_owner" in c.args))).toBe(true);
+  });
+
   it("nothing set up (marker rows) is access, with the 'not set up' Coverage line", async () => {
     const { client } = fakeClient({
       briefing_coverage: { data: [{ stream: "mail", account: null, status: "not_configured", configured: false }, { stream: "calendar", account: null, status: "not_configured", configured: false }], error: null },

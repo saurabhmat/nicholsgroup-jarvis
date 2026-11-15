@@ -7,7 +7,10 @@ select plan(61);
 -- ---------------------------------------------------------------- schema and policies
 select has_table('core', 'connections', 'core.connections exists');
 select has_table('core', 'sync_runs', 'core.sync_runs exists');
-select pg_temp.has_standard_lane_policy('core.connections', 'connections');
+select ok((select count(*) = 1 from pg_policy p where p.polrelid = 'core.connections'::regclass and p.polcmd = 'r' and p.polpermissive
+                 and pg_get_expr(p.polqual, p.polrelid) like '%''connections''%' and pg_get_expr(p.polqual, p.polrelid) like '%''own_mail''%'
+                 and pg_get_expr(p.polqual, p.polrelid) like '%owner_user_id%'),
+          'core.connections: one SELECT policy: the connections view (health) OR the caller''s own mailbox rows (T-247)');
 select pg_temp.has_standard_lane_policy('core.sync_runs', 'health');
 select is(
   (select count(*)::int from information_schema.columns

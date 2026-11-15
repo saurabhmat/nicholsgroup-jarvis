@@ -219,7 +219,8 @@ export async function runBriefing(deps: RunDeps, input: { laneId: LaneId; ownerU
   const { laneId, now } = input;
   const clock = deps.clock ?? Date.now;
   const runStartedMs = clock();
-  const view = await loadBriefing(deps.client, laneId, now, input.viewerTz);
+  // T-247: the briefing is built from the run owner's own mailboxes only (the job client names them; a user's own client reads its own anyway).
+  const view = await loadBriefing(deps.client, laneId, now, input.viewerTz, input.ownerUserId);
   const { policy } = deps;
   // Without "email" the model gets no mail at all, so no refs either (nothing to attach notes or drafts to).
   const refs = policy.email ? refsFrom(view, now) : [];

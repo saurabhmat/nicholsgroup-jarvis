@@ -8,6 +8,8 @@ import { ConnectorError } from "../contract/errors";
 import type { JobClientFor } from "./tokens";
 
 export interface LaneConfigReader {
+  /** `lane_config.mail.allowed_domains` (lower-case domains whose Google accounts may be connected); empty when unset = nothing is allowed; throws when malformed (fail closed) (T-247). */
+  mailDomains(laneId: LaneId): Promise<string[]>;
   /** The realm id configured for the lane's QuickBooks file, or null when none is set. */
   qboRealmId(laneId: LaneId): Promise<string | null>;
   /** The mailboxes (lower-cased) the lane's mail connection may be, from `lane_config.mailboxes`; empty when none is set (T-063). */
@@ -51,6 +53,7 @@ const REALM = /^\d{1,20}$/;
 /** A raw Google calendar id: printable, no controls or whitespace, at most 200 characters. */
 const CALENDAR_ID = /^[^\s\u0000-\u001f\u007f-\u009f]{1,200}$/;
 const EMAIL = /^[^\s@]{1,64}@[^\s@]{1,255}$/;
+const MAIL_DOMAIN = /^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?(\.[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?)+$/;
 
 export function createLaneConfigReader(clientFor: JobClientFor): LaneConfigReader {
   async function readConfig(laneId: LaneId): Promise<unknown> {
@@ -115,6 +118,18 @@ export function createLaneConfigReader(clientFor: JobClientFor): LaneConfigReade
     async retentionSettings(laneId) {
       const commsDays = await readRetentionDays(laneId);
       return { commsDays, ...(await this.retentionConfig(laneId)) };
+    },
+    async mailDomains(laneId) {
+      const config = await readConfig(laneId);
+      const section = config && typeof config === "object" && !Array.isArray(config) ? (config as Record<string, unknown>).mail : undefined;
+      if (section === undefined || section === null) return [];
+      const bad = () => new ConnectorError({ kind: "provider_error", message: "The lane's mail settings are not valid" });
+      if (typeof section !== "object" || Array.isArray(section)) throw bad();
+      const list = (section as Record<string, unknown>).allowed_domains;
+      if (list === undefined || list === null) return [];
+      // Same shape as mailDomain in @nichols/core's laneConfigSchema (lower-case DNS name, at least two labels); keep in step.
+      if (!Array.isArray(list) || list.length > 20 || list.some((d) => typeof d !== "string" || !MAIL_DOMAIN.test(d))) throw bad();
+      return [...new Set(list as string[])];
     },
     async mailboxes(laneId) {
       const config = await readConfig(laneId);

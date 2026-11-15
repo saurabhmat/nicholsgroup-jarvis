@@ -9,7 +9,7 @@ import type { JobClientFor } from "./tokens";
 
 /** Exactly the ConnectionSchema fields (the strict schema rejects anything else, e.g. created_at). */
 export const CONNECTION_COLUMNS =
-  "id, lane_id, provider, external_account_id, status, features, features_checked_at, token_expires_at, last_sync_at, last_error";
+  "id, lane_id, provider, external_account_id, status, features, features_checked_at, token_expires_at, last_sync_at, last_error, owner_user_id";
 
 /** Same shape the lane router accepts (core.lanes.code). */
 const LANE_ID = /^[A-Z]{1,8}$/;

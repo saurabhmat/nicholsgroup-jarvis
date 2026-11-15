@@ -6,7 +6,7 @@
 -- the state machine and immutability, the single claim, the D-19 body purge in every terminal state, edit = supersede,
 -- history insert-only, pending count.
 begin;
-select plan(106);
+select plan(107);
 \ir helpers/lane_rls.psql
 
 -- A token whose amr carries a TOTP verification at p_at (epoch seconds), or none when p_at is null.
@@ -20,17 +20,16 @@ grant all on ids to public;
 
 update core.lanes set enabled = true where code = 'APK';
 -- The owner is a member of APK in the seed; drop that so APK is a lane the owner may NOT see (cross-lane denial).
-delete from core.memberships where lane_id = 'APK' and user_id = pg_temp.uid('owner@example.test');
 update core.lane_policies set store_outbound_drafts = true, write_actions_allowed = array['email_send', 'email_draft'] where lane_id in ('PKG', 'APK');
 -- approvals_live true for PKG (a new insert-only config version).
 insert into core.lane_config (lane_id, version, config)
 select lane_id, version + 1, jsonb_set(config, '{approvals}', coalesce(config -> 'approvals', '{}'::jsonb) || '{"approvals_live": true}'::jsonb)
 from core.lane_config where lane_id = 'PKG' order by version desc limit 1;
 
-insert into core.connections (id, lane_id, provider, external_account_id, status, features) values
-  ('00000000-0000-4000-8000-000000002901', 'PKG', 'google', 'act-pkg@example.test', 'active', '{"gmail_compose": true}'),
-  ('00000000-0000-4000-8000-000000002902', 'PKG', 'google', 'act-pkg-ro@example.test', 'active', '{}'),
-  ('00000000-0000-4000-8000-000000002903', 'APK', 'google', 'act-apk@example.test', 'active', '{"gmail_compose": true}');
+insert into core.connections (id, lane_id, provider, external_account_id, status, features, owner_user_id) values
+  ('00000000-0000-4000-8000-000000002901', 'PKG', 'google', 'act-pkg@example.test', 'active', '{"gmail_compose": true}', pg_temp.uid('owner@example.test')),
+  ('00000000-0000-4000-8000-000000002902', 'PKG', 'google', 'act-pkg-ro@example.test', 'active', '{}', pg_temp.uid('owner@example.test')),
+  ('00000000-0000-4000-8000-000000002903', 'APK', 'google', 'act-apk@example.test', 'active', '{"gmail_compose": true}', pg_temp.uid('owner@example.test'));
 
 create function pg_temp.payload(p_from text) returns jsonb language sql as $$
   select jsonb_build_object('fromMailbox', p_from, 'to', jsonb_build_array('dana@sender.example.test'), 'cc', '[]'::jsonb, 'bcc', '[]'::jsonb,
@@ -39,12 +38,16 @@ $$;
 create function pg_temp.hash(p_n text) returns text language sql as $$ select encode(sha256(convert_to('hash-' || p_n, 'utf8')), 'hex'); $$;
 
 -- Proposals created as the postgres owner through the same definer function the service role calls.
+set local role service_role; -- T-247: the mailbox-owner rule resolves the owner's views, which needs the service role (as the app's job client)
 insert into ids select 'a1', act.propose('PKG', 'email.send', '00000000-0000-4000-8000-000000002901', '{"mailbox":"act-pkg@example.test"}', pg_temp.payload('act-pkg@example.test'), 1, pg_temp.hash('a1'), 'note', '[]', 'job', pg_temp.uid('owner@example.test'), true);
-insert into ids select 'a2', act.propose('PKG', 'email.send', '00000000-0000-4000-8000-000000002901', '{"mailbox":"act-pkg@example.test"}', pg_temp.payload('act-pkg@example.test'), 1, pg_temp.hash('a2'), null, '[]', 'user', pg_temp.uid('finance-operator@example.test'), false);
+insert into ids select 'a2', act.propose('PKG', 'email.send', '00000000-0000-4000-8000-000000002901', '{"mailbox":"act-pkg@example.test"}', pg_temp.payload('act-pkg@example.test'), 1, pg_temp.hash('a2'), null, '[]', 'user', pg_temp.uid('owner@example.test'), false);
 insert into ids select 'a3', act.propose('PKG', 'email.save_draft', '00000000-0000-4000-8000-000000002901', '{"mailbox":"act-pkg@example.test"}', pg_temp.payload('act-pkg@example.test'), 1, pg_temp.hash('a3'), null, '[]', 'user', pg_temp.uid('owner@example.test'), false);
 insert into ids select 'a4', act.propose('PKG', 'email.send', '00000000-0000-4000-8000-000000002901', '{"mailbox":"act-pkg@example.test"}', pg_temp.payload('act-pkg@example.test'), 1, pg_temp.hash('a4'), null, '[]', 'user', pg_temp.uid('owner@example.test'), false);
 insert into ids select 'a5', act.propose('PKG', 'email.send', '00000000-0000-4000-8000-000000002902', '{"mailbox":"act-pkg-ro@example.test"}', pg_temp.payload('act-pkg-ro@example.test'), 1, pg_temp.hash('a5'), null, '[]', 'user', pg_temp.uid('owner@example.test'), false);
-insert into ids select 'a6', act.propose('APK', 'email.send', '00000000-0000-4000-8000-000000002903', '{"mailbox":"act-apk@example.test"}', pg_temp.payload('act-apk@example.test'), 1, pg_temp.hash('a6'), null, '[]', 'user', null, false);
+insert into ids select 'a6', act.propose('APK', 'email.send', '00000000-0000-4000-8000-000000002903', '{"mailbox":"act-apk@example.test"}', pg_temp.payload('act-apk@example.test'), 1, pg_temp.hash('a6'), null, '[]', 'user', pg_temp.uid('owner@example.test'), false);
+reset role;
+-- The owner is a member of APK in the seed; drop that now so APK is a lane the owner may NOT see (cross-lane denial).
+delete from core.memberships where lane_id = 'APK' and user_id = pg_temp.uid('owner@example.test');
 
 -- ---------------------------------------------------------------- shape and grants
 select ok((select bool_and(c.relrowsecurity) from pg_class c where c.oid in ('act.proposed_actions'::regclass, 'act.status_history'::regclass, 'act.execution_claims'::regclass)), 'RLS is enabled on all three act tables');
@@ -72,12 +75,12 @@ select is((select count(*)::int from act.status_history where action_id = (selec
 select ok((select expires_at between now() + interval '71 hours' and now() + interval '73 hours' from act.proposed_actions where id = (select id from ids where k = 'a1')), 'email proposals expire after 72 hours by default');
 
 set local role service_role;
-select lives_ok($$select core.act_propose('PKG', 'email.send', '00000000-0000-4000-8000-000000002901', '{"mailbox":"act-pkg@example.test"}'::jsonb, '{"fromMailbox":"x@example.test"}'::jsonb, 1, repeat('c', 64), null, '[]'::jsonb, 'assistant', null, true)$$,
+select lives_ok($$select core.act_propose('PKG', 'email.send', '00000000-0000-4000-8000-000000002901', '{"mailbox":"act-pkg@example.test"}'::jsonb, '{"fromMailbox":"x@example.test"}'::jsonb, 1, repeat('c', 64), null, '[]'::jsonb, 'assistant', pg_temp.uid('owner@example.test'), true)$$,
                 'service_role can propose through the wrapper');
 select throws_ok($$select core.act_propose('PKG', 'payment.send', '00000000-0000-4000-8000-000000002901', '{}'::jsonb, '{}'::jsonb, 1, repeat('c', 64), null, '[]'::jsonb, 'user', null, false)$$, '42501', null, 'a payment type is refused');
 select throws_ok($$select core.act_propose('PKG', 'email.delete', '00000000-0000-4000-8000-000000002901', '{}'::jsonb, '{}'::jsonb, 1, repeat('c', 64), null, '[]'::jsonb, 'user', null, false)$$, '42501', null, 'a delete type is refused');
 select throws_ok($$select core.act_propose('PKG', 'email.send', '00000000-0000-4000-8000-000000002903', '{}'::jsonb, '{}'::jsonb, 1, repeat('c', 64), null, '[]'::jsonb, 'user', null, false)$$, '23503', null, 'another lane''s connection is refused');
-select throws_ok($$select core.act_propose('PKG', 'email.send', '00000000-0000-4000-8000-000000002901', '{}'::jsonb, '{}'::jsonb, 1, 'not-a-hash', null, '[]'::jsonb, 'user', null, false)$$, '23514', null, 'a malformed hash is refused');
+select throws_ok($$select core.act_propose('PKG', 'email.send', '00000000-0000-4000-8000-000000002901', '{}'::jsonb, '{}'::jsonb, 1, 'not-a-hash', null, '[]'::jsonb, 'user', pg_temp.uid('owner@example.test'), false)$$, '23514', null, 'a malformed hash is refused');
 reset role;
 update core.lane_policies set store_outbound_drafts = false where lane_id = 'PKG';
 set local role service_role;
@@ -93,6 +96,7 @@ select throws_ok($$insert into act.proposed_actions (lane_id, action_type, conne
 select pg_temp.claims_amr('owner@example.test', 'aal2', extract(epoch from now())::bigint);
 set local role authenticated;
 select is((select count(*)::int from act.proposed_actions where lane_id = 'PKG'), 6, 'the owner sees every PKG action');
+select is((select array_agg(k order by k) from ids where id in (select id from act.proposed_actions) and k in ('a1', 'a2', 'a3', 'a4', 'a5')), array['a1','a2','a3','a4','a5'], 'T-247: positive case: the mailbox owner sees each of their own actions by id (including the job-proposed one)');
 select is((select count(*)::int from act.proposed_actions where lane_id = 'APK'), 0, 'CROSS-LANE: the owner (not a member of APK) sees no APK action');
 select is((select count(*)::int from core.act_list('APK')), 0, 'CROSS-LANE: act_list of another lane is empty');
 select is((select count(*)::int from core.act_get('APK', (select id from ids where k = 'a6'))), 0, 'CROSS-LANE: act_get of another lane''s action is empty');
@@ -103,7 +107,7 @@ reset role;
 
 select pg_temp.claims_amr('finance-operator@example.test', 'aal2', extract(epoch from now())::bigint);
 set local role authenticated;
-select is((select array_agg(id) from act.proposed_actions), array[(select id from ids where k = 'a2')], 'a proposer sees only their own action');
+select is((select array_agg(id) from act.proposed_actions), null, 'T-247: a member who is not the mailbox owner sees no email action (an owner role or a proposer clause grants nothing)');
 reset role;
 select pg_temp.claims_amr('viewer@example.test', 'aal2', extract(epoch from now())::bigint);
 set local role authenticated;
@@ -341,12 +345,12 @@ select lives_ok($$select act.propose('PKG', 'email.send', '00000000-0000-4000-80
 -- The 20-pending cap counts only unexpired proposals (code M2).
 insert into ids select 'cap' || g::text, act.propose('PKG', 'email.send', '00000000-0000-4000-8000-000000002901', '{"mailbox":"act-pkg@example.test"}', pg_temp.payload('act-pkg@example.test'), 1, pg_temp.hash('cap' || g::text), null, '[]', 'user', pg_temp.uid('owner@example.test'), false)
 from generate_series(1, 20 - (select count(*)::int from act.proposed_actions where lane_id = 'PKG' and status = 'proposed' and expires_at > now())) g;
-select throws_ok($$select act.propose('PKG', 'email.send', '00000000-0000-4000-8000-000000002901', '{"mailbox":"act-pkg@example.test"}', pg_temp.payload('act-pkg@example.test'), 1, pg_temp.hash('cap-over'), null, '[]', 'user', null, false)$$,
+select throws_ok($$select act.propose('PKG', 'email.send', '00000000-0000-4000-8000-000000002901', '{"mailbox":"act-pkg@example.test"}', pg_temp.payload('act-pkg@example.test'), 1, pg_temp.hash('cap-over'), null, '[]', 'user', pg_temp.uid('owner@example.test'), false)$$,
                  '54000', null, 'at 20 unexpired pending proposals the cap refuses');
 alter table act.proposed_actions disable trigger proposed_actions_guard;
 update act.proposed_actions set expires_at = now() - interval '1 minute' where lane_id = 'PKG' and status = 'proposed';
 alter table act.proposed_actions enable trigger proposed_actions_guard;
-select lives_ok($$select act.propose('PKG', 'email.send', '00000000-0000-4000-8000-000000002901', '{"mailbox":"act-pkg@example.test"}', pg_temp.payload('act-pkg@example.test'), 1, pg_temp.hash('cap-after'), null, '[]', 'user', null, false)$$,
+select lives_ok($$select act.propose('PKG', 'email.send', '00000000-0000-4000-8000-000000002901', '{"mailbox":"act-pkg@example.test"}', pg_temp.payload('act-pkg@example.test'), 1, pg_temp.hash('cap-after'), null, '[]', 'user', pg_temp.uid('owner@example.test'), false)$$,
                 'expired (not yet swept) proposals no longer count against the cap');
 
 select * from finish();

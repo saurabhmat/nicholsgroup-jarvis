@@ -10,15 +10,15 @@ create temp table ids (k text primary key, id uuid);
 grant all on ids to public;
 update core.lanes set enabled = true where code = 'APK';
 update core.lane_policies set store_outbound_drafts = true, write_actions_allowed = array['email_send', 'email_draft'] where lane_id in ('PKG', 'APK');
-insert into core.connections (id, lane_id, provider, external_account_id, status, features) values
-  ('00000000-0000-4000-8000-000000001931', 'PKG', 'google', 'wd-pkg@example.test', 'active', '{"gmail_compose": true}'),
-  ('00000000-0000-4000-8000-000000001932', 'APK', 'google', 'wd-apk@example.test', 'active', '{"gmail_compose": true}');
+insert into core.connections (id, lane_id, provider, external_account_id, status, features, owner_user_id) values
+  ('00000000-0000-4000-8000-000000001931', 'PKG', 'google', 'wd-pkg@example.test', 'active', '{"gmail_compose": true}', pg_temp.uid('owner@example.test')),
+  ('00000000-0000-4000-8000-000000001932', 'APK', 'google', 'wd-apk@example.test', 'active', '{"gmail_compose": true}', pg_temp.uid('owner@example.test'));
 create function pg_temp.mk(p_k text, p_lane text, p_conn uuid, p_kind text) returns void language plpgsql as $$
 declare v_id uuid;
 begin
   v_id := act.propose(p_lane, 'email.send', p_conn, jsonb_build_object('mailbox', 'x@example.test'),
     jsonb_build_object('fromMailbox', 'x@example.test', 'to', jsonb_build_array('dana@sender.example.test'), 'cc', '[]'::jsonb, 'bcc', '[]'::jsonb, 'subject', 'S', 'bodyText', 'CANARY body text'),
-    1, encode(sha256(convert_to('wd-' || p_k, 'utf8')), 'hex'), null, '[]', p_kind, case when p_kind = 'user' then pg_temp.uid('owner@example.test') else null end, false);
+    1, encode(sha256(convert_to('wd-' || p_k, 'utf8')), 'hex'), null, '[]', p_kind, pg_temp.uid('owner@example.test') /* T-247: a job's email proposal names the mailbox owner too */, false);
   insert into ids values (p_k, v_id);
 end;
 $$;

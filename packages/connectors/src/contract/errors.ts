@@ -28,6 +28,8 @@ const DISPOSITION: Record<ConnectorErrorKind, ErrorDisposition> = {
  * recognises and reports as a refused account. Fixed text: database messages are never passed on.
  */
 export const ACCOUNT_IN_USE_MESSAGE = "This provider account is already connected to another company";
+/** T-247: the account is already connected here by another person (a mailbox has one owner; nobody connects it for someone else). */
+export const ACCOUNT_OWNED_BY_OTHER_MESSAGE = "This provider account is already connected by another person";
 
 export function dispositionFor(kind: ConnectorErrorKind): ErrorDisposition {
   return DISPOSITION[kind];

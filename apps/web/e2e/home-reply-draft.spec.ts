@@ -24,7 +24,7 @@ const cleanup = () =>
        delete from core.connections where id = '${CID}';`);
 
 const seed = () =>
-  sql(`insert into core.connections (id, lane_id, provider, external_account_id, status) values ('${CID}', 'PKG', 'google', 'reply-e2e@example.test', 'active');
+  sql(`insert into core.connections (id, lane_id, provider, external_account_id, status, owner_user_id) values ('${CID}', 'PKG', 'google', 'reply-e2e@example.test', 'active', (select id from auth.users where email = 'owner@example.test'));
        insert into comms.message_index (lane_id, connection_id, provider, message_id, thread_id, from_address, from_name, subject, received_at, is_read, is_important, folder, labels, deleted, source_updated_at)
        values ('PKG', '${CID}', 'google', 'e2e-reply-1', 'e2e-thread-1', 'sender@example.test', 'Sam Sender', 'Synthetic reply subject', now() - interval '1 minute', false, true, 'INBOX', '{}', false, now());`);
 

@@ -79,7 +79,7 @@ export type GoogleCalendarProviderDeps = {
    * `retentionDays` bounds a full load to the lane policy and fails closed when unreadable; `calendarSettings` picks the
    * calendars and the look-ahead (malformed settings fail closed).
    */
-  laneConfig: Pick<LaneConfigReader, "mailboxes" | "retentionDays" | "calendarSettings">;
+  laneConfig: Pick<LaneConfigReader, "mailboxes" | "mailDomains" | "retentionDays" | "calendarSettings">;
   now?: () => number;
   logger?: ConnectorLogger;
 };

@@ -91,7 +91,7 @@ async function buildProposal(deps: ApprovalsPublicDeps, laneId: LaneId, actionTy
   if (facts.mailbox === null) throw new ApprovalsError("invalid");
   const mailbox = facts.mailbox.toLowerCase();
   if (compose.fromMailbox !== undefined && compose.fromMailbox.toLowerCase() !== mailbox) throw new ApprovalsError("sender_mismatch");
-  if (!(await deps.laneMailboxes(laneId)).includes(mailbox)) throw new ApprovalsError("sender_mismatch");
+  if (!(await deps.mailboxAllowed(laneId, mailbox))) throw new ApprovalsError("sender_mismatch");
   let prepared: Awaited<ReturnType<ApprovalsDeps["prepareEmailWrite"]>>;
   try {
     prepared = await deps.prepareEmailWrite(laneId, connectionId, {
@@ -192,7 +192,8 @@ export async function getApproval(ctx: UserCtx, actionId: string): Promise<Actio
 }
 
 async function requireOwner(ctx: UserCtx): Promise<void> {
-  const { data, error } = await ctx.rpc("has_lane_role", { p_uid: ctx.userId, p_lane: ctx.laneId, p_roles: ["owner"] });
+  // T-247: the roles that may act on an email are owner and admin_technical; the database allows it only to the mailbox's owner.
+  const { data, error } = await ctx.rpc("has_lane_role", { p_uid: ctx.userId, p_lane: ctx.laneId, p_roles: ["owner", "admin_technical"] });
   if (error) throw toApprovalsError(error);
   if (data !== true) throw new ApprovalsError("forbidden");
 }

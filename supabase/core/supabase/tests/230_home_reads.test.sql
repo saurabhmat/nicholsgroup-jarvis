@@ -4,7 +4,7 @@
 -- attention counts (important, priority address and @domain, read/deleted/non-inbox/old mail ignored, no priority list),
 -- and denial: other lane (rows exist, caller not a member), member without the calendar/comms view, outsider, AAL1.
 begin;
-select plan(38);
+select plan(40);
 \ir helpers/lane_rls.psql
 
 update core.lanes set enabled = true where code = 'APK';
@@ -15,9 +15,9 @@ delete from core.memberships where lane_id = 'APK' and user_id = pg_temp.uid('ow
 delete from comms.message_index where lane_id in ('PKG', 'APK');
 delete from cal.event_index where lane_id in ('PKG', 'APK');
 
-insert into core.connections (id, lane_id, provider, external_account_id, status) values
-  ('00000000-0000-4000-8000-000000002301', 'PKG', 'google', 'home-pkg@example.test', 'active'),
-  ('00000000-0000-4000-8000-000000002302', 'APK', 'google', 'home-apk@example.test', 'active');
+insert into core.connections (id, lane_id, provider, external_account_id, status, owner_user_id) values
+  ('00000000-0000-4000-8000-000000002301', 'PKG', 'google', 'home-pkg@example.test', 'active', pg_temp.uid('owner@example.test')),
+  ('00000000-0000-4000-8000-000000002302', 'APK', 'google', 'home-apk@example.test', 'active', pg_temp.uid('owner@example.test'));
 
 -- Calendar: a window of 2026-11-06 05:00Z .. 2026-11-07 05:00Z (Nov 6 in New York).
 insert into cal.event_index (lane_id, connection_id, provider, calendar_id, event_id, ical_uid, title, location, source_url, online_meeting_url,
@@ -102,8 +102,14 @@ select is((select count(*)::int from core.home_mail_attention('APK', now() - int
 select is((select count(*)::int from core.home_mail_attention('APK', now() - interval '24 hours')), 0, 'another lane''s config is not read (no row: no mail view)');
 reset role;
 -- The APK fixture is real: without RLS (service_role) the same call sees the list and the message.
+select set_config('request.jwt.claims', '{"role":"service_role"}', true); -- the service key carries no sub
 set local role service_role;
-select is((select unread_priority::text || '/' || priority_configured::text from core.home_mail_attention('APK', now() - interval '24 hours')), '1/true', 'fixture check: APK has a priority sender and an unread message');
+select is((select (count(*) filter (where lower(m.from_address) = 'boss@example.test'))::text || '/' || ((select c.config -> 'priority_senders' from core.lane_config_current c where c.lane_id = 'APK') ? 'boss@example.test')::text
+             from comms.message_index m where m.lane_id = 'APK' and not m.is_read and not m.deleted and m.folder = 'INBOX'), '1/true',
+          'fixture check: APK has a priority sender and an unread message from it (so the zero counts above come from denial, not from an empty fixture)');
+-- T-247: the service role reads no mail through the Home functions (they answer for a signed-in user's own mailboxes only).
+select is((select count(*)::int from core.home_mail_attention('PKG', now() - interval '24 hours')), 0, 'service_role: home_mail_attention returns no row (no user)');
+select is((select count(*)::int from core.home_meetings('PKG', '2026-11-06 05:00Z', '2026-11-07 05:00Z')), 0, 'service_role: home_meetings returns no rows (no user)');
 reset role;
 
 -- ---------------------------------------------------------------- owner at aal1
@@ -118,14 +124,14 @@ reset role;
 select pg_temp.claims('admin-technical@example.test', 'aal2');
 set local role authenticated;
 select is((select count(*)::int from core.home_meetings('PKG', '2026-11-06 05:00Z', '2026-11-07 05:00Z')), 0, 'admin_technical sees no meetings');
-select is((select count(*)::int from core.home_mail_attention('PKG', now() - interval '24 hours')), 0, 'admin_technical counts no mail (no row: no mail view)');
-select is(core.home_calendar_status('PKG'), 'no_access', 'admin_technical: calendar status no_access (connections view alone is not enough)');
+select is((select coalesce(sum(unread_important + unread_priority), 0)::int from core.home_mail_attention('PKG', now() - interval '24 hours')), 0, 'admin_technical owns no mailbox here: zero counts (T-247: own_mail grants only their own mail)');
+select is(core.home_calendar_status('PKG'), 'not_connected', 'admin_technical: calendar status not_connected (own_mail, but no calendar connection of their own; the lane''s connections are not theirs)');
 reset role;
 
 select pg_temp.claims('viewer@example.test', 'aal2');
 set local role authenticated;
 select is((select count(*)::int from core.home_meetings('PKG', '2026-11-06 05:00Z', '2026-11-07 05:00Z')), 0, 'a finance-only viewer sees no meetings');
-select is((select count(*)::int from core.home_mail_attention('PKG', now() - interval '24 hours')), 0, 'a viewer without the config view does not read priority senders (no row: no mail view)');
+select is((select coalesce(sum(unread_important + unread_priority), 0)::int from core.home_mail_attention('PKG', now() - interval '24 hours')), 0, 'a viewer owns no mailbox: zero counts');
 reset role;
 
 -- ---------------------------------------------------------------- outsider

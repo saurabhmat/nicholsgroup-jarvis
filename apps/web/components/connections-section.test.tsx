@@ -14,7 +14,8 @@ vi.mock("next/navigation", () => ({ useRouter: () => ({ refresh: vi.fn(), push: 
 afterEach(cleanup);
 
 const google: GoogleSectionView = {
-  connections: [{ id: "g1", mailbox: "boss@example.test", state: "connected", mailboxAllowed: true, lastMailSyncAt: "2026-11-09T14:00:00Z", lastCalendarSyncAt: null }],
+  canSync: true,
+  connections: [{ id: "g1", mailbox: "boss@example.test", state: "connected", mailboxAllowed: true, mine: true, lastMailSyncAt: "2026-11-09T14:00:00Z", lastCalendarSyncAt: null }],
 };
 const keyless: ComposioSectionView = {
   toolkits: [
@@ -72,7 +73,7 @@ describe("ConnectionsSection", () => {
   });
 
   it("Google needs reconnecting: an alert, and the row's own Reconnect bound to its connection (no section-level Reconnect Google)", () => {
-    render(<ConnectionsSection laneId="PKG" google={{ connections: google.connections.map((c) => ({ ...c, state: "reconnect_required" as const })) }} quickbooks={null} composio={null} />);
+    render(<ConnectionsSection laneId="PKG" google={{ canSync: true, connections: google.connections.map((c) => ({ ...c, state: "reconnect_required" as const })) }} quickbooks={null} composio={null} />);
     expect(screen.getByText("Google needs to be reconnected")).toBeTruthy();
     expect(screen.queryByRole("button", { name: "Reconnect Google" })).toBeNull();
     const reconnect = screen.getByRole("button", { name: "Reconnect boss@example.test" });
@@ -103,6 +104,32 @@ describe("ConnectionsSection", () => {
     cleanup();
     render(<ConnectionsSection laneId="PKG" google={{ connections: google.connections.map((c) => ({ ...c, state: "reconnect_required" as const })) }} quickbooks={null} composio={null} />);
     expect(screen.queryByTestId("settings-sync-now")).toBeNull();
+  });
+
+  it("T-247: your own accounts have the buttons; another person's account is listed for status only, with no buttons and no Sync now without the connections view", () => {
+    const view: GoogleSectionView = {
+      connections: [
+        { id: "g1", mailbox: "me@example.test", state: "connected", mailboxAllowed: true, mine: true, lastMailSyncAt: null, lastCalendarSyncAt: null },
+        { id: "g2", mailbox: "other@example.test", state: "degraded", mailboxAllowed: true, mine: false, lastMailSyncAt: null, lastCalendarSyncAt: null },
+      ],
+    };
+    render(<ConnectionsSection laneId="PKG" google={view} quickbooks={null} composio={null} />);
+    const mine = screen.getByTestId("google-connection");
+    expect(mine.textContent).toContain("me@example.test");
+    expect(within(mine).getByRole("button", { name: "Reconnect me@example.test" })).toBeTruthy();
+    const other = screen.getByTestId("google-other-connection");
+    expect(other.textContent).toContain("other@example.test");
+    expect(other.textContent).toMatch(/Only the person who connected this account can reconnect it/);
+    expect(within(other).queryByRole("button")).toBeNull();
+    expect(screen.queryByTestId("settings-sync-now")).toBeNull(); // no canSync: a viewer has no Sync now
+  });
+
+  it("T-247: a member with no account of their own still gets Connect Google, and sees only status of the others", () => {
+    const view: GoogleSectionView = { connections: [{ id: "g2", mailbox: "other@example.test", state: "connected", mailboxAllowed: true, mine: false, lastMailSyncAt: null, lastCalendarSyncAt: null }] };
+    render(<ConnectionsSection laneId="PKG" google={view} quickbooks={null} composio={null} />);
+    const row = screen.getByTestId("google-not-connected");
+    expect(within(row).getByRole("button", { name: "Connect Google" })).toBeTruthy();
+    expect(screen.getByTestId("google-other-connection").textContent).toContain("other@example.test");
   });
 
   it("unavailable status: says so and offers no connect button", () => {

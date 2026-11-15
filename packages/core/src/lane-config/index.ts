@@ -10,6 +10,8 @@ export const laneCode = z.string().regex(/^[A-Z]{1,8}$/);
 const id = z.string().min(1).max(100).regex(/^[A-Za-z0-9_.:-]+$/);
 export const hhmm = z.string().regex(/^([01]\d|2[0-3]):[0-5]\d$/); // America/New_York wall-clock time
 export const email = z.email().max(254);
+/** A lower-case DNS domain name (a mail account domain), at least two labels, no scheme, port, path or wildcard. */
+export const mailDomain = z.string().max(253).regex(/^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?(\.[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?)+$/);
 const ids = z.array(id).max(500).default([]);
 /** Free-text labels (GoHighLevel tags, pipeline stage names): any printable text, no control characters. */
 const tags = z.array(z.string().min(1).max(100).regex(/^[^\u0000-\u001f\u007f]+$/)).max(500).default([]);
@@ -158,6 +160,19 @@ export const laneConfigSchema = z.strictObject({
   // still holds it parses; remove it when no stored version has it.
   pilot: z.strictObject({ connection_test_enabled: z.boolean().default(false) }).optional(),
   mailboxes: z.array(email).max(20).default([]),
+  // Which Google accounts may be connected to this lane (T-247). Fail closed: an empty list allows no account.
+  //  - allowed_domains: lower-case domains of the Google Workspace accounts that may be connected (e.g. the company's own domains).
+  //    Checked at connect and on every Google call, in addition to D-23 (one account, one lane).
+  //  - mailboxes (above): an OPTIONAL exact-address list. When it is not empty the address must be in BOTH lists (the list narrows the
+  //    domain rule, it never widens it); when it is empty the domain list alone decides.
+  //  - self_connect_domains: domains whose accounts a user may connect themselves through the later Composio route (e.g. a personal
+  //    gmail.com, after H-041). Nothing reads it yet; it stays empty.
+  mail: z
+    .strictObject({
+      allowed_domains: z.array(mailDomain).max(20).default([]),
+      self_connect_domains: z.array(mailDomain).max(20).default([]),
+    })
+    .prefault({}),
   // How the lane's Gmail + Calendar are reached (T-219, D-30, D-37): `native` = our own Google OAuth client and Vault tokens
   // (the only path that syncs today, and every existing lane); `composio` = Composio holds the Google tokens (D-35). Switching
   // a lane is this one value, after the Composio path passes its live check. Default `native`: nothing changes for a lane

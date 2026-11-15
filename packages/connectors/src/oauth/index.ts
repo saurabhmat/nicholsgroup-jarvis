@@ -8,7 +8,7 @@ import { OAUTH_PROVIDERS } from "./registry";
 import { dbStateStore } from "./state";
 
 export { createConnectHandlers, type OnConnected } from "./handlers";
-export { CONNECT_ROLES, type AuthorizeFn, type Authorized, type CallbackResult, type ConnectFailure } from "./flow";
+export { CONNECT_ROLES, MAIL_CONNECT_ROLES, connectRolesFor, type AuthorizeFn, type Authorized, type CallbackResult, type ConnectFailure } from "./flow";
 
 export const oauthFlow = createOAuthFlow({
   providers: OAUTH_PROVIDERS,

@@ -10,9 +10,9 @@ update core.lanes set enabled = true where code = 'APK';
 delete from core.memberships where lane_id = 'APK' and user_id = pg_temp.uid('owner@example.test');
 delete from comms.message_index where lane_id in ('PKG', 'APK');
 
-insert into core.connections (id, lane_id, provider, external_account_id, status) values
-  ('00000000-0000-4000-8000-000000002811', 'PKG', 'google', 'thr-pkg@example.test', 'active'),
-  ('00000000-0000-4000-8000-000000002812', 'APK', 'google', 'thr-apk@example.test', 'active');
+insert into core.connections (id, lane_id, provider, external_account_id, status, owner_user_id) values
+  ('00000000-0000-4000-8000-000000002811', 'PKG', 'google', 'thr-pkg@example.test', 'active', pg_temp.uid('owner@example.test')),
+  ('00000000-0000-4000-8000-000000002812', 'APK', 'google', 'thr-apk@example.test', 'active', pg_temp.uid('owner@example.test'));
 
 insert into comms.message_index (lane_id, connection_id, provider, message_id, thread_id, from_address, from_name, subject, received_at, is_read, folder, labels, deleted, source_updated_at) values
   -- t1: client wrote twice, unread, owner never replied -> waiting
@@ -30,9 +30,9 @@ insert into comms.message_index (lane_id, connection_id, provider, message_id, t
   ('PKG', '00000000-0000-4000-8000-000000002811', 'google', 'm7', 't5', 'stale@acme.test', null, 'Old', now() - interval '10 days', false, 'INBOX', '{INBOX}', false, now()),
   ('APK', '00000000-0000-4000-8000-000000002812', 'google', 'a1', 'x1', 'client@acme.test', null, 'Other company', now() - interval '1 hour', false, 'INBOX', '{INBOX}', false, now());
 
-select ok(has_function_privilege('authenticated', 'core.briefing_threads(text, timestamptz)', 'execute'), 'authenticated executes');
-select ok(not has_function_privilege('anon', 'core.briefing_threads(text, timestamptz)', 'execute'), 'anon does not');
-select ok((select not prosecdef and proconfig = array['search_path=""'] from pg_proc where oid = 'core.briefing_threads(text, timestamptz)'::regprocedure), 'invoker, empty search_path');
+select ok(has_function_privilege('authenticated', 'core.briefing_threads(text, timestamptz, uuid)', 'execute'), 'authenticated executes');
+select ok(not has_function_privilege('anon', 'core.briefing_threads(text, timestamptz, uuid)', 'execute'), 'anon does not');
+select ok((select not prosecdef and proconfig = array['search_path=""'] from pg_proc where oid = 'core.briefing_threads(text, timestamptz, uuid)'::regprocedure), 'invoker, empty search_path');
 
 select pg_temp.claims('owner@example.test', 'aal2');
 set local role authenticated;
@@ -50,7 +50,7 @@ select throws_ok($$select * from core.briefing_threads(null, now())$$, '22004', 
 select is((select count(*)::int from core.briefing_threads('APK', now() - interval '7 days')), 0, 'another lane: no threads');
 reset role;
 set local role service_role;
-select is((select count(*)::int from core.briefing_threads('APK', now() - interval '7 days')), 1, 'fixture check: APK has a thread');
+select is((select count(distinct thread_id)::int from comms.message_index where lane_id = 'APK'), 1, 'fixture check: APK has a thread');
 reset role;
 
 select pg_temp.claims('owner@example.test', 'aal1');

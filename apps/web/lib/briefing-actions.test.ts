@@ -76,7 +76,7 @@ describe.each([
     expect(state.rpc).not.toHaveBeenCalled();
     expect(state.after).not.toHaveBeenCalled();
     await action("PKG");
-    expect(state.requireRole).toHaveBeenLastCalledWith("PKG", ["owner"]);
+    expect(state.requireRole).toHaveBeenLastCalledWith("PKG", ["owner", "admin_technical", "viewer"]);
   });
 
   it("refuses a malformed lane id before any guard", async () => {
@@ -201,7 +201,7 @@ describe("briefingRunState", () => {
   it("returns the owner's run state; null for a non-owner, a bad lane or an error", async () => {
     state.rpc.mockResolvedValueOnce({ data: [{ running: true, last_regenerate_at: null, runs_today: 2, latest_prepared_at: "2026-11-12T10:00:00Z", last_attempt_at: "2026-11-12T10:00:00Z" }], error: null });
     expect(await briefingRunState("PKG")).toEqual({ running: true, lastRegenerateAt: null, runsToday: 2, latestPreparedAt: "2026-11-12T10:00:00Z", lastAttemptAt: "2026-11-12T10:00:00Z" });
-    expect(state.requireRole).toHaveBeenLastCalledWith("PKG", ["owner"]);
+    expect(state.requireRole).toHaveBeenLastCalledWith("PKG", ["owner", "admin_technical", "viewer"]);
     state.rpc.mockResolvedValueOnce({ data: [], error: null });
     expect(await briefingRunState("PKG")).toBeNull();
     state.requireRole.mockRejectedValueOnce(new AuthError("forbidden" as never));

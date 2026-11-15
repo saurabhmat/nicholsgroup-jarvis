@@ -27,7 +27,7 @@ const cleanup = () =>
 // A timed meeting 20 minutes ahead (seeded after sign-in, so it is still upcoming when the page loads), an all-day
 // event for today in New York, three unread important inbox messages and one already read.
 const seed = () =>
-  sql(`insert into core.connections (id, lane_id, provider, external_account_id, status) values ('${CID}', 'PKG', 'google', 'home-e2e@example.test', 'active');
+  sql(`insert into core.connections (id, lane_id, provider, external_account_id, status, owner_user_id) values ('${CID}', 'PKG', 'google', 'home-e2e@example.test', 'active', (select id from auth.users where email = 'owner@example.test'));
        insert into cal.event_index (lane_id, connection_id, provider, calendar_id, event_id, title, location, online_meeting_url, start_at, end_at, all_day, start_date, end_date, status, attendees, source_updated_at)
        values ('PKG', '${CID}', 'google', 'primary', 'e2e-m1', '${MEETING}', 'Synthetic room', 'https://meet.example.test/e2e',
                now() + interval '20 minutes', now() + interval '30 minutes', false, null, null, 'confirmed', '[]', now());

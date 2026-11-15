@@ -252,8 +252,15 @@ describe("approve and reject by action type (T-195)", () => {
     expect(s.approve).toHaveBeenCalledTimes(1);
     expect(s.g.requireRole.mock.calls.map((c) => c[1])).toEqual([["owner", "admin_technical"]]); // never narrowed to owner
   });
-  it("admin_technical cannot approve or reject an EMAIL action (403), and the module is not reached", async () => {
+  it("T-247: admin_technical may approve their OWN email action (the mailbox owner rule is the database's): the role check passes and the bound approve runs", async () => {
     const s = setupRoles(["admin_technical"], { rows: [row()] });
+    const a = await handleApprovals(post({ action: "approve", id: ID, hashSeen: HASH }), "PKG", s.deps);
+    expect(a.status).toBe(200);
+    expect(s.approve).toHaveBeenCalledTimes(1);
+    expect(s.g.requireRole.mock.calls.map((c) => c[1])).toContainEqual(["owner", "admin_technical"]);
+  });
+  it("a viewer or finance_operator cannot approve or reject an EMAIL action (403), and the module is not reached", async () => {
+    const s = setupRoles(["viewer"], { rows: [row()] });
     const a = await handleApprovals(post({ action: "approve", id: ID, hashSeen: HASH }), "PKG", s.deps);
     expect(a.status).toBe(403);
     expect(s.approve).not.toHaveBeenCalled();
@@ -262,8 +269,8 @@ describe("approve and reject by action type (T-195)", () => {
     expect(r.status).toBe(403);
     expect(s.calls.map((c) => c.fn)).not.toContain("act_reject");
   });
-  it("admin_technical cannot edit an email or use the reply actions (owner only)", async () => {
-    const s = setupRoles(["admin_technical"]);
+  it("a viewer cannot edit an email or use the reply actions (T-247: owner or admin_technical, as the mailbox owner)", async () => {
+    const s = setupRoles(["viewer"]);
     const res = await handleApprovals(post({ action: "save", id: ID, to: ["a@example.test"], cc: [], bcc: [], subject: "x", bodyText: "y" }), "PKG", s.deps);
     expect(res.status).toBe(403);
   });
@@ -338,7 +345,7 @@ describe("page view models for qbo.disconnect (T-195)", () => {
     };
     const approvals = { jobRpc: async () => async () => ({ data: 0, error: null }), readFacts: async (_l: string, conn: string) => (conn === CONN ? { ...facts, ...qboFacts, mailbox: facts.mailbox, composeGranted: true } : facts), laneMailboxes: async () => [], audit: { log: async () => undefined } } as unknown as ApprovalsPublicDeps;
     const admin = await loadApprovals(mk(["admin_technical"]), approvals, "PKG");
-    expect(admin).toMatchObject({ isOwner: false, canActDisconnect: true });
+    expect(admin).toMatchObject({ isOwner: true, canActDisconnect: true }); // T-247: isOwner = may act on email (owner or admin_technical); the list holds only their own drafts
     expect(admin.disconnects).toHaveLength(1);
     expect(admin.pending).toHaveLength(1);
     const viewer = await loadApprovals(mk(["viewer"]), approvals, "PKG");

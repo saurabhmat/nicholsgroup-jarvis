@@ -1,6 +1,7 @@
 // Read tools for the assistant demo scope (T-105, Nov 8, 2026): mail and calendar METADATA the portal already shows
 // (Inbox, Home). Each tool reads through the signed-in user's lane client (`ctx.client`), via the SECURITY INVOKER
-// functions core.inbox_messages and core.home_meetings, so RLS applies (AAL2 + lane + comms/calendar view). No bodies
+// functions core.inbox_messages and core.home_meetings, so RLS applies (AAL2 + lane + the own_mail view, and only the caller's OWN mailboxes:
+// T-247, mail and calendar are readable only through mailbox ownership; a lane role never grants another user's mail). No bodies
 // are read (rule 6), nothing is written (rule 5). Subjects, senders, titles and locations are external text: they are
 // not in trustedFields, so the loop wraps them as untrusted data. Only tool-formatted times are trusted.
 // Moves to the comms/calendar modules with T-123/T-133.
@@ -52,7 +53,7 @@ export function mailTool(now: () => Date = () => new Date()): ToolDescriptor<{ f
       "No message bodies. Use for 'what came in', 'anything important', 'who emailed me'.",
     category: "email",
     effect: "read",
-    requiredView: "comms",
+    requiredView: "own_mail",
     args: z.strictObject({
       filter: z.enum(["important", "unread", "all"]).default("important"),
       limit: z.number().int().min(1).max(25).default(10),
@@ -96,7 +97,7 @@ export function meetingsTool(now: () => Date = () => new Date()): ToolDescriptor
     description: "List calendar meetings for this company: today, tomorrow or the next 7 days (New York time). Titles, times, locations.",
     category: "calendar",
     effect: "read",
-    requiredView: "calendar",
+    requiredView: "own_mail",
     args: z.strictObject({ range: z.enum(["today", "tomorrow", "next_7_days"]).default("today") }),
     // Titles and locations are external content: store references only (T-103).
     resultStore: "refs_only",

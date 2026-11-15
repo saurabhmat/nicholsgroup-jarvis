@@ -13,7 +13,7 @@ import type { LaneId } from "@nichols/core";
 import { withAudit, type Audit } from "@nichols/core/audit";
 import type { LaneClient } from "@nichols/core/lane-router";
 import { z } from "zod";
-import { ACCOUNT_IN_USE_MESSAGE, ConnectorError, isConnectorError } from "../contract/errors";
+import { ACCOUNT_IN_USE_MESSAGE, ACCOUNT_OWNED_BY_OTHER_MESSAGE, ConnectorError, isConnectorError } from "../contract/errors";
 import type { LaneBoundConnection } from "../contract/lane-bound";
 import type { Provider } from "../contract/schemas";
 import { createHttpClient, basicCredentials, type HttpClient } from "../http/client";
@@ -22,8 +22,23 @@ import { SecretValue } from "../vault/secret";
 import { codeChallenge, connectionOfState, hashState, laneOfState, newCodeVerifier, newState } from "./pkce";
 import type { StateStore } from "./state";
 
-/** Who may connect or reconnect an account (T-050: owner or admin_technical of the lane). */
+/** Who may connect or reconnect an account (T-050: owner or admin_technical of the lane). QuickBooks and every provider but the mail ones. */
 export const CONNECT_ROLES = ["owner", "admin_technical"] as const;
+
+/**
+ * T-247: a person's own Google account is connected by the person: any member who holds the `own_mail` view (owner, admin_technical,
+ * viewer). The database decides again (core.oauth_state_create / consume: own_mail for google), so this list is only the first,
+ * friendly check. Nobody connects a mailbox for someone else: the connection's owner is the signed-in user.
+ */
+export const MAIL_CONNECT_ROLES = ["owner", "admin_technical", "viewer"] as const;
+
+/** The roles that may start or finish a connect of this provider. */
+export function connectRolesFor(provider: string): readonly ("owner" | "admin_technical" | "viewer")[] {
+  return provider === "google" ? MAIL_CONNECT_ROLES : CONNECT_ROLES;
+}
+
+/** Providers whose connections are a person's mailbox or calendar: they carry an owner (core.connections.owner_user_id). */
+const MAIL_PROVIDERS: ReadonlySet<string> = new Set(["google", "microsoft"]);
 
 /** The provider's token response; extra fields (x_refresh_token_expires_in, id_token, ...) are kept for `identify`. */
 export const TokenResponseSchema = z
@@ -83,7 +98,7 @@ export type OAuthFlowDeps = {
      * One connection of the lane by id, for a reconnect (T-238): null when it is not this lane's, not this provider's or not a native
      * connection. Required for `start`/`callback` with a connection id; without it such a connect is refused.
      */
-    findById?(laneId: LaneId, provider: Provider, connectionId: string): Promise<{ id: string; externalAccountId: string; status: string } | null>;
+    findById?(laneId: LaneId, provider: Provider, connectionId: string): Promise<{ id: string; externalAccountId: string; status: string; ownerUserId?: string | null } | null>;
     /** Merges boolean features into the connection row (T-232); required only for providers whose `identify` returns features. */
     setFeatures?(laneId: LaneId, connection: LaneBoundConnection, features: Record<string, boolean>): Promise<void>;
   };
@@ -108,8 +123,8 @@ export type CallbackResult =
   | { ok: true; provider: Provider; laneId: LaneId; connectionId: string }
   | { ok: false; reason: ConnectFailure; provider?: Provider; laneId?: LaneId; message?: string };
 
-/** Thrown by `authorize` callbacks; the route maps it to 401/403. Anything else is an outage. */
-export type AuthorizeFn = (laneId: LaneId) => Promise<Authorized>;
+/** Thrown by `authorize` callbacks; the route maps it to 401/403. Anything else is an outage. The provider is passed so the roles can differ (a person's own Google account: any own_mail member, T-247). */
+export type AuthorizeFn = (laneId: LaneId, provider?: Provider) => Promise<Authorized>;
 
 const OUTAGE_KINDS: ReadonlySet<string> = new Set(["transient", "rate_limited", "connection_unavailable"]);
 /** Scopes any OpenID provider adds on its own; everything else the token carries must have been requested. */
@@ -153,13 +168,15 @@ export function createOAuthFlow(deps: OAuthFlowDeps) {
     async start(slug: string, laneId: LaneId, authorize: AuthorizeFn, opts: { connectionId?: string } = {}): Promise<string> {
       const p = bySlug.get(slug);
       if (!p) throw new ConnectorError({ kind: "not_found", message: "Unknown provider" });
-      const { userId, client } = await authorize(laneId);
+      const { userId, client } = await authorize(laneId, p.provider);
       // A reconnect (T-238): the connection must be this lane's own, for this provider; its account is the only one the callback accepts.
       let bound: { id: string; externalAccountId: string } | null = null;
       if (opts.connectionId !== undefined) {
         const found = deps.connections.findById ? await deps.connections.findById(laneId, p.provider, opts.connectionId).catch(() => "error" as const) : null;
         if (found === "error") throw new ConnectorError({ kind: "transient", message: "Connection store unavailable" });
         if (!found) throw new ConnectorError({ kind: "not_found", message: "Connection not found" });
+        // T-247: only the owner reconnects their own mailbox (the connect is as the signed-in user; the account check follows at the callback).
+        if (MAIL_PROVIDERS.has(p.provider) && found.ownerUserId !== userId) throw new ConnectorError({ kind: "not_found", message: "Connection not found" });
         bound = found;
       }
       const { clientId, redirectUri } = p.client();
@@ -200,7 +217,7 @@ export function createOAuthFlow(deps: OAuthFlowDeps) {
       if (!p) return { ok: false, reason: "unknown_provider" };
       const laneId = laneOfState(query.get("state"));
       if (!laneId) return { ok: false, reason: "invalid_state", provider: p.provider };
-      const { userId, client } = await authorize(laneId);
+      const { userId, client } = await authorize(laneId, p.provider);
 
       let stored: Awaited<ReturnType<StateStore["consume"]>>;
       try {
@@ -263,6 +280,11 @@ export function createOAuthFlow(deps: OAuthFlowDeps) {
             }
           };
           const connection = await refuseInUse(() => deps.connections.ensureConnection(laneId, p.provider, account, userId));
+          // T-247: a mailbox has one owner. A row that belongs to someone else is never reused (this user proved control of the Google
+          // account, but the row is another user's: the tokens are not stored, and the user is told).
+          if (MAIL_PROVIDERS.has(p.provider) && connection.owner_user_id !== userId) {
+            throw new RefusedAccount(new ConnectorError({ kind: "forbidden", message: ACCOUNT_OWNED_BY_OTHER_MESSAGE }));
+          }
           // Defence in depth (T-238 review): a reconnect stores tokens only on the row it was started for, never on another row.
           if (boundId !== null && connection.id !== boundId) throw new WrongAccount();
           await refuseInUse(() =>
@@ -287,9 +309,12 @@ export function createOAuthFlow(deps: OAuthFlowDeps) {
             .log({ ...entry, action: "connection.connect.grant_not_stored", metadata: { reason } })
             .catch(() => undefined);
           const inUse = isConnectorError(cause) && cause.info.message === ACCOUNT_IN_USE_MESSAGE;
+          const ownedByOther = isConnectorError(cause) && cause.info.message === ACCOUNT_OWNED_BY_OTHER_MESSAGE;
           const message = inUse
             ? `This ${p.accountLabel ?? "account"} is already connected to another company in Jarvis. ${GRANT_NOT_STORED_MESSAGE}`
-            : GRANT_NOT_STORED_MESSAGE;
+            : ownedByOther
+              ? `This ${p.accountLabel ?? "account"} is already connected by another person in Jarvis. ${GRANT_NOT_STORED_MESSAGE}`
+              : GRANT_NOT_STORED_MESSAGE;
           return { ok: false, reason, provider: p.provider, laneId, message };
         }
         return { ok: false, reason, provider: p.provider, laneId };

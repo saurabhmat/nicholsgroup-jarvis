@@ -59,8 +59,8 @@ describe("findById (reconnect, T-238)", () => {
   const GOOGLE = { ...ROW, provider: "google", external_account_id: "ann@pubk.test", status: "disconnected" };
   it("reads one native connection of the lane and provider by id, any status, and returns only id, account and status", async () => {
     const f = fake({ row: GOOGLE });
-    await expect(createConnectionStore(f.clientFor).findById("PKG", "google", ROW.id)).resolves.toEqual({ id: ROW.id, externalAccountId: "ann@pubk.test", status: "disconnected" });
-    expect(f.calls.selected).toBe("id, external_account_id, status");
+    await expect(createConnectionStore(f.clientFor).findById("PKG", "google", ROW.id)).resolves.toEqual({ id: ROW.id, externalAccountId: "ann@pubk.test", status: "disconnected", ownerUserId: null });
+    expect(f.calls.selected).toBe("id, external_account_id, status, owner_user_id");
     expect(f.calls.filters).toEqual([["lane_id", "PKG"], ["provider", "google"], ["transport", "native"], ["id", ROW.id]]);
     expect(f.calls.upsert).toBeUndefined();
   });
@@ -122,5 +122,54 @@ describe("createConnectionStore", () => {
     expect(await kind(noLane.ensureConnection("PKG", "quickbooks", "r"))).toBe("connection_unavailable");
     expect(await kind(createConnectionStore(fake().clientFor).ensureConnection("pkg" as never, "quickbooks", "r"))).toBe("invalid_input");
     expect(await kind(createConnectionStore(fake().clientFor).ensureConnection("PKG", "quickbooks", ""))).toBe("invalid_input");
+  });
+});
+
+describe("mailbox ownership (T-247)", () => {
+  const USER = "00000000-0000-4000-8000-0000000000a1";
+  const GOOGLE_ROW = { ...ROW, provider: "google", external_account_id: "ann@example.test", owner_user_id: USER };
+  /** A fake that also records update/is/in, for the owner claim and the address list. */
+  function fake2(rows: unknown[] = [GOOGLE_ROW]) {
+    const calls = { upsert: undefined as [Record<string, unknown>, unknown] | undefined, update: undefined as Record<string, unknown> | undefined, is: [] as [string, unknown][], inList: [] as [string, unknown][], filters: [] as [string, unknown][] };
+    const q: Record<string, unknown> = {
+      select: () => q,
+      eq: (c: string, v: unknown) => (calls.filters.push([c, v]), q),
+      neq: (c: string, v: unknown) => (calls.filters.push([`!${c}`, v]), q),
+      in: (c: string, v: unknown) => (calls.inList.push([c, v]), Promise.resolve({ data: rows, error: null })),
+      is: (c: string, v: unknown) => (calls.is.push([c, v]), Promise.resolve({ error: null })),
+      maybeSingle: async () => ({ data: rows[0] ?? null, error: null }),
+    };
+    // `.in(...)` ends the listMailAccounts chain after `.neq`, so give neq a thenable result too
+    const table = {
+      upsert: async (v: Record<string, unknown>, o: unknown) => ((calls.upsert = [v, o]), { error: null }),
+      update: (v: Record<string, unknown>) => ((calls.update = v), q),
+      ...q,
+    };
+    const client = { schema: () => ({ from: () => table }) };
+    return { calls, clientFor: async () => client as never };
+  }
+
+  it("sets the owner (and created_by) of a new Google connection to the signed-in user, and claims an ownerless row only where owner is null", async () => {
+    const f = fake2();
+    const conn = await createConnectionStore(f.clientFor).ensureConnection("PKG", "google", "ann@example.test", USER);
+    expect(f.calls.upsert?.[0]).toMatchObject({ created_by: USER, owner_user_id: USER });
+    expect(f.calls.update).toEqual({ owner_user_id: USER });
+    expect(f.calls.is).toEqual([["owner_user_id", null]]);
+    expect(conn.owner_user_id).toBe(USER);
+  });
+  it("never gives a QuickBooks connection an owner", async () => {
+    const f = fake2([{ ...ROW }]);
+    await createConnectionStore(f.clientFor).ensureConnection("PKG", "quickbooks", "realm-synthetic-1", USER);
+    expect(f.calls.upsert?.[0]).not.toHaveProperty("owner_user_id");
+    expect(f.calls.update).toBeUndefined();
+  });
+  it("findById returns the owner; listMailAccounts returns the lane's mail account addresses lower-cased, mail providers only, not disconnected", async () => {
+    const f = fake2([{ id: ROW.id, external_account_id: "Ann@Example.test", status: "active", owner_user_id: USER }]);
+    await expect(createConnectionStore(f.clientFor).findById("PKG", "google", ROW.id)).resolves.toMatchObject({ ownerUserId: USER });
+    const g = fake2([{ external_account_id: "Ann@Example.test" }, { external_account_id: "bob@example.test" }]);
+    await expect(createConnectionStore(g.clientFor).listMailAccounts("PKG")).resolves.toEqual(["ann@example.test", "bob@example.test"]);
+    expect(g.calls.filters).toContainEqual(["lane_id", "PKG"]);
+    expect(g.calls.filters).toContainEqual(["!status", "disconnected"]);
+    expect(g.calls.inList).toEqual([["provider", ["google", "microsoft"]]]);
   });
 });
