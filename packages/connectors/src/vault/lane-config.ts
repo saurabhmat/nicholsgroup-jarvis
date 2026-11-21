@@ -10,16 +10,18 @@ import type { JobClientFor } from "./tokens";
 export interface LaneConfigReader {
   /** `lane_config.mail.allowed_domains` (lower-case domains whose Google accounts may be connected); empty when unset = nothing is allowed; throws when malformed (fail closed) (T-247). */
   mailDomains(laneId: LaneId): Promise<string[]>;
-  /** `lane_config.mail.provider` (default `google`); read on every call; throws when the config is unreadable or the provider settings are malformed (fail closed) (T-250). */
-  mailProvider(laneId: LaneId): Promise<MailProvider>;
-  /** `lane_config.microsoft` (defaults applied), or null when the lane has none; throws when unreadable or malformed, or when it is required by `mail.provider = "microsoft"` and missing (fail closed) (T-250). */
+  /** `lane_config.mail.providers`, the enabled mail/calendar providers (default `["google"]`; a legacy `mail.provider` is read as a one-element list); read on every call; throws when the config is unreadable or the provider settings are malformed (fail closed) (T-269). */
+  mailProviders(laneId: LaneId): Promise<MailProvider[]>;
+  /** Whether `provider` is in the lane's `mail.providers` (D-57). Says nothing about the Microsoft block: use `mailProviderSettings` for allow decisions. Fails closed like `mailProviders`. */
+  isMailProviderEnabled(laneId: LaneId, provider: MailProvider): Promise<boolean>;
+  /** `lane_config.microsoft` (defaults applied, `calendarIds` null when unset), or null when the lane has none; throws when unreadable or malformed, or when it is required by `microsoft` in `mail.providers` and missing (fail closed) (T-250, T-269). */
   microsoftSettings(laneId: LaneId): Promise<MicrosoftSettings | null>;
   /**
-   * The provider and the Microsoft settings from ONE read of the config (T-250). Use this, never the two accessors above, for any
-   * allow decision (connect, sync, provider call): two reads could combine the provider of one config version with the tenant
-   * list of the next. Fails closed like them.
+   * The enabled providers and the Microsoft settings from ONE read of the config (T-269). Use this, never the accessors above, for
+   * any allow decision (connect, sync, provider call): two reads could combine the providers of one config version with the tenant
+   * list of the next. Microsoft is enabled for a lane only when it is in `providers` AND `microsoft` is not null. Fails closed like them.
    */
-  mailProviderSettings(laneId: LaneId): Promise<{ provider: MailProvider; microsoft: MicrosoftSettings | null }>;
+  mailProviderSettings(laneId: LaneId): Promise<{ providers: MailProvider[]; microsoft: MicrosoftSettings | null }>;
   /** The realm id configured for the lane's QuickBooks file, or null when none is set. */
   qboRealmId(laneId: LaneId): Promise<string | null>;
   /** The mailboxes (lower-cased) the lane's mail connection may be, from `lane_config.mailboxes`; empty when none is set (T-063). */
@@ -41,7 +43,11 @@ export interface LaneConfigReader {
 }
 
 export type MailProvider = "google" | "microsoft";
-export type MicrosoftSettings = { cloud: MicrosoftConfig["cloud"]; tenantIds: string[]; allowGcc: boolean; mailFolders: MicrosoftConfig["mail_folders"] };
+export type MicrosoftSettings = {
+  cloud: MicrosoftConfig["cloud"]; tenantIds: string[]; allowGcc: boolean; mailFolders: MicrosoftConfig["mail_folders"];
+  /** Explicit raw Graph calendar ids for Microsoft connections (replaces the default selection), or null = the default selection (T-269). */
+  calendarIds: string[] | null;
+};
 
 export type { PayrollSettings } from "../quickbooks/sync";
 import type { PayrollSettings } from "../quickbooks/sync";
@@ -69,17 +75,19 @@ const EMAIL = /^[^\s@]{1,64}@[^\s@]{1,255}$/;
 const MAIL_DOMAIN = /^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?(\.[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?)+$/;
 
 /**
- * The provider keys of a config (a missing config is the default: google, with no Microsoft settings, so nothing Microsoft is
- * allowed); a malformed one throws (fail closed). Only `mail.provider`, `mail_transport` and `microsoft` are checked here: the
+ * The provider keys of a config (a missing config is the default: ["google"], with no Microsoft settings, so nothing Microsoft is
+ * allowed); a malformed one throws (fail closed). Only `mail.providers` / `mail.provider`, `mail_transport` and `microsoft` are checked here: the
  * whole config is validated when it is written (`parseLaneConfig`), not on this read.
  */
-function readProviderView(config: unknown): { provider: MailProvider; microsoft: MicrosoftSettings | null } {
+function readProviderView(config: unknown): { providers: MailProvider[]; microsoft: MicrosoftSettings | null } {
   const parsed = mailProviderViewSchema.safeParse(config === undefined || config === null ? {} : config);
   if (!parsed.success) throw new ConnectorError({ kind: "provider_error", message: "The lane's mail provider settings are not valid" });
   const m = parsed.data.microsoft;
   return {
-    provider: parsed.data.mail.provider,
-    microsoft: m ? { cloud: m.cloud, tenantIds: [...m.tenant_ids], allowGcc: m.allow_gcc, mailFolders: [...m.mail_folders] } : null,
+    providers: [...parsed.data.mail.providers],
+    microsoft: m
+      ? { cloud: m.cloud, tenantIds: [...m.tenant_ids], allowGcc: m.allow_gcc, mailFolders: [...m.mail_folders], calendarIds: m.calendar_ids ? [...m.calendar_ids] : null }
+      : null,
   };
 }
 
@@ -159,8 +167,11 @@ export function createLaneConfigReader(clientFor: JobClientFor): LaneConfigReade
       if (!Array.isArray(list) || list.length > 20 || list.some((d) => typeof d !== "string" || !MAIL_DOMAIN.test(d))) throw bad();
       return [...new Set(list as string[])];
     },
-    async mailProvider(laneId) {
-      return readProviderView(await readConfig(laneId)).provider;
+    async mailProviders(laneId) {
+      return readProviderView(await readConfig(laneId)).providers;
+    },
+    async isMailProviderEnabled(laneId, provider) {
+      return readProviderView(await readConfig(laneId)).providers.includes(provider);
     },
     async microsoftSettings(laneId) {
       return readProviderView(await readConfig(laneId)).microsoft;

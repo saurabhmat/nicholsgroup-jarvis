@@ -4,7 +4,7 @@
 import type { LaneId } from "@nichols/core";
 import { ConnectorError } from "../contract/errors";
 import { assertLaneBound } from "../contract/lane-bound";
-import { createIndexRpc } from "../google/index-rpc";
+import { createIndexRpc } from "../comms/index-rpc";
 import type { JobClientFor } from "../vault/tokens";
 import { SYNC_STREAMS, type SyncCursorStore, type SyncRunStore } from "./types";
 

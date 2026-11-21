@@ -6,7 +6,7 @@
 //
 // Money is not involved. Times are ISO instants with offset; all-day events carry exclusive end dates.
 import { z } from "zod";
-import { isMailAddress } from "../google/headers";
+import { isMailAddress } from "./address";
 import { InstantSchema, OpNameSchema } from "../contract/schemas";
 
 /**

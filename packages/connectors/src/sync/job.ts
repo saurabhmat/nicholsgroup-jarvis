@@ -6,7 +6,7 @@
 // failing connection returns a failed outcome for that connection only; nothing here touches another connection.
 import type { LaneId } from "@nichols/core";
 import { ConnectorError, toConnectorError } from "../contract/errors";
-import type { ConnectionLoader } from "../contract/lane-bound";
+import type { ConnectionLoader, LaneBoundConnection } from "../contract/lane-bound";
 import { connectorLog, type ConnectorLogger } from "../log/index";
 import type { ConnSyncOutcome, SyncRunStore, SyncRunner, SyncStream, SyncTrigger } from "./types";
 
@@ -18,6 +18,12 @@ export type ConnSyncJobDeps = {
   runs: SyncRunStore;
   /** Runner per provider slug. A provider without one fails its runs (unsupported_op), never silently succeeds. */
   runners: Readonly<Record<string, SyncRunner>>;
+  /**
+   * T-255: asked for every usable connection before its run is logged and before any token read. False = the connection's provider is
+   * not enabled for the lane (D-57): the run is skipped as `provider_disabled` (no external call, nothing deleted, status unchanged).
+   * A throw (config unreadable or malformed) fails closed as a failed outcome. Providers that are not mail/calendar answer true.
+   */
+  gate?: (laneId: LaneId, conn: LaneBoundConnection<string>) => Promise<boolean>;
   logger?: ConnectorLogger;
 };
 
@@ -49,6 +55,19 @@ export function createConnSyncJob(deps: ConnSyncJobDeps) {
       if (!USABLE.has(conn.status)) {
         child.info("conn.sync.skipped", { reason: "connection_not_usable", status: conn.status });
         return { ok: true, skipped: "connection_not_usable" };
+      }
+
+      if (deps.gate) {
+        let allowed: boolean;
+        try {
+          allowed = await deps.gate(laneId, conn);
+        } catch (e) {
+          return failure(toConnectorError(e));
+        }
+        if (!allowed) {
+          child.info("conn.sync.skipped", { reason: "provider_disabled" });
+          return { ok: true, skipped: "provider_disabled" };
+        }
       }
 
       let started;

@@ -1497,3 +1497,44 @@ No BLOCKER, no HIGH. Both reviews confirmed from the local catalog that exactly 
 - (security LOW-4) `core.cal_events_apply_page` does not test the cursor for control characters as `core.sync_cursor_put` does (unchanged from T-064).
 - (security LOW-5, for **T-260**) `apps/web/lib/home.ts` shows the unread-important count only when a feed is `google`; a user with only Microsoft feeds would see none.
 - (code LOW) The inventory test in 322 matches the quoted literal `'google'` only, so it does not see `act.connection_ok`'s `gmail_compose`; it also matches comments, so a comment edit can fail it (the failure message says what to do).
+
+## T-269: subagent reviews (security and code, run after the build, Nov 21, 2026)
+No BLOCKER, no HIGH. Both reviews confirmed the five acceptance parts, that the parsed config never carries `mail.provider`, that a `microsoft` block alone never enables Microsoft, that every accessor reads per lane with no cache, and that `mailProviderSettings` takes providers and Microsoft settings from one read. Fixed after review:
+- (security MEDIUM-1, partly fixed) The reader's narrow view ignored unknown keys inside `mail`, so a mistyped key (`Providers`, `"providers "`) read as the default `["google"]` and would have kept Google enabled when a human meant to pause it. The view's `mail` section is now strict (its two other keys accepted unvalidated); a mistyped key fails closed (`provider_error`); reader tests added. **Still open:** an unknown key at the ROOT of the config (for example `mail_providers`) is ignored by this view, as by every other narrow reader view (the full schema refuses it). Candidates: a database-side check of the config's root keys when a version is inserted, or the T-047 editor being the only writer. The runbook SQL parts (T-265, T-266) must build the config with the exact key `mail.providers` and their check files must read it back.
+- (code MEDIUM-1) The reader test for the personal-accounts tenant, dropped in the rewrite, is restored, with the nil UUID.
+- (security LOW-4, code LOW-1) Tests brought in line with their titles: the "changed config is seen at once" test now changes the stored config between calls; the malformed list gained `mail: null`, `mail: []`, `provider: null`, `microsoft: null`, `mail_transport: null`, `calendar_ids: null` and disagreeing both-keys shapes (39 shapes); the core both-keys test has four combinations; one stale test title reworded.
+
+Logged for later tasks:
+- (security LOW-1, for **T-261**) `microsoft.calendar_ids` (and the Google list, same rule since D-26) accept URL-path characters (`/ ? # %`, `..`) and invisible format characters. The Graph calendar sync must `encodeURIComponent` every id it puts into a path, with a test; tightening the rule to Graph's id alphabet waits on the live check of real ids (spec §15 "verify").
+- (security LOW-2, for **T-256 / T-066 / T-258 / T-261**) Allow decisions must call `mailProviderSettings` only (one read); combining `isMailProviderEnabled` with a separate `microsoftSettings` re-opens a time-of-check gap. Only the interface comment says so today.
+- (security LOW-5, for **T-255 / T-256**) `["google","microsoft"]` with `mail_transport = "composio"` is valid; "Microsoft connections are always native" then rests on dispatch by the connection row's provider. Needs a test that a Microsoft connection in a composio lane takes the native Graph path.
+- (security LOW-3, no action) A config object with inherited (prototype) keys is read through them; cannot arise from jsonb or `JSON.parse`.
+- (code LOW-3) "A stored config with both keys cannot exist" rests on T-250 never having written `providers`; not checked against the production database. Both keys fail closed anyway.
+- (code LOW-2) One older core test ("secret scan covers the new keys") still uses the legacy key only; the T-269 block covers `mail.providers`.
+
+## T-255: subagent reviews (security and code, run after the build, Nov 21, 2026)
+No BLOCKER, no HIGH. Both reviews confirmed the order of checks on every path (authoritative row by lane and id → T-247 owner check → provider gate → the entry of the row's own provider), that tokens are read only inside the Google entry after the gate, that nothing outside `packages/modules/approvals` gained the ability to write externally, that the move commit is moves and renamed imports (plus `comms/address.ts`, and the `server-only` dependency landing there), that no existing assertion was weakened, deleted or skipped, and that the Google log names are unchanged.
+
+**Dependency allow-list:** `server-only` was added to the `packages/connectors` entry of `scripts/dependency-allowlist.test.mjs`. Approved by the reviewing agent session (not by a human) on the grounds that the same package and version already guards `packages/core`, `packages/ai` and the approvals module; Saurabh confirms it by merging the PR, where it is listed.
+
+Fixed after review:
+- (security MEDIUM-1) `@nichols/connectors/google` still exports the Gmail and calendar providers and their sync runners, which run neither the provider gate nor the owner check. Nothing imports them today; a test now fails if any file outside `packages/connectors` imports that subpath. Removing the exports stays open (the facade and the OAuth wiring inside the connectors use them).
+- (security LOW-5, code MEDIUM-1) Gate unit tests with a stub reader (`facade/gate.test.ts`): Microsoft listed without its block, Microsoft paused with its block, Google paused, one read per decision, a failed read thrown on. One facade test title no longer claims a QuickBooks case it does not run.
+
+Recorded, differs from the acceptance wording:
+- (code MEDIUM-1) "A Microsoft connection in a lane with `microsoft: null` is skipped the same way" cannot happen through the real reader: `microsoft` in `mail.providers` without the block is a malformed config, so EVERY mail and calendar connection of that lane (Google included) fails closed with `provider_error` instead of the Microsoft one being skipped. The gate's own null check is kept and unit-tested. A malformed provider section therefore stops Google sync for that lane until it is corrected; the runbook SQL parts (T-265, T-266) must be checked with their check files before the lane relies on them.
+
+Logged for later tasks:
+- (code MEDIUM-2, security LOW-2, for **T-262**) `wire.ts` casts the email dispatch to the Google-shaped approvals types through `unknown` (the dispatch writer has no `provider` member). No runtime mismatch was found (the dispatch routes by the row's provider and the Google writer reloads the row); T-262 gives approvals a provider-neutral writer type and removes the cast.
+- (security LOW-1, for **T-262**) A lane-config read that fails inside the email execute path (after `stage = "send"`, before any provider call) is reported as "outcome unknown" although nothing was sent; a disabled provider is a definite failure. Run the gate in `loadWriteConnection` too, or map gate errors to a definite failure.
+- (code LOW-2, for **T-262**) A disabled provider is recognised by a fixed message string, and the approvals paths show it as "connection needs attention". Give it its own reason/code.
+- (security LOW-3, for **T-260**) `readFacts` does not ask the gate, so Reply can be offered on a paused connection and is then refused at prepare.
+- (security LOW-4) The `gate` option of `createConnSyncJob` is optional; the only production wiring passes it and the runners check again. Make it required when the sync tests are next touched.
+- (security LOW-8) `expectedOwnerId` is optional on the facade's `readBody` and `search`; every caller passes it. A required variant for request code.
+- (security LOW-7) The facade dispatches by provider, not transport: a Composio Google row reaches the native Gmail entry and fails at the Vault lookup, as before T-255.
+- (security LOW-6, for **T-258 / T-067**) A Microsoft row in a lane with Microsoft enabled fails every tick with `unsupported_op` until its sync lands; no such row can exist before T-066.
+- (code LOW-1) `email-dispatch.test.ts` stands in for `assertLaneBound`, so its "copied connection is refused" case tests the stand-in.
+- (code LOW-3, LOW-6) `syncMail`/`syncCalendar` on the facade have no caller yet; three gate instances exist; a sync tick reads the lane config twice (job gate, runner gate).
+- (code LOW-5) The TypeScript index twin accepts any cursor prefix; SQL (pgTAP 321, 322) refuses foreign prefixes.
+- Not verified by either review: a Next.js build proving `server-only` blocks a transitive client import of the facade; a test on the real wiring showing zero Vault reads for a disabled provider (the tests prove the gate runs before the entry).
+

@@ -16,15 +16,15 @@ import { ACCOUNT_IN_USE_MESSAGE, ConnectorError } from "../contract/errors";
 import { assertLaneBound, mintLaneBoundConnection, type LaneBoundConnection } from "../contract/lane-bound";
 import type { Connection } from "../contract/schemas";
 import { createGoogleApi } from "../google/api";
-import type { CalendarIndexStore } from "../google/cal-store";
-import { createCalendarSync } from "../google/cal-sync";
+import type { CalendarIndexStore } from "../comms/cal-store";
+import { createCalendarSync } from "../comms/cal-sync";
 import { createGoogleCalendarProvider } from "../google/calendar";
 import { GOOGLE_SCOPES } from "../google/constants";
 import { createGoogleHttp } from "../google/http";
 import { createGmailProvider } from "../google/mail";
-import type { ApplyCounts } from "../google/index-rpc";
-import type { MailIndexStore } from "../google/mail-store";
-import { createMailSync } from "../google/mail-sync";
+import type { ApplyCounts } from "../comms/index-rpc";
+import type { MailIndexStore } from "../comms/mail-store";
+import { createMailSync } from "../comms/mail-sync";
 import { createGoogleOAuthProvider } from "../google/provider";
 import { createGoogleTokenManager } from "../google/token-manager";
 import { createGoogleRevoker, GOOGLE_REVOKE_ACTION } from "../google/writer";
@@ -45,6 +45,9 @@ type Row = { -readonly [K in keyof Connection<"google">]: Connection<"google">[K
 type IndexRow = MessageMeta & { deleted: boolean; connection_id: string; lane_id: string };
 type EventRow = EventMeta & { connection_id: string; lane_id: string };
 
+/** The providers the index writers accept (SQL, T-252 / T-253): `google` and `microsoft`; the twin accepts both and refuses anything else. */
+const TWIN_PROVIDERS: readonly string[] = ["google", "microsoft"];
+
 /** The harness clock (calendar windows): the synthetic fixtures live in Oct/Nov 2026, so time stands still. */
 export const HARNESS_NOW = Date.parse("2026-11-05T12:00:00.000Z");
 /** The user who owns every seeded mail connection of the harness (T-247: a mail connection has an owner). */
@@ -62,6 +65,8 @@ export type GoogleHarnessOptions = {
   retention?: Record<string, number>;
   /** `lane_config.calendar` per lane (default: the safe defaults); "unreadable" makes the read fail (fail-closed tests). */
   calendar?: Record<string, CalendarSettings | "unreadable">;
+  /** T-255: whether `google` is enabled for a lane (default: enabled everywhere, like every stored lane). */
+  googleEnabled?: (laneId: string) => Promise<boolean>;
   now?: () => number;
 };
 
@@ -220,7 +225,7 @@ export function createGoogleHarness(options: GoogleHarnessOptions) {
       if (stored !== (opts.expected?.value ?? null)) return { removed: 0, written: 0, skipped: 0, conflict: true };
       assertLaneBound(laneId, conn);
       const row = rowOf(laneId, conn);
-      if (row.provider !== "google" || !["active", "degraded"].includes(row.status)) throw new ConnectorError({ kind: "forbidden", message: "Mail index access refused" });
+      if (!TWIN_PROVIDERS.includes(row.provider) || !["active", "degraded"].includes(row.status)) throw new ConnectorError({ kind: "forbidden", message: "Mail index access refused" });
       if (page.nextCursor === null) throw new ConnectorError({ kind: "invalid_input", message: "A resync answer is not a page" });
       indexStats.applies += 1;
       writes.push({ store: "message_index", value: { upserts: page.upserts, removals: page.removals } });
@@ -271,7 +276,7 @@ export function createGoogleHarness(options: GoogleHarnessOptions) {
     async applyPage(laneId, conn, page: CalendarSyncResult, opts): Promise<ApplyCounts> {
       assertLaneBound(laneId, conn);
       const row = rowOf(laneId, conn);
-      if (row.provider !== "google" || !["active", "degraded"].includes(row.status)) throw new ConnectorError({ kind: "forbidden", message: "Calendar index access refused" });
+      if (!TWIN_PROVIDERS.includes(row.provider) || !["active", "degraded"].includes(row.status)) throw new ConnectorError({ kind: "forbidden", message: "Calendar index access refused" });
       const stored = cursors.get(calCursorKey(laneId, conn.id)) ?? null;
       if (stored !== (opts.expected?.value ?? null)) return { removed: 0, written: 0, skipped: 0, conflict: true };
       if (page.nextCursor === null) throw new ConnectorError({ kind: "invalid_input", message: "A resync answer is not a page" });
@@ -327,7 +332,7 @@ export function createGoogleHarness(options: GoogleHarnessOptions) {
   const fastHttp = (laneId: string, connectionId: string | undefined, baseUrl: string) =>
     createGoogleHttp({ baseUrl, laneId, ...(connectionId ? { connectionId } : {}), retryBaseMs: 1, retryMaxMs: 5, maxRetries: 1, logger });
   const client = () => ({ clientId: FAKE_CLIENT_ID, clientSecret: new SecretValue(FAKE_CLIENT_SECRET), redirectUri: HARNESS_REDIRECT });
-  const provider = createGoogleOAuthProvider({ client, laneConfig, logger, composeAllowed: async (laneId) => composeLanes.has(laneId), httpFor: (laneId, baseUrl) => fastHttp(laneId, undefined, baseUrl) });
+  const provider = createGoogleOAuthProvider({ client, laneConfig, logger, ...(options.googleEnabled ? { googleEnabled: options.googleEnabled } : {}), composeAllowed: async (laneId) => composeLanes.has(laneId), httpFor: (laneId, baseUrl) => fastHttp(laneId, undefined, baseUrl) });
   const newTokenManager = () =>
     createGoogleTokenManager({ vault, client, httpFor: fastHttp, logger, sleep: (ms) => new Promise((resolve) => setTimeout(resolve, Math.min(ms, 5))) });
   const tokens = newTokenManager();

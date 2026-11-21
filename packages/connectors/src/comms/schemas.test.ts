@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { isMailAddress } from "../google/headers";
+import { isMailAddress } from "./address";
 import { UntrustedBody, isUntrustedBody } from "./ephemeral";
 import { COMMS_PROVIDER_KEYS, FORBIDDEN_EXECUTE_PATTERN } from "./provider";
 import { CommsCursorSchema, ProviderIdParamSchema, CalendarWriteIntentSchema, EventMetaSchema, MailSyncResultSchema, MailWriteIntentSchema, MessageMetaSchema, WatchInfoSchema } from "./schemas";

@@ -10,7 +10,7 @@ vi.mock("@/lib/lane-page", () => ({ loadLane: async () => ({ laneId: "PKG", name
 vi.mock("@/lib/guards", () => ({ guards: async () => ({ requireLane: async () => ({ session: { userId: "00000000-0000-4000-8000-0000000000a1" } }) }) }));
 vi.mock("@/lib/timed", () => ({ timed: async <T,>(_n: string, f: () => Promise<T>) => f() }));
 vi.mock("@/lib/inbox", async (orig) => ({ ...(await orig<typeof import("@/lib/inbox")>()), messageFor: async () => m.view }));
-vi.mock("@nichols/connectors/google", () => ({ readGmailBody: async () => ({ text: "", truncated: false }) }));
+vi.mock("@nichols/connectors/facade", () => ({ readBody: async () => ({ text: "", truncated: false }) }));
 const notFound = vi.hoisted(() => vi.fn(() => { throw new Error("NEXT_NOT_FOUND"); }));
 vi.mock("next/navigation", () => ({ notFound }));
 

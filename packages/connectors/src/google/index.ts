@@ -3,16 +3,16 @@
 // env at call time (`requireConnectorEnv("google")` fails closed naming missing variables, never printing values).
 import type { LaneId } from "@nichols/core";
 import { requireConnectorEnv } from "@nichols/core/env/server";
-import { ConnectorError } from "../contract/errors";
 import type { LaneBoundConnection } from "../contract/lane-bound";
+import { createProviderGate } from "../facade/gate";
 import { mailAccountAllowed, readMailPolicy } from "../mail-policy";
 import { actionClaimReader, calendarIndexStore, connectionLoader, connectionStore, getToken, laneConfigReader, mailIndexStore, revokeToken, rotateToken, storeToken, writePolicyReader } from "../vault/index";
 import { SecretValue } from "../vault/secret";
 import { createGoogleApi } from "./api";
-import { createCalendarSync } from "./cal-sync";
+import { createCalendarSync } from "../comms/cal-sync";
 import { createGoogleCalendarProvider } from "./calendar";
 import { createGmailProvider } from "./mail";
-import { createMailSync } from "./mail-sync";
+import { createMailSync } from "../comms/mail-sync";
 import { createGoogleOAuthProvider, type GoogleClientConfig } from "./provider";
 import { createGoogleTokenManager } from "./token-manager";
 import { createGoogleEmailWriter, type GoogleEmailReconciler } from "./email-writer";
@@ -23,7 +23,9 @@ function client(): GoogleClientConfig {
   return { clientId: env.GOOGLE_OAUTH_CLIENT_ID, clientSecret: new SecretValue(env.GOOGLE_OAUTH_CLIENT_SECRET), redirectUri: env.GOOGLE_REDIRECT_URI };
 }
 
-export const googleOAuthProvider = createGoogleOAuthProvider({ client, laneConfig: laneConfigReader, composeAllowed: (laneId) => writePolicyReader.emailWritesAllowed(laneId) });
+const providerGate = createProviderGate({ laneConfig: laneConfigReader });
+
+export const googleOAuthProvider = createGoogleOAuthProvider({ client, laneConfig: laneConfigReader, googleEnabled: (laneId) => providerGate.enabled(laneId, "google"), composeAllowed: (laneId) => writePolicyReader.emailWritesAllowed(laneId) });
 
 const vault = { getToken, rotateToken, storeToken, revokeToken };
 const tokens = createGoogleTokenManager({ vault, client });
@@ -34,32 +36,6 @@ const connections = { load: (laneId: string, id: string) => connectionLoader.loa
 export const gmailProvider = createGmailProvider({ api, connections, laneConfig: laneConfigReader });
 /** Runs one connection's mail metadata sync into comms.message_index (the sync job calls this; Inngest wiring: T-038/T-065). */
 export const mailSync = createMailSync({ mail: gmailProvider, store: mailIndexStore });
-
-/**
- * Inbox (T-202): one message's text, read live from Gmail and never stored (rule 6), wrapped as untrusted data (rule 9).
- * The caller must first have proved, under RLS with the user's own lane client, that the user may see this message in
- * this lane (core.inbox_message_ref); the provider's guard then re-checks lane, provider, connection status and the
- * lane's mailbox list before any call to Google. Read-only (gmail.readonly).
- */
-export async function readGmailBody(laneId: LaneId, connectionId: string, messageId: string, expectedOwnerId?: string): Promise<{ text: string; truncated: boolean }> {
-  const conn = await connectionLoader.loadConnection(laneId, connectionId);
-  // T-247: when the caller names the user it reads for (the scheduled briefing, the reply and message pages), the connection must be
-  // that user's own: a mailbox is read only on behalf of its owner.
-  if (expectedOwnerId !== undefined && conn.owner_user_id !== expectedOwnerId) throw new ConnectorError({ kind: "forbidden", message: "This mailbox belongs to another user" });
-  const res = await gmailProvider.readBody(laneId, conn as LaneBoundConnection<"google">, messageId);
-  // Revealed here, for display to the signed-in user only: the caller renders it as plain text and must not store or log it.
-  return { text: res.data.reveal(), truncated: res.data.truncated };
-}
-
-/**
- * Email proposals (T-232): builds the proposed payload for an email action from a connection (no external effect, no
- * token read). The connection is loaded by (lane, id) from the authoritative row; `prepareWrite` refuses a sender other
- * than the connection's mailbox. Only the approvals module proposes; execution is `googleEmailWriter` (write subpath).
- */
-export async function prepareEmailWrite(laneId: LaneId, connectionId: string, intent: Parameters<typeof gmailProvider.prepareWrite>[2]) {
-  const conn = await connectionLoader.loadConnection(laneId, connectionId);
-  return { connection: conn as LaneBoundConnection<"google">, proposed: await gmailProvider.prepareWrite(laneId, conn as LaneBoundConnection<"google">, intent) };
-}
 
 /**
  * The lane's mail addresses, lower-cased: the configured exact list plus every connected mail account (whoever owns it). Used to

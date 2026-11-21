@@ -2,7 +2,7 @@
 // RPC arguments exact, database messages never passed on, a compare-and-swap on every chunk. The functions themselves
 // are pinned by pgTAP 170.
 import { describe, expect, it, vi } from "vitest";
-import type { CalendarSyncResult, EventMeta } from "../comms/schemas";
+import type { CalendarSyncResult, EventMeta } from "./schemas";
 import { mintLaneBoundConnection } from "../contract/lane-bound";
 import type { Connection } from "../contract/schemas";
 import { createCalendarIndexStore } from "./cal-store";

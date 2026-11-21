@@ -8,7 +8,7 @@ import { useMockServer } from "../testing/msw/index";
 import { createFakeGoogle, GOOGLE_BODY_CANARY, GOOGLE_SNIPPET_CANARY, seedMessage } from "../testing/msw/google/handlers";
 import { createMailSync } from "./mail-sync";
 import { createGoogleSyncRunner } from "../sync/runners";
-import type { MailProvider } from "../comms/provider";
+import type { MailProvider } from "./provider";
 
 const server = useMockServer();
 afterEach(() => {

@@ -1,11 +1,11 @@
-// The Gmail metadata sync run (T-063): read the stored cursor, pull pages from the provider, apply each page atomically
+// The mail metadata sync run (Gmail, Graph) (T-063): read the stored cursor, pull pages from the provider, apply each page atomically
 // with its cursor, and continue until the run ends. A provider failure never advances the cursor (the stored one is
 // only replaced by `applyPage`, in the same transaction as the page). An expired or foreign cursor discards the stored
 // one and starts a full load. This function is what the sync job calls: the Inngest wiring comes with the connector
 // sync job (T-038 / T-065 push); polling schedules call it per connection.
 import type { LaneId } from "@nichols/core";
-import type { MailProvider } from "../comms/provider";
-import type { CommsCursor } from "../comms/schemas";
+import type { CommsProviderId, MailProvider } from "./provider";
+import type { CommsCursor } from "./schemas";
 import { ConnectorError } from "../contract/errors";
 import { assertLaneBound, type LaneBoundConnection } from "../contract/lane-bound";
 import { connectorLog, type ConnectorLogger } from "../log/index";
@@ -23,8 +23,9 @@ export type MailSyncRunResult = {
   conflict: boolean;
 };
 
-export type MailSyncDeps = {
-  mail: MailProvider<"google">;
+export type MailSyncDeps<P extends CommsProviderId = CommsProviderId> = {
+  /** The provider this run drives (Gmail, Graph); its `provider` names the log lines (`<provider>.mail.*`). */
+  mail: MailProvider<P>;
   store: MailIndexStore;
   logger?: ConnectorLogger;
   /** Safety cap on pages in one run. Default 500 (50,000 messages at the default page size). */
@@ -32,14 +33,17 @@ export type MailSyncDeps = {
   pageSize?: number;
 };
 
-export function createMailSync(deps: MailSyncDeps) {
+export function createMailSync<P extends CommsProviderId>(deps: MailSyncDeps<P>) {
   const log = deps.logger ?? connectorLog;
   const maxPages = deps.maxPages ?? 500;
 
   return {
-    async run(laneId: LaneId, conn: LaneBoundConnection<"google">): Promise<MailSyncRunResult> {
+    async run(laneId: LaneId, conn: LaneBoundConnection<P>): Promise<MailSyncRunResult> {
       assertLaneBound(laneId, conn);
-      const child = log.child({ laneId, provider: "google", connectionId: conn.id });
+      // A runner drives one provider: a connection of another one is refused before the store or the provider is touched.
+      if (conn.provider !== deps.mail.provider) throw new ConnectorError({ kind: "forbidden", message: "This connection belongs to another provider" });
+      const provider = deps.mail.provider;
+      const child = log.child({ laneId, provider, connectionId: conn.id });
       const options = deps.pageSize ? { pageSize: deps.pageSize } : undefined;
       const result: MailSyncRunResult = { mode: "incremental", pages: 0, written: 0, skipped: 0, removed: 0, resynced: false, conflict: false };
       let cursor: CommsCursor | null = await deps.store.getCursor(laneId, conn);
@@ -50,7 +54,7 @@ export function createMailSync(deps: MailSyncDeps) {
         if (r.fullResyncRequired) {
           // At most one reload per run, and never for a full load: either would loop.
           if (cursor === null || result.resynced) throw new ConnectorError({ kind: "provider_error", message: "The provider asked for a second resync in one run" });
-          child.warn("google.mail.full_resync", {});
+          child.warn(`${provider}.mail.full_resync`, {});
           await deps.store.resetCursor(laneId, conn);
           result.mode = "full";
           result.resynced = true;
@@ -61,7 +65,7 @@ export function createMailSync(deps: MailSyncDeps) {
         // stored one. Pages of this run are fresh by that check, so they may bring back a message flagged deleted.
         const counts = await deps.store.applyPage(laneId, conn, r, { expected: cursor, complete: !r.hasMore, revive: true });
         if (counts.conflict) {
-          child.warn("google.mail.sync_conflict", {});
+          child.warn(`${provider}.mail.sync_conflict`, {});
           result.conflict = true;
           return result;
         }
@@ -71,12 +75,12 @@ export function createMailSync(deps: MailSyncDeps) {
         result.removed += counts.removed;
         cursor = r.nextCursor;
         if (!r.hasMore) {
-          child.info("google.mail.sync_done", { mode: result.mode, pages: result.pages, written: result.written, removed: result.removed });
+          child.info(`${provider}.mail.sync_done`, { mode: result.mode, pages: result.pages, written: result.written, removed: result.removed });
           return result;
         }
       }
       // Cap reached: the cursor of the last applied page is stored, so the next run continues from it.
-      child.warn("google.mail.sync_page_cap", { pages: result.pages });
+      child.warn(`${provider}.mail.sync_page_cap`, { pages: result.pages });
       return result;
     },
   };

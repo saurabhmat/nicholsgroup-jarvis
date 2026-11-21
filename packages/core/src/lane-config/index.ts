@@ -125,9 +125,34 @@ export const newsSchema = z
   })
   .prefault({});
 
-/** Which mail and calendar provider a lane uses (microsoft spec §4, D-54: one provider per lane). Default `google`. */
+/** Mail and calendar providers a lane can have (microsoft spec §4, D-57: a lane may enable both at once, permanently). */
 export const MAIL_PROVIDERS = ["google", "microsoft"] as const;
 export const mailProviderSchema = z.enum(MAIL_PROVIDERS);
+/** A raw calendar id (Google or Graph): printable, no controls or whitespace, at most 200 characters. */
+const calendarId = z.string().regex(/^[^\s\u0000-\u001f\u007f-\u009f]{1,200}$/);
+/** The enabled providers of a lane (T-269): 1..2 entries, unique. */
+const mailProvidersList = z
+  .array(mailProviderSchema)
+  .min(1)
+  .max(MAIL_PROVIDERS.length)
+  .refine((a) => new Set(a).size === a.length, "providers must be unique");
+/**
+ * The provider keys of the `mail` section, shared by the whole config and the reader's narrow view. `providers` is the list
+ * (default `["google"]`); `provider` is the deprecated T-250 single value, accepted as input only (read as `[provider]` when
+ * `providers` is absent, refused when both are present) and never present in the parsed output, so every config version the app
+ * writes carries `providers` only.
+ */
+const mailProviderKeys = { provider: mailProviderSchema.optional(), providers: mailProvidersList.optional() };
+function resolveMailProviders<T extends { provider?: (typeof MAIL_PROVIDERS)[number]; providers?: (typeof MAIL_PROVIDERS)[number][] }>(
+  m: T,
+  ctx: z.RefinementCtx,
+): Omit<T, "provider" | "providers"> & { providers: (typeof MAIL_PROVIDERS)[number][] } {
+  const { provider, providers, ...rest } = m;
+  if (provider !== undefined && providers !== undefined) {
+    ctx.addIssue({ code: "custom", message: "mail.provider and mail.providers are both set; use mail.providers only", path: ["providers"] });
+  }
+  return { ...rest, providers: providers ?? (provider !== undefined ? [provider] : ["google"]) };
+}
 export const MICROSOFT_CLOUDS = ["commercial", "gcc_high"] as const;
 export const MICROSOFT_MAIL_FOLDERS = ["inbox", "sentitems", "archive"] as const;
 export const DEFAULT_MICROSOFT_MAIL_FOLDERS = ["inbox", "sentitems"] as const;
@@ -142,7 +167,10 @@ export const NON_ORGANIZATION_TENANT_IDS: readonly string[] = ["9188040d-6c67-4c
  *    what is compared, so upper-case UUIDs are REFUSED (not silently lower-cased) and duplicates are refused (also in `mail_folders`).
  *  - `allow_gcc` stays false until a human decides D-49; `mail_folders` are the well-known folders synced (drafts, junk and deleted
  *    items are never synced; custom folders are not supported).
- *  - A `microsoft` block next to `mail.provider = "google"` is ALLOWED: a lane can be prepared before its cut-over.
+ *  - A `microsoft` block without `microsoft` in `mail.providers` is ALLOWED: a lane prepared before use, or with Microsoft paused after use (D-57).
+ *  - `calendar_ids` (T-269) are raw Graph calendar ids and replace the default selection for Microsoft connections only; the
+ *    Google list stays `calendar.calendar_ids` (D-26). One list per provider, because a shared list would leave the other provider's
+ *    connections with no calendar.
  */
 export const microsoftSchema = z.strictObject({
   cloud: z.enum(MICROSOFT_CLOUDS).default("commercial"),
@@ -158,24 +186,42 @@ export const microsoftSchema = z.strictObject({
     .max(3)
     .refine((a) => new Set(a).size === a.length, "mail_folders must be unique")
     .default([...DEFAULT_MICROSOFT_MAIL_FOLDERS]),
+  calendar_ids: z
+    .array(calendarId)
+    .min(1)
+    .max(5)
+    .refine((a) => new Set(a).size === a.length, "calendar_ids must be unique")
+    .optional(),
 });
 export type MicrosoftConfig = z.infer<typeof microsoftSchema>;
 
 /** The cross-field rules of the provider settings; used by the whole config and by the reader's narrow view (one definition). */
-export function refineMailProvider(c: { mail?: { provider: (typeof MAIL_PROVIDERS)[number] }; mail_transport?: string; microsoft?: unknown }, ctx: z.RefinementCtx): void {
-  if (c.mail?.provider !== "microsoft") return;
-  if (c.microsoft === undefined) ctx.addIssue({ code: "custom", message: "microsoft settings are required when mail.provider is microsoft", path: ["microsoft"] });
-  if (c.mail_transport === "composio") ctx.addIssue({ code: "custom", message: "mail_transport composio is not available with microsoft", path: ["mail_transport"] });
+export function refineMailProviders(c: { mail?: { providers: (typeof MAIL_PROVIDERS)[number][] }; mail_transport?: string; microsoft?: unknown }, ctx: z.RefinementCtx): void {
+  const providers = c.mail?.providers ?? ["google"];
+  if (providers.includes("microsoft") && c.microsoft === undefined) {
+    ctx.addIssue({ code: "custom", message: "microsoft settings are required when microsoft is in mail.providers", path: ["microsoft"] });
+  }
+  // mail_transport is about how Google is reached; Microsoft connections are always native (spec §4).
+  if (c.mail_transport === "composio" && !providers.includes("google")) {
+    ctx.addIssue({ code: "custom", message: "mail_transport composio needs google in mail.providers", path: ["mail_transport"] });
+  }
 }
 
-/** Only the provider-related keys of a config (other keys are ignored), for readers that must not depend on unrelated settings. */
+/**
+ * Only the provider-related keys of a config (other root keys are ignored), for readers that must not depend on unrelated settings.
+ * The `mail` section itself is strict: its other two keys are accepted unvalidated, and any unknown key (a mistyped `Providers`)
+ * is refused, because a typo there would otherwise read as the default `["google"]` and keep Google enabled without an error.
+ */
 export const mailProviderViewSchema = z
   .object({
-    mail: z.object({ provider: mailProviderSchema.default("google") }).prefault({}),
+    mail: z
+      .strictObject({ ...mailProviderKeys, allowed_domains: z.unknown().optional(), self_connect_domains: z.unknown().optional() })
+      .transform(resolveMailProviders)
+      .prefault({}),
     mail_transport: z.enum(["native", "composio"]).default("native"),
     microsoft: microsoftSchema.optional(),
   })
-  .superRefine(refineMailProvider);
+  .superRefine(refineMailProviders);
 
 export const laneConfigSchema = z.strictObject({
   enabled_modules: z.array(z.enum(MODULES)).default([]),
@@ -221,25 +267,27 @@ export const laneConfigSchema = z.strictObject({
   //    gmail.com, after H-041). Nothing reads it yet; it stays empty.
   mail: z
     .strictObject({
-      // Which provider this lane's mail and calendar use (T-250); one per lane. Default google: nothing changes for a stored lane.
-      provider: mailProviderSchema.default("google"),
+      // Which providers this lane's mail and calendar use (T-269, D-57): 1..2, default ["google"] (nothing changes for a stored
+      // lane). `provider` is the T-250 single value, accepted as input only and never emitted (see `mailProviderKeys`).
+      ...mailProviderKeys,
       allowed_domains: z.array(mailDomain).max(20).default([]),
       self_connect_domains: z.array(mailDomain).max(20).default([]),
     })
+    .transform(resolveMailProviders)
     .prefault({}),
   // How the lane's Gmail + Calendar are reached (T-219, D-30, D-37): `native` = our own Google OAuth client and Vault tokens
   // (the only path that syncs today, and every existing lane); `composio` = Composio holds the Google tokens (D-35). Switching
   // a lane is this one value, after the Composio path passes its live check. Default `native`: nothing changes for a lane
   // that does not set it.
   mail_transport: z.enum(["native", "composio"]).default("native"),
-  // Microsoft 365 settings (T-250); required when mail.provider = "microsoft" (refine at the end of this schema).
+  // Microsoft 365 settings (T-250); required when "microsoft" is in mail.providers (refine at the end of this schema).
   microsoft: microsoftSchema.optional(),
   // Google Calendar sync (T-064). Unset = primary plus owned/writable selected calendars, 365 days ahead.
-  // `calendar_ids` are raw ids of the lane's CURRENT provider (Google or Microsoft); an explicit
-  // list replaces the default selection. A provider switch (cut-over runbook) writes the new config version without them.
+  // `calendar_ids` are raw GOOGLE calendar ids (D-26); an explicit list replaces the default selection for Google connections.
+  // Microsoft calendar ids are `microsoft.calendar_ids` (T-269). `include_read_only` and `forward_days` apply to both providers.
   calendar: z
     .strictObject({
-      calendar_ids: z.array(z.string().regex(/^[^\s\u0000-\u001f\u007f-\u009f]{1,200}$/)).min(1).max(10).optional(),
+      calendar_ids: z.array(calendarId).min(1).max(10).optional(),
       include_read_only: z.boolean().default(false),
       forward_days: z.int().min(7).max(730).default(365),
     })
@@ -403,7 +451,7 @@ export const laneConfigSchema = z.strictObject({
       max_snippet_chars: z.int().min(50).max(1000).default(300), // assistant spec §6
     })
     .prefault({}),
-}).superRefine(refineMailProvider);
+}).superRefine(refineMailProviders);
 
 export type LaneConfig = z.infer<typeof laneConfigSchema>;
 export type LaneConfigInput = z.input<typeof laneConfigSchema>;

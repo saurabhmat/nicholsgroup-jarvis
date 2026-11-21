@@ -5,7 +5,7 @@
 // Metadata only: each record is re-validated against the strict schema, which has no description field (rule 6).
 // Never log a record or put one in an error.
 import type { LaneId } from "@nichols/core";
-import { EventMetaSchema, EventRemovalSchema, type CalendarSyncResult, type CommsCursor } from "../comms/schemas";
+import { EventMetaSchema, EventRemovalSchema, type CalendarSyncResult, type CommsCursor } from "./schemas";
 import { ConnectorError } from "../contract/errors";
 import { assertLaneBound, type LaneBoundConnection } from "../contract/lane-bound";
 import type { JobClientFor } from "../vault/tokens";

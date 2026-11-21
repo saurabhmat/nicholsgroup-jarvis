@@ -76,6 +76,11 @@ export interface OAuthProvider {
    */
   precheck?(input: { laneId: LaneId; callback: URLSearchParams }): Promise<void>;
   /**
+   * T-255: optional check at the START of a connect (after the caller is authorized, before any state is stored or any redirect is
+   * built): e.g. the provider must be enabled for the lane. Throw `forbidden` to refuse (the route answers 403).
+   */
+  startCheck?(input: { laneId: LaneId }): Promise<void>;
+  /**
    * The connected account and the expiry of the credential whose loss forces a reconnect. Throw a ConnectorError to
    * refuse the account (e.g. a QuickBooks realm that is not the lane's). May call the provider with `http`.
    */
@@ -169,6 +174,7 @@ export function createOAuthFlow(deps: OAuthFlowDeps) {
       const p = bySlug.get(slug);
       if (!p) throw new ConnectorError({ kind: "not_found", message: "Unknown provider" });
       const { userId, client } = await authorize(laneId, p.provider);
+      if (p.startCheck) await p.startCheck({ laneId });
       // A reconnect (T-238): the connection must be this lane's own, for this provider; its account is the only one the callback accepts.
       let bound: { id: string; externalAccountId: string } | null = null;
       if (opts.connectionId !== undefined) {

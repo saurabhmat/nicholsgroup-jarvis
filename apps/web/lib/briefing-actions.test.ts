@@ -35,7 +35,7 @@ vi.mock("@nichols/brain/server", () => ({
   },
   loadBrainPromptContext: (...a: unknown[]) => state.brainLoad(...a),
 }));
-vi.mock("@nichols/connectors/google", () => ({ readGmailBody: async () => ({ text: "" }) }));
+vi.mock("@nichols/connectors/facade", () => ({ readBody: async () => ({ text: "" }) }));
 vi.mock("@/lib/briefing-proposals", () => ({ replyProposer: () => async () => "p1" }));
 vi.mock("@/lib/briefing-run", async (orig) => ({ ...(await orig<typeof import("@/lib/briefing-run")>()), runBriefingBounded: (...a: unknown[]) => state.run(...a) }));
 import { LaneAccessError } from "@nichols/core/lane-router";

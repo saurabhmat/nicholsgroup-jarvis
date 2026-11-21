@@ -2,7 +2,7 @@
 // with the same guarded reader as the thread view, and draft with the lane-policy-gated AI provider.
 import { getLLMProvider } from "@nichols/ai/config";
 import { approvalsDeps, approveAndExecuteEmail } from "@nichols/approvals/wire";
-import { readGmailBody } from "@nichols/connectors/google";
+import { readBody as readMailBody } from "@nichols/connectors/facade";
 import type { LaneId } from "@nichols/core";
 import { handleApprovals } from "@/lib/approvals";
 import { guards } from "@/lib/guards";
@@ -20,7 +20,7 @@ export async function POST(request: Request, ctx: { params: Promise<{ laneId: st
     approvals: approvalsDeps,
     approve: approveAndExecuteEmail,
     reply: {
-      readBody: (l, c, m, owner) => readGmailBody(l as LaneId, c, m, owner),
+      readBody: (l, c, m, owner) => readMailBody(l as LaneId, c, m, owner),
       llm: () => {
         const p = getLLMProvider({ timeoutMs: 45_000, maxRetries: 1 });
         return p.configured ? { configured: true, provider: p.provider } : { configured: false };

@@ -45,7 +45,7 @@ const ALLOWED = {
   ],
   "packages/ai": [...CORE_ONLY, "@anthropic-ai/sdk", "server-only", "zod"], // T-100; server-only: keeps the SDK out of client bundles; zod: strict tool argument schemas (T-101)
   // vendor SDKs join this list with their connectors (T-04x...); zod for the contract schemas, vitest for the kit (T-030)
-  "packages/connectors": [...CORE_ONLY, "@composio/core", "msw", "vitest", "zod"], // msw: provider mocks for tests (T-034); @composio/core: pinned exactly, imported only in src/composio (T-219)
+  "packages/connectors": [...CORE_ONLY, "@composio/core", "msw", "server-only", "vitest", "zod"], // server-only: keeps the comms facade out of client bundles (T-255); msw: provider mocks for tests (T-034); @composio/core: pinned exactly, imported only in src/composio (T-219)
   // T-016/T-017: Supabase clients, only importable from the lane router and packages/core/src/auth (lint)
   "packages/core": ["@supabase/ssr", "@supabase/supabase-js", "inngest", "server-only", "zod"], // inngest: T-037
   "packages/eslint-plugin": ["@eslint-community/eslint-plugin-eslint-comments", "@nichols/core", "eslint", "typescript-eslint"],
