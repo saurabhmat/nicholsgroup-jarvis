@@ -1725,3 +1725,27 @@ Read on learn.microsoft.com on Nov 21, 2026 by the agent session (a web-fetch su
 
 **`eventMessage`:** a meeting request, cancellation or response is an `eventMessage` ("derived from message"; `meetingMessageType` values `none`, `meetingRequest`, `meetingCancelled`, `meetingAccepted`, `meetingTenativelyAccepted` (spelled so), `meetingDeclined`). Whether `@odata.type` is returned for such items in a list or delta response is not stated: use it when present, and otherwise rely on the header classifier.
 
+## T-259: subagent reviews (security and code, run after the build, Nov 21, 2026)
+Security review: no BLOCKER, no HIGH. Code review: no BLOCKER, one HIGH (functional), fixed. Confirmed by the reviews: no body (text or HTML) reaches a store, log, error, cursor or module state, and 1 MB hostile HTML converts in under a second (linear); `readBody` and `search` go owner check → provider gate → guard before any request or token read, and another user, a paused provider and a Google connection id each end with zero requests; an id can only ever reach `/me/messages/{id}` with a fixed `$select`; no Microsoft code path can set `is_auth_pass` true whatever headers a sender adds; the flags a sender can influence (`is_bulk`, `is_auto`, `is_generated`, `is_calendar`) follow the same rules as Gmail, and a message over the header-read budget stays visible, so a sender cannot hide by flooding; the code moved out of `google/` (`mail-flags`, `htmlToText`, `cut`) is byte-identical; no Google test changed; `testing/comms-contract.ts` unchanged.
+
+Fixed after review (commit 21c95fe):
+- (code HIGH-1) The per-page header-read cap (50) was below the page size (100): on a first load the older half of every page, and everything after 20 pages, was indexed without flags and stored as not bulk, so recent newsletters would have reached Home and the briefing. The per-page cap is now the page size itself; the per-connection window (1,000 reads per 10 minutes) is the only bound.
+- (code MEDIUM, security) Header reads have their own time bounds: 8 seconds per read with no retry, and a 20-second deadline per page, after which the rest are skipped and the page is applied (a hung read could otherwise have taken about two minutes and pushed a run towards the job's 300-second limit).
+- (security MEDIUM-1, rule 1) The in-memory header-read budget is keyed by lane and connection; a full table grants zero instead of growing; reads granted but not started are refunded.
+- (code MEDIUM) The T-258 sync behaviours (removal, a move in both orders, a 410 resync, Google beside Microsoft) are now also tested with header reads on, with the same end state required.
+- (security LOW-1, LOW-2) Search reduction: cut on a word boundary before lower-casing operators (a cut could create a trailing `OR`, `NOT` or `NEAR`); default-ignorable code points removed; `ONEAR`, `XRANK`, `WORDS` added to the operator words; leading `-` and `+` stripped.
+- (security LOW-3, LOW-4) A malformed answer to one header read no longer fails the page (it could have repeated on every run); the checks that refuse a page run before any header read is spent on it.
+- Small: a test for a search Graph refuses with 400; an accurate comment on the authentication header; PR wording.
+
+**Remaining limit, for T-260 (stated in the PR):** on a first load of an inbox with more messages in the window than the header-read budget allows, the messages beyond it are indexed without flags (bulk mail among them is shown on Home and in the briefing) until they change. T-260 should add a bounded backfill of unflagged inbox rows. The budget is held in memory per server instance, so it is per instance, not global.
+
+**For T-260 callers of `search`:** results carry `folder` null and no `SENT` label; a null folder must not be read as "not in the inbox".
+
+Open for the live check (H-070): whether real immutable ids contain `/` or `+` (such a message cannot be opened or flagged until an encoding is added); that the text preference returns a text body; real header names and a reliable own-service marker for `is_auth_pass`; whether delta items carry `@odata.type` for meeting messages; that Graph accepts `$search` with `$top` and the index `$select`; whether Graph's search treats any remaining character as an operator; how a real first load behaves against the 8-second and 20-second limits.
+
+Logged for later:
+- (code, T-258 harness) The shared Microsoft mail harness defaults to header reads off because two T-258 tests count requests; counting only delta requests there and defaulting to on would be cleaner.
+- (code LOW) The doc comment on `unsupportedMail` in `testing/comms-contract.ts` still names T-259 as the owner of Microsoft's `readBody` and `search`.
+- (calling session) The new `timeoutMs` option of the Graph client accepts up to 60,000 ms although its comment says "shorter than the default"; only the 8-second header read uses it.
+- One full test run during the build failed on four `apps/web/components/brain-wizard.test.tsx` timeouts under machine load (reviews were running at the same time); it passed alone and in three later full runs. Nothing in this task touches `apps/web`.
+
