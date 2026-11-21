@@ -16,6 +16,7 @@ import { FAKE_NOW, MAIL_BODY_CANARY, MAIL_PREVIEW_CANARY, type FakeMail } from "
 import type { FakeMicrosoft } from "./msw/microsoft/handlers";
 
 export const MAIL_CANARIES = [MAIL_BODY_CANARY, MAIL_PREVIEW_CANARY] as const;
+const contractMessageId = "synthetic-message";
 export const MAIL_DOMAIN = "pubkgroup.example.test";
 
 export type MicrosoftMailHarnessOptions = {
@@ -32,6 +33,13 @@ export type MicrosoftMailHarnessOptions = {
   providerNow?: () => number;
   pageSize?: number;
   maxPages?: number;
+  /**
+   * T-259 header flags of the provider under test. DEFAULT OFF here: the T-258 tests count and inspect every request of a metadata sync, and a
+   * header read per inbox message would change those counts. The T-259 tests and the contract suite turn it on (`{}` = the production bounds).
+   */
+  headerFlags?: false | { perPage?: number; perWindow?: number };
+  /** The default length of `readBody` (tests of the bound). */
+  defaultMaxBodyChars?: number;
 } & Pick<MicrosoftHarnessOptions, "writeLanes">;
 
 const defaultLane = (): LaneSetup => ({ providers: ["microsoft"], microsoft: { tenantIds: [TENANT_A, TENANT_B] }, domains: [MAIL_DOMAIN] });
@@ -62,7 +70,7 @@ export function createMicrosoftMailHarness(options: MicrosoftMailHarnessOptions)
     virtualNow += ms;
   };
   const api = createGraphApi({ guard: h.guard, tokens: h.tokens, logger, httpOptions: { sleep, now: clock.now, retryBaseMs: 1, retryMaxMs: 30_000, random: () => 0.5, maxRetries: 1 } });
-  const provider = createMicrosoftMailProvider({ api, guard: h.guard, laneConfig, now: options.providerNow ?? (() => FAKE_NOW), logger });
+  const provider = createMicrosoftMailProvider({ api, guard: h.guard, laneConfig, now: options.providerNow ?? (() => FAKE_NOW), logger, headerFlags: options.headerFlags ?? false, ...(options.defaultMaxBodyChars !== undefined ? { defaultMaxBodyChars: options.defaultMaxBodyChars } : {}) });
   const twin = createMailIndexTwin({
     rowOf: (laneId, conn) => {
       const row = h.rows.get(conn.id);
@@ -115,7 +123,10 @@ export function createMicrosoftMailHarness(options: MicrosoftMailHarnessOptions)
       laneId: "PKG",
       otherLaneId: "APK",
       async connect(opts = {}) {
-        return connect(opts.laneId ?? "PKG", opts.mailbox ? { address: opts.mailbox } : {}).conn as never;
+        const made = connect(opts.laneId ?? "PKG", opts.mailbox ? { address: opts.mailbox } : {});
+        // The message the contract reads and searches for (T-259): the same id and a subject with the search term on every connection.
+        fakeMail.add(accountOf(made.conn), "inbox", { id: contractMessageId, subject: "Synthetic contract message" });
+        return made.conn as never;
       },
       async connectForeignProvider() {
         return seedGoogle("PKG").conn as never;
@@ -145,7 +156,7 @@ export function createMicrosoftMailHarness(options: MicrosoftMailHarnessOptions)
       tokenReads: () => h.stats.tokenReads,
       persistedContentWrites: contentWriteCount,
       bodyCanary: MAIL_BODY_CANARY,
-      fixtures: { messageId: "synthetic-message", messageSearchTerm: "synthetic", calendarId: "", calendarIds: [], eventId: "", documentId: "", documentSearchTerm: "" },
+      fixtures: { messageId: contractMessageId, messageSearchTerm: "synthetic", calendarId: "", calendarIds: [], eventId: "", documentId: "", documentSearchTerm: "" },
     };
   }
 

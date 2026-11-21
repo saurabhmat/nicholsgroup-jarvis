@@ -46,9 +46,9 @@ const onReconnectRequired = createReconnectRecorder({
 const tokens = createMicrosoftTokenManager({ vault: { getToken, rotateToken }, client, onReconnectRequired });
 const errors = createApiErrorSink({ store: apiErrorStore, messageFor: (info) => classifyGraphFailure(info).message });
 
-/** The guarded, read-only Graph client. The facade's Microsoft entry uses it for the mail metadata sync (T-258); live body and calendar come with T-259 / T-067. */
+/** The guarded, read-only Graph client. The facade's Microsoft entry uses it for the mail sync, live body and search (T-258, T-259); calendar comes with T-067. */
 export const graphApi = createGraphApi({ guard, tokens, errors });
-/** Microsoft mail metadata delta sync (T-258). Only `sync` is real; the other operations answer `unsupported_op` until T-259 / T-262. */
+/** Microsoft mail (T-258 delta sync; T-259 live body, search and header flags with the default bounds). `prepareWrite` answers `unsupported_op` until T-262. */
 export const microsoftMailProvider = createMicrosoftMailProvider({ api: graphApi, guard, laneConfig: laneConfigReader });
 /**
  * Time budget of one mail run: the first load of a large folder takes many pages, so a run stops after this long and the next one continues from the cursor

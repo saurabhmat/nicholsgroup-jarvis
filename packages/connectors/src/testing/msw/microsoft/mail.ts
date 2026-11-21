@@ -8,6 +8,8 @@
 //  - a link request carries the link's query as given; a page ends with exactly one of `@odata.nextLink` / `@odata.deltaLink`;
 //  - a removed or moved-out message comes back as `{ id, "@removed": { reason: "deleted" } }` in the folder it left;
 //  - an expired delta state answers 410 (or a 4xx with `syncStateNotFound` / `resyncRequired`);
+//  - T-259: `GET /me/messages/{id}` (single message: `$select=body` and `$select=internetMessageHeaders`, the only way headers come back) and
+//    `GET /me/messages?$search="..."` (a search: `$filter` and `$orderby` are refused with it; the answer is metadata only unless the fake is told to return a body anyway);
 //  - the fake returns `body`, `bodyPreview`, `uniqueBody` and other fields the sync never selects (Graph may do so; the mapper must drop them).
 // Every request is recorded (path, raw query, the Prefer header, the account) so a test can prove what was and was not sent.
 import { HttpResponse, http, type RequestHandler } from "msw";
@@ -38,11 +40,18 @@ export type FakeMailMessage = {
   webLink: string;
   /** The version counter value when it last changed (the delta cursor is a version). */
   changedAt: number;
+  /** T-259: what a single-message read returns. Defaults: a text body holding the content canary, and a few ordinary headers. */
+  bodyContentType?: string;
+  bodyContent?: string;
+  /** Header lines (`internetMessageHeaders`). Default: a Received line only. */
+  headers?: { name: string; value: string }[];
+  /** The `@odata.type` the delta item carries (default `#microsoft.graph.message`; `#microsoft.graph.eventMessage` for a meeting message). */
+  odataType?: string;
 };
 
 type Box = { id: string; hidden?: boolean; name: FakeFolderName; messages: Map<string, FakeMailMessage>; removed: { id: string; at: number }[]; version: number };
 export type MailFault = "auth_revoked" | "rate_limited" | "server_error" | "expired_cursor";
-export type MailRequest = { method: string; path: string; search: string; prefer: string | null; address: string | null; kind: "folder" | "delta" | "other" };
+export type MailRequest = { method: string; path: string; search: string; prefer: string | null; address: string | null; kind: "folder" | "delta" | "message" | "search" | "other" };
 
 export type FakeMailOptions = {
   /** The fake's idea of now (messages are dated relative to it). Default: a fixed 2026-11-05T12:00:00Z. */
@@ -87,6 +96,18 @@ export interface FakeMail {
   recreateFolder(account: FakeMsAccount, name: FakeFolderName): string;
   /** Requests to the delta endpoint only. */
   deltaRequests(): MailRequest[];
+  /** T-259: single-message reads (`GET /me/messages/{id}`) and searches, as recorded. */
+  messageRequests(): MailRequest[];
+  searchRequests(): MailRequest[];
+  /** Every `$search` value the fake received, decoded (the quotes included), in order. */
+  searchValues: string[];
+  /** The ids of the messages the fake was asked for one by one, in order. */
+  messageReads: { id: string; select: string | null; prefer: string | null }[];
+  /** Called when a single-message read arrives, before it is answered (a test uses it to change the world between two reads). */
+  onMessageRead: ((id: string) => void) | null;
+  /** Make a single-message read of this id fail with this status (every time, until cleared with `null`). */
+  failMessage(id: string, status: number | null): void;
+
 }
 
 const pageSizeOf = (prefer: string | null): number | null => {
@@ -114,6 +135,9 @@ export function createFakeMail(fake: FakeMicrosoft, opts: FakeMailOptions = {}):
   const expired = new Map<FakeMsAccount, { status: number; code: string; left: number }>();
   const requests: MailRequest[] = [];
   let refusedForImmutableId = 0;
+  const searchValues: string[] = [];
+  const messageReads: { id: string; select: string | null; prefer: string | null }[] = [];
+  const failing = new Map<string, number>();
   let counter = 0;
   let accountCounter = 0;
   const accountNo = new Map<FakeMsAccount, number>();
@@ -215,6 +239,33 @@ export function createFakeMail(fake: FakeMicrosoft, opts: FakeMailOptions = {}):
     return { account };
   }
 
+  const indexFields = (m: FakeMailMessage): Record<string, unknown> => ({
+    "@odata.type": m.odataType ?? "#microsoft.graph.message",
+    id: m.id,
+    conversationId: m.conversationId,
+    webLink: m.webLink,
+    from: { emailAddress: m.from },
+    toRecipients: m.to.map((e) => ({ emailAddress: e })),
+    ccRecipients: m.cc.map((e) => ({ emailAddress: e })),
+    subject: m.subject,
+    receivedDateTime: m.receivedDateTime,
+    sentDateTime: m.sentDateTime,
+    isRead: m.isRead,
+    flag: { flagStatus: m.flagStatus },
+    importance: m.importance,
+    hasAttachments: m.hasAttachments,
+    inferenceClassification: m.inferenceClassification,
+    categories: m.categories,
+    lastModifiedDateTime: m.lastModifiedDateTime,
+        });
+  /** Fields the sync never selects but Graph may return anyway; the strict mapper must drop them. */
+  const addExtras = (out: Record<string, unknown>, m: FakeMailMessage): void => {
+    out.body = { contentType: "text", content: `${MAIL_BODY_CANARY} ${m.id}` };
+    out.bodyPreview = `${MAIL_PREVIEW_CANARY} ${m.id}`;
+    out.uniqueBody = { contentType: "text", content: MAIL_BODY_CANARY };
+    out.internetMessageHeaders = [{ name: "X-Synthetic", value: MAIL_BODY_CANARY }];
+  };
+
   const handlers: RequestHandler[] = [
     // Folder lookup: a well-known name (or an id) -> the folder.
     http.get(`${GRAPH_V1}/me/mailFolders/:name`, ({ request, params }) => {
@@ -225,6 +276,53 @@ export function createFakeMail(fake: FakeMicrosoft, opts: FakeMailOptions = {}):
       if (!b) return gErr(404, "ErrorItemNotFound");
       const select = rawParams(new URL(request.url).search).get("$select");
       return HttpResponse.json({ id: b.id, ...(select === undefined || select === "id" ? {} : { displayName: b.name }) }, { headers: { "request-id": `synthetic-${String(++counter)}` } });
+    }),
+
+    // T-259: one message (the only place Graph returns `internetMessageHeaders`, and the live body). `$select` is honoured: only what is selected comes back.
+    http.get(`${GRAPH_V1}/me/messages/:id`, ({ request, params }) => {
+      const a = admit(request, "message");
+      if ("response" in a) return a.response;
+      const id = decodeURIComponent(String(params.id));
+      const q = rawParams(new URL(request.url).search);
+      const select = q.get("$select") ?? null;
+      messageReads.push({ id, select, prefer: request.headers.get("prefer") });
+      api.onMessageRead?.(id);
+      const status = failing.get(id);
+      if (status !== undefined) return gErr(status, "InjectedFailure");
+      const m = [...mailbox(a.account).values()].filter((x) => !x.hidden).flatMap((x) => [...x.messages.values()]).find((x) => x.id === id);
+      if (!m) return gErr(404, "ErrorItemNotFound");
+      const wanted = new Set((select ?? "id").split(",").map((x) => x.trim()));
+      const out: Record<string, unknown> = { "@odata.context": `${GRAPH_V1}/$metadata#users('synthetic')/messages(id)`, id: m.id };
+      if (wanted.has("body")) out.body = { contentType: m.bodyContentType ?? "text", content: m.bodyContent ?? `${MAIL_BODY_CANARY} ${m.id}` };
+      if (wanted.has("internetMessageHeaders")) out.internetMessageHeaders = m.headers ?? [{ name: "Received", value: "from synthetic.example.test by synthetic.example.test" }];
+      return HttpResponse.json(out, { headers: { "request-id": `synthetic-${String(++counter)}`, "preference-applied": 'outlook.body-content-type="text"' } });
+    }),
+
+    // T-259: search. `$search` is one quoted clause; Graph does not take `$filter` or `$orderby` with it. A message matches when EVERY word of the clause is in its
+    // subject or sender (the fake has no operators: a query that is still a boolean one would only be reduced by what the sync sent).
+    http.get(`${GRAPH_V1}/me/messages`, ({ request }) => {
+      const a = admit(request, "search");
+      if ("response" in a) return a.response;
+      const q = rawParams(new URL(request.url).search);
+      const clause = q.get("$search");
+      if (clause === undefined) return gErr(400, "SearchRequired");
+      searchValues.push(clause);
+      if (q.has("$filter") || q.has("$orderby")) return gErr(400, "SearchCannotCombine");
+      if (!/^"[^"\\]*"$/.test(clause)) return gErr(400, "InvalidSearchClause"); // the whole clause in one pair of quotes, no quote or backslash inside
+      const words = clause.slice(1, -1).toLowerCase().split(/\s+/).filter(Boolean);
+      const top = Number(q.get("$top") ?? "25");
+      const hits = [...mailbox(a.account).values()]
+        .filter((x) => !x.hidden)
+        .flatMap((x) => [...x.messages.values()])
+        .filter((m) => words.every((w) => `${m.subject} ${m.from.address} ${m.from.name}`.toLowerCase().includes(w)))
+        .sort((x, y) => (x.receivedDateTime < y.receivedDateTime ? 1 : -1))
+        .slice(0, Number.isFinite(top) && top > 0 ? top : 25);
+      const value = hits.map((m) => {
+        const out = indexFields(m);
+        if (options.returnBodiesAnyway) addExtras(out, m);
+        return out;
+      });
+      return HttpResponse.json({ "@odata.context": `${GRAPH_V1}/$metadata#users('synthetic')/messages`, value }, { headers: { "request-id": `synthetic-${String(++counter)}` } });
     }),
 
     http.get(`${GRAPH_V1}/me/mailFolders/:id/messages/delta`, ({ request, params }) => {
@@ -277,31 +375,8 @@ export function createFakeMail(fake: FakeMicrosoft, opts: FakeMailOptions = {}):
       const value = slice.map((it) => {
         if (it.removedId !== undefined) return { "@odata.type": "#microsoft.graph.message", id: it.removedId, "@removed": { reason: "deleted" } };
         const m = it.msg as FakeMailMessage;
-        const out: Record<string, unknown> = {
-          "@odata.type": "#microsoft.graph.message",
-          id: m.id,
-          conversationId: m.conversationId,
-          webLink: m.webLink,
-          from: { emailAddress: m.from },
-          toRecipients: m.to.map((e) => ({ emailAddress: e })),
-          ccRecipients: m.cc.map((e) => ({ emailAddress: e })),
-          subject: m.subject,
-          receivedDateTime: m.receivedDateTime,
-          sentDateTime: m.sentDateTime,
-          isRead: m.isRead,
-          flag: { flagStatus: m.flagStatus },
-          importance: m.importance,
-          hasAttachments: m.hasAttachments,
-          inferenceClassification: m.inferenceClassification,
-          categories: m.categories,
-          lastModifiedDateTime: m.lastModifiedDateTime,
-        };
-        if (options.returnBodiesAnyway) {
-          out.body = { contentType: "text", content: `${MAIL_BODY_CANARY} ${m.id}` };
-          out.bodyPreview = `${MAIL_PREVIEW_CANARY} ${m.id}`;
-          out.uniqueBody = { contentType: "text", content: MAIL_BODY_CANARY };
-          out.internetMessageHeaders = [{ name: "X-Synthetic", value: MAIL_BODY_CANARY }];
-        }
+        const out = indexFields(m);
+        if (options.returnBodiesAnyway) addExtras(out, m);
         return out;
       });
       const more = offset + size < items.length;
@@ -312,7 +387,8 @@ export function createFakeMail(fake: FakeMicrosoft, opts: FakeMailOptions = {}):
     }),
   ];
 
-  return {
+  const api: FakeMail = {
+    onMessageRead: null,
     handlers,
     requests,
     get refusedForImmutableId() {
@@ -366,7 +442,16 @@ export function createFakeMail(fake: FakeMicrosoft, opts: FakeMailOptions = {}):
       return b.id;
     },
     deltaRequests: () => requests.filter((r) => r.kind === "delta"),
+    messageRequests: () => requests.filter((r) => r.kind === "message"),
+    searchRequests: () => requests.filter((r) => r.kind === "search"),
+    searchValues,
+    messageReads,
+    failMessage(id, status) {
+      if (status === null) failing.delete(id);
+      else failing.set(id, status);
+    },
   };
+  return api;
 }
 
 /** Default handlers: none (a test builds its own fake). */

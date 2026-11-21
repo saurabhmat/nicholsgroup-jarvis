@@ -1,6 +1,11 @@
-// Microsoft Graph MailProvider (T-258): metadata delta sync only (spec §8.1, §8.2, §8.5). Live body, search and header flags are T-259, the
-// write path T-262; those methods answer `unsupported_op` AFTER the guard (so a refused connection is refused for the right reason and no
-// request or token read happens). Read-only against Graph by construction (the Graph client has GET only).
+// Microsoft Graph MailProvider: metadata delta sync (T-258, spec §8.1, §8.2, §8.5), and since T-259 the live body, the search and the header flags
+// (spec §8.3, §8.4). The write path is T-262: `prepareWrite` answers `unsupported_op` AFTER the guard (so a refused connection is refused for the right
+// reason and no request or token read happens). Read-only against Graph by construction (the Graph client has GET only).
+//
+// T-259: `readBody` is a live `GET /me/messages/{id}?$select=body` (text preferred; the type is read from the answer), returned in an `UntrustedBody`
+// and never stored, logged or put in an error. `search` sends `$search="<plain words>"` (./mail-live.ts reduces the caller's text first, so no operator
+// reaches Graph) with the index `$select` and maps the answer with the strict metadata mapper (no body, no folder). Header flags: one single-message
+// read per INBOX message of a sync page (bounded, ./mail-headers.ts), booleans only; `is_auth_pass` is always false.
 //
 // One Graph page per `sync` call. Per folder (the lane's `microsoft.mail_folders`, well-known names resolved to ids with
 // `GET /me/mailFolders/{name}`): `GET /me/mailFolders/{id}/messages/delta` with a `$select` of the index fields only and
@@ -15,7 +20,9 @@
 import type { LaneId } from "@nichols/core";
 import { z } from "zod";
 import type { MailCapabilities, MailProvider } from "../comms/provider";
-import { CommsCursorSchema, CommsSyncOptionsSchema, MailSyncResultSchema, type MailSyncResult, type MessageMeta, type MessageRemoval, type WatchInfo } from "../comms/schemas";
+import { UntrustedBody } from "../comms/ephemeral";
+import { CommsCursorSchema, CommsSyncOptionsSchema, MailSyncResultSchema, MessageMetaSchema, ProviderIdParamSchema, ReadBodyOptionsSchema, SearchQuerySchema, type MailSyncResult, type MessageMeta, type MessageRemoval, type WatchInfo } from "../comms/schemas";
+import type { SourceResult } from "../contract/schemas";
 import { ConnectorError, isConnectorError } from "../contract/errors";
 import { connectorLog, type ConnectorLogger } from "../log/index";
 import { PROVIDER_DISABLED_MESSAGE, providerEnabledIn } from "../facade/gate";
@@ -23,8 +30,10 @@ import type { LaneConfigReader } from "../vault/lane-config";
 import type { GraphApi } from "./api";
 import type { MicrosoftGuard } from "./guard";
 import { CANONICAL_FOLDER, encodeCursor, fingerprintOf, isFolderId, MAIL_FOLDER_NAMES, MAX_LINK_CHARS, OPTIONAL_FOLDERS, parseCursor, validateDeltaLink, type CursorState, type FolderState, type MailFolderName } from "./mail-cursor";
+import { createHeaderBudget, EVENT_MESSAGE_TYPE, flagsFromAnswer, HEADER_READS_PER_PAGE, HEADER_READS_PER_WINDOW, HEADERS_QUERY, type HeaderFlags } from "./mail-headers";
+import { bodyFromAnswer, MAX_SEARCH_RESULTS, plainSearchWords, searchParam } from "./mail-live";
 import { mapMessage, MAX_ID_CHARS } from "./mail-map";
-import { INITIAL_QUERY } from "./mail-query";
+import { INITIAL_QUERY, SELECT_PARAM } from "./mail-query";
 
 export type MicrosoftMailDeps = {
   /** The guarded, read-only Graph client (it runs the guard again before every request attempt). */
@@ -36,6 +45,10 @@ export type MicrosoftMailDeps = {
   logger?: ConnectorLogger;
   /** Upper bound on days the first load covers: min(this, the lane policy's retention_days). Default 90. */
   fullSyncDays?: number;
+  /** T-259 header flags: the bounds (defaults in ./mail-headers.ts), or `false` to read no headers at all (tests of the metadata sync alone). */
+  headerFlags?: false | { perPage?: number; perWindow?: number };
+  /** Default body length of `readBody` when the caller names none. */
+  defaultMaxBodyChars?: number;
 };
 
 export const DEFAULT_FULL_SYNC_DAYS = 90;
@@ -48,6 +61,17 @@ const MAX_PAGE_ITEMS = 2000;
 const PATH_FOLDER = "/me/mailFolders/{name}";
 const PATH_DELTA = "/me/mailFolders/{id}/messages/delta";
 const FOLDER_QUERY = "$select=id";
+const PATH_MESSAGE = "/me/messages/{id}";
+const PATH_MESSAGES = "/me/messages";
+/** Same default as the Gmail reader (google/constants.ts DEFAULT_MAX_BODY_CHARS). */
+export const DEFAULT_MAX_BODY_CHARS = 200_000;
+/** Workers for header reads (the Graph client allows this many requests in flight per mailbox). */
+const HEADER_CONCURRENCY = 4;
+const SINGLE_PREFER = { Prefer: 'IdType="ImmutableId"' };
+const BODY_PREFER = { Prefer: 'IdType="ImmutableId", outlook.body-content-type="text"' };
+/** Failures of ONE header read that never fail the page: Graph answered (a status), or the call timed out / was throttled. A refusal of ours (the guard, the token) is not one. */
+const FATAL_KINDS: readonly string[] = ["reconnect_required", "connection_unavailable", "lane_mismatch", "unsupported_op"];
+const SOFT_NO_STATUS: readonly string[] = ["timeout", "transient", "rate_limited"];
 
 const PageSchema = z.object({
   value: z.array(z.unknown()).max(MAX_PAGE_ITEMS),
@@ -74,11 +98,20 @@ export function createMicrosoftMailProvider(deps: MicrosoftMailDeps): MailProvid
   const log = deps.logger ?? connectorLog;
   const fullDays = deps.fullSyncDays ?? DEFAULT_FULL_SYNC_DAYS;
   const capabilities: MailCapabilities = { watch: "polling", prepareWrite: false };
+  const headerCfg = deps.headerFlags === false ? null : (deps.headerFlags ?? {});
+  const headerPerPage = headerCfg?.perPage ?? HEADER_READS_PER_PAGE;
+  const headerBudget = createHeaderBudget(now, headerCfg?.perWindow ?? HEADER_READS_PER_WINDOW);
+  const defaultMaxChars = deps.defaultMaxBodyChars ?? DEFAULT_MAX_BODY_CHARS;
+  const envelope = <T>(laneId: LaneId, c: GuardedConn, op: string, data: T): SourceResult<T, "microsoft"> => {
+    const at = new Date(now()).toISOString();
+    return { lane_id: laneId, provider: "microsoft", connection_id: c.id, op, data, as_of: at, fetched_at: at, freshness: "live", provider_tid: null, source_refs: [], notes: [] };
+  };
 
   const done = (r: MailSyncResult): MailSyncResult => MailSyncResultSchema.parse(r);
   const resync = (): MailSyncResult => ({ upserts: [], removals: [], nextCursor: null, hasMore: false, fullResyncRequired: true });
   const preferFor = (pageSize: number) => ({ Prefer: `IdType="ImmutableId", odata.maxpagesize=${String(pageSize)}` });
 
+  type GuardedConn = Awaited<ReturnType<MicrosoftGuard>>["conn"];
   const unsupported = (what: string) => new ConnectorError({ kind: "unsupported_op", message: `${what} is not available for Microsoft yet` });
   const pollingWatch = (): WatchInfo => ({ mode: "polling", resource: "mail", channel_id: null, resource_id: null, expires_at: null, created_at: new Date(now()).toISOString() });
 
@@ -129,6 +162,55 @@ export function createMicrosoftMailProvider(deps: MicrosoftMailDeps): MailProvid
     if (folders.length === 0) throw providerError("This mailbox has none of the configured mail folders");
     if (absent.length > 0) log.child({ laneId, provider: "microsoft" }).info("microsoft.mail.folders_absent", { count: absent.length, configured: names.length });
     return { v: 1, folders, pos: 0, fp, ...(absent.length > 0 ? { absent, checked: new Date(now()).toISOString() } : {}) };
+  }
+
+  /**
+   * Header flags of up to `headerPerPage` INBOX messages of a page (newest first), within the connection's window budget. A single read that fails because
+   * Graph answered (404: the message moved or went; 4xx/5xx; throttled) leaves that message without flags, and any failure other than "message not found"
+   * stops the remaining reads of this page; the page is still applied. A failure that is OUR refusal (reconnect required, provider disabled, a guard or
+   * token failure) is thrown and fails the page: the cursor does not advance. Nothing of an answer is logged: counts only.
+   */
+  async function readHeaderFlags(laneId: LaneId, c: GuardedConn, metas: readonly MessageMeta[]): Promise<Map<string, HeaderFlags>> {
+    const out = new Map<string, HeaderFlags>();
+    if (headerCfg === null || metas.length === 0) return out;
+    const seen = new Set<string>();
+    const ids = [...metas]
+      .sort((a, b) => (a.received_at < b.received_at ? 1 : a.received_at > b.received_at ? -1 : 0))
+      .map((m) => m.message_id)
+      .filter((id) => !seen.has(id) && ProviderIdParamSchema.safeParse(id).success && (seen.add(id), true));
+    const granted = headerBudget.take(c.id, Math.min(headerPerPage, ids.length));
+    const todo = ids.slice(0, granted);
+    let next = 0;
+    let stop = false;
+    let failed = 0;
+    let fatal: { error: unknown } | null = null;
+    const worker = async (): Promise<void> => {
+      for (;;) {
+        const i = next++;
+        if (stop || i >= todo.length) return;
+        const id = todo[i] as string;
+        try {
+          const res = await deps.api.get(laneId, c, PATH_MESSAGE, { id }, undefined, { headers: SINGLE_PREFER, rawQuery: HEADERS_QUERY });
+          const flags = flagsFromAnswer(res.data);
+          if (flags) out.set(id, flags);
+          else failed += 1;
+        } catch (e) {
+          const info = isConnectorError(e) ? e.info : null;
+          if (info === null || FATAL_KINDS.includes(info.kind) || (info.http_status === null && !SOFT_NO_STATUS.includes(info.kind))) {
+            fatal ??= { error: e };
+            stop = true;
+            return;
+          }
+          failed += 1;
+          if (info.http_status !== 404) stop = true; // throttled, unavailable, refused: the rest of this page is left without flags
+        }
+      }
+    };
+    await Promise.all(Array.from({ length: Math.min(HEADER_CONCURRENCY, todo.length) }, worker));
+    if (fatal !== null) throw (fatal as { error: unknown }).error;
+    const notRead = ids.length - out.size - failed; // over a bound, or left after a stop
+    if (failed > 0 || notRead > 0) log.child({ laneId, provider: "microsoft", connectionId: c.id }).info("microsoft.mail.header_flags_partial", { read: out.size, failed, notRead });
+    return out;
   }
 
   async function syncPage(laneId: LaneId, conn: Parameters<MicrosoftGuard>[1], cursor: Parameters<MailProvider<"microsoft">["sync"]>[2], options: Parameters<MailProvider<"microsoft">["sync"]>[3]): Promise<MailSyncResult> {
@@ -186,7 +268,7 @@ export function createMicrosoftMailProvider(deps: MicrosoftMailDeps): MailProvid
     const delta = page.data["@odata.deltaLink"];
     if ((next === undefined) === (delta === undefined)) throw providerError("Microsoft message delta is not valid"); // exactly one of the two ends a page
 
-    const upserts: MessageMeta[] = [];
+    let upserts: MessageMeta[] = [];
     const removals: MessageRemoval[] = [];
     const canonical = CANONICAL_FOLDER[folder.name];
     let old = 0;
@@ -200,11 +282,19 @@ export function createMicrosoftMailProvider(deps: MicrosoftMailDeps): MailProvid
         continue;
       }
       const r = mapMessage(item, { folder: folder.name, since: folder.since, cloud: g.cloud });
-      if ("meta" in r) upserts.push(r.meta);
+      // A meeting request, cancellation or response is an `eventMessage` (spec §8.4): the type is used when Graph returns it in the delta item.
+      const isEvent = typeof item === "object" && item !== null && (item as { "@odata.type"?: unknown })["@odata.type"] === EVENT_MESSAGE_TYPE;
+      if ("meta" in r) upserts.push(isEvent ? { ...r.meta, is_calendar: true } : r.meta);
       else if (r.dropped === "old") old += 1;
       else unusable += 1;
     }
     if (old > 0 || unusable > 0) log.child({ laneId, provider: "microsoft", connectionId: c.id }).info("microsoft.mail.items_dropped", { folder: folder.name, old, unusable });
+
+    // Header flags (inbox only; one bounded single-message read each). Only the booleans are kept; is_auth_pass is false.
+    if (folder.name === "inbox" && upserts.length > 0) {
+      const flags = await readHeaderFlags(laneId, c, upserts);
+      if (flags.size > 0) upserts = upserts.map((m) => { const f = flags.get(m.message_id); return f ? { ...m, ...f, is_calendar: f.is_calendar || m.is_calendar === true } : m; });
+    }
 
     // A nextLink equal to the link just used would page the same data forever, run after run: refuse it.
     if (next !== undefined && next === stored) throw providerError("Microsoft returned the same page link again");
@@ -234,14 +324,42 @@ export function createMicrosoftMailProvider(deps: MicrosoftMailDeps): MailProvid
 
     sync: (laneId, conn, cursor, options) => syncPage(laneId, conn, cursor, options),
 
-    // T-259: live body, search and header flags. Guarded first, then refused: no request, no token read.
-    async readBody(laneId, conn) {
-      await deps.guard(laneId, conn);
-      throw unsupported("Reading a message");
+    async readBody(laneId, conn, messageId, options) {
+      const g = await deps.guard(laneId, conn); // before the id is looked at and before any token read
+      const id = ProviderIdParamSchema.safeParse(messageId);
+      if (!id.success) throw invalid("Invalid message id"); // fixed text: the id is never echoed; checked before any request
+      const opts = ReadBodyOptionsSchema.safeParse(options ?? {});
+      if (!opts.success) throw invalid("Invalid read options");
+      if (g.cloud !== "commercial") throw new ConnectorError({ kind: "unsupported_op", message: "This Microsoft cloud is not supported yet" });
+      const res = await deps.api.get(laneId, g.conn, PATH_MESSAGE, { id: id.data }, undefined, { headers: BODY_PREFER, rawQuery: "$select=body" });
+      const body = bodyFromAnswer(res.data, opts.data.maxChars ?? defaultMaxChars);
+      if (body === null) throw providerError("Microsoft message body is not valid"); // never the content
+      return envelope(laneId, g.conn, "mail.read_body", new UntrustedBody({ origin: "mail", text: body.text, contentType: "text/plain", truncated: body.truncated }));
     },
-    async search(laneId, conn) {
-      await deps.guard(laneId, conn);
-      throw unsupported("Mail search");
+    async search(laneId, conn, query) {
+      const g = await deps.guard(laneId, conn);
+      const q = SearchQuerySchema.safeParse(query);
+      if (!q.success) throw invalid("Invalid search query");
+      const words = plainSearchWords(q.data.query);
+      if (words === null) throw invalid("The search has no words to look for");
+      if (g.cloud !== "commercial") throw new ConnectorError({ kind: "unsupported_op", message: "This Microsoft cloud is not supported yet" });
+      const limit = Math.min(q.data.limit, MAX_SEARCH_RESULTS);
+      // The index fields only (no body), the quoted plain words, a bounded count; no $filter and no $orderby (Graph sorts a search itself).
+      const rawQuery = `${SELECT_PARAM}&${searchParam(words)}&$top=${String(limit)}`;
+      const res = await deps.api.get(laneId, g.conn, PATH_MESSAGES, undefined, undefined, { headers: { Prefer: 'IdType="ImmutableId"' }, rawQuery });
+      const page = z.object({ value: z.array(z.unknown()).max(MAX_PAGE_ITEMS) }).safeParse(res.data);
+      if (!page.success) throw providerError("Microsoft search answer is not valid");
+      // Results are untrusted data (rule 9): strict, metadata only (the mapper drops body, preview and headers), no folder (the select has none, so none is guessed).
+      const metas: MessageMeta[] = [];
+      const seen = new Set<string>();
+      for (const item of page.data.value) {
+        if (metas.length >= limit) break;
+        const r = mapMessage(item, { folder: "inbox", since: new Date(0).toISOString(), cloud: g.cloud });
+        if (!("meta" in r) || seen.has(r.meta.message_id)) continue;
+        seen.add(r.meta.message_id);
+        metas.push(MessageMetaSchema.parse({ ...r.meta, folder: null }));
+      }
+      return envelope(laneId, g.conn, "mail.search", metas);
     },
     // Graph change notifications are T-068 / T-264: until then mail is polled, no subscription is created.
     async watch(laneId, conn) {
