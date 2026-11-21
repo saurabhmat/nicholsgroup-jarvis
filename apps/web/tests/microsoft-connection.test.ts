@@ -58,7 +58,7 @@ const guards = (over: { role?: AuthError } = {}) => ({
 const both: MailProvidersView = { state: "known", google: true, microsoft: { cloud: "commercial", tenantIds: [TENANT] } };
 const googleOnly: MailProvidersView = { state: "known", google: true, microsoft: null };
 const microsoftOff = googleOnly; // "disabled after connect" is the same answer: Microsoft not enabled
-const consent = vi.fn(async (_laneId: string, _settings: unknown) => ({ url: "https://login.microsoftonline.com/x/v2.0/adminconsent?synthetic" as string | null, writes: false }));
+const consent = vi.fn<(laneId: string, settings: unknown) => Promise<{ url: string | null; writes: boolean }>>(async () => ({ url: "https://login.microsoftonline.com/x/v2.0/adminconsent?synthetic" as string | null, writes: false }));
 
 describe("a company with both providers enabled", () => {
   it("shows both sections, and the same user's Google row and Microsoft row each in its own section", async () => {
