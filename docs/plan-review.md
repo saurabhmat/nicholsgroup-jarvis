@@ -1358,3 +1358,22 @@ Logged, not changed (intended):
 - (code L1) After a background Refresh ends, the button note shows the next-refresh time; the result shows as new stories or the card's "Last refresh failed: …" line ("Updated just now" is no longer shown).
 - `maxDuration` 300 s on the Inngest route and Home: every server action on Home may now run up to 300 s; each keeps its own bound (briefing 60/75 s, news 240 s).
 - Security re-check (Nov 15): no BLOCKER/HIGH/MEDIUM. Fixed LOW: the aborted-retry estimate is rounded to cents and capped at 1000 (the SQL check). Logged LOW: the session renewal runs before the role check (by design: the guards must read the renewed cookies; it only rotates the caller's own session); no test shows `guards()` reading the renewed cookie in the same action (true in Next 16.4.2 per the reviewer; fails closed if a framework change breaks it). Manual check after deploy.
+
+## T-250: review results (security and code review, Nov 21, 2026)
+No BLOCKER, no HIGH. Fixed: the personal-accounts tenant and the nil UUID are refused in `microsoft.tenant_ids` (security M1); `mailProviderSettings(laneId)` returns the provider and the Microsoft settings from one read (security M3); a test for a config shaped like the stored production PKG one (code M1). Logged, not changed:
+- (security M2) `microsoft.cloud = "gcc_high"` parses while `allow_gcc` is false. The spec ties `allow_gcc` to GCC tenants the connect flow detects (§5.4), not to the cloud value. **T-267 must decide** whether a `gcc_high` lane also requires `allow_gcc = true` (recommended: yes, both wait on D-49) and add the rule there.
+- (security L1) A lane with no config row reads as `google` with no Microsoft settings (nothing Microsoft is allowed; Google stays gated by `mail.allowed_domains` being empty). **T-066 and T-255 must treat `microsoft: null` as a refusal** for a Microsoft connect or sync.
+- (security L2) `calendar.calendar_ids` of the old provider are not refused after a provider switch; the T-266 cut-over SQL writes the new version without them and its check file should assert the key is absent.
+- (security L3, code M2) The reader checks only `mail.provider`, `mail_transport` and `microsoft`; a malformed `mail_transport` therefore fails the provider read too (fail closed), while other malformed keys do not. The whole config is validated at write time only.
+- (code L3, L4) The secret-scan and `calendar_ids` tests are regression guards for generic code, not rule tests.
+- (code L5, L6) `MailProvider` is a literal union in connectors beside `MAIL_PROVIDERS` in core; `refineMailProvider` takes a hand-written structural type. Cosmetic.
+- Flaky under load, unrelated to this change, both pass on a rerun: `@nichols/eslint-plugin` `config-web.test.js` (30 s timeout) and `@nichols/connectors` `quickbooks/sync.test.ts` initial load (5 s timeout).
+
+## T-251: review results (security and code review, Nov 21, 2026)
+No BLOCKER, no HIGH. Fixed: an assertion that could never fail was removed from `graph-env.test.ts` (security LOW-3); H-068 (5) reworded, because `.env.example` was changed in the task commit (code MEDIUM). Logged, not changed:
+- (security LOW-1) The redirect check pins the origin, not the path (Google has the same rule; Entra requires an exact match with the registered URI). **T-066** should also require the path `/api/connect/microsoft/callback` when the callback route lands.
+- (security LOW-2) `graph_usgov` has the same local default callback as the commercial app. **T-267 requirement:** the cloud of a callback must come from the server-side OAuth state (or the GCC High app gets its own callback path), never from the query, so a code is never redeemed at the other cloud's token endpoint with the other client secret.
+- (code LOW) Google keeps its own inline copy of the redirect rule beside the new shared `checkRedirect` (left so Google's behaviour is provably unchanged); a later refactor can move Google onto it.
+- (code LOW) No test ties the `turbo.json` env list to the env schema.
+- `.env.example`: the acceptance said "proposed in the PR body (human-owned file)". The names were added in the commit instead, because `env.test.ts` ("every server and connector name exists in .env.example") fails without them; T-063 and T-219 did the same. Saurabh was told (Nov 21) and can ask for it to be reverted.
+- `pnpm test:bundle` not run (refuses while `apps/web/.env.local` exists, by design).

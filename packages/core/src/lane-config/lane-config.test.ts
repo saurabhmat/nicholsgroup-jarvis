@@ -297,7 +297,7 @@ describe("T-240: briefing.attention.fresh_hours, deadline_subjects, own_domain_b
 describe("mail section (T-247)", () => {
   it("defaults to empty lists (fail closed): no domain is allowed until a lane lists it", () => {
     const c = parseLaneConfig(VALID);
-    expect(c.mail).toEqual({ allowed_domains: [], self_connect_domains: [] });
+    expect(c.mail).toEqual({ provider: "google", allowed_domains: [], self_connect_domains: [] });
   });
   it("accepts lower-case domains for both keys", () => {
     const c = parseLaneConfig({ ...VALID, mail: { allowed_domains: ["example.test", "mail.example.test"], self_connect_domains: ["gmail.example.test"] } });
@@ -319,5 +319,99 @@ describe("mail section (T-247)", () => {
     const c = parseLaneConfig({ ...VALID, mail: { allowed_domains: ["example.test"] } });
     expect(c.mailboxes).toEqual(["ops@example.test"]);
     expect(c.mail.allowed_domains).toEqual(["example.test"]);
+  });
+});
+
+describe("mail provider and Microsoft settings (T-250)", () => {
+  // Synthetic tenant ids only (rule 10).
+  const T1 = "11111111-2222-4333-8444-555555555555";
+  const T2 = "aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee";
+  const MS = { tenant_ids: [T1] };
+  const msConfig = (extra: Record<string, unknown> = {}) => ({ ...VALID, mail: { provider: "microsoft" }, microsoft: MS, ...extra });
+
+  it("defaults to google with no microsoft block; a stored PKG-style config (no provider keys) still parses unchanged", () => {
+    const stored = { ...VALID, mail: { allowed_domains: ["example.test"], self_connect_domains: [] }, mail_transport: "composio", calendar: { calendar_ids: ["primary"] } };
+    const c = parseLaneConfig(stored);
+    expect(c.mail.provider).toBe("google");
+    expect(c.microsoft).toBeUndefined();
+    expect(parseLaneConfig(VALID).mail.provider).toBe("google");
+    expect(parseLaneConfig({}).mail.provider).toBe("google");
+  });
+  it("parses a config shaped like the stored production PKG one (modules, mailboxes, mail_transport native; no provider keys)", () => {
+    const c = parseLaneConfig({ enabled_modules: ["assistant", "comms"], mailboxes: ["owner@example.test"], mail_transport: "native" });
+    expect(c.mail.provider).toBe("google");
+    expect(c.microsoft).toBeUndefined();
+  });
+  it("refuses the personal-accounts tenant and the nil UUID in tenant_ids", () => {
+    for (const id of ["9188040d-6c67-4c5b-b112-36a304b66dad", "00000000-0000-0000-0000-000000000000"]) {
+      expect(() => parseLaneConfig(msConfig({ microsoft: { tenant_ids: [id] } }))).toThrow();
+      expect(() => parseLaneConfig(msConfig({ microsoft: { tenant_ids: [T1, id] } }))).toThrow();
+    }
+  });
+  it("accepts microsoft with defaults: commercial, allow_gcc false, inbox and sentitems", () => {
+    const c = parseLaneConfig(msConfig());
+    expect(c.mail.provider).toBe("microsoft");
+    expect(c.microsoft).toEqual({ cloud: "commercial", tenant_ids: [T1], allow_gcc: false, mail_folders: ["inbox", "sentitems"] });
+  });
+  it("accepts every field set explicitly", () => {
+    const c = parseLaneConfig(msConfig({ microsoft: { cloud: "gcc_high", tenant_ids: [T1, T2], allow_gcc: true, mail_folders: ["archive", "inbox", "sentitems"] } }));
+    expect(c.microsoft).toEqual({ cloud: "gcc_high", tenant_ids: [T1, T2], allow_gcc: true, mail_folders: ["archive", "inbox", "sentitems"] });
+  });
+  it("rejects an unknown provider", () => {
+    for (const bad of ["Microsoft", "outlook", "", null]) expect(() => parseLaneConfig({ ...VALID, mail: { provider: bad } }), String(bad)).toThrow();
+  });
+  it("requires the microsoft block when mail.provider is microsoft", () => {
+    const issues = issuesOf(() => parseLaneConfig({ ...VALID, mail: { provider: "microsoft" } }));
+    expect(issues.some((i) => i.path.join(".") === "microsoft")).toBe(true);
+  });
+  it("allows a microsoft block while mail.provider is google (a lane prepared before its cut-over)", () => {
+    const c = parseLaneConfig({ ...VALID, microsoft: MS });
+    expect(c.mail.provider).toBe("google");
+    expect(c.microsoft?.tenant_ids).toEqual([T1]);
+  });
+  it("refuses mail_transport composio with microsoft, but not with google", () => {
+    const issues = issuesOf(() => parseLaneConfig(msConfig({ mail_transport: "composio" })));
+    expect(issues.some((i) => i.path.join(".") === "mail_transport")).toBe(true);
+    expect(parseLaneConfig(msConfig({ mail_transport: "native" })).mail_transport).toBe("native");
+    expect(parseLaneConfig({ ...VALID, mail_transport: "composio", microsoft: MS }).mail_transport).toBe("composio");
+  });
+  it("tenant_ids: 1..10 lower-case UUIDs, no duplicates, no upper-case (refused, not lower-cased)", () => {
+    const ten = Array.from({ length: 10 }, (_, i) => `00000000-0000-4000-8000-${String(i).padStart(12, "0")}`);
+    expect(parseLaneConfig(msConfig({ microsoft: { tenant_ids: ten } })).microsoft?.tenant_ids).toEqual(ten);
+    const eleven = [...ten, "00000000-0000-4000-8000-0000000000ff"];
+    for (const bad of [[], eleven, [T1, T1], [T2.toUpperCase()], ["not-a-uuid"], [`{${T1}}`], [` ${T1}`], [T1.replaceAll("-", "")], [5], "x"]) {
+      expect(() => parseLaneConfig(msConfig({ microsoft: { tenant_ids: bad } })), JSON.stringify(bad)).toThrow();
+    }
+    expect(() => parseLaneConfig(msConfig({ microsoft: {} }))).toThrow();
+  });
+  it("cloud: commercial or gcc_high only", () => {
+    expect(parseLaneConfig(msConfig({ microsoft: { ...MS, cloud: "gcc_high" } })).microsoft?.cloud).toBe("gcc_high");
+    for (const bad of ["gcc", "dod", "Commercial", ""]) expect(() => parseLaneConfig(msConfig({ microsoft: { ...MS, cloud: bad } })), bad).toThrow();
+  });
+  it("allow_gcc is a boolean", () => {
+    expect(parseLaneConfig(msConfig({ microsoft: { ...MS, allow_gcc: true } })).microsoft?.allow_gcc).toBe(true);
+    for (const bad of ["true", 1, null]) expect(() => parseLaneConfig(msConfig({ microsoft: { ...MS, allow_gcc: bad } }))).toThrow();
+  });
+  it("mail_folders: subset of inbox, sentitems, archive; 1..3; no duplicates", () => {
+    expect(parseLaneConfig(msConfig({ microsoft: { ...MS, mail_folders: ["inbox"] } })).microsoft?.mail_folders).toEqual(["inbox"]);
+    for (const bad of [[], ["inbox", "inbox"], ["drafts"], ["junkemail"], ["Inbox"], ["inbox", "sentitems", "archive", "inbox"], "inbox"]) {
+      expect(() => parseLaneConfig(msConfig({ microsoft: { ...MS, mail_folders: bad } })), JSON.stringify(bad)).toThrow();
+    }
+  });
+  it("the microsoft block is strict: unknown keys are rejected", () => {
+    for (const extra of [{ tenant: T1 }, { client_id: "x" }, { mailboxes: [] }]) expect(() => parseLaneConfig(msConfig({ microsoft: { ...MS, ...extra } }))).toThrow();
+  });
+  it("calendar_ids are accepted as ids of the current provider (a Graph-style id)", () => {
+    const id = "AAMkAGI2synthetic-calendar-id=";
+    expect(parseLaneConfig(msConfig({ calendar: { calendar_ids: [id] } })).calendar?.calendar_ids).toEqual([id]);
+  });
+  it("the secret-value scan covers the new keys: a credential-like value is refused, ordinary values are not", () => {
+    expect(findSecretLikeValues(msConfig())).toEqual([]);
+    expect(findSecretLikeValues({ microsoft: { tenant_ids: ["ya29.synthetic"], mail_folders: ["Bearer abc"] }, mail: { provider: "sk-ant-synthetic" } }).sort()).toEqual([
+      "$.mail.provider",
+      "$.microsoft.mail_folders[0]",
+      "$.microsoft.tenant_ids[0]",
+    ]);
+    expect(() => parseLaneConfig(msConfig({ microsoft: { tenant_ids: ["ya29.synthetic"] } }))).toThrow(/secret-like/);
   });
 });

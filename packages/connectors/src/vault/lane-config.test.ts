@@ -205,3 +205,73 @@ describe("mailDomains (T-247)", () => {
     expect(await kindOf(reader({ mail: { allowed_domains: "example.test" } }).mailDomains("PKG"))).toBe("provider_error");
   });
 });
+
+describe("mailProvider and microsoftSettings (T-250)", () => {
+  const T1 = "11111111-2222-4333-8444-555555555555"; // synthetic
+  const reader = (config: unknown) => createLaneConfigReader(client({ data: { config } }).clientFor);
+  const ms = { mail: { provider: "microsoft" }, microsoft: { tenant_ids: [T1] } };
+  it("mailProvider defaults to google when the config, the mail section or the key is missing", async () => {
+    expect(await reader({}).mailProvider("PKG")).toBe("google");
+    expect(await reader({ mail: {} }).mailProvider("PKG")).toBe("google");
+    expect(await createLaneConfigReader(client({ data: null }).clientFor).mailProvider("PKG")).toBe("google");
+    expect(await reader({ mail: { allowed_domains: ["example.test"] } }).mailProvider("PKG")).toBe("google");
+  });
+  it("reads the lane's provider, filtered by lane, on every call (a changed config is seen at once)", async () => {
+    const c = client({ data: { config: ms } });
+    const r = createLaneConfigReader(c.clientFor);
+    expect(await r.mailProvider("PKG")).toBe("microsoft");
+    expect(await r.mailProvider("PKG")).toBe("microsoft");
+    expect(c.calls).toHaveLength(2);
+    expect(c.calls[0]).toMatchObject({ table: "core.lane_config_current", filters: [["lane_id", "PKG"]] });
+  });
+  it("mailProviderSettings returns the provider and the settings from one read, and fails closed like the others", async () => {
+    const c = client({ data: { config: ms } });
+    const r = createLaneConfigReader(c.clientFor);
+    expect(await r.mailProviderSettings("PKG")).toEqual({
+      provider: "microsoft",
+      microsoft: { cloud: "commercial", tenantIds: [T1], allowGcc: false, mailFolders: ["inbox", "sentitems"] },
+    });
+    expect(c.calls).toHaveLength(1);
+    expect(await reader({}).mailProviderSettings("PKG")).toEqual({ provider: "google", microsoft: null });
+    await expect(reader({ mail: { provider: "microsoft" } }).mailProviderSettings("PKG")).rejects.toMatchObject({ info: { kind: "provider_error" } });
+    await expect(reader({ ...ms, microsoft: { tenant_ids: ["9188040d-6c67-4c5b-b112-36a304b66dad"] } }).mailProviderSettings("PKG")).rejects.toMatchObject({ info: { kind: "provider_error" } });
+  });
+  it("microsoftSettings returns defaults applied, or null when the lane has no block", async () => {
+    expect(await reader(ms).microsoftSettings("PKG")).toEqual({ cloud: "commercial", tenantIds: [T1], allowGcc: false, mailFolders: ["inbox", "sentitems"] });
+    expect(await reader({}).microsoftSettings("PKG")).toBeNull();
+    expect(await createLaneConfigReader(client({ data: null }).clientFor).microsoftSettings("PKG")).toBeNull();
+    expect(await reader({ microsoft: { tenant_ids: [T1], cloud: "gcc_high", allow_gcc: true, mail_folders: ["archive"] } }).microsoftSettings("PKG")).toEqual({
+      cloud: "gcc_high", tenantIds: [T1], allowGcc: true, mailFolders: ["archive"],
+    });
+  });
+  it("fails closed on a malformed provider setting or block, and on the cross-field rules", async () => {
+    const bad: unknown[] = [
+      { mail: { provider: "outlook" } },
+      { mail: "x" },
+      { mail: { provider: "microsoft" } }, // block missing
+      { ...ms, mail_transport: "composio" },
+      { ...ms, microsoft: { tenant_ids: [] } },
+      { ...ms, microsoft: { tenant_ids: ["AAAAAAAA-BBBB-4CCC-8DDD-EEEEEEEEEEEE"] } },
+      { ...ms, microsoft: { tenant_ids: [T1, T1] } },
+      { ...ms, microsoft: { tenant_ids: [T1], mail_folders: ["drafts"] } },
+      { ...ms, microsoft: { tenant_ids: [T1], extra: 1 } },
+      { microsoft: "x" },
+      { mail_transport: "x" },
+      "x",
+    ];
+    for (const config of bad) {
+      expect(await kindOf(reader(config).mailProvider("PKG")), JSON.stringify(config)).toBe("provider_error");
+      expect(await kindOf(reader(config).microsoftSettings("PKG")), JSON.stringify(config)).toBe("provider_error");
+    }
+  });
+  it("fails closed when the config cannot be read or the lane is not valid", async () => {
+    const failing = createLaneConfigReader(client({ error: { message: "secret db text" } }).clientFor);
+    expect(await kindOf(failing.mailProvider("PKG"))).toBe("transient");
+    expect(await kindOf(failing.microsoftSettings("PKG"))).toBe("transient");
+    expect(await kindOf(reader({}).mailProvider("pkg" as never))).toBe("invalid_input");
+    expect(await kindOf(createLaneConfigReader(vi.fn(async () => Promise.reject(new Error("no lane")))).microsoftSettings("PKG"))).toBe("connection_unavailable");
+  });
+  it("an unrelated malformed section does not hide the provider", async () => {
+    expect(await reader({ finance: "x", mail: { provider: "google" } }).mailProvider("PKG")).toBe("google");
+  });
+});

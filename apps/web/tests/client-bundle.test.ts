@@ -37,6 +37,14 @@ describe("canary scanner", () => {
   });
 });
 
+describe("canary set (T-251)", () => {
+  it("covers both Microsoft client secrets as server-only canaries", () => {
+    for (const name of ["GRAPH_CLIENT_SECRET", "GRAPH_USGOV_CLIENT_SECRET"]) {
+      expect(((CANARIES as Record<string, string>)[name] ?? "").length, name).toBeGreaterThan(24);
+    }
+  });
+});
+
 describe("canary set (T-219)", () => {
   it("covers the Composio key and auth config ids, none of them NEXT_PUBLIC_, all distinct and long enough to match nothing else", () => {
     for (const name of ["COMPOSIO_API_KEY", "COMPOSIO_GMAIL_AUTH_CONFIG_ID", "COMPOSIO_GOOGLECALENDAR_AUTH_CONFIG_ID"]) {

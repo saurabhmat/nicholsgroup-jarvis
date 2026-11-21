@@ -20,6 +20,9 @@ export const CANARIES = {
   COMPOSIO_API_KEY: "canary-composio-api-key-3e9c51b8",
   COMPOSIO_GMAIL_AUTH_CONFIG_ID: "canary-composio-gmail-auth-config-a47d20f1",
   COMPOSIO_GOOGLECALENDAR_AUTH_CONFIG_ID: "canary-composio-calendar-auth-config-6c18e9d3",
+  // T-251: the Microsoft app secrets are server-only.
+  GRAPH_CLIENT_SECRET: "canary-graph-client-secret-2f7a96c1",
+  GRAPH_USGOV_CLIENT_SECRET: "canary-graph-usgov-client-secret-8d04b5e3",
 };
 
 /**

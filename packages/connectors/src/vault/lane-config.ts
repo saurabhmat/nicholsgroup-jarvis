@@ -3,13 +3,23 @@
 // job client (`lane_config_current` is service_role-readable) and takes only the one field it needs; nothing else of
 // the config reaches connector code. A lane without `qbo` has no configured realm; a malformed one fails closed.
 import type { LaneId } from "@nichols/core";
-import { laneConfigSchema, qboSyncSchema } from "@nichols/core/lane-config";
+import { laneConfigSchema, mailProviderViewSchema, qboSyncSchema, type MicrosoftConfig } from "@nichols/core/lane-config";
 import { ConnectorError } from "../contract/errors";
 import type { JobClientFor } from "./tokens";
 
 export interface LaneConfigReader {
   /** `lane_config.mail.allowed_domains` (lower-case domains whose Google accounts may be connected); empty when unset = nothing is allowed; throws when malformed (fail closed) (T-247). */
   mailDomains(laneId: LaneId): Promise<string[]>;
+  /** `lane_config.mail.provider` (default `google`); read on every call; throws when the config is unreadable or the provider settings are malformed (fail closed) (T-250). */
+  mailProvider(laneId: LaneId): Promise<MailProvider>;
+  /** `lane_config.microsoft` (defaults applied), or null when the lane has none; throws when unreadable or malformed, or when it is required by `mail.provider = "microsoft"` and missing (fail closed) (T-250). */
+  microsoftSettings(laneId: LaneId): Promise<MicrosoftSettings | null>;
+  /**
+   * The provider and the Microsoft settings from ONE read of the config (T-250). Use this, never the two accessors above, for any
+   * allow decision (connect, sync, provider call): two reads could combine the provider of one config version with the tenant
+   * list of the next. Fails closed like them.
+   */
+  mailProviderSettings(laneId: LaneId): Promise<{ provider: MailProvider; microsoft: MicrosoftSettings | null }>;
   /** The realm id configured for the lane's QuickBooks file, or null when none is set. */
   qboRealmId(laneId: LaneId): Promise<string | null>;
   /** The mailboxes (lower-cased) the lane's mail connection may be, from `lane_config.mailboxes`; empty when none is set (T-063). */
@@ -29,6 +39,9 @@ export interface LaneConfigReader {
   /** Only the `lane_config.retention` part of the above (defaults when unset), so a bad config does not hide the policy's comms days (T-042). */
   retentionConfig(laneId: LaneId): Promise<Omit<RetentionSettings, "commsDays">>;
 }
+
+export type MailProvider = "google" | "microsoft";
+export type MicrosoftSettings = { cloud: MicrosoftConfig["cloud"]; tenantIds: string[]; allowGcc: boolean; mailFolders: MicrosoftConfig["mail_folders"] };
 
 export type { PayrollSettings } from "../quickbooks/sync";
 import type { PayrollSettings } from "../quickbooks/sync";
@@ -54,6 +67,21 @@ const REALM = /^\d{1,20}$/;
 const CALENDAR_ID = /^[^\s\u0000-\u001f\u007f-\u009f]{1,200}$/;
 const EMAIL = /^[^\s@]{1,64}@[^\s@]{1,255}$/;
 const MAIL_DOMAIN = /^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?(\.[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?)+$/;
+
+/**
+ * The provider keys of a config (a missing config is the default: google, with no Microsoft settings, so nothing Microsoft is
+ * allowed); a malformed one throws (fail closed). Only `mail.provider`, `mail_transport` and `microsoft` are checked here: the
+ * whole config is validated when it is written (`parseLaneConfig`), not on this read.
+ */
+function readProviderView(config: unknown): { provider: MailProvider; microsoft: MicrosoftSettings | null } {
+  const parsed = mailProviderViewSchema.safeParse(config === undefined || config === null ? {} : config);
+  if (!parsed.success) throw new ConnectorError({ kind: "provider_error", message: "The lane's mail provider settings are not valid" });
+  const m = parsed.data.microsoft;
+  return {
+    provider: parsed.data.mail.provider,
+    microsoft: m ? { cloud: m.cloud, tenantIds: [...m.tenant_ids], allowGcc: m.allow_gcc, mailFolders: [...m.mail_folders] } : null,
+  };
+}
 
 export function createLaneConfigReader(clientFor: JobClientFor): LaneConfigReader {
   async function readConfig(laneId: LaneId): Promise<unknown> {
@@ -130,6 +158,15 @@ export function createLaneConfigReader(clientFor: JobClientFor): LaneConfigReade
       // Same shape as mailDomain in @nichols/core's laneConfigSchema (lower-case DNS name, at least two labels); keep in step.
       if (!Array.isArray(list) || list.length > 20 || list.some((d) => typeof d !== "string" || !MAIL_DOMAIN.test(d))) throw bad();
       return [...new Set(list as string[])];
+    },
+    async mailProvider(laneId) {
+      return readProviderView(await readConfig(laneId)).provider;
+    },
+    async microsoftSettings(laneId) {
+      return readProviderView(await readConfig(laneId)).microsoft;
+    },
+    async mailProviderSettings(laneId) {
+      return readProviderView(await readConfig(laneId));
     },
     async mailboxes(laneId) {
       const config = await readConfig(laneId);
