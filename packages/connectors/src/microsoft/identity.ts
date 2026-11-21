@@ -1,6 +1,6 @@
 // The Microsoft identity of a connection row (T-254: `core.connections.tenant_id` and `cloud`, set once at connect time by
 // `core.connection_set_microsoft_identity`). Read on every guarded call, over the lane's job client (lane router only, rule 1),
-// by (lane, id). Read-only: two columns, no token, no content. A database failure is `transient` with fixed text.
+// by (lane, id). The reader is read-only: two columns, no token, no content. A database failure is `transient` with fixed text. The writer (T-066, below) sets them once at connect time.
 import type { LaneId } from "@nichols/core";
 import { ConnectorError } from "../contract/errors";
 import type { JobClientFor } from "../vault/tokens";

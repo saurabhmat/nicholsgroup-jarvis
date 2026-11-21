@@ -16,7 +16,7 @@ import { PROVIDER_DISABLED_MESSAGE, providerEnabledIn } from "../facade/gate";
 import { GRAPH_SCOPE_PREFIX } from "./constants";
 import { assertGrantedScopes, assertRedirectUri, microsoftCallbackErrorReason } from "./provider";
 import { parseStored } from "./token-manager";
-import { SecretValue } from "../vault/secret";
+import { REDACTED, SecretValue } from "../vault/secret";
 import { GRANT_NOT_STORED_MESSAGE } from "../oauth/flow";
 
 const server = useMockServer();
@@ -355,7 +355,9 @@ describe("refused after the exchange: the grant is dropped, never stored, and th
   it("a guest, an account without a mailbox and a malformed profile are refused", async () => {
     const cases: [string, NonNullable<Parameters<Harness["connectViaCallback"]>[1]["profile"]>][] = [
       ["guest userType", { userType: "Guest" }],
-      ["empty userType", { userType: "" }],
+      ["guest in another case", { userType: "guest" }],
+      ["an unknown userType", { userType: "Visitor" }],
+      ["null userType with #EXT# in the UPN", { userType: null, userPrincipalName: "exec_corp.example.test#EXT#@other.example.test" }],
       ["#EXT# in the UPN", { userPrincipalName: "exec_corp.example.test#EXT#@other.example.test" }],
       ["#ext# lower-case", { userPrincipalName: "exec_corp.example.test#ext#@other.example.test" }],
       ["no mail (null)", { mail: null }],
@@ -366,11 +368,21 @@ describe("refused after the exchange: the grant is dropped, never stored, and th
       const { fake, h } = setup();
       await refused(h, fake, { address: EXEC, profile }, "account_refused", title);
     }
-    for (const body of [{ id: "u1", mail: EXEC, userPrincipalName: EXEC }, {}, "nonsense", { id: "u1", userType: "Member" }]) {
+    for (const body of [{}, "nonsense", { id: "u1", userType: "Member" }]) {
       const { fake, h } = setup();
       fake.state.meBody = body;
       await refused(h, fake, { address: EXEC }, "account_refused", `profile ${JSON.stringify(body)}`); // no userType, no mail, or not an object
     }
+  });
+
+  it("userType: null, missing, empty and `member` in any case are accepted when the UPN has no #EXT# (Microsoft documents Member and Guest and does not rule out null)", async () => {
+    for (const profile of [{ userType: null }, { userType: "" }, { userType: "member" }, { userType: "MEMBER" }, { userType: "Member" }]) {
+      const { h } = setup();
+      expect((await h.connectViaCallback("PKG", { address: EXEC, profile })).result, JSON.stringify(profile)).toMatchObject({ ok: true });
+    }
+    const { fake, h } = setup();
+    fake.state.meBody = { id: "u1", mail: EXEC, userPrincipalName: EXEC }; // no userType field at all
+    expect((await h.connectViaCallback("PKG", { address: EXEC })).result).toMatchObject({ ok: true });
   });
 
   it("an outage while reading `/me` is `unavailable`, not a refusal of the account; nothing is stored", async () => {
@@ -705,6 +717,110 @@ describe("token canary (rule 4)", () => {
     const stored = [...h.secrets.values()].join("\n");
     for (const t of fake.state.idTokens) expect(stored).not.toContain(t);
     expect(h.secrets.size).toBe(2); // the first run, and the route run
-    expect(MICROSOFT_ERROR_TEXT_CANARY.length).toBeGreaterThan(0);
+    // The harness logger redacts registered secrets BEFORE its sink, so a logged token would show as the marker: none may be there.
+    expect(h.logs.length).toBeGreaterThan(0);
+    expect(JSON.stringify(h.logs)).not.toContain(REDACTED);
+    // The text Microsoft returns in `error_description` (the failed exchange carried it) and `AADSTS` appear nowhere we produce.
+    expect(fake.state.tokenRequests.length).toBeGreaterThan(0);
+    for (const needle of [MICROSOFT_ERROR_TEXT_CANARY, "AADSTS"]) {
+      expect(JSON.stringify({ outputs, logs: h.logs, audits: h.audits, apiErrors: h.apiErrors, reconnects: h.reconnects, location: res.headers.get("location") }), needle).not.toContain(needle);
+    }
+  });
+});
+
+describe("the tenant list is decided at callback time", () => {
+  it("[A] at start and [B] at callback with a user of A: wrong_tenant, nothing stored; and [A,B] then [B] the same", async () => {
+    for (const [atStart, atCallback] of [[[TENANT_A], [TENANT_B, TENANT_C]], [[TENANT_A, TENANT_B], [TENANT_B]]] as const) {
+      const { fake, h } = setup({ microsoft: { tenantIds: [...atStart] } });
+      const account = fake.addAccount(TENANT_A, EXEC);
+      const url = await h.flow.start("microsoft", "PKG", h.as(CONNECT_USER));
+      const q = new URL(url).searchParams;
+      fake.grant("code-late", { account, codeChallenge: q.get("code_challenge") ?? "", nonce: q.get("nonce") ?? "", redirectUri: q.get("redirect_uri") ?? "", anyAuthority: true });
+      h.setLane("PKG", { microsoft: { tenantIds: [...atCallback] } });
+      const before = frozen(h);
+      const result = await h.flow.callback("microsoft", new URLSearchParams({ state: q.get("state") ?? "", code: "code-late" }), h.as(CONNECT_USER));
+      expect(result, JSON.stringify(atStart)).toMatchObject({ ok: false, reason: "wrong_tenant", message: GRANT_NOT_STORED_MESSAGE });
+      noWrites(h, before);
+      expect(h.rows.size).toBe(0);
+    }
+  });
+});
+
+describe("a tenant-specific authority", () => {
+  it("when the list shrinks to one other tenant, Entra itself refuses a user of tenant A at that authority: exchange_failed, nothing stored", async () => {
+    const { fake, h } = setup({ microsoft: { tenantIds: [TENANT_A, TENANT_B] } });
+    const account = fake.addAccount(TENANT_A, EXEC);
+    const url = await h.flow.start("microsoft", "PKG", h.as(CONNECT_USER));
+    const q = new URL(url).searchParams;
+    fake.grant("code-auth", { account, codeChallenge: q.get("code_challenge") ?? "", nonce: q.get("nonce") ?? "", redirectUri: q.get("redirect_uri") ?? "" });
+    h.setLane("PKG", { microsoft: { tenantIds: [TENANT_B] } });
+    const before = frozen(h);
+    const result = await h.flow.callback("microsoft", new URLSearchParams({ state: q.get("state") ?? "", code: "code-auth" }), h.as(CONNECT_USER));
+    expect(result).toMatchObject({ ok: false, reason: "exchange_failed" });
+    expect(fake.state.tokenRequests[0]?.tenant).toBe(TENANT_B);
+    noWrites(h, before);
+  });
+});
+
+describe("the leftover pending row (the tenant is recorded before the token is stored)", () => {
+  const leftover = (h: Harness) => {
+    const rows = [...h.rows.values()];
+    expect(rows).toHaveLength(1);
+    const row = rows[0];
+    if (!row) throw new Error("no row");
+    expect(row.status).toBe("pending");
+    expect(h.secrets.has(row.id)).toBe(false);
+    return row;
+  };
+
+  it("a Vault outage at the token store leaves a pending row with its tenant and no secret; the user sees the not-stored message", async () => {
+    const { fake, h } = setup({ microsoft: { tenantIds: [TENANT_A, TENANT_C] } });
+    // The Vault write at the end of the connect fails once.
+    h.failStoreOnce(new ConnectorError({ kind: "transient", message: "Token store unavailable" }));
+    const { result } = await h.connectViaCallback("PKG", { address: EXEC });
+    expect(result).toMatchObject({ ok: false, reason: "unavailable", message: GRANT_NOT_STORED_MESSAGE });
+    const row = leftover(h);
+    expect(h.identities.get(row.id)).toEqual({ tenantId: TENANT_A, cloud: "commercial" });
+    expect(h.stats.stores).toBe(0);
+    // The same mailbox in the same tenant reuses the row and succeeds; the identity is not written again.
+    const writes = h.stats.identityWrites;
+    expect((await h.connectViaCallback("PKG", { address: EXEC })).result).toMatchObject({ ok: true, connectionId: row.id });
+    expect(h.rows.size).toBe(1);
+    expect(h.rows.get(row.id)?.status).toBe("active");
+    expect(h.stats.identityWrites).toBe(writes);
+    expect(fake.state.codeGrants).toBe(2);
+  });
+
+  it("a D-23 refusal leaves a pending row with its tenant; the same mailbox from another listed tenant is wrong_account and changes nothing", async () => {
+    const other: LaneSetup = { providers: ["microsoft"], microsoft: { tenantIds: [TENANT_A, TENANT_C] }, domains: [DOMAIN] };
+    const { h } = setup({ microsoft: { tenantIds: [TENANT_A, TENANT_C] } }, { APK: other });
+    expect((await h.connectViaCallback("APK", { address: EXEC })).result.ok).toBe(true);
+    const { result } = await h.connectViaCallback("PKG", { address: EXEC });
+    expect(result).toMatchObject({ ok: false, reason: "account_refused" });
+    expect(message(result)).toMatch(/already connected to another company/);
+    const pkg = [...h.rows.values()].filter((r) => r.lane_id === "PKG");
+    expect(pkg).toHaveLength(1);
+    const row = pkg[0];
+    if (!row) throw new Error("no row");
+    expect(row.status).toBe("pending");
+    expect(h.secrets.has(row.id)).toBe(false);
+    expect(h.identities.get(row.id)).toEqual({ tenantId: TENANT_A, cloud: "commercial" });
+    const before = frozen(h);
+    expect((await h.connectViaCallback("PKG", { address: EXEC, tenant: TENANT_C })).result).toMatchObject({ ok: false, reason: "wrong_account" });
+    noWrites(h, before);
+  });
+});
+
+describe("the fake's exact redirect_uri match and the OpenID scopes in the answer", () => {
+  it("a token request whose redirect_uri differs from the authorize request's is refused by the fake: exchange_failed, nothing stored", async () => {
+    const { h } = setup();
+    const before = frozen(h);
+    const { result } = await h.connectViaCallback("PKG", { address: EXEC, redirectUri: "http://localhost:3000/api/connect/microsoft/other" });
+    expect(result).toMatchObject({ ok: false, reason: "exchange_failed" });
+    noWrites(h, before);
+  });
+  it("a connect whose scope also lists `openid offline_access profile` succeeds", async () => {
+    const { h } = setup();
+    expect((await h.connectViaCallback("PKG", { address: EXEC, oidcScopes: true })).result.ok).toBe(true);
   });
 });

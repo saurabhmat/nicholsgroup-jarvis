@@ -291,11 +291,23 @@ export function createMicrosoftHarness(options: MicrosoftHarnessOptions) {
     tokenHttpFor: (laneId, baseUrl) => createGraphHttp({ baseUrl, laneId, ...fastOptions }, "commercial", "token"),
     graphHttpFor: (laneId, baseUrl) => createGraphHttp({ baseUrl, laneId, ...fastOptions }, "commercial", "api"),
   });
+  let storeFailure: unknown = null;
+  /** The next token store (the Vault write at the end of a connect) fails with this error, once. */
+  const failStoreOnce = (e: unknown) => {
+    storeFailure = e;
+  };
   const flow = createOAuthFlow({
     providers: [oauthProvider],
     states: stateStore,
     connections: connectConnections,
-    storeToken: (laneId, conn, secret, expiresAt, actorUserId) => vault.storeToken(laneId, conn, secret, expiresAt, actorUserId),
+    storeToken: async (laneId, conn, secret, expiresAt, actorUserId) => {
+      if (storeFailure !== null) {
+        const e = storeFailure;
+        storeFailure = null;
+        throw e;
+      }
+      await vault.storeToken(laneId, conn, secret, expiresAt, actorUserId);
+    },
     audit,
     logger,
   });
@@ -314,6 +326,10 @@ export function createMicrosoftHarness(options: MicrosoftHarnessOptions) {
     idToken?: FakeGrant["idToken"];
     /** The nonce the fake puts in the id_token (default: the one on the authorize request). */
     nonce?: string;
+    /** Passed to the fake: the default scope also lists `openid offline_access profile`. */
+    oidcScopes?: boolean;
+    /** The redirect URI the fake expects (default: the one on the authorize request). */
+    redirectUri?: string;
     profile?: NonNullable<FakeMsAccount["profile"]>;
   };
   /** Start + callback through the real flow against the fake. The code is registered with the fake between the two, with the nonce and PKCE challenge of the authorize request. */
@@ -331,6 +347,8 @@ export function createMicrosoftHarness(options: MicrosoftHarnessOptions) {
       account,
       ...(challenge ? { codeChallenge: challenge } : {}),
       ...(nonce ? { nonce } : {}),
+      redirectUri: opts.redirectUri ?? q.get("redirect_uri") ?? "",
+      ...(opts.oidcScopes ? { oidcScopes: true } : {}),
       ...(opts.scope !== undefined ? { scope: opts.scope } : {}),
       ...(opts.refresh !== undefined ? { refresh: opts.refresh } : {}),
       ...(opts.idToken !== undefined ? { idToken: opts.idToken } : {}),
@@ -346,7 +364,7 @@ export function createMicrosoftHarness(options: MicrosoftHarnessOptions) {
 
   return {
     api, guard, tokens, health, newTokenManager, clock, laneConfig, connect, bind, rows, identities, secrets, lanes, stats, logs, apiErrors, reconnects, storedSet, expireStoredAccess, everyRequest,
-    flow, as, states, audits, writes, writeCount, connectViaCallback, writeLanes, oauthProvider,
+    flow, failStoreOnce, as, states, audits, writes, writeCount, connectViaCallback, writeLanes, oauthProvider,
     /** Changes a lane's configuration (a tenant or the provider removed, a second provider added...). */
     setLane(laneId: string, patch: Partial<LaneSetup>) {
       lanes[laneId] = { ...(lanes[laneId] as LaneSetup), ...patch };

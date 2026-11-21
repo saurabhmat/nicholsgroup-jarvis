@@ -8,6 +8,7 @@ import { RateLimiter } from "../http/rate-limit";
 import { createMicrosoftHarness, CONNECT_USER, TENANT_A } from "../testing/microsoft-harness";
 import { useMockServer } from "../testing/msw/index";
 import { createFakeMicrosoft } from "../testing/msw/microsoft/handlers";
+import { mintLaneBoundConnection } from "../contract/lane-bound";
 import { SecretValue } from "./secret";
 import { createTokenVault } from "./tokens";
 import { parseStored } from "../microsoft/token-manager";
@@ -27,19 +28,24 @@ function setup() {
     calls.push({ fn, args: { ...args, ...(args.p_secret === undefined ? {} : { p_secret: "<secret>" }) } });
     const row = h.rows.get(String(args.p_connection_id));
     if (!row || row.lane_id !== args.p_lane_id) return { data: null, error: { code: "P0002" } };
+    // The SQL: 1 to 16384 characters (22023); a disconnected connection's token is not readable (55000).
+    const tooLong = (v: unknown) => typeof v !== "string" || v.length === 0 || v.length > 16384;
     if (fn === "connection_token_store") {
+      if (tooLong(args.p_secret)) return { data: null, error: { code: "22023" } };
       secretWrites.push(String(args.p_secret));
       h.secrets.set(row.id, String(args.p_secret));
       row.status = "active";
       return { data: null, error: null };
     }
     if (fn === "connection_token_read") {
+      if (row.status === "disconnected") return { data: null, error: { code: "55000" } };
       const text = h.secrets.get(row.id);
       return text === undefined ? { data: null, error: { code: "P0002" } } : { data: text, error: null };
     }
     if (fn === "connection_token_rotate") {
       const current = h.secrets.get(row.id);
       if (current === undefined) return { data: null, error: { code: "P0002" } };
+      if (tooLong(args.p_secret)) return { data: null, error: { code: "22023" } };
       if (createHash("sha256").update(current, "utf8").digest("hex") !== args.p_expected_hash) return { data: null, error: { code: "40001" } };
       secretWrites.push(String(args.p_secret));
       h.secrets.set(row.id, String(args.p_secret));
@@ -103,13 +109,24 @@ describe("a Microsoft token stored by the connect flow works through the real to
     expect(h.secrets.get(row.id)).toBe(before);
   });
 
-  it("another lane's connection id reads nothing (lane-checked): the same call from lane APK finds no row", async () => {
+  it("the twin's own lane check: a connection minted for lane APK with a PKG row's id reads nothing (not_found), and the TypeScript lane check refuses the PKG-bound one for APK", async () => {
     const { h, vault } = setup();
     await h.connectViaCallback("PKG", { address: "exec@corp.example.test" });
     const row = [...h.rows.values()][0];
     if (!row) throw new Error("no row");
     await expect(vault.getToken("PKG", h.bind(row))).resolves.toBeInstanceOf(SecretValue);
-    const foreign = { ...h.bind(row) };
-    await expect(vault.getToken("APK", foreign)).rejects.toMatchObject({ info: { kind: "lane_mismatch" } });
+    const asApk = mintLaneBoundConnection({ ...row, lane_id: "APK", features: { ...row.features } });
+    await expect(vault.getToken("APK", asApk)).rejects.toMatchObject({ info: { kind: "not_found" } });
+    await expect(vault.getToken("APK", h.bind(row))).rejects.toMatchObject({ info: { kind: "lane_mismatch" } });
+  });
+
+  it("a disconnected connection's token is not readable, and a secret over 16384 characters is refused, as in the SQL", async () => {
+    const { h, vault } = setup();
+    await h.connectViaCallback("PKG", { address: "exec@corp.example.test" });
+    const row = [...h.rows.values()][0];
+    if (!row) throw new Error("no row");
+    await expect(vault.storeToken("PKG", h.bind(row), new SecretValue("x".repeat(16385)), null)).rejects.toMatchObject({ info: { kind: "invalid_input" } });
+    row.status = "disconnected";
+    await expect(vault.getToken("PKG", h.bind(row))).rejects.toMatchObject({ info: { kind: "connection_unavailable" } });
   });
 });

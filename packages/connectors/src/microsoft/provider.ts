@@ -206,14 +206,17 @@ export function createMicrosoftOAuthProvider(deps: MicrosoftProviderDeps): OAuth
       const res = await graphHttp(laneId, lane.cloud).request({ method: "GET", path: "/me", query: ME_QUERY, auth: { scheme: "Bearer", secret: new SecretValue(tokens.access_token) } });
       const me = MeSchema.safeParse(res.data);
       if (!me.success) throw new ConnectorError({ kind: "provider_error", message: "The Microsoft profile is not valid" });
-      // A guest (an account of another organisation invited into the tenant) or an account without a mailbox is refused.
-      if (me.data.userType !== "Member" || (me.data.userPrincipalName ?? "").toUpperCase().includes("#EXT#")) {
+      // A guest is refused: `#EXT#` in the UPN (the B2B collaboration format) always, and a non-empty `userType` other than `Member`
+      // (case-insensitive: `Guest`, unknown values). Microsoft documents `Member` and `Guest`, does not rule out null, and says a B2B user
+      // can be `Member`, so a null, missing or empty `userType` is accepted when the UPN has no `#EXT#`.
+      const userType = (me.data.userType ?? "").trim().toLowerCase();
+      if ((me.data.userPrincipalName ?? "").toUpperCase().includes("#EXT#") || (userType !== "" && userType !== "member")) {
         throw new ConnectorError({ kind: "forbidden", message: "Only member accounts of the organisation can be connected" });
       }
       const address = (me.data.mail ?? "").trim().toLowerCase();
       if (address === "" || !ADDRESS.test(address)) throw new ConnectorError({ kind: "forbidden", message: "This Microsoft account has no mailbox address" });
       assertMailAccountAllowed(policy, address);
-      const writes = (await writesAllowed(laneId)) && MICROSOFT_WRITE_SCOPES.every((s) => requested.includes(s)); // required above, so granted
+      const writes = MICROSOFT_WRITE_SCOPES.every((s) => requested.includes(s)); // requested only when the lane allows writes, and required above, so granted
       return {
         externalAccountId: address,
         expiresAt: null,

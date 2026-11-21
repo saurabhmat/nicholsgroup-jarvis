@@ -28,6 +28,12 @@ export type FakeGrant = {
   account: FakeMsAccount;
   /** The `code_challenge` of the authorize request: when set, the exchange must carry the matching `code_verifier` (PKCE, S256). */
   codeChallenge?: string;
+  /** The `redirect_uri` of the authorize request: the token request must carry exactly this (Entra requires an exact match). */
+  redirectUri?: string;
+  /** Skips the fake's refusal of a user of another tenant at a tenant-specific authority (to prove the connector's own `tid` check does not rely on it). */
+  anyAuthority?: boolean;
+  /** Adds `openid offline_access profile` to the default `scope` (Microsoft may or may not list them, V-5). */
+  oidcScopes?: boolean;
   /** The `nonce` of the authorize request, echoed in the id_token. */
   nonce?: string;
   /** The `scope` of the answer: a string as is, `null` leaves the field out. Default: the three read scopes, fully qualified and lower-cased (the doc's example form). */
@@ -59,7 +65,7 @@ export type FakeMsAccount = {
   /** When set, `/me` answers this status with Retry-After (`null` = no header) `remaining` more times (Infinity = always). */
   throttle: { status: 429 | 503; retryAfter: number | null; remaining: number } | null;
   /** What `/me` answers for this account instead of the defaults (T-066): `mail: null` = no mailbox, `userType`/`userPrincipalName` for guests. `userType` is returned only when `$select` asks for it (Graph). */
-  profile?: { mail?: string | null; userPrincipalName?: string; userType?: string };
+  profile?: { mail?: string | null; userPrincipalName?: string; userType?: string | null };
   inflight: number;
   maxInflight: number;
 };
@@ -150,9 +156,9 @@ export function createFakeMicrosoft(): FakeMicrosoft {
         codes.delete(fields.code ?? ""); // a code works once
         const { account: who } = grant;
         // A tenant-specific authority only lets that tenant's users in.
-        if (tenant !== "organizations" && tenant !== who.tenant) return oauthError(400, "invalid_request", [50020]);
+        if (!grant.anyAuthority && tenant !== "organizations" && tenant !== who.tenant) return oauthError(400, "invalid_request", [50020]);
         if (grant.codeChallenge !== undefined && createHash("sha256").update(fields.code_verifier ?? "", "ascii").digest("base64url") !== grant.codeChallenge) return oauthError(400, "invalid_grant", [70000]);
-        if (!fields.redirect_uri) return oauthError(400, "invalid_request", [900144]);
+        if (!fields.redirect_uri || (grant.redirectUri !== undefined && fields.redirect_uri !== grant.redirectUri)) return oauthError(400, "invalid_grant", [50011]);
         const claims: Record<string, unknown> = {
           iss: `https://login.microsoftonline.com/${who.tenant}/v2.0`,
           aud: FAKE_GRAPH_CLIENT_ID,
@@ -178,7 +184,7 @@ export function createFakeMicrosoft(): FakeMicrosoft {
         return HttpResponse.json(
           {
             token_type: "Bearer",
-            ...(grant.scope === null ? {} : { scope: grant.scope ?? "https://graph.microsoft.com/mail.read https://graph.microsoft.com/user.read https://graph.microsoft.com/calendars.read" }),
+            ...(grant.scope === null ? {} : { scope: grant.scope ?? `https://graph.microsoft.com/mail.read https://graph.microsoft.com/user.read https://graph.microsoft.com/calendars.read${grant.oidcScopes ? " openid offline_access profile" : ""}` }),
             expires_in: 3599,
             ext_expires_in: 3599,
             access_token: issueAccess(who),
@@ -236,7 +242,7 @@ export function createFakeMicrosoft(): FakeMicrosoft {
             ...(wants("mail") ? { mail: p.mail === undefined ? account.address : p.mail } : {}),
             ...(wants("userPrincipalName") ? { userPrincipalName: p.userPrincipalName ?? account.address } : {}),
             // `userType` is returned only when asked for with `$select` (V-4/V-6 check).
-            ...(select.split(",").includes("userType") ? { userType: p.userType ?? "Member" } : {}),
+            ...(select.split(",").includes("userType") ? { userType: p.userType === undefined ? "Member" : p.userType } : {}),
             displayName: "Synthetic Executive",
           },
           { headers: requestId },
