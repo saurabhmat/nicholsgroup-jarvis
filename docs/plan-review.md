@@ -1438,3 +1438,53 @@ Test 322 pins the inventory: the list of functions naming `'google'` is asserted
 - (LOW) The apply function still does not read `core.connections.cloud` / `tenant_id`; the lane/tenant rules are the guard of T-256, before any call.
 - Not changed: `core.connection_token_store` and `connection_activate_composio` still name `'google'` (listed above, with the reason).
 - `pnpm db:types:check` passes (no signature or view change). Production: gitignored `part-28-T-253.sql` and read-only `check-part-28.sql`; no earlier check row turns false by design.
+
+## D-57: Google and Microsoft in one lane (re-plan, Nov 21, 2026)
+Planner re-plan for Saurabh's decision of Nov 21, 2026 (quoted in `docs/backlog.md` D-57): one lane may have Google and Microsoft mail/calendar connections at the same time, permanently; Microsoft is an additional connector; nothing disconnects, hides, skips or stops syncing a Google connection because Microsoft exists; sign-in unchanged. Supersedes D-54 and the PKG cut-over. Only docs changed (backlog, spec, this section); no code, test or migration.
+
+**Decisions**
+- D-57 (new, `[x]`): the decision, quote, meaning; supersedes D-54; T-266 and H-071 change.
+- D-54: prefixed "Superseded Nov 21, 2026 by D-57:"; text kept.
+- D-48: one sentence appended: its "provider per lane" and "PKG stays on Google, then a cut-over" parts are superseded by D-57 (text kept).
+- D-58 (new, `[ ]`): de-duplicate mail/events seen through both a Google and a Microsoft mailbox? Default (built unless changed): no de-duplication in the pilot; each row labelled with its provider and account.
+
+**New task**
+- T-269 (`status: proposed`, needs Saurabh's approval): lane_config follow-up to T-250. `mail.providers: ("google"|"microsoft")[]` (default `["google"]`); legacy `mail.provider` read as a one-element list, both keys refused; `microsoft` in the list requires the block; `composio` requires `google` and applies to Google connections only; reader `mailProviders`, `isMailProviderEnabled`, `mailProviderSettings` returning `{ providers, microsoft }` from one read; `mailProvider()` removed (callers today: its own test file only, checked by search Nov 21). Shape used as recommended; no reason found in the code not to (no stored production config has `mail.provider`, and nothing outside tests calls the T-250 reader methods yet).
+- Calendar ids: per provider. `calendar.calendar_ids` stays Google-only (D-26, reader unchanged) and T-269 adds `microsoft.calendar_ids` (1..5). Reason: the list replaces the default selection, so one shared list would leave the other provider's connections with no calendar or need a silent fallback.
+
+**Tasks changed (acceptance text; ids and status lines kept)**
+- Phase B9 intro and standing rules: D-57 summary and the rule "each connection is handled by its own row's provider; both providers' rows shown together, labelled".
+- T-250 (done): a note that T-269 replaces `mail.provider`; acceptance kept as the record of what was built.
+- T-255: depends gains T-269 (a real dependency: it needs `isMailProviderEnabled`); `provider_mismatch` replaced by `provider_disabled` (skip only a provider not enabled for the lane); target lists return both providers; one lane's tick runs all its usable Google and Microsoft connections; Google OAuth refused only when `google` is not enabled (no change for stored lanes); tests for a same-user Google + Microsoft pair in one tick and for each provider disabled.
+- T-256: guard requires "Microsoft enabled for the lane" (in `mail.providers` + valid block), tenant, cloud, mail policy; never the lane's single provider; tests for Microsoft removed from the list and for both enabled.
+- T-066: precheck = Microsoft enabled and settings valid (one read), not "provider is microsoft"; tests: Microsoft not enabled refuses at start with Google unaffected; same user with a Google row of the same address connects Microsoft, both active.
+- T-257: "Your Google accounts" and "Your Microsoft accounts" side by side when each is enabled; no "this company now uses <provider>" note; rows of a provider not enabled shown as paused (no Connect/Reconnect, nothing deleted); tests for both, Google-only and disabled-later lanes.
+- T-258: one added test (Microsoft sync beside a Google connection of the same user leaves Google rows and cursor untouched).
+- T-260: Microsoft connections of every lane where Microsoft is enabled, in the same tick as Google; Home/Inbox/briefing show both together, labelled per provider and account, "Open in Gmail"/"Open in Outlook" per row; no de-duplication (D-58 default); tests for one user with both.
+- T-067: `microsoft.calendar_ids` replaces the default; `calendar.calendar_ids` never applied to Microsoft.
+- T-261: same as T-260 for calendar (events of both providers together, labelled, "Open in" per row); test for one user with both calendars.
+- T-262: reply prepared against the row's own connection in a two-provider lane (test).
+- T-263: Approval Center labels proposals with provider and mailbox; both writers in one lane in one run (test); action on a provider no longer enabled refused at execute with the body purged.
+- T-265: NC config uses `mail.providers = ["microsoft"]`; runbook generic for either or both providers and documents disabling a provider (paused, nothing deleted).
+- T-266: rewritten from "PKG cut-over" to "Enable Microsoft for PKG alongside Google (runbook section and SQL pair)": one insert-only config version adding `microsoft` and keeping every other key; no disconnect, no proposal invalidation, no reader filter; check file asserts Google counts unchanged; rollback = remove Microsoft from the list. `needs: H-065, D-54` removed (D-54 superseded; H-065 is needed only for the human run, H-071). Status line kept as `approved`; because the scope changed, Saurabh may want to re-confirm it.
+- T-068: watch/stop only for Microsoft connections of lanes where Microsoft is enabled; Google watch (T-065) independent.
+- T-264: subscriptions of a paused (provider disabled) connection are stopped; no Google watch touched.
+- T-267: wording only (the GCC High env group serves Microsoft connections of `gcc_high` lanes; Google unaffected).
+- Not changed: T-251, T-252, T-253, T-254 (done; their behaviour already fits D-57), T-259 (no single-provider wording), T-268.
+
+**Human items changed**
+- H-069: `mail.providers = ["microsoft"]` instead of `mail.provider = "microsoft"`.
+- H-071: rewritten: no cut-over; "Enable Microsoft for PKG alongside Google" when Robert wants it (record his answer, tenant id(s) and cloud, tenant consent, D-58 answer or default, run the T-266 SQL and check, each person connects Microsoft; Google untouched; rollback).
+- H-068, H-070: read; nothing in them assumes one provider per lane, so unchanged (H-068 step 3 still says part 26 is applied).
+
+**Spec sections changed** (`docs/specs/microsoft.md`): dated D-57 note at the top; §1, §2 (per-lane list; no cut-over); §4 rewritten (both-at-once rules, T-269 config shape, what "enabled" means per provider, disabling later = paused); §6.3 (the T-253 inventory result is now the desired behaviour); §7 (where Connect shows, precheck, step 9, guard); §8.6; §9 (calendar ids, wiring); §10 (approvals dispatch); §11 (one line); §12 title, §12.1 step 3, §12.2 rewritten as "Enabling Microsoft for PKG alongside Google" (duplicate caution points to D-58); §13 (jobs table); §16 (the two single-provider edge cases replaced; same-user pair, Microsoft settings absent, Microsoft disabled later, both keys, composio added); §17 (tests 1 – 3, 26, 27 rewritten; 28 – 30 added); §18 (question 1 is D-58; question 7 wording); §19 (task range).
+
+**Conflicts and points not resolved here**
+- Removed from the old T-266 without replacement: "every reader hides rows of `disconnected` connections". It existed only to avoid duplicates after a cut-over. Whether readers show rows of a disconnected connection today was not checked; if that matters it is a separate task, not caused by D-57.
+- Disabling a provider is checked in TypeScript only (facade, guards, Settings, approvals dispatcher). SQL readers keep listing a paused connection's indexed rows until the retention purge (with the stale line). Hiding them in SQL would need the readers to read `lane_config`; not proposed.
+- `mail.allowed_domains` and `mailboxes` are shared by both providers. A lane cannot allow a domain for Google but not for Microsoft. No need was found; flagged in case Robert wants one provider per domain.
+- T-266 keeps `status: approved` although its scope changed; Saurabh should re-confirm (the planner never changes a status).
+- H-065 answers (tenants after the GCC move) still decide which tenant ids PKG lists; nothing in the plan depends on them before H-071.
+
+**Recommended build order from here**
+T-253 review finishes → T-269 (after Saurabh approves) → T-255 → T-256 → T-066 → T-257 → T-258 → T-259 → T-260 → T-067 → T-261 → T-262 → T-263 → T-265 → T-266 → T-068 → T-264; T-267 and T-268 only if their human items say so.
