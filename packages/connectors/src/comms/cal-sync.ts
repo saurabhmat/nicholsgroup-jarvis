@@ -31,11 +31,18 @@ export type CalendarSyncDeps<P extends CommsProviderId = CommsProviderId> = {
   /** Safety cap on pages in one run. Default 500. */
   maxPages?: number;
   pageSize?: number;
+  /**
+   * Time budget of one run (T-067, as the mail run's, T-258): after a page is applied and the budget is spent, the run stops and the next run continues from the
+   * stored cursor (a first load of a large Graph calendar takes many pages). Default: none (Google is unchanged). `now` is injected for tests.
+   */
+  maxRunMs?: number;
+  now?: () => number;
 };
 
 export function createCalendarSync<P extends CommsProviderId>(deps: CalendarSyncDeps<P>) {
   const log = deps.logger ?? connectorLog;
   const maxPages = deps.maxPages ?? 500;
+  const clock = deps.now ?? Date.now;
 
   return {
     async run(laneId: LaneId, conn: LaneBoundConnection<P>): Promise<CalendarSyncRunResult> {
@@ -45,6 +52,7 @@ export function createCalendarSync<P extends CommsProviderId>(deps: CalendarSync
       const provider = deps.calendar.provider;
       const child = log.child({ laneId, provider, connectionId: conn.id });
       const options = deps.pageSize ? { pageSize: deps.pageSize } : undefined;
+      const startedAt = clock();
       const result: CalendarSyncRunResult = { mode: "incremental", pages: 0, written: 0, skipped: 0, removed: 0, resynced: false, conflict: false };
       let cursor: CommsCursor | null = await deps.store.getCursor(laneId, conn);
       if (cursor === null) result.mode = "full";
@@ -74,6 +82,10 @@ export function createCalendarSync<P extends CommsProviderId>(deps: CalendarSync
         cursor = r.nextCursor;
         if (!r.hasMore) {
           child.info(`${provider}.calendar.sync_done`, { mode: result.mode, pages: result.pages, written: result.written, removed: result.removed });
+          return result;
+        }
+        if (deps.maxRunMs !== undefined && clock() - startedAt >= deps.maxRunMs) {
+          child.warn(`${provider}.calendar.sync_time_budget`, { pages: result.pages });
           return result;
         }
       }
