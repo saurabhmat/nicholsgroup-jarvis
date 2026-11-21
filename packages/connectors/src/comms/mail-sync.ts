@@ -4,8 +4,8 @@
 // one and starts a full load. This function is what the sync job calls: the Inngest wiring comes with the connector
 // sync job (T-038 / T-065 push); polling schedules call it per connection.
 import type { LaneId } from "@nichols/core";
-import type { MailProvider } from "../comms/provider";
-import type { CommsCursor } from "../comms/schemas";
+import type { MailProvider } from "./provider";
+import type { CommsCursor } from "./schemas";
 import { ConnectorError } from "../contract/errors";
 import { assertLaneBound, type LaneBoundConnection } from "../contract/lane-bound";
 import { connectorLog, type ConnectorLogger } from "../log/index";

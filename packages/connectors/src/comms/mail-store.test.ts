@@ -1,7 +1,7 @@
 // The mail index store (T-063) over core.comms_mail_apply_page / sync_cursor_*: lane-bound, metadata re-validated, RPC
 // arguments exact, database messages never passed on. The functions themselves are pinned by pgTAP 160.
 import { describe, expect, it, vi } from "vitest";
-import type { MailSyncResult, MessageMeta } from "../comms/schemas";
+import type { MailSyncResult, MessageMeta } from "./schemas";
 import { mintLaneBoundConnection } from "../contract/lane-bound";
 import type { Connection } from "../contract/schemas";
 import { createMailIndexStore } from "./mail-store";

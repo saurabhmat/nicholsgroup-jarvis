@@ -4,7 +4,7 @@
 // upserts, then the cursor, one transaction); metadata only: a record is re-validated against the strict schema and
 // the call has no field that could carry a body. Never log a record or put one in an error.
 import type { LaneId } from "@nichols/core";
-import { MessageMetaSchema, MessageRemovalSchema, type CommsCursor, type MailSyncResult } from "../comms/schemas";
+import { MessageMetaSchema, MessageRemovalSchema, type CommsCursor, type MailSyncResult } from "./schemas";
 import { ConnectorError } from "../contract/errors";
 import { assertLaneBound, type LaneBoundConnection } from "../contract/lane-bound";
 import type { JobClientFor } from "../vault/tokens";

@@ -4,8 +4,8 @@
 // foreign or malformed) discards the stored one and starts a full load of every calendar. The Inngest wiring comes with
 // the connector sync job; polling schedules call `run` per connection.
 import type { LaneId } from "@nichols/core";
-import type { CalendarProvider } from "../comms/provider";
-import type { CommsCursor } from "../comms/schemas";
+import type { CalendarProvider } from "./provider";
+import type { CommsCursor } from "./schemas";
 import { ConnectorError } from "../contract/errors";
 import { assertLaneBound, type LaneBoundConnection } from "../contract/lane-bound";
 import { connectorLog, type ConnectorLogger } from "../log/index";

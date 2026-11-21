@@ -18,8 +18,8 @@ import { createNormalizeStore } from "../quickbooks/normalize-store";
 import { createReportCacheStore } from "../quickbooks/report-store";
 import { createSyncCursorStore, createSyncRunStore } from "../sync/store";
 import { createSyncTargetLister } from "../sync/targets";
-import { createCalendarIndexStore } from "../google/cal-store";
-import { createMailIndexStore } from "../google/mail-store";
+import { createCalendarIndexStore } from "../comms/cal-store";
+import { createMailIndexStore } from "../comms/mail-store";
 import { createApiErrorStore } from "../error-log/store";
 import { createComposioConnectionStore } from "../composio/store";
 
