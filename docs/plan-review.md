@@ -1406,3 +1406,35 @@ The `security-reviewer` and `code-reviewer` subagents could not be spawned from 
 - (security L2, not changed) The Google mail prefix is `g1.<id>.` only, so a calendar-shaped Google cursor is accepted on the mail stream (spec §6.3 wording); the effect would be one full reload. T-253 may tighten it with the calendar writer.
 - (security L5, code LOW, not changed) Cases test 321 does not have, none in the acceptance: a legacy unprefixed stored cursor followed by a prefixed one, upper-case or leading-space prefix, empty cursor, empty folder, removal elements that are numbers or arrays, an upsert carrying a `provider` key. Test 160's cross-lane cases pass a cursor prefixed with another connection's id (they fail earlier with 42501).
 - (code LOW, for **T-258**) `MessageRemovalSchema.folder` refuses null while the SQL accepts it: send a string or nothing. The twin still refuses providers other than `google` and does not check the cursor prefix; **T-255** generalises it.
+
+## T-253: review results (Nov 21, 2026)
+The `security-reviewer` and `code-reviewer` subagents could not be spawned from the builder session; the diff got a self-review against the same checklist, and the calling session runs both reviews after the build. Migration `20261125120000_cal_apply_page_provider_generic.sql` replaces one body (`core.cal_events_apply_page`); pgTAP `322_calendar_page_writer.test.sql` (84).
+
+### Reader inventory (latest body of every function or view naming `'google'`)
+Method: `pg_proc.prosrc`, `pg_views.definition`, `pg_policies` and `pg_constraint` of the local database after all migrations (the latest definition only), cross-checked with `grep "'google'"` over every migration. Views: none names `'google'`. Row-level policies: none. Table checks naming it (`connections_provider_check`, `oauth_states_provider_check`, `source_records_provider_check`, `webhook_events_provider_check`, `message_index_provider_check`, `event_index_provider_check`, `proposed_actions_provider_check`, `connections_owner_only_mail`) already list `microsoft`.
+
+| Function (latest definition) | Names google as | Decision |
+|---|---|---|
+| `core.cal_events_apply_page` (20261105140000) | `c.provider = 'google'`, inserts `'google'`, cursor `g1.<id>.c:` | **Generalised now** (this migration): `google`/`microsoft`, the row's provider, `g1.`/`m1.` + `<id>.c:` |
+| `core.comms_mail_apply_page` (20261125110000, T-252) | `in ('google', 'microsoft')`, `g1.` prefix | Done in T-252, unchanged |
+| `core.briefing_coverage` (20261124110000, T-247) | `provider in ('google', 'microsoft')` (own rows, `mail_reader`, `own_mail`) | Already generalised (T-231a/T-247); leave. Pinned by test 322 |
+| `core.home_calendar_status` (20261124110000, T-247) | `in ('google', 'microsoft')` and `transport = 'native'` | Already generalised; leave (Microsoft rows are always `native`). Pinned by test 322 |
+| `core.mailbox_ids` (20261124100000, T-247) | `in ('google', 'microsoft')` | Already generalised; leave. Pinned by tests 321, 322 |
+| `core.oauth_state_create` / `core.oauth_state_consume` (20261125100000, T-254) | `in ('google', 'microsoft')` (own_mail) | Already generalised in T-254; leave |
+| `act.insert_proposal` (20261124150000, T-247) | `not in ('google', 'microsoft')` | Already generalised; leave (the email writer itself is T-261 and later) |
+| `raw.is_content_provider` (20261102080000) | list contains `'google'`, `'microsoft'` | Already generalised; leave |
+| `core.connection_activate_composio` (20261108130000) | `n.provider = 'google' and n.transport = 'native'` | **Leave, on purpose**: the D-23 check of the Composio transport, which exists for Google only (Composio is a transport for `provider = 'google'`, D-35). A Microsoft row cannot hold a Composio identity |
+| `core.connection_token_store` (20261108130000) | `v_provider = 'google'` (D0023 against a Composio row of another lane) | **Leave, on purpose**: same reason; a Microsoft account has no Composio twin, and the unique index `connections_one_lane_per_account` still guards Microsoft rows |
+
+Functions that never name a provider and so already serve Microsoft rows (all pinned by test 322): `core.home_meetings`, `core.home_mail_attention`, `core.inbox_messages`, `core.inbox_message_ref`, `core.briefing_events`, `core.briefing_threads` (read the index through `core.mailbox_ids` and RLS); `core.sync_now_claim` (lane-level); `core.job_failure_record` / `core.job_failure_clear` / `core.connections_clear_job_failures` / `core.connections_clear_error_stream` (check the connection's lane and status, not its provider); `core.sync_cursor_get/put/reset` (generic by stream). `act.connection_ok` reads `features ->> 'gmail_compose'`; the Microsoft writer feature key (`graph_mail_write`, T-066) and its approval path belong to T-261+, not here (leave).
+
+Test 322 pins the inventory: the list of functions naming `'google'` is asserted exactly, so a new one fails until it is added here and to the test.
+
+### Self-review findings (none BLOCKER or HIGH)
+- Google calendar cursors: `encodeCalendarCursor` (`packages/connectors/src/google/calendar-events.ts`) is the only writer and always emits `g1.<connection id>.c:<base64url>` (checked with `grep`; the Composio path indexes no calendar yet, T-223). The prefix rule was already in the Google body; the new rule only adds the `m1.` branch, so Google sync is not changed. A stored Google calendar cursor that lacks the prefix cannot exist (the old body refused it); `check-part-28.sql` has a row that confirms it on production.
+- The diff against the previous body (`20261105140000`) is the provider condition only: the usable-connection select (now `provider in (...)` into `v_provider`), the cursor prefix (`v_prefix`), `'google'` replaced by `v_provider` in the insert, and the function comment. Every other line, the checks, `security definer`, `search_path = ''`, the revoke and the grant are unchanged. Removals still use `(calendar_id, event_id) in (select ...)`, not touched, so no EXPLAIN was needed.
+- (LOW, by design) A calendar-shaped cursor of the other provider, or a mail-shaped cursor (`g1.<id>.h:`, `m1.<id>.m:`), is refused (22023) on the calendar stream. This closes the T-252 security L2 note for the calendar side; the Google mail prefix (`g1.<id>.`) still accepts a calendar-shaped Google cursor on the mail stream (the effect would be one full reload), not changed here.
+- (LOW) Only the NEW cursor is checked; `p_expected_cursor` is only compared with the stored value, as in T-252.
+- (LOW) The apply function still does not read `core.connections.cloud` / `tenant_id`; the lane/tenant rules are the guard of T-256, before any call.
+- Not changed: `core.connection_token_store` and `connection_activate_composio` still name `'google'` (listed above, with the reason).
+- `pnpm db:types:check` passes (no signature or view change). Production: gitignored `part-28-T-253.sql` and read-only `check-part-28.sql`; no earlier check row turns false by design.

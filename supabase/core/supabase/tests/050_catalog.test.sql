@@ -94,7 +94,7 @@ insert into security_definer_ok values
   ('core.sync_cursor_reset', 'deletes a sync cursor; service_role only, lane-checked (T-063)'),
   ('core.sync_cursor_put', 'compare-and-swap write of a sync cursor; service_role only, lane-checked, usable connections only (T-038)'),
   ('core.comms_mail_apply_page', 'applies one Google or Microsoft mail metadata page and its cursor atomically; service_role only, lane-checked against a usable Google or Microsoft connection, cursor prefix checked (T-063, T-252)'),
-  ('core.cal_events_apply_page', 'applies one Google Calendar metadata page and its cursor atomically; service_role only, lane-checked against a usable Google connection (T-064)'),
+  ('core.cal_events_apply_page', 'applies one Google or Microsoft calendar metadata page and its cursor atomically; service_role only, lane-checked against a usable Google or Microsoft connection, cursor prefix checked (T-064, T-253)'),
   ('comms.message_summary_guard', 'trigger only: reads lane policy and memberships to validate a summary and its approver (T-061)'),
   ('fin.report_cache_guard', 'trigger only: calls the private raw.payload_scan on a report payload; reads and writes nothing (T-055)'),
   ('core.fin_qbo_normalize', 'QuickBooks normalizer: reads the private raw.source_records of one connection and writes fin.*; service_role only, lane-checked against a usable QuickBooks connection (T-056)'),
