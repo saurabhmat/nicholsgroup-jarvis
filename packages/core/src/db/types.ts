@@ -119,14 +119,14 @@ isOneToOne: false
                   ]
                 },"connections": {
                   Row: {
-                    "account_identity": string | null,"created_at": string,"created_by": string | null,"external_account_id": string,"features": NonNullable<Json>,"features_checked_at": string | null,"id": string,"lane_id": string,"last_error": Json | null,"last_error_stream": string | null,"last_sync_at": string | null,"owner_user_id": string | null,"provider": string,"reconnect_notified_at": string | null,"status": string,"token_expires_at": string | null,"toolkit": string | null,"transport": string,"updated_at": string
+                    "account_identity": string | null,"cloud": string | null,"created_at": string,"created_by": string | null,"external_account_id": string,"features": NonNullable<Json>,"features_checked_at": string | null,"id": string,"lane_id": string,"last_error": Json | null,"last_error_stream": string | null,"last_sync_at": string | null,"owner_user_id": string | null,"provider": string,"reconnect_notified_at": string | null,"status": string,"tenant_id": string | null,"token_expires_at": string | null,"toolkit": string | null,"transport": string,"updated_at": string
                   }
                   ComputedFields: never
                   Insert: {
-                    "account_identity"?: string | null,"created_at"?: string,"created_by"?: string | null,"external_account_id": string,"features"?: NonNullable<Json>,"features_checked_at"?: string | null,"id"?: string,"lane_id": string,"last_error"?: Json | null,"last_error_stream"?: string | null,"last_sync_at"?: string | null,"owner_user_id"?: string | null,"provider": string,"reconnect_notified_at"?: string | null,"status"?: string,"token_expires_at"?: string | null,"toolkit"?: string | null,"transport"?: string,"updated_at"?: string
+                    "account_identity"?: string | null,"cloud"?: string | null,"created_at"?: string,"created_by"?: string | null,"external_account_id": string,"features"?: NonNullable<Json>,"features_checked_at"?: string | null,"id"?: string,"lane_id": string,"last_error"?: Json | null,"last_error_stream"?: string | null,"last_sync_at"?: string | null,"owner_user_id"?: string | null,"provider": string,"reconnect_notified_at"?: string | null,"status"?: string,"tenant_id"?: string | null,"token_expires_at"?: string | null,"toolkit"?: string | null,"transport"?: string,"updated_at"?: string
                   }
                   Update: {
-                    "account_identity"?: string | null,"created_at"?: string,"created_by"?: string | null,"external_account_id"?: string,"features"?: NonNullable<Json>,"features_checked_at"?: string | null,"id"?: string,"lane_id"?: string,"last_error"?: Json | null,"last_error_stream"?: string | null,"last_sync_at"?: string | null,"owner_user_id"?: string | null,"provider"?: string,"reconnect_notified_at"?: string | null,"status"?: string,"token_expires_at"?: string | null,"toolkit"?: string | null,"transport"?: string,"updated_at"?: string
+                    "account_identity"?: string | null,"cloud"?: string | null,"created_at"?: string,"created_by"?: string | null,"external_account_id"?: string,"features"?: NonNullable<Json>,"features_checked_at"?: string | null,"id"?: string,"lane_id"?: string,"last_error"?: Json | null,"last_error_stream"?: string | null,"last_sync_at"?: string | null,"owner_user_id"?: string | null,"provider"?: string,"reconnect_notified_at"?: string | null,"status"?: string,"tenant_id"?: string | null,"token_expires_at"?: string | null,"toolkit"?: string | null,"transport"?: string,"updated_at"?: string
                   }
                   Relationships: [
                     {
@@ -710,6 +710,9 @@ isOneToOne: false
                            },
 "connection_for_token":
 { Args: { "p_connection_id": string,"p_lane_id": string,"p_lock": boolean }; Returns: string
+                           },
+"connection_set_microsoft_identity":
+{ Args: { "p_cloud": string,"p_connection_id": string,"p_lane": string,"p_tenant_id": string }; Returns: undefined
                            },
 "connection_token_check_secret":
 { Args: { "p_secret": string }; Returns: undefined

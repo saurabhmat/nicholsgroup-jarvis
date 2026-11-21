@@ -34,7 +34,7 @@ export const MAIL_CONNECT_ROLES = ["owner", "admin_technical", "viewer"] as cons
 
 /** The roles that may start or finish a connect of this provider. */
 export function connectRolesFor(provider: string): readonly ("owner" | "admin_technical" | "viewer")[] {
-  return provider === "google" ? MAIL_CONNECT_ROLES : CONNECT_ROLES;
+  return provider === "google" || provider === "microsoft" ? MAIL_CONNECT_ROLES : CONNECT_ROLES;
 }
 
 /** Providers whose connections are a person's mailbox or calendar: they carry an owner (core.connections.owner_user_id). */

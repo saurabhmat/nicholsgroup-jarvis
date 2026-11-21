@@ -47,7 +47,8 @@ const iso = (ms: number) => new Date(ms).toISOString();
 const touch = (o: FakeObject, ms: number) => void (o.MetaData = { CreateTime: iso(ms), LastUpdatedTime: iso(ms) });
 
 describe("initial load (acceptance: initial load for every entity, CompanyInfo and Preferences into raw records)", () => {
-  it("a sync without a cursor is a full load of all 11 entities plus CompanyInfo and Preferences", async () => {
+  // First test of the file: it also pays the fake server's start-up, which passes 5 s when the whole repo's tests run in parallel.
+  it("a sync without a cursor is a full load of all 11 entities plus CompanyInfo and Preferences", { timeout: 30_000 }, async () => {
     const { intuit, h, conn } = await setup();
     const { records, summary } = await run(h, conn, null);
     expect(summary.mode).toBe("full");
