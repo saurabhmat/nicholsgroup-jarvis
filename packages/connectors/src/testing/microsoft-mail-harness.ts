@@ -28,6 +28,8 @@ export type MicrosoftMailHarnessOptions = {
   /** Run time budget and clock of the sync runner. */
   maxRunMs?: number;
   runnerNow?: () => number;
+  /** The provider's clock (window start, the hourly re-check of an absent folder). Default: the fake's fixed now. */
+  providerNow?: () => number;
   pageSize?: number;
   maxPages?: number;
 } & Pick<MicrosoftHarnessOptions, "writeLanes">;
@@ -60,7 +62,7 @@ export function createMicrosoftMailHarness(options: MicrosoftMailHarnessOptions)
     virtualNow += ms;
   };
   const api = createGraphApi({ guard: h.guard, tokens: h.tokens, logger, httpOptions: { sleep, now: clock.now, retryBaseMs: 1, retryMaxMs: 30_000, random: () => 0.5, maxRetries: 1 } });
-  const provider = createMicrosoftMailProvider({ api, guard: h.guard, laneConfig, now: () => FAKE_NOW, logger });
+  const provider = createMicrosoftMailProvider({ api, guard: h.guard, laneConfig, now: options.providerNow ?? (() => FAKE_NOW), logger });
   const twin = createMailIndexTwin({
     rowOf: (laneId, conn) => {
       const row = h.rows.get(conn.id);

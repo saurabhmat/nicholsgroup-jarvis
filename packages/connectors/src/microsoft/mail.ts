@@ -22,8 +22,9 @@ import { PROVIDER_DISABLED_MESSAGE, providerEnabledIn } from "../facade/gate";
 import type { LaneConfigReader } from "../vault/lane-config";
 import type { GraphApi } from "./api";
 import type { MicrosoftGuard } from "./guard";
-import { CANONICAL_FOLDER, encodeCursor, fingerprintOf, isFolderId, MAIL_FOLDER_NAMES, MAX_LINK_CHARS, parseCursor, validateDeltaLink, type CursorState, type FolderState, type MailFolderName } from "./mail-cursor";
-import { mapMessage, MAX_ID_CHARS, MESSAGE_SELECT } from "./mail-map";
+import { CANONICAL_FOLDER, encodeCursor, fingerprintOf, isFolderId, MAIL_FOLDER_NAMES, MAX_LINK_CHARS, OPTIONAL_FOLDERS, parseCursor, validateDeltaLink, type CursorState, type FolderState, type MailFolderName } from "./mail-cursor";
+import { mapMessage, MAX_ID_CHARS } from "./mail-map";
+import { INITIAL_QUERY } from "./mail-query";
 
 export type MicrosoftMailDeps = {
   /** The guarded, read-only Graph client (it runs the guard again before every request attempt). */
@@ -40,12 +41,12 @@ export type MicrosoftMailDeps = {
 export const DEFAULT_FULL_SYNC_DAYS = 90;
 const DAY_MS = 86_400_000;
 const DEFAULT_PAGE_SIZE = 100;
+/** How often a configured optional folder the mailbox did not have is looked for again. */
+const ABSENT_RECHECK_MS = 60 * 60_000;
 /** More items than this in one page is not a page (a provider bug or an attack); the store refuses more than 20,000 anyway. */
 const MAX_PAGE_ITEMS = 2000;
 const PATH_FOLDER = "/me/mailFolders/{name}";
 const PATH_DELTA = "/me/mailFolders/{id}/messages/delta";
-/** The first delta request: index fields only, newest first, NO `$filter`. Sent as a raw query so `$` and the space go out as Graph documents them. */
-const INITIAL_QUERY = `$select=${MESSAGE_SELECT.join(",")}&$orderby=receivedDateTime%20desc`;
 const FOLDER_QUERY = "$select=id";
 
 const PageSchema = z.object({
@@ -97,14 +98,26 @@ export function createMicrosoftMailProvider(deps: MicrosoftMailDeps): MailProvid
   }
 
   /**
-   * Fresh discovery (first load, or the folder settings changed): every configured folder's id is resolved. A folder that was already in the
-   * cursor with the same id keeps its link and window; a new one starts a full load.
+   * Fresh discovery (first load, the folder settings changed, a stored folder id stopped answering, or the hourly re-check of an absent optional folder): every
+   * configured folder's id is resolved. A folder that was already in the cursor with the same id keeps its link and window; a new one starts a full load.
+   * An OPTIONAL folder (`archive`) the mailbox does not have (404 on the lookup) is left out and recorded as absent, so it is looked for again later and never
+   * stops the other folders; a 404 for `inbox` or `sentitems` stays a hard failure.
    */
   async function discover(laneId: LaneId, conn: unknown, names: readonly MailFolderName[], fp: string, previous: CursorState | null, pageSize: number): Promise<CursorState> {
     let since: string | null = null;
     const folders: FolderState[] = [];
+    const absent: MailFolderName[] = [];
     for (const name of names) {
-      const id = await resolveFolderId(laneId, conn, name, pageSize);
+      let id: string;
+      try {
+        id = await resolveFolderId(laneId, conn, name, pageSize);
+      } catch (e) {
+        if (OPTIONAL_FOLDERS.includes(name) && isConnectorError(e) && e.info.http_status === 404) {
+          absent.push(name);
+          continue;
+        }
+        throw e;
+      }
       const kept = previous?.folders.find((f) => f.name === name && f.id === id);
       if (kept) {
         folders.push(kept);
@@ -113,7 +126,9 @@ export function createMicrosoftMailProvider(deps: MicrosoftMailDeps): MailProvid
       since ??= await windowStart(laneId);
       folders.push({ name, id, since });
     }
-    return { v: 1, folders, pos: 0, fp };
+    if (folders.length === 0) throw providerError("This mailbox has none of the configured mail folders");
+    if (absent.length > 0) log.child({ laneId, provider: "microsoft" }).info("microsoft.mail.folders_absent", { count: absent.length, configured: names.length });
+    return { v: 1, folders, pos: 0, fp, ...(absent.length > 0 ? { absent, checked: new Date(now()).toISOString() } : {}) };
   }
 
   async function syncPage(laneId: LaneId, conn: Parameters<MicrosoftGuard>[1], cursor: Parameters<MailProvider<"microsoft">["sync"]>[2], options: Parameters<MailProvider<"microsoft">["sync"]>[3]): Promise<MailSyncResult> {
@@ -137,7 +152,11 @@ export function createMicrosoftMailProvider(deps: MicrosoftMailDeps): MailProvid
       state = parseCursor(cursor.value, c.id);
       if (state === null) return resync(); // foreign, malformed, oversized, or a link that fails validation
     }
-    if (state === null || state.fp !== fp) state = await discover(laneId, c, names, fp, state, pageSize);
+    // An absent optional folder is looked for again at the start of a cycle (position 0, no page in progress), at most once an hour.
+    const recheckDue = state !== null && state.absent !== undefined && state.pos === 0 && state.folders[0]?.next === undefined && now() - Date.parse(state.checked as string) >= ABSENT_RECHECK_MS;
+    const discoveredNow = state === null || state.fp !== fp || recheckDue;
+    if (discoveredNow) state = await discover(laneId, c, names, fp, state, pageSize);
+    state = state as CursorState;
 
     const folder = state.folders[state.pos] as FolderState;
     const stored = folder.next ?? folder.delta;
@@ -151,6 +170,12 @@ export function createMicrosoftMailProvider(deps: MicrosoftMailDeps): MailProvid
       // Only a STORED link can be expired; the first request of a load is never answered with a resync (it would loop).
       if (stored !== undefined && isExpiredDeltaState(e)) {
         log.child({ laneId, provider: "microsoft", connectionId: c.id }).warn("microsoft.mail.delta_state_expired", { folder: folder.name });
+        return resync();
+      }
+      // A folder id from the cursor that no longer exists (the folder was deleted or recreated): start from a fresh discovery instead of failing forever.
+      // A folder id resolved in THIS call that answers 404 is a real failure.
+      if (!discoveredNow && isConnectorError(e) && e.info.http_status === 404) {
+        log.child({ laneId, provider: "microsoft", connectionId: c.id }).warn("microsoft.mail.folder_id_stale", { folder: folder.name });
         return resync();
       }
       throw e;
@@ -181,6 +206,8 @@ export function createMicrosoftMailProvider(deps: MicrosoftMailDeps): MailProvid
     }
     if (old > 0 || unusable > 0) log.child({ laneId, provider: "microsoft", connectionId: c.id }).info("microsoft.mail.items_dropped", { folder: folder.name, old, unusable });
 
+    // A nextLink equal to the link just used would page the same data forever, run after run: refuse it.
+    if (next !== undefined && next === stored) throw providerError("Microsoft returned the same page link again");
     // The new state: the link of this page, and the position.
     const link = (next ?? delta) as string;
     if (link.length > MAX_LINK_CHARS) return resync(); // too long for the cursor: fail safe, never truncated
@@ -196,7 +223,7 @@ export function createMicrosoftMailProvider(deps: MicrosoftMailDeps): MailProvid
         hasMore = false;
       }
     }
-    const nextCursor = encodeCursor(c.id, { v: 1, folders, pos, fp });
+    const nextCursor = encodeCursor(c.id, { v: 1, folders, pos, fp, ...(state.absent !== undefined && state.checked !== undefined ? { absent: state.absent, checked: state.checked } : {}) });
     if (nextCursor === null) return resync(); // the state would not fit the table's limit: fail safe
     return done({ upserts, removals, nextCursor, hasMore, fullResyncRequired: false });
   }

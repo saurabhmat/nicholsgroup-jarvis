@@ -254,7 +254,7 @@ describe("spec §17 test 15: foreign cursor", () => {
     expect(env.m.externalRequestCount()).toBe(before);
   });
 
-  it("the index refuses a page whose cursor has the other provider's prefix or another connection's id, and another lane's connection (TypeScript twin of core.comms_mail_apply_page; pgTAP 321 pins the SQL: 22023 / 42501)", async () => {
+  it("the TypeScript TWIN of the index writer refuses a page whose cursor has the other provider's prefix or another connection's id, and another lane's connection (the SQL guarantee itself is pgTAP 321: 22023 / 42501)", async () => {
     const env = setup({ harness: { lanes: { PKG: { providers: ["google", "microsoft"], microsoft: { tenantIds: [TENANT_A] }, domains: [MAIL_DOMAIN] }, APK: { providers: ["microsoft"], microsoft: { tenantIds: [TENANT_A] }, domains: [MAIL_DOMAIN] } } } });
     const g = env.m.seedGoogle("PKG");
     const page = (value: string): MailSyncResult => ({ upserts: [], removals: [], nextCursor: { value }, hasMore: false, fullResyncRequired: false });

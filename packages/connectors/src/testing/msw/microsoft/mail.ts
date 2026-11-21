@@ -40,7 +40,7 @@ export type FakeMailMessage = {
   changedAt: number;
 };
 
-type Box = { id: string; name: FakeFolderName; messages: Map<string, FakeMailMessage>; removed: { id: string; at: number }[]; version: number };
+type Box = { id: string; hidden?: boolean; name: FakeFolderName; messages: Map<string, FakeMailMessage>; removed: { id: string; at: number }[]; version: number };
 export type MailFault = "auth_revoked" | "rate_limited" | "server_error" | "expired_cursor";
 export type MailRequest = { method: string; path: string; search: string; prefer: string | null; address: string | null; kind: "folder" | "delta" | "other" };
 
@@ -80,6 +80,11 @@ export interface FakeMail {
   setFault(account: FakeMsAccount, kind: MailFault, count?: number): void;
   /** The next `times` (default 1) link requests on this account answer this expired-state error (default 410, `syncStateNotFound`). */
   expireDeltaState(account: FakeMsAccount, how?: { status?: number; code?: string; times?: number }): void;
+  /** The mailbox has no such folder (lookups and delta requests answer 404) until `showFolder`. */
+  hideFolder(account: FakeMsAccount, name: FakeFolderName): void;
+  showFolder(account: FakeMsAccount, name: FakeFolderName): void;
+  /** The folder is deleted and created again: it gets a new id; the old id answers 404. Returns the new id. */
+  recreateFolder(account: FakeMsAccount, name: FakeFolderName): string;
   /** Requests to the delta endpoint only. */
   deltaRequests(): MailRequest[];
 }
@@ -216,7 +221,7 @@ export function createFakeMail(fake: FakeMicrosoft, opts: FakeMailOptions = {}):
       const a = admit(request, "folder");
       if ("response" in a) return a.response;
       const name = decodeURIComponent(String(params.name));
-      const b = [...mailbox(a.account).values()].find((x) => x.name === name || x.id === name);
+      const b = [...mailbox(a.account).values()].find((x) => !x.hidden && (x.name === name || x.id === name));
       if (!b) return gErr(404, "ErrorItemNotFound");
       const select = rawParams(new URL(request.url).search).get("$select");
       return HttpResponse.json({ id: b.id, ...(select === undefined || select === "id" ? {} : { displayName: b.name }) }, { headers: { "request-id": `synthetic-${String(++counter)}` } });
@@ -227,7 +232,7 @@ export function createFakeMail(fake: FakeMicrosoft, opts: FakeMailOptions = {}):
       if ("response" in a) return a.response;
       const account = a.account;
       const id = decodeURIComponent(String(params.id));
-      const b = [...mailbox(account).values()].find((x) => x.id === id); // ids only: well-known names do not work in a delta URL
+      const b = [...mailbox(account).values()].find((x) => !x.hidden && x.id === id); // ids only: well-known names do not work in a delta URL
       if (!b) return gErr(404, "ErrorItemNotFound");
       const url = new URL(request.url);
       const q = rawParams(url.search);
@@ -352,6 +357,13 @@ export function createFakeMail(fake: FakeMicrosoft, opts: FakeMailOptions = {}):
     },
     expireDeltaState(a, how = {}) {
       expired.set(a, { status: how.status ?? 410, code: how.code ?? "syncStateNotFound", left: how.times ?? 1 });
+    },
+    hideFolder: (a, name) => void (box(a, name).hidden = true),
+    showFolder: (a, name) => void (box(a, name).hidden = false),
+    recreateFolder(a, name) {
+      const b = box(a, name);
+      b.id = `${b.id.replace(/AAA=$/, "")}R${String(++counter)}AAA=`;
+      return b.id;
     },
     deltaRequests: () => requests.filter((r) => r.kind === "delta"),
   };

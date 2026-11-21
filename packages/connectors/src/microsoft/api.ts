@@ -70,19 +70,22 @@ function assertOptions(options: GraphGetOptions | undefined, query: Query | unde
   const raw = options?.rawQuery;
   if (raw !== undefined) {
     if (!isOpaqueQuery(raw)) throw bad("The query is not allowed");
+    // Checked HERE, before the slot, the guard and any token read: the URL parser must keep the query exactly as given (a throw inside the fetch wrapper
+    // would be read as a transport failure and retried, with a token read each time).
+    if (raw !== "") {
+      const probe = new URL(GRAPH_COMMERCIAL_BASE);
+      probe.search = `?${raw}`;
+      if (probe.search !== `?${raw}`) throw bad("The query is not allowed");
+    }
     if (query && Object.keys(query).length > 0) throw bad("A raw query cannot be combined with a query object");
   }
 }
 
-/** A fetch that puts the opaque query on the request the client built (which has none), and refuses anything the URL parser would change. */
+/** A fetch that puts the opaque query (already checked by `assertOptions`) on the request the client built, which has none. It never throws. */
 function withRawQuery(inner: typeof fetch, rawQuery: string): typeof fetch {
   return (input, init) => {
     const url = new URL(input instanceof URL ? input.href : typeof input === "string" ? input : input.url);
-    if (url.search !== "") throw new ConnectorError({ kind: "invalid_input", message: "The query is not allowed" });
-    if (rawQuery !== "") {
-      url.search = `?${rawQuery}`;
-      if (url.search !== `?${rawQuery}`) throw new ConnectorError({ kind: "invalid_input", message: "The query is not allowed" });
-    }
+    if (rawQuery !== "") url.search = `?${rawQuery}`;
     return inner(url, init);
   };
 }

@@ -11,8 +11,7 @@ import { cleanText } from "../comms/text";
 import { OUTLOOK_WEB_HOSTS, type MicrosoftCloud } from "./constants";
 import { CANONICAL_FOLDER, type MailFolderName } from "./mail-cursor";
 
-/** The `$select` of the delta request: the index fields and nothing else. `id` is always returned. */
-export const MESSAGE_SELECT = ["id", "conversationId", "webLink", "from", "toRecipients", "ccRecipients", "subject", "receivedDateTime", "sentDateTime", "isRead", "flag", "importance", "hasAttachments", "inferenceClassification", "categories", "lastModifiedDateTime"] as const;
+export { MESSAGE_SELECT } from "./mail-query";
 
 /** Our caps where the documentation states none (V-11, categories): ids, categories (count and length), recipients (200, spec §8.2). */
 export const MAX_ID_CHARS = 512;
@@ -45,25 +44,35 @@ const GraphMessageSchema = z.object({
 export type GraphMessage = z.infer<typeof GraphMessageSchema>;
 
 const CONTROL = /[\u0000-\u001f\u007f-\u009f]/;
+/** Text with no control, line-separator or bidi character: the same set `MessageMetaSchema` refuses (and `cleanText` removes). */
+const isCleanText = (s: string): boolean => cleanText(s) === s;
+// ISO-8601 as Graph sends it (`2026-11-04T10:00:00Z`, up to 7 fractional digits, or an offset). A string with NO zone is read as UTC (Graph's
+// `receivedDateTime` is UTC; `Date.parse` would otherwise use the server's local zone). Anything that is not this shape is unusable.
+const ISO_TIME = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}(?::\d{2}(?:\.\d{1,9})?)?(Z|[+-]\d{2}:\d{2})?$/i;
 const instant = (v: string | null | undefined): string | null => {
-  if (typeof v !== "string" || v === "" || v.length > 64) return null;
-  const ms = Date.parse(v);
+  if (typeof v !== "string" || v.length > 40) return null;
+  const m = ISO_TIME.exec(v);
+  if (!m) return null;
+  const ms = Date.parse(m[1] === undefined ? `${v}Z` : v);
   return Number.isFinite(ms) ? new Date(ms).toISOString() : null;
 };
 
 /** `webLink` when it is https, on an allow-listed Outlook host of the cloud, without credentials or a port, and plain text; else null. */
 export function safeWebLink(value: string | null | undefined, cloud: MicrosoftCloud = "commercial"): string | null {
-  if (typeof value !== "string" || value.length === 0 || value.length > 2048 || /[\u0000-\u001f\u007f\s]/.test(value) || !URL.canParse(value)) return null;
+  // Printable ASCII only, no space, no backslash and no encoded backslash: the parser would rewrite some of these into a different URL.
+  if (typeof value !== "string" || value.length === 0 || value.length > 2048 || !/^[\x21-\x7e]+$/.test(value) || value.includes("\\") || /%5c/i.test(value) || !URL.canParse(value)) return null;
   const u = new URL(value);
   const ok = u.protocol === "https:" && OUTLOOK_WEB_HOSTS[cloud].has(u.hostname) && u.port === "" && u.username === "" && u.password === "";
-  return ok ? value : null;
+  // The normalised form is stored, so what the row links to is what was checked.
+  return ok && u.href.length <= 2048 ? u.href : null;
 }
 
 function recipients(list: z.infer<typeof recipient>[] | null | undefined): Recipient[] {
   const out: Recipient[] = [];
   for (const r of list ?? []) {
     const address = (r.emailAddress?.address ?? "").trim().toLowerCase();
-    if (address.length < 3 || address.length > 320 || CONTROL.test(address) || !isMailAddress(address)) continue;
+    // Only the bad ADDRESS is dropped (as Gmail's parser does); a hostile one never costs the rest of the message.
+    if (address.length < 3 || address.length > 320 || !isCleanText(address) || !isMailAddress(address)) continue;
     const name = cleanText(r.emailAddress?.name ?? "").slice(0, 200);
     out.push(name !== "" && name.toLowerCase() !== address ? { address, name } : { address });
     if (out.length >= MAX_RECIPIENTS) break;
@@ -131,9 +140,17 @@ export function mapMessage(raw: unknown, ctx: MapContext): { meta: MessageMeta }
     labels,
     source_updated_at: instant(m.lastModifiedDateTime),
   };
-  const first = MessageMetaSchema.safeParse(base);
-  if (first.success) return { meta: first.data };
-  // Sender-controlled text broke a limit: keep the message with the unusable parts dropped rather than wedge the sync.
-  const second = MessageMetaSchema.safeParse({ ...base, subject: null, from_name: null, to_recipients: [], cc_recipients: [], source_url: null });
-  return second.success ? { meta: second.data } : { dropped: "unusable" };
+  // Sender-controlled text broke a limit: clear ONLY the field that failed (never the whole record) and try again. The identity (id), the time,
+  // the folder and the flags are ours, so a failure there is the only reason to drop the message.
+  const CLEARABLE: Record<string, unknown> = { thread_id: null, source_url: null, from_address: null, from_name: null, to_recipients: [], cc_recipients: [], subject: null, labels: [], source_updated_at: null };
+  let record: Record<string, unknown> = base;
+  for (let attempt = 0; attempt < 12; attempt++) {
+    const parsed = MessageMetaSchema.safeParse(record);
+    if (parsed.success) return { meta: parsed.data };
+    const keys = [...new Set(parsed.error.issues.map((i) => String(i.path[0] ?? "")))];
+    if (keys.some((k) => !(k in CLEARABLE) || JSON.stringify(record[k]) === JSON.stringify(CLEARABLE[k]))) return { dropped: "unusable" };
+    const fixable = keys;
+    record = { ...record, ...Object.fromEntries(fixable.map((k) => [k, CLEARABLE[k]])) };
+  }
+  return { dropped: "unusable" };
 }

@@ -50,8 +50,13 @@ const errors = createApiErrorSink({ store: apiErrorStore, messageFor: (info) => 
 export const graphApi = createGraphApi({ guard, tokens, errors });
 /** Microsoft mail metadata delta sync (T-258). Only `sync` is real; the other operations answer `unsupported_op` until T-259 / T-262. */
 export const microsoftMailProvider = createMicrosoftMailProvider({ api: graphApi, guard, laneConfig: laneConfigReader });
-/** Time budget of one mail run: the first load of a large folder takes many pages, so a run stops after this long and the next one continues from the cursor (spec §8.5). */
-export const MICROSOFT_MAIL_RUN_BUDGET_MS = 4 * 60_000;
+/**
+ * Time budget of one mail run: the first load of a large folder takes many pages, so a run stops after this long and the next one continues from the cursor
+ * (spec §8.5). It is checked BETWEEN pages only. A normal page takes about a second, but the worst case of ONE request is four attempts of 30 s each plus
+ * three backoff or Retry-After waits of up to 30 s (about 210 s), and a discovery makes up to three lookups first; against a 300 s job limit the budget
+ * therefore bounds a healthy run, not a failing one, and is kept low (150 s) for that reason.
+ */
+export const MICROSOFT_MAIL_RUN_BUDGET_MS = 150_000;
 /** Runs one connection's mail metadata sync into comms.message_index. Reached only through the facade (provider gate and owner checks first). */
 export const microsoftMailSync = createMailSync({ mail: microsoftMailProvider, store: mailIndexStore, maxRunMs: MICROSOFT_MAIL_RUN_BUDGET_MS });
 /** `GET /me`: registered with conn.token_health (health/index.ts). */

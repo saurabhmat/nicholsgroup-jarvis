@@ -15,6 +15,7 @@ import { CommsCursorSchema, type CommsCursor } from "../comms/schemas";
 import { InstantSchema } from "../contract/schemas";
 import { isOpaqueQuery } from "./api";
 import { GRAPH_COMMERCIAL_BASE } from "./constants";
+import { ORDERBY_PARAM, SELECT_PARAM } from "./mail-query";
 
 export const MAIL_FOLDER_NAMES = ["inbox", "sentitems", "archive"] as const;
 export type MailFolderName = (typeof MAIL_FOLDER_NAMES)[number];
@@ -27,10 +28,14 @@ export const MAX_FOLDER_ID_CHARS = 256;
 /** The cursor table's limit (`CommsCursorSchema`). */
 export const MAX_CURSOR_CHARS = 16_384;
 const FOLDER_ID = new RegExp(`^[A-Za-z0-9_=+.-]{1,${String(MAX_FOLDER_ID_CHARS)}}$`);
-export const isFolderId = (v: unknown): v is string => typeof v === "string" && FOLDER_ID.test(v);
+/** A folder id of the allowed characters and length that is not only dots (`.` and `..` are dot segments the client refuses on every run). */
+export const isFolderId = (v: unknown): v is string => typeof v === "string" && FOLDER_ID.test(v) && !/^\.+$/.test(v);
 
 export type FolderState = { name: MailFolderName; id: string; delta?: string; next?: string; since: string };
-export type CursorState = { v: 1; folders: FolderState[]; pos: number; fp: string };
+/** `absent`: configured folders the mailbox does not have (only the optional `archive`), with when they were last looked for; re-checked later, never a failure. */
+export type CursorState = { v: 1; folders: FolderState[]; pos: number; fp: string; absent?: MailFolderName[]; checked?: string };
+/** The optional folders: a 404 on their lookup means "this mailbox has none"; for `inbox` and `sentitems` it stays a hard failure. */
+export const OPTIONAL_FOLDERS: readonly MailFolderName[] = ["archive"];
 
 export const cursorPrefix = (connectionId: string): string => `m1.${connectionId}.m:`;
 
@@ -38,6 +43,24 @@ export const cursorPrefix = (connectionId: string): string => `m1.${connectionId
 export const fingerprintOf = (names: readonly string[]): string => [...new Set(names)].sort().join(",");
 
 const BASE = new URL(GRAPH_COMMERCIAL_BASE);
+
+/**
+ * A link's query is exactly one `$skiptoken=<opaque>` or one `$deltatoken=<opaque>`, optionally with parameters that are byte for byte the ones our own first
+ * request sends (`$select` = our index fields, `$orderby=receivedDateTime desc` in its sent encoding). Any other key (`$expand`, `$filter`, `$search`, a
+ * `$select` naming more), a repeated key, an empty parameter or an empty token is refused, so a link can never ask for more than we ask for.
+ * A real link carrying other parameters would fail visibly; the rule would then be widened deliberately (live check, H-070).
+ */
+export function isAllowedLinkQuery(query: string): boolean {
+  let tokens = 0;
+  const seen = new Set<string>();
+  for (const part of query.split("&")) {
+    if (seen.has(part)) return false;
+    seen.add(part);
+    if (/^\$(skiptoken|deltatoken)=.+/.test(part)) tokens += 1;
+    else if (part !== SELECT_PARAM && part !== ORDERBY_PARAM) return false;
+  }
+  return tokens === 1;
+}
 
 /**
  * The query of a delta or next link when it may be used for this folder, else null. Valid = the string starts with the cloud's exact Graph
@@ -51,7 +74,7 @@ export function validateDeltaLink(link: unknown, folderId: string, base: URL = B
   if (q < 0) return null;
   const head = link.slice(0, q);
   const query = link.slice(q + 1);
-  if (query === "" || !isOpaqueQuery(query)) return null;
+  if (query === "" || !isOpaqueQuery(query) || !isAllowedLinkQuery(query)) return null;
   const origin = base.origin;
   if (!head.startsWith(`${origin}/`)) return null;
   const segments = head.slice(origin.length).split("/");
@@ -76,7 +99,7 @@ export function validateDeltaLink(link: unknown, folderId: string, base: URL = B
 const link = z.string().min(1).max(MAX_LINK_CHARS);
 const FolderSchema = z.strictObject({
   name: z.enum(MAIL_FOLDER_NAMES),
-  id: z.string().regex(FOLDER_ID),
+  id: z.string().refine(isFolderId),
   delta: link.optional(),
   next: link.optional(),
   since: InstantSchema,
@@ -86,6 +109,8 @@ const StateSchema = z.strictObject({
   folders: z.array(FolderSchema).min(1).max(3),
   pos: z.int().min(0).max(2),
   fp: z.string().min(1).max(64),
+  absent: z.array(z.enum(OPTIONAL_FOLDERS as readonly [MailFolderName, ...MailFolderName[]])).max(1).optional(),
+  checked: InstantSchema.optional(),
 });
 
 /**
@@ -106,6 +131,7 @@ export function parseCursor(value: string, connectionId: string): CursorState | 
   const parsed = StateSchema.safeParse(json);
   if (!parsed.success) return null;
   const s = parsed.data;
+  if ((s.absent === undefined) !== (s.checked === undefined) || (s.absent ?? []).some((n) => s.folders.some((f) => f.name === n))) return null;
   if (s.pos >= s.folders.length || new Set(s.folders.map((f) => f.name)).size !== s.folders.length) return null;
   for (const f of s.folders) {
     if (f.delta !== undefined && f.next !== undefined) return null;
