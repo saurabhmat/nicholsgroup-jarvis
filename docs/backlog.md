@@ -1386,7 +1386,7 @@ Standing rules for every task in this phase (not repeated below):
 - Google behaviour is unchanged: the existing Google tests pass without edits other than renamed imports.
 
 ### T-250 Lane config: mail provider per lane and Microsoft settings
-- status: approved
+- status: done
 - depends: T-011
 - needs: D-54
 - acceptance: Spec: `docs/specs/microsoft.md` §4. `laneConfigSchema` gains `mail.provider` (`google` | `microsoft`, default `google`) and an optional strict `microsoft` block (`cloud` `commercial` | `gcc_high` default `commercial`; `tenant_ids` 1..10 lower-case UUIDs; `allow_gcc` default false; `mail_folders` subset of `inbox`, `sentitems`, `archive`, default `["inbox","sentitems"]`, max 3); refines: `microsoft` required when `mail.provider = "microsoft"`, `mail_transport = "composio"` refused with `microsoft`; `calendar.calendar_ids` are read as ids of the lane's current provider (the cut-over runbook clears them); existing stored PKG configs still parse (fixture test); `LaneConfigReader` gains `mailProvider(lane)` and `microsoftSettings(lane)`, read on every call, failing closed on an unreadable or malformed config; unit tests for each rule and for the secret-value scan on the new keys. No SQL.
