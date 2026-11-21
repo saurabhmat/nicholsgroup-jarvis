@@ -297,7 +297,7 @@ describe("T-240: briefing.attention.fresh_hours, deadline_subjects, own_domain_b
 describe("mail section (T-247)", () => {
   it("defaults to empty lists (fail closed): no domain is allowed until a lane lists it", () => {
     const c = parseLaneConfig(VALID);
-    expect(c.mail).toEqual({ provider: "google", allowed_domains: [], self_connect_domains: [] });
+    expect(c.mail).toEqual({ providers: ["google"], allowed_domains: [], self_connect_domains: [] });
   });
   it("accepts lower-case domains for both keys", () => {
     const c = parseLaneConfig({ ...VALID, mail: { allowed_domains: ["example.test", "mail.example.test"], self_connect_domains: ["gmail.example.test"] } });
@@ -332,14 +332,14 @@ describe("mail provider and Microsoft settings (T-250)", () => {
   it("defaults to google with no microsoft block; a stored PKG-style config (no provider keys) still parses unchanged", () => {
     const stored = { ...VALID, mail: { allowed_domains: ["example.test"], self_connect_domains: [] }, mail_transport: "composio", calendar: { calendar_ids: ["primary"] } };
     const c = parseLaneConfig(stored);
-    expect(c.mail.provider).toBe("google");
+    expect(c.mail.providers).toEqual(["google"]);
     expect(c.microsoft).toBeUndefined();
-    expect(parseLaneConfig(VALID).mail.provider).toBe("google");
-    expect(parseLaneConfig({}).mail.provider).toBe("google");
+    expect(parseLaneConfig(VALID).mail.providers).toEqual(["google"]);
+    expect(parseLaneConfig({}).mail.providers).toEqual(["google"]);
   });
   it("parses a config shaped like the stored production PKG one (modules, mailboxes, mail_transport native; no provider keys)", () => {
     const c = parseLaneConfig({ enabled_modules: ["assistant", "comms"], mailboxes: ["owner@example.test"], mail_transport: "native" });
-    expect(c.mail.provider).toBe("google");
+    expect(c.mail.providers).toEqual(["google"]);
     expect(c.microsoft).toBeUndefined();
   });
   it("refuses the personal-accounts tenant and the nil UUID in tenant_ids", () => {
@@ -350,7 +350,7 @@ describe("mail provider and Microsoft settings (T-250)", () => {
   });
   it("accepts microsoft with defaults: commercial, allow_gcc false, inbox and sentitems", () => {
     const c = parseLaneConfig(msConfig());
-    expect(c.mail.provider).toBe("microsoft");
+    expect(c.mail.providers).toEqual(["microsoft"]);
     expect(c.microsoft).toEqual({ cloud: "commercial", tenant_ids: [T1], allow_gcc: false, mail_folders: ["inbox", "sentitems"] });
   });
   it("accepts every field set explicitly", () => {
@@ -360,13 +360,13 @@ describe("mail provider and Microsoft settings (T-250)", () => {
   it("rejects an unknown provider", () => {
     for (const bad of ["Microsoft", "outlook", "", null]) expect(() => parseLaneConfig({ ...VALID, mail: { provider: bad } }), String(bad)).toThrow();
   });
-  it("requires the microsoft block when mail.provider is microsoft", () => {
+  it("requires the microsoft block when the legacy mail.provider is microsoft", () => {
     const issues = issuesOf(() => parseLaneConfig({ ...VALID, mail: { provider: "microsoft" } }));
     expect(issues.some((i) => i.path.join(".") === "microsoft")).toBe(true);
   });
-  it("allows a microsoft block while mail.provider is google (a lane prepared before its cut-over)", () => {
+  it("allows a microsoft block while microsoft is not in mail.providers (a lane prepared before use, or paused)", () => {
     const c = parseLaneConfig({ ...VALID, microsoft: MS });
-    expect(c.mail.provider).toBe("google");
+    expect(c.mail.providers).toEqual(["google"]);
     expect(c.microsoft?.tenant_ids).toEqual([T1]);
   });
   it("refuses mail_transport composio with microsoft, but not with google", () => {
@@ -413,5 +413,76 @@ describe("mail provider and Microsoft settings (T-250)", () => {
       "$.microsoft.tenant_ids[0]",
     ]);
     expect(() => parseLaneConfig(msConfig({ microsoft: { tenant_ids: ["ya29.synthetic"] } }))).toThrow(/secret-like/);
+  });
+});
+
+describe("several mail providers per lane (T-269, D-57)", () => {
+  const T1 = "11111111-2222-4333-8444-555555555555"; // synthetic
+  const MS = { tenant_ids: [T1] };
+  const withMail = (mail: unknown, extra: Record<string, unknown> = {}) => ({ ...VALID, mail, ...extra });
+  const paths = (fn: () => unknown) => issuesOf(fn).map((i) => i.path.join("."));
+
+  it("a stored config with no provider keys reads [google]", () => {
+    expect(parseLaneConfig(VALID).mail.providers).toEqual(["google"]);
+    expect(parseLaneConfig(withMail({})).mail.providers).toEqual(["google"]);
+  });
+  it("the legacy mail.provider is read as a one-element list and is never emitted", () => {
+    const ms = parseLaneConfig(withMail({ provider: "microsoft" }, { microsoft: MS }));
+    expect(ms.mail.providers).toEqual(["microsoft"]);
+    expect("provider" in ms.mail).toBe(false);
+    const g = parseLaneConfig(withMail({ provider: "google", allowed_domains: ["example.test"] }));
+    expect(g.mail).toEqual({ providers: ["google"], allowed_domains: ["example.test"], self_connect_domains: [] });
+    // Re-parsing what the app would write (the parsed config) is stable and carries providers only.
+    const again = parseLaneConfig(JSON.parse(JSON.stringify(ms)));
+    expect(again).toEqual(ms);
+    expect(JSON.stringify(again.mail)).not.toContain('"provider"');
+  });
+  it("accepts both providers with the microsoft block; each order and a single entry parse", () => {
+    expect(parseLaneConfig(withMail({ providers: ["google", "microsoft"] }, { microsoft: MS })).mail.providers).toEqual(["google", "microsoft"]);
+    expect(parseLaneConfig(withMail({ providers: ["microsoft", "google"] }, { microsoft: MS })).mail.providers).toEqual(["microsoft", "google"]);
+    expect(parseLaneConfig(withMail({ providers: ["microsoft"] }, { microsoft: MS })).mail.providers).toEqual(["microsoft"]);
+  });
+  it("refuses microsoft in providers without the microsoft block", () => {
+    expect(paths(() => parseLaneConfig(withMail({ providers: ["microsoft"] })))).toContain("microsoft");
+    expect(paths(() => parseLaneConfig(withMail({ providers: ["google", "microsoft"] })))).toContain("microsoft");
+  });
+  it("allows the microsoft block without microsoft in providers", () => {
+    expect(parseLaneConfig(withMail({ providers: ["google"] }, { microsoft: MS })).microsoft?.tenant_ids).toEqual([T1]);
+  });
+  it("mail_transport composio: accepted with google (also with both), refused with microsoft only", () => {
+    expect(parseLaneConfig(withMail({ providers: ["google", "microsoft"] }, { microsoft: MS, mail_transport: "composio" })).mail_transport).toBe("composio");
+    expect(parseLaneConfig(withMail({ providers: ["google"] }, { mail_transport: "composio" })).mail_transport).toBe("composio");
+    expect(paths(() => parseLaneConfig(withMail({ providers: ["microsoft"] }, { microsoft: MS, mail_transport: "composio" })))).toContain("mail_transport");
+  });
+  it("refuses an empty list, duplicates, an unknown provider, a non-array and more than two entries", () => {
+    for (const bad of [[], ["google", "google"], ["microsoft", "microsoft"], ["outlook"], ["Google"], [null], "google", null, { 0: "google" }, ["google", "microsoft", "google"]]) {
+      expect(() => parseLaneConfig(withMail({ providers: bad }, { microsoft: MS })), JSON.stringify(bad)).toThrow();
+    }
+  });
+  it("refuses both keys present, whatever their values", () => {
+    for (const mail of [{ provider: "google", providers: ["google"] }, { provider: "microsoft", providers: ["google", "microsoft"] }]) {
+      expect(paths(() => parseLaneConfig(withMail(mail, { microsoft: MS })))).toContain("mail.providers");
+    }
+  });
+  it("microsoft.calendar_ids: optional, 1..5, unique, same character rule as the Google ids", () => {
+    const ids = (a: unknown) => parseLaneConfig({ ...VALID, microsoft: { ...MS, calendar_ids: a } });
+    expect(parseLaneConfig({ ...VALID, microsoft: MS }).microsoft?.calendar_ids).toBeUndefined();
+    expect(ids(["AAMkAGI2synthetic-id="]).microsoft?.calendar_ids).toEqual(["AAMkAGI2synthetic-id="]);
+    expect(ids(["a", "b", "c", "d", "e"]).microsoft?.calendar_ids).toHaveLength(5);
+    for (const bad of [[], ["a", "b", "c", "d", "e", "f"], ["a", "a"], [""], ["has space"], ["tab\t"], ["x".repeat(201)], "a", [1]]) {
+      expect(() => ids(bad), JSON.stringify(bad)).toThrow();
+    }
+    expect(ids(["x".repeat(200)]).microsoft?.calendar_ids).toHaveLength(1);
+  });
+  it("calendar.calendar_ids keeps its Google meaning and limits (1..10)", () => {
+    expect(parseLaneConfig({ ...VALID, calendar: { calendar_ids: ["a", "b", "c", "d", "e", "f"] } }).calendar?.calendar_ids).toHaveLength(6);
+    expect(() => parseLaneConfig({ ...VALID, calendar: { calendar_ids: [] } })).toThrow();
+  });
+  it("the secret scan covers microsoft.calendar_ids and mail.providers", () => {
+    expect(findSecretLikeValues({ microsoft: { calendar_ids: ["ordinary-id", "ya29.synthetic"] }, mail: { providers: ["sk-ant-synthetic"] } }).sort()).toEqual([
+      "$.mail.providers[0]",
+      "$.microsoft.calendar_ids[1]",
+    ]);
+    expect(() => parseLaneConfig({ ...VALID, microsoft: { ...MS, calendar_ids: ["ya29.synthetic"] } })).toThrow(/secret-like/);
   });
 });
