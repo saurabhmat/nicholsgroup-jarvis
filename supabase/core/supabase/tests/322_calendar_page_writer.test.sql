@@ -7,7 +7,7 @@
 -- lane's rows (T-247 rules) and AAL1.
 -- Synthetic data only: example UUIDs, example.test addresses.
 begin;
-select plan(84);
+select plan(143);
 \ir helpers/lane_rls.psql
 
 update core.lanes set enabled = true where code = 'APK';
@@ -60,6 +60,18 @@ select throws_ok($$select core.cal_events_apply_page('PKG', '00000000-0000-4000-
   '22023', null, 'a Microsoft connection cannot store another connection''s cursor');
 select throws_ok($$select core.cal_events_apply_page('PKG', '00000000-0000-4000-8000-000000032201', '[]'::jsonb, '[]'::jsonb, 'm1.00000000-0000-4000-8000-000000032201.c:eyJ2IjoxfQ', 'x', false)$$,
   '22023', null, 'a Microsoft connection cannot store an unprefixed cursor');
+select throws_ok($$select core.cal_events_apply_page('PKG', '00000000-0000-4000-8000-000000032201', '[]'::jsonb, '[]'::jsonb, 'm1.00000000-0000-4000-8000-000000032201.c:eyJ2IjoxfQ', 'M1.00000000-0000-4000-8000-000000032201.c:x', false)$$,
+  '22023', null, 'a Microsoft connection cannot store an upper-case M1 prefix');
+select throws_ok($$select core.cal_events_apply_page('PKG', '00000000-0000-4000-8000-000000032202', '[]'::jsonb, '[]'::jsonb, 'g1.00000000-0000-4000-8000-000000032202.c:1', 'G1.00000000-0000-4000-8000-000000032202.c:x', false)$$,
+  '22023', null, 'a Google connection cannot store an upper-case G1 prefix');
+select throws_ok($$select core.cal_events_apply_page('PKG', '00000000-0000-4000-8000-000000032201', '[]'::jsonb, '[]'::jsonb, 'm1.00000000-0000-4000-8000-000000032201.c:eyJ2IjoxfQ', ' m1.00000000-0000-4000-8000-000000032201.c:x', false)$$,
+  '22023', null, 'a Microsoft cursor with a leading space is refused');
+select throws_ok($$select core.cal_events_apply_page('PKG', '00000000-0000-4000-8000-000000032202', '[]'::jsonb, '[]'::jsonb, 'g1.00000000-0000-4000-8000-000000032202.c:1', ' g1.00000000-0000-4000-8000-000000032202.c:x', false)$$,
+  '22023', null, 'a Google cursor with a leading space is refused');
+select throws_ok($$select core.cal_events_apply_page('PKG', '00000000-0000-4000-8000-000000032201', '[]'::jsonb, '[]'::jsonb, 'm1.00000000-0000-4000-8000-000000032201.c:eyJ2IjoxfQ', '', false)$$,
+  '22023', null, 'an empty-string cursor is refused for a Microsoft connection');
+select throws_ok($$select core.cal_events_apply_page('PKG', '00000000-0000-4000-8000-000000032202', '[]'::jsonb, '[]'::jsonb, 'g1.00000000-0000-4000-8000-000000032202.c:1', '', false)$$,
+  '22023', null, 'an empty-string cursor is refused for a Google connection');
 select is(core.sync_cursor_get('PKG', '00000000-0000-4000-8000-000000032201', 'calendar'), 'm1.00000000-0000-4000-8000-000000032201.c:eyJ2IjoxfQ', 'refused pages left the Microsoft cursor unchanged');
 select throws_ok($$select core.cal_events_apply_page('PKG', '00000000-0000-4000-8000-000000032201', '[]'::jsonb, '[]'::jsonb, 'm1.00000000-0000-4000-8000-000000032201.c:eyJ2IjoxfQ',
   'm1.00000000-0000-4000-8000-000000032201.c:' || repeat('a', 16384), false)$$, '22023', null, 'a cursor longer than 16384 characters is refused');
@@ -144,6 +156,14 @@ select is(core.comms_mail_apply_page('PKG', '00000000-0000-4000-8000-00000003220
   jsonb_build_array(jsonb_build_object('message_id', 'ms-o-1', 'from_address', 'b@example.test', 'subject', 'Owner mail', 'received_at', now() - interval '1 hour',
     'is_read', false, 'is_important', true, 'folder', 'INBOX', 'labels', '[]'::jsonb, 'source_updated_at', now() - interval '1 hour')),
   null, 'm1.00000000-0000-4000-8000-000000032204.m:a', false), '{"removed": 0, "written": 1, "skipped": 0}'::jsonb, 'setup: the owner''s Microsoft mailbox has a message');
+select is(core.cal_events_apply_page('APK', '00000000-0000-4000-8000-000000032203', '[]'::jsonb,
+  jsonb_build_array(jsonb_build_object('calendar_id', 'AAMk-cal-a', 'event_id', 'AAMk-ev-a', 'title', 'APK MS meeting', 'start_at', now() + interval '1 hour',
+    'end_at', now() + interval '2 hours', 'attendees', '[]'::jsonb, 'status', 'confirmed', 'source_updated_at', '2026-11-20T12:00:00.000Z')),
+  'm1.00000000-0000-4000-8000-000000032203.c:x', 'm1.00000000-0000-4000-8000-000000032203.c:y', false), '{"removed": 0, "written": 1, "skipped": 0}'::jsonb, 'setup: the other lane''s Microsoft mailbox has an event');
+select is(core.comms_mail_apply_page('APK', '00000000-0000-4000-8000-000000032203', '[]'::jsonb,
+  jsonb_build_array(jsonb_build_object('message_id', 'ms-a-1', 'from_address', 'c@example.test', 'subject', 'APK mail', 'received_at', now() - interval '1 hour',
+    'is_read', false, 'is_important', true, 'folder', 'INBOX', 'labels', '[]'::jsonb, 'source_updated_at', now() - interval '1 hour')),
+  null, 'm1.00000000-0000-4000-8000-000000032203.m:a', false), '{"removed": 0, "written": 1, "skipped": 0}'::jsonb, 'setup: the other lane''s Microsoft mailbox has a message');
 reset role;
 
 select pg_temp.claims('viewer@example.test', 'aal2');
@@ -162,6 +182,23 @@ select is((select unread_important from core.home_mail_attention('PKG', now() - 
 select is((select count(*)::int from core.home_meetings('APK', now(), now() + interval '1 day')), 0, 'core.home_meetings: another lane shows nothing');
 select is((select count(*)::int from core.inbox_messages('APK', 'all')), 0, 'core.inbox_messages: another lane shows nothing');
 select is((select count(*)::int from core.home_mail_attention('APK', now() - interval '1 day')), 0, 'core.home_mail_attention: another lane returns no row');
+select is((select count(*)::int from core.home_meetings('APK', now(), now() + interval '1 day') where title = 'APK MS meeting')
+        + (select count(*)::int from core.home_meetings('PKG', now(), now() + interval '1 day') where title = 'APK MS meeting'), 0, 'cross-lane: the viewer sees the APK event under neither lane');
+select is((select count(*)::int from core.inbox_messages('APK', 'all') where subject = 'APK mail')
+        + (select count(*)::int from core.inbox_messages('PKG', 'all') where subject = 'APK mail'), 0, 'cross-lane: the viewer sees the APK message under neither lane');
+select ok(not ('00000000-0000-4000-8000-000000032203'::uuid = any (core.mailbox_ids(pg_temp.uid('viewer@example.test'), 'PKG') || core.mailbox_ids(pg_temp.uid('viewer@example.test'), 'APK'))), 'cross-lane: the APK Microsoft mailbox is not the viewer''s under either lane');
+select is((select count(*)::int from core.briefing_coverage('PKG') where account = 'apk-t253@ms.example.test') + (select count(*)::int from core.briefing_coverage('APK') where account = 'apk-t253@ms.example.test'), 0, 'cross-lane: coverage names the APK account under neither lane');
+select is((select unread_important from core.home_mail_attention('PKG', now() - interval '1 day')), 1, 'cross-lane: the viewer''s PKG attention count excludes the APK message');
+-- briefing readers and message ref: the viewer's own Microsoft rows, no one else's
+select is((select array_agg(title) from core.briefing_events('PKG', now(), now() + interval '1 day')), array['Viewer MS meeting'], 'core.briefing_events: the viewer''s Microsoft event only');
+select is((select count(*)::int from core.briefing_events('APK', now(), now() + interval '1 day')), 0, 'core.briefing_events: another lane shows the viewer nothing (the APK event is not shown)');
+select is((select array_agg(thread_key || '@' || connection_id::text) from core.briefing_threads('PKG', now() - interval '1 day')), array['m:ms-v-1@00000000-0000-4000-8000-000000032201'], 'core.briefing_threads: the viewer''s Microsoft thread only');
+select is((select count(*)::int from core.briefing_threads('APK', now() - interval '1 day')), 0, 'core.briefing_threads: another lane shows the viewer nothing (the APK thread is not shown)');
+select is((select array_agg(thread_key) from core.briefing_threads('PKG', now() - interval '1 day', pg_temp.uid('owner@example.test'))), array['m:ms-v-1'], 'core.briefing_threads: a signed-in caller naming another owner still gets only their own threads');
+select is((select provider || ':' || connection_id::text from core.inbox_message_ref('PKG', 'ms-v-1')), 'microsoft:00000000-0000-4000-8000-000000032201', 'core.inbox_message_ref: the viewer''s own Microsoft message');
+select is((select count(*)::int from core.inbox_message_ref('PKG', 'ms-o-1')), 0, 'core.inbox_message_ref: another user''s message is refused');
+select is((select count(*)::int from core.inbox_message_ref('PKG', 'ms-a-1')) + (select count(*)::int from core.inbox_message_ref('APK', 'ms-a-1')), 0, 'core.inbox_message_ref: another lane''s message is refused under either lane');
+select is((select count(*)::int from core.inbox_message_ref('APK', 'ms-v-1')), 0, 'core.inbox_message_ref: the viewer''s message is not found under another lane');
 reset role;
 
 -- another user with their own mail view in the lane but no mailbox of their own sees none of it
@@ -173,6 +210,10 @@ select is((select string_agg(stream || ':' || status, ',' order by stream desc) 
 select is((select count(*)::int from core.home_meetings('PKG', now(), now() + interval '1 day')), 0, 'another user: core.home_meetings shows nothing');
 select is((select count(*)::int from core.inbox_messages('PKG', 'all')), 0, 'another user: core.inbox_messages shows nothing');
 select is((select unread_important from core.home_mail_attention('PKG', now() - interval '1 day')), 0, 'another user: core.home_mail_attention counts nothing');
+select is((select count(*)::int from core.briefing_events('PKG', now(), now() + interval '1 day')), 0, 'another user: core.briefing_events shows nothing');
+select is((select count(*)::int from core.briefing_threads('PKG', now() - interval '1 day')), 0, 'another user: core.briefing_threads shows nothing');
+select is((select count(*)::int from core.briefing_threads('PKG', now() - interval '1 day', pg_temp.uid('viewer@example.test'))), 0, 'another user naming the viewer as p_owner still gets nothing');
+select is((select count(*)::int from core.inbox_message_ref('PKG', 'ms-v-1')) + (select count(*)::int from core.inbox_message_ref('PKG', 'ms-o-1')), 0, 'another user: core.inbox_message_ref finds neither the viewer''s nor the owner''s message');
 reset role;
 
 -- a member without own_mail
@@ -181,6 +222,9 @@ set local role authenticated;
 select is(core.home_calendar_status('PKG'), 'no_access', 'no own_mail: core.home_calendar_status is no_access');
 select is((select count(*)::int from core.briefing_coverage('PKG')), 0, 'no own_mail: core.briefing_coverage shows nothing');
 select is(core.mailbox_ids(pg_temp.uid('finance-operator@example.test'), 'PKG'), '{}'::uuid[], 'no own_mail: core.mailbox_ids is empty');
+select is((select count(*)::int from core.briefing_events('PKG', now(), now() + interval '1 day')), 0, 'no own_mail: core.briefing_events shows nothing');
+select is((select count(*)::int from core.briefing_threads('PKG', now() - interval '1 day')), 0, 'no own_mail: core.briefing_threads shows nothing');
+select is((select count(*)::int from core.inbox_message_ref('PKG', 'ms-v-1')) + (select count(*)::int from core.inbox_message_ref('PKG', 'ms-o-1')), 0, 'no own_mail: core.inbox_message_ref finds nothing');
 reset role;
 
 -- AAL1
@@ -191,6 +235,9 @@ select is((select count(*)::int from core.briefing_coverage('PKG')), 0, 'AAL1: c
 select is((select count(*)::int from core.home_mail_attention('PKG', now() - interval '1 day')), 0, 'AAL1: core.home_mail_attention returns no row');
 select is((select count(*)::int from core.inbox_messages('PKG', 'all')), 0, 'AAL1: core.inbox_messages shows nothing (row-level policy)');
 select is((select count(*)::int from core.home_meetings('PKG', now(), now() + interval '1 day')), 0, 'AAL1: core.home_meetings shows nothing (row-level policy)');
+select is((select count(*)::int from core.briefing_events('PKG', now(), now() + interval '1 day')), 0, 'AAL1: core.briefing_events shows nothing');
+select is((select count(*)::int from core.briefing_threads('PKG', now() - interval '1 day')), 0, 'AAL1: core.briefing_threads shows nothing');
+select is((select count(*)::int from core.inbox_message_ref('PKG', 'ms-v-1')), 0, 'AAL1: core.inbox_message_ref finds nothing');
 reset role;
 
 -- the owner sees their own Microsoft rows, not the viewer's
@@ -200,6 +247,40 @@ select is((select array_agg(title order by title) from core.home_meetings('PKG',
 select is((select array_agg(subject) from core.inbox_messages('PKG', 'all')), array['Owner mail'], 'the owner: own Microsoft message, not the viewer''s');
 select is((select string_agg(distinct account, ',' order by account) from core.briefing_coverage('PKG') where account is not null and status <> 'not_connected' and provider = 'microsoft'),
   'dead-t253@ms.example.test,robert-t253@ms.example.test'::text, 'the owner: coverage lists their own Microsoft accounts (the dead one too), never the viewer''s');
+-- the owner's APK mailbox: shown under APK, absent under PKG
+select is(core.mailbox_ids(pg_temp.uid('owner@example.test'), 'APK'), array['00000000-0000-4000-8000-000000032203']::uuid[], 'cross-lane: the owner''s APK mailbox is returned for APK');
+select ok(not ('00000000-0000-4000-8000-000000032203'::uuid = any (core.mailbox_ids(pg_temp.uid('owner@example.test'), 'PKG'))), 'cross-lane: ...and not for PKG');
+select is(core.home_calendar_status('APK'), 'connected', 'cross-lane: the owner''s APK calendar status is connected');
+select is((select string_agg(distinct account, ',') from core.briefing_coverage('APK') where connection_id is not null), 'apk-t253@ms.example.test', 'cross-lane: coverage for APK names the APK account');
+select is((select count(*)::int from core.briefing_coverage('PKG') where account = 'apk-t253@ms.example.test'), 0, 'cross-lane: coverage for PKG never names the APK account');
+select is((select array_agg(title) from core.home_meetings('APK', now(), now() + interval '1 day')), array['APK MS meeting'], 'cross-lane: home_meetings for APK shows the APK event');
+select is((select count(*)::int from core.home_meetings('PKG', now(), now() + interval '1 day') where title = 'APK MS meeting'), 0, 'cross-lane: ...and PKG does not');
+select is((select array_agg(subject) from core.inbox_messages('APK', 'all')), array['APK mail'], 'cross-lane: inbox_messages for APK shows the APK message');
+select is((select count(*)::int from core.inbox_messages('PKG', 'all') where subject = 'APK mail'), 0, 'cross-lane: ...and PKG does not');
+select is((select unread_important from core.home_mail_attention('APK', now() - interval '1 day')), 1, 'cross-lane: home_mail_attention for APK counts the APK message');
+select is((select unread_important from core.home_mail_attention('PKG', now() - interval '1 day')), 1, 'cross-lane: home_mail_attention for PKG counts only the PKG message (would be 2 on a leak)');
+-- briefing readers and message ref
+select is((select array_agg(title order by title) from core.briefing_events('PKG', now(), now() + interval '1 day')), array['Google meeting', 'Owner MS meeting'], 'core.briefing_events: the owner''s PKG events, not the viewer''s or the APK one');
+select is((select array_agg(title) from core.briefing_events('APK', now(), now() + interval '1 day')), array['APK MS meeting'], 'core.briefing_events: the APK event under APK');
+select is((select array_agg(thread_key) from core.briefing_threads('PKG', now() - interval '1 day')), array['m:ms-o-1'], 'core.briefing_threads: the owner''s PKG Microsoft thread only');
+select is((select array_agg(thread_key) from core.briefing_threads('APK', now() - interval '1 day')), array['m:ms-a-1'], 'core.briefing_threads: the APK thread under APK');
+select is((select provider || ':' || connection_id::text from core.inbox_message_ref('PKG', 'ms-o-1')), 'microsoft:00000000-0000-4000-8000-000000032204', 'core.inbox_message_ref: the owner''s own Microsoft message');
+select is((select provider || ':' || connection_id::text from core.inbox_message_ref('APK', 'ms-a-1')), 'microsoft:00000000-0000-4000-8000-000000032203', 'core.inbox_message_ref: the owner''s APK message under APK');
+select is((select count(*)::int from core.inbox_message_ref('PKG', 'ms-a-1')), 0, 'core.inbox_message_ref: the APK message is not found under PKG');
+select is((select count(*)::int from core.inbox_message_ref('PKG', 'ms-v-1')) + (select count(*)::int from core.inbox_message_ref('APK', 'ms-v-1')), 0, 'core.inbox_message_ref: the viewer''s message is refused to the owner');
+reset role;
+
+-- the job path: service_role names the owner (p_owner) and gets that person's Microsoft rows only
+select set_config('request.jwt.claims', '{"role":"service_role"}', true);
+set local role service_role;
+select is((select array_agg(thread_key) from core.briefing_threads('PKG', now() - interval '1 day', pg_temp.uid('viewer@example.test'))), array['m:ms-v-1'], 'job path: core.briefing_threads for the viewer returns the viewer''s Microsoft thread');
+select is((select array_agg(title) from core.briefing_events('PKG', now(), now() + interval '1 day', pg_temp.uid('viewer@example.test'))), array['Viewer MS meeting'], 'job path: core.briefing_events for the viewer returns the viewer''s Microsoft event');
+select is((select array_agg(thread_key) from core.briefing_threads('PKG', now() - interval '1 day', pg_temp.uid('owner@example.test'))), array['m:ms-o-1'], 'job path: naming the owner does not return the viewer''s thread');
+select is((select array_agg(title order by title) from core.briefing_events('PKG', now(), now() + interval '1 day', pg_temp.uid('owner@example.test'))), array['Google meeting', 'Owner MS meeting'], 'job path: naming the owner does not return the viewer''s event');
+select is((select count(*)::int from core.briefing_threads('APK', now() - interval '1 day', pg_temp.uid('viewer@example.test'))) + (select count(*)::int from core.briefing_events('APK', now(), now() + interval '1 day', pg_temp.uid('viewer@example.test'))), 0, 'job path: the viewer in another lane returns nothing');
+select is((select array_agg(thread_key) from core.briefing_threads('APK', now() - interval '1 day', pg_temp.uid('owner@example.test'))), array['m:ms-a-1'], 'job path: the owner in APK returns the APK thread');
+select is((select count(*)::int from core.briefing_threads('PKG', now() - interval '1 day', pg_temp.uid('finance-operator@example.test'))) + (select count(*)::int from core.briefing_events('PKG', now(), now() + interval '1 day', pg_temp.uid('finance-operator@example.test'))), 0, 'job path: a user without own_mail returns nothing');
+select is((select count(*)::int from core.briefing_threads('PKG', now() - interval '1 day')) + (select count(*)::int from core.briefing_events('PKG', now(), now() + interval '1 day')), 0, 'job path: no owner named, nothing');
 reset role;
 
 -- ---------------------------------------------------------------- failure and sync streams treat a Microsoft connection like a Google one
