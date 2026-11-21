@@ -227,7 +227,7 @@ export function createGoogleHarness(options: GoogleHarnessOptions) {
       let removed = 0;
       for (const r of page.removals) {
         const hit = index.get(indexKey(laneId, conn.id, r.message_id));
-        if (hit && !hit.deleted) {
+        if (hit && !hit.deleted && (r.folder === undefined || r.folder === hit.folder)) {
           hit.deleted = true;
           removed += 1;
         }

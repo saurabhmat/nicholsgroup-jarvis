@@ -106,8 +106,10 @@ export type MessageMeta = z.infer<typeof MessageMetaSchema>;
  * Provider reported the message truly gone: sets `comms.message_index.deleted` (Gmail messagesDeleted, Graph @removed
  * with reason "deleted", or a reconciled move out of the synced folders). Trash/archive are labels, not removals.
  * Apply a page atomically: removals first, then upserts (so remove-then-re-add of one id ends present).
+ * `folder` (T-252, Graph delta per folder): when present, only a stored row in that folder is flagged deleted, so a message
+ * that moved between two synced folders in two pages is not lost. Absent: any folder (Gmail).
  */
-export const MessageRemovalSchema = z.strictObject({ message_id: id512 });
+export const MessageRemovalSchema = z.strictObject({ message_id: id512, folder: id512.optional() });
 export type MessageRemoval = z.infer<typeof MessageRemovalSchema>;
 
 export const ATTENDEE_RESPONSES = ["accepted", "declined", "tentative", "needs_action"] as const;
