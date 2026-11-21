@@ -1689,6 +1689,8 @@ Logged for later tasks:
 - (not run) The SQL half of spec test 15 (cursor prefix, cross-connection refusal) is pgTAP 321 from T-252, unchanged here and not re-run; the TypeScript twin was compared with the SQL by reading.
 
 ## T-067: spec §15 "verify" items checked against Microsoft's documentation (Nov 21, 2026): BLOCKED on D-59
+**Update, same day: D-59 decided by Saurabh: the default calendar only (option b).** T-067 is unblocked; its acceptance and spec §9 carry the note. The findings below stand.
+
 Read on learn.microsoft.com on Nov 21, 2026 by the agent session (a web-fetch subagent; pages read in full). T-067 is not started: one finding differs from the spec and needs a decision (D-59).
 
 **V-17 calendarView delta: the per-calendar form is not in the v1.0 documentation.**
