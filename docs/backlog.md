@@ -1386,120 +1386,120 @@ Standing rules for every task in this phase (not repeated below):
 - Google behaviour is unchanged: the existing Google tests pass without edits other than renamed imports.
 
 ### T-250 Lane config: mail provider per lane and Microsoft settings
-- status: proposed
+- status: approved
 - depends: T-011
 - needs: D-54
 - acceptance: Spec: `docs/specs/microsoft.md` §4. `laneConfigSchema` gains `mail.provider` (`google` | `microsoft`, default `google`) and an optional strict `microsoft` block (`cloud` `commercial` | `gcc_high` default `commercial`; `tenant_ids` 1..10 lower-case UUIDs; `allow_gcc` default false; `mail_folders` subset of `inbox`, `sentitems`, `archive`, default `["inbox","sentitems"]`, max 3); refines: `microsoft` required when `mail.provider = "microsoft"`, `mail_transport = "composio"` refused with `microsoft`; `calendar.calendar_ids` are read as ids of the lane's current provider (the cut-over runbook clears them); existing stored PKG configs still parse (fixture test); `LaneConfigReader` gains `mailProvider(lane)` and `microsoftSettings(lane)`, read on every call, failing closed on an unreadable or malformed config; unit tests for each rule and for the secret-value scan on the new keys. No SQL.
 
 ### T-251 Graph connector environment (multi-tenant, per cloud)
-- status: proposed
+- status: approved
 - depends: T-005
 - acceptance: Spec: `docs/specs/microsoft.md` §5.2. `connectorEnvShapes.graph` = `GRAPH_CLIENT_ID`, `GRAPH_CLIENT_SECRET`, optional `GRAPH_REDIRECT_URI` with the `GOOGLE_REDIRECT_URI` rules (default `http://localhost:3000/api/connect/microsoft/callback` locally; required, https and on the app's own origin elsewhere); `GRAPH_TENANT_ID` removed from the schema; a separate optional group `graph_usgov` (`GRAPH_USGOV_CLIENT_ID`, `GRAPH_USGOV_CLIENT_SECRET`, `GRAPH_USGOV_REDIRECT_URI`) defined but read by nothing until T-267; `GRAPH_CLIENT_SECRET` and `GRAPH_USGOV_CLIENT_SECRET` match the secret patterns, are server-only and are in the client-bundle canary set; env errors name variables only (tests); the `.env.example` line changes are proposed in the PR body (human-owned file, H-068).
 
 ### T-254 SQL: Microsoft identity on connections and own-mail connect for Microsoft
-- status: proposed
+- status: approved
 - depends: T-031, T-035
 - acceptance: Spec: `docs/specs/microsoft.md` §6.1, §6.2. `core.connections` gains `tenant_id uuid` and `cloud text` (`commercial` | `gcc_high`), allowed only on `provider = 'microsoft'` (check); set once by a new service-role security-definer function `core.connection_set_microsoft_identity(p_lane, p_connection_id, p_tenant_id, p_cloud)` (lane-checked, refuses a non-Microsoft row and a second set); `core.connections_identity_immutable` refuses any later change; the health columns grant includes both (no content). `core.oauth_state_create` / `core.oauth_state_consume` treat `microsoft` like `google` (own_mail); TypeScript `connectRolesFor("microsoft")` returns `MAIL_CONNECT_ROLES`. pgTAP: set-once, immutability, non-Microsoft refused, viewer may start a Microsoft state, finance_operator may not, QuickBooks still needs owner/admin_technical, cross-lane state and cross-lane identity set refused, AAL1 refused; catalog test updated; production part + check.
 
 ### T-252 SQL: provider-generic mail page writer
-- status: proposed
+- status: approved
 - depends: T-063, T-254
 - acceptance: Spec: `docs/specs/microsoft.md` §6.3. New latest definition of `core.comms_mail_apply_page` (from the body in `20261113120000_message_flags_and_thread_ref.sql`, or a newer one if it exists): usable connection of provider `google` or `microsoft`, rows inserted with the connection's own provider (no `'google'` literal); cursor must start with `g1.<connection id>.` (google) or `m1.<connection id>.m:` (microsoft), at most 16384 characters, else 22023 (closes the T-063 re-review LOW); removals accept a string or `{message_id, folder}` (with a folder only a stored row in that folder is flagged deleted); on update an absent flag keeps the stored value, on insert it is false. TypeScript: `MessageRemovalSchema` gains optional `folder`; the mail store passes it. pgTAP: Microsoft page applied, Google regression unchanged, foreign-prefix cursor refused for each provider, folder-scoped removal, flag keep-on-update, cross-lane denial (a lane-B connection with lane A refused), disabled lane refused; production part + check.
 
 ### T-253 SQL: provider-generic calendar page writer and the reader inventory
-- status: proposed
+- status: approved
 - depends: T-064, T-252
 - acceptance: Spec: `docs/specs/microsoft.md` §6.3. New latest definition of `core.cal_events_apply_page`: provider `google` or `microsoft`, prefix `g1.<id>.c:` or `m1.<id>.c:` by the row's provider; the inventory of every function and view whose latest body names `'google'` (start from the plan-review T-219 finding 1 list and the T-130 / T-200 / T-231a / T-238 / T-247 functions; search all migrations) recorded in `docs/plan-review.md` with a decision per item; "mail provider" meanings generalised to `google`/`microsoft` in the same migration; a pgTAP test lists those functions and asserts each accepts a Microsoft connection (mail and calendar readers, coverage, home calendar status, sync-now/job-failure streams) and still refuses another user's and another lane's rows (T-247 rules); production part + check.
 
 ### T-255 Provider-agnostic comms wiring (facade and generic sync runners)
-- status: proposed
+- status: approved
 - depends: T-250, T-252, T-253
 - acceptance: Spec: `docs/specs/microsoft.md` §4, §8.3, §8.6. `createMailSync` / `createCalendarSync` and the mail/calendar index stores move out of `google/` into `comms/` and are generic over the provider (log names by provider); `isMailAddress` moves out of `google/headers` so `comms/schemas` no longer imports Google code; a server-only facade in `packages/connectors` dispatches `readBody`, `search`, `prepareEmailWrite`, the sync runners and the email writer/reconciler by the authoritative connection row's provider (the T-247 owner check kept); apps/web callers (`readGmailBody`, `prepareEmailWrite`, the reply route, briefing body reads, `mail-ingest-delta` and `cal-ingest-delta` target lists, `CALENDAR_PROVIDERS`) use it; every sync and read re-reads `mail.provider` and skips (reported `provider_mismatch`, no external call) a connection whose provider is not the lane's; Microsoft entries are registered but answer `unsupported_op` until their tasks land; `describeCommsContract` gains the options a Graph provider needs (`removedEventsAreStubs: false`). Tests: Google regression suite unchanged, dispatch by provider, mismatch skipped before any token read, two lanes with different providers in one tick.
 
 ### T-256 Microsoft: Graph HTTP client, token manager, guard and health
-- status: proposed
+- status: approved
 - depends: T-251, T-255, T-034
 - acceptance: Spec: `docs/specs/microsoft.md` §5.3, §7 (Tokens, Guard), §8.5. `packages/connectors/src/microsoft/` with `import "server-only"` entry points; host allow-list per cloud (`commercial` only here; `gcc_high` hosts refused until T-267); `createGraphHttp` refuses other hosts before a token is read; per-connection rate bucket and at most 4 concurrent requests per mailbox, separate `:write` bucket, `Retry-After` honoured on 429/503 through the shared client; token manager mirroring Google's (refresh under 5 min or on 401, single-flight, compare-and-swap `rotateToken` because refresh tokens rotate (verify V-8), loser re-reads, refresh never retried, `invalid_grant` and the consent-revoked / conditional-access family → `reconnect_required`); guard on every call (lane brand, provider `microsoft`, authoritative row, usable status, lane `mail.provider`, row `tenant_id` in `tenant_ids`, row `cloud` = lane cloud, mail policy); health check `GET /me` registered with `conn.token_health`; error map (400/401/403/404/410/429/5xx/timeouts → retry, `reconnect_required` or failed-with-message; no provider text stored, T-196 error log used); tests incl. token canary (never in logs, errors or responses), a lost refresh race, 429 storm on one tenant not delaying another, a tenant removed from config refused before any call.
 
 ### T-066 Microsoft: Entra connect (multi-tenant) and identity
-- status: proposed
+- status: approved
 - depends: T-256, T-254, T-035
 - note: builds on fakes with no human item; the live checks are H-062 (app registration), H-066 (test tenant) and H-070.
 - acceptance: Spec: `docs/specs/microsoft.md` §5, §7. `OAuthProvider` `microsoft` (slug `microsoft`, callback `/api/connect/microsoft/callback`, PKCE, client secret in the body); `endpoints(laneId)` from the lane's cloud with authority = the single tenant id or `organizations`, never `common`; scopes `openid offline_access User.Read Mail.Read Calendars.Read`, plus `Mail.ReadWrite Mail.Send` only when the lane policy allows email writes (`scopesFor`, same switch as Google's compose); callback order of spec §7: precheck (domains configured, Microsoft settings valid) → exchange → exact granted scopes (handles the `scope` format, V-5) and a refresh token → `tid` from the id_token in `tenant_ids` else new result `wrong_tenant` → GCC check per spec §5.4 (V-3; if not detectable, the gate is documented) → `GET /me` `mail` required, no guest → mail policy → reconnect same address and tenant else `wrong_account` → D-23 and ownership (existing) → Vault store → `core.connection_set_microsoft_identity` → features `graph_mail_write` → audit; known consent errors mapped to new result `admin_consent_required` (V-7), others `denied`; `login_hint` on reconnect; a refused grant is never stored and shows `GRANT_NOT_STORED_MESSAGE`. Tests against an MSW fake Entra + Graph `/me` for every refusal in spec §17 tests 4 – 9, plus "no tenant ids configured refuses before the exchange" and "personal-account tenant refused".
 
 ### T-257 Settings: "Your Microsoft accounts", admin consent help and local Disconnect
-- status: proposed
+- status: approved
 - depends: T-066, T-199
 - needs: D-55
 - acceptance: Spec: `docs/specs/microsoft.md` §5.5, §7. On Settings → Connections, when the lane's `mail.provider` is `microsoft`: "Your Microsoft accounts" (connect, reconnect per row, several accounts per user) for members with `own_mail`, other people's rows as health only for owner/admin_technical (D-43); a "this company now uses <provider>" note on rows of the other provider; the admin consent note with a link built from the client id, the lane's tenant id, the cloud and the registered redirect URI (no secret, no state stored); fixed messages for `admin_consent_required`, `wrong_tenant`, `wrong_account`, `account_refused`; Disconnect per D-55 (mailbox owner only, AAL2, confirm, Vault tokens deleted, row `disconnected`, audited, instructions to remove the app at Microsoft); wording says this connects mail and calendar read-only and is not how anyone signs in. Server actions return 403 to other roles and 404 to other lanes (tests); Vitest + a Playwright spec with the MSW fakes (run by a human if the e2e run would reset the local database).
 
 ### T-258 Microsoft: mail delta sync (metadata)
-- status: proposed
+- status: approved
 - depends: T-066, T-252, T-255
 - acceptance: Spec: `docs/specs/microsoft.md` §8.1, §8.2, §8.5. `MailProvider<"microsoft">.sync`: folders from `microsoft.mail_folders` resolved by well-known name; per-folder `messages/delta` with `$select` of index fields only, `Prefer: IdType="ImmutableId"` (the fake refuses a request without it) and `odata.maxpagesize`; first load bounded by 90 days or the lane's retention (V-10); composite cursor `m1.<connection id>.m:<base64url JSON>` with folder ids, next/delta links, position and a settings fingerprint; size test of the largest allowed state under 16 KB (V-12); one page per call; `@removed` → `{message_id, folder}` removals; 410 / sync-state errors and foreign or malformed cursors → `fullResyncRequired`; field mapping of spec §8.2 (canonical `INBOX`/`SENT`/`ARCHIVE`, `SENT` label, `OTHER`, `cat:` categories, `webLink` host check per cloud, V-15); time budget per run (`hasMore`); mail policy re-checked per call; `describeCommsContract` passes. Tests: spec §17 tests 11 – 15 and 17 with the fake Graph.
 
 ### T-259 Microsoft: live body, search and header flags
-- status: proposed
+- status: approved
 - depends: T-258
 - acceptance: Spec: `docs/specs/microsoft.md` §8.3, §8.4. `readBody` (text body, bounded, `UntrustedBody`, `live`, never persisted: DB-write spy and log capture with a canary body); ids validated (`ProviderIdParamSchema`, or a reversible encoding if V-11 shows Graph ids contain characters it refuses); `search` with the query escaped so operators cannot widen it (V-14), metadata only; header flags for new inbox messages through one bounded single-message read each, classified by the existing `mail-flags` rules, only booleans stored, headers never stored or logged; `is_auth_pass` false for Microsoft until V-13 is verified and the parser accepts only the tenant's own authserv-id (then a test per shape); `is_calendar` from `eventMessage` when present. Tests incl. spec §17 test 16.
 
 ### T-260 Microsoft mail in the jobs, Home, Inbox and briefing
-- status: proposed
+- status: approved
 - depends: T-259, T-238
 - acceptance: Spec: `docs/specs/microsoft.md` §8.6, §13. `mail-ingest-delta` and `conn.sync` run Microsoft connections of Microsoft lanes through the facade; Inngest concurrency per connection plus per tenant (`tenant_id`); Coverage, Sync now, the stale line and the failure alerts treat Microsoft streams like Google's; Home, Inbox and the briefing show Microsoft mail with "Open in Outlook" from `source_url` and provider names taken from the connection (no hard-coded "Gmail" in shared UI); the reply drawer and briefing body reads go through the facade with the owner check. Tests: a lane with two Microsoft mailboxes of two users (each sees only their own), a mixed tick (Google lane + Microsoft lane), UI text per provider.
 
 ### T-067 Microsoft: calendar delta sync
-- status: proposed
+- status: approved
 - depends: T-066, T-253, T-255
 - acceptance: Spec: `docs/specs/microsoft.md` §9. `CalendarProvider<"microsoft">`: discovery `GET /me/calendars` with the D-26-equivalent selection (default + owned/editable; read-only only with `include_read_only`; `calendar_ids` replaces), at most 5 calendars (the rest counted, never named), settings fingerprint re-checked per page; `calendarView/delta` per calendar over retention-back to `forward_days`-ahead windows (V-17); cursor `m1.<connection id>.c:` with per-calendar links and window, reload at half horizon; mapping of spec §9 (series/occurrences, `isCancelled`, https-only join URL, host-checked `webLink`, attendees capped, all-day with the original zone mapped to IANA or skipped and logged, V-18); `@removed` → `removals`; bodies in delta pages dropped in memory (canary test: not in store, logs or errors); `readBody` for a selected calendar only; contract suite passes with `removedEventsAreStubs: false`; size test for the largest allowed cursor. Tests: spec §17 tests 18 – 19.
 
 ### T-261 Microsoft calendar in the jobs, Home and briefing
-- status: proposed
+- status: approved
 - depends: T-067, T-130
 - acceptance: Spec: `docs/specs/microsoft.md` §9 (Wiring), §13. `cal-ingest-delta` lists Microsoft connections of Microsoft lanes (`CALENDAR_PROVIDERS` gains `microsoft`), per-tenant concurrency; Home's meetings, the 7-day look-ahead and the briefing show Microsoft events (Join links shown, never opened automatically); Settings shows "N calendars not synced (limit 5)" when the cap applies. Tests with synthetic events incl. an all-day event, a cancelled occurrence and a removed event.
 
 ### T-262 Microsoft email write: prepareWrite and Save as draft
-- status: proposed
+- status: approved
 - depends: T-259, T-232, T-192
 - needs: D-34
 - acceptance: Spec: `docs/specs/microsoft.md` §10. `prepareWrite` for `email.save_draft` / `email.send` (no external call; sender = the connection's mailbox; `inReplyTo.threadId` = conversation id); a Microsoft email writer exported only through `@nichols/connectors/write` with the checks of spec §10 (incl. `graph_mail_write`, owner = approver, open claim); Save as draft = `createReply` in the approved conversation (parent read first) or a new message, then PATCH of exactly the approved recipients, subject and body with the `X-Portal-Action-Id` header and the extended-property marker (V-19); marker lookup in Drafts before any create and after an ambiguous failure; POSTs never retried; read-back verify; write-client allow-list of exactly the spec §10 method + path templates (a test enumerates DELETE, move, copy, forward, rules and settings and expects refusal before a token read); lint/source test that only approvals imports the writer. Tests: spec §17 tests 20, 22, 23.
 
 ### T-263 Microsoft email write: Send, recovery and approvals dispatch
-- status: proposed
+- status: approved
 - depends: T-262
 - needs: D-34
 - acceptance: Spec: `docs/specs/microsoft.md` §10. `email.send` = the T-262 draft then `POST /me/messages/{id}/send` (V-20); verification by the marker in Sent Items (From = mailbox, recipients, subject, conversation); timeout/5xx after the send → marker lookup twice, else `outcome_unknown`, never a second send; `MicrosoftEmailReconciler` (`findWrite`, `verifyWrite` only) used by `action.reconcile_stuck`; the approvals email executor and reconciler dispatch by the connection's provider; any approvals SQL that assumes `provider = 'google'` for `email.*` generalised with pgTAP (incl. cross-lane and the T-247 owner-only rules for a Microsoft mailbox) and a production part; the body purge on every terminal state still holds (D-19). Tests: spec §17 test 21 with a counting fake that crashes after accepting a send.
 
 ### T-265 Enable `NC` for Microsoft mail and calendar (runbook, config only)
-- status: proposed
+- status: approved
 - depends: T-257, T-260, T-261
 - needs: D-50, D-56
 - acceptance: Spec: `docs/specs/microsoft.md` §12.1. `docs/runbooks/enable-lane-mail.md` (generic: any lane, either provider; NC as the worked example) and a gitignored manual SQL pair (lane enabled, lane policy with `email`/`calendar` only and no writes, an insert-only lane_config version with `mail.provider = "microsoft"`, `allowed_domains`, `microsoft` settings with a placeholder tenant id the human fills in, memberships) plus a check file; a synthetic mail-only lane test (Vitest/pgTAP, and Playwright if it can run) shows Home and the nav limited to `enabled_modules` (no finance tiles, no QuickBooks banner); any code fix this needs is generic (no lane code in code, rule 2); zero company-specific code in the diff (PR diff check). Human steps: H-068, H-069, H-070.
 
 ### T-266 PKG cut-over from Google to Microsoft (runbook and SQL)
-- status: proposed
+- status: approved
 - depends: T-265, T-263
 - needs: H-065, D-54
 - acceptance: Spec: `docs/specs/microsoft.md` §12.2. `docs/runbooks/mail-provider-cutover.md` modelled on T-247's part 25 (order, what users see, rollback); a gitignored manual SQL pair: insert-only lane_config version switching `PKG` to `microsoft` (domains kept, Microsoft settings with placeholders, Google `calendar.calendar_ids` dropped), every pending `email.*` proposal on a `PKG` Google connection invalidated with its body purged, `PKG` Google connections set `disconnected` with Vault tokens deleted through the existing function; old Google rows left to the retention purge; every mail/calendar reader checked and, where missing, changed to hide rows of `disconnected` connections (migration + pgTAP incl. cross-lane and cross-user denial); check file (all Google rows disconnected, no pending Google email proposal, new version current). Runs locally against synthetic data only (spec §17 test 27). Human step: H-071.
 
 ### T-068 Microsoft: change notifications (subscriptions and receiver)
-- status: proposed
+- status: approved
 - depends: T-260, T-261, T-036, T-040
 - acceptance: Spec: `docs/specs/microsoft.md` §6.4, §14. `core.push_subscriptions` (lane_id, RLS health-only, definer writers, retention entry, pgTAP incl. cross-lane denial); `core.webhook_events` accepts provider `microsoft` (extend the check if needed, pgTAP); `watch`/`stop` for mail (inbox) and each synced calendar, `notificationUrl`/`lifecycleNotificationUrl` from server config only, `clientState` a random Vault secret per subscription; `POST /api/webhooks/microsoft`: validation token echoed as `text/plain` and nothing else, `clientState` compared in constant time, unknown subscription or wrong `clientState` dropped, deduped in `core.webhook_events`, each valid notification only queues a debounced delta sync for its connection (no inline content read, no rich notifications); `capabilities.watch` becomes `push` with polling kept as fallback. Tests: spoofed, replayed, wrong-lane and unknown-subscription notifications; validation echo (V-21).
 
 ### T-264 Microsoft: subscription renewal and lifecycle events
-- status: proposed
+- status: approved
 - depends: T-068
 - acceptance: Spec: `docs/specs/microsoft.md` §14. Microsoft renewer in the T-040 `conn.subscriptions_renew` registry renews subscriptions expiring within 24 h (expiry within Graph's maximum, V-21); lifecycle `reauthorizationRequired` → renew, `subscriptionRemoved` → recreate, `missed` → delta sync; a renewal that fails falls back to polling and emits `conn/attention.needed` (`subscription_renewal_failed`); renew/stop act only on subscriptions recorded for the same (lane, connection); a disconnected connection's subscriptions are stopped. Tests with fake clocks and the fake Graph. Human step: H-073.
 
 ### T-267 GCC High cloud (only if needed)
-- status: proposed
+- status: approved
 - depends: T-066, T-258, T-067
 - needs: H-064, H-065, D-49
 - acceptance: Spec: `docs/specs/microsoft.md` §5.2 – §5.4. Build only if H-064/H-065 say a tenant to be connected is in GCC High. `gcc_high` hosts and endpoints (V-2) enabled in the allow-lists; the `graph_usgov` env group used for `cloud = "gcc_high"` lanes; `webLink` hosts for that cloud; a connection's cloud must equal its lane's; tests that a commercial token never reaches a GCC High host and the reverse. Nichols Law stays off until D-51.
 
 ### T-268 Shared mailboxes (only if decided)
-- status: proposed
+- status: approved
 - depends: T-260, T-261
 - needs: H-065
 - acceptance: Spec: `docs/specs/microsoft.md` §11. Build only if H-065 (2) is "one account plus shared mailboxes" and Saurabh approves a token design that keeps credentials lane-isolated (spec §11 explains why one refresh token across lanes breaks rule 1). Then: a design note in the spec first, `Mail.Read.Shared` / `Calendars.Read.Shared` requested only for lanes that list shared mailboxes in `lane_config`, `/users/{address}/...` paths, the shared address as the connection's mailbox, D-23 and owner rules unchanged, SQL with RLS and pgTAP as needed.
