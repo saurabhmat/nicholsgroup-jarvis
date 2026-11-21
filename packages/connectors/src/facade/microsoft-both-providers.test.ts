@@ -28,7 +28,6 @@ afterEach(() => {
 });
 const USER_1 = "00000000-0000-4000-8000-0000000c2601";
 const USER_2 = "00000000-0000-4000-8000-0000000c2602";
-const TENANT_UUID = "33333333-3333-4333-8333-333333333333";
 
 function setup(lanes: Record<string, { providers: ("google" | "microsoft")[] }> = { PKG: { providers: ["google", "microsoft"] } }) {
   const fake = createFakeMicrosoft();
@@ -77,7 +76,7 @@ function setup(lanes: Record<string, { providers: ("google" | "microsoft")[] }> 
       const lane = f["eq:lane_id"]?.[0];
       const providers = (f["in:provider"]?.[0] ?? []) as string[];
       const statuses = (f["in:status"]?.[0] ?? []) as string[];
-      const data = [...m.h.rows.values()].filter((r) => r.lane_id === lane && providers.includes(r.provider) && statuses.includes(r.status)).sort((x, y) => x.id.localeCompare(y.id)).map((r) => ({ id: r.id, provider: r.provider, tenant_id: r.provider === "microsoft" ? TENANT_UUID : null }));
+      const data = [...m.h.rows.values()].filter((r) => r.lane_id === lane && providers.includes(r.provider) && statuses.includes(r.status)).sort((x, y) => x.id.localeCompare(y.id)).map((r) => ({ id: r.id, provider: r.provider }));
       return Promise.resolve({ data, error: null });
     };
     return { schema: () => ({ from: () => ({ select: () => b }) }) } as never;
@@ -87,7 +86,7 @@ function setup(lanes: Record<string, { providers: ("google" | "microsoft")[] }> 
   async function tick(stream: "mail" | "calendar", laneIds: string[]) {
     const out: { laneId: string; id: string; result: Awaited<ReturnType<typeof job.run>> }[] = [];
     for (const laneId of laneIds) {
-      const targets = stream === "mail" ? await lister.listMailTargets(laneId as LaneId) : await lister.listCalendarTargets(laneId as LaneId);
+      const targets = stream === "mail" ? await lister.listMailTargets(laneId as LaneId) : (await lister.listCalendarConnectionIds(laneId as LaneId)).map((connectionId) => ({ connectionId }));
       for (const t of targets) out.push({ laneId, id: t.connectionId, result: await job.run(laneId as LaneId, t.connectionId, { trigger: "schedule", streams: [stream] }) });
     }
     return out;
@@ -218,16 +217,16 @@ describe("the calendar tick: all-day, a cancelled occurrence and a removed event
 });
 
 describe("the scheduled lister (T-260)", () => {
-  it("lists Google and Microsoft connections of the lane together, with the tenant id of a Microsoft row only", async () => {
+  it("lists Google and Microsoft connections of the lane together (ids), and the mail targets with their provider", async () => {
     const { m, lister } = setup();
     const g = m.seedGoogle("PKG", { ownerId: USER_1 });
     const ms = m.connect("PKG", { ownerId: USER_1 });
     m.connect("PKG", { ownerId: USER_2, tenant: TENANT_A, address: "second@pubkgroup.example.test" });
     const mailTargets = await lister.listMailTargets("PKG" as LaneId);
     expect(mailTargets).toHaveLength(3);
-    expect(mailTargets.find((t) => t.connectionId === g.row.id)).toEqual({ connectionId: g.row.id, tenantId: null });
-    expect(mailTargets.find((t) => t.connectionId === ms.conn.id)).toEqual({ connectionId: ms.conn.id, tenantId: TENANT_UUID });
-    expect(await lister.listCalendarTargets("PKG" as LaneId)).toEqual(mailTargets);
+    expect(mailTargets.find((t) => t.connectionId === g.row.id)?.provider).toBe("google");
+    expect(mailTargets.find((t) => t.connectionId === ms.conn.id)?.provider).toBe("microsoft");
+    expect((await lister.listCalendarConnectionIds("PKG" as LaneId)).sort()).toEqual(mailTargets.map((t) => t.connectionId).sort());
     expect((await lister.listMailConnectionIds("PKG" as LaneId)).sort()).toEqual(mailTargets.map((t) => t.connectionId).sort());
   });
 });

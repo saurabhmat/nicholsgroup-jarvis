@@ -64,7 +64,7 @@ export async function handleMailIngest(deps: MailIngestDeps, scheduledAtMs: unkn
   if (plan.sends.length > 0) {
     await step.sendEvent(
       "fan-out",
-      plan.sends.map((s) => connSyncRequested.create({ laneId: s.laneId, connectionId: s.connectionId, trigger: "schedule", streams: ["mail"], ...(s.tenantId ? { tenantId: s.tenantId } : {}) }, { id: mailIngestEventId(s.connectionId, slot) })),
+      plan.sends.map((s) => connSyncRequested.create({ laneId: s.laneId, connectionId: s.connectionId, trigger: "schedule", streams: ["mail"] }, { id: mailIngestEventId(s.connectionId, slot) })),
     );
   }
   // Fail the run AFTER the healthy lanes were sent. Not retried: the next tick is the retry.

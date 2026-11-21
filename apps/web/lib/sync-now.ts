@@ -1,10 +1,10 @@
-// "Sync now" (T-238 part B; T-260: Google and Microsoft): POST /api/lanes/PKG/sync-now asks conn.sync to run every usable mail/calendar connection of the lane now
+// "Sync now" (T-238 part B): POST /api/lanes/PKG/sync-now asks conn.sync to run every usable Google connection of the lane now
 // (trigger "manual", both streams), instead of waiting for the next 15-minute tick.
 //  - Who: owner or admin_technical of the lane at AAL2 (the same guard as connecting). No session 401; AAL1 or another role 403; a
 //    lane that is not the caller's (or no such lane) 404, the same answer as an unknown lane.
 //  - Cross-site: the request must carry Origin = this site (a form or fetch from the page); Sec-Fetch-Site other than same-origin is 403.
 //  - Rate limit: one per lane per 2 minutes, in the database (core.sync_now_claim: atomic, per lane, whoever clicks). Refused with 429 and
-//    retryAfterSeconds. A lane with no usable connection answers `no_connections` WITHOUT using up the limit.
+//    retryAfterSeconds. A lane with no usable Google connection answers `no_connections` WITHOUT using up the limit.
 //  - Events: one conn/sync.requested per connection (ids only), event id `sync-now:<connectionId>:<2-minute slot>` as a second dedupe.
 //  - Audit: `connection.sync_now` with who, lane and the number of connections (ids and counts only), written BEFORE any event is sent;
 //    if the audit write fails nothing is sent (503).
@@ -19,6 +19,9 @@ const json = (body: unknown, status: number) => Response.json(body, { status, he
 export const SYNC_NOW_SLOT_MS = 2 * 60_000;
 export const syncNowEventId = (connectionId: string, nowMs: number): string => `sync-now:${connectionId}:${String(Math.floor(nowMs / SYNC_NOW_SLOT_MS))}`;
 
+/** T-260: the stream-specific event id of a Microsoft connection (its two streams are two events, so a first load never runs both inside one 300-second invocation). */
+export const syncNowStreamEventId = (connectionId: string, nowMs: number, stream: "mail" | "calendar"): string => `${syncNowEventId(connectionId, nowMs)}:${stream}`;
+
 export type SyncNowResult =
   | { status: "started"; connections: number }
   | { status: "no_connections"; connections: 0 };
@@ -28,10 +31,13 @@ type Rpc = { schema(s: "core"): { rpc(fn: "sync_now_claim", args: { p_lane: stri
 export type SyncNowDeps = {
   guards: () => Promise<Pick<Guards, "requireLane" | "requireRole">>;
   audit: () => Audit;
-  /** Usable Google and Microsoft connections of the lane (the lane router's lister; ids only, a Microsoft row with its tenant id, T-260). */
-  listConnections: (laneId: string) => Promise<readonly (string | { connectionId: string; tenantId?: string | null })[]>;
-  /** conn/sync.requested for one connection (trigger manual, both streams). Throws when it could not be sent. `tenantId` only for a Microsoft row. */
-  send: (laneId: string, connectionId: string, eventId: string, tenantId?: string) => Promise<unknown>;
+  /** Usable mail and calendar connections of the lane (the lane router's lister; ids, with the provider when known). A bare id is sent as one event, as before. */
+  listConnections: (laneId: string) => Promise<readonly (string | { connectionId: string; provider: string })[]>;
+  /**
+   * conn/sync.requested for one connection (trigger manual). Throws when it could not be sent. Without `streams` the event runs both streams (every Google
+   * connection, exactly as before); a Microsoft connection gets two calls, one per stream.
+   */
+  send: (laneId: string, connectionId: string, eventId: string, streams?: readonly ("mail" | "calendar")[]) => Promise<unknown>;
   now?: () => Date;
 };
 
@@ -53,13 +59,12 @@ export function createSyncNowHandler(deps: SyncNowDeps) {
       }
       const { session, client } = await g.requireRole(laneId, CONNECT_ROLES);
 
-      const byId = new Map<string, string | undefined>();
+      const providerOf = new Map<string, string>();
       for (const ref of await deps.listConnections(laneId)) {
         const id = typeof ref === "string" ? ref : ref.connectionId;
-        const tenant = typeof ref === "string" ? undefined : (ref.tenantId ?? undefined);
-        if (!byId.has(id)) byId.set(id, tenant);
+        if (!providerOf.has(id)) providerOf.set(id, typeof ref === "string" ? "" : ref.provider);
       }
-      const ids = [...byId.keys()];
+      const ids = [...providerOf.keys()];
       if (ids.length === 0) return json({ status: "no_connections", connections: 0 } satisfies SyncNowResult, 200);
 
       const claim = await (client as unknown as Rpc).schema("core").rpc("sync_now_claim", { p_lane: laneId });
@@ -83,10 +88,15 @@ export function createSyncNowHandler(deps: SyncNowDeps) {
       });
 
       const nowMs = (deps.now ?? (() => new Date()))().getTime();
-      const sent = await Promise.allSettled(ids.map((id) => {
-        const tenant = byId.get(id);
-        return tenant ? deps.send(laneId, id, syncNowEventId(id, nowMs), tenant) : deps.send(laneId, id, syncNowEventId(id, nowMs));
-      }));
+      // A Microsoft connection: one event per stream (a connection counts as started when at least one of its events was sent). Everything else: the one event it always had.
+      const sent = await Promise.allSettled(
+        ids.map(async (id) => {
+          if (providerOf.get(id) !== "microsoft") return deps.send(laneId, id, syncNowEventId(id, nowMs));
+          const results = await Promise.allSettled((["mail", "calendar"] as const).map((stream) => deps.send(laneId, id, syncNowStreamEventId(id, nowMs, stream), [stream])));
+          if (results.every((r) => r.status === "rejected")) throw new Error("not sent");
+          return undefined;
+        }),
+      );
       const started = sent.filter((r) => r.status === "fulfilled").length;
       if (started === 0) return json({ error: "jobs_unavailable" }, 503);
       return json({ status: "started", connections: started } satisfies SyncNowResult, 200);

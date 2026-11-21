@@ -1,7 +1,7 @@
 // conn.sync Inngest function (T-038): concurrency key, retries, failure translation, lane check, registration.
 import { NonRetriableError, RetryAfterError, Inngest } from "inngest";
 import { describe, expect, it, vi } from "vitest";
-import { CONN_SYNC_CONCURRENCY, CONN_SYNC_RETRIES, CONN_SYNC_TENANT_CONCURRENCY, connSyncFunction, handleConnSync, type ConnSyncDeps, type ConnSyncResult } from "./conn-sync";
+import { CONN_SYNC_CONCURRENCY, CONN_SYNC_RETRIES, connSyncFunction, handleConnSync, type ConnSyncDeps, type ConnSyncResult } from "./conn-sync";
 import { connSyncRequested } from "./events";
 
 const CONN = "00000000-0000-4000-8000-000000000381";
@@ -19,8 +19,7 @@ describe("conn.sync function config", () => {
     const fn = connSyncFunction(new Inngest({ id: "test-app", isDev: true }), deps(ok)) as unknown as { opts: Record<string, unknown>; id: () => string };
     const opts = JSON.parse(JSON.stringify(fn.opts)) as Record<string, unknown>;
     expect(opts.retries).toBe(CONN_SYNC_RETRIES);
-    // T-260: the per-connection key first and unchanged, then the per-tenant key (see microsoft-wiring.test.ts).
-    expect(opts.concurrency).toEqual([CONN_SYNC_CONCURRENCY, CONN_SYNC_TENANT_CONCURRENCY]);
+    expect(opts.concurrency).toEqual(CONN_SYNC_CONCURRENCY);
     expect(opts.id).toBe("conn-sync");
   });
 

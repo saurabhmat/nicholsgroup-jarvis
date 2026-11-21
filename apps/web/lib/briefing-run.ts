@@ -79,6 +79,7 @@ async function proposeReplies(deps: RunDeps, laneId: LaneId, content: BriefConte
       continue;
     }
     // T-260: replying from a Microsoft mailbox is not built yet (T-262, T-263): no proposal is attempted (the facade would answer unsupported_op); the draft stays on Home to copy.
+    // Fail closed: in a labelled view (provider set) only a thread known to be Google's is proposed; an unknown provider ("") is skipped.
     if (r?.provider !== undefined && r.provider !== "google") {
       content.notes.push(`reply_not_proposed:${d.ref}`);
       continue;
@@ -183,7 +184,8 @@ export function refsFrom(view: BriefingView, now?: Date): BriefRef[] {
       subject: t.subject,
       receivedAt: t.receivedAt,
       sourceUrl: t.sourceUrl,
-      ...(tag ? { provider: tag.provider } : {}),
+      // In a labelled view every ref has a provider; "" = the row's connection is not in Coverage (unknown), which is never treated as Google.
+      ...(sourceOf ? { provider: tag?.provider ?? "" } : {}),
       reason,
       kind,
     });

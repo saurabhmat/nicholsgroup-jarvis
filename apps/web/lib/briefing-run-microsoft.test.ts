@@ -23,14 +23,21 @@ const client = {
   }),
 } as unknown as Parameters<typeof loadBriefing>[0];
 
+const withCoverage = (rows: unknown[]) => ({
+  schema: () => ({
+    from: () => ({ select: () => ({ eq: () => ({ maybeSingle: async () => ({ data: { config: { mailboxes: ["robert@pubk.example.test"] } }, error: null }) }) }) }),
+    rpc: async (fn: string) => (fn === "briefing_coverage" ? { data: rows, error: null } : fn === "briefing_threads" ? { data: [thread(G, "g-1", "Gmail thread"), thread(M, "ms-1", "Outlook thread")], error: null } : { data: [], error: null }),
+  }),
+}) as unknown as Parameters<typeof loadBriefing>[0];
+
 const reply = JSON.stringify({ lines: ["Two threads need you."], attention: [], deadlines: [], priorities: [], more_replies: [], replies: [{ ref: "r1", status: "ready", context: "x", text: "Thanks, noted." }, { ref: "r2", status: "ready", context: "y", text: "Thanks, noted." }] });
 
-function run() {
+function run(coverageRows?: unknown[]) {
   const saved: SavedBriefing[] = [];
   const reads: { connection: string; message: string }[] = [];
   const proposed: { connectionId: string }[] = [];
   const d: RunDeps = {
-    client,
+    client: coverageRows ? withCoverage(coverageRows) : client,
     provider: createMockProvider([textResult(reply)]),
     readBody: async (_l, connection, message) => (reads.push({ connection, message }), "Plain synthetic body"),
     brain: null,
@@ -52,5 +59,13 @@ describe("a briefing run for a person with a Google and a Microsoft mailbox", ()
     expect(s?.content.notes.some((n) => n.startsWith("reply_proposal_failed"))).toBe(false); // no failed attempt, no unsupported_op noise
     expect(s?.sourceRefs.map((r) => r.connectionId).sort()).toEqual([G, M].sort());
     expect(JSON.stringify(s)).not.toContain("Plain synthetic body");
+  });
+
+  it("fail closed: a thread whose connection is not in Coverage (provider unknown) in a view that has a Microsoft mailbox is never proposed a reply", async () => {
+    // Coverage lists only the Microsoft connection M and a Google one G2; the Google thread's connection G is missing, so its provider is unknown.
+    const G2 = "00000000-0000-4000-8000-0000000c2699";
+    const { d, proposed } = run([cov("mail", "google", G2, "other@pubk.example.test"), cov("mail", "microsoft", M, "robert@pubkgroup.example.test")]);
+    await runBriefing(d, { laneId: "PKG" as LaneId, ownerUserId: OWNER, trigger: "manual", now: NOW, viewerTz: "America/New_York" });
+    expect(proposed).toEqual([]);
   });
 });

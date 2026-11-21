@@ -33,7 +33,7 @@ import type { LaneId } from "@nichols/core";
 import { getLaneJobClient } from "@nichols/core/lane-router";
 import { BRAIN_RETENTION, createImportPurge } from "@nichols/brain/jobs";
 import { getServerEnv } from "@nichols/core/env/server";
-import { QBO_SYNC_ENTITIES, connSyncJob, isQuickbooksConnectionUsable, listCalendarTargets, listMailTargets, listQuickbooksSyncConnectionIds, qboSyncIntervalHours } from "@nichols/connectors/sync";
+import { QBO_SYNC_ENTITIES, connSyncJob, isQuickbooksConnectionUsable, listCalendarConnectionIds, listMailConnectionIds, listQuickbooksSyncConnectionIds, qboSyncIntervalHours } from "@nichols/connectors/sync";
 import { listHealthConnectionIds, listRenewConnectionIds, markReconnectNotified, subscriptionRenewJob, tokenHealthJob } from "@nichols/connectors/health";
 import { retentionPurgeJob, retentionRegistry } from "@nichols/connectors/retention";
 import { listQuickbooksConnectionIds, qboReportsJob } from "@nichols/connectors/reports";
@@ -120,12 +120,12 @@ const functionsFor = (inngest: Parameters<Parameters<typeof inngestRoute>[0]>[0]
   ),
   // cal.ingest_delta (T-130): every 15 minutes, asks conn.sync to run each lane's usable calendar-capable connections.
   calIngestFunction(inngest, {
-    listConnections: (laneId) => listCalendarTargets(laneId),
+    listConnections: (laneId) => listCalendarConnectionIds(laneId),
     enabledLanes: () => getServerEnv().ENABLED_LANES,
   }),
   // mail.ingest_delta (T-238): every 15 minutes (offset to :07/:22/:37/:52), asks conn.sync for the mail stream of each usable mailbox.
   mailIngestFunction(inngest, {
-    listConnections: (laneId) => listMailTargets(laneId),
+    listConnections: (laneId) => listMailConnectionIds(laneId),
     enabledLanes: () => getServerEnv().ENABLED_LANES,
   }),
   // briefing.refresh (T-238): after a scheduled mail sync wrote messages, each owner's briefing is refreshed through the run claim

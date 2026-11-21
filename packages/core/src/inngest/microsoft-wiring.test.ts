@@ -1,18 +1,16 @@
-// T-260 / T-261: the scheduled mail and calendar jobs run Google AND Microsoft connections of every lane in one tick, through conn.sync, with the per-tenant
-// concurrency key for Microsoft rows on top of the per-connection key; Google's key and event shape are unchanged.
+// T-260 / T-261: the scheduled mail and calendar jobs list Google AND Microsoft connections of every lane in one tick and send ONE event per connection through
+// conn.sync, with the event shape and the job options exactly as they are for Google today (no per-tenant key: logged as a follow-up).
 import { Inngest } from "inngest";
 import { describe, expect, it, vi } from "vitest";
-import { handleCalIngest, calIngestEventId, type CalIngestDeps, type SyncTargetRef } from "./cal-ingest";
-import { CONN_SYNC_CONCURRENCY, CONN_SYNC_TENANT_CONCURRENCY, connSyncFunction, handleConnSync, type ConnSyncDeps, type ConnSyncResult } from "./conn-sync";
+import { handleCalIngest, calIngestEventId, type CalIngestDeps } from "./cal-ingest";
+import { CONN_SYNC_CONCURRENCY, connSyncFunction, handleConnSync, type ConnSyncDeps, type ConnSyncResult } from "./conn-sync";
 import { connSyncRequested } from "./events";
 import { handleMailIngest, mailIngestEventId, shouldRefreshBriefingAfterSync, type MailIngestDeps } from "./mail-ingest";
 
 const G_PKG = "00000000-0000-4000-8000-000000026001"; // Google connection of lane PKG
-const M_PKG = "00000000-0000-4000-8000-000000026002"; // Microsoft connection of lane PKG (same user as G_PKG, or another)
-const M_PKG_2 = "00000000-0000-4000-8000-000000026003"; // Microsoft connection of a second user of PKG, in the same tenant
+const M_PKG = "00000000-0000-4000-8000-000000026002"; // Microsoft connection of PKG
+const M_PKG_2 = "00000000-0000-4000-8000-000000026003"; // Microsoft connection of a second user of PKG
 const G_APK = "00000000-0000-4000-8000-000000026004"; // Google-only lane
-const TENANT_1 = "11111111-1111-4111-8111-111111111111";
-const TENANT_2 = "22222222-2222-4222-8222-222222222222";
 const TS = Date.parse("2026-11-21T12:22:00Z");
 
 type Sent = ReturnType<typeof connSyncRequested.create>[];
@@ -23,11 +21,7 @@ const stepFor = (sent: Sent[]) => ({
   },
 });
 
-/** Lane PKG has Google and Microsoft connections (two Microsoft users in one tenant, one Microsoft user in another); lane APK has only Google. */
-const targets: Record<string, SyncTargetRef[]> = {
-  PKG: [G_PKG, { connectionId: M_PKG, tenantId: TENANT_1 }, { connectionId: M_PKG_2, tenantId: TENANT_1 }, { connectionId: "00000000-0000-4000-8000-000000026005", tenantId: TENANT_2 }],
-  APK: [G_APK],
-};
+const targets: Record<string, string[]> = { PKG: [G_PKG, M_PKG, M_PKG_2], APK: [G_APK] };
 const lanes = { enabledLanes: () => ["PKG", "APK"], listConnections: async (lane: string) => targets[lane] ?? [] };
 
 describe("one tick runs every usable connection of both providers, across lanes (T-260, T-261)", () => {
@@ -36,9 +30,9 @@ describe("one tick runs every usable connection of both providers, across lanes 
     const deps: MailIngestDeps = lanes;
     const out = await handleMailIngest(deps, TS, stepFor(sent));
     const events = sent.flat();
-    expect(out).toMatchObject({ lanes: 2, connections: 5 });
-    expect(events.map((e) => [e.data.laneId, e.data.connectionId])).toEqual([["PKG", G_PKG], ["PKG", M_PKG], ["PKG", M_PKG_2], ["PKG", "00000000-0000-4000-8000-000000026005"], ["APK", G_APK]]);
-    for (const e of events) expect(e.data).toMatchObject({ trigger: "schedule", streams: ["mail"] });
+    expect(out).toMatchObject({ lanes: 2, connections: 4 });
+    expect(events.map((e) => [e.data.laneId, e.data.connectionId])).toEqual([["PKG", G_PKG], ["PKG", M_PKG], ["PKG", M_PKG_2], ["APK", G_APK]]);
+    for (const e of events) expect(e.data).toStrictEqual({ laneId: e.data.laneId, connectionId: e.data.connectionId, trigger: "schedule", streams: ["mail"] });
     expect(events.map((e) => e.id)).toEqual(events.map((e) => mailIngestEventId(e.data.connectionId, out.slot)));
   });
 
@@ -47,26 +41,9 @@ describe("one tick runs every usable connection of both providers, across lanes 
     const deps: CalIngestDeps = lanes;
     const out = await handleCalIngest(deps, TS, stepFor(sent));
     const events = sent.flat();
-    expect(out).toMatchObject({ lanes: 2, connections: 5 });
-    for (const e of events) expect(e.data).toMatchObject({ trigger: "schedule", streams: ["calendar"] });
+    expect(out).toMatchObject({ lanes: 2, connections: 4 });
+    for (const e of events) expect(e.data).toStrictEqual({ laneId: e.data.laneId, connectionId: e.data.connectionId, trigger: "schedule", streams: ["calendar"] });
     expect(events.map((e) => e.id)).toEqual(events.map((e) => calIngestEventId(e.data.connectionId, out.slot)));
-  });
-
-  it("a Microsoft row's event carries its tenant id; a Google row's event is exactly the shape it had before (no tenant key at all)", async () => {
-    const sent: Sent[] = [];
-    await handleMailIngest(lanes, TS, stepFor(sent));
-    const byConn = new Map(sent.flat().map((e) => [e.data.connectionId, e.data]));
-    expect(byConn.get(G_PKG)).toStrictEqual({ laneId: "PKG", connectionId: G_PKG, trigger: "schedule", streams: ["mail"] });
-    expect(byConn.get(G_APK)).toStrictEqual({ laneId: "APK", connectionId: G_APK, trigger: "schedule", streams: ["mail"] });
-    expect(byConn.get(M_PKG)).toStrictEqual({ laneId: "PKG", connectionId: M_PKG, trigger: "schedule", streams: ["mail"], tenantId: TENANT_1 });
-    expect(byConn.get(M_PKG_2)).toMatchObject({ tenantId: TENANT_1 });
-  });
-
-  it("a tenant id that is not a UUID is dropped (the run is then keyed by its connection alone); a list of bare ids still works", async () => {
-    const sent: Sent[] = [];
-    const deps: MailIngestDeps = { enabledLanes: () => ["PKG"], listConnections: async () => [{ connectionId: M_PKG, tenantId: "not-a-uuid" }, { connectionId: G_PKG, tenantId: null }, M_PKG_2] };
-    await handleMailIngest(deps, TS, stepFor(sent));
-    for (const e of sent.flat()) expect(Object.keys(e.data)).not.toContain("tenantId");
   });
 
   it("one lane that cannot be listed does not stop the other lane's connections, and the tick still reports it", async () => {
@@ -77,32 +54,23 @@ describe("one tick runs every usable connection of both providers, across lanes 
   });
 });
 
-describe("conn.sync concurrency (T-260)", () => {
-  it("Google's per-connection key is byte for byte what it was, and stays the first key", () => {
+describe("conn.sync options and event are what they are for Google today (T-260)", () => {
+  it("the job keeps its single per-connection key, byte for byte", () => {
     expect(JSON.stringify(CONN_SYNC_CONCURRENCY)).toBe('{"key":"event.data.connectionId","limit":1}');
     const fn = connSyncFunction(new Inngest({ id: "test-app", isDev: true }), { runSync: vi.fn(), enabledLanes: () => ["PKG"] } as unknown as ConnSyncDeps) as unknown as { opts: Record<string, unknown> };
-    const concurrency = (JSON.parse(JSON.stringify(fn.opts)) as { concurrency: unknown[] }).concurrency;
-    expect(concurrency).toHaveLength(2);
-    expect(JSON.stringify(concurrency[0])).toBe('{"key":"event.data.connectionId","limit":1}');
+    expect(JSON.stringify((JSON.parse(JSON.stringify(fn.opts)) as { concurrency: unknown }).concurrency)).toBe('{"key":"event.data.connectionId","limit":1}');
   });
 
-  it("the second key is per Microsoft tenant, and falls back to the connection id when the event has no tenant (a no-op for Google)", () => {
-    expect(CONN_SYNC_TENANT_CONCURRENCY.key).toBe("has(event.data.tenantId) ? event.data.tenantId : event.data.connectionId");
-    expect(CONN_SYNC_TENANT_CONCURRENCY.limit).toBeGreaterThanOrEqual(CONN_SYNC_CONCURRENCY.limit);
-    expect(CONN_SYNC_TENANT_CONCURRENCY.key).toContain("event.data.tenantId");
+  it("the event has no tenant field: an unknown key is refused (strict), so nothing can pick a queue from the event", async () => {
+    const check = (extra: Record<string, unknown>) => connSyncRequested.schema["~standard"].validate({ laneId: "PKG", connectionId: M_PKG, trigger: "schedule", ...extra });
+    expect((await check({})).issues).toBeUndefined();
+    expect((await check({ tenantId: "11111111-1111-4111-8111-111111111111" })).issues).toBeDefined();
   });
 
-  it("the event accepts a tenant id (a UUID) and refuses anything else there", async () => {
-    const check = (tenantId: unknown) => connSyncRequested.schema["~standard"].validate({ laneId: "PKG", connectionId: M_PKG, trigger: "schedule", tenantId });
-    expect((await check(TENANT_1)).issues).toBeUndefined();
-    expect((await check("Contoso Ltd")).issues).toBeDefined();
-    expect((await check({ id: TENANT_1 })).issues).toBeDefined();
-  });
-
-  it("a Microsoft event is run through the same runSync by connection id; the tenant id only picks a queue and is not passed on", async () => {
+  it("a Microsoft event is run through the same runSync by connection id", async () => {
     const result: ConnSyncResult = { ok: true, skipped: null, runId: "r", provider: "microsoft", kind: "incremental", received: 2, written: 2 };
     const d = { runSync: vi.fn(async () => result), enabledLanes: () => ["PKG"] } as unknown as ConnSyncDeps & { runSync: ReturnType<typeof vi.fn> };
-    await handleConnSync(d, { laneId: "PKG", connectionId: M_PKG, trigger: "schedule", streams: ["mail"], tenantId: TENANT_1 } as never, null);
+    await handleConnSync(d, { laneId: "PKG", connectionId: M_PKG, trigger: "schedule", streams: ["mail"] }, null);
     expect(d.runSync).toHaveBeenCalledWith("PKG", M_PKG, { trigger: "schedule", jobRunId: null, streams: ["mail"] });
   });
 });

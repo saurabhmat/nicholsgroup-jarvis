@@ -56,6 +56,14 @@ describe("Home attention rows with both providers (T-260)", () => {
     expect(within(b).queryByTestId("attention-source")).toBeNull();
   });
 
+  it("fail closed: in a labelled view a row whose connection is NOT in Coverage (the other connection of a shared address, or a disconnected one) gets the fixed note, never Reply; only a row known to be Google's keeps Reply", () => {
+    render(<AttentionSection laneId="PKG" now={now} mail={mail([item(G, "g-1", GMAIL), item("c-missing", "x-1", OUTLOOK)], { sourceOf: { [G]: sourceOf[G], [M]: sourceOf[M] } })} canReply />);
+    const [known, unknown] = screen.getAllByTestId("attention-item") as [HTMLElement, HTMLElement];
+    expect(within(known).getByTestId("attention-reply")).toBeTruthy();
+    expect(within(unknown).queryByTestId("attention-reply")).toBeNull();
+    expect(within(unknown).getByTestId("attention-reply-unavailable").textContent).toBe(REPLY_NOT_AVAILABLE_YET);
+  });
+
   it("a Google-only person: no provider line, no 'Open in' link, Reply unchanged, and 'to <mailbox>' only with several mailboxes (as before)", () => {
     render(<AttentionSection laneId="PKG" now={now} mail={mail([item(G, "g-1", GMAIL)], { mailboxOf: { [G]: "robert@pubk.example.test" } })} canReply />);
     expect(screen.queryByTestId("attention-source")).toBeNull();
@@ -141,14 +149,13 @@ describe("Coverage (Settings) lists both providers' connections of a lane togeth
     render(<CoverageList view={{ items: items.filter((i) => i.provider === "google"), unavailable: false }} tz="America/New_York" now={now} />);
     expect(screen.queryByTestId("coverage-provider")).toBeNull();
   });
-  it("the same address held by a Google and a Microsoft connection are two rows, with no duplicate-key warning", () => {
+  it("the same address in both providers: Coverage returns ONE row per address (the SQL keeps one connection), so the list has one row and no duplicate-key warning", () => {
     const error = vi.spyOn(console, "error").mockImplementation(() => undefined);
-    const same = toCoverage(parseCoverageRows([
+    const one = toCoverage(parseCoverageRows([
       { stream: "mail", account: "same@pubk.example.test", connection_id: G, provider: "google", status: "active", configured: true, last_sync_at: "2026-11-20T14:55:00Z" },
-      { stream: "mail", account: "same@pubk.example.test", connection_id: M, provider: "microsoft", status: "active", configured: true, last_sync_at: "2026-11-20T14:55:00Z" },
     ]), now, 120);
-    render(<CoverageList view={{ items: same, unavailable: false }} tz="America/New_York" now={now} />);
-    expect(screen.getAllByTestId("coverage-item")).toHaveLength(2);
+    render(<CoverageList view={{ items: one, unavailable: false }} tz="America/New_York" now={now} />);
+    expect(screen.getAllByTestId("coverage-item")).toHaveLength(1);
     expect(error).not.toHaveBeenCalled();
     error.mockRestore();
   });

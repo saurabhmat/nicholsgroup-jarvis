@@ -1,4 +1,4 @@
-// POST /api/lanes/<lane>/sync-now (T-238; T-260): run every usable Google and Microsoft connection of the lane now. Owner or admin_technical at AAL2;
+// POST /api/lanes/<lane>/sync-now (T-238): run every usable Google connection of the lane now. Owner or admin_technical at AAL2;
 // one per lane per 2 minutes; audited. Logic and checks: lib/sync-now.ts.
 import { connSyncRequested, sendLaneEvent } from "@nichols/core/inngest";
 import { getAudit } from "@nichols/core/lane-router";
@@ -11,7 +11,7 @@ const handler = createSyncNowHandler({
   guards,
   audit: () => getAudit(),
   listConnections: (laneId) => listMailTargets(laneId as LaneId),
-  send: (laneId, connectionId, eventId, tenantId) => sendLaneEvent(connSyncRequested.create({ laneId, connectionId, trigger: "manual", ...(tenantId ? { tenantId } : {}) }, { id: eventId })),
+  send: (laneId, connectionId, eventId, streams) => sendLaneEvent(connSyncRequested.create({ laneId, connectionId, trigger: "manual", ...(streams ? { streams: [...streams] } : {}) }, { id: eventId })),
 });
 
 export async function POST(request: Request, ctx: RouteContext<"/api/lanes/[laneId]/sync-now">) {

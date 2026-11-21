@@ -23,12 +23,6 @@ export const connSyncRequested = eventType("conn/sync.requested", {
      * stream runs once per tick. Absent = both (manual, connect and webhook triggers, and any other provider).
      */
     streams: z.array(z.enum(["mail", "calendar"])).min(1).max(2).optional(),
-    /**
-     * T-260: the Microsoft tenant (`core.connections.tenant_id`) of a Microsoft connection, so conn.sync can add its per-tenant concurrency
-     * key (one tenant's throttling must not block another). A tenant id is an id (a UUID), never a name or a token. Absent for Google and
-     * every other provider: their runs are keyed by connection alone. It only chooses a queue; the sync loads the connection row itself.
-     */
-    tenantId: z.uuid().optional(),
   }),
 });
 

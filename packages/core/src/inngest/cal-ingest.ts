@@ -18,15 +18,9 @@ import "server-only";
 import { NonRetriableError, type Inngest, type InngestFunction } from "inngest";
 import { connSyncRequested } from "./events";
 
-/**
- * A connection the schedule should run: its id, or (T-260) its id with the Microsoft tenant id the row carries, which becomes the event's
- * `tenantId` so conn.sync's per-tenant concurrency key applies. Google and every other provider: the bare id.
- */
-export type SyncTargetRef = string | { connectionId: string; tenantId?: string | null };
-
 export type CalIngestDeps = {
-  /** Usable calendar-capable connection ids of the lane, Google and Microsoft together (apps/web wires @nichols/connectors/sync; core cannot import connectors). */
-  listConnections: (laneId: string) => Promise<readonly SyncTargetRef[]>;
+  /** Usable calendar-capable connection ids of the lane (apps/web wires @nichols/connectors/sync; core cannot import connectors). */
+  listConnections: (laneId: string) => Promise<readonly string[]>;
   enabledLanes: () => readonly string[];
 };
 
@@ -49,7 +43,7 @@ export function calIngestEventId(connectionId: string, slot: number): string {
   return `cal-ingest:${connectionId}:${String(slot)}`;
 }
 
-export type CalIngestPlan = { sends: { laneId: string; connectionId: string; tenantId?: string }[]; failedLanes: string[] };
+export type CalIngestPlan = { sends: { laneId: string; connectionId: string }[]; failedLanes: string[] };
 
 /** Lists every enabled lane; one lane failing is recorded (lane id only: no error text) and does not stop the rest. */
 export async function planCalIngest(deps: CalIngestDeps): Promise<CalIngestPlan> {
@@ -57,13 +51,9 @@ export async function planCalIngest(deps: CalIngestDeps): Promise<CalIngestPlan>
   const failedLanes: string[] = [];
   for (const laneId of new Set(deps.enabledLanes())) {
     try {
-      const seen = new Set<string>();
-      for (const ref of await deps.listConnections(laneId)) {
-        const connectionId = typeof ref === "string" ? ref : ref.connectionId;
-        if (!UUID.test(connectionId) || seen.has(connectionId)) continue;
-        seen.add(connectionId);
-        const tenantId = typeof ref === "string" ? null : ref.tenantId;
-        sends.push({ laneId, connectionId, ...(typeof tenantId === "string" && UUID.test(tenantId) ? { tenantId: tenantId.toLowerCase() } : {}) });
+      const ids = await deps.listConnections(laneId);
+      for (const connectionId of new Set(ids)) {
+        if (UUID.test(connectionId)) sends.push({ laneId, connectionId });
       }
     } catch {
       failedLanes.push(laneId);
@@ -85,7 +75,7 @@ export async function handleCalIngest(deps: CalIngestDeps, scheduledAtMs: unknow
   if (plan.sends.length > 0) {
     await step.sendEvent(
       "fan-out",
-      plan.sends.map((s) => connSyncRequested.create({ laneId: s.laneId, connectionId: s.connectionId, trigger: "schedule", streams: ["calendar"], ...(s.tenantId ? { tenantId: s.tenantId } : {}) }, { id: calIngestEventId(s.connectionId, slot) })),
+      plan.sends.map((s) => connSyncRequested.create({ laneId: s.laneId, connectionId: s.connectionId, trigger: "schedule", streams: ["calendar"] }, { id: calIngestEventId(s.connectionId, slot) })),
     );
   }
   // Fail the run (visible in Inngest) AFTER the healthy lanes were sent. Not retried: a retry replays the saved plan; the next tick is the retry.

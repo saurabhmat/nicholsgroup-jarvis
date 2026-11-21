@@ -346,8 +346,8 @@ export function AttentionSection({ laneId, mail, now, notes, replies, canReply =
               </div>
               <div data-testid="attention-actions" className="flex shrink-0 items-center gap-3 max-md:[&_a]:min-h-11 max-md:[&_button]:min-h-11">
                 {/* T-249: no Reply for automated / no-reply senders, security alerts and repeated failures (attention.ts `replyable`). */}
-                {a.kind === "repeated_failures" || a.replyable !== true ? null : sourceTag && sourceTag.provider !== "google" ? (
-                  // T-260: a Microsoft mailbox cannot be replied to from here yet (T-262, T-263): a fixed note instead of the button, never an error.
+                {a.kind === "repeated_failures" || a.replyable !== true ? null : labelled && sourceTag?.provider !== "google" ? (
+                  // T-260: a Microsoft mailbox cannot be replied to from here yet (T-262, T-263): a fixed note instead of the button, never an error. Fail closed: in a labelled view only a row whose own connection is known to be Google's gets Reply (a row whose connection is missing from Coverage gets the note).
                   <span data-testid="attention-reply-unavailable" className="relative z-[1] text-small text-muted-foreground">{REPLY_NOT_AVAILABLE_YET}</span>
                 ) : (
                   <span className="relative z-[1] inline-flex">

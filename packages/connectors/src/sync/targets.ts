@@ -21,13 +21,12 @@ export const MAX_SYNC_TARGETS = 200;
 const LANE_ID = /^[A-Z]{1,8}$/;
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
-/** A usable connection the schedule runs: its id and, for a Microsoft row, its tenant id (the event's per-tenant concurrency key, T-260). */
-export type SyncTarget = { connectionId: string; tenantId: string | null };
+/** A usable mail-capable connection with its provider (Sync now sends a Microsoft connection's two streams as two events, T-260). */
+export type MailTarget = { connectionId: string; provider: string };
 
 export interface SyncTargetLister {
-  /** Same lists as the two below, with each Microsoft row's tenant id (T-260). Sorted by id; Google rows carry `tenantId: null`. */
-  listCalendarTargets(laneId: LaneId): Promise<SyncTarget[]>;
-  listMailTargets(laneId: LaneId): Promise<SyncTarget[]>;
+  /** Same list as listMailConnectionIds, with each connection's provider. */
+  listMailTargets(laneId: LaneId): Promise<MailTarget[]>;
   /** Ids of the lane's usable QuickBooks connections, sorted (the nightly report pull, T-052). Throws ConnectorError when unreadable. */
   listQuickbooksConnectionIds(laneId: LaneId): Promise<string[]>;
   /** Ids of the lane's usable connections of calendar-capable providers, sorted. Throws ConnectorError when unreadable. */
@@ -37,7 +36,7 @@ export interface SyncTargetLister {
 }
 
 export function createSyncTargetLister(clientFor: JobClientFor): SyncTargetLister {
-  const list = (providers: readonly string[]) => async (laneId: LaneId): Promise<SyncTarget[]> => {
+  const listTargets = (providers: readonly string[]) => async (laneId: LaneId): Promise<MailTarget[]> => {
     if (typeof laneId !== "string" || !LANE_ID.test(laneId)) {
       throw new ConnectorError({ kind: "invalid_input", message: "A lane is required" });
     }
@@ -47,7 +46,7 @@ export function createSyncTargetLister(clientFor: JobClientFor): SyncTargetListe
       const { data, error } = await client
         .schema("core")
         .from("connections")
-        .select("id, provider, tenant_id")
+        .select("id, provider")
         .eq("lane_id", laneId)
         .eq("transport", "native") // a Composio connection has no token row; the native sync cannot run on it (T-219)
         .in("provider", [...providers])
@@ -60,23 +59,13 @@ export function createSyncTargetLister(clientFor: JobClientFor): SyncTargetListe
       throw new ConnectorError({ kind: "transient", message: "Connection list unavailable" });
     }
     if (!Array.isArray(rows)) throw new ConnectorError({ kind: "transient", message: "Connection list unavailable" });
-    const targets: SyncTarget[] = [];
+    const targets: MailTarget[] = [];
     for (const r of rows) {
-      const row = r as { id?: unknown; provider?: unknown; tenant_id?: unknown } | null;
-      const id = row?.id;
-      if (typeof id !== "string" || !UUID.test(id)) continue;
-      // Only a Microsoft row carries a tenant (a malformed value is dropped: the run then keys by its connection alone).
-      const tenant = row?.provider === "microsoft" && typeof row.tenant_id === "string" && UUID.test(row.tenant_id) ? row.tenant_id.toLowerCase() : null;
-      targets.push({ connectionId: id, tenantId: tenant });
+      const row = r as { id?: unknown; provider?: unknown } | null;
+      if (typeof row?.id === "string" && UUID.test(row.id)) targets.push({ connectionId: row.id, provider: typeof row.provider === "string" ? row.provider : "" });
     }
     return targets;
   };
-  const ids = (providers: readonly string[]) => async (laneId: LaneId): Promise<string[]> => (await list(providers)(laneId)).map((t) => t.connectionId);
-  return {
-    listCalendarTargets: list(CALENDAR_PROVIDERS),
-    listMailTargets: list(MAIL_PROVIDERS),
-    listCalendarConnectionIds: ids(CALENDAR_PROVIDERS),
-    listMailConnectionIds: ids(MAIL_PROVIDERS),
-    listQuickbooksConnectionIds: ids(["quickbooks"]),
-  };
+  const list = (providers: readonly string[]) => async (laneId: LaneId): Promise<string[]> => (await listTargets(providers)(laneId)).map((t) => t.connectionId);
+  return { listMailTargets: listTargets(MAIL_PROVIDERS), listCalendarConnectionIds: list(CALENDAR_PROVIDERS), listMailConnectionIds: list(MAIL_PROVIDERS), listQuickbooksConnectionIds: list(["quickbooks"]) };
 }
