@@ -4,7 +4,7 @@
 //     connectors are provider interfaces), so its connections get the expiry rule only. Add checkers as providers land.
 //   - Renewers: none. The renewal job is an interface; no provider creates or extends a subscription yet.
 import { connectionLoader, tokenHealthStore as store } from "../vault/index";
-import { microsoftHealth } from "../microsoft/index";
+import { microsoftHealth, microsoftHealthSkip } from "../microsoft/index";
 import { quickbooksConnector } from "../quickbooks/index";
 import { createSubscriptionRenewJob, createTokenHealthJob } from "./job";
 import type { HealthChecker, SubscriptionRenewer } from "./types";
@@ -15,7 +15,7 @@ const checkers: Record<string, HealthChecker> = {
 };
 const renewers: Record<string, SubscriptionRenewer> = {};
 
-export const tokenHealthJob = createTokenHealthJob({ loader: connectionLoader, store, checkers });
+export const tokenHealthJob = createTokenHealthJob({ loader: connectionLoader, store, checkers, skips: { microsoft: microsoftHealthSkip } });
 export const subscriptionRenewJob = createSubscriptionRenewJob({ loader: connectionLoader, store, renewers });
 
 /** Marks a reconnect_required connection's admin notice as sent, after the scan's event went out (T-195). */

@@ -1,12 +1,15 @@
 // The guarded Graph client (T-256): host and path allow-list, per-mailbox concurrency, Retry-After, per-connection isolation under a
 // 429 storm, the error map, the T-196 error log, and the token canary.
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { isConnectorError } from "../contract/errors";
 import { RateLimiter } from "../http/rate-limit";
+import { PROVIDER_DISABLED_MESSAGE } from "../facade/gate";
 import { createMicrosoftHarness, TENANT_A, TENANT_B, type MicrosoftHarness } from "../testing/microsoft-harness";
 import { useMockServer } from "../testing/msw/index";
 import { createFakeMicrosoft, FAKE_GRAPH_CLIENT_SECRET, MICROSOFT_ERROR_TEXT_CANARY } from "../testing/msw/microsoft/handlers";
 import { resetMailboxSlotsForTests, withMailboxSlot } from "./concurrency";
+import { REDACTED } from "../vault/secret";
+import { createGraphApi } from "./api";
 import { createGraphHttp } from "./http";
 
 const server = useMockServer();
@@ -37,7 +40,6 @@ async function failure(p: Promise<unknown>) {
   }
   throw new Error("expected a ConnectorError");
 }
-const settle = (ms = 40) => new Promise((r) => setTimeout(r, ms));
 const allText = (h: MicrosoftHarness, extra: unknown[] = []) => JSON.stringify([h.logs, h.apiErrors, h.reconnects, ...extra]);
 
 describe("hosts and paths", () => {
@@ -89,8 +91,7 @@ describe("concurrency, pacing and Retry-After", () => {
     let release: () => void = () => undefined;
     fake.state.hold = new Promise<void>((r) => (release = r));
     const calls = Array.from({ length: 9 }, () => h.api.get("PKG", conn, "/me"));
-    await settle(150);
-    expect(account.inflight).toBe(4);
+    await vi.waitFor(() => expect(account.inflight).toBe(4));
     release();
     const results = await Promise.all(calls);
     expect(results).toHaveLength(9);
@@ -105,8 +106,7 @@ describe("concurrency, pacing and Retry-After", () => {
     fake.state.hold = new Promise<void>((r) => (release = r));
     const first = h.api.get("PKG", a.conn, "/me");
     const queued = h.api.get("PKG", a.conn, "/me");
-    await settle(100);
-    expect(a.account.inflight).toBe(1);
+    await vi.waitFor(() => expect(a.account.inflight).toBe(1));
     release();
     await Promise.all([first, queued, h.api.get("PKG", b.conn, "/me")]);
     expect(a.account.maxInflight).toBe(1);
@@ -131,19 +131,19 @@ describe("concurrency, pacing and Retry-After", () => {
     let openGate: () => void = () => undefined;
     const gate = new Promise<void>((r) => (openGate = r));
     const sleep = (ms: number) => (ms >= 10_000 ? gate : Promise.resolve());
-    const { h } = setup({ sleep });
+    const { h, fake } = setup({ sleep });
     const a = h.connect("PKG", EXEC, { tenant: TENANT_A });
     const b = h.connect("PKG", OTHER, { tenant: TENANT_B });
     a.account.throttle = { status: 429, retryAfter: 30, remaining: Infinity };
     const storm = Array.from({ length: 7 }, () => h.api.get("PKG", a.conn, "/me").then(() => "ok", (e: unknown) => (isConnectorError(e) ? e.info.kind : "other")));
-    await settle(150);
+    // Wait for the condition, not for time: the four slot holders of tenant A are all asleep on their 30 s Retry-After.
+    await vi.waitFor(() => expect(h.clock.waits.filter((w) => w >= 10_000)).toHaveLength(4));
+    expect(fake.state.graphRequests).toHaveLength(4);
     let stormDone = false;
     void Promise.all(storm).then(() => (stormDone = true));
     // Tenant B is served at once while all of tenant A's requests are still waiting on Retry-After.
-    const started = Date.now();
     const res = await h.api.get<{ mail: string }>("PKG", b.conn, "/me");
     expect(res.data.mail).toBe(OTHER);
-    expect(Date.now() - started).toBeLessThan(1000);
     expect(stormDone).toBe(false);
     expect(a.account.maxInflight).toBeLessThanOrEqual(4);
     openGate();
@@ -289,5 +289,121 @@ describe("the token canary", () => {
     expect(account.accessTokens.size).toBeGreaterThan(1);
     for (const s of secretsToHide()) expect(text, s.slice(0, 24)).not.toContain(s);
     expect(text).not.toContain(MICROSOFT_ERROR_TEXT_CANARY);
+    // The harness logger redacts registered secrets BEFORE its sink, so the check above cannot fail by itself: a code path that logged a
+    // token would show up as the redaction marker instead.
+    expect(JSON.stringify(h.logs)).not.toContain(REDACTED);
+  });
+});
+
+describe("a fresh guard decision at send time", () => {
+  it("a call queued behind a full mailbox is refused when the config changed while it waited: zero Graph requests for it", async () => {
+    const { h, fake } = setup({ maxConcurrent: 1 });
+    const { conn, account } = h.connect("PKG", EXEC);
+    let release: () => void = () => undefined;
+    fake.state.hold = new Promise<void>((r) => (release = r));
+    const first = h.api.get("PKG", conn, "/me");
+    await vi.waitFor(() => expect(account.inflight).toBe(1));
+    const queued = failure(h.api.get("PKG", conn, "/me"));
+    h.setLane("PKG", { providers: ["google"] }); // Microsoft switched off while the second call waits for the slot
+    const reads = h.stats.tokenReads;
+    release();
+    await first;
+    const e = await queued;
+    expect(e.info).toMatchObject({ kind: "connection_unavailable", message: PROVIDER_DISABLED_MESSAGE });
+    expect(fake.state.graphRequests).toHaveLength(1); // only the first call's
+    expect(h.stats.tokenReads).toBe(reads);
+  });
+
+  it("the same when a tenant is removed while the call waits", async () => {
+    const { h, fake } = setup({ maxConcurrent: 1 });
+    const { conn, account } = h.connect("PKG", EXEC, { tenant: TENANT_A });
+    let release: () => void = () => undefined;
+    fake.state.hold = new Promise<void>((r) => (release = r));
+    const first = h.api.get("PKG", conn, "/me");
+    await vi.waitFor(() => expect(account.inflight).toBe(1));
+    const queued = failure(h.api.get("PKG", conn, "/me"));
+    h.setLane("PKG", { microsoft: { tenantIds: [TENANT_B] } });
+    release();
+    await first;
+    expect((await queued).info.kind).toBe("forbidden");
+    expect(fake.state.graphRequests).toHaveLength(1);
+  });
+
+  it("a call sleeping on Retry-After does not send its retry when the provider is disabled during the sleep", async () => {
+    const { h, fake } = setup({ sleep: async (ms) => { if (ms === 7000) h.setLane("PKG", { providers: ["google"] }); } });
+    const { conn, account } = h.connect("PKG", EXEC);
+    account.throttle = { status: 503, retryAfter: 7, remaining: 5 };
+    const e = await failure(h.api.get("PKG", conn, "/me"));
+    expect(e.info).toMatchObject({ kind: "connection_unavailable", message: PROVIDER_DISABLED_MESSAGE });
+    expect(fake.state.graphRequests).toHaveLength(1); // the first attempt only; the retry was never sent
+    expect(h.stats.tokenReads).toBe(1); // the first attempt's read only: no token was read for the retry
+    expect(h.apiErrors).toEqual([]); // a guard refusal is not a Microsoft API error
+  });
+
+  it("with an unchanged config a retry decides again (one more settings read) and goes out", async () => {
+    const { h, fake } = setup();
+    const { conn, account } = h.connect("PKG", EXEC);
+    account.throttle = { status: 503, retryAfter: 1, remaining: 1 };
+    await h.api.get("PKG", conn, "/me");
+    expect(fake.state.graphRequests).toHaveLength(2);
+    expect(h.stats.settingsReads).toBe(2); // the entry decision, and the one before the retry
+  });
+});
+
+describe("paths, parameters and origins", () => {
+  it("a path parameter with `/`, a backslash or `%` is refused before anything happens", async () => {
+    const { h, fake } = setup();
+    const { conn } = h.connect("PKG", EXEC);
+    for (const id of ["a/b", "a\\b", "%2e%2e", "a%2Fb", "..%5cx"]) {
+      const e = await failure(h.api.get("PKG", conn, "/me/messages/{id}", { id }));
+      expect(e.info.kind, id).toBe("invalid_input");
+    }
+    expect(h.stats.settingsReads).toBe(0);
+    expect(h.stats.tokenReads).toBe(0);
+    expect(fake.state.graphRequests).toHaveLength(0);
+  });
+
+  it("encoded separators in the template itself are refused (the rule holds without the shared client)", async () => {
+    const { h, fake } = setup();
+    const { conn } = h.connect("PKG", EXEC);
+    for (const path of ["/me/%2e%2e/users", "/me/%2E%2E/users", "/me/a%2fb", "/me/a%2Fb", "/me/a%5cb", "/me/a%5Cb", "/me/a\\b"]) {
+      expect((await failure(h.api.get("PKG", conn, path))).info.kind, path).toBe("invalid_input");
+    }
+    expect(fake.state.graphRequests).toHaveLength(0);
+  });
+
+  it("the origin must match exactly: another port or scheme on an allowed host is refused", () => {
+    const opts = { laneId: "PKG" as const };
+    for (const baseUrl of ["https://graph.microsoft.com:8443/v1.0", "https://graph.microsoft.com:444", "http://graph.microsoft.com", "https://user@graph.microsoft.com"]) {
+      expect(() => createGraphHttp({ ...opts, baseUrl }, "commercial", "api"), baseUrl).toThrow();
+    }
+    expect(() => createGraphHttp({ ...opts, baseUrl: "https://login.microsoftonline.com:8443" }, "commercial", "token")).toThrow(/allowed Microsoft host/);
+    expect(() => createGraphHttp({ ...opts, baseUrl: "https://graph.microsoft.com:443/v1.0" }, "commercial", "api")).not.toThrow(); // the default port is the same origin
+  });
+
+  it("a baseUrl smuggled in through httpOptions cannot move the client off Graph", async () => {
+    const { h, fake } = setup();
+    const { conn } = h.connect("PKG", EXEC);
+    const api = createGraphApi({ guard: h.guard, tokens: h.tokens, httpOptions: { baseUrl: "https://graph.microsoft.com:8443/v1.0" } });
+    const res = await api.get("PKG", conn, "/me");
+    expect(res.status).toBe(200);
+    expect(fake.state.graphRequests).toHaveLength(1);
+  });
+});
+
+describe("the error log records only what Microsoft answered", () => {
+  it("our own refusals (a bad path, a bad parameter, a guard refusal) are not recorded; a real answer and a timeout-class failure are", async () => {
+    const { h, fake } = setup({ sleep: async () => undefined });
+    const { conn } = h.connect("PKG", EXEC);
+    await failure(h.api.get("PKG", conn, "/users/{id}", { id: "x" }));
+    await failure(h.api.get("PKG", conn, "/me/{id}", { id: "a/b" }));
+    h.setLane("PKG", { providers: ["google"] });
+    await failure(h.api.get("PKG", conn, "/me"));
+    expect(h.apiErrors).toEqual([]);
+    h.setLane("PKG", { providers: ["microsoft"] });
+    fake.state.meFail = { status: 502, code: "ErrorBadGateway", times: 99 };
+    await failure(h.api.get("PKG", conn, "/me"));
+    expect(h.apiErrors).toHaveLength(1);
+    expect(h.apiErrors[0]?.provider_message).not.toMatch(/unexpected answer/);
   });
 });

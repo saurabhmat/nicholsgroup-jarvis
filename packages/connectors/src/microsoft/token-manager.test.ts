@@ -1,7 +1,7 @@
 // Microsoft token refresh (T-256): proactive and on-demand refresh, single flight, rotation with compare-and-swap (V-8: the new
 // refresh token replaces the old one and the old one is not revoked), a lost race, invalid_grant and its family ->
 // reconnect_required (V-7), a refresh that is never retried, and secrets never logged.
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { isConnectorError } from "../contract/errors";
 import { RateLimiter } from "../http/rate-limit";
 import { createMicrosoftHarness, TENANT_A, TENANT_B } from "../testing/microsoft-harness";
@@ -124,7 +124,7 @@ describe("access tokens", () => {
     fake.state.refreshHold = new Promise<void>((r) => (release = r));
     fake.state.failRefresh = { status: 400, error: "invalid_grant", codes: [70008] };
     const pending = h.tokens.accessToken("PKG", g);
-    await new Promise((r) => setTimeout(r, 30));
+    await vi.waitFor(() => expect(fake.state.tokenRequests).toHaveLength(1)); // our refresh is at Microsoft, held
     // The other instance's refresh finished and stored its set while ours was in flight.
     const winner = JSON.stringify({ access_token: "synthetic-ms-access-winner-1", refresh_token: "synthetic-ms-refresh-winner-1", expires_in: 3599, obtained_at: new Date().toISOString() });
     h.secrets.set(g.conn.id, winner);
@@ -214,7 +214,7 @@ describe("access tokens", () => {
     fake.state.refreshHold = new Promise<void>((r) => (release = r));
     fake.state.failRefresh = { status: 400, error: "invalid_grant" };
     const pending = h.tokens.accessToken("PKG", g);
-    await new Promise((r) => setTimeout(r, 30));
+    await vi.waitFor(() => expect(fake.state.tokenRequests).toHaveLength(1));
     h.secrets.set(g.conn.id, "garbage");
     release();
     expect(await kindOf(pending)).toBe("transient");

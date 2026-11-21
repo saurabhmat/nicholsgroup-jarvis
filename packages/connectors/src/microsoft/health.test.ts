@@ -2,9 +2,13 @@
 // keeping anything from the response.
 import { afterEach, describe, expect, it } from "vitest";
 import { RateLimiter } from "../http/rate-limit";
-import { createMicrosoftHarness, TENANT_A } from "../testing/microsoft-harness";
+import type { LaneBoundConnection } from "../contract/lane-bound";
+import { createTokenHealthJob } from "../health/job";
+import type { ConnectionHealthPatch, TokenHealthStore } from "../health/types";
+import { createMicrosoftHarness, TENANT_A, TENANT_B } from "../testing/microsoft-harness";
 import { useMockServer } from "../testing/msw/index";
 import { createFakeMicrosoft, MICROSOFT_ERROR_TEXT_CANARY } from "../testing/msw/microsoft/handlers";
+import { createMicrosoftHealthSkip } from "./health";
 
 const server = useMockServer();
 afterEach(() => RateLimiter.resetForTests());
@@ -59,5 +63,87 @@ describe("health", () => {
     expect(res).toMatchObject({ ok: false, error: { kind: "connection_unavailable" } });
     expect(h.stats.tokenReads).toBe(0);
     expect(fake.state.graphRequests).toHaveLength(0);
+  });
+});
+
+describe("the daily health job and a Microsoft connection that is paused", () => {
+  /** The real job over the harness: a store that records every change, the real skip and the real health check. */
+  function job(over: { status?: "active" | "degraded"; cloud?: "commercial" | "gcc_high" } = {}) {
+    const f = setup();
+    if (over.status) { const r = f.h.rows.get(f.row.id); if (r) r.status = over.status; }
+    const patches: ConnectionHealthPatch[] = [];
+    let cleared = 0;
+    const store: TokenHealthStore = {
+      listUsableConnectionIds: async () => [f.row.id],
+      applyHealth: async (_l, _c, patch) => (patches.push(patch), true),
+      clearHealthError: async () => (cleared++, true),
+      reconnectNoticePending: async () => false,
+      markReconnectNotified: async () => undefined,
+    };
+    const run = createTokenHealthJob({
+      loader: {
+        loadConnection: async (_l, id) => {
+          const r = f.h.rows.get(id);
+          if (!r) throw new Error("no such row");
+          return f.h.bind(r) as LaneBoundConnection<string>;
+        },
+      },
+      store,
+      checkers: { microsoft: f.h.health },
+      skips: { microsoft: createMicrosoftHealthSkip({ laneConfig: f.h.laneConfig }) },
+    });
+    return { ...f, patches, cleared: () => cleared, run: () => run.run("PKG", f.row.id) };
+  }
+
+  it("a provider switched off for the lane is skipped: no status change, no last_error, no alert, no token read, no request", async () => {
+    const j = job();
+    j.h.setLane("PKG", { providers: ["google"] }); // the microsoft block stays
+    expect(await j.run()).toEqual({ ok: true, skipped: "connection_not_usable", alerts: [] });
+    expect(j.patches).toEqual([]);
+    expect(j.cleared()).toBe(0);
+    expect(j.h.stats.tokenReads).toBe(0);
+    expect(j.fake.state.graphRequests).toHaveLength(0);
+    expect(j.fake.state.tokenRequests).toHaveLength(0);
+  });
+
+  it("a degraded paused row stays degraded (the skip does not heal it either), and a lane with no microsoft block is the same", async () => {
+    const j = job({ status: "degraded" });
+    j.h.setLane("PKG", { microsoft: null });
+    expect(await j.run()).toMatchObject({ ok: true, skipped: "connection_not_usable", alerts: [] });
+    expect(j.patches).toEqual([]);
+    expect(j.h.stats.tokenReads).toBe(0);
+  });
+
+  it("a lane on gcc_high is skipped the same way", async () => {
+    const j = job();
+    j.h.setLane("PKG", { microsoft: { tenantIds: [TENANT_A], cloud: "gcc_high" } });
+    expect(await j.run()).toMatchObject({ ok: true, skipped: "connection_not_usable", alerts: [] });
+    expect(j.patches).toEqual([]);
+    expect(j.h.stats.tokenReads).toBe(0);
+    expect(j.fake.state.graphRequests).toHaveLength(0);
+  });
+
+  it("an unreadable lane config is a retryable failure that changes nothing", async () => {
+    const j = job();
+    delete j.h.lanes.PKG;
+    expect(await j.run()).toMatchObject({ ok: false, retryable: true });
+    expect(j.patches).toEqual([]);
+    expect(j.h.stats.tokenReads).toBe(0);
+  });
+
+  it("a tenant removed from the lane is NOT skipped: it stays a real failure (forbidden), flagged and alerted", async () => {
+    const j = job();
+    j.h.setLane("PKG", { microsoft: { tenantIds: [TENANT_B] } });
+    const out = await j.run();
+    expect(out).toMatchObject({ ok: true, skipped: null, alerts: [{ provider: "microsoft", reason: "health_check_failed", errorKind: "forbidden" }] });
+    expect(j.patches[0]).toMatchObject({ status: "degraded", last_error: { kind: "forbidden" } });
+    expect(j.h.stats.tokenReads).toBe(0);
+    expect(j.fake.state.graphRequests).toHaveLength(0);
+  });
+
+  it("a healthy enabled connection is checked as before", async () => {
+    const j = job();
+    expect(await j.run()).toEqual({ ok: true, skipped: null, alerts: [] });
+    expect(j.fake.state.graphRequests).toHaveLength(1);
   });
 });

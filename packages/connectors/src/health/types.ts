@@ -13,6 +13,12 @@ export type JobFailure = { ok: false; retryable: boolean; errorKind: string };
 export type HealthJobOutcome = { ok: true; skipped: "connection_not_usable" | null; alerts: AttentionAlert[] } | JobFailure;
 export type RenewJobOutcome = { ok: true; skipped: "connection_not_usable" | "no_renewer" | null; alerts: AttentionAlert[] } | JobFailure;
 
+/**
+ * Whether a connection should not be health-checked at all because its provider is switched off for the lane (a configuration choice, not a
+ * fault: no check, no status change, no `last_error`, no alert; T-256). Optional per provider; a provider without one is unchanged.
+ */
+export type HealthSkip = (laneId: LaneId, conn: LaneBoundConnection<string>) => Promise<boolean>;
+
 /** A provider's read-only health check, normally `connector.health`. Must not write to the provider. */
 export type HealthChecker = (laneId: LaneId, conn: LaneBoundConnection<string>) => Promise<HealthStatus>;
 

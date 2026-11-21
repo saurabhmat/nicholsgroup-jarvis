@@ -11,7 +11,7 @@ import { SecretValue } from "../vault/secret";
 import { createGraphApi } from "./api";
 import { classifyGraphFailure } from "./errors";
 import { createMicrosoftGuard } from "./guard";
-import { createMicrosoftHealth } from "./health";
+import { createMicrosoftHealth, createMicrosoftHealthSkip } from "./health";
 import { createMicrosoftTokenManager } from "./token-manager";
 
 function client() {
@@ -40,3 +40,5 @@ const errors = createApiErrorSink({ store: apiErrorStore, messageFor: (info) => 
 export const graphApi = createGraphApi({ guard, tokens, errors });
 /** `GET /me`: registered with conn.token_health (health/index.ts). */
 export const microsoftHealth = createMicrosoftHealth({ api: graphApi });
+/** Tells the daily health job to skip a connection whose provider is switched off for the lane (registered in health/index.ts). */
+export const microsoftHealthSkip = createMicrosoftHealthSkip({ laneConfig: laneConfigReader });

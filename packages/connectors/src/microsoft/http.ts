@@ -4,7 +4,7 @@
 import type { LaneId } from "@nichols/core";
 import { ConnectorError } from "../contract/errors";
 import { createHttpClient, type HttpClient, type HttpClientOptions } from "../http/client";
-import { GRAPH_PATH, GRAPH_REQUEST_ID_HEADER, microsoftHostsFor, type MicrosoftCloud } from "./constants";
+import { GRAPH_REQUEST_ID_HEADER, isGraphPath, microsoftHostsFor, type MicrosoftCloud } from "./constants";
 import { assertGraphHost } from "./guard";
 
 /**
@@ -34,7 +34,7 @@ export function createGraphHttp(options: Omit<HttpClientOptions, "provider" | "e
   if (kind === "token") return client;
   return {
     request(req) {
-      if (!GRAPH_PATH.test(req.path)) throw new ConnectorError({ kind: "invalid_input", message: "Path is not an allowed Graph path" });
+      if (!isGraphPath(req.path)) throw new ConnectorError({ kind: "invalid_input", message: "Path is not an allowed Graph path" });
       return client.request(req);
     },
   };

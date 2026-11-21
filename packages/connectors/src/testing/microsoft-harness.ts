@@ -193,7 +193,7 @@ export function createMicrosoftHarness(options: MicrosoftHarnessOptions) {
   const everyRequest = () => fake.state.tokenRequests.length + fake.state.graphRequests.length;
 
   return {
-    api, guard, tokens, health, newTokenManager, clock, connect, bind, rows, identities, secrets, lanes, stats, logs, apiErrors, reconnects, storedSet, expireStoredAccess, everyRequest,
+    api, guard, tokens, health, newTokenManager, clock, laneConfig, connect, bind, rows, identities, secrets, lanes, stats, logs, apiErrors, reconnects, storedSet, expireStoredAccess, everyRequest,
     /** Changes a lane's configuration (a tenant or the provider removed, a second provider added...). */
     setLane(laneId: string, patch: Partial<LaneSetup>) {
       lanes[laneId] = { ...(lanes[laneId] as LaneSetup), ...patch };

@@ -22,9 +22,13 @@ export function assertMicrosoftConnection(conn: { readonly provider: string }): 
   if (conn.provider !== "microsoft") throw new ConnectorError({ kind: "forbidden", message: "Connection belongs to another provider" });
 }
 
-/** Refuses a base URL whose host is not in `allowed` (the per-cloud allow-list). Run before any token is read. */
+/**
+ * Refuses a base URL whose ORIGIN is not `https://<allowed host>` with the default port (the per-cloud allow-list holds hosts; scheme and
+ * port must match too, so `https://graph.microsoft.com:8443` is refused). Run before any token is read.
+ */
 export function assertGraphHost(baseUrl: string, allowed: ReadonlySet<string>): void {
-  const ok = URL.canParse(baseUrl) && allowed.has(new URL(baseUrl).hostname);
+  const url = URL.canParse(baseUrl) ? new URL(baseUrl) : null;
+  const ok = url !== null && allowed.has(url.hostname) && url.origin === `https://${url.hostname}`;
   if (!ok) throw new ConnectorError({ kind: "invalid_input", message: "Host is not an allowed Microsoft host" });
 }
 

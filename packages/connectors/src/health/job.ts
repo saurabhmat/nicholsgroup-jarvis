@@ -13,7 +13,7 @@ import { toConnectorError } from "../contract/errors";
 import type { ConnectionLoader } from "../contract/lane-bound";
 import type { HealthStatus } from "../contract/schemas";
 import { connectorLog, type ConnectorLogger } from "../log/index";
-import { HEALTH_CHECK_ENDPOINT, type AttentionAlert, type HealthChecker, type HealthJobOutcome, type RenewJobOutcome, type SubscriptionRenewer, type TokenHealthStore } from "./types";
+import { HEALTH_CHECK_ENDPOINT, type AttentionAlert, type HealthChecker, type HealthJobOutcome, type HealthSkip, type RenewJobOutcome, type SubscriptionRenewer, type TokenHealthStore } from "./types";
 
 const USABLE = new Set(["active", "degraded"]);
 export const TOKEN_WARNING_DAYS = 7;
@@ -30,7 +30,7 @@ export function expiryAlert(provider: string, expiresAt: string | null, now: Dat
   return { provider, reason: left <= 0 ? "token_expired" : "token_expiring", daysLeft };
 }
 
-export function createTokenHealthJob(deps: Common & { checkers: Readonly<Record<string, HealthChecker>> }) {
+export function createTokenHealthJob(deps: Common & { checkers: Readonly<Record<string, HealthChecker>>; skips?: Readonly<Record<string, HealthSkip>> }) {
   const log = deps.logger ?? connectorLog;
   const now = deps.now ?? (() => new Date());
 
@@ -56,6 +56,20 @@ export function createTokenHealthJob(deps: Common & { checkers: Readonly<Record<
         return { ok: true, skipped: "connection_not_usable", alerts: pending ? [{ provider: conn.provider, reason: "reconnect_required", errorKind: "reconnect_required" }] : [] };
       }
       if (!USABLE.has(conn.status)) return { ok: true, skipped: "connection_not_usable", alerts: [] };
+
+      // A provider switched off for the lane is skipped before anything else (T-256): nothing is checked, changed or raised. Only providers
+      // that register a skip are affected; every other provider's path below is unchanged.
+      const skip = deps.skips?.[conn.provider];
+      if (skip) {
+        try {
+          if (await skip(laneId, conn)) {
+            child.info("conn.token_health.skipped", { reason: "provider_paused" });
+            return { ok: true, skipped: "connection_not_usable", alerts: [] }; // the existing "nothing was done" outcome; the log line says why
+          }
+        } catch (e) {
+          return { ok: false, retryable: true, errorKind: toConnectorError(e).info.kind };
+        }
+      }
 
       const alerts: AttentionAlert[] = [];
       const expiry = expiryAlert(conn.provider, conn.token_expires_at, now());

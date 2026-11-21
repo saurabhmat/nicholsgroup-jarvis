@@ -40,6 +40,10 @@ export const isCloudSupported = (cloud: string): cloud is MicrosoftCloud => clou
 
 /** Through the Graph client only the signed-in user's own mailbox and calendar (`/me`...) is reachable (never `/users/{id}`). */
 export const GRAPH_PATH = /^\/me(\/[^?#\s]*)?$/;
+/** A template that holds a backslash or a percent-encoded dot, slash or backslash (`%2e`, `%2f`, `%5c`, any case) could move the request. */
+const SMUGGLED = /\\|%(?:2e|2f|5c)/i;
+/** The one path rule: under `/me`, no query or fragment, and no encoded or backslash separator tricks (holds on its own, besides the shared client's checks). */
+export const isGraphPath = (path: string): boolean => GRAPH_PATH.test(path) && !SMUGGLED.test(path);
 
 /** Refresh the access token when it has less than this left. */
 export const REFRESH_SKEW_MS = 5 * 60_000;
