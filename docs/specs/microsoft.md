@@ -1,6 +1,8 @@
 # Spec — Microsoft 365 mail and calendar connector (M2, M5, M6)
 
-Status: proposed (planner output, Nov 18, 2026). Re-plans T-066 – T-068 and adds T-250 – T-268 in `docs/backlog.md`.
+Status: proposed (planner output, Nov 18, 2026). Re-plans T-066 – T-068 and adds T-250 – T-269 in `docs/backlog.md`.
+
+**Nov 21, 2026: D-57** (Saurabh): one lane may have Google and Microsoft mail/calendar connections at the same time, permanently; Microsoft is an additional connector and nothing disconnects, hides, skips or stops syncing a Google connection because Microsoft exists. Supersedes D-54 and the PKG cut-over. Sections changed: §1, §2, §4 (rewritten; new config shape, T-269), §6.3 (inventory note), §7 (where Connect shows, precheck, guard), §8.6, §9 (calendar ids, wiring), §10 (approvals dispatch), §11 (one line), §12 (title; §12.1 step 3; §12.2 rewritten as "Enabling Microsoft for PKG alongside Google"), §13, §16 (edge cases replaced and added), §17 (tests 1 – 3, 26, 27 rewritten; 28 – 30 added), §18 (questions 1 and 7), §19 (task range). Sign-in is unchanged (D-6).
 Brief: decisions D-48 – D-53 and human items H-062 – H-065 (Nov 18, 2026). Read `CLAUDE.md` (rules 1 – 13), `docs/specs/approvals.md` and the T-063/T-064/T-219/T-247 notes in `docs/plan-review.md` first.
 
 Facts about Microsoft Graph and Entra in this spec are from memory. Every one marked **(verify)** is also in section 15 and must be checked against Microsoft's current documentation before the task that relies on it is built. Nothing marked (verify) may be treated as certain.
@@ -9,19 +11,19 @@ Facts about Microsoft Graph and Entra in this spec are from memory. Every one ma
 
 A native Microsoft Graph connector for mail and calendar, behind the existing T-062 interfaces (`MailProvider`, `CalendarProvider` in `packages/connectors/src/comms/provider.ts`), so a lane whose mailboxes live in Microsoft 365 gets the same product as a Google lane: Settings → "Connect Microsoft", sign in, approve once; mail and calendar metadata in the index; bodies read live; Home, Inbox and the briefing work unchanged; reply drafts and sends go through the Approval Center.
 
-Google and Microsoft run side by side, chosen **per lane** in `lane_config` (D-48). PKG stays on native Google until its mailboxes move (D-48); the first live Microsoft test is Nichols Capital (`NC`, D-50).
+Google and Microsoft run side by side, **also inside one lane** (D-57): a lane enables one or both providers in `lane_config` (`mail.providers`, section 4), and each person may connect Google and Microsoft mailboxes in the same company. Microsoft is an additional connector; PKG keeps its native Google connections and may add Microsoft when Robert wants it (section 12.2). The first live Microsoft test is Nichols Capital (`NC`, D-50).
 
 ## 2. Scope and out of scope
 
 **In scope (this spec):**
-- Per-lane provider choice in `lane_config`, read on every sync and call, fail closed.
+- Per-lane list of enabled mail providers in `lane_config` (Google, Microsoft or both), read on every sync and call, fail closed.
 - One multi-tenant Entra app; tenant and cloud recorded per lane and per connection, never in code.
 - Connect, reconnect and disconnect of a person's own Microsoft mailbox (D-43 ownership, T-247 rules).
 - Mail metadata sync (per-folder delta), live body read, live search.
 - Calendar metadata sync (calendarView delta), live event description.
 - Write path for `email.save_draft` and `email.send` through `packages/modules/approvals` only (rule 5, D-34).
 - Change notifications (subscriptions) as a later task, with polling as the default and fallback.
-- Enabling the `NC` lane for mail and calendar only (D-50), and a PKG Google → Microsoft cut-over runbook.
+- Enabling the `NC` lane for mail and calendar only (D-50), and a runbook for adding Microsoft to a lane that already uses Google (PKG, when Robert wants it). No cut-over: Google is never switched off because Microsoft is added (D-57).
 - GCC High as a second cloud, built only if H-064/H-065 say it is needed.
 
 **Out of scope (later work only, not planned here):**
@@ -45,31 +47,43 @@ Google and Microsoft run side by side, chosen **per lane** in `lane_config` (D-4
 - Rule 10: MSW fakes and synthetic data only in code and tests. Every live check is a human item.
 - D-23: one mailbox, one lane. D-43: a mailbox belongs to the person who connected it; admins see health, never content.
 
-## 4. Provider per lane (lane_config)
+## 4. Mail providers of a lane (lane_config; D-57)
 
-`laneConfigSchema` is strict, so new keys need a schema change and tests (T-250). Plan-review item 12 suggested `mail: { provider, via }`; `via` already exists as `mail_transport` (T-219), so it is not repeated.
+`laneConfigSchema` is strict, so new keys need a schema change and tests. T-250 (merged) added a single `mail.provider` value under D-54; D-57 (Nov 21, 2026) replaced D-54, so T-269 turns it into a list. Plan-review item 12 suggested `mail: { provider, via }`; `via` already exists as `mail_transport` (T-219), so it is not repeated.
 
 ```ts
 mail: {
-  provider: "google" | "microsoft",        // NEW, default "google": no change for existing lanes
-  allowed_domains: string[],               // existing (T-247), fail closed when empty
+  providers: ("google" | "microsoft")[],   // T-269; 1..2, unique; default ["google"]: no change for existing lanes
+  provider?: "google" | "microsoft",       // T-250, deprecated input only: read as [provider] when `providers` is absent;
+                                           // both keys present is refused; never written by the app again
+  allowed_domains: string[],               // existing (T-247), fail closed when empty; applies to BOTH providers' accounts
   self_connect_domains: string[],          // existing, unused
 },
-mail_transport: "native" | "composio",     // existing; "composio" is refused when mail.provider = "microsoft" (refine)
-microsoft: {                               // NEW, optional; required when mail.provider = "microsoft" (refine)
+mail_transport: "native" | "composio",     // existing; applies to Google connections only; "composio" requires "google" in providers
+microsoft: {                               // T-250, optional; required when "microsoft" is in providers (refine)
   cloud: "commercial" | "gcc_high",        // default "commercial" (covers plain GCC as far as we know: verify)
   tenant_ids: uuid[],                      // allowed Entra tenant ids, 1..10; empty is refused by the schema
   allow_gcc: boolean,                      // default false; see section 5.4 (D-49)
   mail_folders: ("inbox" | "sentitems" | "archive")[],  // default ["inbox", "sentitems"]
+  calendar_ids?: string[],                 // T-269; raw Graph calendar ids, 1..5; replaces the default selection for Microsoft connections only
 },
-calendar: { calendar_ids?, include_read_only, forward_days }  // existing; applies to whichever provider the lane uses
+calendar: { calendar_ids?, include_read_only, forward_days }
+  // existing; calendar_ids = raw GOOGLE ids only (D-26, unchanged); include_read_only and forward_days apply to both providers
 ```
 
+What "enabled" means, per provider:
+- **Google enabled** for a lane: `google` is in `mail.providers` (true for every stored lane by default). Google connections are then gated exactly as today (`allowed_domains`, `mailboxes`, D-23, T-247 ownership, `mail_transport`).
+- **Microsoft enabled** for a lane: `microsoft` is in `mail.providers` **and** the `microsoft` block is present and valid. A lane with `microsoft: null` never allows a Microsoft connect, sync or call (T-250 review L1). Connections are then gated by `tenant_ids`, `cloud`, `allow_gcc` and the same mail policy.
+- A `microsoft` block without `microsoft` in the list is allowed: a lane prepared before use, or Microsoft paused after use.
+
 Rules:
-- Read on every sync, every provider call and every connect (like `mailboxes` today). A malformed or unreadable config fails closed.
-- A lane uses **one** mail provider at a time (default for D-54). A connection whose provider is not the lane's `mail.provider` is not synced, not read and not offered Reconnect; Settings shows "This company now uses <provider>". Its rows stay until the retention purge (section 12).
-- Google and Microsoft lanes run side by side: the provider is a per-lane value, every job reads it per lane.
-- `calendar.calendar_ids` holds raw ids of the lane's current provider. A provider switch (the cut-over runbook, T-266) writes the new config version without them; ids of the other provider would simply never match a calendar.
+- Read on every sync, every provider call and every connect (like `mailboxes` today), from ONE read (`mailProviderSettings(laneId)` returns `{ providers, microsoft }`; plus `mailProviders(laneId)` and `isMailProviderEnabled(laneId, provider)`). A malformed or unreadable config fails closed.
+- **Both providers may be enabled in one lane at the same time, permanently (D-57).** Each connection is handled by its own row's provider: the facade dispatches by `core.connections.provider`, never by a lane-level value. One lane's mail and calendar ticks run all its usable Google **and** Microsoft connections.
+- Nothing about a lane's Google connections changes because Microsoft is enabled: they are not disconnected, hidden, skipped, paused or re-consented, and their proposals are not invalidated.
+- One person may have a Google and a Microsoft mailbox in the same lane, even with the same address (the D-23 index is `(provider, lower(external_account_id))`). Home, Inbox, the briefing, calendar and approvals show both providers' rows together, each labelled with its provider and account. The same message or meeting seen through both mailboxes appears twice; whether to de-duplicate is open decision **D-58** (default: no de-duplication in the pilot; each row labelled with its account).
+- **A provider later removed from `mail.providers`** (a new config version, by a human): its connections are **paused**: not synced, not read live (the guard refuses), not offered Connect or Reconnect; Settings lists them as "Paused: <Google|Microsoft> is not enabled for this company"; their status is not changed, nothing is deleted, and their indexed metadata stays (shown with the stale line) until the retention purge removes it (rule 6 and the lane's retention policy are unchanged). Pending `email.*` proposals on a paused connection are refused at execute (`connection_unavailable`, body purged). Microsoft subscriptions of a paused connection are stopped (T-264). Adding the provider back resumes from the stored cursors.
+- Calendar ids are per provider: `calendar.calendar_ids` (Google, D-26) and `microsoft.calendar_ids`. Each list replaces the default selection for that provider's connections only; a shared list would leave the other provider's connections with no calendar or need a silent fallback.
+- `mail_transport` is about how Google is reached; Microsoft connections are always `native`.
 
 ## 5. Tenant, cloud and consent
 
@@ -143,7 +157,7 @@ The plan-review "T-219 build notes"/finding 1 list (file:line) shows the provide
 
 The cursor table `core.sync_cursors` (streams `mail`, `calendar`) is reused unchanged.
 
-T-253 also does the **reader inventory**: every function and view whose latest body names `'google'` (examples from the notes: `core.home_calendar_status`, Home feed counts, `core.briefing_coverage`, the sync-now and job-failure functions, the calendar target lists). Each is decided case by case and logged: "mail provider" meanings accept `microsoft`; `transport = 'native'` filters stay (Microsoft rows are always `native`). A pgTAP test lists those functions and asserts each accepts a Microsoft connection.
+T-253 also does the **reader inventory**: every function and view whose latest body names `'google'` (examples from the notes: `core.home_calendar_status`, Home feed counts, `core.briefing_coverage`, the sync-now and job-failure functions, the calendar target lists). Each is decided case by case and logged: "mail provider" meanings accept `microsoft`; `transport = 'native'` filters stay (Microsoft rows are always `native`). A pgTAP test lists those functions and asserts each accepts a Microsoft connection. The inventory (plan-review "T-253: review results") found that every SQL reader serves both providers regardless of `lane_config`; under D-57 that is the desired behaviour (both providers' rows of one lane are read together), not a gap. Provider enablement is checked in TypeScript (facade, guards, Settings), not in SQL.
 
 ### 6.4 Push subscriptions (T-068)
 
@@ -155,7 +169,7 @@ No change to `comms.message_index` or `cal.event_index` columns: both already al
 
 Same experience as Google: Settings → "Your Microsoft accounts" → **Connect Microsoft** → Microsoft sign-in → approve once → back on Settings with the result. **Reconnect** appears when the grant dies. Portal sign-in is unchanged (D-6): this connect is a data connection, not a login, and the page says so.
 
-Shown only when the lane's `mail.provider` is `microsoft`. Any member with `own_mail` connects **their own** account; the connection's owner is the signed-in user (D-43, T-247); nobody connects someone else's mailbox.
+"Your Microsoft accounts" is shown when Microsoft is enabled for the lane (section 4), **next to** "Your Google accounts" when Google is enabled too; the Google section is unchanged. The start and the callback refuse server-side when Microsoft is not enabled. Any member with `own_mail` connects **their own** account; the connection's owner is the signed-in user (D-43, T-247); nobody connects someone else's mailbox.
 
 **Start** (generic T-035 flow): role and lane checked, state + PKCE bound to user and lane, audited. Authorization parameters: `response_type=code`, `response_mode=query`, `prompt=select_account` (verify), scopes from `scopesFor(laneId)`, `login_hint` with the stored address on a reconnect.
 
@@ -171,7 +185,7 @@ Shown only when the lane's `mail.provider` is `microsoft`. Any member with `own_
 Permission names and whether each needs admin consent: **verify**.
 
 **Callback, in order (all before anything is stored):**
-1. `precheck`: the lane's `mail.allowed_domains` is not empty and `microsoft` settings are valid (fail closed before the code exchange).
+1. `precheck` (one `mailProviderSettings` read): the lane's `mail.allowed_domains` is not empty, and Microsoft is enabled for the lane (`microsoft` in `mail.providers`, `microsoft` settings present and valid) (fail closed before the code exchange). Whether the lane also has Google enabled or Google connections is irrelevant; they are not read or changed.
 2. Code exchange at the lane's cloud token endpoint (PKCE, client secret in the body).
 3. Granted scopes are exactly the requested set (the token response `scope`; OIDC extras tolerated). A missing scope, an unrequested write scope, or no refresh token refuses the account. The format of `scope` (short names vs full URIs) must be handled: **verify**.
 4. Tenant: the `tid` claim of the id_token received directly from the token endpoint over TLS (OIDC code flow; signature check optional in that case: **verify** and let security review decide). `tid` must be in `microsoft.tenant_ids` → otherwise `wrong_tenant` (new result code, fixed message). A personal-account tenant is refused by the `organizations` authority and by this check.
@@ -179,14 +193,14 @@ Permission names and whether each needs admin consent: **verify**.
 6. Identity: Graph `GET /me?$select=id,mail,userPrincipalName` with the new access token. The mailbox is `mail` (primary SMTP), lower-cased. No `mail` (unlicensed or no mailbox) refuses. A guest account (`#EXT#` in the UPN) refuses.
 7. Mail policy: `assertMailAccountAllowed` (allowed domain, and on the exact `mailboxes` list when the lane keeps one).
 8. Reconnect: the address must equal the bound connection's (`wrong_account` otherwise); the tenant must equal its stored `tenant_id`.
-9. D-23 and ownership: the existing `ensureConnection` + owner checks (a row owned by someone else is refused, `ACCOUNT_OWNED_BY_OTHER_MESSAGE`).
+9. D-23 and ownership: the existing `ensureConnection` + owner checks (a row owned by someone else is refused, `ACCOUNT_OWNED_BY_OTHER_MESSAGE`). A Google row with the same address in the lane does not conflict (different provider).
 10. Store the token set in the Vault (`storeToken`), set `tenant_id` + `cloud` (set-once function), record features (`graph_mail_write: true|false`), audit.
 
 A grant refused after step 2 is dropped from memory, never stored, and the user is told to remove the app's access in their Microsoft account (the existing `GRANT_NOT_STORED_MESSAGE` path).
 
 **Tokens** (`microsoft/token-manager.ts`, mirrors Google's): refresh when under 5 minutes left and on a 401; single-flight per connection per process; Microsoft **rotates** refresh tokens on use **(verify)**, so the new set is stored with the existing compare-and-swap `rotateToken` and a loser re-reads the Vault. `invalid_grant` and the "consent revoked / password changed / conditional access" family (`interaction_required`, specific `AADSTS` codes: **verify**) → `reconnect_required`. Refresh POSTs are never retried. `token_expires_at` stays null (refresh-token lifetime is sliding and not returned: **verify**); expiry is found by the refresh failure.
 
-**Guard** (`microsoft/guard.ts`, mirrors `google/guard.ts`) on every provider call, before any token read: lane brand, provider `microsoft`, authoritative row, usable status, lane `mail.provider = microsoft`, the row's `tenant_id` still in `tenant_ids`, the row's `cloud` equal to the lane's cloud (a changed cloud means Reconnect), mail policy on the address.
+**Guard** (`microsoft/guard.ts`, mirrors `google/guard.ts`) on every provider call, before any token read, from one `mailProviderSettings` read: lane brand, provider `microsoft`, authoritative row, usable status, Microsoft enabled for the lane (section 4; `microsoft: null` refuses), the row's `tenant_id` still in `tenant_ids`, the row's `cloud` equal to the lane's cloud (a changed cloud means Reconnect), mail policy on the address. The guard never refuses because the lane also has Google enabled, and never touches Google rows.
 
 **Disconnect** (D-55 default). Microsoft has no per-app token revocation a user's delegated token can call (revoking all sign-in sessions is far too broad; removing the grant needs admin permissions) **(verify)**. So Disconnect is local: the mailbox owner, at AAL2, confirms; the Vault tokens are deleted, the row becomes `disconnected`, audited; the page tells the user to remove the app in their Microsoft account ("My Apps" / "Apps and services": exact place **verify**). This is not an external write, so it does not go through approvals; D-55 asks Saurabh to confirm (D-24 covered provider-side revocation only).
 
@@ -250,17 +264,17 @@ Gmail flags (`is_bulk`, `is_calendar`, `is_auto`, `is_generated`, `is_auth_pass`
 
 ### 8.6 Wiring (T-260)
 
-`mail-ingest-delta` (T-238) and `conn.sync` pick the runner from the connection's provider through the facade; Microsoft connections of a lane whose `mail.provider` is `microsoft` are listed; the per-tenant concurrency key is added. Home, Inbox and the briefing show Microsoft mail: "Open in Outlook" uses `source_url`; provider names in UI text come from the connection, not hard-coded "Gmail". Coverage, Sync now and the stale line treat Microsoft streams like Google's.
+`mail-ingest-delta` (T-238) and `conn.sync` pick the runner from the connection's provider through the facade; the Microsoft connections of every lane where Microsoft is enabled are listed and run in the same tick as that lane's Google connections; the per-tenant concurrency key is added for Microsoft rows. Home, Inbox and the briefing show the user's Google and Microsoft mail together in one list, each row labelled with its provider and account; "Open in Gmail" / "Open in Outlook" per row from that row's `source_url`; provider names in UI text come from the row's connection, not hard-coded "Gmail". No de-duplication across providers (D-58 default). Coverage, Sync now and the stale line treat Microsoft streams like Google's.
 
 ## 9. Calendar sync on Graph (T-067, T-261)
 
-- **Which calendars (D-26 equivalent):** discovery `GET /me/calendars` at the start of each run: the default calendar plus calendars the user owns (`owner.address` = the mailbox) or can edit (`canEdit`); others' read-only and subscribed calendars only with `calendar.include_read_only`; `calendar.calendar_ids` (raw Graph ids) replaces the default. **At most 5 calendars** per Microsoft connection (calendarView deltaLinks are long and carry the window; the 16 KB cursor bound must hold: **verify** link length, raise the cap only with a measured bound). Settings read on every page, fingerprint in the cursor, as T-064.
+- **Which calendars (D-26 equivalent):** discovery `GET /me/calendars` at the start of each run: the default calendar plus calendars the user owns (`owner.address` = the mailbox) or can edit (`canEdit`); others' read-only and subscribed calendars only with `calendar.include_read_only`; `microsoft.calendar_ids` (raw Graph ids, T-269) replaces the default. `calendar.calendar_ids` holds Google ids (D-26) and is never applied to a Microsoft connection. **At most 5 calendars** per Microsoft connection (calendarView deltaLinks are long and carry the window; the 16 KB cursor bound must hold: **verify** link length, raise the cap only with a measured bound). Settings read on every page, fingerprint in the cursor, as T-064.
 - **Delta:** `GET /me/calendars/{id}/calendarView/delta?startDateTime=..&endDateTime=..` per calendar, window = retention back (max 180 days) to `forward_days` ahead, `Prefer: IdType="ImmutableId"`, `Prefer: outlook.timezone="UTC"` **(verify which Prefer headers delta honours)**. calendarView delta may not support `$select` and may return bodies **(verify)**: the mapper projects to `EventMeta` (strict, no description) and drops everything else in memory; a test feeds bodies in the fake and asserts none reaches the store, a log or an error.
 - **Cursor:** `m1.<connection id>.c:<base64url JSON>` with per calendar the deltaLink or nextLink and the window it was created for; a calendar whose forward window has run down to half is reloaded (as T-064).
 - **Mapping:** `seriesMasterId` → `recurring_event_id`; occurrences and exceptions are instances; `isCancelled` → status `cancelled`; `showAs`/`responseStatus` not stored in v1 (as Google); `onlineMeeting.joinUrl` (https only) → `online_meeting_url`; `webLink` (host-checked) → `source_url`; attendees capped at 500; all-day events from `isAllDay` with the event's original time zone (`originalStartTimeZone`, Windows zone names mapped to IANA: **verify**); an all-day event without a usable zone is skipped and logged, never guessed.
 - **Deletions:** `@removed` → `removals` (hard delete), which the apply function sets to `cancelled`. The contract suite runs with `removedEventsAreStubs: false` for Microsoft.
 - **readBody:** the event's `body` read live (`$select=body`, text), only for a calendar in the current selection.
-- **Wiring (T-261):** `CALENDAR_PROVIDERS` (T-130 note) gains `microsoft`; `cal-ingest-delta` lists Microsoft connections of Microsoft lanes; Home and the briefing show "Join" links for Teams meetings like any https link (never opened automatically).
+- **Wiring (T-261):** `CALENDAR_PROVIDERS` (T-130 note) gains `microsoft`; `cal-ingest-delta` lists the Microsoft connections of every lane where Microsoft is enabled, beside its Google connections; Home and the briefing show the user's Google and Microsoft events together in time order, each labelled with its provider and account, and "Join" links for Teams meetings like any https link (never opened automatically). The same meeting on both calendars appears twice (D-58 default).
 
 ## 10. Write path (T-262, T-263)
 
@@ -274,7 +288,7 @@ Gmail flags (`is_bulk`, `is_calendar`, `is_auto`, `is_generated`, `is_auth_pass`
 - **Verify (read-back):** recipients, subject, conversation and marker equal the approved payload; else `VERIFICATION_MISMATCH_MESSAGE`. The body is purged on any terminal state (D-19, existing `act.purge_content`).
 - **Write client allow-list:** the Graph write client accepts only these method + path templates: `POST /me/messages`, `POST /me/messages/{id}/createReply`, `PATCH /me/messages/{id}` (only a draft this action created, checked by marker before the call), `POST /me/messages/{id}/send`. No `DELETE`, `move`, `copy`, `forward`, rules or settings call can be built (a test enumerates and refuses them). `Mail.ReadWrite` would allow deletes; this allow-list is the guard.
 - **Recovery (T-192):** a `MicrosoftEmailReconciler` with `findWrite` and `verifyWrite` only (no `executeWrite`), used by `action.reconcile_stuck`.
-- **Approvals dispatch:** the email executor and reconciler pick the writer by the action's connection provider. Any SQL in the approvals path that assumes `provider = 'google'` for `email.*` is generalised with pgTAP (T-263).
+- **Approvals dispatch:** the email executor and reconciler pick the writer by the action's connection provider, so a lane with both providers executes Google and Microsoft proposals side by side; the Approval Center labels each email proposal with its provider and sending mailbox. An action whose connection's provider is no longer enabled for the lane is refused at execute (`connection_unavailable`, body purged). Any SQL in the approvals path that assumes `provider = 'google'` for `email.*` is generalised with pgTAP (T-263).
 
 ## 11. Mailbox setups (H-065)
 
@@ -284,37 +298,39 @@ Gmail flags (`is_bulk`, `is_calendar`, `is_auto`, `is_generated`, `is_auth_pass`
 | One account plus shared mailboxes | Workable, not built (T-268, only if decided) | Needs `Mail.Read.Shared` (+ `Calendars.Read.Shared`), `/users/{shared address}/...` paths, a connection whose mailbox differs from the signed-in identity, and a rule for the token: one refresh token would serve mailboxes in several lanes. Copying it per lane breaks with rotating refresh tokens, and sharing one token row across lanes breaks lane isolation of credentials (rule 1). A design decision is needed first. |
 | One mailbox with several addresses (aliases) | **Not supported unless decided** | Every message would have to be sorted into a lane by recipient address; a mistake puts law-firm mail in the wrong lane. Only the primary address is checked at connect; mail to an alias lands in the same mailbox and the same lane. |
 
-## 12. Lanes: NC first (D-50), PKG cut-over later
+Under D-57 a company lane may hold these Microsoft accounts **and** the same people's Google accounts at the same time (e.g. pub-k.org on Google and a pub-k.org Microsoft mailbox in `PKG`); each is its own connection, labelled per account.
+
+## 12. Lanes: NC first (D-50), Microsoft added to PKG later (D-57)
 
 ### 12.1 Enabling `NC` for mail and calendar only (T-265)
 
 Configuration only, no company code. A runbook `docs/runbooks/enable-lane-mail.md` plus a gitignored manual SQL pair:
 1. `core.lanes`: `NC` enabled.
 2. `core.lane_policies` for `NC`: `llm_allowed_categories` = `email`, `calendar` (no finance, no web); `store_content_bodies = false`; `retention_days` 90; `write_actions_allowed` empty and `store_outbound_drafts = false` at first (drafts later, by a human).
-3. A new insert-only `lane_config` version: `enabled_modules` = `comms`, `calendar`, `briefing`; `mail.provider = "microsoft"`; `mail.allowed_domains = ["nichols.capital"]`; `microsoft = { cloud: "commercial", tenant_ids: ["<NC tenant id>"] }`.
+3. A new insert-only `lane_config` version: `enabled_modules` = `comms`, `calendar`, `briefing`; `mail.providers = ["microsoft"]` (NC has no Google mail today; Google can be added later the same way); `mail.allowed_domains = ["nichols.capital"]`; `microsoft = { cloud: "commercial", tenant_ids: ["<NC tenant id>"] }`.
 4. Memberships: Robert `owner` of `NC` (he connects his own mailbox, D-43); Saurabh `admin_technical` (health only). Finance and approvals are not enabled for `NC`.
 5. Vercel Production `ENABLED_LANES=PKG,NC`; Inngest app re-synced.
 A lane with mail but no QuickBooks must show no finance tiles or banners: T-265 checks Home and the nav against `enabled_modules` and fixes what does not.
 
 **Where the first live test runs (D-56, recommendation).** Not in an agent worktree with a real mailbox, and not in Saurabh's personal test deployment (H-040 is for his own mail, D-33). Recommended: (1) a local smoke against a **Microsoft test tenant with synthetic users** (H-066), which is synthetic data, so it fits rule 10 and needs no D-33 exception; then (2) the first real mailbox, Robert's nichols.capital, in **Nichols production, lane `NC`**, after the code is merged and deployed, by Robert himself (H-070). Nichols Capital data belongs in Nichols production, like PKG's.
 
-### 12.2 PKG cut-over from Google to Microsoft (T-266; date unknown)
+### 12.2 Enabling Microsoft for PKG alongside Google (T-266, H-071; when Robert wants it)
 
-Modelled on T-247's part 25. A runbook plus a gitignored manual SQL pair, run in one short window:
-1. Before: the pub-k.org/pubkgroup.com mailboxes are migrated to Microsoft 365 (H-065, H-071 sets the date); the NC test has passed.
-2. SQL part: a new insert-only `lane_config` version for `PKG` with `mail.provider = "microsoft"`, the same `allowed_domains`, and `microsoft` settings; every pending `email.*` proposal on a Google connection of `PKG` is invalidated and its body purged; Google connections of `PKG` become `disconnected` (status only; their Vault tokens deleted by the existing function).
-3. Each person reconnects under "Your Microsoft accounts".
-4. Old Google rows in `comms.message_index` and `cal.event_index` are left to the retention purge (90 / 180 days). Readers must not show rows of a `disconnected` connection, or migrated mail would appear twice (the Google copy and the Microsoft copy). T-266 checks every reader and adds the filter where missing, with pgTAP.
-5. Revoking the Google grant at Google is an approvals action (`google.revoke_grant`, D-24) or done by each user at Google; the runbook names both.
-6. Check file: every `PKG` Google connection disconnected, no pending Google email proposal, the new config version current, at least one Microsoft connection per person after step 3.
-What users see between step 2 and 3: no mail or calendar on Home until they reconnect. The briefing says "Not connected".
+Not a cut-over (D-57): Google stays connected and keeps syncing; nothing is disconnected, invalidated, hidden or purged. This differs from 12.1 because the lane already exists and uses Google: no lane enable, no policy or membership change. A section of `docs/runbooks/enable-lane-mail.md` plus a gitignored manual SQL pair:
+1. Before: Robert wants PKG's Microsoft mailboxes in the portal (H-071 records it); the NC test has passed (H-070); the PKG tenant id(s) and cloud are known (H-065); the tenant admin has granted consent once (as H-063).
+2. Record the counts the check file compares: usable Google connections of `PKG`, pending Google `email.*` proposals of `PKG`.
+3. SQL part: one new insert-only `lane_config` version for `PKG` with `mail.providers = ["google", "microsoft"]` and the `microsoft` block (cloud, tenant ids). Every other key is kept unchanged (`allowed_domains`, `mailboxes`, `mail_transport`, `calendar.calendar_ids`, `briefing`, `approvals`); a legacy `mail.provider` key is removed. It refuses to run unless Google is enabled in the current version and Microsoft is not. Nothing else is written.
+4. Each person with a PKG Microsoft mailbox connects it under "Your Microsoft accounts"; their Google rows stay under "Your Google accounts".
+5. Check file (read-only): the new version current; both providers listed; the Google keys equal to the previous version's; the two counts of step 2 unchanged.
+What users see: a new "Your Microsoft accounts" section; Home, Inbox and the briefing list Google and Microsoft rows together, each labelled with its account. **Caution:** if the same mail reaches both mailboxes (forwarding, or a copy migrated from Google to Microsoft), it appears twice; whether to de-duplicate is open decision D-58 (default: no; each row labelled). The lane policy's `write_actions_allowed` applies to both providers, so a Microsoft connect in PKG requests `Mail.ReadWrite` and `Mail.Send` when PKG allows email writes (section 7); T-263 must be merged first.
+Rollback: a new version with `mail.providers = ["google"]` (Microsoft rows paused, nothing deleted, section 4).
 
 ## 13. Jobs
 
 | Job | Change |
 |---|---|
-| `conn.sync` | runner picked by provider through the facade; concurrency key per connection plus per tenant for Microsoft |
-| `mail-ingest-delta` (15 min) | lists Microsoft connections of Microsoft lanes |
+| `conn.sync` | runner picked by the connection row's provider through the facade; a connection whose provider is not enabled for its lane is skipped (`provider_disabled`, no external call); concurrency key per connection plus per tenant for Microsoft |
+| `mail-ingest-delta` (15 min) | lists every usable Google and Microsoft connection of each lane (Microsoft only where enabled) in the same tick |
 | `cal-ingest-delta` (15 min) | same |
 | `conn.token_health` | Microsoft health check (`GET /me`) registered; no expiry warning (no expiry known) |
 | `conn.subscriptions_renew` (T-040 registry) | Microsoft renewer (T-264) |
@@ -367,8 +383,12 @@ Each item is unverified and must be checked against Microsoft's current document
 - A guest account, or a personal Microsoft account → refused.
 - The tenant is removed from `tenant_ids` → the guard refuses every call; Settings shows the row as not usable.
 - `microsoft.cloud` changes after connect → the guard refuses; Reconnect.
-- The lane switches `mail.provider` → old provider's connections stop syncing at the next run; no data is deleted.
-- Same address held by a Google row (any status) and a Microsoft row in the same lane (cut-over): allowed (different provider); readers hide disconnected rows.
+- One user has a Google and a Microsoft mailbox in the same lane (same or different address) → both connections are usable; both sync in the same tick; Home, Inbox, the briefing and calendar show both, each row labelled with its provider and account; a message present in both mailboxes is shown twice (D-58 default).
+- The lane has no `microsoft` block, or `microsoft` is not in `mail.providers` → "Your Microsoft accounts" is not shown, Connect Microsoft is refused server-side before the code exchange, nothing is stored; the lane's Google connections, Settings section and sync are unaffected.
+- Microsoft is removed from `mail.providers` later (a new config version) → its connections are paused: not synced, live reads refused by the guard, no Reconnect, shown on Settings as "Paused: Microsoft is not enabled for this company"; status unchanged, nothing deleted, indexed metadata left to the retention purge; pending Microsoft email proposals refused at execute with the body purged; subscriptions stopped. Google connections unaffected. The same holds the other way round for Google.
+- A config with both `mail.provider` and `mail.providers` → refused (fail closed).
+- `mail_transport = "composio"` in a lane with both providers → applies to the Google connections only; Microsoft connections stay native.
+- Same address held by a Google row and a Microsoft row in the same lane: allowed (different provider); both shown, each labelled.
 - A user category named like a system marker → stored as `cat:<name>`.
 - A message moves Inbox → Sent Items between two pages → removal carries the folder; the newer folder's upsert wins.
 - 429 storm on one tenant → only that tenant's connections wait (per-tenant key); others continue.
@@ -384,9 +404,9 @@ Each item is unverified and must be checked against Microsoft's current document
 
 All with MSW fakes and synthetic data. Every test of a SQL change includes a cross-lane denial case.
 
-1. **Provider per lane.** Given lane A with `mail.provider = "google"` and lane B with `"microsoft"`, when the 15-minute mail tick runs, then A's Google and B's Microsoft connections are synced and neither lane's other-provider connections are.
-2. **Fail closed config.** Given lane B with `mail.provider = "microsoft"` and no `microsoft` block, when the config is parsed, then it is refused; and given a stored config that cannot be read, when a Microsoft sync starts, then nothing is called and the run fails with a config error.
-3. **Composio refused for Microsoft.** Given `mail.provider = "microsoft"` and `mail_transport = "composio"`, when the config is parsed, then it is refused.
+1. **Both providers in one lane.** Given lane A with `mail.providers = ["google","microsoft"]` and a `microsoft` block, and user U with one Google and one Microsoft mailbox in A, when the 15-minute mail tick runs, then both of U's connections are synced in that tick, each by its own provider's runner; and when U opens Home, Inbox and the briefing, then both mailboxes' rows are shown together, each labelled with its provider and address, with "Open in Gmail" on the Google rows and "Open in Outlook" on the Microsoft rows.
+2. **Fail closed config.** Given lane B with `mail.providers = ["microsoft"]` and no `microsoft` block, when the config is parsed, then it is refused; given a config with both `mail.provider` and `mail.providers`, then it is refused; and given a stored config that cannot be read, when a Microsoft sync starts, then nothing is called and the run fails with a config error.
+3. **Composio is Google-only.** Given `mail.providers = ["microsoft"]` and `mail_transport = "composio"`, when the config is parsed, then it is refused; given `["google","microsoft"]` and `composio`, then it is accepted and the Microsoft connections run native. Given a stored T-250 config with `mail.provider = "microsoft"`, then it reads as `["microsoft"]`; given one with no provider key, then `["google"]`.
 4. **Connect, happy path.** Given a viewer in lane B with `own_mail`, an allowed domain and the tenant in `tenant_ids`, when they connect and the fake Entra returns the read scopes, a refresh token and a `tid` in the list, then one `active` Microsoft row exists with the user as owner, `tenant_id` and `cloud` set, tokens only in the Vault, and an audit row.
 5. **Wrong tenant.** Given a `tid` not in `tenant_ids`, when the callback runs, then the result is `wrong_tenant`, no row or token is stored, and the message tells the user to remove the app's access.
 6. **Wrong domain / not on the list.** Given `/me` returns an address on another domain, then `account_refused`; nothing stored.
@@ -409,21 +429,24 @@ All with MSW fakes and synthetic data. Every test of a SQL change includes a cro
 23. **No write scope.** Given a connection with `graph_mail_write = false`, when an email action is approved, then the executor refuses with the reconnect message and nothing is called.
 24. **Contract.** `describeCommsContract` passes for the Microsoft mail and calendar providers (with `removedEventsAreStubs: false`).
 25. **Notifications (later).** Given a validation request, then the token is echoed as plain text; given a notification with a wrong `clientState`, then nothing is queued; given a subscription expiring in 12 hours, when the renew scan runs, then it is renewed and `expires_at` moves.
-26. **NC lane.** Given the synthetic `NC` config (mail-only modules), when Robert opens `NC`, then Home shows mail and calendar and no finance tiles, and Settings shows "Your Microsoft accounts".
-27. **Cut-over.** Given PKG with a Google connection, pending Google email drafts and indexed rows, when the cut-over SQL runs (locally, synthetic), then the drafts are invalidated with bodies purged, the Google rows are `disconnected`, the Inbox shows no Google rows, and the check file's rows are all true.
+26. **NC lane.** Given the synthetic `NC` config (mail-only modules, `mail.providers = ["microsoft"]`), when Robert opens `NC`, then Home shows mail and calendar and no finance tiles, and Settings shows "Your Microsoft accounts" and no Google section.
+27. **Microsoft added to a Google lane.** Given synthetic PKG with a usable Google connection, pending Google email drafts and indexed Google rows, when the T-266 SQL runs (locally, synthetic), then the new config version lists both providers with every Google key unchanged, the Google connection is still usable and syncs in the next tick, the drafts are still pending, the Inbox still shows the Google rows, Settings shows both sections, and the check file's rows are all true.
+28. **Microsoft settings absent.** Given lane C with `mail.providers = ["google"]` and no `microsoft` block, when a member starts Connect Microsoft (direct request to the start route), then it is refused before any redirect to Microsoft and nothing is stored; and the member's Google connect and the lane's Google sync work as before.
+29. **Microsoft disabled later.** Given lane A with both providers and a usable Microsoft connection with indexed rows and one pending Microsoft `email.save_draft`, when a new config version sets `mail.providers = ["google"]`, then the next tick skips the Microsoft connection (`provider_disabled`, no Graph call, no token read), a live body read of a Microsoft row is refused, Settings shows the row as paused with no Reconnect, its status and indexed rows are unchanged, approving the pending draft ends `connection_unavailable` with the body purged, and the Google connections sync as before.
+30. **Calendar ids per provider.** Given `calendar.calendar_ids` with one Google id and `microsoft.calendar_ids` with one Graph id, when both of a user's connections sync, then the Google connection syncs only its listed calendar and the Microsoft connection only its listed calendar.
 
 ## 18. Open questions for Robert / Saurabh
 
-1. **D-54:** one mail provider per lane (default), or both Google and Microsoft in one lane during a migration?
+1. **D-58** (D-54 was decided and then superseded by D-57 on Nov 21, 2026: both providers in one lane, permanently): should Home, Inbox, the briefing and calendar de-duplicate mail and events seen through both a Google and a Microsoft mailbox of the same person? Default: no de-duplication in the pilot; each row labelled with its provider and account.
 2. **D-55:** Microsoft Disconnect as a local action (delete our tokens, the user removes the app at Microsoft), without approvals? (Default yes.)
 3. **D-56:** first live test: local smoke on a synthetic Microsoft test tenant (H-066), then Robert's nichols.capital mailbox in production `NC` (recommended), or another place?
 4. Who in Nichols Capital can grant admin consent (H-063), and is publisher verification worth doing (H-067)?
 5. H-065: one tenant or several after the GCC migration; four accounts or shared mailboxes; dates.
 6. Should Focused Inbox "Other" mail be excluded from "Needs your attention" by default (it is stored as label `OTHER`; default: not excluded)?
-7. Archive folder: sync it for Microsoft lanes (Gmail indexes archived mail; Outlook users often archive)? Default: no.
+7. Archive folder: sync it for Microsoft connections (Gmail indexes archived mail; Outlook users often archive)? Default: no.
 8. D-49 (Robert): GCC content through commercial services; blocks any live GCC mailbox and `allow_gcc`.
 9. D-51 (Robert): Nichols Law mail at all.
 
 ## 19. Sub-tasks
 
-See `docs/backlog.md`, Phase B9 (T-250 – T-268 and the re-planned T-066 – T-068). Every task is app code (connectors, tokens, RLS or approvals): full security + code review, fix all BLOCKER and HIGH before done.
+See `docs/backlog.md`, Phase B9 (T-250 – T-269 and the re-planned T-066 – T-068). Every task is app code (connectors, tokens, RLS or approvals): full security + code review, fix all BLOCKER and HIGH before done.

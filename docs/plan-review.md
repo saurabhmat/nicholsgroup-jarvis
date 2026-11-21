@@ -1406,3 +1406,94 @@ The `security-reviewer` and `code-reviewer` subagents could not be spawned from 
 - (security L2, not changed) The Google mail prefix is `g1.<id>.` only, so a calendar-shaped Google cursor is accepted on the mail stream (spec §6.3 wording); the effect would be one full reload. T-253 may tighten it with the calendar writer.
 - (security L5, code LOW, not changed) Cases test 321 does not have, none in the acceptance: a legacy unprefixed stored cursor followed by a prefixed one, upper-case or leading-space prefix, empty cursor, empty folder, removal elements that are numbers or arrays, an upsert carrying a `provider` key. Test 160's cross-lane cases pass a cursor prefixed with another connection's id (they fail earlier with 42501).
 - (code LOW, for **T-258**) `MessageRemovalSchema.folder` refuses null while the SQL accepts it: send a string or nothing. The twin still refuses providers other than `google` and does not check the cursor prefix; **T-255** generalises it.
+
+## T-253: review results (Nov 21, 2026)
+The `security-reviewer` and `code-reviewer` subagents could not be spawned from the builder session; the diff got a self-review against the same checklist, and the calling session runs both reviews after the build. Migration `20261125120000_cal_apply_page_provider_generic.sql` replaces one body (`core.cal_events_apply_page`); pgTAP `322_calendar_page_writer.test.sql` (84).
+
+### Reader inventory (latest body of every function or view naming `'google'`)
+Method: `pg_proc.prosrc`, `pg_views.definition`, `pg_policies` and `pg_constraint` of the local database after all migrations (the latest definition only), cross-checked with `grep "'google'"` over every migration. Views: none names `'google'`. Row-level policies: none. Table checks naming it (`connections_provider_check`, `oauth_states_provider_check`, `source_records_provider_check`, `webhook_events_provider_check`, `message_index_provider_check`, `event_index_provider_check`, `proposed_actions_provider_check`, `connections_owner_only_mail`) already list `microsoft`.
+
+| Function (latest definition) | Names google as | Decision |
+|---|---|---|
+| `core.cal_events_apply_page` (20261105140000) | `c.provider = 'google'`, inserts `'google'`, cursor `g1.<id>.c:` | **Generalised now** (this migration): `google`/`microsoft`, the row's provider, `g1.`/`m1.` + `<id>.c:` |
+| `core.comms_mail_apply_page` (20261125110000, T-252) | `in ('google', 'microsoft')`, `g1.` prefix | Done in T-252, unchanged |
+| `core.briefing_coverage` (20261124110000, T-247) | `provider in ('google', 'microsoft')` (own rows, `mail_reader`, `own_mail`) | Already generalised (T-231a/T-247); leave. Pinned by test 322 |
+| `core.home_calendar_status` (20261124110000, T-247) | `in ('google', 'microsoft')` and `transport = 'native'` | Already generalised; leave (Microsoft rows are always `native`). Pinned by test 322 |
+| `core.mailbox_ids` (20261124100000, T-247) | `in ('google', 'microsoft')` | Already generalised; leave. Pinned by tests 321, 322 |
+| `core.oauth_state_create` / `core.oauth_state_consume` (20261125100000, T-254) | `in ('google', 'microsoft')` (own_mail) | Already generalised in T-254; leave |
+| `act.insert_proposal` (20261124150000, T-247) | `not in ('google', 'microsoft')` | Already generalised; leave (the email writer itself is T-261 and later) |
+| `raw.is_content_provider` (20261102080000) | list contains `'google'`, `'microsoft'` | Already generalised; leave |
+| `core.connection_activate_composio` (20261108130000) | `n.provider = 'google' and n.transport = 'native'` | **Leave, on purpose**: the D-23 check of the Composio transport, which exists for Google only (Composio is a transport for `provider = 'google'`, D-35). A Microsoft row cannot hold a Composio identity |
+| `core.connection_token_store` (20261108130000) | `v_provider = 'google'` (D0023 against a Composio row of another lane) | **Leave, on purpose**: same reason; a Microsoft account has no Composio twin, and the unique index `connections_one_lane_per_account` still guards Microsoft rows |
+
+Functions that never name a provider and so already serve Microsoft rows (all pinned by test 322): `core.home_meetings`, `core.home_mail_attention`, `core.inbox_messages`, `core.inbox_message_ref`, `core.briefing_events`, `core.briefing_threads` (read the index through `core.mailbox_ids` and RLS); `core.sync_now_claim` (lane-level); `core.job_failure_record` / `core.job_failure_clear` / `core.connections_clear_job_failures` / `core.connections_clear_error_stream` (check the connection's lane and status, not its provider); `core.sync_cursor_get/put/reset` (generic by stream). `act.connection_ok` reads `features ->> 'gmail_compose'`; the Microsoft writer feature key (`graph_mail_write`, T-066) and its approval path belong to T-261+, not here (leave).
+
+Test 322 pins the inventory: the list of functions naming `'google'` is asserted exactly, so a new one fails until it is added here and to the test.
+
+### Self-review findings (none BLOCKER or HIGH)
+- Google calendar cursors: `encodeCalendarCursor` (`packages/connectors/src/google/calendar-events.ts`) is the only writer and always emits `g1.<connection id>.c:<base64url>` (checked with `grep`; the Composio path indexes no calendar yet, T-223). The prefix rule was already in the Google body; the new rule only adds the `m1.` branch, so Google sync is not changed. A stored Google calendar cursor that lacks the prefix cannot exist (the old body refused it); `check-part-28.sql` has a row that confirms it on production.
+- The diff against the previous body (`20261105140000`) is the provider condition only: the usable-connection select (now `provider in (...)` into `v_provider`), the cursor prefix (`v_prefix`), `'google'` replaced by `v_provider` in the insert, and the function comment. Every other line, the checks, `security definer`, `search_path = ''`, the revoke and the grant are unchanged. Removals still use `(calendar_id, event_id) in (select ...)`, not touched, so no EXPLAIN was needed.
+- (LOW, by design) A calendar-shaped cursor of the other provider, or a mail-shaped cursor (`g1.<id>.h:`, `m1.<id>.m:`), is refused (22023) on the calendar stream. This closes the T-252 security L2 note for the calendar side; the Google mail prefix (`g1.<id>.`) still accepts a calendar-shaped Google cursor on the mail stream (the effect would be one full reload), not changed here.
+- (LOW) Only the NEW cursor is checked; `p_expected_cursor` is only compared with the stored value, as in T-252.
+- (LOW) The apply function still does not read `core.connections.cloud` / `tenant_id`; the lane/tenant rules are the guard of T-256, before any call.
+- Not changed: `core.connection_token_store` and `connection_activate_composio` still name `'google'` (listed above, with the reason).
+- `pnpm db:types:check` passes (no signature or view change). Production: gitignored `part-28-T-253.sql` and read-only `check-part-28.sql`; no earlier check row turns false by design.
+
+## D-57: Google and Microsoft in one lane (re-plan, Nov 21, 2026)
+Planner re-plan for Saurabh's decision of Nov 21, 2026 (quoted in `docs/backlog.md` D-57): one lane may have Google and Microsoft mail/calendar connections at the same time, permanently; Microsoft is an additional connector; nothing disconnects, hides, skips or stops syncing a Google connection because Microsoft exists; sign-in unchanged. Supersedes D-54 and the PKG cut-over. Only docs changed (backlog, spec, this section); no code, test or migration.
+
+**Decisions**
+- D-57 (new, `[x]`): the decision, quote, meaning; supersedes D-54; T-266 and H-071 change.
+- D-54: prefixed "Superseded Nov 21, 2026 by D-57:"; text kept.
+- D-48: one sentence appended: its "provider per lane" and "PKG stays on Google, then a cut-over" parts are superseded by D-57 (text kept).
+- D-58 (new, `[ ]`): de-duplicate mail/events seen through both a Google and a Microsoft mailbox? Default (built unless changed): no de-duplication in the pilot; each row labelled with its provider and account.
+
+**New task**
+- T-269 (`status: proposed`, needs Saurabh's approval): lane_config follow-up to T-250. `mail.providers: ("google"|"microsoft")[]` (default `["google"]`); legacy `mail.provider` read as a one-element list, both keys refused; `microsoft` in the list requires the block; `composio` requires `google` and applies to Google connections only; reader `mailProviders`, `isMailProviderEnabled`, `mailProviderSettings` returning `{ providers, microsoft }` from one read; `mailProvider()` removed (callers today: its own test file only, checked by search Nov 21). Shape used as recommended; no reason found in the code not to (no stored production config has `mail.provider`, and nothing outside tests calls the T-250 reader methods yet).
+- Calendar ids: per provider. `calendar.calendar_ids` stays Google-only (D-26, reader unchanged) and T-269 adds `microsoft.calendar_ids` (1..5). Reason: the list replaces the default selection, so one shared list would leave the other provider's connections with no calendar or need a silent fallback.
+
+**Tasks changed (acceptance text; ids and status lines kept)**
+- Phase B9 intro and standing rules: D-57 summary and the rule "each connection is handled by its own row's provider; both providers' rows shown together, labelled".
+- T-250 (done): a note that T-269 replaces `mail.provider`; acceptance kept as the record of what was built.
+- T-255: depends gains T-269 (a real dependency: it needs `isMailProviderEnabled`); `provider_mismatch` replaced by `provider_disabled` (skip only a provider not enabled for the lane); target lists return both providers; one lane's tick runs all its usable Google and Microsoft connections; Google OAuth refused only when `google` is not enabled (no change for stored lanes); tests for a same-user Google + Microsoft pair in one tick and for each provider disabled.
+- T-256: guard requires "Microsoft enabled for the lane" (in `mail.providers` + valid block), tenant, cloud, mail policy; never the lane's single provider; tests for Microsoft removed from the list and for both enabled.
+- T-066: precheck = Microsoft enabled and settings valid (one read), not "provider is microsoft"; tests: Microsoft not enabled refuses at start with Google unaffected; same user with a Google row of the same address connects Microsoft, both active.
+- T-257: "Your Google accounts" and "Your Microsoft accounts" side by side when each is enabled; no "this company now uses <provider>" note; rows of a provider not enabled shown as paused (no Connect/Reconnect, nothing deleted); tests for both, Google-only and disabled-later lanes.
+- T-258: one added test (Microsoft sync beside a Google connection of the same user leaves Google rows and cursor untouched).
+- T-260: Microsoft connections of every lane where Microsoft is enabled, in the same tick as Google; Home/Inbox/briefing show both together, labelled per provider and account, "Open in Gmail"/"Open in Outlook" per row; no de-duplication (D-58 default); tests for one user with both.
+- T-067: `microsoft.calendar_ids` replaces the default; `calendar.calendar_ids` never applied to Microsoft.
+- T-261: same as T-260 for calendar (events of both providers together, labelled, "Open in" per row); test for one user with both calendars.
+- T-262: reply prepared against the row's own connection in a two-provider lane (test).
+- T-263: Approval Center labels proposals with provider and mailbox; both writers in one lane in one run (test); action on a provider no longer enabled refused at execute with the body purged.
+- T-265: NC config uses `mail.providers = ["microsoft"]`; runbook generic for either or both providers and documents disabling a provider (paused, nothing deleted).
+- T-266: rewritten from "PKG cut-over" to "Enable Microsoft for PKG alongside Google (runbook section and SQL pair)": one insert-only config version adding `microsoft` and keeping every other key; no disconnect, no proposal invalidation, no reader filter; check file asserts Google counts unchanged; rollback = remove Microsoft from the list. `needs: H-065, D-54` removed (D-54 superseded; H-065 is needed only for the human run, H-071). Status line kept as `approved`; because the scope changed, Saurabh may want to re-confirm it.
+- T-068: watch/stop only for Microsoft connections of lanes where Microsoft is enabled; Google watch (T-065) independent.
+- T-264: subscriptions of a paused (provider disabled) connection are stopped; no Google watch touched.
+- T-267: wording only (the GCC High env group serves Microsoft connections of `gcc_high` lanes; Google unaffected).
+- Not changed: T-251, T-252, T-253, T-254 (done; their behaviour already fits D-57), T-259 (no single-provider wording), T-268.
+
+**Human items changed**
+- H-069: `mail.providers = ["microsoft"]` instead of `mail.provider = "microsoft"`.
+- H-071: rewritten: no cut-over; "Enable Microsoft for PKG alongside Google" when Robert wants it (record his answer, tenant id(s) and cloud, tenant consent, D-58 answer or default, run the T-266 SQL and check, each person connects Microsoft; Google untouched; rollback).
+- H-068, H-070: read; nothing in them assumes one provider per lane, so unchanged (H-068 step 3 still says part 26 is applied).
+
+**Spec sections changed** (`docs/specs/microsoft.md`): dated D-57 note at the top; §1, §2 (per-lane list; no cut-over); §4 rewritten (both-at-once rules, T-269 config shape, what "enabled" means per provider, disabling later = paused); §6.3 (the T-253 inventory result is now the desired behaviour); §7 (where Connect shows, precheck, step 9, guard); §8.6; §9 (calendar ids, wiring); §10 (approvals dispatch); §11 (one line); §12 title, §12.1 step 3, §12.2 rewritten as "Enabling Microsoft for PKG alongside Google" (duplicate caution points to D-58); §13 (jobs table); §16 (the two single-provider edge cases replaced; same-user pair, Microsoft settings absent, Microsoft disabled later, both keys, composio added); §17 (tests 1 – 3, 26, 27 rewritten; 28 – 30 added); §18 (question 1 is D-58; question 7 wording); §19 (task range).
+
+**Conflicts and points not resolved here**
+- Removed from the old T-266 without replacement: "every reader hides rows of `disconnected` connections". It existed only to avoid duplicates after a cut-over. Whether readers show rows of a disconnected connection today was not checked; if that matters it is a separate task, not caused by D-57.
+- Disabling a provider is checked in TypeScript only (facade, guards, Settings, approvals dispatcher). SQL readers keep listing a paused connection's indexed rows until the retention purge (with the stale line). Hiding them in SQL would need the readers to read `lane_config`; not proposed.
+- `mail.allowed_domains` and `mailboxes` are shared by both providers. A lane cannot allow a domain for Google but not for Microsoft. No need was found; flagged in case Robert wants one provider per domain.
+- T-266 keeps `status: approved` although its scope changed; Saurabh should re-confirm (the planner never changes a status).
+- H-065 answers (tenants after the GCC move) still decide which tenant ids PKG lists; nothing in the plan depends on them before H-071.
+
+**Recommended build order from here**
+T-253 review finishes → T-269 (after Saurabh approves) → T-255 → T-256 → T-066 → T-257 → T-258 → T-259 → T-260 → T-067 → T-261 → T-262 → T-263 → T-265 → T-266 → T-068 → T-264; T-267 and T-268 only if their human items say so.
+
+## T-253: subagent reviews (security and code, run after the build, Nov 21, 2026)
+No BLOCKER, no HIGH. Both reviews confirmed from the local catalog that exactly the 11 inventoried functions name `'google'`, that no view or policy does, and that `core.cal_events_apply_page` was the only one still limited to Google. Fixed (commit e18c999, test 322 only, 84 → 143 assertions, none changed): the other lane now holds a Microsoft event and message so the cross-lane assertions can fail; `core.briefing_events`, `core.briefing_threads` and `core.inbox_message_ref` are exercised with Microsoft rows (own, another user, another lane, AAL1, no own-mail rights, the service-role path with an owner); upper-case prefix, leading space and empty cursor refused. Logged, not changed:
+- (code MEDIUM-2, for **T-262 / T-263**; the "T-261+" pointer in the builder's note above is wrong) `act.connection_ok` requires `features->>'gmail_compose' = 'true'`, which no Microsoft row has, so an email proposal on a Microsoft connection is refused at approval today (fails closed). The Microsoft write tasks must make `act.connection_ok` read the feature of the connection's provider (`graph_mail_write` for Microsoft) with pgTAP for both providers.
+- (security LOW-1, now moot) The SQL readers and writers accept both providers whatever `lane_config` says. Under D-57 (both providers in one lane) that is the intended behaviour; a provider disabled for a lane is enforced in TypeScript (T-255, T-256).
+- (security LOW-2) "Composio is Google only" is enforced by `COMPOSIO_PROVIDER = "google"` in code, not by a table check. Candidate for the next connections migration: `check (transport = 'native' or provider = 'google')`.
+- (security LOW-4) `core.cal_events_apply_page` does not test the cursor for control characters as `core.sync_cursor_put` does (unchanged from T-064).
+- (security LOW-5, for **T-260**) `apps/web/lib/home.ts` shows the unread-important count only when a feed is `google`; a user with only Microsoft feeds would see none.
+- (code LOW) The inventory test in 322 matches the quoted literal `'google'` only, so it does not see `act.connection_ok`'s `gmail_compose`; it also matches comments, so a comment edit can fail it (the failure message says what to do).
