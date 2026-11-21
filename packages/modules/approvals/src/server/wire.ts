@@ -3,7 +3,7 @@ import "server-only";
 // (`@nichols/approvals/wire`) so tests of the module logic never import the connector wiring. The job client bypasses RLS:
 // every call below passes the lane and the database re-checks it (act.* functions are lane-scoped definer functions).
 import type { LaneBoundConnection } from "@nichols/connectors";
-import { prepareEmailWrite, laneMailboxes, mailboxAllowed } from "@nichols/connectors/facade";
+import { prepareEmailWrite, laneMailboxes, mailboxAllowed, providerGate } from "@nichols/connectors/facade";
 import { emailWriteGate, googleEmailReconciler, googleEmailWriter, loadEmailWriteConnection, loadQuickbooksWriteConnection, quickbooksDisconnectVerifier, quickbooksWriter } from "@nichols/connectors/write";
 import type { LaneId } from "@nichols/core";
 import { getAudit, getLaneJobClient } from "@nichols/core/lane-router";
@@ -38,7 +38,10 @@ async function readFacts(laneId: LaneId, connectionId: string): Promise<Capabili
   ]);
   if (conn.error || policy.error || config.error) throw new Error("capability facts unavailable");
   const c = conn.data as { provider: string; external_account_id: string; status: string; features: Record<string, unknown> } | null;
-  const usable = c !== null && c.provider === "google" && (c.status === "active" || c.status === "degraded");
+  // T-260: a connection whose provider the lane has not enabled (paused, D-57) is not usable, so Reply is not offered on it (it would be refused at prepare anyway).
+  // The gate is asked only for a Google row (the only provider with an email writer until T-262); an unreadable config fails closed (not usable), never an error page.
+  const providerOn = c !== null && c.provider === "google" ? await providerGate.enabled(laneId, c.provider).catch(() => false) : false;
+  const usable = c !== null && c.provider === "google" && providerOn && (c.status === "active" || c.status === "degraded");
   // T-195: a QuickBooks connection of the lane that is not disconnected (reconnect_required can still be disconnected).
   const qboOk = c !== null && c.provider === "quickbooks" && isQboDisconnectable(c.status);
   const approvals = ((config.data?.config as { approvals?: Record<string, unknown> } | null | undefined)?.approvals ?? {}) as Record<string, unknown>;

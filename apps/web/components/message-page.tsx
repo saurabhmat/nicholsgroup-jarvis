@@ -1,4 +1,4 @@
-// One message (T-202). Visibility is proved under RLS first (lib/inbox.ts); then the text is read live from Gmail and
+// One message (T-202; T-260: Gmail or Outlook, by the row's own connection). Visibility is proved under RLS first (lib/inbox.ts); then the text is read live from the provider and
 // rendered as plain text: never stored (rule 6), never interpreted (rule 9: untrusted data, no HTML, no links followed).
 // The page is per request (loadLane calls connection()) and nothing here is cached.
 import Link from "next/link";
@@ -6,6 +6,7 @@ import { notFound } from "next/navigation";
 import type { LaneId } from "@nichols/core";
 import { readBody as readMailBody } from "@nichols/connectors/facade";
 import { Alert, AlertDescription, AlertTitle, laneHref, PageHeader } from "@nichols/ui";
+import { sourceName } from "@nichols/briefing/domain";
 import { guards } from "@/lib/guards";
 import { timed } from "@/lib/timed";
 import { messageFor, type ReadBody } from "@/lib/inbox";
@@ -35,6 +36,12 @@ export async function MessagePage({ params }: { params: Promise<{ laneId: string
   const view = await timed("load.message", async () => messageFor(g, lane.laneId, id, readBody));
   if (view.state === "not_found") notFound();
   const m = view.meta;
+  // The provider's names come from the row's own connection ("Gmail" / "Outlook"; "Google" / "Microsoft"), never fixed text for every row. Google rows read exactly as before.
+  const provider = m.provider ?? "google";
+  const openUrl = m.openUrl !== undefined ? m.openUrl : m.gmailUrl;
+  const openLabel = m.openLabel ?? "Open in Gmail";
+  const mailName = sourceName(provider, "mail") ?? "the mailbox";
+  const accountName = provider === "microsoft" ? "Microsoft" : "Google";
   return (
     <div className="flex flex-col gap-6">
       <Link href={laneHref(lane.laneId, "inbox")} className="text-body font-medium text-primary hover:underline">
@@ -59,16 +66,16 @@ export async function MessagePage({ params }: { params: Promise<{ laneId: string
           ) : null}
           <dt className="text-muted-foreground">Received</dt>
           <dd>{WHEN.format(new Date(m.receivedAt))} ET</dd>
-          {m.mailbox ? (
+          {m.mailbox || provider !== "google" ? (
             <>
               <dt className="text-muted-foreground">Mailbox</dt>
-              <dd className="min-w-0 break-words">{m.mailbox}</dd>
+              <dd className="min-w-0 break-words">{provider === "google" ? m.mailbox : m.mailbox ? `${mailName} \u00b7 ${m.mailbox}` : mailName}</dd>
             </>
           ) : null}
         </dl>
-        {m.gmailUrl ? (
-          <a href={m.gmailUrl} target="_blank" rel="noopener noreferrer" className="self-start text-body font-medium text-primary hover:underline">
-            Open in Gmail
+        {openUrl ? (
+          <a href={openUrl} target="_blank" rel="noopener noreferrer" className="self-start text-body font-medium text-primary hover:underline">
+            {openLabel}
           </a>
         ) : null}
         <hr className="border-border" />
@@ -77,17 +84,17 @@ export async function MessagePage({ params }: { params: Promise<{ laneId: string
             <pre data-testid="message-body" className="whitespace-pre-wrap break-words font-sans text-body leading-relaxed text-foreground">
               {view.text}
             </pre>
-            {view.truncated ? <p className="text-small text-muted-foreground">This message is long; open it in Gmail to read the rest.</p> : null}
+            {view.truncated ? <p className="text-small text-muted-foreground">This message is long; open it in {mailName} to read the rest.</p> : null}
           </>
         ) : (
           <Alert variant="alert">
-            <AlertTitle>{view.reason === "gone" ? "This message is no longer in Gmail" : "The message text could not be loaded"}</AlertTitle>
+            <AlertTitle>{view.reason === "gone" ? `This message is no longer in ${mailName}` : "The message text could not be loaded"}</AlertTitle>
             <AlertDescription>
               {view.reason === "reconnect"
-                ? "Google needs to be reconnected in Settings → Connections."
+                ? `${accountName} needs to be reconnected in Settings → Connections.`
                 : view.reason === "gone"
                   ? "It may have been deleted or moved."
-                  : "Try again in a minute, or open it in Gmail."}
+                  : `Try again in a minute, or open it in ${mailName}.`}
             </AlertDescription>
           </Alert>
         )}

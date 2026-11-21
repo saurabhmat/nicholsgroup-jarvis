@@ -78,6 +78,11 @@ async function proposeReplies(deps: RunDeps, laneId: LaneId, content: BriefConte
       content.notes.push(`reply_not_proposed:${d.ref}`);
       continue;
     }
+    // T-260: replying from a Microsoft mailbox is not built yet (T-262, T-263): no proposal is attempted (the facade would answer unsupported_op); the draft stays on Home to copy.
+    if (r?.provider !== undefined && r.provider !== "google") {
+      content.notes.push(`reply_not_proposed:${d.ref}`);
+      continue;
+    }
     // Only a draft checked as ready is proposed (T-231d security review M1): "Awaiting your input" stays on Home.
     if (d.status !== "ready" || !r || !d.text || !to || !r.threadKey || r.threadKey.startsWith("m:") || ownMailboxes.has(to) || isNoReplyAddress(to)) {
       content.notes.push(`reply_not_proposed:${d.ref}`);
@@ -161,10 +166,12 @@ export function refsFrom(view: BriefingView, now?: Date): BriefRef[] {
   const out: BriefRef[] = [];
   const seen = new Set<string>();
   const mailboxOf = view.mail.mailboxOf;
+  const sourceOf = view.mail.sourceOf;
   const push = (t: (typeof view.mail.attention)[number]["thread"], reason: string, kind: string) => {
     const key = `${t.connectionId}:${t.threadKey}`;
     if (seen.has(key) || out.length >= MAX_REFS) return;
     seen.add(key);
+    const tag = sourceOf?.[t.connectionId];
     out.push({
       ref: `r${String(out.length + 1)}`,
       connectionId: t.connectionId,
@@ -176,6 +183,7 @@ export function refsFrom(view: BriefingView, now?: Date): BriefRef[] {
       subject: t.subject,
       receivedAt: t.receivedAt,
       sourceUrl: t.sourceUrl,
+      ...(tag ? { provider: tag.provider } : {}),
       reason,
       kind,
     });

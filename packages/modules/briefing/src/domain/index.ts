@@ -9,3 +9,4 @@ export * from "./compose";
 export * from "./failure";
 export * from "./sync-status";
 export * from "./attention-summary";
+export * from "./source-labels";

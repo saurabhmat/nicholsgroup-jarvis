@@ -8,6 +8,7 @@ import { fieldText, subjectLine } from "@/lib/home-text";
 import { DisclosureFooter } from "./collapsible-section";
 import { ReplyAction } from "./reply-action";
 import { inboxHref } from "@/lib/inbox-links";
+import { REPLY_NOT_AVAILABLE_YET } from "@/lib/reply-messages";
 import {
   ageShort,
   aheadSummaryText,
@@ -19,7 +20,10 @@ import {
   formatDayIn,
   formatTimeIn,
   maskFigures,
+  openInText,
   otherZoneTime,
+  sourceLabel,
+  type SourceTag,
   type AttentionNote,
   type DayEvent,
   type NotableEvent,
@@ -61,6 +65,26 @@ function EventTitle({ title, url }: { title: string; url: string | null }) {
     </a>
   ) : (
     <span className="line-clamp-2 font-medium text-foreground">{title}</span>
+  );
+}
+
+/**
+ * T-261: the provider and account of an event's own calendar connection and "Open in Google Calendar" / "Open in Outlook" (from the event's link, https only,
+ * checked by the connector and again here). Rendered only when the viewer has a non-Google connection (`sources` is then given); a Google-only viewer sees nothing here.
+ */
+function EventSource({ tag, url }: { tag: SourceTag | undefined; url: string | null }) {
+  const label = tag ? sourceLabel(tag, "calendar") : null;
+  if (!tag || !label) return null;
+  const open = openInText(tag.provider, "calendar");
+  return (
+    <span data-testid="event-source" className="flex flex-wrap items-center gap-x-3 text-small text-muted-foreground">
+      <span data-testid="event-source-label">{label}</span>
+      {url && open ? (
+        <a href={url} target="_blank" rel="noopener noreferrer" data-testid="event-open-in" className="font-medium text-primary underline-offset-2 hover:underline">
+          {open}
+        </a>
+      ) : null}
+    </span>
   );
 }
 
@@ -111,6 +135,7 @@ export function TodayCalendar({ calendar, tz, now }: { calendar: CalendarSection
               {e.location ? <span className="truncate text-small text-muted-foreground">{e.location}</span> : null}
               {who ? <span title={who} className="truncate text-small text-muted-foreground">With {who}</span> : null}
               <Chips e={e} />
+              {e.connectionId ? <EventSource tag={calendar.sourceOf?.[e.connectionId]} url={e.calendarUrl} /> : null}
             </span>
           </li>
         );
@@ -119,7 +144,7 @@ export function TodayCalendar({ calendar, tz, now }: { calendar: CalendarSection
   );
 }
 
-export function LookAhead({ events, tz }: { events: NotableEvent[]; tz: string }) {
+export function LookAhead({ events, tz, sources }: { events: NotableEvent[]; tz: string; sources?: Record<string, SourceTag> | undefined }) {
   if (events.length === 0) return <p className="text-body text-muted-foreground">Nothing notable in the next 7 days (no holidays, external meetings or open invitations).</p>;
   return (
     <ul data-testid="look-ahead" className="flex flex-col divide-y divide-border">
@@ -143,6 +168,7 @@ export function LookAhead({ events, tz }: { events: NotableEvent[]; tz: string }
             <span className="flex min-w-0 flex-1 flex-col gap-1">
               <EventTitle title={e.title} url={e.calendarUrl} />
               <span className="text-small text-muted-foreground">{e.why.join(" · ")}</span>
+              {e.connectionId ? <EventSource tag={sources?.[e.connectionId]} url={e.calendarUrl} /> : null}
             </span>
           </li>
         );
@@ -162,7 +188,7 @@ export function CalendarSections({ view, now }: { view: BriefingView; now: Date 
     <PageSection title="Today" ariaLabel="Today's calendar" note={EASTERN_ZONES.has(view.viewerTz) ? "Eastern time" : `Times in ${view.viewerTz.replace(/_/g, " ")}`}>
       <TodayCalendar calendar={view.calendar} tz={view.viewerTz} now={now} />
       <DisclosureFooter title="Next 7 days" testId="next-7-days" persistId="next-7-days" {...(summary ? { note: summary } : {})}>
-        {c.access ? <LookAhead events={c.ahead} tz={view.viewerTz} /> : <p className="text-body text-muted-foreground">No calendar to look ahead in. See Settings → Connections.</p>}
+        {c.access ? <LookAhead events={c.ahead} tz={view.viewerTz} sources={c.sourceOf} /> : <p className="text-body text-muted-foreground">No calendar to look ahead in. See Settings → Connections.</p>}
       </DisclosureFooter>
     </PageSection>
   );
@@ -175,6 +201,23 @@ export function StillWaiting({ laneId, count }: { laneId: string; count: number 
     <Link href={`${laneHref(laneId, "inbox")}?view=waiting`} data-testid="attention-still-waiting" className="self-start py-1 text-small text-muted-foreground underline-offset-2 hover:text-foreground hover:underline max-md:inline-flex max-md:min-h-11 max-md:items-center">
       Still waiting: {count} older {count === 1 ? "thread" : "threads"} <span aria-hidden>{"\u2192"}</span>
     </Link>
+  );
+}
+
+/** T-260: "Outlook · name@example.test" and "Open in Outlook" (the row's own link, https only) for one mail row; above the row's stretched Open link. */
+function SourceLine({ tag, url }: { tag: SourceTag; url: string | null }) {
+  const label = sourceLabel(tag, "mail");
+  if (!label) return null;
+  const open = openInText(tag.provider, "mail");
+  return (
+    <span data-testid="attention-source" className="relative z-[1] flex flex-wrap items-center gap-x-3 text-small text-muted-foreground">
+      <span data-testid="attention-source-label">{label}</span>
+      {url && open ? (
+        <a href={url} target="_blank" rel="noopener noreferrer" data-testid="attention-open-in" className="font-medium text-primary underline-offset-2 hover:underline">
+          {open}
+        </a>
+      ) : null}
+    </span>
   );
 }
 
@@ -225,6 +268,8 @@ export function AttentionSection({ laneId, mail, now, notes, replies, canReply =
   }
   // "to <mailbox>" only tells something when the lane reads more than one mailbox.
   const showMailbox = new Set(Object.values(mail.mailboxOf)).size > 1;
+  // T-260: a viewer with a non-Google mailbox sees each row's provider and account (and "Open in Gmail" / "Open in Outlook"); the "to <mailbox>" chip is then not repeated.
+  const labelled = mail.sourceOf !== undefined;
   const total = mail.attention.length + mail.more;
   return (
     <div className="flex flex-col gap-3">
@@ -233,6 +278,7 @@ export function AttentionSection({ laneId, mail, now, notes, replies, canReply =
           const t = a.thread;
           const note = notes?.get(`${t.connectionId}:${t.messageId}`);
           const mailbox = mail.mailboxOf[t.connectionId];
+          const sourceTag = mail.sourceOf?.[t.connectionId];
           const who = senderParts(t.fromName, t.fromAddress, AVATAR.length);
           // T-243: the subject is always shown ("(no subject)" when there is none). Figures stay masked; a mask token reads as an ellipsis.
           const subject = a.kind === "repeated_failures" ? (fieldText(a.reason, tz) ?? subjectLine(null, maskFigures, tz)) : subjectLine(t.subject, maskFigures, tz);
@@ -283,20 +329,27 @@ export function AttentionSection({ laneId, mail, now, notes, replies, canReply =
                     ) : null}
                   </p>
                 ) : null}
-                {chips.length > 0 || (showMailbox && mailbox) ? (
+                {chips.length > 0 || (labelled ? sourceTag : showMailbox && mailbox) ? (
                   <div className="flex flex-wrap items-center gap-x-2 gap-y-1">
                     {chips.map((c) => (
                       <Badge key={c.key} variant={CHIP_TONE[c.tone]} data-testid="attention-chip">
                         {c.label}
                       </Badge>
                     ))}
-                    {showMailbox && mailbox ? <span data-testid="attention-mailbox" className="text-small text-muted-foreground">to {mailbox}</span> : null}
+                    {labelled ? (
+                      sourceTag ? <SourceLine tag={sourceTag} url={t.sourceUrl} /> : null
+                    ) : showMailbox && mailbox ? (
+                      <span data-testid="attention-mailbox" className="text-small text-muted-foreground">to {mailbox}</span>
+                    ) : null}
                   </div>
                 ) : null}
               </div>
               <div data-testid="attention-actions" className="flex shrink-0 items-center gap-3 max-md:[&_a]:min-h-11 max-md:[&_button]:min-h-11">
                 {/* T-249: no Reply for automated / no-reply senders, security alerts and repeated failures (attention.ts `replyable`). */}
-                {a.kind === "repeated_failures" || a.replyable !== true ? null : (
+                {a.kind === "repeated_failures" || a.replyable !== true ? null : sourceTag && sourceTag.provider !== "google" ? (
+                  // T-260: a Microsoft mailbox cannot be replied to from here yet (T-262, T-263): a fixed note instead of the button, never an error.
+                  <span data-testid="attention-reply-unavailable" className="relative z-[1] text-small text-muted-foreground">{REPLY_NOT_AVAILABLE_YET}</span>
+                ) : (
                   <span className="relative z-[1] inline-flex">
                     <ReplyAction canReply={canReply} target={{ laneId, connectionId: t.connectionId, messageId: t.messageId, threadKey: t.threadKey, proposalId: replies?.get(`${t.connectionId}:${t.messageId}`) ?? null }} />
                   </span>

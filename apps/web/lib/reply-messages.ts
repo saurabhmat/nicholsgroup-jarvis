@@ -16,6 +16,12 @@ export const REPLY_MESSAGES: Record<ReplyErrorCode, string> = {
   no_reply_sender: "This message came from an automated address that does not accept replies.",
 };
 
+/**
+ * T-260: shown in place of Reply for a message in a Microsoft mailbox. Replying and sending from one is not built yet (T-262, T-263); the server also refuses
+ * it (the message is `not_found` for the reply routes, and the facade answers `unsupported_op`). Fixed text: no provider name taken from data.
+ */
+export const REPLY_NOT_AVAILABLE_YET = "Reply is not available for this mailbox yet.";
+
 /** Shown instead of Save draft and Send when the lane does not store outbound drafts (D-19). Copy still works. */
 export const DRAFTS_OFF_MESSAGE = "This company does not store outbound drafts, so replies cannot be saved or sent from here. Copy still works.";
 

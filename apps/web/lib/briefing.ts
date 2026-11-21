@@ -22,6 +22,9 @@ import {
   parseEvents,
   toCoverage,
   validTimeZone,
+  needsSourceLabels,
+  sourceTags,
+  type SourceTag,
   type CoverageItem,
   parseThreads,
   rankAttention,
@@ -41,11 +44,11 @@ const DAY_MS = 86_400_000;
 
 export type BriefingConfig = LaneConfig["briefing"];
 
-export type CalendarSection = { access: true; today: DayEvent[]; ahead: NotableEvent[]; /** Names we already hold for exact addresses (display names in the lane's mail index), used when an event has none (T-240). */ knownNames?: Record<string, string>; /** All meetings in the next 7 days (not only the notable ones), for the header summary. */ aheadSummary?: { meetings: number; clashes: number }; owners: string[] } | { access: false; unavailable?: true };
+export type CalendarSection = { access: true; today: DayEvent[]; ahead: NotableEvent[]; /** Names we already hold for exact addresses (display names in the lane's mail index), used when an event has none (T-240). */ knownNames?: Record<string, string>; /** All meetings in the next 7 days (not only the notable ones), for the header summary. */ aheadSummary?: { meetings: number; clashes: number }; owners: string[]; /** T-261: provider and account per calendar connection; present only when the viewer has a non-Google connection (a Google-only viewer sees no label). */ sourceOf?: Record<string, SourceTag> } | { access: false; unavailable?: true };
 
 /** "Needs your attention" + Money from mail metadata; `access: false` when the caller may not read the lane's mail. */
 export type MailSection =
-  | { access: true; attention: AttentionThread[]; more: number; /** T-243: every fresh qualifying thread in rank order (attention is its first 5); Home re-cuts it after the summary's "no reply needed" items are removed. Absent: attention is all there is. */ fresh?: AttentionThread[]; /** T-240: qualifying threads older than the fresh window, newest first (Home shows the count; Inbox ?view=waiting lists them). */ stillWaiting: AttentionThread[]; money: MoneyThread[]; mailboxOf: Record<string, string> }
+  | { access: true; attention: AttentionThread[]; more: number; /** T-243: every fresh qualifying thread in rank order (attention is its first 5); Home re-cuts it after the summary's "no reply needed" items are removed. Absent: attention is all there is. */ fresh?: AttentionThread[]; /** T-240: qualifying threads older than the fresh window, newest first (Home shows the count; Inbox ?view=waiting lists them). */ stillWaiting: AttentionThread[]; money: MoneyThread[]; mailboxOf: Record<string, string>; /** T-260: provider and account per mail connection; present only when the viewer has a non-Google connection (a Google-only viewer sees no label). */ sourceOf?: Record<string, SourceTag> }
   | { access: false; unavailable?: true };
 
 export type BriefingView = {
@@ -134,13 +137,16 @@ export async function loadBriefing(client: Db, laneId: string, now: Date, viewer
   const mailAccess = rows.some((c) => c.stream === "mail");
   const owners = new Set([...mailboxes, ...coverage.map((c) => c.account.toLowerCase())].filter((o) => o !== ""));
   const internal = internalDomains(briefing.internal_domains, owners);
+  // T-260/T-261 (D-57): Google and Microsoft rows are shown together, each with its own connection's provider and account. Only when the viewer has a
+  // non-Google connection; otherwise nothing is added and the sections are exactly what they were.
+  const labelled = needsSourceLabels(coverage.map((c) => c.provider));
   let calendar: CalendarSection = { access: false };
   if (calendarAccess && events.error) calendar = { access: false, unavailable: true };
   else if (calendarAccess) {
     const knownNames = knownNamesFrom(threads.error ? [] : parseThreads(threads.data));
     const split = splitByDay(parseEvents(events.data), from, to, localDate(from, viewerTz), 7);
     calendar = { access: true, knownNames, today: analyzeDay(split.today, owners, internal), // No knownNames here: `ahead` feeds the AI facts, and mail display names are sender-written and may be outside the lane's AI policy.
-    ahead: notableAhead(split.later, owners, internal, 8), aheadSummary: summarizeAhead(split.later, owners), owners: [...owners] };
+    ahead: notableAhead(split.later, owners, internal, 8), aheadSummary: summarizeAhead(split.later, owners), owners: [...owners], ...(labelled ? { sourceOf: sourceTags(coverage, "calendar") } : {}) };
   }
   let mail: MailSection = { access: false };
   if (mailAccess && threads.error) mail = { access: false, unavailable: true };
@@ -149,7 +155,7 @@ export async function loadBriefing(client: Db, laneId: string, now: Date, viewer
     const rules: AttentionRules = { prioritySenders, freshHours: briefing.attention.fresh_hours, deadlineSubjects: briefing.deadline_subjects, ownDomains: ownMailDomains(owners), securitySubjects: briefing.security_subjects, securitySenders: briefing.security_senders, exclusions: briefing.exclusions, money: briefing.money };
     const ranked = rankAttention(rows, rules, now);
     const mailboxOf = Object.fromEntries(coverage.filter((c) => c.connectionId && c.stream === "mail").map((c) => [c.connectionId as string, c.account]));
-    mail = { access: true, attention: ranked.top, more: ranked.more, fresh: ranked.fresh, stillWaiting: ranked.stillWaiting, money: moneyThreads(rows, rules), mailboxOf };
+    mail = { access: true, attention: ranked.top, more: ranked.more, fresh: ranked.fresh, stillWaiting: ranked.stillWaiting, money: moneyThreads(rows, rules), mailboxOf, ...(labelled ? { sourceOf: sourceTags(coverage, "mail") } : {}) };
   }
   return { viewerTz, coverage, coverageLine: coverageLine(coverage, mailAccess || calendarAccess), calendar, mail, config: briefing, mailboxes };
 }
