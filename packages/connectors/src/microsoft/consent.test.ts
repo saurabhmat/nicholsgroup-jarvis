@@ -64,6 +64,13 @@ describe("the wired builder (link and wording switch from one scope list)", () =
     const d = deps();
     expect(await createMicrosoftConnectInfo(d)("PKG", settings)).toEqual({ url: buildAdminConsentUrl(base), writes: false });
   });
+  it("never puts a secret in the link, even if the client reader hands back more than the two public values", async () => {
+    const SECRET = "synthetic-graph-client-secret-canary-9931";
+    const leaky = (() => ({ clientId: CLIENT, redirectUri: REDIRECT, clientSecret: SECRET, GRAPH_CLIENT_SECRET: SECRET })) as Deps["client"];
+    const info = await createMicrosoftConnectInfo({ ...deps(), client: leaky })("PKG", settings);
+    expect(info.url).toBe(buildAdminConsentUrl(base));
+    expect(JSON.stringify(info)).not.toContain(SECRET);
+  });
   it("writes is true exactly when the same scope list that builds the link has Mail.ReadWrite or Mail.Send", async () => {
     const withWrites = [...READ, "Mail.ReadWrite", "Mail.Send"];
     const info = await createMicrosoftConnectInfo({ ...deps(), scopesFor: async () => withWrites })("PKG", settings);
