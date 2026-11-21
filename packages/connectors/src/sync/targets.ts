@@ -5,10 +5,14 @@ import type { LaneId } from "@nichols/core";
 import { ConnectorError } from "../contract/errors";
 import type { JobClientFor } from "../vault/tokens";
 
-/** Providers whose connector indexes calendar events. Add Microsoft here when its calendar sync lands. */
-export const CALENDAR_PROVIDERS = ["google"] as const;
-/** Providers whose connector indexes mail (T-238: the scheduled Gmail delta). Add Microsoft here when its mail sync lands. */
-export const MAIL_PROVIDERS = ["google"] as const;
+/**
+ * Providers whose connector indexes calendar events: both (T-255). One lane's tick lists every usable connection of both providers (D-57);
+ * conn.sync then skips a connection whose provider the lane has not enabled (`provider_disabled`) and a provider without a runner yet
+ * answers `unsupported_op`.
+ */
+export const CALENDAR_PROVIDERS = ["google", "microsoft"] as const;
+/** Providers whose connector indexes mail (T-238 scheduled delta, T-255 both providers). */
+export const MAIL_PROVIDERS = ["google", "microsoft"] as const;
 /** Same states conn.sync accepts (job.ts USABLE). */
 export const SYNCABLE_STATUSES = ["active", "degraded"] as const;
 /** A lane has a handful of connections; the cap only bounds a runaway table (more than this many per lane would be dropped silently). */

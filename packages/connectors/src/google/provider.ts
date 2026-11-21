@@ -34,6 +34,12 @@ export type GoogleProviderDeps = {
    * Fails closed: if it throws, no connect starts and no callback completes.
    */
   composeAllowed?: (laneId: LaneId) => Promise<boolean>;
+  /**
+   * T-255 (D-57): whether `google` is enabled for the lane (in `mail.providers`; the default for every stored lane is `["google"]`).
+   * When it answers false, the connect start and the callback are refused (`forbidden`) and nothing is stored. Absent = enabled
+   * (unit tests of the provider alone). Fails closed: a throw refuses.
+   */
+  googleEnabled?: (laneId: LaneId) => Promise<boolean>;
   logger?: ConnectorLogger;
   /** Test hook: the HTTP client for the Gmail host. */
   httpFor?: (laneId: LaneId, baseUrl: string) => HttpClient;
@@ -80,6 +86,10 @@ export function createGoogleOAuthProvider(deps: GoogleProviderDeps): OAuthProvid
     return policy;
   };
 
+  const assertEnabled = async (laneId: LaneId): Promise<void> => {
+    if (deps.googleEnabled && (await deps.googleEnabled(laneId)) !== true) throw new ConnectorError({ kind: "forbidden", message: "Google is not enabled for this company" });
+  };
+
   const composeAllowed = async (laneId: LaneId): Promise<boolean> => (deps.composeAllowed ? (await deps.composeAllowed(laneId)) === true : false);
 
   return {
@@ -99,7 +109,11 @@ export function createGoogleOAuthProvider(deps: GoogleProviderDeps): OAuthProvid
       assertRedirectUri(c.redirectUri);
       return { clientId: c.clientId, clientSecret: c.clientSecret, redirectUri: c.redirectUri, tokenAuth: "post" };
     },
+    async startCheck({ laneId }) {
+      await assertEnabled(laneId);
+    },
     async precheck({ laneId }) {
+      await assertEnabled(laneId);
       await policyOf(laneId);
     },
     async identify({ laneId, tokens }: { laneId: LaneId; tokens: TokenResponse; callback: URLSearchParams; http: HttpClient }) {

@@ -54,14 +54,18 @@ export function createConnectorSyncRunner<P extends string>(deps: { connector: C
   return Object.assign(runner, { reloadsOnFull: true as const });
 }
 
-/** `received` for Google = written + skipped + removed items, `written` = items written. */
-type GoogleRun = { written: number; skipped: number; removed: number; mode: "full" | "incremental" };
+/** `received` for a mail/calendar provider = written + skipped + removed items, `written` = items written. */
+type CommsRun = { written: number; skipped: number; removed: number; mode: "full" | "incremental" };
 
-/** Mail then calendar; one failing never stops the other. The first failure is rethrown so the job retries both (cheap: their cursors are kept). */
-export function createGoogleSyncRunner(deps: { mail: { run(laneId: LaneId, conn: LaneBoundConnection<"google">): Promise<GoogleRun> }; calendar: { run(laneId: LaneId, conn: LaneBoundConnection<"google">): Promise<GoogleRun> } }): SyncRunner {
+/**
+ * Mail then calendar for one provider (T-255: generic; Google today, Graph later); one failing never stops the other. The first failure is
+ * rethrown so the job retries both (cheap: their cursors are kept). Which runner a connection gets is decided by the job, from the
+ * connection row's own provider.
+ */
+export function createCommsSyncRunner<P extends string>(deps: { mail: { run(laneId: LaneId, conn: LaneBoundConnection<P>): Promise<CommsRun> }; calendar: { run(laneId: LaneId, conn: LaneBoundConnection<P>): Promise<CommsRun> } }): SyncRunner {
   return async (laneId, conn, options) => {
     assertLaneBound(laneId, conn);
-    const g = conn as LaneBoundConnection<"google">;
+    const g = conn as LaneBoundConnection<P>;
     // T-238: a run can ask for one stream (the scheduled mail delta and the calendar delta are separate ticks). No streams = both.
     const wanted = options?.streams && options.streams.length > 0 ? new Set(options.streams) : null;
     const streams = [
@@ -69,7 +73,7 @@ export function createGoogleSyncRunner(deps: { mail: { run(laneId: LaneId, conn:
       ...(!wanted || wanted.has("calendar") ? [deps.calendar] : []),
     ];
     // Sequential: both share one token manager, and a rate-limited account should not be hit twice at once.
-    const runs: GoogleRun[] = [];
+    const runs: CommsRun[] = [];
     let failure: unknown;
     let retryable: unknown;
     for (const stream of streams) {
@@ -90,3 +94,6 @@ export function createGoogleSyncRunner(deps: { mail: { run(laneId: LaneId, conn:
     };
   };
 }
+
+/** The Google runner (Gmail + Google Calendar). Same function as before, named for the wiring and the Google tests. */
+export const createGoogleSyncRunner = createCommsSyncRunner<"google">;

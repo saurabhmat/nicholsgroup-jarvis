@@ -16,7 +16,7 @@ export type SyncStreamName = "mail" | "calendar";
 /** Mirrors ConnSyncOutcome in @nichols/connectors/sync (structural: core does not import connectors). */
 export type ConnSyncResult =
   | { ok: true; skipped: null; runId: string; provider?: string; kind: "full" | "incremental"; received: number; written: number }
-  | { ok: true; skipped: "already_running" | "connection_not_usable" }
+  | { ok: true; skipped: "already_running" | "connection_not_usable" | "provider_disabled" }
   | { ok: false; retryable: boolean; retryAfterSeconds: number | null; errorKind: string; message: string };
 
 export type ConnSyncDeps = {

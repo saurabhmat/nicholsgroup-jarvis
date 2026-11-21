@@ -2,18 +2,21 @@
 // imports `connSyncJob` from "@nichols/connectors/sync". Providers join `runners` as their sync lands (QuickBooks
 // T-051 is in; Stripe, GoHighLevel...); a provider without a runner fails its runs with unsupported_op.
 import type { LaneId } from "@nichols/core";
-import { calSync, mailSync } from "../google/index";
+import { providerGate, syncRunners } from "../facade/index";
 import { quickbooksConnector } from "../quickbooks/index";
 import { connectionLoader, laneConfigReader, rawRecords, syncCursorStore, syncRunStore, syncTargetLister } from "../vault/index";
 import { createConnSyncJob } from "./job";
 import { createQuickbooksUsableCheck } from "./usable";
-import { createConnectorSyncRunner, createGoogleSyncRunner } from "./runners";
+import { createConnectorSyncRunner } from "./runners";
 
 export const connSyncJob = createConnSyncJob({
   loader: connectionLoader,
   runs: syncRunStore,
+  // T-255: a mail/calendar connection is run by its own row's provider through the facade (Google today; Microsoft answers unsupported_op
+  // until its tasks land), and skipped as `provider_disabled` when the lane has not enabled that provider, before the run is logged.
+  gate: (laneId, conn) => providerGate.enabled(laneId, conn.provider),
   runners: {
-    google: createGoogleSyncRunner({ mail: mailSync, calendar: calSync }),
+    ...syncRunners(),
     // QuickBooks (T-051): Connector.sync through the generic cursor (stream 'default' = the CDC changedSince instant).
     quickbooks: createConnectorSyncRunner({ connector: quickbooksConnector, cursors: syncCursorStore, sinkFor: rawRecords.sinkFor }),
   },

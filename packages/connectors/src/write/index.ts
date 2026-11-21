@@ -16,3 +16,13 @@ export {
   type GoogleEmailReconciler,
   type GoogleEmailWriter,
 } from "../google/email-writer";
+
+// T-255: what the approvals module's email dispatch (by the connection row's provider) needs. The dispatch itself lives in
+// packages/modules/approvals; these are the read-only pieces: the lane's enabled-provider gate, the generic write-connection loader and
+// the refusal test. A write or read-back for a connection whose provider is not enabled for the lane is refused before any token read.
+export { createProviderGate, isProviderDisabledError } from "../facade/gate";
+import { createProviderGate as makeProviderGate } from "../facade/gate";
+import { connectionLoader as writeConnectionLoader, laneConfigReader as writeLaneConfig } from "../vault/index";
+export const emailWriteGate = makeProviderGate({ laneConfig: writeLaneConfig });
+/** The authoritative, lane-bound connection row, whatever its provider (the dispatch refuses a provider that is not mail/calendar). */
+export const loadEmailWriteConnection = (laneId: Parameters<typeof writeConnectionLoader.loadConnection>[0], connectionId: string) => writeConnectionLoader.loadConnection(laneId, connectionId);

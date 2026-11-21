@@ -24,7 +24,7 @@ describe("listCalendarConnectionIds", () => {
     expect(x.f).toContainEqual(["eq", "transport", "native"]); // a Composio connection has no token row: the native sync never targets it (T-219)
     expect(x.f).toContainEqual(["in", "status", ["active", "degraded"]]);
     expect(x.f).toContainEqual(["limit", String(MAX_SYNC_TARGETS), undefined]);
-    expect(CALENDAR_PROVIDERS).toEqual(["google"]);
+    expect(CALENDAR_PROVIDERS).toEqual(["google", "microsoft"]); // T-255: both providers (D-57)
   });
 
   it("fails with a generic error (no database detail) when the read fails or the lane is bad", async () => {
@@ -45,7 +45,7 @@ describe("listMailConnectionIds (T-238)", () => {
     expect(x.f).toContainEqual(["in", "provider", [...MAIL_PROVIDERS]]);
     expect(x.f).toContainEqual(["eq", "transport", "native"]);
     expect(x.f).toContainEqual(["in", "status", ["active", "degraded"]]);
-    expect(MAIL_PROVIDERS).toEqual(["google"]);
+    expect(MAIL_PROVIDERS).toEqual(["google", "microsoft"]); // T-255: both providers (D-57)
   });
   it("fails generically and refuses a bad lane", async () => {
     const lister = createSyncTargetLister(fake({ error: { message: "relation x leaks" } }).clientFor);
