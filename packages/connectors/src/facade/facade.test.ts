@@ -212,7 +212,7 @@ describe("one lane's tick over Google and Microsoft connections (conn.sync with 
     await expect(t.job.run("PKG", G1, { trigger: "schedule" })).resolves.toMatchObject({ ok: true, skipped: null });
   });
 
-  it("an unreadable lane config fails closed as a failed outcome with no run logged and no provider call; a QuickBooks row needs no config", async () => {
+  it("an unreadable lane config fails closed as a failed outcome with no run logged and no provider call", async () => {
     const t = tick({ mail: { providers: [] } }, [{ id: G1, provider: "google" }]);
     expect(await t.job.run("PKG", G1, { trigger: "schedule" })).toMatchObject({ ok: false, errorKind: "provider_error" });
     expect(t.log).toEqual([]);
