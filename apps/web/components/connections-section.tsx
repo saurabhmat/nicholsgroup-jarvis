@@ -4,6 +4,7 @@
 import { Card, CardDescription, CardHeader, CardTitle } from "@nichols/ui";
 import type { ComposioSectionView } from "@/lib/composio-connection";
 import type { GoogleSectionView } from "@/lib/google-connection";
+import type { MicrosoftSectionView } from "@/lib/microsoft-connection";
 import type { QuickBooksSectionView } from "@/lib/quickbooks-connection";
 import type { CoverageView } from "@/lib/coverage";
 import { CoverageList } from "./coverage-list";
@@ -12,9 +13,10 @@ import type { JobFailureItem } from "@/lib/job-failures";
 import { ComposioNotes, ComposioNotices, ComposioRows } from "./composio-connection-section";
 import { ConnectionsHeader } from "./connection-rows";
 import { GoogleNotes, GoogleNotices, GoogleRows, GoogleSyncBar } from "./google-connection-section";
+import { MicrosoftNotes, MicrosoftNotices, MicrosoftRows } from "./microsoft-connection-section";
 import { QuickBooksNotes, QuickBooksNotices, QuickBooksRows } from "./quickbooks-connection-section";
 
-export function ConnectionsSection({ laneId, google, quickbooks, composio, coverage = null, jobFailures = null, tz = "America/New_York", now = new Date() }: { laneId: string; google: GoogleSectionView | null; quickbooks: QuickBooksSectionView | null; composio: ComposioSectionView | null; coverage?: CoverageView | null; jobFailures?: JobFailureItem[] | null; tz?: string; now?: Date }) {
+export function ConnectionsSection({ laneId, google, microsoft = null, quickbooks, composio, coverage = null, jobFailures = null, tz = "America/New_York", now = new Date() }: { laneId: string; google: GoogleSectionView | null; microsoft?: MicrosoftSectionView | null; quickbooks: QuickBooksSectionView | null; composio: ComposioSectionView | null; coverage?: CoverageView | null; jobFailures?: JobFailureItem[] | null; tz?: string; now?: Date }) {
   return (
     <section id="connections" aria-labelledby="connections-title" className="scroll-mt-8">
       <Card>
@@ -27,15 +29,18 @@ export function ConnectionsSection({ laneId, google, quickbooks, composio, cover
         <JobFailureBanner laneId={laneId} items={jobFailures} now={now} onSettings />
         {google ? <GoogleNotices view={google} /> : null}
         {google ? <GoogleSyncBar laneId={laneId} view={google} /> : null}
+        {microsoft ? <MicrosoftNotices view={microsoft} /> : null}
         {quickbooks ? <QuickBooksNotices view={quickbooks} /> : null}
         {composio ? <ComposioNotices view={composio} /> : null}
         <ul data-testid="connections-list" className="flex flex-col divide-y divide-border">
           <ConnectionsHeader />
           {google ? <GoogleRows laneId={laneId} view={google} /> : null}
+          {microsoft ? <MicrosoftRows laneId={laneId} view={microsoft} /> : null}
           {quickbooks ? <QuickBooksRows laneId={laneId} view={quickbooks} /> : null}
           {composio ? <ComposioRows laneId={laneId} view={composio} /> : null}
         </ul>
         {google ? <GoogleNotes /> : null}
+        {microsoft ? <MicrosoftNotes view={microsoft} /> : null}
         {quickbooks ? <QuickBooksNotes laneId={laneId} now={now} /> : null}
         {composio ? <ComposioNotes view={composio} /> : null}
         {coverage ? <CoverageList view={coverage} tz={tz} now={now} /> : null}

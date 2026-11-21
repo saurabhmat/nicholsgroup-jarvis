@@ -9,6 +9,7 @@ import { AuthError, type Guards } from "@nichols/core/auth";
 import type { LaneClient } from "@nichols/core/lane-router";
 import { CONNECT_ROLES, MAIL_CONNECT_ROLES } from "@nichols/connectors/oauth";
 import { mailAccountAllowed } from "@nichols/connectors/mail-policy";
+import type { MailProvidersView } from "./mail-providers";
 
 export type GoogleConnectionState = "connected" | "connecting" | "degraded" | "reconnect_required" | "disconnected";
 
@@ -33,6 +34,8 @@ export type GoogleSectionView = {
   unavailable?: true;
   /** True for owner and admin_technical (the connections view): they also get "Sync now" (the route checks the same). */
   canSync?: true;
+  /** T-257: the provider is not enabled for this company (any more). The rows are kept and listed as paused: no Connect, no Reconnect, nothing deleted. */
+  paused?: true;
 };
 
 type Db = Pick<LaneClient, "schema">;
@@ -71,14 +74,17 @@ function mailPolicyOf(config: unknown): { domains: string[]; mailboxes: string[]
  * health. `userId` marks which are theirs. Throws on a database error (the page must not show "not connected" for an outage).
  */
 export async function loadGoogleSection(client: Db, laneId: string, userId?: string): Promise<GoogleSectionView> {
+  return loadMailSection(client, laneId, userId, "google");
+}
+
+/**
+ * The same read for either mail provider (T-257: Microsoft rows are listed by the same code, so the two sections cannot drift). Google keeps its
+ * `transport = native` filter (Composio connections have their own section, T-219); Microsoft is always native and has no such rows.
+ */
+export async function loadMailSection(client: Db, laneId: string, userId: string | undefined, provider: "google" | "microsoft"): Promise<GoogleSectionView> {
   const core = client.schema("core");
-  const conns = await core
-    .from("connections")
-    .select("id, external_account_id, status, owner_user_id")
-    .eq("lane_id", laneId)
-    .eq("provider", "google")
-    .eq("transport", "native") // Composio connections have their own section (T-219)
-    .order("created_at", { ascending: true });
+  const base = core.from("connections").select("id, external_account_id, status, owner_user_id").eq("lane_id", laneId).eq("provider", provider);
+  const conns = await (provider === "google" ? base.eq("transport", "native") : base).order("created_at", { ascending: true });
   if (conns.error) throw new Error("connections unavailable");
   const rows = (conns.data ?? []).flatMap((r) => {
     const state = mapGoogleStatus(r.status);
@@ -128,7 +134,13 @@ export async function loadGoogleSection(client: Db, laneId: string, userId?: str
  * `unavailable` view, so it is never shown as "not connected" and does not take the rest of Settings down; an outage in
  * the role check itself rethrows.
  */
-export async function googleSectionFor(g: RoleGuards, laneId: string, load: (client: Db, laneId: string, userId?: string) => Promise<GoogleSectionView> = loadGoogleSection): Promise<GoogleSectionView | null> {
+export async function googleSectionFor(
+  g: RoleGuards,
+  laneId: string,
+  load: (client: Db, laneId: string, userId?: string) => Promise<GoogleSectionView> = loadGoogleSection,
+  /** T-257: the company's enabled providers (one read per page, `lib/mail-providers.ts`). Omitted or unknown: the section is drawn as it always was. */
+  providers?: MailProvidersView | null,
+): Promise<GoogleSectionView | null> {
   let client: Db;
   let userId: string;
   try {
@@ -146,8 +158,13 @@ export async function googleSectionFor(g: RoleGuards, laneId: string, load: (cli
       throw e;
     },
   );
+  // Google is shown whenever it is enabled (every stored lane today). Only when the company's list is KNOWN and Google is not in it, its rows
+  // are kept and listed as paused (no Connect, no Reconnect, nothing deleted); with no rows there is nothing to show. A list that could not be
+  // read never pauses or hides Google.
+  const paused = providers?.state === "known" && !providers.google;
   try {
     const view = await load(client, laneId, userId);
+    if (paused) return view.connections.length === 0 ? null : { ...view, paused: true, ...(canSync ? { canSync: true as const } : {}) };
     return canSync ? { ...view, canSync: true } : view;
   } catch {
     return { connections: [], unavailable: true, ...(canSync ? { canSync: true as const } : {}) };

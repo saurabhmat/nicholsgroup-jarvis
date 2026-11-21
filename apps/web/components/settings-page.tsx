@@ -8,6 +8,8 @@ import { loadLane } from "@/lib/lane-page";
 import { guards } from "@/lib/guards";
 import { quickbooksSectionFor } from "@/lib/quickbooks-connection";
 import { googleSectionFor } from "@/lib/google-connection";
+import { mailProvidersFor } from "@/lib/mail-providers";
+import { microsoftSectionFor } from "@/lib/microsoft-connection";
 import { availability, missingSettings } from "@/lib/composio-availability";
 import { composioSectionFor } from "@/lib/composio-connection";
 import { ConnectionsSection } from "./connections-section";
@@ -37,11 +39,18 @@ export async function SettingsPage({
   // Independent reads, run together (T-230 A). Each keeps its own role check; the guards memoise the shared ones.
   const now = new Date();
   const tz = viewerZone((await cookies()).get("tz")?.value);
-  const [result, quickbooks, google, composio, brain, coverage, news, jobFailures] = await Promise.all([
+  // T-257: ONE read of the company's enabled providers per render, shared by the Google and the Microsoft section.
+  const providers = timed("load.mail_providers", () => mailProvidersFor(g, lane.laneId));
+  const microsoftP = timed("load.microsoft", async () => microsoftSectionFor(g, lane.laneId, await providers));
+  const [result, quickbooks, google, microsoft, composio, brain, coverage, news, jobFailures] = await Promise.all([
     // The result of a connect the OAuth callback sent back here (fixed, allowlisted text; connect roles only).
-    timed("load.connect_result", () => connectResultFor(g, lane.laneId, query)),
+    timed("load.connect_result", async () => {
+      const section = await microsoftP; // the banner's Microsoft wording follows the same scope list as the section; consent returns show only where Microsoft is enabled
+      return connectResultFor(g, lane.laneId, query, { enabled: Boolean(section && !section.paused && !section.unavailable && !section.settingsUnknown), writes: section?.writes ?? null });
+    }),
     timed("load.quickbooks", () => quickbooksSectionFor(g, lane.laneId, undefined, approvalsDeps)),
-    timed("load.google", () => googleSectionFor(g, lane.laneId)),
+    timed("load.google", async () => googleSectionFor(g, lane.laneId, undefined, await providers)),
+    microsoftP,
     timed("load.composio", () => composioSectionFor(g, lane.laneId, availability, undefined, missingSettings)),
     onboardingFor(lane.laneId), // null unless the owner has the brain view here
     // Coverage per source (T-234; it was a card on Home). The SQL answers only for callers with the comms or calendar view.
@@ -52,13 +61,13 @@ export async function SettingsPage({
     timed("load.job_failures", () => jobFailureBannerFor(g, lane.laneId)),
   ]);
   // On another host than NEXT_PUBLIC_APP_URL a connect cannot finish (hosts only in the notice); only users who can connect see it.
-  const origin = google || quickbooks || composio ? await currentOriginNotice() : null;
+  const origin = google || microsoft || quickbooks || composio ? await currentOriginNotice() : null;
   // The "not set up yet" card only stands in for a page with nothing real on it.
   const showCoverage = coverage.unavailable || coverage.items.length > 0;
-  const anySection = Boolean(result || google || quickbooks || composio || brain || showCoverage || news);
+  const anySection = Boolean(result || google || microsoft || quickbooks || composio || brain || showCoverage || news);
   // The sub-nav lists exactly the sections that are drawn below (the loaders above decide who sees which).
   const nav: SettingsNavItem[] = [
-    ...(google || quickbooks || composio || showCoverage ? [{ id: "connections", label: "Connections" }] : []),
+    ...(google || microsoft || quickbooks || composio || showCoverage ? [{ id: "connections", label: "Connections" }] : []),
     ...(news ? [{ id: "news", label: "GovCon news" }] : []),
     ...(brain ? [{ id: "ai-brain", label: "AI brain" }] : []),
   ];
@@ -86,7 +95,7 @@ export async function SettingsPage({
         <div className="grid gap-4 lg:grid-cols-[200px_minmax(0,1fr)] lg:gap-8">
           <SettingsNav items={nav} />
           <div className="flex min-w-0 flex-col gap-4">
-            {google || quickbooks || composio || showCoverage ? <ConnectionsSection laneId={lane.laneId} google={google} quickbooks={quickbooks} composio={composio} coverage={showCoverage ? coverage : null} jobFailures={jobFailures} tz={tz} now={now} /> : null}
+            {google || microsoft || quickbooks || composio || showCoverage ? <ConnectionsSection laneId={lane.laneId} google={google} microsoft={microsoft} quickbooks={quickbooks} composio={composio} coverage={showCoverage ? coverage : null} jobFailures={jobFailures} tz={tz} now={now} /> : null}
             {news ? <NewsSection view={news} tz={tz} now={now} /> : null}
             {brain ? <BrainSection laneId={lane.laneId} view={brain} /> : null}
           </div>
