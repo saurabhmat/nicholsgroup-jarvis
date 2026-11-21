@@ -220,9 +220,9 @@ Composite cursor, one per connection, stream `mail`:
 - `fp`: a fingerprint of `mail_folders`; a change means a fresh discovery and a full load of new folders.
 - Size bound: at most 3 folders; the encoded cursor must stay under 16 KB (the table limit). A test builds the largest allowed state with long synthetic links and asserts the bound. Real deltaLink length: **verify** in the live check.
 
-Requests: `GET /me/mailFolders/{id}/messages/delta` with `$select` of the index fields only, `Prefer: IdType="ImmutableId"` (T-061 review: ids survive moves) and `Prefer: odata.maxpagesize=<pageSize>`. First load: messages of the last 90 days (or the lane's retention, whichever is shorter), using `$filter=receivedDateTime ge ...` if message delta supports it **(verify)**; otherwise older items are dropped in the mapper.
+Requests: `GET /me/mailFolders/{id}/messages/delta` with `$select` of the index fields only, `Prefer: IdType="ImmutableId"` (T-061 review: ids survive moves) and `Prefer: odata.maxpagesize=<pageSize>`. First load: messages of the last 90 days (or the lane's retention, whichever is shorter). **Checked Nov 21, 2026 (V-10): message delta supports `$filter=receivedDateTime ge|gt {value}`, but "Applying `$filter` in a delta query returns only up to 5,000 messages", which a busy mailbox exceeds inside 90 days. So NO `$filter` is used: the folder is read in full with `$orderby=receivedDateTime desc` (newest first; the only supported order) and messages older than the window are dropped in the mapper (never indexed). The first load of a large folder therefore takes many pages over several runs (`hasMore`).**
 
-`410 Gone` / `syncStateNotFound` / `resyncRequired` on a stored link → `fullResyncRequired` (an answer, not an error), as Gmail 404 and Calendar 410 are **(verify the codes)**. A foreign or malformed cursor → `fullResyncRequired`.
+`410 Gone`, or a 4xx answer whose error code is `syncStateNotFound` or `resyncRequired` (compared case-insensitively), on a stored link → `fullResyncRequired` (an answer, not an error), as Gmail 404 and Calendar 410 are (checked Nov 21, 2026: 410 and `syncStateNotFound` are documented; `resyncRequired` is not documented for mail and is kept as a harmless extra). A foreign or malformed cursor → `fullResyncRequired`.
 
 ### 8.2 Field mapping (`MessageMeta`, strict, no body field)
 

@@ -52,6 +52,11 @@ export interface CommsContractHarness {
    * a deletion is `status: cancelled`). Default false (Graph and the mock use removals).
    */
   removedEventsAreStubs?: boolean;
+  /**
+   * T-258 (Graph): a removal carries the folder the message left (`{ message_id, folder }`, spec §6.3). Absent (Gmail, the mock): a removal is
+   * `{ message_id }` only. The value is the folder the harness's `removeMessage` takes the message from.
+   */
+  removalFolder?: string;
   /** Source-side: an existing event becomes a cancelled stub (status cancelled, no times); returns its event id. */
   cancelEvent: (conn: { id: string }) => string;
   /** Provider write calls received (sends, drafts, event writes). Must stay 0 through every check here. */
@@ -82,6 +87,12 @@ export interface CommsContractFixture {
   name: string;
   /** Which providers this vendor must implement; the suite fails if a flag disagrees with the harness. */
   expect?: { mail?: boolean; calendar?: boolean; documents?: boolean };
+  /**
+   * T-258: mail operations the provider has not built yet (Microsoft: `readBody` and `search` are T-259, `prepareWrite` is T-262). For each one
+   * the suite checks that the call is still guarded first (the guard test runs every call) and then answers `unsupported_op` with no request and
+   * no token read, instead of running the behaviour checks of that operation. Absent: every operation is checked in full (Google, the mock).
+   */
+  unsupportedMail?: readonly ("readBody" | "search" | "prepareWrite")[];
   setup: () => CommsContractHarness | Promise<CommsContractHarness>;
 }
 
@@ -224,6 +235,7 @@ export function describeCommsContract(fixture: CommsContractFixture): void {
   describe(`comms provider contract: ${fixture.name}`, () => {
     let h: CommsContractHarness | undefined;
     const harness = async (): Promise<CommsContractHarness> => (h ??= await fixture.setup());
+    const unsupported = (op: "readBody" | "search" | "prepareWrite") => fixture.unsupportedMail?.includes(op) === true;
 
     it("has the providers this vendor must implement", async () => {
       const x = await harness();
@@ -297,7 +309,7 @@ export function describeCommsContract(fixture: CommsContractFixture): void {
         const removed = x.removeMessage(conn);
         const delta = await drain((c) => mail.sync(x.laneId, conn, c), base.cursor);
         expect((delta.upserts as { message_id: string }[]).map((m) => m.message_id)).toContain(added);
-        expect(delta.removals).toContainEqual({ message_id: removed });
+        expect(delta.removals).toContainEqual(x.removalFolder === undefined ? { message_id: removed } : { message_id: removed, folder: x.removalFolder });
         // The removed id comes back: applied removals-first, the upsert must be present in the same delta.
         const cursor = delta.cursor;
         x.addMessage(conn, removed);
@@ -362,21 +374,47 @@ export function describeCommsContract(fixture: CommsContractFixture): void {
         await rejectsKind(mail.sync(x.laneId, conn, cursor), "reconnect_required");
       });
 
-      describeBody(
-        "mail",
-        harness,
-        (x, conn, opts) => need(x.mail).readBody(x.laneId, conn, x.fixtures.messageId, opts),
-        (x) => Boolean(x.mail),
-        (x, conn, bad) => [need(x.mail).readBody(x.laneId, conn, bad)],
-      );
+      if (unsupported("readBody")) {
+        it("mail: readBody is not built yet: unsupported_op, with no request and no token read", async () => {
+          const x = await harness();
+          if (!x.mail) return;
+          const conn = await x.connect();
+          const requests = x.externalRequestCount?.();
+          const tokens = x.tokenReads?.();
+          await rejectsKind(need(x.mail).readBody(x.laneId, conn, x.fixtures.messageId), "unsupported_op");
+          if (requests !== undefined) expect(x.externalRequestCount?.(), "an unsupported call reached the provider API").toBe(requests);
+          if (tokens !== undefined) expect(x.tokenReads?.(), "an unsupported call read a token").toBe(tokens);
+        });
+      } else {
+        describeBody(
+          "mail",
+          harness,
+          (x, conn, opts) => need(x.mail).readBody(x.laneId, conn, x.fixtures.messageId, opts),
+          (x) => Boolean(x.mail),
+          (x, conn, bad) => [need(x.mail).readBody(x.laneId, conn, bad)],
+        );
 
-      it("readBody of an unknown message is not_found", async () => {
-        const x = await harness();
-        if (!x.mail) return;
-        await rejectsKind(x.mail.readBody(x.laneId, await x.connect(), "does-not-exist"), "not_found");
-      });
+        it("readBody of an unknown message is not_found", async () => {
+          const x = await harness();
+          if (!x.mail) return;
+          await rejectsKind(x.mail.readBody(x.laneId, await x.connect(), "does-not-exist"), "not_found");
+        });
+      }
 
-      it("search returns metadata only, honours limit, treats the query as plain text", async () => {
+      if (unsupported("search")) {
+        it("mail: search is not built yet: unsupported_op, with no request and no token read", async () => {
+          const x = await harness();
+          if (!x.mail) return;
+          const conn = await x.connect();
+          const requests = x.externalRequestCount?.();
+          const tokens = x.tokenReads?.();
+          await rejectsKind(need(x.mail).search(x.laneId, conn, { query: x.fixtures.messageSearchTerm }), "unsupported_op");
+          if (requests !== undefined) expect(x.externalRequestCount?.(), "an unsupported call reached the provider API").toBe(requests);
+          if (tokens !== undefined) expect(x.tokenReads?.(), "an unsupported call read a token").toBe(tokens);
+        });
+      }
+
+      it.skipIf(unsupported("search"))("search returns metadata only, honours limit, treats the query as plain text", async () => {
         const x = await harness();
         if (!x.mail) return;
         const conn = await x.connect();
@@ -411,7 +449,20 @@ export function describeCommsContract(fixture: CommsContractFixture): void {
         if (w.mode === "push") await rejectsKind(x.mail.renew(x.laneId, conn, r), "not_found");
       });
 
-      it("prepareWrite returns an exact proposed payload and performs no external write", async () => {
+      if (unsupported("prepareWrite")) {
+        it("mail: prepareWrite is not built yet: unsupported_op, with no request and no token read", async () => {
+          const x = await harness();
+          if (!x.mail) return;
+          const conn = await x.connect();
+          const requests = x.externalRequestCount?.();
+          const tokens = x.tokenReads?.();
+          await rejectsKind(need(x.mail).prepareWrite(x.laneId, conn, intent("email.save_draft", conn.external_account_id)), "unsupported_op");
+          if (requests !== undefined) expect(x.externalRequestCount?.(), "an unsupported call reached the provider API").toBe(requests);
+          if (tokens !== undefined) expect(x.tokenReads?.(), "an unsupported call read a token").toBe(tokens);
+        });
+      }
+
+      it.skipIf(unsupported("prepareWrite"))("prepareWrite returns an exact proposed payload and performs no external write", async () => {
         const x = await harness();
         if (!x.mail) return;
         const conn = await x.connect();
@@ -430,7 +481,7 @@ export function describeCommsContract(fixture: CommsContractFixture): void {
         expect(x.externalWriteCount()).toBe(0);
       });
 
-      it("prepareWrite refuses another mailbox, header injection, spoofing characters, bad types and bad recipients", async () => {
+      it.skipIf(unsupported("prepareWrite"))("prepareWrite refuses another mailbox, header injection, spoofing characters, bad types and bad recipients", async () => {
         const x = await harness();
         if (!x.mail) return;
         const conn = await x.connect();

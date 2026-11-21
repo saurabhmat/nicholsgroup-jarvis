@@ -94,3 +94,14 @@ export const MICROSOFT_WRITE_SCOPES = ["Mail.ReadWrite", "Mail.Send"] as const;
 export const GRAPH_SCOPE_PREFIX = "https://graph.microsoft.com/";
 /** `tid` of personal Microsoft accounts (quoted in the V-6 check). Never an organisation: refused even if a lane lists it. */
 export const NON_ORGANISATION_TENANTS: ReadonlySet<string> = new Set(["9188040d-6c67-4c5b-b112-36a304b66dad"]);
+
+/**
+ * Hosts a message's `webLink` may point to (spec §8.2, V-15). UNCONFIRMED ASSUMPTION: Microsoft's documentation says only "the URL to open the
+ * message in Outlook on the web" and names no host. These two are the commonly seen ones for the commercial cloud; the real host is a live
+ * check (H-070). Any other host, a non-https link or a link with credentials or a port gives `source_url` null (the row has no "Open in
+ * Outlook" link), never a wrong link. `gcc_high` is empty until T-267.
+ */
+export const OUTLOOK_WEB_HOSTS: Readonly<Record<MicrosoftCloud, ReadonlySet<string>>> = Object.freeze({
+  commercial: new Set(["outlook.office.com", "outlook.office365.com"]),
+  gcc_high: new Set<string>(),
+});

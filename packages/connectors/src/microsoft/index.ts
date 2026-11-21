@@ -6,14 +6,16 @@ import { requireConnectorEnv } from "@nichols/core/env/server";
 import { attentionEventId, connAttentionNeeded, sendLaneEvent } from "@nichols/core/inngest";
 import { createApiErrorSink } from "../error-log/sink";
 import { createReconnectRecorder } from "../quickbooks/reconnect";
-import { apiErrorStore, connectionLoader, getToken, laneConfigReader, microsoftIdentityReader, microsoftIdentityWriter, reconnectStore, revokeToken, rotateToken, writePolicyReader } from "../vault/index";
+import { apiErrorStore, connectionLoader, getToken, laneConfigReader, mailIndexStore, microsoftIdentityReader, microsoftIdentityWriter, reconnectStore, revokeToken, rotateToken, writePolicyReader } from "../vault/index";
 import { SecretValue } from "../vault/secret";
+import { createMailSync } from "../comms/mail-sync";
 import { createGraphApi } from "./api";
 import { createMicrosoftConnectInfo } from "./consent";
 import { createMicrosoftDisconnect } from "./disconnect";
 import { classifyGraphFailure } from "./errors";
 import { createMicrosoftGuard } from "./guard";
 import { createMicrosoftHealth, createMicrosoftHealthSkip } from "./health";
+import { createMicrosoftMailProvider } from "./mail";
 import { createMicrosoftOAuthProvider, type MicrosoftClientConfig } from "./provider";
 import { createMicrosoftTokenManager } from "./token-manager";
 
@@ -44,8 +46,19 @@ const onReconnectRequired = createReconnectRecorder({
 const tokens = createMicrosoftTokenManager({ vault: { getToken, rotateToken }, client, onReconnectRequired });
 const errors = createApiErrorSink({ store: apiErrorStore, messageFor: (info) => classifyGraphFailure(info).message });
 
-/** The guarded, read-only Graph client. The facade's Microsoft entry does not use it yet (T-258, T-259, T-067). */
+/** The guarded, read-only Graph client. The facade's Microsoft entry uses it for the mail metadata sync (T-258); live body and calendar come with T-259 / T-067. */
 export const graphApi = createGraphApi({ guard, tokens, errors });
+/** Microsoft mail metadata delta sync (T-258). Only `sync` is real; the other operations answer `unsupported_op` until T-259 / T-262. */
+export const microsoftMailProvider = createMicrosoftMailProvider({ api: graphApi, guard, laneConfig: laneConfigReader });
+/**
+ * Time budget of one mail run: the first load of a large folder takes many pages, so a run stops after this long and the next one continues from the cursor
+ * (spec §8.5). It is checked BETWEEN pages only. A normal page takes about a second, but the worst case of ONE request is four attempts of 30 s each plus
+ * three backoff or Retry-After waits of up to 30 s (about 210 s), and a discovery makes up to three lookups first; against a 300 s job limit the budget
+ * therefore bounds a healthy run, not a failing one, and is kept low (150 s) for that reason.
+ */
+export const MICROSOFT_MAIL_RUN_BUDGET_MS = 150_000;
+/** Runs one connection's mail metadata sync into comms.message_index. Reached only through the facade (provider gate and owner checks first). */
+export const microsoftMailSync = createMailSync({ mail: microsoftMailProvider, store: mailIndexStore, maxRunMs: MICROSOFT_MAIL_RUN_BUDGET_MS });
 /** `GET /me`: registered with conn.token_health (health/index.ts). */
 export const microsoftHealth = createMicrosoftHealth({ api: graphApi });
 /** Tells the daily health job to skip a connection whose provider is switched off for the lane (registered in health/index.ts). */

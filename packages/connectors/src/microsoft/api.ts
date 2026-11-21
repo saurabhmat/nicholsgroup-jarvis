@@ -38,9 +38,56 @@ export type GraphApiDeps = {
   maxConcurrent?: number;
 };
 
+/**
+ * Extra request parts (T-258), each checked here:
+ *  - `headers`: only `Prefer` (the `IdType="ImmutableId"` and `odata.maxpagesize` preferences; they apply to the one request they are on, so every
+ *    request carries them), printable ASCII.
+ *  - `rawQuery`: an OPAQUE query string sent exactly as given (a delta/next link's `$skiptoken` / `$deltatoken` must not be rebuilt; the
+ *    first delta request uses it so `$select` and `$orderby` go out unencoded). It carries no path and no host: the path is still the
+ *    `/me/...` template, and the host is still the allow-listed one. Characters outside the URL query set, a `#`, and more than
+ *    MAX_RAW_QUERY characters are refused; it cannot be combined with `query`.
+ */
+export type GraphGetOptions = { headers?: Record<string, string>; rawQuery?: string };
+
 export interface GraphApi {
   /** GET a path template under `/v1.0`, e.g. `/me/messages/{id}` with `params.id`. Only `/me/...` is reachable. */
-  get<T = unknown>(laneId: LaneId, conn: unknown, path: string, params?: Record<string, string | number>, query?: Query): Promise<ConnectorResponse<T>>;
+  get<T = unknown>(laneId: LaneId, conn: unknown, path: string, params?: Record<string, string | number>, query?: Query, options?: GraphGetOptions): Promise<ConnectorResponse<T>>;
+}
+
+/** Longest opaque query accepted (a link's query is never truncated: longer is refused). */
+export const MAX_RAW_QUERY = 4096;
+/** The URL query character set (RFC 3986 `query` without the apostrophe, which the URL parser would re-encode; `%` for escapes): nothing that could end the query, start a fragment or break the request line. */
+const RAW_QUERY = /^[A-Za-z0-9\-._~!$&()*+,;=:@/?%]*$/;
+
+/** Whether `q` could be sent as a raw query (a link's query is checked with this before it is stored or used). */
+export const isOpaqueQuery = (q: string): boolean => q.length <= MAX_RAW_QUERY && RAW_QUERY.test(q);
+
+function assertOptions(options: GraphGetOptions | undefined, query: Query | undefined): void {
+  const bad = (m: string) => new ConnectorError({ kind: "invalid_input", message: m });
+  for (const [k, v] of Object.entries(options?.headers ?? {})) {
+    if (k.toLowerCase() !== "prefer" || !/^[\x20-\x7e]{1,200}$/.test(v)) throw bad("A request header is not allowed");
+  }
+  const raw = options?.rawQuery;
+  if (raw !== undefined) {
+    if (!isOpaqueQuery(raw)) throw bad("The query is not allowed");
+    // Checked HERE, before the slot, the guard and any token read: the URL parser must keep the query exactly as given (a throw inside the fetch wrapper
+    // would be read as a transport failure and retried, with a token read each time).
+    if (raw !== "") {
+      const probe = new URL(GRAPH_COMMERCIAL_BASE);
+      probe.search = `?${raw}`;
+      if (probe.search !== `?${raw}`) throw bad("The query is not allowed");
+    }
+    if (query && Object.keys(query).length > 0) throw bad("A raw query cannot be combined with a query object");
+  }
+}
+
+/** A fetch that puts the opaque query (already checked by `assertOptions`) on the request the client built, which has none. It never throws. */
+function withRawQuery(inner: typeof fetch, rawQuery: string): typeof fetch {
+  return (input, init) => {
+    const url = new URL(input instanceof URL ? input.href : typeof input === "string" ? input : input.url);
+    if (rawQuery !== "") url.search = `?${rawQuery}`;
+    return inner(url, init);
+  };
 }
 
 /** Path parameter values are single segments: a separator or an escape could move the request (no caller passes provider ids yet; T-258 will). */
@@ -52,12 +99,13 @@ function assertParams(params: Record<string, string | number> | undefined): void
 
 export function createGraphApi(deps: GraphApiDeps): GraphApi {
   const max = deps.maxConcurrent ?? MAX_CONCURRENT_PER_MAILBOX;
-  const httpFor = (laneId: LaneId, g: GuardedMicrosoftConnection): HttpClient => {
+  const httpFor = (laneId: LaneId, g: GuardedMicrosoftConnection, rawQuery?: string): HttpClient => {
     const bucket = graphBucket(g.conn.id, "read");
     return createGraphHttp(
       {
         // Test hooks first: they can never replace the base URL, the allow-list checks the final value.
         ...deps.httpOptions,
+        ...(rawQuery === undefined ? {} : { fetch: withRawQuery(deps.httpOptions?.fetch ?? fetch, rawQuery) }),
         baseUrl: GRAPH_COMMERCIAL_BASE,
         laneId,
         connectionId: g.conn.id,
@@ -71,12 +119,13 @@ export function createGraphApi(deps: GraphApiDeps): GraphApi {
   };
 
   return {
-    async get<T = unknown>(laneId: LaneId, conn: unknown, path: string, params?: Record<string, string | number>, query?: Query) {
+    async get<T = unknown>(laneId: LaneId, conn: unknown, path: string, params?: Record<string, string | number>, query?: Query, options?: GraphGetOptions) {
       assertParams(params);
+      assertOptions(options, query);
       assertLaneBound(laneId, conn);
       return withMailboxSlot(`${laneId}\u0000${conn.id}`, max, async () => {
         const g = await deps.guard(laneId, conn); // decided inside the slot: after any wait for it
-        const http = httpFor(laneId, g); // host allow-list: before any token read or request
+        const http = httpFor(laneId, g, options?.rawQuery); // host allow-list: before any token read or request
         let fresh = true; // the first attempt uses the decision just made; every later attempt decides again
         let used: SecretValue | undefined;
         // An error thrown while getting the credential (the guard again, the token endpoint, a store outage) is not a Graph API answer:
@@ -88,6 +137,7 @@ export function createGraphApi(deps: GraphApiDeps): GraphApi {
             path,
             ...(params ? { params } : {}),
             ...(query ? { query } : {}),
+            ...(options?.headers ? { headers: options.headers } : {}),
             auth: {
               scheme: "Bearer",
               secret: async () => {
