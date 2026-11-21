@@ -8,6 +8,9 @@ import { GROUPS } from "@nichols/brain/interview";
 const m = vi.hoisted(() => ({
   result: null as unknown,
   google: null as unknown,
+  microsoft: null as unknown,
+  providerReads: 0,
+  providersSeen: [] as unknown[],
   composio: null as unknown,
   quickbooks: null as unknown,
   brain: null as unknown,
@@ -32,6 +35,9 @@ vi.mock("@/lib/guards", () => ({ guards: async () => m.sharedGuards }));
 vi.mock("@/lib/connect-result", () => ({ connectResultFor: (g: unknown) => loader("result", () => m.result)(g) }));
 vi.mock("@/lib/quickbooks-connection", () => ({ quickbooksSectionFor: (g: unknown) => loader("quickbooks", () => m.quickbooks)(g) }));
 vi.mock("@/lib/google-connection", () => ({ googleSectionFor: (g: unknown) => loader("google", () => m.google)(g) }));
+// T-257: not recorded in `m.started` (the loader-list test below is unchanged); the providers read is counted on its own.
+vi.mock("@/lib/mail-providers", () => ({ mailProvidersFor: async () => { m.providerReads += 1; return { state: "known", google: true, microsoft: null }; } }));
+vi.mock("@/lib/microsoft-connection", () => ({ microsoftSectionFor: async (_g: unknown, _l: string, providers: unknown) => { m.providersSeen.push(providers); return m.microsoft; } }));
 vi.mock("@/lib/composio-availability", () => ({ availability: () => ({}), missingSettings: () => ({}) }));
 vi.mock("@/lib/composio-connection", () => ({ composioSectionFor: (g: unknown) => loader("composio", () => m.composio)(g) }));
 vi.mock("@/lib/news-settings", () => ({ newsSectionFor: async () => m.news }));
@@ -40,8 +46,8 @@ vi.mock("next/headers", () => ({ cookies: async () => ({ get: () => undefined })
 vi.mock("@/lib/origin-notice-server", () => ({ currentOriginNotice: async () => m.origin }));
 vi.mock("@/lib/onboarding-progress", () => ({ onboardingFor: () => loader("brain", () => m.brain)() }));
 vi.mock("./connections-section", () => ({
-  ConnectionsSection: ({ google, quickbooks, composio, coverage }: { google: unknown; quickbooks: unknown; composio: unknown; coverage?: unknown }) => (
-    <div data-testid="connections-section" data-coverage={String(Boolean(coverage))} data-google={String(Boolean(google))} data-quickbooks={String(Boolean(quickbooks))} data-composio={String(Boolean(composio))} />
+  ConnectionsSection: ({ google, microsoft, quickbooks, composio, coverage }: { google: unknown; microsoft?: unknown; quickbooks: unknown; composio: unknown; coverage?: unknown }) => (
+    <div data-testid="connections-section" data-coverage={String(Boolean(coverage))} data-google={String(Boolean(google))} data-microsoft={String(Boolean(microsoft))} data-quickbooks={String(Boolean(quickbooks))} data-composio={String(Boolean(composio))} />
   ),
 }));
 // The shared module page is async (a server component); here only whether it is asked to draw the placeholder matters.
@@ -58,6 +64,9 @@ const view = (done: number) => ({
 });
 
 beforeEach(() => {
+  m.microsoft = null;
+  m.providerReads = 0;
+  m.providersSeen = [];
   m.result = m.google = m.composio = m.brain = m.origin = m.news = null;
   m.quickbooks = null;
   m.coverage = { items: [], unavailable: false };
@@ -231,3 +240,20 @@ describe("loading (T-230 A)", () => {
     await expect(SettingsPage(props)).rejects.toThrow("outage");
   });
 });
+
+describe("Microsoft section (T-257)", () => {
+  it("draws Connections for a Microsoft section alone, and hides the placeholder", async () => {
+    m.microsoft = { connections: [], adminConsentUrl: null };
+    expect(await draw()).toBe("false");
+    expect(screen.getByTestId("connections-section").getAttribute("data-microsoft")).toBe("true");
+    expect(screen.getByTestId("connections-section").getAttribute("data-google")).toBe("false");
+  });
+  it("reads the company's providers ONCE per render and hands that one answer to the Microsoft loader", async () => {
+    m.google = { connections: [] };
+    m.microsoft = { connections: [], adminConsentUrl: null };
+    await draw();
+    expect(m.providerReads).toBe(1);
+    expect(m.providersSeen).toEqual([{ state: "known", google: true, microsoft: null }]);
+  });
+});
+

@@ -6,9 +6,11 @@ import { requireConnectorEnv } from "@nichols/core/env/server";
 import { attentionEventId, connAttentionNeeded, sendLaneEvent } from "@nichols/core/inngest";
 import { createApiErrorSink } from "../error-log/sink";
 import { createReconnectRecorder } from "../quickbooks/reconnect";
-import { apiErrorStore, connectionLoader, getToken, laneConfigReader, microsoftIdentityReader, microsoftIdentityWriter, reconnectStore, rotateToken, writePolicyReader } from "../vault/index";
+import { apiErrorStore, connectionLoader, getToken, laneConfigReader, microsoftIdentityReader, microsoftIdentityWriter, reconnectStore, revokeToken, rotateToken, writePolicyReader } from "../vault/index";
 import { SecretValue } from "../vault/secret";
 import { createGraphApi } from "./api";
+import { createAdminConsentLink } from "./consent";
+import { createMicrosoftDisconnect } from "./disconnect";
 import { classifyGraphFailure } from "./errors";
 import { createMicrosoftGuard } from "./guard";
 import { createMicrosoftHealth, createMicrosoftHealthSkip } from "./health";
@@ -57,3 +59,15 @@ export const microsoftOAuthProvider = createMicrosoftOAuthProvider({
   identityWriter: microsoftIdentityWriter,
   writesAllowed: (laneId) => writePolicyReader.emailWritesAllowed(laneId),
 });
+
+/** The admin consent link of a lane (T-257): public values only (client id, redirect URI), the lane's connect scopes; null when none can be built. Not a connect, stores nothing. */
+export const microsoftAdminConsentLink = createAdminConsentLink({
+  client: () => {
+    const env = requireConnectorEnv("graph");
+    return { clientId: env.GRAPH_CLIENT_ID, redirectUri: env.GRAPH_REDIRECT_URI };
+  },
+  scopesFor: (laneId) => microsoftOAuthProvider.scopesFor?.(laneId) ?? Promise.resolve(microsoftOAuthProvider.scopes),
+});
+
+/** Local Disconnect (T-257, D-55): deletes the Vault tokens and marks the row `disconnected`. No request to Microsoft. */
+export const disconnectMicrosoft = createMicrosoftDisconnect({ loader: connectionLoader, vault: { revokeToken } });

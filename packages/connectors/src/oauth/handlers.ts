@@ -6,6 +6,7 @@
 import { authErrorResponse } from "@nichols/core/auth";
 import { EnvValidationError, describeEnvError } from "@nichols/core/env/server";
 import { isConnectorError } from "../contract/errors";
+import { consentReturn } from "../microsoft/consent";
 import type { AuthorizeFn, createOAuthFlow } from "./flow";
 
 const NO_STORE = { "cache-control": "no-store" } as const;
@@ -70,6 +71,16 @@ export function createConnectHandlers(flow: Pick<ReturnType<typeof createOAuthFl
     async callback(request: Request, provider: string): Promise<Response> {
       if (!flow.has(provider)) return json("not_found", 404);
       const url = new URL(request.url);
+      // T-257: the return from a tenant admin consent link is not a connect (no `code`, the fixed marker `state`; see microsoft/consent.ts). It is
+      // answered before anything else with one of two fixed codes and nothing from the request: no session, no database, no state, no token, no
+      // request to Microsoft. A request carrying a `code` never takes this branch.
+      const consent = consentReturn(provider, url.searchParams);
+      if (consent) {
+        const back = new URL(`/${encodeURIComponent(consent.laneId)}/settings`, url.origin);
+        back.searchParams.set("connect", consent.ok ? "consent_ok" : "consent_failed");
+        back.searchParams.set("provider", provider);
+        return new Response(null, { status: 303, headers: { ...NO_STORE, location: back.pathname + back.search, "referrer-policy": "no-referrer" } });
+      }
       try {
         const result = await flow.callback(provider, url.searchParams, await authorizer());
         if (result.ok && opts.onConnected) {

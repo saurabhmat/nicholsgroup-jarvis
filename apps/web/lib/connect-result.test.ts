@@ -136,3 +136,30 @@ describe("Microsoft results (T-066)", () => {
     expect(connectResultMessage({ connect: "wrong_tenant", provider: "<b>x</b>" })?.title).toBe("The provider organisation not accepted");
   });
 });
+
+describe("Microsoft results (T-257)", () => {
+  const NOTE = /connects your mail and calendar, read-only\. It is not how anyone signs in to the portal/;
+  it("the four refusals say it connects mail and calendar read-only and is not how anyone signs in; Google's text is unchanged", () => {
+    for (const connect of ["admin_consent_required", "wrong_tenant", "wrong_account", "account_refused"]) {
+      expect(connectResultMessage({ connect, provider: "microsoft" })?.description, connect).toMatch(NOTE);
+      expect(connectResultMessage({ connect, provider: "google" })?.description ?? "", connect).not.toMatch(NOTE);
+    }
+  });
+  it("the admin consent return has two fixed texts, only for Microsoft, and copies nothing from the URL", () => {
+    expect(connectResultMessage({ connect: "consent_ok", provider: "microsoft" })).toMatchObject({ tone: "success", title: "Microsoft sent the administrator back" });
+    expect(connectResultMessage({ connect: "consent_failed", provider: "microsoft" })).toMatchObject({ tone: "alert", title: "Administrator approval was not completed" });
+    for (const provider of ["google", "quickbooks", undefined]) {
+      for (const connect of ["consent_ok", "consent_failed", "disconnected"]) expect(connectResultMessage({ connect, provider }), `${connect} ${String(provider)}`).toBeNull();
+    }
+    const m = connectResultMessage({ connect: "consent_ok", provider: "microsoft", tenant: "canary-ms-5", scope: "canary-ms-5", admin_consent: "canary-ms-5", error_description: "canary-ms-5" });
+    expect(JSON.stringify(m)).not.toContain("canary-ms-5");
+  });
+  it("the Disconnect result is fixed: stored access deleted, Microsoft may still list the app, where the person or administrator removes it; no link", () => {
+    const m = connectResultMessage({ connect: "disconnected", provider: "microsoft", text: "canary-ms-6" });
+    expect(m?.tone).toBe("success");
+    expect(m?.description).toMatch(/stored in the portal was deleted/);
+    expect(m?.description).toMatch(/Microsoft may still list the app/);
+    expect(m?.description).toMatch(/Entra admin center \(Enterprise apps → the app → Permissions\)/);
+    expect(JSON.stringify(m)).not.toMatch(/canary-ms-6|https?:\/\//);
+  });
+});

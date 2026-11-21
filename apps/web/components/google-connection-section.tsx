@@ -19,7 +19,7 @@ const LABEL: Record<GoogleConnectionState, { text: string; variant: "success" | 
   disconnected: { text: "Disconnected", variant: "alert" },
 };
 
-const needsReconnect = (view: GoogleSectionView) => view.connections.some((c) => c.state === "reconnect_required" || c.state === "disconnected");
+const needsReconnect = (view: GoogleSectionView) => !view.paused && view.connections.some((c) => c.state === "reconnect_required" || c.state === "disconnected");
 /** The states in which Reconnect is the main action of the row. */
 const URGENT: ReadonlySet<GoogleConnectionState> = new Set(["reconnect_required", "disconnected", "degraded"]);
 
@@ -44,7 +44,7 @@ export function GoogleNotices({ view }: { view: GoogleSectionView }) {
 
 /** "Sync now" for the Google accounts (owner or admin_technical: the view is null for everyone else). Drawn only with a connected account. */
 export function GoogleSyncBar({ laneId, view }: { laneId: string; view: GoogleSectionView }) {
-  if (view.unavailable || !view.canSync || !view.connections.some((c) => c.state === "connected" || c.state === "degraded")) return null;
+  if (view.unavailable || view.paused || !view.canSync || !view.connections.some((c) => c.state === "connected" || c.state === "degraded")) return null;
   return (
     <div data-testid="google-sync-bar" className="flex flex-wrap items-center gap-3 text-small text-muted-foreground">
       <span>Mail and calendar sync every 15 minutes. To check for new items right now:</span>
@@ -53,7 +53,36 @@ export function GoogleSyncBar({ laneId, view }: { laneId: string; view: GoogleSe
   );
 }
 
+/** T-257: Google is not enabled for this company (any more): its rows are kept and shown as paused, with no Connect and no Reconnect. */
+export const GOOGLE_PAUSED_TEXT = "Paused: Google is not enabled for this company";
+
+function GooglePausedRows({ view }: { view: GoogleSectionView }) {
+  return (
+    <>
+      {view.connections.map((c) => (
+        <ConnectionRow
+          key={c.id}
+          testId={c.mine ? "google-connection" : "google-other-connection"}
+          provider={c.mine ? "Your Google account" : "Google"}
+          sub={c.mine ? "Mail, calendar and Drive, read-only" : "Another person's account: status only"}
+          account={c.mailbox}
+          status={<Badge variant="muted">{GOOGLE_PAUSED_TEXT}</Badge>}
+          lastSync={
+            <>
+              <span className="block">Mail: {when(c.lastMailSyncAt)}</span>
+              <span className="block">Calendar: {when(c.lastCalendarSyncAt)}</span>
+            </>
+          }
+          actions={null}
+          note={<>Nothing was deleted: the connection and its data are kept, and syncing is paused.</>}
+        />
+      ))}
+    </>
+  );
+}
+
 export function GoogleRows({ laneId, view }: { laneId: string; view: GoogleSectionView }) {
+  if (view.paused) return <GooglePausedRows view={view} />;
   const start = `/api/connect/google/start?lane=${encodeURIComponent(laneId)}`;
   const mine = view.connections.filter((c) => c.mine);
   const others = view.connections.filter((c) => !c.mine);

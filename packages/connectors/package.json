@@ -25,7 +25,8 @@
     "./reports": "./src/reports/index.ts",
     "./normalize": "./src/normalize/index.ts",
     "./error-log": "./src/error-log/index.ts",
-    "./facade": "./src/facade/index.ts"
+    "./facade": "./src/facade/index.ts",
+    "./microsoft-settings": "./src/microsoft/settings-entry.ts"
   },
   "scripts": {
     "typecheck": "tsc -b",
