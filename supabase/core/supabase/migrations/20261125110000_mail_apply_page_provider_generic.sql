@@ -87,12 +87,14 @@ begin
   end if;
 
   -- Removals first: the row stays (retention purges it) and is flagged.
+  -- (a join on the ids, not EXISTS with a CASE: the planner then probes the unique index per removal instead of reading the whole mailbox)
   update comms.message_index m
      set deleted = true
+    from (select distinct case when pg_catalog.jsonb_typeof(e) = 'string' then e #>> '{}' else e ->> 'message_id' end as message_id,
+                 case when pg_catalog.jsonb_typeof(e) = 'string' then null else e ->> 'folder' end as folder
+          from pg_catalog.jsonb_array_elements(p_removals) e) r
    where m.lane_id = p_lane and m.connection_id = p_connection_id and not m.deleted
-     and exists (select 1 from pg_catalog.jsonb_array_elements(p_removals) e
-                 where m.message_id = case when pg_catalog.jsonb_typeof(e) = 'string' then e #>> '{}' else e ->> 'message_id' end
-                   and (pg_catalog.jsonb_typeof(e) = 'string' or (e ->> 'folder') is null or (e ->> 'folder') = m.folder));
+     and m.message_id = r.message_id and (r.folder is null or r.folder = m.folder);
   get diagnostics v_removed = row_count;
 
   -- Upserts. One row per message id (the last occurrence wins); stale versions are skipped, not errors.
