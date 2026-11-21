@@ -5,20 +5,24 @@
 //
 // `is_auth_pass` is FALSE for every Microsoft message (plan-review "T-259: spec §15 verify items", V-13): the `Authentication-Results` header Exchange
 // Online adds has no documented service identifier, so the tenant's own header cannot be told from one a sender put in the message. The header is
-// therefore never parsed for a pass (the classifier is called WITHOUT it), and the flag is set to false explicitly.
+// read into the header map like any other and is never used for a pass: the classifier is called WITHOUT it as an authentication input, and the flag is
+// set to false explicitly.
 //
-// Bounds (the sync does not know which messages of a delta page are new, only which are in it, so it reads for every inbox message of a page that
-// has none yet, newest first, up to these limits; the headers do not change, so a re-read for a changed message gives the same booleans):
-//  - HEADER_READS_PER_PAGE reads in one sync page, and
-//  - HEADER_READS_PER_WINDOW reads per connection in any HEADER_WINDOW_MS (a first load of a large inbox cannot multiply requests without limit).
-// A message over a bound is indexed WITHOUT flags: on a first insert the flags are false, on an update the stored ones are kept (the page writer
-// keeps an absent flag), never guessed. It is read again when it next appears in a delta page (a later change to it).
+// Bounds. The sync does not know which messages of a delta page are new, only which are in it, so it reads for every inbox message of a page, newest
+// first:
+//  - per page: as many reads as the page has messages (the page size; derived by the caller, so the two cannot drift: a first load flags the whole page);
+//  - per connection (the real bound): HEADER_READS_PER_WINDOW reads in any HEADER_WINDOW_MS, so a first load of a large inbox cannot multiply requests
+//    without limit; reads that were granted but never started (a stop, the deadline) are given back;
+//  - per read: HEADER_READ_TIMEOUT_MS and no retries; per page: HEADER_PAGE_DEADLINE_MS, after which the remaining reads are skipped like a stop.
+// A message over a bound is indexed WITHOUT flags: on a first insert the flags are false, on an update the stored ones are kept (the page writer keeps an
+// absent flag), never guessed. It is read again when it next appears in a delta page (a later change to it). A bounded backfill of unflagged rows is T-260.
 import { z } from "zod";
 import { deriveMailFlags } from "../comms/mail-flags";
 
-export const HEADER_READS_PER_PAGE = 50;
 export const HEADER_READS_PER_WINDOW = 1000;
 export const HEADER_WINDOW_MS = 10 * 60_000;
+export const HEADER_READ_TIMEOUT_MS = 8_000;
+export const HEADER_PAGE_DEADLINE_MS = 20_000;
 /** Header lines and sizes we look at: a hostile message cannot make this work unbounded. */
 const MAX_HEADERS = 1000;
 const MAX_NAME_CHARS = 200;
@@ -48,22 +52,32 @@ export function flagsFromAnswer(answer: unknown): HeaderFlags | null {
   return { is_bulk: f.is_bulk, is_calendar: f.is_calendar, is_auto: f.is_auto, is_generated: f.is_generated, is_auth_pass: false };
 }
 
-/** A per-connection budget of header reads over a rolling window (in memory: a restart only gives a fresh window, the per-page bound still holds). */
-export function createHeaderBudget(now: () => number, perWindow = HEADER_READS_PER_WINDOW, windowMs = HEADER_WINDOW_MS) {
+/** A per-lane-and-connection budget of header reads over a rolling window (in memory: a restart only gives a fresh window; the per-read and per-page limits still hold). */
+export function createHeaderBudget(now: () => number, perWindow = HEADER_READS_PER_WINDOW, windowMs = HEADER_WINDOW_MS, maxTracked = MAX_TRACKED_CONNECTIONS) {
   const used = new Map<string, { since: number; count: number }>();
+  const key = (laneId: string, connectionId: string) => `${laneId}\u0000${connectionId}`;
   return {
-    /** Takes up to `want` reads from the connection's window; returns how many were granted. */
-    take(connectionId: string, want: number): number {
+    /** Takes up to `want` reads from the connection's window; returns how many were granted. A full table with no expired entry grants none (it never grows). */
+    take(laneId: string, connectionId: string, want: number): number {
       const t = now();
-      let e = used.get(connectionId);
+      const k = key(laneId, connectionId);
+      let e = used.get(k);
       if (e === undefined || t - e.since >= windowMs) {
-        if (used.size >= MAX_TRACKED_CONNECTIONS) for (const [k, v] of used) if (t - v.since >= windowMs) used.delete(k);
+        if (e === undefined && used.size >= maxTracked) {
+          for (const [other, v] of used) if (t - v.since >= windowMs) used.delete(other);
+          if (used.size >= maxTracked) return 0;
+        }
         e = { since: t, count: 0 };
-        used.set(connectionId, e);
+        used.set(k, e);
       }
       const granted = Math.max(0, Math.min(want, perWindow - e.count));
       e.count += granted;
       return granted;
+    },
+    /** Gives back reads that were granted and not started. */
+    refund(laneId: string, connectionId: string, n: number): void {
+      const e = used.get(key(laneId, connectionId));
+      if (e !== undefined && n > 0) e.count = Math.max(0, e.count - n);
     },
   };
 }

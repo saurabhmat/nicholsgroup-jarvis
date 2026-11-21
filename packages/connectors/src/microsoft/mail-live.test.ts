@@ -8,8 +8,8 @@ import { isConnectorError } from "../contract/errors";
 import { isUntrustedBody } from "../comms/ephemeral";
 import { RateLimiter } from "../http/rate-limit";
 import { createMicrosoftMailHarness } from "../testing/microsoft-mail-harness";
-import { useMockServer } from "../testing/msw/index";
-import { createFakeMicrosoft, MICROSOFT_ERROR_TEXT_CANARY } from "../testing/msw/microsoft/handlers";
+import { HttpResponse, http, useMockServer } from "../testing/msw/index";
+import { createFakeMicrosoft, GRAPH_V1, MICROSOFT_ERROR_TEXT_CANARY } from "../testing/msw/microsoft/handlers";
 import { createFakeMail, MAIL_BODY_CANARY, MAIL_PREVIEW_CANARY } from "../testing/msw/microsoft/mail";
 import { MESSAGE_SELECT } from "./mail-map";
 import { MAX_SEARCH_CHARS, plainSearchWords, searchParam } from "./mail-live";
@@ -219,6 +219,38 @@ describe("search (spec §8.3, V-14)", () => {
     expect(raw).not.toMatch(/\\|\$filter|\$orderby/);
     expect(req?.search).not.toMatch(/from:|%3A|\(|\*/i); // no colon, no parenthesis, no wildcard reaches the wire
     expect(env.mail.searchValues).toHaveLength(1);
+  });
+
+  const longWord = "x".repeat(197);
+  it.each([
+    // (a) the cut is on a word boundary FIRST; lower-casing comes after, so a cut can never leave an upper-case operator
+    [`${longWord} ORANGE`, longWord],
+    [`${"x".repeat(195)} OR tail`, `${"x".repeat(195)} or`],
+    // (b) default-ignorable code points (zero-width, word joiner, variation selector, grapheme joiner) are removed before splitting
+    ["O\u200bR", "or"],
+    ["a O\u2060R b", "a or b"],
+    ["OR\ufe0f x", "or x"],
+    ["\u034fOR\u034f", "or"],
+    ["N\u200dOT NE\u00adAR", "not near"],
+    // (c) the other operators and the ranking keyword of the search language
+    ["ONEAR XRANK WORDS AND NEAR", "onear xrank words and near"],
+    ["a ONEAR(2) b", "a onear 2 b"],
+    // (d) no exclusion or inclusion prefix
+    ["-secret +plus --x ++y a-b", "secret plus x y a-b"],
+  ])("the query %j reaches Graph as exactly %j (the fake records the $search value)", async (query, words) => {
+    const env = setup();
+    await env.m.provider.search("PKG", env.conn, { query });
+    expect(clauseOf(env)).toBe(`"${words}"`);
+  });
+
+  it("a search Graph answers with 400: a fixed error kind and message; neither the query text nor any response text is in the error, the logs or the stored errors", async () => {
+    const env = setup();
+    server.use(http.get(`${GRAPH_V1}/me/messages`, () => HttpResponse.json({ error: { code: "BadRequest", message: "bad search QUERYCANARYTEXT" } }, { status: 400 })));
+    const err = await failure(env.m.provider.search("PKG", env.conn, { query: "zebraquery" }));
+    expect(err.info.kind).toBe("invalid_input");
+    expect(err.info.http_status).toBe(400);
+    const text = JSON.stringify([err.info, err.message, err.toJSON(), env.m.h.logs, env.m.h.apiErrors]);
+    for (const leak of ["QUERYCANARYTEXT", "zebraquery", "bad search"]) expect(text).not.toContain(leak);
   });
 
   it("the request: GET /me/messages with the index $select only, the quoted words, a bounded $top; no $filter and no $orderby; ImmutableId", async () => {

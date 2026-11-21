@@ -37,7 +37,10 @@ export type MicrosoftMailHarnessOptions = {
    * T-259 header flags of the provider under test. DEFAULT OFF here: the T-258 tests count and inspect every request of a metadata sync, and a
    * header read per inbox message would change those counts. The T-259 tests and the contract suite turn it on (`{}` = the production bounds).
    */
-  headerFlags?: false | { perPage?: number; perWindow?: number };
+  headerFlags?: false | { perWindow?: number };
+  /** Header read limits of the provider (tests of the timeout and the deadline). */
+  headerReadTimeoutMs?: number;
+  headerPageDeadlineMs?: number;
   /** The default length of `readBody` (tests of the bound). */
   defaultMaxBodyChars?: number;
 } & Pick<MicrosoftHarnessOptions, "writeLanes">;
@@ -70,7 +73,7 @@ export function createMicrosoftMailHarness(options: MicrosoftMailHarnessOptions)
     virtualNow += ms;
   };
   const api = createGraphApi({ guard: h.guard, tokens: h.tokens, logger, httpOptions: { sleep, now: clock.now, retryBaseMs: 1, retryMaxMs: 30_000, random: () => 0.5, maxRetries: 1 } });
-  const provider = createMicrosoftMailProvider({ api, guard: h.guard, laneConfig, now: options.providerNow ?? (() => FAKE_NOW), logger, headerFlags: options.headerFlags ?? false, ...(options.defaultMaxBodyChars !== undefined ? { defaultMaxBodyChars: options.defaultMaxBodyChars } : {}) });
+  const provider = createMicrosoftMailProvider({ api, guard: h.guard, laneConfig, now: options.providerNow ?? (() => FAKE_NOW), logger, headerFlags: options.headerFlags ?? false, ...(options.headerReadTimeoutMs !== undefined ? { headerReadTimeoutMs: options.headerReadTimeoutMs } : {}), ...(options.headerPageDeadlineMs !== undefined ? { headerPageDeadlineMs: options.headerPageDeadlineMs } : {}), ...(options.defaultMaxBodyChars !== undefined ? { defaultMaxBodyChars: options.defaultMaxBodyChars } : {}) });
   const twin = createMailIndexTwin({
     rowOf: (laneId, conn) => {
       const row = h.rows.get(conn.id);

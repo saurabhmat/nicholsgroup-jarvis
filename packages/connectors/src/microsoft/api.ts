@@ -47,7 +47,17 @@ export type GraphApiDeps = {
  *    `/me/...` template, and the host is still the allow-listed one. Characters outside the URL query set, a `#`, and more than
  *    MAX_RAW_QUERY characters are refused; it cannot be combined with `query`.
  */
-export type GraphGetOptions = { headers?: Record<string, string>; rawQuery?: string };
+export type GraphGetOptions = {
+  headers?: Record<string, string>;
+  rawQuery?: string;
+  /**
+   * T-259: a SHORTER timeout per attempt than the client's default (a bounded read that must not hold up a page), 1 to 60,000 ms; and `noRetry`: the shared
+   * client makes no retry of its own (a 429 or 5xx is answered as it is). The guard still runs before the attempt, inside the slot, and the rate bucket
+   * still paces the call; a 401 still refreshes the token once.
+   */
+  timeoutMs?: number;
+  noRetry?: boolean;
+};
 
 export interface GraphApi {
   /** GET a path template under `/v1.0`, e.g. `/me/messages/{id}` with `params.id`. Only `/me/...` is reachable. */
@@ -67,6 +77,8 @@ function assertOptions(options: GraphGetOptions | undefined, query: Query | unde
   for (const [k, v] of Object.entries(options?.headers ?? {})) {
     if (k.toLowerCase() !== "prefer" || !/^[\x20-\x7e]{1,200}$/.test(v)) throw bad("A request header is not allowed");
   }
+  const t = options?.timeoutMs;
+  if (t !== undefined && !(Number.isInteger(t) && t >= 1 && t <= 60_000)) throw bad("The timeout is not allowed");
   const raw = options?.rawQuery;
   if (raw !== undefined) {
     if (!isOpaqueQuery(raw)) throw bad("The query is not allowed");
@@ -99,12 +111,15 @@ function assertParams(params: Record<string, string | number> | undefined): void
 
 export function createGraphApi(deps: GraphApiDeps): GraphApi {
   const max = deps.maxConcurrent ?? MAX_CONCURRENT_PER_MAILBOX;
-  const httpFor = (laneId: LaneId, g: GuardedMicrosoftConnection, rawQuery?: string): HttpClient => {
+  const httpFor = (laneId: LaneId, g: GuardedMicrosoftConnection, options?: GraphGetOptions): HttpClient => {
+    const rawQuery = options?.rawQuery;
     const bucket = graphBucket(g.conn.id, "read");
     return createGraphHttp(
       {
         // Test hooks first: they can never replace the base URL, the allow-list checks the final value.
         ...deps.httpOptions,
+        ...(options?.timeoutMs === undefined ? {} : { timeoutMs: options.timeoutMs }),
+        ...(options?.noRetry === true ? { maxRetries: 0 } : {}),
         ...(rawQuery === undefined ? {} : { fetch: withRawQuery(deps.httpOptions?.fetch ?? fetch, rawQuery) }),
         baseUrl: GRAPH_COMMERCIAL_BASE,
         laneId,
@@ -125,7 +140,7 @@ export function createGraphApi(deps: GraphApiDeps): GraphApi {
       assertLaneBound(laneId, conn);
       return withMailboxSlot(`${laneId}\u0000${conn.id}`, max, async () => {
         const g = await deps.guard(laneId, conn); // decided inside the slot: after any wait for it
-        const http = httpFor(laneId, g, options?.rawQuery); // host allow-list: before any token read or request
+        const http = httpFor(laneId, g, options); // host allow-list: before any token read or request
         let fresh = true; // the first attempt uses the decision just made; every later attempt decides again
         let used: SecretValue | undefined;
         // An error thrown while getting the credential (the guard again, the token endpoint, a store outage) is not a Graph API answer:

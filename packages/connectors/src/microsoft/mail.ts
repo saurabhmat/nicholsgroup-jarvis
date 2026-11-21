@@ -30,7 +30,7 @@ import type { LaneConfigReader } from "../vault/lane-config";
 import type { GraphApi } from "./api";
 import type { MicrosoftGuard } from "./guard";
 import { CANONICAL_FOLDER, encodeCursor, fingerprintOf, isFolderId, MAIL_FOLDER_NAMES, MAX_LINK_CHARS, OPTIONAL_FOLDERS, parseCursor, validateDeltaLink, type CursorState, type FolderState, type MailFolderName } from "./mail-cursor";
-import { createHeaderBudget, EVENT_MESSAGE_TYPE, flagsFromAnswer, HEADER_READS_PER_PAGE, HEADER_READS_PER_WINDOW, HEADERS_QUERY, type HeaderFlags } from "./mail-headers";
+import { createHeaderBudget, EVENT_MESSAGE_TYPE, flagsFromAnswer, HEADER_PAGE_DEADLINE_MS, HEADER_READ_TIMEOUT_MS, HEADER_READS_PER_WINDOW, HEADERS_QUERY, type HeaderFlags } from "./mail-headers";
 import { bodyFromAnswer, MAX_SEARCH_RESULTS, plainSearchWords, searchParam } from "./mail-live";
 import { mapMessage, MAX_ID_CHARS } from "./mail-map";
 import { INITIAL_QUERY, SELECT_PARAM } from "./mail-query";
@@ -46,7 +46,10 @@ export type MicrosoftMailDeps = {
   /** Upper bound on days the first load covers: min(this, the lane policy's retention_days). Default 90. */
   fullSyncDays?: number;
   /** T-259 header flags: the bounds (defaults in ./mail-headers.ts), or `false` to read no headers at all (tests of the metadata sync alone). */
-  headerFlags?: false | { perPage?: number; perWindow?: number };
+  headerFlags?: false | { perWindow?: number };
+  /** Header read limits (T-259): per read and per page (default 8 s and 20 s; the clock is `now`). */
+  headerReadTimeoutMs?: number;
+  headerPageDeadlineMs?: number;
   /** Default body length of `readBody` when the caller names none. */
   defaultMaxBodyChars?: number;
 };
@@ -69,9 +72,15 @@ export const DEFAULT_MAX_BODY_CHARS = 200_000;
 const HEADER_CONCURRENCY = 4;
 const SINGLE_PREFER = { Prefer: 'IdType="ImmutableId"' };
 const BODY_PREFER = { Prefer: 'IdType="ImmutableId", outlook.body-content-type="text"' };
-/** Failures of ONE header read that never fail the page: Graph answered (a status), or the call timed out / was throttled. A refusal of ours (the guard, the token) is not one. */
+/**
+ * Failures of ONE header read. These stop the sync (the guard, the token, the lane, the provider switch): they are OUR refusals, whatever the status.
+ * `forbidden` and `invalid_input` without an HTTP status are ours too (a guard refusal, a bad path); with a status (401, 403, 400) they are Graph's answer.
+ * Every other failure is soft: that message is indexed without flags, and the page is applied.
+ */
 const FATAL_KINDS: readonly string[] = ["reconnect_required", "connection_unavailable", "lane_mismatch", "unsupported_op"];
-const SOFT_NO_STATUS: readonly string[] = ["timeout", "transient", "rate_limited"];
+const FATAL_WITHOUT_STATUS: readonly string[] = ["forbidden", "invalid_input"];
+/** A soft failure that says nothing about the next message (the message is gone, or its answer was unusable): the other reads of the page go on. */
+const PER_MESSAGE_KINDS: readonly string[] = ["not_found", "provider_error", "invalid_input"];
 
 const PageSchema = z.object({
   value: z.array(z.unknown()).max(MAX_PAGE_ITEMS),
@@ -99,7 +108,8 @@ export function createMicrosoftMailProvider(deps: MicrosoftMailDeps): MailProvid
   const fullDays = deps.fullSyncDays ?? DEFAULT_FULL_SYNC_DAYS;
   const capabilities: MailCapabilities = { watch: "polling", prepareWrite: false };
   const headerCfg = deps.headerFlags === false ? null : (deps.headerFlags ?? {});
-  const headerPerPage = headerCfg?.perPage ?? HEADER_READS_PER_PAGE;
+  const headerReadTimeout = deps.headerReadTimeoutMs ?? HEADER_READ_TIMEOUT_MS;
+  const headerDeadline = deps.headerPageDeadlineMs ?? HEADER_PAGE_DEADLINE_MS;
   const headerBudget = createHeaderBudget(now, headerCfg?.perWindow ?? HEADER_READS_PER_WINDOW);
   const defaultMaxChars = deps.defaultMaxBodyChars ?? DEFAULT_MAX_BODY_CHARS;
   const envelope = <T>(laneId: LaneId, c: GuardedConn, op: string, data: T): SourceResult<T, "microsoft"> => {
@@ -165,12 +175,14 @@ export function createMicrosoftMailProvider(deps: MicrosoftMailDeps): MailProvid
   }
 
   /**
-   * Header flags of up to `headerPerPage` INBOX messages of a page (newest first), within the connection's window budget. A single read that fails because
-   * Graph answered (404: the message moved or went; 4xx/5xx; throttled) leaves that message without flags, and any failure other than "message not found"
-   * stops the remaining reads of this page; the page is still applied. A failure that is OUR refusal (reconnect required, provider disabled, a guard or
-   * token failure) is thrown and fails the page: the cursor does not advance. Nothing of an answer is logged: counts only.
+   * Header flags of the INBOX messages of a page (newest first): one read per message of the page (`pageSize` of them at most, so a first load flags the
+   * whole page), within the connection's window budget. Each read has a short timeout and no retries, and the page has a deadline after which the rest are
+   * skipped exactly like a stop. A read that fails because Graph answered or timed out leaves that message without flags (see FATAL_KINDS); a failure
+   * that says nothing about the others (404, an unusable answer) lets the rest go on, any other soft failure stops the remaining reads of this page; the
+   * page is still applied. A refusal of OURS (reconnect required, provider disabled, a guard or token failure) is thrown and fails the page: the cursor
+   * does not advance. Reads granted but never started are given back to the budget. Nothing of an answer is logged: counts only.
    */
-  async function readHeaderFlags(laneId: LaneId, c: GuardedConn, metas: readonly MessageMeta[]): Promise<Map<string, HeaderFlags>> {
+  async function readHeaderFlags(laneId: LaneId, c: GuardedConn, metas: readonly MessageMeta[], pageSize: number): Promise<Map<string, HeaderFlags>> {
     const out = new Map<string, HeaderFlags>();
     if (headerCfg === null || metas.length === 0) return out;
     const seen = new Set<string>();
@@ -178,37 +190,42 @@ export function createMicrosoftMailProvider(deps: MicrosoftMailDeps): MailProvid
       .sort((a, b) => (a.received_at < b.received_at ? 1 : a.received_at > b.received_at ? -1 : 0))
       .map((m) => m.message_id)
       .filter((id) => !seen.has(id) && ProviderIdParamSchema.safeParse(id).success && (seen.add(id), true));
-    const granted = headerBudget.take(c.id, Math.min(headerPerPage, ids.length));
+    const granted = headerBudget.take(laneId, c.id, Math.min(pageSize, ids.length));
     const todo = ids.slice(0, granted);
+    const deadline = now() + headerDeadline;
     let next = 0;
+    let started = 0;
     let stop = false;
     let failed = 0;
     let fatal: { error: unknown } | null = null;
     const worker = async (): Promise<void> => {
       for (;;) {
+        if (stop || now() >= deadline) return;
         const i = next++;
-        if (stop || i >= todo.length) return;
+        if (i >= todo.length) return;
         const id = todo[i] as string;
+        started += 1;
         try {
-          const res = await deps.api.get(laneId, c, PATH_MESSAGE, { id }, undefined, { headers: SINGLE_PREFER, rawQuery: HEADERS_QUERY });
+          const res = await deps.api.get(laneId, c, PATH_MESSAGE, { id }, undefined, { headers: SINGLE_PREFER, rawQuery: HEADERS_QUERY, timeoutMs: headerReadTimeout, noRetry: true });
           const flags = flagsFromAnswer(res.data);
           if (flags) out.set(id, flags);
           else failed += 1;
         } catch (e) {
           const info = isConnectorError(e) ? e.info : null;
-          if (info === null || FATAL_KINDS.includes(info.kind) || (info.http_status === null && !SOFT_NO_STATUS.includes(info.kind))) {
+          if (info === null || FATAL_KINDS.includes(info.kind) || (info.http_status === null && FATAL_WITHOUT_STATUS.includes(info.kind))) {
             fatal ??= { error: e };
             stop = true;
             return;
           }
           failed += 1;
-          if (info.http_status !== 404) stop = true; // throttled, unavailable, refused: the rest of this page is left without flags
+          if (!PER_MESSAGE_KINDS.includes(info.kind) || info.http_status === 401 || info.http_status === 403) stop = true; // throttled, unavailable, timed out, refused: the rest of this page is left without flags
         }
       }
     };
     await Promise.all(Array.from({ length: Math.min(HEADER_CONCURRENCY, todo.length) }, worker));
+    headerBudget.refund(laneId, c.id, todo.length - started);
     if (fatal !== null) throw (fatal as { error: unknown }).error;
-    const notRead = ids.length - out.size - failed; // over a bound, or left after a stop
+    const notRead = ids.length - out.size - failed; // over the budget, or left after a stop or the deadline
     if (failed > 0 || notRead > 0) log.child({ laneId, provider: "microsoft", connectionId: c.id }).info("microsoft.mail.header_flags_partial", { read: out.size, failed, notRead });
     return out;
   }
@@ -290,12 +307,6 @@ export function createMicrosoftMailProvider(deps: MicrosoftMailDeps): MailProvid
     }
     if (old > 0 || unusable > 0) log.child({ laneId, provider: "microsoft", connectionId: c.id }).info("microsoft.mail.items_dropped", { folder: folder.name, old, unusable });
 
-    // Header flags (inbox only; one bounded single-message read each). Only the booleans are kept; is_auth_pass is false.
-    if (folder.name === "inbox" && upserts.length > 0) {
-      const flags = await readHeaderFlags(laneId, c, upserts);
-      if (flags.size > 0) upserts = upserts.map((m) => { const f = flags.get(m.message_id); return f ? { ...m, ...f, is_calendar: f.is_calendar || m.is_calendar === true } : m; });
-    }
-
     // A nextLink equal to the link just used would page the same data forever, run after run: refuse it.
     if (next !== undefined && next === stored) throw providerError("Microsoft returned the same page link again");
     // The new state: the link of this page, and the position.
@@ -315,6 +326,12 @@ export function createMicrosoftMailProvider(deps: MicrosoftMailDeps): MailProvid
     }
     const nextCursor = encodeCursor(c.id, { v: 1, folders, pos, fp, ...(state.absent !== undefined && state.checked !== undefined ? { absent: state.absent, checked: state.checked } : {}) });
     if (nextCursor === null) return resync(); // the state would not fit the table's limit: fail safe
+    // Header flags (inbox only; one bounded single-message read each). AFTER every check that can refuse the page (link, cursor), so a refused page costs no read. Only the booleans are kept; is_auth_pass is false.
+    if (folder.name === "inbox" && upserts.length > 0) {
+      const flags = await readHeaderFlags(laneId, c, upserts, pageSize);
+      if (flags.size > 0) upserts = upserts.map((m) => { const f = flags.get(m.message_id); return f ? { ...m, ...f, is_calendar: f.is_calendar || m.is_calendar === true } : m; });
+    }
+
     return done({ upserts, removals, nextCursor, hasMore, fullResyncRequired: false });
   }
 

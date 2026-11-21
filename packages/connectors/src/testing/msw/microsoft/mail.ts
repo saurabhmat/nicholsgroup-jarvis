@@ -12,7 +12,7 @@
 //    `GET /me/messages?$search="..."` (a search: `$filter` and `$orderby` are refused with it; the answer is metadata only unless the fake is told to return a body anyway);
 //  - the fake returns `body`, `bodyPreview`, `uniqueBody` and other fields the sync never selects (Graph may do so; the mapper must drop them).
 // Every request is recorded (path, raw query, the Prefer header, the account) so a test can prove what was and was not sent.
-import { HttpResponse, http, type RequestHandler } from "msw";
+import { HttpResponse, delay, http, type RequestHandler } from "msw";
 import { GRAPH_V1, MICROSOFT_ERROR_TEXT_CANARY, type FakeMicrosoft, type FakeMsAccount } from "./handlers";
 
 export const MAIL_BODY_CANARY = "synthetic-graph-body-canary-4c19-not-real";
@@ -105,6 +105,8 @@ export interface FakeMail {
   messageReads: { id: string; select: string | null; prefer: string | null }[];
   /** Called when a single-message read arrives, before it is answered (a test uses it to change the world between two reads). */
   onMessageRead: ((id: string) => void) | null;
+  /** Make a single-message read of this id answer only after `ms` milliseconds of real time (`null` clears it). */
+  slowMessage(id: string, ms: number | null): void;
   /** Make a single-message read of this id fail with this status (every time, until cleared with `null`). */
   failMessage(id: string, status: number | null): void;
 
@@ -138,6 +140,7 @@ export function createFakeMail(fake: FakeMicrosoft, opts: FakeMailOptions = {}):
   const searchValues: string[] = [];
   const messageReads: { id: string; select: string | null; prefer: string | null }[] = [];
   const failing = new Map<string, number>();
+  const slow = new Map<string, number>();
   let counter = 0;
   let accountCounter = 0;
   const accountNo = new Map<FakeMsAccount, number>();
@@ -279,7 +282,7 @@ export function createFakeMail(fake: FakeMicrosoft, opts: FakeMailOptions = {}):
     }),
 
     // T-259: one message (the only place Graph returns `internetMessageHeaders`, and the live body). `$select` is honoured: only what is selected comes back.
-    http.get(`${GRAPH_V1}/me/messages/:id`, ({ request, params }) => {
+    http.get(`${GRAPH_V1}/me/messages/:id`, async ({ request, params }) => {
       const a = admit(request, "message");
       if ("response" in a) return a.response;
       const id = decodeURIComponent(String(params.id));
@@ -287,6 +290,8 @@ export function createFakeMail(fake: FakeMicrosoft, opts: FakeMailOptions = {}):
       const select = q.get("$select") ?? null;
       messageReads.push({ id, select, prefer: request.headers.get("prefer") });
       api.onMessageRead?.(id);
+      const wait = slow.get(id);
+      if (wait !== undefined) await delay(wait);
       const status = failing.get(id);
       if (status !== undefined) return gErr(status, "InjectedFailure");
       const m = [...mailbox(a.account).values()].filter((x) => !x.hidden).flatMap((x) => [...x.messages.values()]).find((x) => x.id === id);
@@ -446,6 +451,10 @@ export function createFakeMail(fake: FakeMicrosoft, opts: FakeMailOptions = {}):
     searchRequests: () => requests.filter((r) => r.kind === "search"),
     searchValues,
     messageReads,
+    slowMessage(id, ms) {
+      if (ms === null) slow.delete(id);
+      else slow.set(id, ms);
+    },
     failMessage(id, status) {
       if (status === null) failing.delete(id);
       else failing.set(id, status);
