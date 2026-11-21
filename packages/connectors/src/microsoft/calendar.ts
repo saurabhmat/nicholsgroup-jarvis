@@ -122,7 +122,7 @@ export function createMicrosoftCalendarProvider(deps: MicrosoftCalendarDeps): Ca
 
     let state: CalState | null = null;
     if (cursor !== null) {
-      state = oversized ? null : parseCalCursor(cursor.value, c.id);
+      state = oversized ? null : parseCalCursor(cursor.value, c.id, nowMs);
       if (state === null) return resync(); // foreign, mail-prefixed, other connection, malformed, oversized, or a link that fails validation: no request is made
     }
     // A run starts without a cursor or from a finished delta link; a page in progress continues from a nextLink.
@@ -171,6 +171,7 @@ export function createMicrosoftCalendarProvider(deps: MicrosoftCalendarDeps): Ca
     const removals = new Map<string, EventRemoval>();
     const skipped: Record<string, number> = {};
     const skip = (reason: string) => void (skipped[reason] = (skipped[reason] ?? 0) + 1);
+    let truncatedLists = 0;
     for (const item of page.data.value) {
       if (typeof item === "object" && item !== null && "@removed" in item) {
         // Any `@removed` (a delete, or an event that left the date range) removes the row of this connection.
@@ -186,8 +187,11 @@ export function createMicrosoftCalendarProvider(deps: MicrosoftCalendarDeps): Ca
       if (out.kind === "event") {
         removals.delete(out.meta.event_id);
         upserts.set(out.meta.event_id, out.meta);
+        if (out.attendeesTruncated) truncatedLists += 1;
       } else skip(out.reason);
     }
+    // A count only: lists cut at the attendee cap are reported beside the skips.
+    if (truncatedLists > 0) skipped.attendees_truncated = truncatedLists;
     if (Object.keys(skipped).length > 0) log.child({ laneId, provider: "microsoft", connectionId: c.id }).warn("microsoft.calendar.events_skipped", skipped);
 
     // A nextLink equal to the link just used would page the same data forever, run after run: refuse it.
@@ -217,9 +221,10 @@ export function createMicrosoftCalendarProvider(deps: MicrosoftCalendarDeps): Ca
       // D-59: only the default calendar is synced, so only its events are listed in the index and only that calendar id exists.
       if (cal.data !== DEFAULT_CALENDAR_ID) throw new ConnectorError({ kind: "forbidden", message: "Only events of the default calendar can be opened" });
       if (g.cloud !== "commercial") throw notSupportedCloud();
-      // `/me/events/{id}` answers for the event id alone: Graph is not asked which calendar holds it, and this provider has no access to the index to
-      // check that the id is one of its rows. The id comes from an index row (the default calendar only) in every caller; the owner check of the facade
-      // and the provider guard still apply. Not enforceable here, stated in the T-067 PR body.
+      // `/me/events/{id}` answers for the event id alone: Graph is not asked which calendar holds it, and this provider has no access to the index. No caller
+      // exists yet (the facade has no calendar readBody and nothing in the app calls this). The request can only reach the mailbox owner's own events, under the
+      // connection's own token. Before the first caller is wired, that caller (or a facade method) must check that an index row exists for this lane,
+      // connection, `microsoft:default` and event id for that owner, and pass the owner as the mail `readBody` does. Stated in the T-067 PR body.
       const res = await deps.api.get(laneId, g.conn, PATH_EVENT, { id: id.data }, undefined, { headers: BODY_PREFER, rawQuery: "$select=body" });
       const body = bodyFromAnswer(res.data, opts.data.maxChars ?? defaultMaxChars);
       if (body === null) throw providerError("Microsoft event body is not valid"); // never the content

@@ -47,9 +47,18 @@ describe("coverage (the common zones the sync promises)", () => {
 });
 
 describe("never guessed", () => {
-  it("a zone that is not in the table, the custom marker, an IANA name, an empty or non-string value, and a very long one are all null", () => {
-    for (const v of ["Synthetic Standard Time", "tzone://Microsoft/Custom", "America/New_York", "", undefined, null, 42, "x".repeat(101), "Pacific Standard Time "]) {
+  it("a zone that is not in the table, the custom marker, an invalid IANA-looking name, odd characters, an empty or non-string value, and a very long one are all null", () => {
+    for (const v of ["Synthetic Standard Time", "tzone://Microsoft/Custom", "Mars/Olympus", "Europe/Lon don", "Europe/London;x", "Pacific\u0000", "", undefined, null, 42, "x".repeat(101), "Pacific Standard Time "]) {
       expect(ianaForWindowsZone(v), String(v)).toBeNull();
     }
+  });
+});
+
+describe("an IANA name that Intl knows is accepted as a fallback (Microsoft says such names can appear; the table does not cover every region)", () => {
+  it("Europe/London, America/Santiago and America/New_York map to themselves", () => {
+    for (const z of ["Europe/London", "America/Santiago", "America/New_York"]) expect(ianaForWindowsZone(z)).toBe(z);
+  });
+  it("the Windows table still wins for a Windows name", () => {
+    expect(ianaForWindowsZone("Eastern Standard Time")).toBe("America/New_York");
   });
 });

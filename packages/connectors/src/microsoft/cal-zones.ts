@@ -82,8 +82,22 @@ const BY_NAME: ReadonlyMap<string, string> = new Map(PAIRS.map(([windows, iana])
 /** The table itself (for the tests that check it has no dead entries and no duplicates). */
 export const WINDOWS_ZONE_PAIRS: readonly (readonly [string, string])[] = PAIRS;
 
-/** The IANA name for a Windows zone name (compared case-insensitively), or null when the table has none, the name is `tzone://Microsoft/Custom`, or it is not a string. Never guesses. */
+/** The `EventMeta` timezone rule (comms/schemas.ts). */
+const IANA_SHAPE = /^[A-Za-z0-9_+./-]{1,64}$/;
+
+/**
+ * The IANA name for a zone name: the Windows table first (case-insensitive); otherwise a name that already IS an IANA zone (Microsoft says such names can
+ * appear, and the table does not cover every region), accepted only when `Intl` knows it and it fits the `EventMeta` rule. Null for anything else
+ * (`tzone://Microsoft/Custom`, unknown Windows names, empty, non-strings). The caller's local-midnight check still guards the result. Never guesses.
+ */
 export function ianaForWindowsZone(name: unknown): string | null {
   if (typeof name !== "string" || name.length === 0 || name.length > 100) return null;
-  return BY_NAME.get(name.toLowerCase()) ?? null;
+  const mapped = BY_NAME.get(name.toLowerCase());
+  if (mapped) return mapped;
+  if (!IANA_SHAPE.test(name)) return null;
+  try {
+    return new Intl.DateTimeFormat("en-US", { timeZone: name }).resolvedOptions().timeZone === undefined ? null : name;
+  } catch {
+    return null;
+  }
 }

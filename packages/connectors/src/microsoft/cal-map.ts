@@ -53,7 +53,7 @@ const GraphEventSchema = z.object({
   lastModifiedDateTime: z.string().max(60).nullish(),
   location: z.object({ displayName: clip(4000).nullish() }).nullish(),
   organizer: z.object({ emailAddress }).nullish(),
-  attendees: z.array(z.object({ emailAddress, status: z.object({ response: z.string().max(40).nullish() }).nullish() })).max(5000).nullish(),
+  attendees: z.array(z.unknown()).nullish(),
   onlineMeeting: z.object({ joinUrl: clip(4096).nullish() }).nullish(),
 });
 
@@ -62,7 +62,7 @@ const isCleanText = (s: string): boolean => cleanText(s) === s;
 
 /** The skip reasons: fixed words, counted by the caller and logged without any event content. */
 export type CalSkipReason = "invalid_item" | "series_master" | "not_utc" | "invalid_times" | "all_day_zone_unusable" | "invalid_all_day" | "invalid_event";
-export type CalOutcome = { kind: "event"; meta: EventMeta } | { kind: "skip"; reason: CalSkipReason };
+export type CalOutcome = { kind: "event"; meta: EventMeta; /** The attendee list was cut at the cap (a count for the log, nothing else). */ attendeesTruncated?: boolean } | { kind: "skip"; reason: CalSkipReason };
 
 /** `{ calendar_id, event_id }` for an `@removed` entry with a usable id, else null (the caller counts it). */
 export function removalOf(item: unknown): { calendar_id: string; event_id: string } | null {
@@ -76,30 +76,42 @@ function text(raw: string | null | undefined, max: number): string | null {
   return t === "" ? null : t;
 }
 
-const RESPONSES: Record<string, Attendee["response"]> = { accepted: "accepted", declined: "declined", tentativelyAccepted: "tentative", notResponded: "needs_action", none: "needs_action" };
+const RESPONSES = new Map<string, Attendee["response"]>([["accepted", "accepted"], ["declined", "declined"], ["tentativelyAccepted", "tentative"], ["notResponded", "needs_action"], ["none", "needs_action"]]);
+/** One attendee entry, parsed on its own: a malformed one costs only itself. */
+const AttendeeEntrySchema = z.object({ emailAddress, status: z.object({ response: z.string().max(40).nullish() }).nullish() });
+/** Entries looked at per event (a longer list is sliced, never a reason to skip the event). */
+const MAX_ATTENDEE_ENTRIES = 5000;
 
-function attendeesOf(list: z.infer<typeof GraphEventSchema>["attendees"]): Attendee[] {
+function attendeesOf(list: unknown[] | null | undefined): { attendees: Attendee[]; truncated: boolean } {
   const out: Attendee[] = [];
   let bytes = 0;
-  for (const a of list ?? []) {
+  let truncated = (list?.length ?? 0) > MAX_ATTENDEE_ENTRIES;
+  for (const raw of (list ?? []).slice(0, MAX_ATTENDEE_ENTRIES)) {
+    const parsed = AttendeeEntrySchema.safeParse(raw);
+    if (!parsed.success) continue;
+    const a = parsed.data;
     const address = (a.emailAddress?.address ?? "").trim().toLowerCase();
     // Only the bad ADDRESS is dropped (as for mail); a hostile one never costs the rest of the event.
     if (address.length < 3 || address.length > 320 || !isCleanText(address) || !isMailAddress(address)) continue;
     const name = text(a.emailAddress?.name, 200);
-    const response = a.status?.response ? RESPONSES[a.status.response] : undefined;
+    const response = a.status?.response && RESPONSES.has(a.status.response) ? RESPONSES.get(a.status.response) : undefined;
     const rec: Attendee = { email: address, ...(name !== null && name.toLowerCase() !== address ? { name } : {}), ...(response ? { response } : {}) };
     bytes += JSON.stringify(rec).length + 1;
-    if (bytes > MAX_ATTENDEE_BYTES || out.length >= MAX_ATTENDEES) break;
+    if (bytes > MAX_ATTENDEE_BYTES || out.length >= MAX_ATTENDEES) {
+      truncated = true;
+      break;
+    }
     out.push(rec);
   }
-  return out;
+  return { attendees: out, truncated };
 }
 
 /** An https link of plain characters, at most 2048, with no credentials; else null. */
 function httpsLink(raw: string | null | undefined): string | null {
-  if (typeof raw !== "string" || raw.length === 0 || raw.length > 2048 || !/^https:\/\/[\x21-\x7e]+$/.test(raw) || !URL.canParse(raw)) return null;
+  if (typeof raw !== "string" || raw.length === 0 || raw.length > 2048 || !/^https:\/\/[\x21-\x7e]+$/.test(raw) || raw.includes("\\") || /%5c/i.test(raw) || !URL.canParse(raw)) return null;
   const u = new URL(raw);
-  return u.protocol === "https:" && u.username === "" && u.password === "" ? raw : null;
+  // The normalised form is stored, so what the row links to is what was checked (as `safeWebLink`).
+  return u.protocol === "https:" && u.username === "" && u.password === "" && u.href.length <= 2048 ? u.href : null;
 }
 
 /** A `dateTimeTimeZone` of the UTC preference as epoch ms; `"not_utc"` when the answer names another zone; null when unusable. */
@@ -186,6 +198,7 @@ export function mapEvent(raw: unknown, ctx: CalMapContext = {}): CalOutcome {
     }
   }
 
+  const attendeeList = attendeesOf(e.attendees);
   const organizerAddress = (e.organizer?.emailAddress?.address ?? "").trim().toLowerCase();
   const organizerOk = organizerAddress.length >= 3 && organizerAddress.length <= 320 && isCleanText(organizerAddress) && isMailAddress(organizerAddress);
   const base = {
@@ -203,7 +216,7 @@ export function mapEvent(raw: unknown, ctx: CalMapContext = {}): CalOutcome {
     start_date: startDate,
     end_date: endDate,
     timezone: zone,
-    attendees: attendeesOf(e.attendees),
+    attendees: attendeeList.attendees,
     status: "confirmed" as const,
     recurring_event_id: recurring,
     original_start_at: originalStart,
@@ -216,7 +229,7 @@ export function mapEvent(raw: unknown, ctx: CalMapContext = {}): CalOutcome {
   let record: Record<string, unknown> = base;
   for (let attempt = 0; attempt < 12; attempt++) {
     const r = EventMetaSchema.safeParse(record);
-    if (r.success) return { kind: "event", meta: r.data };
+    if (r.success) return { kind: "event", meta: r.data, ...(attendeeList.truncated ? { attendeesTruncated: true } : {}) };
     const keys = [...new Set(r.error.issues.map((i) => String(i.path[0] ?? "")))];
     if (keys.some((k) => !(k in CLEARABLE) || JSON.stringify(record[k]) === JSON.stringify(CLEARABLE[k]))) return { kind: "skip", reason: allDay ? "invalid_all_day" : "invalid_event" };
     record = { ...record, ...Object.fromEntries(keys.map((k) => [k, CLEARABLE[k]])) };

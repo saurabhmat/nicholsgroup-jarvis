@@ -48,7 +48,15 @@ export type CalState = { v: 1; w: CalWindow; k: "n" | "d"; l: string };
 export const cursorPrefix = (connectionId: string): string => `m1.${connectionId}.c:`;
 
 const DAY_ISO = /^\d{4}-\d\d-\d\dT00:00:00\.000Z$/;
-const isWindow = (w: CalWindow): boolean => DAY_ISO.test(w.s) && DAY_ISO.test(w.e) && Number.isFinite(Date.parse(w.s)) && Number.isFinite(Date.parse(w.e)) && Date.parse(w.e) > Date.parse(w.s);
+const canonical = (s: string): boolean => DAY_ISO.test(s) && Number.isFinite(Date.parse(s)) && new Date(Date.parse(s)).toISOString() === s;
+/** The longest window we ever create: 180 days back, 730 ahead (the `forward_days` maximum), and today. */
+const MAX_WINDOW_DAYS = MAX_BACK_DAYS + 730 + 1;
+const isWindow = (w: CalWindow): boolean => {
+  if (!canonical(w.s) || !canonical(w.e)) return false;
+  const s = Date.parse(w.s);
+  const e = Date.parse(w.e);
+  return e > s && e - s <= MAX_WINDOW_DAYS * DAY_MS;
+};
 
 export const epochDay = (ms: number): number => Math.floor(ms / DAY_MS);
 
@@ -112,7 +120,7 @@ const StateSchema = z.strictObject({
  * window; null otherwise (the caller answers `fullResyncRequired`). Never throws. A mail cursor (`m1.<id>.m:`), a Google cursor (`g1.`), another
  * connection's cursor and an oversized value all fail the prefix or the size check.
  */
-export function parseCalCursor(value: string, connectionId: string): CalState | null {
+export function parseCalCursor(value: string, connectionId: string, nowMs: number = Date.now()): CalState | null {
   const prefix = cursorPrefix(connectionId);
   if (value.length > MAX_CURSOR_CHARS || !value.startsWith(prefix)) return null;
   const encoded = value.slice(prefix.length);
@@ -124,7 +132,7 @@ export function parseCalCursor(value: string, connectionId: string): CalState | 
     return null;
   }
   const parsed = StateSchema.safeParse(json);
-  if (!parsed.success || !isWindow(parsed.data.w) || validateCalendarLink(parsed.data.l, parsed.data.w) === null) return null;
+  if (!parsed.success || !isWindow(parsed.data.w) || Date.parse(parsed.data.w.e) > nowMs + 731 * DAY_MS || validateCalendarLink(parsed.data.l, parsed.data.w) === null) return null;
   return parsed.data;
 }
 

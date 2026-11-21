@@ -193,3 +193,17 @@ describe("link validation: exact origin and path, one token, our own window para
     }
   });
 });
+
+describe("review fixes (T-067): the window in a stored cursor is bounded and canonical", () => {
+  const enc = (w: { s: string; e: string }) => `${cursorPrefix(CONN)}${Buffer.from(JSON.stringify({ ...state(), w, l: delta() }), "utf8").toString("base64url")}`;
+  it("years 0001 to 9999, a window longer than 911 days, an end far past now, and a non-canonical string are malformed", () => {
+    expect(parseCalCursor(enc({ s: "0001-01-01T00:00:00.000Z", e: "9999-12-31T00:00:00.000Z" }), CONN, NOW)).toBeNull();
+    expect(parseCalCursor(enc({ s: "2020-01-01T00:00:00.000Z", e: "2026-11-30T00:00:00.000Z" }), CONN, NOW)).toBeNull(); // too long
+    expect(parseCalCursor(enc({ s: "2029-01-01T00:00:00.000Z", e: "2029-02-01T00:00:00.000Z" }), CONN, NOW)).toBeNull(); // end beyond two years ahead
+    expect(parseCalCursor(enc({ s: "2026-02-30T00:00:00.000Z", e: "2026-11-30T00:00:00.000Z" }), CONN, NOW)).toBeNull(); // rolls over: not canonical
+  });
+  it("a window we create is accepted, including the longest", () => {
+    expect(parseCalCursor(enc(newWindow(NOW, 180, 730)), CONN, NOW)).not.toBeNull();
+    expect(parseCalCursor(enc(W), CONN, NOW)).not.toBeNull();
+  });
+});
