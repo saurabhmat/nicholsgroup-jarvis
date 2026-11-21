@@ -22,6 +22,7 @@ import { createCalendarIndexStore } from "../comms/cal-store";
 import { createMailIndexStore } from "../comms/mail-store";
 import { createApiErrorStore } from "../error-log/store";
 import { createComposioConnectionStore } from "../composio/store";
+import { createMicrosoftIdentityReader } from "../microsoft/identity";
 
 const vault = createTokenVault(getLaneJobClient);
 
@@ -70,6 +71,9 @@ export const syncCursorStore = createSyncCursorStore(getLaneJobClient);
 
 /** Records a connection as reconnect_required after invalid_grant, with the lane's job client (T-195). */
 export const reconnectStore = createReconnectStore(getLaneJobClient);
+
+/** `tenant_id` and `cloud` of a Microsoft connection row, read by the Microsoft guard on every call (T-256). Read-only. */
+export const microsoftIdentityReader = createMicrosoftIdentityReader(getLaneJobClient);
 
 /** Writes the QuickBooks edition flags onto core.connections with the lane's job client (T-051). */
 export const qboFeatureStore = createQboFeatureStore(getLaneJobClient);

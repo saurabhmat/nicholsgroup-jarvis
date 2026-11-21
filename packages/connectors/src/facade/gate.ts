@@ -23,12 +23,19 @@ export interface ProviderGate {
   assertEnabled(laneId: LaneId, provider: string): Promise<void>;
 }
 
+/**
+ * The one decision, from settings already read (so a caller that needs more of the same read, like the Microsoft guard's tenant
+ * check, decides from that read and never from a second one).
+ */
+export function providerEnabledIn(settings: { providers: readonly string[]; microsoft: unknown }, provider: CommsProviderId): boolean {
+  if (!settings.providers.includes(provider)) return false;
+  return provider === "microsoft" ? settings.microsoft !== null && settings.microsoft !== undefined : true;
+}
+
 export function createProviderGate(deps: { laneConfig: Pick<LaneConfigReader, "mailProviderSettings"> }): ProviderGate {
   async function enabled(laneId: LaneId, provider: string): Promise<boolean> {
     if (!isCommsProvider(provider)) return true;
-    const settings = await deps.laneConfig.mailProviderSettings(laneId);
-    if (!settings.providers.includes(provider)) return false;
-    return provider === "microsoft" ? settings.microsoft !== null : true;
+    return providerEnabledIn(await deps.laneConfig.mailProviderSettings(laneId), provider);
   }
   return {
     enabled,
