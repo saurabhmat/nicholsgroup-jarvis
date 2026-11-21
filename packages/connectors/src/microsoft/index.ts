@@ -6,17 +6,23 @@ import { requireConnectorEnv } from "@nichols/core/env/server";
 import { attentionEventId, connAttentionNeeded, sendLaneEvent } from "@nichols/core/inngest";
 import { createApiErrorSink } from "../error-log/sink";
 import { createReconnectRecorder } from "../quickbooks/reconnect";
-import { apiErrorStore, connectionLoader, getToken, laneConfigReader, microsoftIdentityReader, reconnectStore, rotateToken } from "../vault/index";
+import { apiErrorStore, connectionLoader, getToken, laneConfigReader, microsoftIdentityReader, microsoftIdentityWriter, reconnectStore, rotateToken, writePolicyReader } from "../vault/index";
 import { SecretValue } from "../vault/secret";
 import { createGraphApi } from "./api";
 import { classifyGraphFailure } from "./errors";
 import { createMicrosoftGuard } from "./guard";
 import { createMicrosoftHealth, createMicrosoftHealthSkip } from "./health";
+import { createMicrosoftOAuthProvider, type MicrosoftClientConfig } from "./provider";
 import { createMicrosoftTokenManager } from "./token-manager";
 
 function client() {
   const env = requireConnectorEnv("graph");
   return { clientId: env.GRAPH_CLIENT_ID, clientSecret: new SecretValue(env.GRAPH_CLIENT_SECRET) };
+}
+
+function connectClient(): MicrosoftClientConfig {
+  const env = requireConnectorEnv("graph");
+  return { clientId: env.GRAPH_CLIENT_ID, clientSecret: new SecretValue(env.GRAPH_CLIENT_SECRET), redirectUri: env.GRAPH_REDIRECT_URI };
 }
 
 const guard = createMicrosoftGuard({
@@ -42,3 +48,12 @@ export const graphApi = createGraphApi({ guard, tokens, errors });
 export const microsoftHealth = createMicrosoftHealth({ api: graphApi });
 /** Tells the daily health job to skip a connection whose provider is switched off for the lane (registered in health/index.ts). */
 export const microsoftHealthSkip = createMicrosoftHealthSkip({ laneConfig: laneConfigReader });
+
+/** The connect flow's Microsoft provider (T-066), registered in oauth/registry.ts. Same email-write switch as Google's compose scope (T-232). */
+export const microsoftOAuthProvider = createMicrosoftOAuthProvider({
+  client: connectClient,
+  laneConfig: laneConfigReader,
+  identity: microsoftIdentityReader,
+  identityWriter: microsoftIdentityWriter,
+  writesAllowed: (laneId) => writePolicyReader.emailWritesAllowed(laneId),
+});

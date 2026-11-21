@@ -110,3 +110,29 @@ describe("connectResultFor with an error code", () => {
     expect(await connectResultFor(denied, "PKG", { error: "google_env" })).toBeNull();
   });
 });
+
+describe("Microsoft results (T-066)", () => {
+  it("wrong_tenant and admin_consent_required have fixed texts naming Microsoft; the remove-access notice follows wrong_tenant only when a grant existed", () => {
+    const plain = connectResultMessage({ connect: "wrong_tenant", provider: "microsoft" });
+    expect(plain).toMatchObject({ tone: "alert", title: "Microsoft organisation not accepted" });
+    expect(plain?.description).not.toMatch(/app permissions/);
+    const notice = connectResultMessage({ connect: "wrong_tenant", provider: "microsoft", notice: "remove_app_access" });
+    expect(notice?.description).toMatch(/Microsoft account's app permissions page/);
+    const consent = connectResultMessage({ connect: "admin_consent_required", provider: "microsoft" });
+    expect(consent).toMatchObject({ tone: "alert", title: "Microsoft needs administrator approval" });
+    expect(connectResultMessage({ connect: "admin_consent_required", provider: "microsoft", notice: "remove_app_access" })).toEqual(consent); // nothing was granted
+  });
+  it("account_refused and wrong_account name Microsoft and show the Microsoft remove-access text with the notice", () => {
+    for (const connect of ["account_refused", "wrong_account", "unavailable"]) {
+      const m = connectResultMessage({ connect, provider: "microsoft", notice: "remove_app_access" });
+      expect(m?.description, connect).toMatch(/Microsoft account's app permissions page/);
+      expect(m?.description, connect).not.toMatch(/Google/);
+    }
+    expect(connectResultMessage({ connect: "ok", provider: "microsoft" })?.title).toBe("Microsoft connected");
+  });
+  it("renders nothing from the query string: crafted provider and text are ignored", () => {
+    const m = connectResultMessage({ connect: "wrong_tenant", provider: "microsoft", notice: "remove_app_access", text: "canary-ms-88", message: "canary-ms-88", tenant: "canary-ms-88" });
+    expect(JSON.stringify(m)).not.toContain("canary-ms-88");
+    expect(connectResultMessage({ connect: "wrong_tenant", provider: "<b>x</b>" })?.title).toBe("The provider organisation not accepted");
+  });
+});

@@ -19,7 +19,7 @@ import type { Provider } from "../contract/schemas";
 import { createHttpClient, basicCredentials, type HttpClient } from "../http/client";
 import { connectorLog, type ConnectorLogger } from "../log/index";
 import { SecretValue } from "../vault/secret";
-import { codeChallenge, connectionOfState, hashState, laneOfState, newCodeVerifier, newState } from "./pkce";
+import { codeChallenge, connectionOfState, hashState, laneOfState, newCodeVerifier, newState, nonceOf } from "./pkce";
 import type { StateStore } from "./state";
 
 /** Who may connect or reconnect an account (T-050: owner or admin_technical of the lane). QuickBooks and every provider but the mail ones. */
@@ -70,6 +70,26 @@ export interface OAuthProvider {
   requestIdHeader?: string;
   /** Extra authorization parameters (e.g. Google `access_type=offline`, `prompt=consent`). */
   authorizationParams?: Readonly<Record<string, string>>;
+  /** Whether a reconnect sends the stored address as `login_hint`. Default: true for Google only (T-066: Microsoft sets it). */
+  loginHint?: boolean;
+  /** Names of `authorizationParams` that are left out when a `login_hint` is sent (Microsoft: `prompt=select_account` cannot be combined with `login_hint`). */
+  omitOnLoginHint?: readonly string[];
+  /**
+   * OpenID `nonce` (T-066): the authorize request carries a nonce derived from the PKCE verifier (so it exists only on the server and
+   * in the stored state), and `identify` receives the expected value to check the id_token against. No new storage.
+   */
+  nonce?: boolean;
+  /** The provider checks the granted scopes itself in `identify` (Microsoft returns short or fully qualified names); the generic "nothing we did not ask for" check is skipped. */
+  scopeCheckedByProvider?: boolean;
+  /** HTTP client for the provider's token endpoint with its own host allow-list (Microsoft). Default: the plain client. */
+  tokenHttp?(laneId: LaneId, baseUrl: string): HttpClient;
+  /**
+   * The result for a callback that came back with `error=` (the user cancelled, or the provider refused): `null` = `denied`. Pure and
+   * fixed-result: nothing from the query is copied into the result (T-066: Microsoft's consent errors become `admin_consent_required`).
+   */
+  callbackErrorReason?(query: URLSearchParams): ConnectFailure | null;
+  /** The token set as it is stored in the Vault. Default: everything the token endpoint returned (Microsoft drops the id_token: it is not needed after the connect). */
+  storedTokens?(tokens: TokenResponse): TokenResponse;
   /**
    * Optional check of the callback before the code is exchanged (e.g. QuickBooks: the realm must be the lane's). Throw a
    * ConnectorError to refuse; no token is requested then. `identify` still runs after the exchange.
@@ -84,11 +104,16 @@ export interface OAuthProvider {
    * The connected account and the expiry of the credential whose loss forces a reconnect. Throw a ConnectorError to
    * refuse the account (e.g. a QuickBooks realm that is not the lane's). May call the provider with `http`.
    */
-  identify(input: { laneId: LaneId; tokens: TokenResponse; callback: URLSearchParams; http: HttpClient }): Promise<{
+  identify(input: { laneId: LaneId; tokens: TokenResponse; callback: URLSearchParams; http: HttpClient; nonce?: string }): Promise<{
     externalAccountId: string;
     expiresAt: Date | null;
     /** Boolean connection features to record on the connection row (e.g. Google `gmail_compose`); merged into the stored ones. */
     features?: Record<string, boolean>;
+    /**
+     * Runs after the account, its owner and (for a reconnect) its row are settled and BEFORE the token is stored (Microsoft records the
+     * tenant once, T-254). Throw a ConnectorError or ConnectRefusal to refuse: nothing is stored then.
+     */
+    beforeStore?(input: { connection: LaneBoundConnection; reconnect: boolean }): Promise<void>;
   }>;
 }
 
@@ -122,7 +147,17 @@ export type ConnectFailure =
   | "exchange_failed"
   | "account_refused"
   | "wrong_account"
+  | "wrong_tenant"
+  | "admin_consent_required"
   | "unavailable";
+
+/** A provider's refusal with its own coarse result (T-066: `wrong_tenant`, `wrong_account`). The message is fixed; nothing from a response is put in it. */
+export class ConnectRefusal extends Error {
+  override readonly name = "ConnectRefusal";
+  constructor(readonly reason: "wrong_tenant" | "wrong_account" | "account_refused") {
+    super("connect refused");
+  }
+}
 
 export type CallbackResult =
   | { ok: true; provider: Provider; laneId: LaneId; connectionId: string }
@@ -145,6 +180,7 @@ export const GRANT_NOT_STORED_MESSAGE =
 
 /** The HTTP client for a provider's token endpoint: OAuth error codes (`error`) and the provider's request id are captured. */
 export function defaultOAuthHttp(p: OAuthProvider, laneId: LaneId, baseUrl: string, logger?: ConnectorLogger): HttpClient {
+  if (p.tokenHttp) return p.tokenHttp(laneId, baseUrl);
   return createHttpClient({
     provider: p.provider,
     laneId,
@@ -198,10 +234,13 @@ export function createOAuthFlow(deps: OAuthFlowDeps) {
         action: bound ? "connection.reconnect_started" : "connection.connect_started",
         target: bound ? `connection:${bound.id}` : `provider:${p.provider}`,
       });
+      // The stored address of a reconnect is only a hint to the provider's account chooser; the callback still checks the account.
+      const hint = bound && (p.loginHint ?? p.provider === "google") && /^[^\s@]{1,64}@[^\s@]{1,255}$/.test(bound.externalAccountId) ? bound.externalAccountId : null;
+      const base = Object.fromEntries(Object.entries(p.authorizationParams ?? {}).filter(([k]) => hint === null || !(p.omitOnLoginHint ?? []).includes(k)));
       const params = {
-        ...p.authorizationParams,
-        // The stored address of a reconnect is only a hint to Google's account chooser; the callback still checks the account.
-        ...(bound && p.provider === "google" && /^[^\s@]{1,64}@[^\s@]{1,255}$/.test(bound.externalAccountId) ? { login_hint: bound.externalAccountId } : {}),
+        ...base,
+        ...(hint !== null ? { login_hint: hint } : {}),
+        ...(p.nonce ? { nonce: nonceOf(verifier) } : {}),
         response_type: "code",
         client_id: clientId,
         redirect_uri: redirectUri,
@@ -237,8 +276,9 @@ export function createOAuthFlow(deps: OAuthFlowDeps) {
       const entry = { laneId, actor: { kind: "user" as const, userId }, action: "connection.connect", target: `provider:${p.provider}` };
       // The user cancelled or the provider refused at its consent screen: nothing to exchange.
       if (query.get("error") !== null || !query.get("code")) {
-        await deps.audit.log({ ...entry, action: "connection.connect.failed", metadata: { reason: "denied" } }).catch(() => undefined);
-        return { ok: false, reason: "denied", provider: p.provider, laneId };
+        const reason: ConnectFailure = (query.get("error") !== null ? p.callbackErrorReason?.(query) : null) ?? "denied";
+        await deps.audit.log({ ...entry, action: "connection.connect.failed", metadata: { reason } }).catch(() => undefined);
+        return { ok: false, reason, provider: p.provider, laneId };
       }
       const code = query.get("code") as string;
       let exchanged = false; // a grant exists at the provider (see GRANT_NOT_STORED_MESSAGE)
@@ -258,9 +298,9 @@ export function createOAuthFlow(deps: OAuthFlowDeps) {
           // dropped (never stored, never logged) and the owner is told to remove the app's access (D-24: no revoke here).
           exchanged = true;
           const http = httpFor(p, laneId, new URL((await p.endpoints(laneId)).token).origin);
-          let identity: { externalAccountId: string; expiresAt: Date | null; features?: Record<string, boolean> };
+          let identity: Awaited<ReturnType<OAuthProvider["identify"]>>;
           try {
-            identity = await p.identify({ laneId, tokens, callback: query, http });
+            identity = await p.identify({ laneId, tokens, callback: query, http, ...(p.nonce ? { nonce: nonceOf(stored.codeVerifier) } : {}) });
           } catch (e) {
             // An outage while checking the account is not a refusal of the account.
             if (isConnectorError(e) && OUTAGE_KINDS.has(e.info.kind)) throw e;
@@ -293,8 +333,16 @@ export function createOAuthFlow(deps: OAuthFlowDeps) {
           }
           // Defence in depth (T-238 review): a reconnect stores tokens only on the row it was started for, never on another row.
           if (boundId !== null && connection.id !== boundId) throw new WrongAccount();
+          if (identity.beforeStore) {
+            try {
+              await identity.beforeStore({ connection, reconnect: boundId !== null });
+            } catch (e) {
+              if (isConnectorError(e) && OUTAGE_KINDS.has(e.info.kind)) throw e;
+              throw new RefusedAccount(e);
+            }
+          }
           await refuseInUse(() =>
-            deps.storeToken(laneId, connection, new SecretValue(JSON.stringify({ ...tokens, obtained_at: new Date().toISOString() })), identity.expiresAt, userId),
+            deps.storeToken(laneId, connection, new SecretValue(JSON.stringify({ ...(p.storedTokens ? p.storedTokens(tokens) : tokens), obtained_at: new Date().toISOString() })), identity.expiresAt, userId),
           );
           if (identity.features) {
             if (!deps.connections.setFeatures) throw new TypeError("connections.setFeatures is required for a provider that reports features");
@@ -304,7 +352,16 @@ export function createOAuthFlow(deps: OAuthFlowDeps) {
         });
         return { ok: true, provider: p.provider, laneId, connectionId: conn.id };
       } catch (e) {
-        const reason: ConnectFailure = e instanceof WrongAccount ? "wrong_account" : e instanceof RefusedAccount ? "account_refused" : e instanceof ExchangeFailed ? "exchange_failed" : "unavailable";
+        const reason: ConnectFailure =
+          e instanceof WrongAccount
+            ? "wrong_account"
+            : e instanceof RefusedAccount
+              ? e.cause instanceof ConnectRefusal
+                ? e.cause.reason
+                : "account_refused"
+              : e instanceof ExchangeFailed
+                ? "exchange_failed"
+                : "unavailable";
         const cause = e instanceof RefusedAccount || e instanceof ExchangeFailed ? e.cause : e;
         (deps.logger ?? connectorLog).child({ laneId, provider: p.provider }).warn("connector.oauth_callback_failed", {
           reason,
@@ -375,7 +432,7 @@ export async function exchangeAuthorizationCode(
   // Register every credential the response carries before anything can log it.
   new SecretValue(JSON.stringify(parsed.data));
   // A token broader than the scopes we asked for is refused (e.g. a provider that merges earlier grants).
-  if (parsed.data.scope !== undefined) {
+  if (parsed.data.scope !== undefined && !p.scopeCheckedByProvider) {
     const allowed = new Set([...(p.scopesFor ? await p.scopesFor(laneId) : p.scopes), ...OIDC_SCOPES]);
     if (parsed.data.scope.split(/[\s,]+/).some((g) => g !== "" && !allowed.has(g))) {
       throw new ConnectorError({ kind: "provider_error", message: "Token carries scopes that were not requested" });

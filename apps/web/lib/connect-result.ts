@@ -8,12 +8,13 @@ import { MAIL_CONNECT_ROLES } from "@nichols/connectors/oauth";
 
 export type ConnectResultMessage = { tone: "success" | "alert"; title: string; description: string };
 
-const PROVIDERS: Record<string, string | undefined> = { google: "Google", quickbooks: "QuickBooks", composio: "Composio" };
+const PROVIDERS: Record<string, string | undefined> = { google: "Google", quickbooks: "QuickBooks", composio: "Composio", microsoft: "Microsoft" };
 const TOOLKITS: Record<string, string | undefined> = { gmail: "Gmail", googlecalendar: "Google Calendar" };
 
 const REMOVE_ACCESS: Record<string, string> = {
   Google: "Google still lists the portal as having access: remove it at Google Account → Security → Third-party connections, then try again.",
   Composio: "The account may still exist in the Composio project: remove it in the Composio dashboard (Connected accounts), and, if you want, the app's access in your Google Account → Security → Third-party connections, then try again.",
+  Microsoft: "Microsoft may still list the portal as having access: remove it in your Microsoft account's app permissions page (My Account → Apps and services, or ask your administrator), then try again.",
   QuickBooks: "QuickBooks still lists the portal as having access: remove it under the company's connected apps in QuickBooks, then try again.",
 };
 
@@ -49,7 +50,7 @@ export function connectResultMessage(params: SearchParams): ConnectResultMessage
   // A Composio connect is named by its toolkit ("Gmail via Composio"); the notice text still keys on "Composio".
   const name = baseName === "Composio" && toolkit ? `${toolkit} via Composio` : baseName;
   // The server sets the notice only when a grant was obtained but not stored (flow.ts: account_refused or unavailable).
-  const removeAccess = one(params.notice) === "remove_app_access" && (code === "account_refused" || code === "wrong_account" || code === "unavailable") ? ` ${REMOVE_ACCESS[baseName] ?? "Remove the portal's access at the provider, then try again."}` : "";
+  const removeAccess = one(params.notice) === "remove_app_access" && (code === "account_refused" || code === "wrong_account" || code === "wrong_tenant" || code === "unavailable") ? ` ${REMOVE_ACCESS[baseName] ?? "Remove the portal's access at the provider, then try again."}` : "";
   switch (code) {
     case "ok":
       if (baseName === "Composio") return { tone: "success", title: `${name} connected`, description: "The account was checked and saved. If it replaced an earlier account, the earlier one stays in Composio until it is removed by hand. Mail and calendar keep syncing through the Google connection until this company is switched to Composio." };
@@ -69,7 +70,19 @@ export function connectResultMessage(params: SearchParams): ConnectResultMessage
       return {
         tone: "alert",
         title: `${name} account does not match`,
-        description: `You chose a different ${name} account than the one being reconnected. Nothing was saved and the connection was not changed. Reconnect again with the same account, or use "Connect another Google account" to add a new one.${removeAccess}`,
+        description: `You chose a different ${name} account than the one being reconnected. Nothing was saved and the connection was not changed. Reconnect again with the same account${name === "Google" ? ', or use "Connect another Google account" to add a new one' : ""}.${removeAccess}`,
+      };
+    case "wrong_tenant":
+      return {
+        tone: "alert",
+        title: `${name} organisation not accepted`,
+        description: `The ${name} account you chose belongs to an organisation that is not set up for this company. Nothing was saved. Sign in with your work account for this company, or ask your administrator.${removeAccess}`,
+      };
+    case "admin_consent_required":
+      return {
+        tone: "alert",
+        title: `${name} needs administrator approval`,
+        description: `Your organisation requires an administrator to approve this app before you can connect it. Nothing was saved. Ask your ${name} administrator to approve it, then try again.`,
       };
     case "denied":
       return { tone: "alert", title: "Connection cancelled", description: `Access was not granted at ${name}. Nothing was saved.` };

@@ -66,3 +66,31 @@ export function graphBucket(connectionId: string, kind: "read" | "write") {
 
 const TENANT_ID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
 export const isTenantId = (v: unknown): v is string => typeof v === "string" && TENANT_ID.test(v);
+
+/** The sign-in authority of a lane (spec §5.3): its one tenant id, or `organizations` (work and school accounts only). NEVER `common` or `consumers`. */
+export function authorityFor(tenantIds: readonly string[]): string {
+  const only = tenantIds.length === 1 ? String(tenantIds[0]).toLowerCase() : "organizations";
+  if (only !== "organizations" && !isTenantId(only)) throw new Error("invalid tenant id");
+  return only;
+}
+
+/** The authorization and token endpoints of the commercial cloud for an authority (a tenant id or `organizations`). */
+export function loginEndpoints(cloud: MicrosoftCloud, authority: string): { authorization: string; token: string } {
+  if (authority !== "organizations" && !isTenantId(authority)) throw new Error("invalid authority");
+  const origin = loginOriginFor(cloud);
+  return { authorization: `${origin}/${authority}/oauth2/v2.0/authorize`, token: `${origin}/${authority}/oauth2/v2.0/token` };
+}
+
+/** The v2.0 issuer of an id_token for a tenant of a cloud (`iss` of the commercial cloud: `https://login.microsoftonline.com/{tid}/v2.0`). */
+export function issuerFor(cloud: MicrosoftCloud, tenantId: string): string {
+  return `${loginOriginFor(cloud)}/${tenantId}/v2.0`;
+}
+
+/** Delegated scopes (V-4: none needs admin consent as a delegated permission; a tenant's own user-consent policy may still block). */
+export const MICROSOFT_READ_SCOPES = ["openid", "offline_access", "User.Read", "Mail.Read", "Calendars.Read"] as const;
+/** Added only when the lane policy allows email writes (same switch as Google's gmail.compose, T-232). */
+export const MICROSOFT_WRITE_SCOPES = ["Mail.ReadWrite", "Mail.Send"] as const;
+/** The prefix of a fully qualified Graph scope in a token response (V-5). */
+export const GRAPH_SCOPE_PREFIX = "https://graph.microsoft.com/";
+/** `tid` of personal Microsoft accounts (quoted in the V-6 check). Never an organisation: refused even if a lane lists it. */
+export const NON_ORGANISATION_TENANTS: ReadonlySet<string> = new Set(["9188040d-6c67-4c5b-b112-36a304b66dad"]);
