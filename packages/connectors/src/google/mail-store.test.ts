@@ -66,6 +66,20 @@ describe("applyPage", () => {
     ]);
   });
 
+  it("passes a removal's folder as {message_id, folder} and a bare id as a string", async () => {
+    const { calls, clientFor } = fake({ data: { removed: 2, written: 0, skipped: 0 } });
+    await createMailIndexStore(clientFor).applyPage("PKG", conn, page({ upserts: [], removals: [{ message_id: "a", folder: "INBOX" }, { message_id: "b" }] }), NONE);
+    expect((calls[0]?.args as { p_removals: unknown }).p_removals).toEqual([{ message_id: "a", folder: "INBOX" }, "b"]);
+  });
+
+  it("refuses a removal with an empty folder or an unknown key before any call", async () => {
+    const { calls, clientFor } = fake({ data: {} });
+    const store = createMailIndexStore(clientFor);
+    await expect(store.applyPage("PKG", conn, page({ removals: [{ message_id: "a", folder: "" }] }), NONE)).rejects.toThrow();
+    await expect(store.applyPage("PKG", conn, page({ removals: [{ message_id: "a", extra: 1 } as never] }), NONE)).rejects.toThrow();
+    expect(calls).toEqual([]);
+  });
+
   it("refuses a record with a body-like extra field before any call (strict metadata)", async () => {
     const { calls, clientFor } = fake({ data: {} });
     const bad = { ...meta("m1"), snippet: "hello" } as unknown as MessageMeta;

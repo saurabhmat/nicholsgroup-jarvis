@@ -202,6 +202,7 @@ export function createGoogleHarness(options: GoogleHarnessOptions) {
   const cursors = new Map<string, string>();
   const indexKey = (laneId: string, connectionId: string, messageId: string) => `${laneId}\u0000${connectionId}\u0000${messageId}`;
   const indexStats = { applies: 0, resets: 0 };
+  const MAIL_FLAG_KEYS = ["is_read", "is_starred", "is_important", "has_attachments", "is_bulk", "is_calendar", "is_auto", "is_generated", "is_auth_pass"] as const;
   const store: MailIndexStore = {
     async getCursor(laneId, conn) {
       assertLaneBound(laneId, conn);
@@ -227,7 +228,7 @@ export function createGoogleHarness(options: GoogleHarnessOptions) {
       let removed = 0;
       for (const r of page.removals) {
         const hit = index.get(indexKey(laneId, conn.id, r.message_id));
-        if (hit && !hit.deleted) {
+        if (hit && !hit.deleted && (r.folder === undefined || r.folder === hit.folder)) {
           hit.deleted = true;
           removed += 1;
         }
@@ -239,7 +240,9 @@ export function createGoogleHarness(options: GoogleHarnessOptions) {
         const hit = index.get(k);
         const newer = !hit || hit.source_updated_at === null || (m.source_updated_at !== null && m.source_updated_at >= hit.source_updated_at);
         if (!newer) continue;
-        index.set(k, { ...m, deleted: opts.revive === true ? false : (hit?.deleted ?? false), connection_id: conn.id, lane_id: laneId });
+        // As the SQL does: a flag the page does not carry keeps the stored value on update and is false on insert.
+        const flags = Object.fromEntries(MAIL_FLAG_KEYS.map((f) => [f, m[f] ?? hit?.[f] ?? false]));
+        index.set(k, { ...m, ...flags, deleted: opts.revive === true ? false : (hit?.deleted ?? false), connection_id: conn.id, lane_id: laneId });
         written += 1;
       }
       cursors.set(`${laneId}\u0000${conn.id}`, page.nextCursor.value);

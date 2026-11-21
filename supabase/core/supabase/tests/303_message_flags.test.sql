@@ -41,14 +41,14 @@ select is(core.comms_mail_apply_page('PKG', '00000000-0000-4000-8000-00000000303
      {"message_id": "f4", "thread_id": "18c2f0a1b2c3d4e4", "source_url": null, "from_address": "person@example.test", "from_name": null, "to_recipients": [], "cc_recipients": [],
       "subject": "Question", "received_at": "2026-11-10T15:00:00.000Z", "is_read": false, "is_starred": false, "is_important": false, "has_attachments": false,
       "folder": "INBOX", "labels": ["INBOX"], "source_updated_at": "2026-11-10T15:00:00.000Z"}]$$::jsonb,
-  null, 'h:1', false, false), '{"removed": 0, "written": 4, "skipped": 0}'::jsonb, 'the apply writes four messages, one without flags in the payload');
+  null, 'g1.00000000-0000-4000-8000-000000003031.h:1', false, false), '{"removed": 0, "written": 4, "skipped": 0}'::jsonb, 'the apply writes four messages, one without flags in the payload');
 select is((select string_agg(message_id || ':' || is_bulk::text || is_calendar::text || is_auto::text || is_generated::text || is_auth_pass::text, ',' order by message_id) from comms.message_index where lane_id = 'PKG'),
           'f1:truefalsefalsefalsetrue,f2:falsetruefalsefalsefalse,f3:falsefalsetruetruefalse,f4:falsefalsefalsefalsefalse', 'the five booleans are stored; absent flags are false');
 select core.comms_mail_apply_page('PKG', '00000000-0000-4000-8000-000000003031', '[]'::jsonb,
   $$[{"message_id": "f4", "thread_id": "18c2f0a1b2c3d4e4", "source_url": null, "from_address": "person@example.test", "from_name": null, "to_recipients": [], "cc_recipients": [],
       "subject": "Question", "received_at": "2026-11-10T15:00:00.000Z", "is_read": false, "is_starred": false, "is_important": false, "has_attachments": false,
       "is_bulk": true, "is_generated": true, "is_auth_pass": true, "folder": "INBOX", "labels": ["INBOX"], "source_updated_at": "2026-11-10T15:00:01.000Z"}]$$::jsonb,
-  'h:1', 'h:2', false, false);
+  'g1.00000000-0000-4000-8000-000000003031.h:1', 'g1.00000000-0000-4000-8000-000000003031.h:2', false, false);
 select is((select is_bulk::text || is_generated::text || is_auth_pass::text from comms.message_index where message_id = 'f4' and lane_id = 'PKG'), 'truetruetrue', 'a re-synced message updates its flags');
 reset role;
 

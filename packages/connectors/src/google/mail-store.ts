@@ -53,7 +53,11 @@ export function createMailIndexStore(clientFor: JobClientFor): MailIndexStore {
       if (page.upserts.length > APPLY_MAX || page.removals.length > APPLY_MAX) throw new ConnectorError({ kind: "invalid_input", message: "A mail sync page is too large" });
       // Re-validate: the store is the last gate before the table (strict objects: no body, snippet or preview field).
       const upserts = page.upserts.map((m) => MessageMetaSchema.parse(m));
-      const removals = page.removals.map((r) => MessageRemovalSchema.parse(r).message_id);
+      // A bare id string without a folder (the form the database always took), {message_id, folder} with one (T-252).
+      const removals = page.removals.map((r) => {
+        const parsed = MessageRemovalSchema.parse(r);
+        return parsed.folder === undefined ? parsed.message_id : { message_id: parsed.message_id, folder: parsed.folder };
+      });
       const chunks = Math.max(1, Math.ceil(upserts.length / APPLY_CHUNK), Math.ceil(removals.length / APPLY_CHUNK));
       const total: ApplyCounts = { removed: 0, written: 0, skipped: 0, conflict: false };
       for (let k = 0; k < chunks; k++) {
