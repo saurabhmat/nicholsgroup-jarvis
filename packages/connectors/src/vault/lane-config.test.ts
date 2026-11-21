@@ -225,12 +225,15 @@ describe("mail providers and microsoftSettings (T-250, T-269)", () => {
     expect(await reader({ mail: { provider: "google" } }).mailProviders("PKG")).toEqual(["google"]);
   });
   it("reads providers, filtered by lane, on every call (a changed config is seen at once)", async () => {
-    const c = client({ data: { config: both } });
+    const stored: { data: unknown } = { data: { config: both } };
+    const c = client(stored);
     const r = createLaneConfigReader(c.clientFor);
     expect(await r.mailProviders("PKG")).toEqual(["google", "microsoft"]);
-    expect(await r.mailProviders("PKG")).toEqual(["google", "microsoft"]);
     expect(await r.isMailProviderEnabled("PKG", "google")).toBe(true);
-    expect(c.calls).toHaveLength(3);
+    stored.data = { config: { mail: { providers: ["microsoft"] }, microsoft: block } }; // Google paused: seen on the next call
+    expect(await r.mailProviders("PKG")).toEqual(["microsoft"]);
+    expect(await r.isMailProviderEnabled("PKG", "google")).toBe(false);
+    expect(c.calls).toHaveLength(4);
     expect(c.calls[0]).toMatchObject({ table: "core.lane_config_current", filters: [["lane_id", "PKG"]] });
   });
   it("isMailProviderEnabled: true for each enabled provider, false for the other; default lane has google only", async () => {
@@ -276,6 +279,17 @@ describe("mail providers and microsoftSettings (T-250, T-269)", () => {
       { mail: { provider: "google", providers: ["google"] } }, // both keys
       { mail: { provider: "microsoft", providers: ["microsoft"] }, microsoft: block },
       { mail: "x" },
+      { mail: null },
+      { mail: [] },
+      { mail: { provider: null } },
+      { mail: { provider: "google", providers: ["microsoft"] }, microsoft: block }, // both keys, disagreeing
+      { mail: { provider: "microsoft", providers: ["google"] }, microsoft: block },
+      { mail: { Providers: ["microsoft"] }, microsoft: block }, // mistyped key: refused, not read as the default
+      { mail: { "providers ": ["microsoft"] }, microsoft: block },
+      { mail: { providers: ["google"], unknown_key: 1 } },
+      { microsoft: null },
+      { mail_transport: null },
+      { ...both, microsoft: { tenant_ids: [T1], calendar_ids: null } },
       { mail: { providers: ["microsoft"] } }, // block missing
       { mail: { provider: "microsoft" } }, // block missing
       { mail: { providers: ["microsoft"] }, microsoft: block, mail_transport: "composio" },
@@ -283,6 +297,8 @@ describe("mail providers and microsoftSettings (T-250, T-269)", () => {
       { ...both, microsoft: { tenant_ids: [] } },
       { ...both, microsoft: { tenant_ids: ["AAAAAAAA-BBBB-4CCC-8DDD-EEEEEEEEEEEE"] } },
       { ...both, microsoft: { tenant_ids: [T1, T1] } },
+      { ...both, microsoft: { tenant_ids: ["9188040d-6c67-4c5b-b112-36a304b66dad"] } }, // personal-accounts tenant
+      { ...both, microsoft: { tenant_ids: ["00000000-0000-0000-0000-000000000000"] } }, // nil UUID
       { ...both, microsoft: { tenant_ids: [T1], mail_folders: ["drafts"] } },
       { ...both, microsoft: { tenant_ids: [T1], extra: 1 } },
       { ...both, microsoft: { tenant_ids: [T1], calendar_ids: [] } },

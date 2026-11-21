@@ -401,7 +401,7 @@ describe("mail provider and Microsoft settings (T-250)", () => {
   it("the microsoft block is strict: unknown keys are rejected", () => {
     for (const extra of [{ tenant: T1 }, { client_id: "x" }, { mailboxes: [] }]) expect(() => parseLaneConfig(msConfig({ microsoft: { ...MS, ...extra } }))).toThrow();
   });
-  it("calendar_ids are accepted as ids of the current provider (a Graph-style id)", () => {
+  it("calendar.calendar_ids character rule also accepts a Graph-style id (the list itself is Google-only, T-269)", () => {
     const id = "AAMkAGI2synthetic-calendar-id=";
     expect(parseLaneConfig(msConfig({ calendar: { calendar_ids: [id] } })).calendar?.calendar_ids).toEqual([id]);
   });
@@ -460,7 +460,7 @@ describe("several mail providers per lane (T-269, D-57)", () => {
     }
   });
   it("refuses both keys present, whatever their values", () => {
-    for (const mail of [{ provider: "google", providers: ["google"] }, { provider: "microsoft", providers: ["google", "microsoft"] }]) {
+    for (const mail of [{ provider: "google", providers: ["google"] }, { provider: "microsoft", providers: ["google", "microsoft"] }, { provider: "google", providers: ["microsoft"] }, { provider: "microsoft", providers: ["google"] }]) {
       expect(paths(() => parseLaneConfig(withMail(mail, { microsoft: MS })))).toContain("mail.providers");
     }
   });

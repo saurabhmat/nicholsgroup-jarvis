@@ -207,10 +207,17 @@ export function refineMailProviders(c: { mail?: { providers: (typeof MAIL_PROVID
   }
 }
 
-/** Only the provider-related keys of a config (other keys are ignored), for readers that must not depend on unrelated settings. */
+/**
+ * Only the provider-related keys of a config (other root keys are ignored), for readers that must not depend on unrelated settings.
+ * The `mail` section itself is strict: its other two keys are accepted unvalidated, and any unknown key (a mistyped `Providers`)
+ * is refused, because a typo there would otherwise read as the default `["google"]` and keep Google enabled without an error.
+ */
 export const mailProviderViewSchema = z
   .object({
-    mail: z.object(mailProviderKeys).transform(resolveMailProviders).prefault({}),
+    mail: z
+      .strictObject({ ...mailProviderKeys, allowed_domains: z.unknown().optional(), self_connect_domains: z.unknown().optional() })
+      .transform(resolveMailProviders)
+      .prefault({}),
     mail_transport: z.enum(["native", "composio"]).default("native"),
     microsoft: microsoftSchema.optional(),
   })
