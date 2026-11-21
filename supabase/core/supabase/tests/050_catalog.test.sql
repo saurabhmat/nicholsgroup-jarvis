@@ -78,6 +78,7 @@ insert into security_definer_ok values
   ('core.connection_token_rotate', 'updates the Vault; service_role only, lane-checked (T-032)'),
   ('core.connection_token_revoke', 'deletes from the Vault and disconnects; service_role only, lane-checked (T-032)'),
   ('core.connection_activate_composio', 'activates a composio connection without a token row; service_role only, lane-checked, identity validated, audited (T-219)'),
+  ('core.connection_set_microsoft_identity', 'sets a Microsoft connection''s Entra tenant id and cloud once; service_role only, lane-checked, refuses non-Microsoft rows and a second set (T-254)'),
   ('core.oauth_state_bind', 'service_role only: binds a Composio toolkit + account id to the user''s own pending connect state, once (T-219)'),
   ('core.connections_no_orphan_secret', 'trigger only: reads the private Vault mapping on status changes (T-032)'),
   ('core.oauth_state_create', 'starts a connect; owner/admin_technical of the lane at aal2 only (T-035)'),

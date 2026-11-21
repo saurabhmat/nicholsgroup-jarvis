@@ -8,8 +8,14 @@
 --     (20 and 6 for jobs) are per mailbox owner for email.
 --  3. The briefing daily cap (6) is per owner, and runs_today shows only the caller's runs (decision: the cap is a cost bound per person, so one user cannot starve the other).
 -- Lock first: a briefing the OLD app saves while this runs would otherwise survive (it waits, then is deleted too).
-lock table brief.briefings in share row exclusive mode;
-delete from brief.briefings where prepared_at < pg_catalog.clock_timestamp();
+-- (T-254: wrapped in a DO block so the lock and the delete share one transaction; the Supabase CLI 2.122 runs each top-level statement of a
+-- migration on its own, and a bare LOCK TABLE then fails with 25P01 on `supabase db reset`. Here the lock covers the delete only; the production part holds it for its whole transaction. Local resets have no old app writing.)
+do $lk$
+begin
+  lock table brief.briefings in share row exclusive mode;
+  delete from brief.briefings where prepared_at < pg_catalog.clock_timestamp();
+end
+$lk$;
 do $w$
 declare r record;
 begin
