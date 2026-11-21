@@ -4,7 +4,8 @@
 // (lane checked, compare-and-swap rotate). Every Vault read, every lane-config read and every request to the fake is counted, so a
 // "refused before any call" test can prove that nothing was read and nothing was sent, not only that an error was thrown.
 import { randomUUID } from "node:crypto";
-import { ConnectorError } from "../contract/errors";
+import type { Audit, AuditEntry } from "@nichols/core/audit";
+import { ACCOUNT_IN_USE_MESSAGE, ConnectorError } from "../contract/errors";
 import { assertLaneBound, mintLaneBoundConnection, type LaneBoundConnection } from "../contract/lane-bound";
 import type { Connection, ConnectorErrorInfo } from "../contract/schemas";
 import { createApiErrorSink, type ScrubbedApiError } from "../error-log/index";
@@ -13,11 +14,15 @@ import { createGraphApi } from "../microsoft/api";
 import { classifyGraphFailure } from "../microsoft/errors";
 import { createMicrosoftGuard } from "../microsoft/guard";
 import { createMicrosoftHealth } from "../microsoft/health";
+import { createGraphHttp } from "../microsoft/http";
+import { createMicrosoftOAuthProvider } from "../microsoft/provider";
 import { createMicrosoftTokenManager } from "../microsoft/token-manager";
+import { createOAuthFlow } from "../oauth/flow";
+import type { StateStore } from "../oauth/state";
 import type { MailProvider, MicrosoftSettings } from "../vault/lane-config";
 import { SecretValue } from "../vault/secret";
 import type { TokenVault } from "../vault/tokens";
-import { FAKE_GRAPH_CLIENT_ID, FAKE_GRAPH_CLIENT_SECRET, type FakeMicrosoft } from "./msw/microsoft/handlers";
+import { FAKE_GRAPH_CLIENT_ID, FAKE_GRAPH_CLIENT_SECRET, type FakeGrant, type FakeMicrosoft, type FakeMsAccount } from "./msw/microsoft/handlers";
 
 type Row = { -readonly [K in keyof Connection<"microsoft">]: Connection<"microsoft">[K] };
 
@@ -26,6 +31,9 @@ export const TENANT_A = "11111111-1111-4111-8111-111111111111";
 export const TENANT_B = "22222222-2222-4222-8222-222222222222";
 export const TENANT_C = "33333333-3333-4333-8333-333333333333";
 export const HARNESS_OWNER = "00000000-0000-4000-8000-00000000b256";
+/** The user who connects through the flow by default (T-066). */
+export const CONNECT_USER = "00000000-0000-4000-8000-0000000b0066";
+export const HARNESS_REDIRECT = "http://localhost:3000/api/connect/microsoft/callback";
 
 export type LaneSetup = {
   providers: MailProvider[];
@@ -39,6 +47,13 @@ export type MicrosoftHarnessOptions = {
   fake: FakeMicrosoft;
   lanes: Record<string, LaneSetup>;
   maxConcurrent?: number;
+  /**
+   * Replaces the in-memory Vault twin (T-066: a test can put the REAL `createTokenVault` over an RPC twin of the SQL functions, to prove a
+   * stored Microsoft token is read and rotated through that path). The harness's `secrets` map is the store the twin must use.
+   */
+  vault?: Pick<TokenVault, "getToken" | "rotateToken" | "storeToken">;
+  /** Lanes whose policy allows email writes (`write_actions_allowed` has email_send or email_draft): the connect then asks for the write scopes (T-066). Default: none. */
+  writeLanes?: readonly string[];
   /**
    * What a pause of the shared client (Retry-After waits, backoff) and of the rate limiter does besides advancing the harness's
    * virtual clock (the HTTP client and its limiter run on that clock, so a test never waits in real time). Default: yield once.
@@ -57,7 +72,17 @@ export function createMicrosoftHarness(options: MicrosoftHarnessOptions) {
   const identities = new Map<string, { tenantId: string | null; cloud: string | null }>();
   const secrets = new Map<string, string>();
   const lanes: Record<string, LaneSetup> = { ...options.lanes };
-  const stats = { tokenReads: 0, rotations: 0, settingsReads: 0, identityReads: 0, loads: 0 };
+  const stats = { tokenReads: 0, rotations: 0, settingsReads: 0, identityReads: 0, loads: 0, stores: 0, identityWrites: 0, featureWrites: 0, domainReads: 0 };
+  /** Every write into a twin store (Vault, identity, features, audit): a "nothing stored" test checks this stays as it was. */
+  const writes: { store: string }[] = [];
+  const audits: AuditEntry[] = [];
+  const audit: Audit = {
+    async log(entry) {
+      audits.push(entry);
+      writes.push({ store: "audit" });
+    },
+  };
+  const writeLanes = new Set(options.writeLanes ?? []);
   const apiErrors: ScrubbedApiError[] = [];
   const reconnects: ConnectorErrorInfo[] = [];
 
@@ -67,7 +92,19 @@ export function createMicrosoftHarness(options: MicrosoftHarnessOptions) {
     return row;
   };
 
-  const vault: Pick<TokenVault, "getToken" | "rotateToken"> = {
+  const memoryVault: Pick<TokenVault, "getToken" | "rotateToken" | "storeToken"> = {
+    async storeToken(laneId, conn, secret, expiresAt) {
+      assertLaneBound(laneId, conn);
+      const row = rowOf(laneId, conn);
+      // D-23 (one account, one lane) is per provider and ignores pending rows, as the SQL index does.
+      const holder = [...rows.values()].find((r) => r.id !== row.id && r.provider === row.provider && r.external_account_id.toLowerCase() === row.external_account_id.toLowerCase() && r.status !== "disconnected" && r.status !== "pending" && r.lane_id !== laneId);
+      if (holder) throw new ConnectorError({ kind: "forbidden", message: ACCOUNT_IN_USE_MESSAGE });
+      secrets.set(row.id, secret.reveal());
+      writes.push({ store: "token_store" });
+      row.status = "active";
+      row.token_expires_at = expiresAt ? expiresAt.toISOString() : null;
+      stats.stores += 1;
+    },
     async getToken(laneId, conn) {
       assertLaneBound(laneId, conn);
       stats.tokenReads += 1;
@@ -81,10 +118,13 @@ export function createMicrosoftHarness(options: MicrosoftHarnessOptions) {
       const row = rowOf(laneId, conn);
       if (secrets.get(row.id) !== replaces.reveal()) return false;
       secrets.set(row.id, secret.reveal());
+      writes.push({ store: "token_store" });
       stats.rotations += 1;
       return true;
     },
   };
+
+  const vault: Pick<TokenVault, "getToken" | "rotateToken" | "storeToken"> = options.vault ?? memoryVault;
 
   const laneConfig = {
     async mailProviderSettings(laneId: string) {
@@ -97,6 +137,7 @@ export function createMicrosoftHarness(options: MicrosoftHarnessOptions) {
       return (lanes[laneId]?.mailboxes ?? []).map((m) => m.toLowerCase());
     },
     async mailDomains(laneId: string) {
+      stats.domainReads += 1;
       return [...(lanes[laneId]?.domains ?? [])];
     },
   };
@@ -190,10 +231,122 @@ export function createMicrosoftHarness(options: MicrosoftHarnessOptions) {
     const set = storedSet(connectionId);
     if (set) secrets.set(connectionId, JSON.stringify({ ...set, obtained_at: new Date(Date.now() - 2 * 3600_000).toISOString() }));
   };
+
+  // ---- The connect flow (T-066): the REAL provider and flow over twins of the connection store, the state store and the identity writer.
+  const connectConnections = {
+    async ensureConnection(laneId: string, provider: string, externalAccountId: string, createdBy?: string) {
+      if (provider !== "microsoft") throw new Error("the Microsoft harness connects Microsoft rows only");
+      let row = [...rows.values()].find((r) => r.lane_id === laneId && r.provider === "microsoft" && r.external_account_id === externalAccountId);
+      if (!row) {
+        row = { id: randomUUID(), lane_id: laneId, provider: "microsoft", external_account_id: externalAccountId, status: "pending", features: {}, features_checked_at: null, token_expires_at: null, last_sync_at: null, last_error: null, owner_user_id: createdBy ?? null };
+        rows.set(row.id, row);
+        writes.push({ store: "connection_row" });
+      }
+      return bind(row) as LaneBoundConnection;
+    },
+    async findById(laneId: string, provider: string, id: string) {
+      const row = rows.get(id);
+      if (!row || row.lane_id !== laneId || row.provider !== provider) return null;
+      return { id: row.id, externalAccountId: row.external_account_id, status: row.status, ownerUserId: row.owner_user_id ?? null };
+    },
+    async setFeatures(laneId: string, conn: { id: string }, features: Record<string, boolean>) {
+      const row = rowOf(laneId, conn);
+      row.features = { ...row.features, ...features };
+      stats.featureWrites += 1;
+      writes.push({ store: "features" });
+    },
+  };
+  const identityWriter = {
+    async setOnce(laneId: string, connectionId: string, tenantId: string, cloud: string) {
+      const row = rowOf(laneId, { id: connectionId });
+      const current = identities.get(row.id);
+      if (current?.tenantId) throw new ConnectorError({ kind: "forbidden", message: "The tenant of this connection is already recorded" });
+      identities.set(row.id, { tenantId, cloud });
+      stats.identityWrites += 1;
+      writes.push({ store: "identity" });
+    },
+  };
+  const states = new Map<string, { laneId: string; userId: string; provider: string; codeVerifier: string; redirectUri: string; expires: number }>();
+  const stateStore: StateStore = {
+    async create(c, laneId, prov, stateHash, codeVerifier, redirectUri) {
+      states.set(stateHash, { laneId, userId: (c as unknown as { uid: string }).uid, provider: prov, codeVerifier, redirectUri, expires: Date.now() + 600_000 });
+      writes.push({ store: "state" });
+    },
+    async consume(c, laneId, stateHash) {
+      const st = states.get(stateHash);
+      if (!st || st.laneId !== laneId || st.userId !== (c as unknown as { uid: string }).uid || st.expires <= Date.now()) return null;
+      states.delete(stateHash);
+      return { provider: st.provider, codeVerifier: st.codeVerifier, redirectUri: st.redirectUri };
+    },
+  };
+  const fastOptions = { retryBaseMs: 1, retryMaxMs: 5, maxRetries: 1, sleep, now: clock.now, random: () => 0.5, logger } as const;
+  const oauthProvider = createMicrosoftOAuthProvider({
+    client: () => ({ clientId: FAKE_GRAPH_CLIENT_ID, clientSecret: new SecretValue(FAKE_GRAPH_CLIENT_SECRET), redirectUri: HARNESS_REDIRECT }),
+    laneConfig,
+    identity: { async read(_laneId, id) { stats.identityReads += 1; return identities.get(id) ?? { tenantId: null, cloud: null }; } },
+    identityWriter,
+    writesAllowed: async (laneId) => writeLanes.has(laneId),
+    logger,
+    ...(options.now ? { now: options.now } : {}),
+    tokenHttpFor: (laneId, baseUrl) => createGraphHttp({ baseUrl, laneId, ...fastOptions }, "commercial", "token"),
+    graphHttpFor: (laneId, baseUrl) => createGraphHttp({ baseUrl, laneId, ...fastOptions }, "commercial", "api"),
+  });
+  const flow = createOAuthFlow({
+    providers: [oauthProvider],
+    states: stateStore,
+    connections: connectConnections,
+    storeToken: (laneId, conn, secret, expiresAt, actorUserId) => vault.storeToken(laneId, conn, secret, expiresAt, actorUserId),
+    audit,
+    logger,
+  });
+  const as = (userId: string) => async (laneId: string) => ({ userId, client: { uid: userId, laneId } as never });
+
+  type ConnectOptions = {
+    address: string;
+    tenant?: string;
+    /** The user who connects (default CONNECT_USER). */
+    userId?: string;
+    /** Reconnect this connection. */
+    connectionId?: string;
+    code?: string;
+    scope?: string | null;
+    refresh?: boolean;
+    idToken?: FakeGrant["idToken"];
+    /** The nonce the fake puts in the id_token (default: the one on the authorize request). */
+    nonce?: string;
+    profile?: NonNullable<FakeMsAccount["profile"]>;
+  };
+  /** Start + callback through the real flow against the fake. The code is registered with the fake between the two, with the nonce and PKCE challenge of the authorize request. */
+  async function connectViaCallback(laneId: string, opts: ConnectOptions) {
+    const tenant = opts.tenant ?? TENANT_A;
+    const account = fake.accountFor(tenant, opts.address) ?? fake.addAccount(tenant, opts.address);
+    if (opts.profile) account.profile = opts.profile;
+    const userId = opts.userId ?? CONNECT_USER;
+    const url = await flow.start("microsoft", laneId, as(userId), opts.connectionId === undefined ? {} : { connectionId: opts.connectionId });
+    const q = new URL(url).searchParams;
+    const code = opts.code ?? `synthetic-ms-code-${randomUUID()}`;
+    const challenge = q.get("code_challenge");
+    const nonce = opts.nonce ?? q.get("nonce");
+    fake.grant(code, {
+      account,
+      ...(challenge ? { codeChallenge: challenge } : {}),
+      ...(nonce ? { nonce } : {}),
+      ...(opts.scope !== undefined ? { scope: opts.scope } : {}),
+      ...(opts.refresh !== undefined ? { refresh: opts.refresh } : {}),
+      ...(opts.idToken !== undefined ? { idToken: opts.idToken } : {}),
+    });
+    const state = q.get("state") ?? "";
+    const result = await flow.callback("microsoft", new URLSearchParams({ state, code }), as(userId));
+    return { url, state, code, result };
+  }
+  /** A snapshot of every counter that a refusal must leave unchanged. */
+  const writeCount = () => writes.length;
+
   const everyRequest = () => fake.state.tokenRequests.length + fake.state.graphRequests.length;
 
   return {
     api, guard, tokens, health, newTokenManager, clock, laneConfig, connect, bind, rows, identities, secrets, lanes, stats, logs, apiErrors, reconnects, storedSet, expireStoredAccess, everyRequest,
+    flow, as, states, audits, writes, writeCount, connectViaCallback, writeLanes, oauthProvider,
     /** Changes a lane's configuration (a tenant or the provider removed, a second provider added...). */
     setLane(laneId: string, patch: Partial<LaneSetup>) {
       lanes[laneId] = { ...(lanes[laneId] as LaneSetup), ...patch };

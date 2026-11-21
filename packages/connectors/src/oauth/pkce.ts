@@ -42,3 +42,12 @@ export function laneOfState(state: unknown): string | null {
 export function hashState(state: string): string {
   return createHash("sha256").update(state, "utf8").digest("hex");
 }
+
+/**
+ * The OpenID `nonce` of a connect (T-066): the SHA-256 of the PKCE verifier with a fixed prefix, base64url. The verifier never leaves the
+ * server (only its challenge is sent), so the nonce cannot be computed from anything in the redirect URL; the callback derives it again
+ * from the verifier in the stored state, so nothing new is stored. Different input from `codeChallenge`: one does not give the other.
+ */
+export function nonceOf(verifier: string): string {
+  return createHash("sha256").update(`nonce:${verifier}`, "utf8").digest("base64url");
+}
