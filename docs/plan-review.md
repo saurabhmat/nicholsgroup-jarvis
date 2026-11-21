@@ -1368,3 +1368,12 @@ No BLOCKER, no HIGH. Fixed: the personal-accounts tenant and the nil UUID are re
 - (code L3, L4) The secret-scan and `calendar_ids` tests are regression guards for generic code, not rule tests.
 - (code L5, L6) `MailProvider` is a literal union in connectors beside `MAIL_PROVIDERS` in core; `refineMailProvider` takes a hand-written structural type. Cosmetic.
 - Flaky under load, unrelated to this change, both pass on a rerun: `@nichols/eslint-plugin` `config-web.test.js` (30 s timeout) and `@nichols/connectors` `quickbooks/sync.test.ts` initial load (5 s timeout).
+
+## T-251: review results (security and code review, Nov 21, 2026)
+No BLOCKER, no HIGH. Fixed: an assertion that could never fail was removed from `graph-env.test.ts` (security LOW-3); H-068 (5) reworded, because `.env.example` was changed in the task commit (code MEDIUM). Logged, not changed:
+- (security LOW-1) The redirect check pins the origin, not the path (Google has the same rule; Entra requires an exact match with the registered URI). **T-066** should also require the path `/api/connect/microsoft/callback` when the callback route lands.
+- (security LOW-2) `graph_usgov` has the same local default callback as the commercial app. **T-267 requirement:** the cloud of a callback must come from the server-side OAuth state (or the GCC High app gets its own callback path), never from the query, so a code is never redeemed at the other cloud's token endpoint with the other client secret.
+- (code LOW) Google keeps its own inline copy of the redirect rule beside the new shared `checkRedirect` (left so Google's behaviour is provably unchanged); a later refactor can move Google onto it.
+- (code LOW) No test ties the `turbo.json` env list to the env schema.
+- `.env.example`: the acceptance said "proposed in the PR body (human-owned file)". The names were added in the commit instead, because `env.test.ts` ("every server and connector name exists in .env.example") fails without them; T-063 and T-219 did the same. Saurabh was told (Nov 21) and can ask for it to be reverted.
+- `pnpm test:bundle` not run (refuses while `apps/web/.env.local` exists, by design).

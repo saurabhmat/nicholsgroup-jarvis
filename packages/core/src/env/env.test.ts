@@ -513,7 +513,7 @@ describe("real-data environments (Staging environment, Oct 28, 2026)", () => {
 describe("connector env", () => {
   it("covers every connector family and requires nothing at startup", () => {
     expect([...CONNECTOR_NAMES].sort()).toEqual(
-      ["composio", "ghl", "google", "graph", "intuit", "intuit_webhook", "monday", "notion", "push", "sentry", "stripe"].sort(),
+      ["composio", "ghl", "google", "graph", "graph_usgov", "intuit", "intuit_webhook", "monday", "notion", "push", "sentry", "stripe"].sort(),
     );
     expect(() => parseServerEnv(CORE)).not.toThrow();
   });
@@ -823,6 +823,7 @@ describe("secret patterns", () => {
       "ANTHROPIC_API_KEY",
       "GOOGLE_OAUTH_CLIENT_SECRET",
       "GRAPH_CLIENT_SECRET",
+      "GRAPH_USGOV_CLIENT_SECRET",
       "INTUIT_CLIENT_SECRET",
       "INTUIT_WEBHOOK_VERIFIER_TOKEN",
       "STRIPE_RESTRICTED_KEY",
@@ -1045,6 +1046,7 @@ function valueFor(key: string): string {
   if (key === "INTUIT_ENVIRONMENT") return "sandbox";
   if (key === "INTUIT_REDIRECT_URI") return "http://localhost:3000/cb";
   if (key === "GOOGLE_REDIRECT_URI") return "http://localhost:3000/api/connect/google/callback";
+  if (key === "GRAPH_REDIRECT_URI" || key === "GRAPH_USGOV_REDIRECT_URI") return "http://localhost:3000/api/connect/microsoft/callback";
   if (key === "APP_ENV") return "local";
   if (key === "VERCEL_ENV") return "preview";
   if (key === "VAPID_SUBJECT") return "mailto:admin@example.com";

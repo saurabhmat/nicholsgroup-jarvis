@@ -235,10 +235,18 @@ export const connectorEnvShapes = {
     GOOGLE_CLOUD_PROJECT_ID: nonEmpty.optional(),
     GMAIL_PUBSUB_TOPIC: nonEmpty.optional(),
   },
+  // Microsoft Graph (T-251, spec microsoft.md 5.2): one multi-tenant app per cloud, so there is no tenant id here (allowed
+  // tenants live in lane_config, the actual tenant on the connection). The redirect URI follows the GOOGLE_REDIRECT_URI rules.
   graph: {
-    GRAPH_TENANT_ID: nonEmpty,
     GRAPH_CLIENT_ID: nonEmpty,
     GRAPH_CLIENT_SECRET: nonEmpty,
+    GRAPH_REDIRECT_URI: httpUrl().optional(),
+  },
+  // A separate app registered inside the GCC High cloud. Defined only; nothing reads it until T-267.
+  graph_usgov: {
+    GRAPH_USGOV_CLIENT_ID: nonEmpty,
+    GRAPH_USGOV_CLIENT_SECRET: nonEmpty,
+    GRAPH_USGOV_REDIRECT_URI: httpUrl().optional(),
   },
   intuit: {
     INTUIT_CLIENT_ID: nonEmpty,
@@ -288,6 +296,16 @@ export const runtimeFlags = (env: EnvRecord): RuntimeFlags => ({
   appOrigin: typeof env.NEXT_PUBLIC_APP_URL === "string" && URL.canParse(env.NEXT_PUBLIC_APP_URL.trim()) ? new URL(env.NEXT_PUBLIC_APP_URL.trim()).origin : undefined,
 });
 
+const MICROSOFT_LOCAL_REDIRECT = "http://localhost:3000/api/connect/microsoft/callback";
+
+/** Redirect rules shared by the Microsoft groups (same as GOOGLE_REDIRECT_URI): optional locally; elsewhere required, https, own origin. */
+function checkRedirect(value: string | undefined, name: string, flags: RuntimeFlags, ctx: z.RefinementCtx): void {
+  if (flags.local) return;
+  if (value === undefined) ctx.addIssue({ code: "custom", message: "required outside local development", path: [name] });
+  else if (!value.startsWith("https://")) ctx.addIssue({ code: "custom", message: "https required", path: [name] });
+  else if (new URL(value).origin !== flags.appOrigin) ctx.addIssue({ code: "custom", message: "must be on the app's own origin", path: [name] });
+}
+
 /** One schema factory per connector. The returned values contain only the connector's own variables. */
 export const connectorSchemaFactories = {
   google: (flags: RuntimeFlags) =>
@@ -303,7 +321,16 @@ export const connectorSchemaFactories = {
           ctx.addIssue({ code: "custom", message: "must be on the app's own origin", path: ["GOOGLE_REDIRECT_URI"] });
       })
       .transform((v) => ({ ...v, GOOGLE_REDIRECT_URI: v.GOOGLE_REDIRECT_URI ?? "http://localhost:3000/api/connect/google/callback" })),
-  graph: () => z.object(connectorEnvShapes.graph),
+  graph: (flags: RuntimeFlags) =>
+    z
+      .object(connectorEnvShapes.graph)
+      .superRefine((v, ctx) => checkRedirect(v.GRAPH_REDIRECT_URI, "GRAPH_REDIRECT_URI", flags, ctx))
+      .transform((v) => ({ ...v, GRAPH_REDIRECT_URI: v.GRAPH_REDIRECT_URI ?? MICROSOFT_LOCAL_REDIRECT })),
+  graph_usgov: (flags: RuntimeFlags) =>
+    z
+      .object(connectorEnvShapes.graph_usgov)
+      .superRefine((v, ctx) => checkRedirect(v.GRAPH_USGOV_REDIRECT_URI, "GRAPH_USGOV_REDIRECT_URI", flags, ctx))
+      .transform((v) => ({ ...v, GRAPH_USGOV_REDIRECT_URI: v.GRAPH_USGOV_REDIRECT_URI ?? MICROSOFT_LOCAL_REDIRECT })),
   intuit: (flags: RuntimeFlags) =>
     z
       .object(connectorEnvShapes.intuit)
