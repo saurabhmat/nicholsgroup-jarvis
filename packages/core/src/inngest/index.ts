@@ -46,7 +46,7 @@ export {
   handleCalIngest,
   planCalIngest,
 } from "./cal-ingest";
-export type { CalIngestDeps, CalIngestPlan } from "./cal-ingest";
+export type { CalIngestDeps, CalIngestPlan, SyncTargetRef } from "./cal-ingest";
 export {
   MAIL_INGEST_CADENCE_MS,
   MAIL_INGEST_CRON,
@@ -96,7 +96,7 @@ export {
   handleFinNormalize,
 } from "./fin-normalize";
 export type { FinQboNormalizeDeps, FinQboNormalizeResult } from "./fin-normalize";
-export { CONN_SYNC_CONCURRENCY, CONN_SYNC_RETRIES, connSyncFunction, handleConnSync } from "./conn-sync";
+export { CONN_SYNC_CONCURRENCY, CONN_SYNC_RETRIES, CONN_SYNC_TENANT_CONCURRENCY, connSyncFunction, handleConnSync } from "./conn-sync";
 export {
   RETENTION_CRON,
   RETENTION_PURGE_CONCURRENCY,

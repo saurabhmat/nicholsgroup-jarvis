@@ -43,11 +43,12 @@ export function briefingRefreshEventId(laneId: string, slot: number): string {
 }
 
 /**
- * Whether a finished sync should ask for a briefing refresh: a SCHEDULED Google run of the mail stream alone that wrote at least
+ * Whether a finished sync should ask for a briefing refresh: a SCHEDULED Google or Microsoft run of the mail stream alone that wrote at least
  * one message. A run for both streams (manual, connect, webhook) or for the calendar never does.
  */
 export function shouldRefreshBriefingAfterSync(run: { provider: string; trigger: string; streams?: readonly string[] | undefined; written: number }): boolean {
-  return run.provider === "google" && run.trigger === "schedule" && run.streams?.length === 1 && run.streams[0] === "mail" && Number.isFinite(run.written) && run.written > 0;
+  // T-260: Microsoft mail counts the same as Google's (D-57: both providers feed one briefing).
+  return (run.provider === "google" || run.provider === "microsoft") && run.trigger === "schedule" && run.streams?.length === 1 && run.streams[0] === "mail" && Number.isFinite(run.written) && run.written > 0;
 }
 
 type StepApi = {
@@ -63,7 +64,7 @@ export async function handleMailIngest(deps: MailIngestDeps, scheduledAtMs: unkn
   if (plan.sends.length > 0) {
     await step.sendEvent(
       "fan-out",
-      plan.sends.map((s) => connSyncRequested.create({ laneId: s.laneId, connectionId: s.connectionId, trigger: "schedule", streams: ["mail"] }, { id: mailIngestEventId(s.connectionId, slot) })),
+      plan.sends.map((s) => connSyncRequested.create({ laneId: s.laneId, connectionId: s.connectionId, trigger: "schedule", streams: ["mail"], ...(s.tenantId ? { tenantId: s.tenantId } : {}) }, { id: mailIngestEventId(s.connectionId, slot) })),
     );
   }
   // Fail the run AFTER the healthy lanes were sent. Not retried: the next tick is the retry.

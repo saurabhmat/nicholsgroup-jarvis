@@ -1,10 +1,10 @@
-// "Sync now" (T-238 part B): POST /api/lanes/PKG/sync-now asks conn.sync to run every usable Google connection of the lane now
+// "Sync now" (T-238 part B; T-260: Google and Microsoft): POST /api/lanes/PKG/sync-now asks conn.sync to run every usable mail/calendar connection of the lane now
 // (trigger "manual", both streams), instead of waiting for the next 15-minute tick.
 //  - Who: owner or admin_technical of the lane at AAL2 (the same guard as connecting). No session 401; AAL1 or another role 403; a
 //    lane that is not the caller's (or no such lane) 404, the same answer as an unknown lane.
 //  - Cross-site: the request must carry Origin = this site (a form or fetch from the page); Sec-Fetch-Site other than same-origin is 403.
 //  - Rate limit: one per lane per 2 minutes, in the database (core.sync_now_claim: atomic, per lane, whoever clicks). Refused with 429 and
-//    retryAfterSeconds. A lane with no usable Google connection answers `no_connections` WITHOUT using up the limit.
+//    retryAfterSeconds. A lane with no usable connection answers `no_connections` WITHOUT using up the limit.
 //  - Events: one conn/sync.requested per connection (ids only), event id `sync-now:<connectionId>:<2-minute slot>` as a second dedupe.
 //  - Audit: `connection.sync_now` with who, lane and the number of connections (ids and counts only), written BEFORE any event is sent;
 //    if the audit write fails nothing is sent (503).
@@ -28,10 +28,10 @@ type Rpc = { schema(s: "core"): { rpc(fn: "sync_now_claim", args: { p_lane: stri
 export type SyncNowDeps = {
   guards: () => Promise<Pick<Guards, "requireLane" | "requireRole">>;
   audit: () => Audit;
-  /** Usable Google connection ids of the lane (the lane router's lister; ids only). */
-  listConnections: (laneId: string) => Promise<readonly string[]>;
-  /** conn/sync.requested for one connection (trigger manual, both streams). Throws when it could not be sent. */
-  send: (laneId: string, connectionId: string, eventId: string) => Promise<unknown>;
+  /** Usable Google and Microsoft connections of the lane (the lane router's lister; ids only, a Microsoft row with its tenant id, T-260). */
+  listConnections: (laneId: string) => Promise<readonly (string | { connectionId: string; tenantId?: string | null })[]>;
+  /** conn/sync.requested for one connection (trigger manual, both streams). Throws when it could not be sent. `tenantId` only for a Microsoft row. */
+  send: (laneId: string, connectionId: string, eventId: string, tenantId?: string) => Promise<unknown>;
   now?: () => Date;
 };
 
@@ -53,7 +53,13 @@ export function createSyncNowHandler(deps: SyncNowDeps) {
       }
       const { session, client } = await g.requireRole(laneId, CONNECT_ROLES);
 
-      const ids = [...new Set(await deps.listConnections(laneId))];
+      const byId = new Map<string, string | undefined>();
+      for (const ref of await deps.listConnections(laneId)) {
+        const id = typeof ref === "string" ? ref : ref.connectionId;
+        const tenant = typeof ref === "string" ? undefined : (ref.tenantId ?? undefined);
+        if (!byId.has(id)) byId.set(id, tenant);
+      }
+      const ids = [...byId.keys()];
       if (ids.length === 0) return json({ status: "no_connections", connections: 0 } satisfies SyncNowResult, 200);
 
       const claim = await (client as unknown as Rpc).schema("core").rpc("sync_now_claim", { p_lane: laneId });
@@ -77,7 +83,10 @@ export function createSyncNowHandler(deps: SyncNowDeps) {
       });
 
       const nowMs = (deps.now ?? (() => new Date()))().getTime();
-      const sent = await Promise.allSettled(ids.map((id) => deps.send(laneId, id, syncNowEventId(id, nowMs))));
+      const sent = await Promise.allSettled(ids.map((id) => {
+        const tenant = byId.get(id);
+        return tenant ? deps.send(laneId, id, syncNowEventId(id, nowMs), tenant) : deps.send(laneId, id, syncNowEventId(id, nowMs));
+      }));
       const started = sent.filter((r) => r.status === "fulfilled").length;
       if (started === 0) return json({ error: "jobs_unavailable" }, 503);
       return json({ status: "started", connections: started } satisfies SyncNowResult, 200);

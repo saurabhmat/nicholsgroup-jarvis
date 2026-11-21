@@ -2,7 +2,8 @@ import "server-only";
 // conn.sync (T-038): the Inngest function that syncs one connection. The sync itself (connector, run log, cursors) is
 // injected as `runSync` (apps/web wires @nichols/connectors/sync; core cannot import connectors).
 //   - Concurrency: key = connection id, limit 1, so one connection never syncs twice at once while other connections
-//     run in parallel. The database also allows one running sync_runs row per connection (backstop).
+//     run in parallel. The database also allows one running sync_runs row per connection (backstop). T-260: plus a per-tenant key
+//     for Microsoft rows (CONN_SYNC_TENANT_CONCURRENCY); the connection key is unchanged.
 //   - Retries: transient failures (the connector's `retry` disposition) are retried by Inngest with backoff, honouring a
 //     provider retry-after; permanent ones (reconnect_required, forbidden, ...) stop at once with NonRetriableError.
 //   - Failure isolation: functions are independent runs, so one connection failing never blocks another.
@@ -34,6 +35,14 @@ export type ConnSyncDeps = {
 /** Function options, exported so tests assert them. */
 export const CONN_SYNC_RETRIES = 4;
 export const CONN_SYNC_CONCURRENCY = { key: "event.data.connectionId", limit: 1 } as const;
+/**
+ * T-260: a second, per-tenant key on top of the per-connection one (spec docs/specs/microsoft.md 8.5): Graph throttles per app per tenant, so
+ * at most this many connections of ONE Microsoft tenant sync at once and another tenant's connections never wait for them. The key is the
+ * event's `tenantId` (set only for Microsoft rows); an event without one falls back to its own connection id, which makes this key a no-op
+ * for Google and every other provider (their only effective limit stays CONN_SYNC_CONCURRENCY). `has()` keeps a missing field from being an error.
+ * 4 = Graph's own cap of concurrent requests per mailbox, as a bound on connections per tenant that run together.
+ */
+export const CONN_SYNC_TENANT_CONCURRENCY = { key: "has(event.data.tenantId) ? event.data.tenantId : event.data.connectionId", limit: 4 } as const;
 const MAX_RETRY_AFTER_SECONDS = 15 * 60;
 
 /** The function body without Inngest, for tests: throws what Inngest needs to decide about a retry. */
@@ -68,7 +77,7 @@ export async function handleConnSync(
 
 export function connSyncFunction(inngest: Inngest, deps: ConnSyncDeps): InngestFunction.Any {
   return inngest.createFunction(
-    { id: "conn-sync", triggers: [connSyncRequested], retries: CONN_SYNC_RETRIES, concurrency: CONN_SYNC_CONCURRENCY },
+    { id: "conn-sync", triggers: [connSyncRequested], retries: CONN_SYNC_RETRIES, concurrency: [CONN_SYNC_CONCURRENCY, CONN_SYNC_TENANT_CONCURRENCY] },
     async ({ event, runId }) => handleConnSync(deps, event.data, typeof runId === "string" ? runId : null),
   );
 }
