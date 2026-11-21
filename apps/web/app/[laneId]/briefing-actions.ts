@@ -26,7 +26,7 @@ import { saveOwnBriefing } from "@nichols/briefing/jobs";
 import { classifyFailure, type FailureCode } from "@nichols/briefing/domain";
 import { adminHint } from "@nichols/briefing/hints";
 import { aiSetupFailure } from "@/lib/briefing-setup";
-import { readGmailBody } from "@nichols/connectors/google";
+import { readBody as readMailBody } from "@nichols/connectors/facade";
 import { cookies } from "next/headers";
 import { after } from "next/server";
 import { guards } from "@/lib/guards";
@@ -122,7 +122,7 @@ async function start(laneId: string, kind: "auto" | "regenerate"): Promise<Brief
           {
             client: lane,
             provider,
-            readBody: async (l, c, m) => (await readGmailBody(l, c, m, userId)).text, // the connection must be the user's own (T-247)
+            readBody: async (l, c, m) => (await readMailBody(l, c, m, userId)).text, // the connection must be the user's own (T-247)
             brain,
             policy,
             save: (l, r) => saveOwnBriefing(lane, l, r),

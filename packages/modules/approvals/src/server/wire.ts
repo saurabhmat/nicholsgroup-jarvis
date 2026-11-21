@@ -2,10 +2,12 @@ import "server-only";
 // The approvals module over the real lane router, audit and Google connector (T-232). Server only; a separate subpath
 // (`@nichols/approvals/wire`) so tests of the module logic never import the connector wiring. The job client bypasses RLS:
 // every call below passes the lane and the database re-checks it (act.* functions are lane-scoped definer functions).
-import { prepareEmailWrite, laneMailboxes, mailboxAllowed } from "@nichols/connectors/google";
-import { googleEmailReconciler, googleEmailWriter, loadGoogleWriteConnection, loadQuickbooksWriteConnection, quickbooksDisconnectVerifier, quickbooksWriter } from "@nichols/connectors/write";
+import type { LaneBoundConnection } from "@nichols/connectors";
+import { prepareEmailWrite, laneMailboxes, mailboxAllowed } from "@nichols/connectors/facade";
+import { emailWriteGate, googleEmailReconciler, googleEmailWriter, loadEmailWriteConnection, loadQuickbooksWriteConnection, quickbooksDisconnectVerifier, quickbooksWriter } from "@nichols/connectors/write";
 import type { LaneId } from "@nichols/core";
 import { getAudit, getLaneJobClient } from "@nichols/core/lane-router";
+import { createEmailWriteDispatch, microsoftEmailWriteEntry, type EmailWriteEntry } from "./email-dispatch";
 import { approveAndExecute, executeApproved, proposeEmailAction, type ProposeEmailInput } from "./email";
 import { isQboDisconnectable } from "./capability";
 import { approveAndExecuteQbo, executeApprovedQbo, type QboExecDeps } from "./qbo";
@@ -57,17 +59,32 @@ async function readFacts(laneId: LaneId, connectionId: string): Promise<Capabili
  */
 export const approvalsDeps: ApprovalsPublicDeps = Object.freeze({
   jobRpc,
-  prepareEmailWrite,
+  // T-255: through the facade (by the connection row's provider); the approvals types stay Google-shaped until T-262.
+  prepareEmailWrite: prepareEmailWrite as ApprovalsPublicDeps["prepareEmailWrite"],
   laneMailboxes,
   mailboxAllowed,
   readFacts,
   audit: getAudit(),
 });
 
+// T-255: the email writer, the write-connection loader and the reconciler's read side go by the connection row's provider (never a lane-level
+// value) and refuse a provider the lane has not enabled, before any token read. Google is the existing writer; Microsoft answers
+// unsupported_op until T-262 / T-263. The reconciler is handed `findWrite` and `verifyWrite` only (the dispatch's other member is not exposed to it).
+const googleEmailEntry: EmailWriteEntry = {
+  actionTypes: googleEmailWriter.actionTypes,
+  executeWrite: (laneId, conn, action) => googleEmailWriter.executeWrite(laneId, conn as LaneBoundConnection<"google">, action),
+  verifyWrite: (laneId, conn, action, externalId) => googleEmailReconciler.verifyWrite(laneId, conn as LaneBoundConnection<"google">, action, externalId),
+  findWrite: (laneId, conn, action) => googleEmailReconciler.findWrite(laneId, conn as LaneBoundConnection<"google">, action),
+};
+Object.freeze(googleEmailEntry);
+const emailDispatch = createEmailWriteDispatch({ loader: { loadConnection: loadEmailWriteConnection }, gate: emailWriteGate, entries: { google: googleEmailEntry, microsoft: microsoftEmailWriteEntry } });
+const emailReconcilerReadSide = Object.freeze({ findWrite: emailDispatch.writer.findWrite, verifyWrite: emailDispatch.writer.verifyWrite });
+
 const fullDeps: ApprovalsDeps = Object.freeze({
   ...approvalsDeps,
-  loadWriteConnection: loadGoogleWriteConnection,
-  writer: googleEmailWriter,
+  // T-255: dispatched by the connection row's provider; the approvals types stay Google-shaped until T-262 generalises them.
+  loadWriteConnection: emailDispatch.loadWriteConnection as ApprovalsDeps["loadWriteConnection"],
+  writer: emailDispatch.writer as unknown as ApprovalsDeps["writer"],
 });
 
 /** The QuickBooks disconnect executor's deps (T-195): the approvals-only writer and the read-back verifier, private to this file. */
@@ -116,7 +133,7 @@ const reconcileDeps: ReconcileDeps = Object.freeze({
   jobRpc,
   audit: approvalsDeps.audit,
   reconcilers: Object.freeze([
-    createEmailReconciler({ reconciler: googleEmailReconciler, loadWriteConnection: loadGoogleWriteConnection }),
+    createEmailReconciler({ reconciler: emailReconcilerReadSide as unknown as Parameters<typeof createEmailReconciler>[0]["reconciler"], loadWriteConnection: emailDispatch.loadWriteConnection as ApprovalsDeps["loadWriteConnection"] }),
     createQboReconciler({ verifier: quickbooksDisconnectVerifier as QboExecDeps["verifier"], loadWriteConnection: loadQuickbooksWriteConnection as QboExecDeps["loadWriteConnection"] }),
   ]),
 });

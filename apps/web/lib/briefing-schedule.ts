@@ -9,7 +9,7 @@ import { getLLMProvider } from "@nichols/ai/config";
 import type { LaneId } from "@nichols/core";
 import { isBriefingDue } from "@nichols/core/inngest";
 import { briefingOwners, saveBriefing } from "@nichols/briefing/jobs";
-import { readGmailBody } from "@nichols/connectors/google";
+import { readBody as readMailBody } from "@nichols/connectors/facade";
 import { BUSINESS_TZ } from "@nichols/briefing/domain";
 import { briefingConfigFrom } from "./briefing";
 import { policyFrom, runBriefing } from "./briefing-run";
@@ -92,7 +92,7 @@ async function runModel(c: Db, provider: Extract<ReturnType<typeof getLLMProvide
       client: c,
       provider,
       // The connection must be this user's own (a job reads a mailbox only on behalf of its owner).
-      readBody: async (l, conn, m) => (await readGmailBody(l, conn, m, ownerUserId)).text,
+      readBody: async (l, conn, m) => (await readMailBody(l, conn, m, ownerUserId)).text,
       brain: { brainUser: null, laneBrain: {}, notes: ["no_brain_in_schedule"] },
       policy: policyFrom(policyRow as Parameters<typeof policyFrom>[0]),
       save: (l, r) => saveBriefing(c, l, r),

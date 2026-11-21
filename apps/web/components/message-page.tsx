@@ -4,7 +4,7 @@
 import Link from "next/link";
 import { notFound } from "next/navigation";
 import type { LaneId } from "@nichols/core";
-import { readGmailBody } from "@nichols/connectors/google";
+import { readBody as readMailBody } from "@nichols/connectors/facade";
 import { Alert, AlertDescription, AlertTitle, laneHref, PageHeader } from "@nichols/ui";
 import { guards } from "@/lib/guards";
 import { timed } from "@/lib/timed";
@@ -31,7 +31,7 @@ export async function MessagePage({ params }: { params: Promise<{ laneId: string
   const g = await guards();
   // T-247: the connection must be the signed-in user's own (the message proof under RLS already says so; checked again before Google is called).
   const { session } = await g.requireLane(lane.laneId as Parameters<typeof g.requireLane>[0]);
-  const readBody: ReadBody = (l, c, m) => readGmailBody(l as LaneId, c, m, session.userId);
+  const readBody: ReadBody = (l, c, m) => readMailBody(l as LaneId, c, m, session.userId);
   const view = await timed("load.message", async () => messageFor(g, lane.laneId, id, readBody));
   if (view.state === "not_found") notFound();
   const m = view.meta;

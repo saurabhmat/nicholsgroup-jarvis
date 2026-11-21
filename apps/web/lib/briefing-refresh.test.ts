@@ -4,7 +4,7 @@ import { createMockProvider } from "@nichols/ai/testing";
 
 const m = vi.hoisted(() => ({ run: vi.fn(), rpc: vi.fn(), configured: true }));
 vi.mock("@nichols/ai/config", () => ({ getLLMProvider: () => ({ configured: m.configured, provider: createMockProvider([]) }) }));
-vi.mock("@nichols/connectors/google", () => ({ readGmailBody: async () => ({ text: "" }) }));
+vi.mock("@nichols/connectors/facade", () => ({ readBody: async () => ({ text: "" }) }));
 vi.mock("./briefing-proposals", () => ({ replyProposer: () => async () => "p1" }));
 vi.mock("./briefing-run", async (orig) => ({ ...(await orig<typeof import("./briefing-run")>()), runBriefing: (...a: unknown[]) => m.run(...a) }));
 import { runRefresh } from "./briefing-schedule";
