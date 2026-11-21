@@ -20,7 +20,7 @@ afterEach(() => {
 });
 
 const conn = (over: Partial<GoogleSectionView["connections"][number]> = {}) => ({ id: "00000000-0000-4000-8000-0000000000c2", mailbox: "me@corp.example.test", state: "connected" as const, mailboxAllowed: true, mine: true, lastMailSyncAt: null, lastCalendarSyncAt: null, ...over });
-const ms = (over: Partial<MicrosoftSectionView> = {}): MicrosoftSectionView => ({ connections: [conn()], adminConsentUrl: null, ...over });
+const ms = (over: Partial<MicrosoftSectionView> = {}): MicrosoftSectionView => ({ connections: [conn()], adminConsentUrl: null, writes: false, ...over });
 const google = (over: Partial<GoogleSectionView> = {}): GoogleSectionView => ({ connections: [conn({ id: "00000000-0000-4000-8000-0000000000c1" })], ...over });
 const draw = (g: GoogleSectionView | null, m: MicrosoftSectionView | null) => render(<ConnectionsSection laneId="PKG" google={g} microsoft={m} quickbooks={null} composio={null} />);
 const LINK = "https://login.microsoftonline.com/11111111-1111-4111-8111-111111111111/v2.0/adminconsent?client_id=synthetic";
@@ -51,6 +51,7 @@ describe("both providers enabled", () => {
     draw(google(), ms());
     const t = screen.getByTestId("microsoft-notes").textContent ?? "";
     expect(t).toMatch(/mail and calendar, read-only/);
+    expect(screen.getByTestId("microsoft-connection").textContent).toMatch(/Mail and calendar, read-only/);
     expect(t).toMatch(/not how anyone signs in/);
     expect(t).toMatch(/does not contact Microsoft/);
     expect(t).toMatch(/Entra admin center \(Enterprise apps → the app → Permissions\)/);
@@ -70,7 +71,7 @@ describe("only Google", () => {
 
 describe("Microsoft disabled after a connect", () => {
   it("the row is kept and shown as paused: no Reconnect, no Connect, data kept, Disconnect still there", () => {
-    draw(null, ms({ paused: true, connections: [conn({ state: "reconnect_required" })] }));
+    draw(null, ms({ paused: true, writes: null, connections: [conn({ state: "reconnect_required" })] }));
     const row = screen.getByTestId("microsoft-connection");
     expect(within(row).getByText(MICROSOFT_PAUSED_TEXT)).toBeTruthy();
     expect(MICROSOFT_PAUSED_TEXT).toBe("Paused: Microsoft is not enabled for this company");
@@ -117,6 +118,7 @@ describe("the admin consent note", () => {
     const a = within(screen.getByTestId("microsoft-admin-consent")).getByRole("link", { name: "Administrator approval link" });
     expect(a.getAttribute("href")).toBe(LINK);
     expect(a.getAttribute("rel")).toBe("noopener noreferrer");
+    expect(screen.getByTestId("microsoft-admin-consent").textContent).toMatch(/only asks for read-only mail and calendar permissions/);
   });
   it("no link, no note", () => {
     draw(null, ms());
@@ -126,7 +128,7 @@ describe("the admin consent note", () => {
 
 describe("unavailable", () => {
   it("says so, with no rows and no buttons", () => {
-    draw(google(), { connections: [], unavailable: true, adminConsentUrl: null });
+    draw(google(), { connections: [], unavailable: true, adminConsentUrl: null, writes: null });
     expect(screen.getByTestId("microsoft-unavailable")).toBeTruthy();
     expect(screen.queryByTestId("microsoft-not-connected")).toBeNull();
     expect(screen.queryByRole("button", { name: /Microsoft/ })).toBeNull();
@@ -164,7 +166,46 @@ describe("Disconnect (client)", () => {
     fireEvent.click(within(screen.getByTestId("microsoft-disconnect-confirm")).getByRole("button", { name: "Disconnect" }));
     const alert = await screen.findByRole("alert");
     expect(alert.textContent).toMatch(/Only the person who connected this account/);
+    expect(alert.textContent).not.toMatch(/recently|authenticator/i);
+    expect(alert.textContent).toMatch(/two-step verification/);
     expect(document.body.textContent).not.toContain("canary-server-text");
     expect(nav.replace).not.toHaveBeenCalled();
+  });
+});
+
+describe("write scopes requested (the lane allows email replies)", () => {
+  const writes = (over: Partial<MicrosoftSectionView> = {}) => ms({ writes: true, adminConsentUrl: LINK, ...over });
+  it("no text in the Microsoft section says read-only: not the row, the notes or the link note", () => {
+    draw(null, writes());
+    const row = screen.getByTestId("microsoft-connection").textContent ?? "";
+    const notes = screen.getByTestId("microsoft-notes").textContent ?? "";
+    expect(row).not.toMatch(/read-only/i);
+    expect(notes).not.toMatch(/read-only/i);
+    expect(notes).toMatch(/also asks permission to create and send mail, which still only happens after approval in the portal/);
+    expect(notes).toMatch(/not how anyone signs in to the portal/);
+    expect(screen.getByTestId("microsoft-admin-consent").textContent).toMatch(/including creating and sending mail/);
+  });
+  it("the not-connected row says no read-only either", () => {
+    draw(null, writes({ connections: [] }));
+    expect(screen.getByTestId("microsoft-not-connected").textContent).not.toMatch(/read-only/i);
+  });
+});
+
+describe("settings could not be read (fail closed)", () => {
+  const unknown = (over: Partial<MicrosoftSectionView> = {}) => ms({ settingsUnknown: true, writes: null, ...over });
+  it("own rows and their Disconnect stay; no Connect, no Reconnect; a neutral notice; no read-only claim", () => {
+    draw(google(), unknown({ connections: [conn({ state: "reconnect_required" }), conn({ id: "00000000-0000-4000-8000-0000000000c9", mine: false, mailbox: "other@corp.example.test" })] }));
+    const row = screen.getByTestId("microsoft-connection");
+    expect(within(row).getByRole("button", { name: /Disconnect/ })).toBeTruthy();
+    expect(within(row).queryByRole("button", { name: /Reconnect/ })).toBeNull();
+    expect(screen.queryByRole("button", { name: /Connect Microsoft|Connect another Microsoft/ })).toBeNull();
+    expect(screen.getByTestId("microsoft-settings-unknown").textContent).toMatch(/could not check this company's Microsoft settings/);
+    expect(screen.getByTestId("microsoft-notes").textContent).not.toMatch(/read-only/i);
+    expect(within(screen.getByTestId("microsoft-other-connection")).queryByRole("button")).toBeNull();
+    expect(screen.queryByText(/needs to be reconnected/)).toBeNull();
+  });
+  it("no Microsoft rows and no view: no Microsoft text at all", () => {
+    draw(google(), null);
+    expect(document.body.textContent).not.toMatch(/Microsoft/);
   });
 });

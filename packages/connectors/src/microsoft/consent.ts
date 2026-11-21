@@ -52,15 +52,33 @@ export function buildAdminConsentUrl(input: AdminConsentInput): string | null {
   }
 }
 
-/** The link for a lane from its settings (one read, taken by the caller) over the app's client id and the lane's connect scopes. Any failure is null (no link). */
-export function createAdminConsentLink(deps: { client: () => { clientId: string; redirectUri: string }; scopesFor: (laneId: LaneId) => Promise<readonly string[]> }) {
-  return async function link(laneId: LaneId, settings: { cloud: string; tenantIds: readonly string[] }): Promise<string | null> {
-    if (!isCloudSupported(settings.cloud)) return null; // before any other read
+/** The Microsoft scopes that mean the app can create or send mail (added only when the lane policy allows email writes, T-232 / T-066). */
+const WRITE_SCOPES: ReadonlySet<string> = new Set(["mail.readwrite", "mail.send"]);
+export const scopesAllowWrites = (scopes: readonly string[]): boolean => scopes.some((s) => WRITE_SCOPES.has(s.toLowerCase()));
+
+export type MicrosoftConnectInfo = {
+  /** The admin consent link, or null when none can be built. */
+  url: string | null;
+  /** From the SAME `scopesFor` result that builds the link and the connect: whether write scopes are requested. When it cannot be read, true: the page never claims "read-only" on a guess. */
+  writes: boolean;
+};
+
+/** The link and the wording switch for a lane from its settings (one read, taken by the caller) over the app's client id and the lane's connect scopes. Any failure is no link. */
+export function createMicrosoftConnectInfo(deps: { client: () => { clientId: string; redirectUri: string }; scopesFor: (laneId: LaneId) => Promise<readonly string[]> }) {
+  return async function info(laneId: LaneId, settings: { cloud: string; tenantIds: readonly string[] }): Promise<MicrosoftConnectInfo> {
+    let scopes: readonly string[];
+    try {
+      scopes = await deps.scopesFor(laneId);
+    } catch {
+      return { url: null, writes: true };
+    }
+    const writes = scopesAllowWrites(scopes);
+    if (!isCloudSupported(settings.cloud)) return { url: null, writes };
     try {
       const { clientId, redirectUri } = deps.client();
-      return buildAdminConsentUrl({ clientId, redirectUri, cloud: settings.cloud, tenantIds: settings.tenantIds, scopes: await deps.scopesFor(laneId), laneId });
+      return { url: buildAdminConsentUrl({ clientId, redirectUri, cloud: settings.cloud, tenantIds: settings.tenantIds, scopes, laneId }), writes };
     } catch {
-      return null;
+      return { url: null, writes };
     }
   };
 }

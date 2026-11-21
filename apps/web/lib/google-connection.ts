@@ -63,7 +63,7 @@ function iso(value: unknown): string | null {
 
 const strings = (v: unknown): string[] => (Array.isArray(v) ? v.filter((m): m is string => typeof m === "string").map((m) => m.toLowerCase()) : []);
 /** The lane's mail policy from the two config fields the page reads: `mailboxes` and `mail`. */
-export function mailPolicyOf(config: unknown): { domains: string[]; mailboxes: string[] } {
+function mailPolicyOf(config: unknown): { domains: string[]; mailboxes: string[] } {
   const c = typeof config === "object" && config !== null ? (config as { mailboxes?: unknown; mail?: unknown }) : {};
   const mail = typeof c.mail === "object" && c.mail !== null ? (c.mail as { allowed_domains?: unknown }) : {};
   return { domains: strings(mail.allowed_domains), mailboxes: strings(c.mailboxes) };

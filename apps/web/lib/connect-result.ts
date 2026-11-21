@@ -5,6 +5,7 @@
 
 import { AuthError, type Guards } from "@nichols/core/auth";
 import { MAIL_CONNECT_ROLES } from "@nichols/connectors/oauth";
+import { microsoftConnects, type MicrosoftWrites } from "./microsoft-wording";
 
 export type ConnectResultMessage = { tone: "success" | "alert"; title: string; description: string };
 
@@ -39,10 +40,10 @@ const SERVER_NOT_CONFIGURED: Record<string, ConnectResultMessage | undefined> = 
   },
 };
 
-/** T-257: said by every Microsoft connect refusal: what this connection is, and that it is not a sign-in. */
-const MICROSOFT_NOTE = " This connects your mail and calendar, read-only. It is not how anyone signs in to the portal.";
+/** What the page knows about Microsoft for this lane (T-257 review): whether it is enabled, and whether the connect asks for write scopes (null = not known). */
+export type MicrosoftContext = { enabled: boolean; writes: MicrosoftWrites };
 
-export function connectResultMessage(params: SearchParams): ConnectResultMessage | null {
+export function connectResultMessage(params: SearchParams, microsoft: MicrosoftContext = { enabled: false, writes: null }): ConnectResultMessage | null {
   const code = one(params.connect);
   if (!code) {
     const err = one(params.error);
@@ -54,20 +55,23 @@ export function connectResultMessage(params: SearchParams): ConnectResultMessage
   const name = baseName === "Composio" && toolkit ? `${toolkit} via Composio` : baseName;
   // The server sets the notice only when a grant was obtained but not stored (flow.ts: account_refused or unavailable).
   const removeAccess = one(params.notice) === "remove_app_access" && (code === "account_refused" || code === "wrong_account" || code === "wrong_tenant" || code === "unavailable") ? ` ${REMOVE_ACCESS[baseName] ?? "Remove the portal's access at the provider, then try again."}` : "";
-  const ms = baseName === "Microsoft" ? MICROSOFT_NOTE : "";
+  const ms = baseName === "Microsoft" ? ` ${microsoftConnects(microsoft.writes)}` : "";
   switch (code) {
     // T-257: the return from the tenant admin consent link (the callback sends only these two codes, nothing from Microsoft) and a local Disconnect.
     case "consent_ok":
     case "consent_failed":
     case "disconnected":
       if (baseName !== "Microsoft") return null;
+      // The consent return is shown only where Microsoft is enabled: a crafted link cannot put it on a lane that does not use Microsoft.
+      if (code !== "disconnected" && !microsoft.enabled) return null;
       if (code === "consent_ok") return { tone: "success", title: "Microsoft sent the administrator back", description: "If they approved the app, you can now use Connect Microsoft. Nothing was saved in the portal." };
       if (code === "consent_failed") return { tone: "alert", title: "Administrator approval was not completed", description: "Nothing was saved. Ask your Microsoft 365 administrator to try the approval link again." };
       return {
         tone: "success",
-        title: "Microsoft account disconnected here",
+        title: "Microsoft disconnect",
+        // Neutral: this banner is driven by the URL, so it does not assert that anything was deleted; the Disconnect button's own success is what led here.
         description:
-          "The access stored in the portal was deleted and syncing stopped. Nothing was sent to Microsoft, so Microsoft may still list the app: you or your Microsoft 365 administrator can remove the app's access in your Microsoft account or in the Entra admin center (Enterprise apps → the app → Permissions).",
+          "If you disconnected a Microsoft account, the access the portal stored for it was deleted here. Nothing is sent to Microsoft, so Microsoft may still list the app: you or your Microsoft 365 administrator can remove the app's access in your Microsoft account or in the Entra admin center (Enterprise apps → the app → Permissions).",
       };
     case "ok":
       if (baseName === "Composio") return { tone: "success", title: `${name} connected`, description: "The account was checked and saved. If it replaced an earlier account, the earlier one stays in Composio until it is removed by hand. Mail and calendar keep syncing through the Google connection until this company is switched to Composio." };
@@ -118,8 +122,8 @@ export function connectResultMessage(params: SearchParams): ConnectResultMessage
  * The message for the Settings page, shown only to users who could have started a connect in this lane (owner or
  * admin_technical at AAL2, as the Connect buttons): a crafted link cannot show a connect result to anyone else.
  */
-export async function connectResultFor(g: Pick<Guards, "requireRole">, laneId: string, params: SearchParams): Promise<ConnectResultMessage | null> {
-  const message = connectResultMessage(params);
+export async function connectResultFor(g: Pick<Guards, "requireRole">, laneId: string, params: SearchParams, microsoft?: MicrosoftContext): Promise<ConnectResultMessage | null> {
+  const message = connectResultMessage(params, microsoft);
   if (!message) return null;
   try {
     await g.requireRole(laneId, [...MAIL_CONNECT_ROLES]); // T-247: anyone who may connect their own Google account sees the result

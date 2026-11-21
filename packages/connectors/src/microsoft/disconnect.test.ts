@@ -1,5 +1,6 @@
 // T-257 (D-55): local Disconnect of a Microsoft mailbox. Owner only, any enabled state, tokens deleted by the Vault call, nothing sent to
 // Microsoft. The real token vault runs over an RPC twin of core.connection_token_revoke in one test. Synthetic data only (rule 10).
+import { readFileSync } from "node:fs";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { ConnectorError } from "../contract/errors";
 import { mintLaneBoundConnection, type LaneBoundConnection } from "../contract/lane-bound";
@@ -83,5 +84,15 @@ describe("what it does and does not do", () => {
     const s = setup();
     s.vault.revokeToken.mockRejectedValueOnce(new ConnectorError({ kind: "transient", message: "Token store unavailable" }));
     expect((await refused(s.disconnect("PKG", CID, OWNER))).info.kind).toBe("transient");
+  });
+});
+
+describe("no way to reach Microsoft (source level)", () => {
+  it("microsoft/disconnect.ts imports no HTTP client, token manager, guard, Graph api, provider or http module", () => {
+    const source = readFileSync(new URL("./disconnect.ts", import.meta.url), "utf8");
+    const imports = [...source.matchAll(/^import[^;]*?from\s+["']([^"']+)["']/gm)].map((m) => m[1] ?? "");
+    expect(imports.length).toBeGreaterThan(0);
+    for (const spec of imports) expect(spec, spec).not.toMatch(/http|token-manager|guard|\/api$|\.\/api|provider|graph|undici|axios|node:https?/i);
+    expect(source).not.toMatch(/\bfetch\s*\(/);
   });
 });

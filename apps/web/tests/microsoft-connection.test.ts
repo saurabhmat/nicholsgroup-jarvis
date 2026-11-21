@@ -58,7 +58,7 @@ const guards = (over: { role?: AuthError } = {}) => ({
 const both: MailProvidersView = { state: "known", google: true, microsoft: { cloud: "commercial", tenantIds: [TENANT] } };
 const googleOnly: MailProvidersView = { state: "known", google: true, microsoft: null };
 const microsoftOff = googleOnly; // "disabled after connect" is the same answer: Microsoft not enabled
-const consent = vi.fn(async () => "https://login.microsoftonline.com/x/v2.0/adminconsent?synthetic");
+const consent = vi.fn(async (_laneId: string, _settings: unknown) => ({ url: "https://login.microsoftonline.com/x/v2.0/adminconsent?synthetic" as string | null, writes: false }));
 
 describe("a company with both providers enabled", () => {
   it("shows both sections, and the same user's Google row and Microsoft row each in its own section", async () => {
@@ -71,6 +71,7 @@ describe("a company with both providers enabled", () => {
     expect(microsoft?.connections.map((c) => c.id)).toEqual([M_ID, M_OTHER]);
     expect(microsoft?.connections.map((c) => c.mine)).toEqual([true, false]);
     expect(microsoft?.adminConsentUrl).toBe("https://login.microsoftonline.com/x/v2.0/adminconsent?synthetic");
+    expect(microsoft?.writes).toBe(false);
     // the same address, one row per provider
     expect(google?.connections[0]?.mailbox).toBe(microsoft?.connections[0]?.mailbox);
   });
@@ -113,6 +114,7 @@ describe("Microsoft disabled after a connect", () => {
     const view = await microsoftSectionFor(guards(), "PKG", microsoftOff, undefined, consent);
     expect(view?.paused).toBe(true);
     expect(view?.adminConsentUrl).toBeNull();
+    expect(view?.writes).toBeNull(); // nothing is claimed about scopes for a paused connection
     expect(view?.connections.map((c) => c.id)).toEqual([M_ID, M_OTHER]);
   });
   it("Google switched off is paused the same way, only when the list is known", async () => {
@@ -131,14 +133,45 @@ describe("Microsoft disabled after a connect", () => {
 });
 
 describe("when the list of providers could not be read", () => {
-  it("Google is never hidden or paused; Microsoft says its status is unavailable", async () => {
-    const unknown: MailProvidersView = { state: "unknown" };
+  const unknown: MailProvidersView = { state: "unknown" };
+  const noRows = { requireRole: async () => ({ session: { userId: ME }, client: client() }) as never };
+  it("Google is never hidden or paused", async () => {
     expect((await googleSectionFor(guards(), "PKG", undefined, unknown))?.connections).toHaveLength(1);
-    expect(await microsoftSectionFor(guards(), "PKG", unknown, undefined, consent)).toEqual({ connections: [], unavailable: true, adminConsentUrl: null });
   });
-  it("a failed connections read is `unavailable`, not an empty list", async () => {
-    const view = await microsoftSectionFor(guards(), "PKG", both, async () => { throw new Error("db"); }, consent);
-    expect(view?.unavailable).toBe(true);
+  it("with no Microsoft rows nothing about Microsoft is drawn at all", async () => {
+    const saved = rows.microsoft as unknown[];
+    rows.microsoft = [];
+    try {
+      expect(await microsoftSectionFor(noRows, "PKG", unknown, undefined, consent)).toBeNull();
+    } finally {
+      rows.microsoft = saved;
+    }
+  });
+  it("with Microsoft rows they are kept (own and others'), flagged settingsUnknown, and no consent link is built (fail closed)", async () => {
+    consent.mockClear();
+    const view = await microsoftSectionFor(guards(), "PKG", unknown, undefined, consent);
+    expect(view).toMatchObject({ settingsUnknown: true, adminConsentUrl: null, writes: null });
+    expect(view?.paused).toBeUndefined();
+    expect(view?.unavailable).toBeUndefined();
+    expect(view?.connections.map((c) => c.id)).toEqual([M_ID, M_OTHER]);
+    expect(consent).not.toHaveBeenCalled();
+  });
+  it("a failed connections read is `unavailable` only where Microsoft is enabled; otherwise nothing", async () => {
+    const boom = async () => { throw new Error("db"); };
+    expect((await microsoftSectionFor(guards(), "PKG", both, boom, consent))?.unavailable).toBe(true);
+    expect(await microsoftSectionFor(guards(), "PKG", unknown, boom, consent)).toBeNull();
+    expect(await microsoftSectionFor(guards(), "PKG", googleOnly, boom, consent)).toBeNull();
+  });
+});
+
+describe("the wording switch", () => {
+  it("is taken from the connect info of the same call (writes on)", async () => {
+    const on = vi.fn(async () => ({ url: "https://login.microsoftonline.com/x/v2.0/adminconsent?s", writes: true }));
+    expect((await microsoftSectionFor(guards(), "PKG", both, undefined, on))?.writes).toBe(true);
+  });
+  it("an unreadable policy is writes true, never a guess of read-only", async () => {
+    const view = await microsoftSectionFor(guards(), "PKG", both, undefined, async () => { throw new Error("x"); });
+    expect(view?.writes).toBe(true);
   });
 });
 

@@ -1,13 +1,12 @@
 // T-257: the tenant admin consent link (exact URL, no secret, no state stored) and the return from it. Synthetic values only (rule 10).
 import { describe, expect, it, vi } from "vitest";
-import { adminConsentState, buildAdminConsentUrl, consentReturn, createAdminConsentLink } from "./consent";
+import { adminConsentState, buildAdminConsentUrl, consentReturn, createMicrosoftConnectInfo, scopesAllowWrites } from "./consent";
 
 const TENANT_A = "11111111-1111-4111-8111-111111111111";
 const TENANT_B = "22222222-2222-4222-8222-222222222222";
 const CLIENT = "synthetic-graph-client-id-5521";
 const REDIRECT = "https://portal.example.test/api/connect/microsoft/callback";
 const READ = ["openid", "offline_access", "User.Read", "Mail.Read", "Calendars.Read"];
-const SECRET = "synthetic-graph-client-secret-canary-9931";
 const base = { clientId: CLIENT, redirectUri: REDIRECT, cloud: "commercial", tenantIds: [TENANT_A], scopes: READ, laneId: "PKG" };
 
 describe("the link", () => {
@@ -53,28 +52,34 @@ describe("the link", () => {
   });
 });
 
-describe("the wired builder", () => {
-  type Deps = Parameters<typeof createAdminConsentLink>[0];
+describe("the wired builder (link and wording switch from one scope list)", () => {
+  type Deps = Parameters<typeof createMicrosoftConnectInfo>[0];
   const deps = () => {
     const client = vi.fn<Deps["client"]>(() => ({ clientId: CLIENT, redirectUri: REDIRECT }));
     const scopesFor = vi.fn<Deps["scopesFor"]>(async () => READ);
     return { client, scopesFor };
   };
-  it("builds the link from the settings it is given and reads the client only (never a secret)", async () => {
+  const settings = { cloud: "commercial", tenantIds: [TENANT_A] };
+  it("builds the link from the settings it is given; writes is false for the read scopes", async () => {
     const d = deps();
-    const link = await createAdminConsentLink(d)("PKG", { cloud: "commercial", tenantIds: [TENANT_A] });
-    expect(link).toBe(buildAdminConsentUrl(base));
-    expect(JSON.stringify(d.client.mock.results)).not.toContain(SECRET);
+    expect(await createMicrosoftConnectInfo(d)("PKG", settings)).toEqual({ url: buildAdminConsentUrl(base), writes: false });
   });
-  it("a lane on another cloud reads nothing at all", async () => {
+  it("writes is true exactly when the same scope list that builds the link has Mail.ReadWrite or Mail.Send", async () => {
+    const withWrites = [...READ, "Mail.ReadWrite", "Mail.Send"];
+    const info = await createMicrosoftConnectInfo({ ...deps(), scopesFor: async () => withWrites })("PKG", settings);
+    expect(info.writes).toBe(true);
+    expect(new URL(info.url ?? "").searchParams.get("scope")).toMatch(/Mail\.Send/);
+    expect(scopesAllowWrites(READ)).toBe(false);
+    expect(scopesAllowWrites(["mail.send"])).toBe(true);
+  });
+  it("a lane on another cloud has no link and reads no client; the wording switch is still from the scopes", async () => {
     const d = deps();
-    expect(await createAdminConsentLink(d)("PKG", { cloud: "gcc_high", tenantIds: [TENANT_A] })).toBeNull();
+    expect(await createMicrosoftConnectInfo(d)("PKG", { cloud: "gcc_high", tenantIds: [TENANT_A] })).toEqual({ url: null, writes: false });
     expect(d.client).not.toHaveBeenCalled();
-    expect(d.scopesFor).not.toHaveBeenCalled();
   });
-  it("a missing environment or an unreadable policy is no link, not an error", async () => {
-    expect(await createAdminConsentLink({ ...deps(), client: () => { throw new Error("GRAPH_CLIENT_ID missing"); } })("PKG", { cloud: "commercial", tenantIds: [TENANT_A] })).toBeNull();
-    expect(await createAdminConsentLink({ ...deps(), scopesFor: async () => { throw new Error("db down"); } })("PKG", { cloud: "commercial", tenantIds: [TENANT_A] })).toBeNull();
+  it("a missing environment is no link; an unreadable policy is no link and writes true (never 'read-only' on a guess)", async () => {
+    expect(await createMicrosoftConnectInfo({ ...deps(), client: () => { throw new Error("GRAPH_CLIENT_ID missing"); } })("PKG", settings)).toEqual({ url: null, writes: false });
+    expect(await createMicrosoftConnectInfo({ ...deps(), scopesFor: async () => { throw new Error("db down"); } })("PKG", settings)).toEqual({ url: null, writes: true });
   });
 });
 

@@ -9,7 +9,7 @@ import { createReconnectRecorder } from "../quickbooks/reconnect";
 import { apiErrorStore, connectionLoader, getToken, laneConfigReader, microsoftIdentityReader, microsoftIdentityWriter, reconnectStore, revokeToken, rotateToken, writePolicyReader } from "../vault/index";
 import { SecretValue } from "../vault/secret";
 import { createGraphApi } from "./api";
-import { createAdminConsentLink } from "./consent";
+import { createMicrosoftConnectInfo } from "./consent";
 import { createMicrosoftDisconnect } from "./disconnect";
 import { classifyGraphFailure } from "./errors";
 import { createMicrosoftGuard } from "./guard";
@@ -60,8 +60,8 @@ export const microsoftOAuthProvider = createMicrosoftOAuthProvider({
   writesAllowed: (laneId) => writePolicyReader.emailWritesAllowed(laneId),
 });
 
-/** The admin consent link of a lane (T-257): public values only (client id, redirect URI), the lane's connect scopes; null when none can be built. Not a connect, stores nothing. */
-export const microsoftAdminConsentLink = createAdminConsentLink({
+/** The admin consent link of a lane (T-257: public values only, client id and redirect URI, the lane's connect scopes; none when it cannot be built) and whether the connect asks for write scopes (same scope list). Not a connect, stores nothing. */
+export const microsoftConnectInfo = createMicrosoftConnectInfo({
   client: () => {
     const env = requireConnectorEnv("graph");
     return { clientId: env.GRAPH_CLIENT_ID, redirectUri: env.GRAPH_REDIRECT_URI };

@@ -1,9 +1,9 @@
-// T-257: Settings -> Connections, "Your Microsoft accounts" beside "Your Google accounts". NOT RUN by the builder (see the PR body, "Needs human").
-// Synthetic rows and a synthetic lane_config version are written to the LOCAL database only; the original lane config is put back by a new
-// version in afterAll (lane_config is insert-only). No Microsoft call is made anywhere: the connect forms are checked, not submitted (the connect
-// flow itself is covered by the connector tests with the MSW fakes of Entra and Graph), and Disconnect is local.
-// The spec needs GRAPH_CLIENT_ID, GRAPH_CLIENT_SECRET and GRAPH_REDIRECT_URI set to synthetic values in the web server's environment for the admin
-// consent link; without them the link is simply not drawn and that one test is skipped.
+// T-257: Settings -> Connections, "Your Microsoft accounts" beside "Your Google accounts". NOT RUN by the builder: every Playwright run starts with
+// `scripts/e2e-reset.mjs` (`supabase db reset --local`, via playwright.config.ts global setup), which wipes the LOCAL database, live connections and
+// Vault tokens included. Synthetic rows and synthetic lane_config versions are written to that freshly reset database; afterAll puts the mail
+// providers back to Google only (lane_config is insert-only, so that is one more version). No Microsoft call is made anywhere: the connect forms are
+// checked, not submitted (the connect flow itself is covered by the connector tests with the MSW fakes of Entra and Graph), and Disconnect is local.
+// The admin consent link is not asserted here (it needs synthetic GRAPH_* values in the web server's environment; it is unit-tested).
 import { expect, test, type Page } from "@playwright/test";
 import { completeMfa, expectLaneHome, nextTotpWindow, signInWithEmailCode } from "./helpers";
 import { clearMailbox } from "./mailpit";
@@ -24,28 +24,24 @@ async function signIn(page: Page, email: string): Promise<void> {
 }
 
 const cleanup = () => sql(`delete from core.connections where id in ('${MID}', '${GID}', '${OID}');`);
-const saveConfig = () => sql(`create table if not exists public.e2e_t257_saved as select config from core.lane_config_current where lane_id = 'PKG';`);
+// Builds `mail` when the config has none (the seeded PKG config has no `mail` key), sets the providers, and adds or removes the `microsoft` block.
 const setConfig = (providers: string[], withBlock: boolean) =>
   sql(`insert into core.lane_config (lane_id, version, config)
        select 'PKG', c.version + 1,
-              jsonb_set(c.config, '{mail,providers}', '${JSON.stringify(providers)}'::jsonb, true)
+              jsonb_set(c.config, '{mail}', coalesce(c.config->'mail', '{}'::jsonb) || jsonb_build_object('providers', '${JSON.stringify(providers)}'::jsonb), true) - 'microsoft'
               || case when ${withBlock} then jsonb_build_object('microsoft', jsonb_build_object('cloud', 'commercial', 'tenant_ids', jsonb_build_array('${TENANT}'))) else '{}'::jsonb end
        from core.lane_config_current c where c.lane_id = 'PKG';`);
-const restoreConfig = () =>
-  sql(`insert into core.lane_config (lane_id, version, config)
-       select 'PKG', c.version + 1, s.config from core.lane_config_current c, public.e2e_t257_saved s where c.lane_id = 'PKG';
-       drop table if exists public.e2e_t257_saved;`);
 const seed = (id: string, provider: string, address: string, owner: string, status = "active") =>
   sql(`insert into core.connections (id, lane_id, provider, external_account_id, status, owner_user_id) values ('${id}', 'PKG', '${provider}', '${address}', '${status}', (select id from auth.users where email = '${owner}'));`);
 
 test.beforeEach(() => {
   cleanup();
-  saveConfig();
+  // As settings-google.spec.ts: stop rather than touch a non-synthetic connection.
+  sql(`do $$ begin if exists (select 1 from core.connections where lane_id = 'PKG' and provider in ('google', 'microsoft')) then
+         raise exception 'T-257 e2e: a non-synthetic Google or Microsoft connection exists in local lane PKG; remove it first'; end if; end $$;`);
 });
-test.afterEach(() => {
-  cleanup();
-  restoreConfig();
-});
+test.afterEach(cleanup);
+test.afterAll(() => setConfig(["google"], false));
 
 test("both providers enabled: both sections, the owner's Google and Microsoft rows each in its own, Connect posts to the Microsoft route", async ({ page }, info) => {
   test.skip(info.project.name !== "desktop", "owner persona is the desktop project's member");

@@ -41,12 +41,16 @@ export async function SettingsPage({
   const tz = viewerZone((await cookies()).get("tz")?.value);
   // T-257: ONE read of the company's enabled providers per render, shared by the Google and the Microsoft section.
   const providers = timed("load.mail_providers", () => mailProvidersFor(g, lane.laneId));
+  const microsoftP = timed("load.microsoft", async () => microsoftSectionFor(g, lane.laneId, await providers));
   const [result, quickbooks, google, microsoft, composio, brain, coverage, news, jobFailures] = await Promise.all([
     // The result of a connect the OAuth callback sent back here (fixed, allowlisted text; connect roles only).
-    timed("load.connect_result", () => connectResultFor(g, lane.laneId, query)),
+    timed("load.connect_result", async () => {
+      const section = await microsoftP; // the banner's Microsoft wording follows the same scope list as the section; consent returns show only where Microsoft is enabled
+      return connectResultFor(g, lane.laneId, query, { enabled: Boolean(section && !section.paused && !section.unavailable && !section.settingsUnknown), writes: section?.writes ?? null });
+    }),
     timed("load.quickbooks", () => quickbooksSectionFor(g, lane.laneId, undefined, approvalsDeps)),
     timed("load.google", async () => googleSectionFor(g, lane.laneId, undefined, await providers)),
-    timed("load.microsoft", async () => microsoftSectionFor(g, lane.laneId, await providers)),
+    microsoftP,
     timed("load.composio", () => composioSectionFor(g, lane.laneId, availability, undefined, missingSettings)),
     onboardingFor(lane.laneId), // null unless the owner has the brain view here
     // Coverage per source (T-234; it was a card on Home). The SQL answers only for callers with the comms or calendar view.

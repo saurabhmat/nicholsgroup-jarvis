@@ -138,28 +138,38 @@ describe("Microsoft results (T-066)", () => {
 });
 
 describe("Microsoft results (T-257)", () => {
-  const NOTE = /connects your mail and calendar, read-only\. It is not how anyone signs in to the portal/;
-  it("the four refusals say it connects mail and calendar read-only and is not how anyone signs in; Google's text is unchanged", () => {
-    for (const connect of ["admin_consent_required", "wrong_tenant", "wrong_account", "account_refused"]) {
-      expect(connectResultMessage({ connect, provider: "microsoft" })?.description, connect).toMatch(NOTE);
-      expect(connectResultMessage({ connect, provider: "google" })?.description ?? "", connect).not.toMatch(NOTE);
+  const READ = /connects your mail and calendar, read-only\. It is not how anyone signs in to the portal/;
+  const WRITE = /also asks permission to create and send mail, which still only happens after approval in the portal\. It is not how anyone signs in to the portal/;
+  const REFUSALS = ["admin_consent_required", "wrong_tenant", "wrong_account", "account_refused"];
+  it("the four refusals follow the scopes: read-only when only read scopes are requested, never 'read-only' when write scopes are; neutral when not known; Google unchanged", () => {
+    for (const connect of REFUSALS) {
+      expect(connectResultMessage({ connect, provider: "microsoft" }, { enabled: true, writes: false })?.description, connect).toMatch(READ);
+      const on = connectResultMessage({ connect, provider: "microsoft" }, { enabled: true, writes: true })?.description ?? "";
+      expect(on, connect).toMatch(WRITE);
+      expect(on, connect).not.toMatch(/read-only/i);
+      const unknown = connectResultMessage({ connect, provider: "microsoft" })?.description ?? "";
+      expect(unknown, connect).not.toMatch(/read-only/i);
+      expect(unknown, connect).toMatch(/not how anyone signs in to the portal/);
+      expect(connectResultMessage({ connect, provider: "google" }, { enabled: true, writes: false })?.description ?? "", connect).not.toMatch(/not how anyone signs in to the portal/);
     }
   });
-  it("the admin consent return has two fixed texts, only for Microsoft, and copies nothing from the URL", () => {
-    expect(connectResultMessage({ connect: "consent_ok", provider: "microsoft" })).toMatchObject({ tone: "success", title: "Microsoft sent the administrator back" });
-    expect(connectResultMessage({ connect: "consent_failed", provider: "microsoft" })).toMatchObject({ tone: "alert", title: "Administrator approval was not completed" });
+  it("the admin consent return has two fixed texts, only for Microsoft AND only where Microsoft is enabled; nothing is copied from the URL", () => {
+    const enabled = { enabled: true, writes: false };
+    expect(connectResultMessage({ connect: "consent_ok", provider: "microsoft" }, enabled)).toMatchObject({ tone: "success", title: "Microsoft sent the administrator back" });
+    expect(connectResultMessage({ connect: "consent_failed", provider: "microsoft" }, enabled)).toMatchObject({ tone: "alert", title: "Administrator approval was not completed" });
+    expect(connectResultMessage({ connect: "consent_ok", provider: "microsoft" }, { enabled: false, writes: null })).toBeNull();
+    expect(connectResultMessage({ connect: "consent_failed", provider: "microsoft" })).toBeNull();
     for (const provider of ["google", "quickbooks", undefined]) {
-      for (const connect of ["consent_ok", "consent_failed", "disconnected"]) expect(connectResultMessage({ connect, provider }), `${connect} ${String(provider)}`).toBeNull();
+      for (const connect of ["consent_ok", "consent_failed", "disconnected"]) expect(connectResultMessage({ connect, provider }, enabled), `${connect} ${String(provider)}`).toBeNull();
     }
-    const m = connectResultMessage({ connect: "consent_ok", provider: "microsoft", tenant: "canary-ms-5", scope: "canary-ms-5", admin_consent: "canary-ms-5", error_description: "canary-ms-5" });
+    const m = connectResultMessage({ connect: "consent_ok", provider: "microsoft", tenant: "canary-ms-5", scope: "canary-ms-5", admin_consent: "canary-ms-5", error_description: "canary-ms-5" }, enabled);
     expect(JSON.stringify(m)).not.toContain("canary-ms-5");
   });
-  it("the Disconnect result is fixed: stored access deleted, Microsoft may still list the app, where the person or administrator removes it; no link", () => {
+  it("the Disconnect banner is neutral (it does not assert a deletion), fixed, has no link, and says nothing about read-only", () => {
     const m = connectResultMessage({ connect: "disconnected", provider: "microsoft", text: "canary-ms-6" });
-    expect(m?.tone).toBe("success");
-    expect(m?.description).toMatch(/stored in the portal was deleted/);
+    expect(m?.description).toMatch(/^If you disconnected a Microsoft account, the access the portal stored for it was deleted here/);
     expect(m?.description).toMatch(/Microsoft may still list the app/);
     expect(m?.description).toMatch(/Entra admin center \(Enterprise apps → the app → Permissions\)/);
-    expect(JSON.stringify(m)).not.toMatch(/canary-ms-6|https?:\/\//);
+    expect(JSON.stringify(m)).not.toMatch(/canary-ms-6|https?:\/\/|read-only/);
   });
 });

@@ -7,6 +7,7 @@ import { Alert, AlertDescription, AlertTitle, Badge, buttonVariants } from "@nic
 import type { GoogleConnectionState } from "@/lib/google-connection";
 import type { MicrosoftSectionView } from "@/lib/microsoft-connection";
 import { ConnectionRow, when } from "./connection-rows";
+import { microsoftConnects, microsoftConsentAsks, microsoftRowSub } from "@/lib/microsoft-wording";
 import { MicrosoftDisconnectButton } from "./microsoft-disconnect-button";
 
 export const MICROSOFT_PAUSED_TEXT = "Paused: Microsoft is not enabled for this company";
@@ -23,10 +24,16 @@ const URGENT: ReadonlySet<GoogleConnectionState> = new Set(["reconnect_required"
 export function MicrosoftNotices({ view }: { view: MicrosoftSectionView }) {
   return (
     <>
-      {!view.paused && view.connections.some((c) => c.mine && (c.state === "reconnect_required" || c.state === "disconnected")) ? (
+      {!view.paused && !view.settingsUnknown && view.connections.some((c) => c.mine && (c.state === "reconnect_required" || c.state === "disconnected")) ? (
         <Alert variant="alert">
           <AlertTitle>Microsoft needs to be reconnected</AlertTitle>
           <AlertDescription>Microsoft access was revoked or has expired, so mail and calendar are no longer syncing. Use the Reconnect button on the account below.</AlertDescription>
+        </Alert>
+      ) : null}
+      {view.settingsUnknown ? (
+        <Alert variant="alert" data-testid="microsoft-settings-unknown">
+          <AlertTitle>Microsoft settings could not be read</AlertTitle>
+          <AlertDescription>The portal could not check this company&apos;s Microsoft settings just now, so Connect and Reconnect are unavailable. Your accounts are listed below. Reload the page in a minute.</AlertDescription>
         </Alert>
       ) : null}
       {view.unavailable ? (
@@ -42,11 +49,12 @@ export function MicrosoftNotices({ view }: { view: MicrosoftSectionView }) {
 export function MicrosoftRows({ laneId, view }: { laneId: string; view: MicrosoftSectionView }) {
   if (view.unavailable) return null;
   const paused = view.paused === true;
+  const locked = paused || view.settingsUnknown === true; // no Connect, no Reconnect
   const start = `/api/connect/microsoft/start?lane=${encodeURIComponent(laneId)}`;
   const mine = view.connections.filter((c) => c.mine);
   const others = view.connections.filter((c) => !c.mine);
   const connected = mine.some((c) => c.state !== "disconnected");
-  const sub = "Mail and calendar, read-only";
+  const sub = microsoftRowSub(view.writes);
   const status = (c: MicrosoftSectionView["connections"][number]) => (paused ? <Badge variant="muted">{MICROSOFT_PAUSED_TEXT}</Badge> : <Badge variant={LABEL[c.state].variant}>{LABEL[c.state].text}</Badge>);
   const syncCell = (c: MicrosoftSectionView["connections"][number]) => (
     <>
@@ -54,7 +62,7 @@ export function MicrosoftRows({ laneId, view }: { laneId: string; view: Microsof
       <span className="block">Calendar: {when(c.lastCalendarSyncAt)}</span>
     </>
   );
-  const connectButton = paused ? null : (
+  const connectButton = locked ? null : (
     <form method="post" action={start}>
       <button type="submit" className={buttonVariants({ variant: connected ? "outline" : "default" })}>
         {connected ? "Connect another Microsoft account" : "Connect Microsoft"}
@@ -62,7 +70,7 @@ export function MicrosoftRows({ laneId, view }: { laneId: string; view: Microsof
     </form>
   );
   const reconnect = (c: MicrosoftSectionView["connections"][number]) =>
-    paused ? null : (
+    locked ? null : (
       <form method="post" action={`${start}&connection=${encodeURIComponent(c.id)}`}>
         <button type="submit" aria-label={`Reconnect ${c.mailbox}`} className={buttonVariants({ variant: URGENT.has(c.state) ? "default" : "outline" })}>
           Reconnect
@@ -83,7 +91,7 @@ export function MicrosoftRows({ laneId, view }: { laneId: string; view: Microsof
     />
   ));
   if (mine.length === 0) {
-    if (paused) return <>{otherRows}</>;
+    if (locked) return <>{otherRows}</>;
     return (
       <>
         <ConnectionRow testId="microsoft-not-connected" provider="Your Microsoft accounts" sub={sub} account={<span className="text-muted-foreground">Not connected</span>} status={<Badge variant="muted">Not connected</Badge>} lastSync="Not synced yet" actions={connectButton} />
@@ -112,6 +120,8 @@ export function MicrosoftRows({ laneId, view }: { laneId: string; view: Microsof
           note={
             paused ? (
               <>Nothing was deleted: the connection and its data are kept, and syncing is paused. You can still disconnect it.</>
+            ) : view.settingsUnknown ? (
+              <>Connect and Reconnect are unavailable until the company&apos;s Microsoft settings can be read. You can still disconnect it.</>
             ) : !c.mailboxAllowed ? (
               <>This account is not on a domain this company allows, so it is not syncing. Ask your administrator.</>
             ) : null
@@ -128,7 +138,7 @@ export function MicrosoftNotes({ view }: { view: MicrosoftSectionView }) {
   return (
     <div className="flex flex-col gap-2 text-small text-muted-foreground" data-testid="microsoft-notes">
       <p>
-        This connects your Microsoft 365 mail and calendar, read-only, and is not how anyone signs in to the portal. Each Microsoft account belongs to the person who connected it: its mail and calendar are visible only to them, and you connect your own accounts yourself.{" "}
+        {microsoftConnects(view.writes)} Each Microsoft account belongs to the person who connected it: its mail and calendar are visible only to them, and you connect your own accounts yourself.{" "}
         <span className="font-medium text-foreground">Removing the portal&apos;s access:</span> Disconnect deletes the access the portal stored and does not contact Microsoft, so Microsoft may still list the app. You or your Microsoft 365 administrator can remove the
         app&apos;s access in your Microsoft account or in the Entra admin center (Enterprise apps → the app → Permissions).
       </p>
@@ -138,7 +148,7 @@ export function MicrosoftNotes({ view }: { view: MicrosoftSectionView }) {
           <a href={view.adminConsentUrl} target="_blank" rel="noopener noreferrer" className="font-medium text-foreground underline underline-offset-4">
             Administrator approval link
           </a>
-          . It only asks for the read-only mail and calendar permissions above; the administrator approves at Microsoft and the portal stores nothing.
+          . {microsoftConsentAsks(view.writes)} The administrator approves at Microsoft and the portal stores nothing.
         </p>
       ) : null}
     </div>

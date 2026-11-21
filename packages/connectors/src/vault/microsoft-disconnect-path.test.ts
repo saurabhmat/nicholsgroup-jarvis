@@ -1,6 +1,8 @@
 // T-257 (D-55): the local Disconnect of a Microsoft mailbox through the REAL `createTokenVault` over an RPC twin of the SQL revoke function
 // (which never looks at the provider). The pgTAP side is not run here. Synthetic data only (rule 10).
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
+
+afterEach(() => vi.unstubAllGlobals());
 import { mintLaneBoundConnection, type LaneBoundConnection } from "../contract/lane-bound";
 import { createMicrosoftDisconnect } from "../microsoft/disconnect";
 import { createTokenVault } from "./tokens";
@@ -25,5 +27,18 @@ describe("Microsoft disconnect through the real token vault", () => {
     const d = createMicrosoftDisconnect({ loader: { loadConnection: async () => conn() }, vault });
     expect(await d("PKG", CID, OWNER)).toBe(true);
     expect(calls).toEqual([{ fn: "connection_token_revoke", args: { p_lane_id: "PKG", p_connection_id: CID, p_actor_id: OWNER } }]);
+  });
+
+  it("sends no request to any host during a disconnect through the real vault path (fetch is recorded, not just blocked)", async () => {
+    const urls: string[] = [];
+    vi.stubGlobal("fetch", async (input: unknown) => {
+      urls.push(String(input instanceof Request ? input.url : input));
+      return new Response("{}");
+    });
+    const client = { schema: () => ({ rpc: async () => ({ data: true, error: null }) }) };
+    const d = createMicrosoftDisconnect({ loader: { loadConnection: async () => conn() }, vault: createTokenVault((async () => client) as never) });
+    await d("PKG", CID, OWNER);
+    expect(urls.filter((u) => /microsoft|graph\.|login\./i.test(u))).toEqual([]);
+    expect(urls).toEqual([]);
   });
 });
