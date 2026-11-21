@@ -31,11 +31,18 @@ export type MailSyncDeps<P extends CommsProviderId = CommsProviderId> = {
   /** Safety cap on pages in one run. Default 500 (50,000 messages at the default page size). */
   maxPages?: number;
   pageSize?: number;
+  /**
+   * Time budget of one run (T-258, spec §8.5): after a page is applied and the budget is spent, the run stops and the next run continues from the stored
+   * cursor (the first load of a large Graph folder takes many pages). Default: none (Gmail is unchanged). `now` is injected for tests.
+   */
+  maxRunMs?: number;
+  now?: () => number;
 };
 
 export function createMailSync<P extends CommsProviderId>(deps: MailSyncDeps<P>) {
   const log = deps.logger ?? connectorLog;
   const maxPages = deps.maxPages ?? 500;
+  const clock = deps.now ?? Date.now;
 
   return {
     async run(laneId: LaneId, conn: LaneBoundConnection<P>): Promise<MailSyncRunResult> {
@@ -45,6 +52,7 @@ export function createMailSync<P extends CommsProviderId>(deps: MailSyncDeps<P>)
       const provider = deps.mail.provider;
       const child = log.child({ laneId, provider, connectionId: conn.id });
       const options = deps.pageSize ? { pageSize: deps.pageSize } : undefined;
+      const startedAt = clock();
       const result: MailSyncRunResult = { mode: "incremental", pages: 0, written: 0, skipped: 0, removed: 0, resynced: false, conflict: false };
       let cursor: CommsCursor | null = await deps.store.getCursor(laneId, conn);
       if (cursor === null) result.mode = "full";
@@ -76,6 +84,10 @@ export function createMailSync<P extends CommsProviderId>(deps: MailSyncDeps<P>)
         cursor = r.nextCursor;
         if (!r.hasMore) {
           child.info(`${provider}.mail.sync_done`, { mode: result.mode, pages: result.pages, written: result.written, removed: result.removed });
+          return result;
+        }
+        if (deps.maxRunMs !== undefined && clock() - startedAt >= deps.maxRunMs) {
+          child.warn(`${provider}.mail.sync_time_budget`, { pages: result.pages });
           return result;
         }
       }

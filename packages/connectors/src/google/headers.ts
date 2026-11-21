@@ -2,13 +2,10 @@
 // from the sender (rule 9), so every value is stripped of control and bidirectional characters, bounded, and checked
 // against the same limits as comms.message_index; anything unusable becomes null / is dropped instead of failing the sync.
 import { MAIL_ADDRESS } from "../comms/address";
+import { cleanText } from "../comms/text";
 
-/** Same set as the T-062 schemas refuse (controls, line/paragraph separators, bidi controls). */
-const UNSAFE = /[\u0000-\u001f\u007f-\u009f\u2028\u2029\u202a-\u202e\u2066-\u2069]/g;
-
-export function cleanText(s: string): string {
-  return s.replace(UNSAFE, " ").replace(/\s+/g, " ").trim();
-}
+// `cleanText` moved to ../comms/text (T-258) so the Microsoft mapper does not import Google code; re-exported for the Gmail code.
+export { cleanText };
 
 function decodeBytes(bytes: Buffer, charset: string): string {
   try {
