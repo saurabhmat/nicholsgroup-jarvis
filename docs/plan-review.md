@@ -1854,3 +1854,22 @@ Changed by the calling session in the two gitignored files (`enable-lane-mail-T-
 Tested on the local database in rolled-back transactions with the local `NC` made to look like production: run without owner, second run (nothing changed), check 14 of 14 true, owner added later, check again; refusals for an edited policy, a policy with a write action, a stray member and a stray owner; and a rehearsal of the filled files with a local user given the same sign-in address. One security review of the change: no BLOCKER, no HIGH; MEDIUM (runbook still described two people: fixed) and LOW-2 (owner lookup evaluated with an empty address: fixed). Logged: (LOW-1) a policy deliberately inserted with exactly the default values cannot be told from the bootstrap one; (LOW-3) no notice when the policy already matches.
 
 Lesson for later runbooks: before writing production SQL from the documents, have the human run a read-only state query first.
+
+## First live Microsoft run, production lane `NC` (H-070 step 2, Nov 22, 2026, Saurabh's own mailbox)
+Result: connect, the scheduled mail sync, the scheduled calendar sync, Home, the source labels ("Outlook · address", "Open in Outlook") and the AI summary all worked in production with a real nichols.capital mailbox (a small one: a handful of messages, no meetings). Reported by Saurabh with screenshots and server log lines; nothing was read by the agent from production.
+
+What went wrong on the way, in order (each cost a round with the human):
+1. **The SQL assumed two portal users and a fresh policy** (see the T-265 follow-up above; H-074).
+2. **Wrong production address given by the agent.** The agent told Saurabh to register `https://portal.pub-k.org/...` as the redirect. That domain is not live (D-5, H-021 open); production runs on its fixed `*.vercel.app` address. The server refused with `GRAPH_REDIRECT_URI: must be on the app's own origin` (banner "This connection isn't configured on this server"). Fixed by Saurabh: `GRAPH_REDIRECT_URI` = `NEXT_PUBLIC_APP_URL` + `/api/connect/microsoft/callback`, the same address added in Entra. The `portal.pub-k.org` entry stays in Entra for H-021.
+3. **The Entra app had 7 delegated Graph permissions that are not ours** (`AccessReview.*` x3, `UserAuthMethod-Email.*` x4), all admin-consented. The token response then names them, and `assertGrantedScopes` refuses ("Microsoft granted a scope that was not requested"), shown as "Microsoft account not accepted". Fixed by Saurabh (revoked and removed; 7 remain: `User.Read`, `Mail.Read`, `Calendars.Read`, `openid`, `offline_access`, `email`, `profile`). **Confirmed live (V-5): a v2 token response lists every consented scope of the resource, not only the requested ones.** Design consequence for T-262/T-263: once any lane of a tenant allows email writes and the admin consents `Mail.ReadWrite`/`Mail.Send`, a read-only lane of the SAME tenant would be refused on every connect by this check. To decide before T-262 (open question for the spec, not changed now).
+4. Not faults: "Mail: not synced yet" for the first minutes (mail and calendar run on different quarter-hours; the first mail run after the connect came 11 minutes later).
+
+Faults found in the app (candidate task, needs approval):
+- (a) Home's AI summary was generated when nothing was connected ("No mailbox or calendar is connected...", one model call) and stayed after the mailbox was connected until Regenerate (stale only after 3 hours).
+- (b) Coverage showed "Mail synced ... OK" with the time of the calendar run, before any mail was read.
+- (c) "Sync now" is not on Settings in a lane without a Google account (it sits in the Google section); it is on Home.
+- (d) An automated report (DMARC aggregate) is marked "Waiting on you" on Home while the summary says it needs no action (Microsoft rows: bulk/automated detection).
+- (e) The refusal log line does not name the unexpected scope, and `[api/connect/start] unavailable` logs only the error name; both cost a round. A scope name restricted to a safe pattern, and the ConnectorError kind, would have been enough.
+- (f) Runbook: say where the production address comes from (`NEXT_PUBLIC_APP_URL`), and list the exact permissions the Entra app may have, with the revoke-then-remove order.
+
+Still unverified (spec §15): message body read, "Open in Outlook" target, a real meeting, an all-day event and a recurring series, throttling, a large mailbox.
