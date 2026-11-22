@@ -5,7 +5,7 @@
 //   regenerateBriefing(lane)   the "Regenerate" menu item (once per 30 minutes);
 //   briefingRunState(lane)     the cheap poll: is a run open, and what is the newest briefing time.
 // Order for a start: lane id shape -> AAL2 session + a member who may have a briefing (owner, admin_technical, viewer: own_mail; the database checks it again) -> model configured -> the lane policy (unreadable:
-// no run) -> the tz cookie (read BEFORE the claim) -> sources (the owner must hold the mail view: gate `no_sources`, before the
+// no run) -> the tz cookie (read BEFORE the claim) -> sources (the person must hold the mail view and have an own mail connection in use: gate `no_sources`, before the
 // claim) -> the SQL CLAIM (core.briefing_claim_auto / _regenerate: stale, one running per owner, 6 per owner per New York day,
 // 10-minute pause, Regenerate 30 minutes; refusals come back as a gate code, nothing is raised) -> the brain context is loaded
 // (while cookies are available, 1.5 s limit; every lane client it needs is resolved through requireLane in that window, never
@@ -33,7 +33,7 @@ import { guards } from "@/lib/guards";
 import { viewerZone } from "@/lib/briefing";
 import { BACKGROUND_RUN_TIMEOUT_MS, policyFrom, runBriefingBounded } from "@/lib/briefing-run";
 import { replyProposer } from "@/lib/briefing-proposals";
-import { briefingRunStateFrom, type BriefingGate, type BriefingRunStateView } from "@/lib/briefing-runs";
+import { briefingRunStateFrom, hasUsableSource, type BriefingGate, type BriefingRunStateView } from "@/lib/briefing-runs";
 
 export type BriefingStartState =
   | { started: true }
@@ -75,10 +75,11 @@ async function start(laneId: string, kind: "auto" | "regenerate"): Promise<Brief
     if (pol.error) return { error: "unavailable" };
     // Cookie-backed values first: nothing between the claim and after() can fail on them.
     const viewerTz = viewerZone((await cookies()).get("tz")?.value);
-    // No sources, no run: the owner must hold the mail view (the briefing is built on the mail index). Before the claim.
+    // No sources, no run (T-270): the person must hold the mail view AND have an own mail connection in use in this lane. Seeing the view alone
+    // is not enough: with nothing connected the summary would be a model call that says "nothing is connected" and then lingers. Before the claim.
     const cov = await lane.schema("core").rpc("briefing_coverage", { p_lane: laneId });
     if (cov.error) return { error: "unavailable" };
-    if (!parseCoverageRows(cov.data).some((c) => c.stream === "mail")) return { started: false, gate: "no_sources" };
+    if (!hasUsableSource(parseCoverageRows(cov.data))) return { started: false, gate: "no_sources" };
     const claim = await lane.schema("core").rpc(kind === "auto" ? "briefing_claim_auto" : "briefing_claim_regenerate", { p_lane: laneId });
     if (claim.error) return { error: "unavailable" };
     const res = claim.data as { id?: unknown; gate?: unknown } | null;

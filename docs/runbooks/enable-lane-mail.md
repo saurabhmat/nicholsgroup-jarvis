@@ -33,8 +33,9 @@ Tick every line. Each one has an exact way to check it.
    message or commit id is on `main` after the T-265 merge. *Expect:* yes. If not, merge and deploy first. (The code comes before the SQL because an older deployment ignores the new `limit_to_enabled_modules` setting, so the company would show every module, finance tiles and QuickBooks strip included.) (T-067 and T-260 matter most: until
    they are deployed every Microsoft calendar sync fails and raises an alert, H-069.)
 2. **H-068 is done.** Vercel dashboard -> Settings -> Environment Variables: `GRAPH_CLIENT_ID`, `GRAPH_CLIENT_SECRET` and `GRAPH_REDIRECT_URI`
-   exist for **Production** only (not Preview), and `GRAPH_TENANT_ID` exists nowhere. The redirect address ends in `/api/connect/microsoft/callback`
-   and is also listed in the Entra app (Entra admin centre -> App registrations -> the app -> Authentication -> Web). *Expect:* all true.
+   exist for **Production** only (not Preview), and `GRAPH_TENANT_ID` exists nowhere. `GRAPH_REDIRECT_URI` is **exactly** the production
+   `NEXT_PUBLIC_APP_URL` plus `/api/connect/microsoft/callback` (see "The redirect address and the Entra app" below: never a domain that is not live yet),
+   and that same address is listed in the Entra app (Entra admin centre -> App registrations -> the app -> Authentication -> Web). *Expect:* all true.
 3. **The production database has parts 26, 27 and 28.** Supabase dashboard (production project) -> SQL Editor: open
    `supabase/core/bootstrap/manual-migrations/check-part-26.sql`, paste, **Run**; then `check-part-27.sql`, then `check-part-28.sql`.
    *Expect:* every row `true` in each (13, 5 and 5 rows; they were applied on Nov 21, 2026). If a check shows `false`, do not go on.
@@ -179,7 +180,7 @@ roles; checked in code, see the PR notes).
 3. You return to Settings. *Expect:* your address under Your Microsoft accounts, status connected.
    Refusals have fixed texts: "wrong tenant" (the account is in another Microsoft tenant), "account does not match", "not allowed for this
    company" (domain), an "admin approval needed" notice with a link (the tenant admin must approve once).
-4. Click **Sync now**. *Expect:* within a few minutes Inbox lists messages labelled "Outlook · your address" with **Open in Outlook**; open one: the text
+4. Click **Sync now** (Settings -> Connections, above the list, or on Home beside the sync status; it syncs every mail and calendar connection of the company, whichever provider). *Expect:* within a few minutes Inbox lists messages labelled "Outlook · your address" with **Open in Outlook**; open one: the text
    is shown (read live, never stored). Home shows your mail and today's meetings. A large mailbox takes several runs.
 5. Sign in as Robert (he does this himself, later) and check that Settings shows **his** mailbox row and **yours** as health only (status and
    last sync, no message, no subject), and that his Inbox shows only his mail.
@@ -188,6 +189,47 @@ roles; checked in code, see the PR notes).
 
 Write down for the agent, step by step, "ok" or the message you saw word for word. Never paste a token or a code. These answers settle the
 live checks of `docs/plan-review.md` (H-070 step 3).
+
+## The redirect address and the Entra app (reference; T-270)
+
+Read this when a connect is refused, and before you set `GRAPH_REDIRECT_URI` for a new deployment.
+
+**The redirect address.** Until the company's own domain is live, production runs on its fixed Vercel address. The server accepts a redirect
+address only on the app's own origin, so `GRAPH_REDIRECT_URI` must be **`NEXT_PUBLIC_APP_URL` (the Production value, no trailing slash) followed by
+`/api/connect/microsoft/callback`**, and the same address must be listed in the Entra app under Authentication -> Web. Never write the address
+of a domain that is not live yet: the connect then fails at the start with `GRAPH_REDIRECT_URI: must be on the app's own origin` (the banner says
+"This connection isn't configured on this server"). The custom domain's address may be added to the Entra app **in addition**, so that the switch
+to the domain later is a change of the two variables only; it is not used until `NEXT_PUBLIC_APP_URL` is changed.
+
+**The permissions the Entra app may hold** (API permissions -> Microsoft Graph -> **Delegated**) for a company whose policy allows no writes:
+exactly `User.Read`, `Mail.Read`, `Calendars.Read`, `openid` and `offline_access`; `email` and `profile` are harmless extras. Nothing else.
+Microsoft lists **every delegated permission the tenant has consented for the app** in the token answer, not only the ones the connect asked
+for, and the portal refuses any grant that holds a permission it did not ask for ("Microsoft account not accepted"). So one stray
+permission, for example an access-review or authentication-method permission left over from an earlier use of the same app registration,
+makes **every** connect fail, for everyone. To remove such a permission: **first revoke the admin consent** for it (Entra admin centre -> Enterprise
+applications -> the app -> Permissions -> the permission -> revoke, or "Revoke admin consent"), **then** remove it from the app registration
+(App registrations -> the app -> API permissions -> the three dots -> Remove permission). Removing it from the registration alone leaves the
+consent in place and the token answer still names it. Then connect again.
+(When a company's policy later allows email writes, `Mail.ReadWrite` and `Mail.Send` are added for it; a read-only company in the **same** tenant
+would then be refused on every connect. That is an open design question for the write task, not something to work around by hand.)
+
+**When the first sync comes.** After a connect the first sync is not immediate. **Mail** and **calendar** run on different quarter-hours:
+mail at minutes 7, 22, 37 and 52 of every hour, calendar at 0, 15, 30 and 45 (cron `7-59/15` and `*/15`). So the calendar can sync
+first and the mail up to 15 minutes later; until the mail has synced, Settings shows "Mail: not synced yet" for it (and Coverage lists Mail as
+"Not synced yet", never with the calendar's time). **Sync now** starts both at once. Home's AI summary is not made before a mailbox is
+connected, and a summary made before the first sync is renewed once when you next open Home.
+
+**Where to look in the logs** (Vercel -> the project -> Logs, search for the text):
+- `oauth_callback_failed` (event `connector.oauth_callback_failed`): why a connect was refused. The field `reason` is the fixed reason shown to the person.
+  For a refusal because of granted permissions, the field `unexpected_scopes` lists the permissions the grant held that were not asked for, by name
+  (for example `AccessReview.Read.All`); names that are not plain letters, digits, dot, dash or underscore, and any beyond the tenth, appear as `other`.
+  Remove those permissions as described above. The refusal text itself, the redirect and the audit entry never carry the names.
+- `[api/connect/start] unavailable:` is a connect that could not start: the line names the error class and, for a connector error, its `kind` and fixed
+  message (for example `connection_unavailable` with `GRAPH_REDIRECT_URI must end with ...`).
+- `microsoft.mail.sync_done` and `microsoft.calendar.sync_done`: one line per successful sync of a stream (the counts of pages, written and removed
+  messages or events). Their absence after the expected quarter-hour means the stream did not run or failed.
+- `conn.sync.*` (`conn.sync.skipped` with its `reason`, `conn.sync.full_reload`, `conn.sync.cursor_conflict`, `conn.sync.log_failed`): the generic sync runner.
+  `skipped` with `provider_disabled` or `connection_not_usable` explains a connection that is not syncing on purpose.
 
 ## Add the owner later
 

@@ -339,6 +339,37 @@ describe("refused after the exchange: the grant is dropped, never stored, and th
     }
   });
 
+  it("T-270: the refusal log line names every unexpected scope (safe pattern, capped); the message, the redirect and the audit row do not", async () => {
+    const { fake, h } = setup();
+    const odd = "UserAuthMethod-Email.Read.All";
+    const scope = `${READ_SHORT.map((s) => GRAPH_SCOPE_PREFIX + s).join(" ")} AccessReview.Read.All ${odd} ${GRAPH_SCOPE_PREFIX}Mail.Send https://other.example.test/Mail.Read bad;name email profile`;
+    const result = await refused(h, fake, { address: EXEC, scope }, "account_refused", "T-270");
+    const line = h.logs.find((l) => l.event === "connector.oauth_callback_failed");
+    expect(line, "the refusal is logged").toBeTruthy();
+    expect((line?.fields as { unexpected_scopes?: unknown }).unexpected_scopes).toEqual(["AccessReview.Read.All", odd, "Mail.Send", "other"]);
+    expect((line?.fields as { error?: { message?: string } }).error?.message).toContain("granted a scope that was not requested");
+    // nothing else of the answer leaked: not the token endpoint's other fields, not the address
+    const out = JSON.stringify(line);
+    expect(out).not.toContain(EXEC);
+    expect(out).not.toContain("other.example.test");
+    expect(JSON.stringify([result, h.audits])).not.toMatch(/AccessReview|UserAuthMethod|Mail\.Send/);
+  });
+
+  it("T-270: at most 10 names are logged, the rest as one 'other'; an overlong or odd name is 'other'", async () => {
+    const { loggableScopes } = await import("./provider");
+    const many = Array.from({ length: 14 }, (_, i) => `Scope${String(i)}.Read`);
+    expect(loggableScopes(many)).toEqual([...many.slice(0, 10), "other"]);
+    expect(loggableScopes(["a".repeat(65), "x y", "tok/en", "ok_name-1.2", `${GRAPH_SCOPE_PREFIX}Files.Read`, "ok_name-1.2"])).toEqual(["ok_name-1.2", "Files.Read", "other"]);
+    expect(loggableScopes([])).toEqual([]);
+  });
+
+  it("T-270: a refusal for a MISSING scope carries no scope names in its log line", async () => {
+    const { fake, h } = setup();
+    await refused(h, fake, { address: EXEC, scope: READ_SHORT.slice(1).join(" ") }, "account_refused", "missing");
+    const line = h.logs.find((l) => l.event === "connector.oauth_callback_failed");
+    expect((line?.fields as { unexpected_scopes?: unknown }).unexpected_scopes).toBeUndefined();
+  });
+
   it("a missing scope (the user unticked one), no scope field, and no refresh token each refuse", async () => {
     for (const missing of READ_SHORT) {
       const { fake, h } = setup();

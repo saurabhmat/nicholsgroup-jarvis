@@ -9,7 +9,7 @@
 //     with Disconnect) and a neutral notice; with no Microsoft rows nothing about Microsoft is drawn. Google is not affected.
 import { AuthError, type Guards } from "@nichols/core/auth";
 import type { LaneId } from "@nichols/core";
-import { MAIL_CONNECT_ROLES } from "@nichols/connectors/oauth";
+import { CONNECT_ROLES, MAIL_CONNECT_ROLES } from "@nichols/connectors/oauth";
 import { microsoftConnectInfo } from "@nichols/connectors/microsoft-settings";
 import { loadMailSection, type GoogleSectionView } from "./google-connection";
 import type { MailProvidersView } from "./mail-providers";
@@ -48,15 +48,24 @@ export async function microsoftSectionFor(
     if (e instanceof AuthError) return null;
     throw e;
   }
+  // T-270: whether this person may use "Sync now" (owner, admin_technical), the same rule as the Google section; the one Sync now button on Settings reads it from either view.
+  const canSync = await g.requireRole(laneId, [...CONNECT_ROLES]).then(
+    () => true,
+    (e: unknown) => {
+      if (e instanceof AuthError) return false;
+      throw e;
+    },
+  );
+  const sync = canSync ? { canSync: true as const } : {};
   const settings = providers.state === "unknown" ? null : providers.microsoft;
   try {
     const view = await load(client, laneId, userId);
-    if (providers.state === "unknown") return view.connections.length === 0 ? null : { ...view, adminConsentUrl: null, writes: null, settingsUnknown: true };
-    if (settings === null) return view.connections.length === 0 ? null : { ...view, paused: true, adminConsentUrl: null, writes: null };
+    if (providers.state === "unknown") return view.connections.length === 0 ? null : { ...view, ...sync, adminConsentUrl: null, writes: null, settingsUnknown: true };
+    if (settings === null) return view.connections.length === 0 ? null : { ...view, ...sync, paused: true, adminConsentUrl: null, writes: null };
     const info = await consentLink(laneId as LaneId, settings).catch(() => ({ url: null, writes: true }));
-    return { ...view, adminConsentUrl: info.url, writes: info.writes };
+    return { ...view, ...sync, adminConsentUrl: info.url, writes: info.writes };
   } catch {
     // The rows could not be read. Where Microsoft is enabled this says so; otherwise (not enabled, or not known) nothing about Microsoft is drawn.
-    return settings === null ? null : { connections: [], unavailable: true, adminConsentUrl: null, writes: null };
+    return settings === null ? null : { connections: [], unavailable: true, ...sync, adminConsentUrl: null, writes: null };
   }
 }

@@ -11,10 +11,27 @@ import { CoverageList } from "./coverage-list";
 import { JobFailureBanner } from "./job-failure-banner";
 import type { JobFailureItem } from "@/lib/job-failures";
 import { ComposioNotes, ComposioNotices, ComposioRows } from "./composio-connection-section";
+import { SyncNowButton } from "./sync-now-button";
 import { ConnectionsHeader } from "./connection-rows";
-import { GoogleNotes, GoogleNotices, GoogleRows, GoogleSyncBar } from "./google-connection-section";
+import { GoogleNotes, GoogleNotices, GoogleRows } from "./google-connection-section";
 import { MicrosoftNotes, MicrosoftNotices, MicrosoftRows } from "./microsoft-connection-section";
 import { QuickBooksNotes, QuickBooksNotices, QuickBooksRows } from "./quickbooks-connection-section";
+
+/**
+ * T-270: "Sync now" once for the whole section, whatever the providers (it used to sit inside the Google section, so a Microsoft-only company had none).
+ * Drawn when the person may sync (owner or admin_technical: canSync, set by the loaders) and at least one provider view that is readable and not paused
+ * lists a connection that is connected or degraded. The button syncs every mail and calendar connection of the company (POST /api/lanes/<lane>/sync-now).
+ */
+export function SyncBar({ laneId, views }: { laneId: string; views: ReadonlyArray<GoogleSectionView | null> }) {
+  const live = views.filter((v): v is GoogleSectionView => v !== null && !v.unavailable && !v.paused);
+  if (!live.some((v) => v.canSync) || !live.some((v) => v.connections.some((c) => c.state === "connected" || c.state === "degraded"))) return null;
+  return (
+    <div data-testid="sync-bar" className="flex flex-wrap items-center gap-3 text-small text-muted-foreground">
+      <span>Mail and calendar sync every 15 minutes. To check for new items right now:</span>
+      <SyncNowButton laneId={laneId} testId="settings-sync-now" />
+    </div>
+  );
+}
 
 export function ConnectionsSection({ laneId, google, microsoft = null, quickbooks, composio, coverage = null, jobFailures = null, tz = "America/New_York", now = new Date() }: { laneId: string; google: GoogleSectionView | null; microsoft?: MicrosoftSectionView | null; quickbooks: QuickBooksSectionView | null; composio: ComposioSectionView | null; coverage?: CoverageView | null; jobFailures?: JobFailureItem[] | null; tz?: string; now?: Date }) {
   return (
@@ -28,7 +45,7 @@ export function ConnectionsSection({ laneId, google, microsoft = null, quickbook
         </CardHeader>
         <JobFailureBanner laneId={laneId} items={jobFailures} now={now} onSettings />
         {google ? <GoogleNotices view={google} /> : null}
-        {google ? <GoogleSyncBar laneId={laneId} view={google} /> : null}
+        <SyncBar laneId={laneId} views={[google, microsoft]} />
         {microsoft ? <MicrosoftNotices view={microsoft} /> : null}
         {quickbooks ? <QuickBooksNotices view={quickbooks} /> : null}
         {composio ? <ComposioNotices view={composio} /> : null}

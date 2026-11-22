@@ -90,6 +90,24 @@ describe("a company with both providers enabled", () => {
   });
 });
 
+describe("T-270: Sync now is available to the roles that may sync, on the Microsoft view too", () => {
+  it("canSync is set for owner / admin_technical, and absent when the connect-role check refuses", async () => {
+    const view = await microsoftSectionFor(guards(), "PKG", both, undefined, consent);
+    expect(view?.canSync).toBe(true);
+    // the first requireRole (own mail) passes, the second (CONNECT_ROLES) refuses: a viewer
+    let n = 0;
+    const viewer = { requireRole: async () => { n += 1; if (n === 2) throw new AuthError("forbidden" as never); return { session: { userId: ME }, client: client() } as never; } };
+    const v = await microsoftSectionFor(viewer, "PKG", both, undefined, consent);
+    expect(v?.connections.length).toBeGreaterThan(0);
+    expect(v?.canSync).toBeUndefined();
+  });
+  it("a paused Microsoft view keeps canSync (the bar itself ignores a paused view)", async () => {
+    const view = await microsoftSectionFor(guards(), "PKG", microsoftOff, undefined, consent);
+    expect(view?.paused).toBe(true);
+    expect(view?.canSync).toBe(true);
+  });
+});
+
 describe("a company with only Google", () => {
   it("has no Microsoft section (no rows), and Google is drawn as before", async () => {
     const g = { requireRole: async () => ({ session: { userId: ME }, client: client() }) as never };

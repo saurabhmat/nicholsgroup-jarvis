@@ -132,6 +132,8 @@ insert into security_definer_ok values
   ('brief.news_cap', 'the lane''s monthly news cap read from lane_config; no API role may execute it (T-234 part 4)'),
   ('core.news_enabled', 'is news configured for the lane (boolean only): aal2 + briefing view, else false (T-234 part 4)'),
   ('brief.briefing_claim', 'briefing run gates: stale (3 h), one running per lane, 6 per lane and New York day, Regenerate once per 30 min, 10 min pause; no API role may execute it (T-235)'),
+  ('brief.briefing_sources_newer', 'true when the user''s newest summary was prepared before a live own connection first synced; internal helper of the claim and core.briefing_sources_newer; no API role may execute it (T-270)'),
+  ('core.briefing_sources_newer', 'Home: the caller''s newest summary predates their connection''s first sync; aal2 + own_mail, else false (T-270)'),
   ('brief.briefing_runs_close', 'marks the owner''s open run claims finished; called by the briefing saves; service_role only (T-235)'),
   ('core.briefing_claim_auto', 'Home auto-summary claim: aal2 + lane owner + briefing view, then brief.briefing_claim (T-235)'),
   ('core.briefing_claim_regenerate', 'owner Regenerate claim: aal2 + lane owner + briefing view, then brief.briefing_claim (30-min limit, daily cap) (T-235)'),
@@ -229,6 +231,7 @@ insert into authenticated_exec_ok values
   ('core.briefing_claim_auto', 'Home auto-summary claim; checks aal2, owner role and the briefing view itself; gates in SQL (T-235)'),
   ('core.briefing_claim_regenerate', 'owner Regenerate claim; checks aal2, owner role and the briefing view itself; 30-min limit and daily cap in SQL (T-235)'),
   ('core.briefing_run_state', 'Home run state for the owner; checks aal2, owner role and the briefing view itself, else no row (T-235)'),
+  ('core.briefing_sources_newer', 'Home: the caller''s newest summary predates their connection''s first sync; checks aal2 and own_mail itself, else false; boolean only (T-270)'),
   ('core.briefing_claim_release', 'the claiming owner releases their own open claim; checks aal2, owner role, the briefing view and the claim owner itself (T-235)');
 
 create temp view app_objects as

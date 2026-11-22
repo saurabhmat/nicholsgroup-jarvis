@@ -21,7 +21,12 @@
 // this connector makes no metadata call. `microsoft.allow_gcc` is a documented manual gate for the people who configure the lane (a human
 // sets it only after D-49 is decided; GCC tenants use the commercial endpoints, which this provider serves); the connect itself cannot tell.
 //
-// Nothing a provider answers is copied into a message, a redirect, a log line or an audit row. Tokens, the id_token, the code, the
+// Nothing a provider answers is copied into a message, a redirect, a log line or an audit row, with ONE deliberate, tightly bounded exception
+// (T-270): when a grant is refused because it holds a scope that was not requested, the structured log field `unexpected_scopes` of
+// `connector.oauth_callback_failed` names those scopes, so the person who configures the Entra app can see which permission to remove. A name is
+// copied only when it matches /^[A-Za-z0-9._-]{1,64}$/ (after the Graph prefix is dropped), at most 10 names; anything else (another resource's
+// URL, odd characters, too long, the 11th and later) is counted as the single entry "other". The user-facing message, the redirect and the audit
+// row never carry them. Tokens, the id_token, the code, the
 // verifier and the client secret are SecretValues or are never held past the call. A grant refused after the exchange is dropped.
 import type { LaneId } from "@nichols/core";
 import { z } from "zod";
@@ -84,17 +89,50 @@ const OIDC_EXTRAS: ReadonlySet<string> = new Set(["openid", "profile", "email", 
  * another resource refuses the grant. `openid` and `offline_access` are neither required nor refused in the string (the id_token and the
  * refresh token prove them). `scope` absent counts as nothing granted. Throws a fixed-message `forbidden`.
  */
+/** Scope names a refused grant carried, kept beside the error (never inside its message or its info): the callback logs them as a structured field. */
+const refusedScopes = new WeakMap<object, readonly string[]>();
+const SAFE_SCOPE = /^[A-Za-z0-9._-]{1,64}$/;
+const MAX_LOGGED_SCOPES = 10;
+
+/** The names to log for the unexpected scopes: safe-pattern names only (without the Graph prefix), at most 10, everything else as one "other". */
+export function loggableScopes(unexpected: readonly string[]): string[] {
+  const out: string[] = [];
+  let other = false;
+  for (const raw of unexpected) {
+    const name = raw.toLowerCase().startsWith(GRAPH_SCOPE_PREFIX) ? raw.slice(GRAPH_SCOPE_PREFIX.length) : raw;
+    if (SAFE_SCOPE.test(name) && !out.includes(name) && out.length < MAX_LOGGED_SCOPES) out.push(name);
+    else if (!SAFE_SCOPE.test(name) || out.length >= MAX_LOGGED_SCOPES) other = true;
+  }
+  if (other) out.push("other");
+  return out;
+}
+
+/** The scope names recorded for a refusal thrown by assertGrantedScopes, or undefined for any other error. */
+export function refusedScopeNames(e: unknown): readonly string[] | undefined {
+  return typeof e === "object" && e !== null ? refusedScopes.get(e) : undefined;
+}
+
 export function assertGrantedScopes(scope: string | undefined, requested: readonly string[]): void {
   const wanted = new Set(requested.filter((s) => !OIDC_EXTRAS.has(s)).map((s) => s.toLowerCase()));
   const granted = new Set<string>();
+  const unexpected: string[] = [];
   for (const raw of (scope ?? "").split(/\s+/)) {
     if (raw === "") continue;
     const lower = raw.toLowerCase();
     if (OIDC_EXTRAS.has(lower)) continue;
     // A fully qualified Graph scope loses its prefix; one of another resource keeps its URL form and cannot match a short name.
     const name = lower.startsWith(GRAPH_SCOPE_PREFIX) ? lower.slice(GRAPH_SCOPE_PREFIX.length) : lower;
-    if (!wanted.has(name)) throw new ConnectorError({ kind: "forbidden", message: "Microsoft granted a scope that was not requested (write access is never accepted unless the company allows it)" });
+    if (!wanted.has(name)) {
+      unexpected.push(raw.slice(0, 200));
+      continue;
+    }
     granted.add(name);
+  }
+  if (unexpected.length > 0) {
+    // V-5: a v2 token response lists every consented scope of the resource, so ALL unexpected ones are collected before the refusal.
+    const refusal = new ConnectorError({ kind: "forbidden", message: "Microsoft granted a scope that was not requested (write access is never accepted unless the company allows it)" });
+    refusedScopes.set(refusal, loggableScopes(unexpected));
+    throw refusal;
   }
   for (const w of wanted) {
     if (!granted.has(w)) throw new ConnectorError({ kind: "forbidden", message: "Microsoft did not grant every required scope" });
@@ -158,6 +196,10 @@ export function createMicrosoftOAuthProvider(deps: MicrosoftProviderDeps): OAuth
     // `prompt=select_account` on a first connect (the person picks the work account); dropped when a reconnect sends `login_hint`.
     authorizationParams: { response_mode: "query", prompt: "select_account" },
     loginHint: true,
+    logFields(cause) {
+      const names = refusedScopeNames(cause);
+      return names === undefined ? undefined : { unexpected_scopes: names };
+    },
     omitOnLoginHint: ["prompt"],
     nonce: true,
     scopeCheckedByProvider: true,

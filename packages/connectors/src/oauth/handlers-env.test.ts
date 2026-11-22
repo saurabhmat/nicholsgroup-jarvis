@@ -60,3 +60,22 @@ describe("connect start with an unconfigured server", () => {
     expect(log.mock.calls.flat().join(" ")).not.toContain(CANARY);
   });
 });
+
+describe("T-270: [api/connect/start] unavailable names what refused", () => {
+  it("a ConnectorError logs its kind and fixed message; any other error logs the class name only", async () => {
+    const { ConnectorError } = await import("../contract/errors");
+    const log = vi.spyOn(console, "error").mockImplementation(() => undefined);
+    const form = { "content-type": "application/x-www-form-urlencoded" };
+    const res = await handlers(new ConnectorError({ kind: "connection_unavailable", message: "GRAPH_REDIRECT_URI must end with /api/connect/microsoft/callback" })).start(post("?lane=PKG", form), "google");
+    expect(res.status).toBe(503);
+    const out = JSON.stringify(log.mock.calls);
+    expect(out).toContain("[api/connect/start] unavailable:");
+    expect(out).toContain("ConnectorError");
+    expect(out).toContain("connection_unavailable");
+    expect(out).toContain("GRAPH_REDIRECT_URI must end with");
+    log.mockClear();
+    await handlers(new Error(`boom ${CANARY}`)).start(post("?lane=PKG", form), "google");
+    expect(JSON.stringify(log.mock.calls)).not.toContain(CANARY);
+    expect(JSON.stringify(log.mock.calls)).toContain("Error");
+  });
+});

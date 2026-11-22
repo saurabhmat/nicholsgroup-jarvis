@@ -21,7 +21,7 @@ import { BriefingAuto } from "./briefing-auto";
 const T0 = new Date("2026-11-12T15:00:00.000Z");
 const OLD = "2026-11-12T08:00:00.000Z"; // 7 h before T0: stale
 const FRESH = "2026-11-12T14:00:00.000Z";
-const idle: BriefingRunStateView = { running: false, lastRegenerateAt: null, runsToday: 1, latestPreparedAt: OLD, lastAttemptAt: OLD };
+const idle: BriefingRunStateView = { running: false, lastRegenerateAt: null, runsToday: 1, latestPreparedAt: OLD, lastAttemptAt: OLD, sourcesNewer: false };
 const draw = (over: Partial<{ preparedAt: string | null; initial: BriefingRunStateView | null }> = {}) =>
   render(<BriefingAuto laneId="PKG" preparedAt={over.preparedAt === undefined ? OLD : over.preparedAt} initial={over.initial === undefined ? idle : over.initial} tz="America/New_York" />);
 const advance = (ms: number) => act(() => vi.advanceTimersByTimeAsync(ms));
@@ -49,6 +49,19 @@ describe("the automatic trigger", () => {
     expect(act_.ensure).toHaveBeenCalledWith("PKG");
     expect(screen.getByTestId("briefing-updating").textContent).toContain("Updating summary…");
     expect(screen.getByRole("status").getAttribute("aria-live")).toBe("polite");
+  });
+
+  it("T-270: a fresh summary made before the newest connection first synced is renewed once on load", async () => {
+    draw({ preparedAt: FRESH, initial: { ...idle, latestPreparedAt: FRESH, sourcesNewer: true } });
+    await advance(0);
+    expect(act_.ensure).toHaveBeenCalledTimes(1);
+    expect(act_.ensure).toHaveBeenCalledWith("PKG");
+  });
+
+  it("T-270: a fresh summary with sources not newer (a Google lane as before) asks for nothing", async () => {
+    draw({ preparedAt: FRESH, initial: { ...idle, latestPreparedAt: FRESH, sourcesNewer: false } });
+    await advance(0);
+    expect(act_.ensure).not.toHaveBeenCalled();
   });
 
   it("the status live region is mounted from the start (empty), only its text changes", async () => {

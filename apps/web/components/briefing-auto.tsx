@@ -1,7 +1,7 @@
 "use client";
 // The automatic AI summary controls on Home (T-235 part 1), for the OWNER only (the server renders this component only for them):
-//   * on mount, ONCE per page load, asks the server to start a background run when the latest briefing is older than 3 hours
-//     (ensureFreshBriefing; the SQL claim has the last word: daily cap, one run at a time). A router.refresh() (the 5-minute
+//   * on mount, ONCE per page load, asks the server to start a background run when the latest briefing is older than 3 hours,
+//     or (T-270) was made before the person's newest connection first synced (initial.sourcesNewer) (ensureFreshBriefing; the SQL claim has the last word: daily cap, one run at a time). A router.refresh() (the 5-minute
 //     auto-refresh, the poll's own refresh) does not re-run the effect: the component stays mounted, the effect has no
 //     changing dependency and a ref guards React strict mode's second mount. A per-tab sessionStorage guard keeps a REMOUNT (a
 //     navigation back to Home) from calling it more than once per lane per 10 minutes. It is never called from a server render.
@@ -15,7 +15,7 @@
 import { useRouter } from "next/navigation";
 import { useCallback, useEffect, useId, useRef, useState } from "react";
 import { briefingRunState, ensureFreshBriefing, regenerateBriefing, type BriefingStartState } from "@/app/[laneId]/briefing-actions";
-import { DAILY_RUN_CAP, isStale, regenerateAvailableAt, type BriefingRunStateView } from "@/lib/briefing-runs";
+import { DAILY_RUN_CAP, needsRenewal, regenerateAvailableAt, type BriefingRunStateView } from "@/lib/briefing-runs";
 import { isRefreshHeld, requestRefresh, subscribeRefreshGate } from "@/lib/refresh-gate";
 import { POLL_EVERY_MS, POLL_FOR_MS } from "@/lib/client-constants";
 
@@ -110,7 +110,7 @@ export function BriefingAuto({ laneId, preparedAt, initial, tz }: { laneId: stri
       poll();
       return;
     }
-    if (!isStale(preparedRef.current, Date.now())) return;
+    if (!needsRenewal(preparedRef.current, Date.now(), initial?.sourcesNewer === true)) return;
     if (ensuredRecently(laneId, Date.now())) return;
     void ensureFreshBriefing(laneId).then((r) => {
       if ("started" in r && (r.started || r.gate === "running")) poll();

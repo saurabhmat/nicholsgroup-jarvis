@@ -59,8 +59,8 @@ select is((select count(*)::int from core.briefing_coverage('PKG') where account
 select is((select configured from core.briefing_coverage('PKG') where account = 'brief-pkg@example.test' and stream = 'mail'), true, '...and the own account is marked configured (it is on the lane''s mailbox list)');
 select is((select status || '|' || error_kind from core.briefing_coverage('PKG') where account = 'brief-pkg@example.test' and stream = 'mail'), 'degraded|rate_limited',
           'connected account: status and the error kind only');
-select is((select last_sync_at from core.briefing_coverage('PKG') where account = 'brief-pkg@example.test' and stream = 'mail'), '2026-11-11 10:01Z'::timestamptz,
-          'mail without its own cursor: last succeeded run');
+select is((select last_sync_at from core.briefing_coverage('PKG') where account = 'brief-pkg@example.test' and stream = 'mail'), null::timestamptz,
+          'T-270: mail without its own cursor: no time (a succeeded run, which may be the calendar''s, no longer stands in)');
 select ok((select last_sync_at > '2026-11-11 10:01Z' from core.briefing_coverage('PKG') where account = 'brief-pkg@example.test' and stream = 'calendar'),
           'calendar last sync = its newer cursor time');
 select ok(not exists (select 1 from core.briefing_coverage('PKG') c where c::text like '%provider text%'), 'no provider error text in coverage');

@@ -8,7 +8,15 @@ export const DAILY_RUN_CAP = 6;
 export type BriefingGate = "not_stale" | "running" | "cap_reached" | "cooldown" | "rate_limited" | "no_sources";
 
 /** What the card needs from core.briefing_run_state. Times are ISO strings or null. */
-export type BriefingRunStateView = { running: boolean; lastRegenerateAt: string | null; runsToday: number; latestPreparedAt: string | null; lastAttemptAt: string | null };
+export type BriefingRunStateView = {
+  running: boolean;
+  lastRegenerateAt: string | null;
+  runsToday: number;
+  latestPreparedAt: string | null;
+  lastAttemptAt: string | null;
+  /** T-270: the newest summary was prepared before one of the person's own connections finished its first sync (core.briefing_sources_newer); false when unknown. */
+  sourcesNewer: boolean;
+};
 
 const iso = (v: unknown): string | null => (typeof v === "string" && !Number.isNaN(Date.parse(v)) ? v : null);
 
@@ -22,6 +30,7 @@ export function briefingRunStateFrom(data: unknown): BriefingRunStateView | null
     runsToday: typeof row.runs_today === "number" ? row.runs_today : 0,
     latestPreparedAt: iso(row.latest_prepared_at),
     lastAttemptAt: iso(row.last_attempt_at),
+    sourcesNewer: false,
   };
 }
 
@@ -30,6 +39,16 @@ export function isStale(preparedAt: string | null, nowMs: number): boolean {
   if (!preparedAt) return true;
   const t = Date.parse(preparedAt);
   return Number.isNaN(t) || nowMs - t > STALE_AFTER_MS;
+}
+
+/** T-270: Home asks for a renewal when the summary is older than 3 hours, or was made before the person's newest connection first synced (the SQL claim decides). */
+export function needsRenewal(preparedAt: string | null, nowMs: number, sourcesNewer: boolean): boolean {
+  return sourcesNewer || isStale(preparedAt, nowMs);
+}
+
+/** T-270: a source the summary can be built from: the person's own connection, in use (not pending, not needing a reconnect), with its mail stream. */
+export function hasUsableSource(rows: ReadonlyArray<{ stream: string; connectionId: string | null; status: string }>): boolean {
+  return rows.some((r) => r.stream === "mail" && r.connectionId !== null && (r.status === "active" || r.status === "degraded"));
 }
 
 /** When Regenerate is available again (ms), or null when it is available now. */
