@@ -13,7 +13,7 @@ import { readBody as readMailBody } from "@nichols/connectors/facade";
 import { BUSINESS_TZ } from "@nichols/briefing/domain";
 import { briefingConfigFrom } from "./briefing";
 import { policyFrom, runBriefing } from "./briefing-run";
-import { replyProposer } from "./briefing-proposals";
+import { canProposeFor, replyProposer } from "./briefing-proposals";
 
 type Db = Parameters<typeof briefingOwners>[0] & Parameters<typeof runBriefing>[0]["client"];
 export type ClientFor = (laneId: string) => Promise<Db>;
@@ -97,6 +97,7 @@ async function runModel(c: Db, provider: Extract<ReturnType<typeof getLLMProvide
       policy: policyFrom(policyRow as Parameters<typeof policyFrom>[0]),
       save: (l, r) => saveBriefing(c, l, r),
       proposeReply: replyProposer(ownerUserId),
+      canProposeFor,
       // T-236 review L1: both model calls (a cut-off reply's retry included) stop before Inngest's maxDuration (120 s), so a
       // slow run is saved as a timeout and its claim closed, instead of the function being killed with the claim open.
       signal: AbortSignal.timeout(SCHEDULE_RUN_TIMEOUT_MS),

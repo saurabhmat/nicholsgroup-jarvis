@@ -74,8 +74,8 @@ const MESSAGES: Record<ApprovalsErrorCode, string> = {
 export class ApprovalsError extends Error {
   override readonly name = "ApprovalsError";
   readonly code: ApprovalsErrorCode;
-  constructor(code: ApprovalsErrorCode) {
-    super(MESSAGES[code]);
+  constructor(code: ApprovalsErrorCode, message?: string) {
+    super(message ?? MESSAGES[code]);
     this.code = code;
   }
 }

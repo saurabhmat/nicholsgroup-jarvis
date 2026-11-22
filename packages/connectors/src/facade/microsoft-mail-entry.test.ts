@@ -145,6 +145,27 @@ describe("prepareWrite through the facade (T-262)", () => {
     await expect(facade.prepareEmailWrite("PKG", ms.conn.id, { action_type: "email.send", compose: { ...compose, fromMailbox: "someone-else@pubkgroup.example.test" } } as never)).rejects.toMatchObject({ info: { kind: "forbidden" } });
   });
 
+  it("two connections in one lane, one Google and one Microsoft: each proposal is prepared on its OWN connection, by that row's provider (never the lane's)", async () => {
+    const { m, ms, google, loader, gate, mail } = setup();
+    const prepared: string[] = [];
+    const googleEntry: CommsEntry = {
+      provider: "google",
+      readBody: async () => ({ text: "", truncated: false }),
+      search: async () => { throw new Error("not used"); },
+      prepareWrite: async (_l, c) => { prepared.push(`google:${c.id}`); return { lane_id: "PKG", provider: "google", connection_id: c.id, action_type: "email.send", target: {}, payload: {}, payload_schema_version: 1, expected_before: null } as never; },
+      mailSync: { run: async () => { throw new Error("not used"); } },
+      calendarSync: { run: async () => { throw new Error("not used"); } },
+    };
+    const facade = createCommsFacade({ loader, gate, entries: { google: googleEntry, microsoft: createMicrosoftEntry({ mailSync: m.sync, mail: m.provider }) } });
+    const compose = (box: string) => ({ fromMailbox: box, to: ["dana@sender.example.test"], cc: [], bcc: [], subject: "Re: Plan", bodyText: "Synthetic.", inReplyTo: { threadId: "t-1", messageId: "m-1" } });
+    const g = await facade.prepareEmailWrite("PKG", google.row.id, { action_type: "email.send", compose: compose(google.row.external_account_id) } as never);
+    const o = await facade.prepareEmailWrite("PKG", ms.conn.id, { action_type: "email.send", compose: compose(ms.address) } as never);
+    expect(prepared).toEqual([`google:${google.row.id}`]); // the Microsoft proposal never reached the Google entry
+    expect(g.proposed).toMatchObject({ provider: "google", connection_id: google.row.id });
+    expect(o.proposed).toMatchObject({ provider: "microsoft", connection_id: ms.conn.id, target: { mailbox: ms.address, thread_id: "t-1" } });
+    expect(mail.requests).toHaveLength(0);
+  });
+
   it("an entry built without a calendar runner (a build without the Graph calendar wiring) still answers unsupported_op for the calendar stream, with no request", async () => {
     const { m, mail, cal, ms, loader, gate } = setup();
     const facade = createCommsFacade({ loader, gate, entries: { google: { provider: "google" } as never, microsoft: createMicrosoftEntry({ mailSync: m.sync, mail: m.provider }) } });

@@ -233,33 +233,46 @@ connected, and a summary made before the first sync is renewed once when you nex
 
 ## Allow drafts and sending in a lane (T-262, T-263; live check H-072)
 
-A mail-only company starts read-only. To let a mailbox owner **save a draft** or **approve and send** from the portal (Reply on Home, the Approvals page), four things
-change, in this order. Nothing here is done by the app on its own: it is your decision, per company.
+A mail-only company starts read-only. To let a mailbox owner **save a draft** or **approve and send** from the portal (Reply on Home, the Approvals page), do these steps **in this
+order**. Nothing is done by the app on its own: it is your decision, per company.
 
-1. **Entra app registration (once per tenant; admin consent).** In the Entra admin centre -> App registrations -> the Nichols app -> API permissions, add the
-   *delegated* Microsoft Graph permissions `Mail.ReadWrite` and `Mail.Send`, then **Grant admin consent for the tenant**. `Mail.ReadWrite` allows creating and editing
-   drafts and "does not include permission to send mail"; `Mail.Send` is only used for the send call. *Consequence (decided Nov 22, 2026, spec section 7):* Microsoft's
-   token answer names every permission consented for the app in that tenant, not only the ones asked for, and the connect refuses an account whose granted set differs from
-   the requested one. So **within one tenant one app registration serves either read-only companies or companies that write, not both**. A tenant that needs both gets a
-   second app registration later (not built yet). Do this step only for a tenant where every company that uses the app is meant to write.
-2. **The company's rules (SQL).** Fill in and run `enable-lane-mail-write-H-072.sql` (gitignored, in `supabase/core/bootstrap/manual-migrations/`, same way as the T-265
-   file): paste the lane code, the mail domain and the tenant id exactly as in the T-265 run, and `true` or `false` for approvals go-live. Then run
-   `check-enable-lane-mail-write-H-072.sql` (the same pasted values): every row must be true. What it does, for that one lane only: the policy allows `email_send` and
-   `email_draft` and may store outbound drafts (only from the exact mail-only state the T-265 file wrote; anything else is refused), and one new config version adds
-   `approvals` to `enabled_modules` (a limited company hides Approvals otherwise) and sets `approvals.approvals_live`. It changes no connection, token, member or mail row.
-   A company limited to its modules also hides Reply when its policy allows no email write; after this step Reply appears for Microsoft rows (only for a connection that holds
-   the write permission, step 3).
-3. **Each person Reconnects Microsoft** (Settings -> Your Microsoft accounts -> Reconnect). The write permissions are asked for only on a connect that happens after step 2, and
-   the connection records `graph_mail_write` when they were granted. Until then the card says "Sending isn't enabled for this mailbox yet. Reconnect Microsoft with send
-   permission in Settings" and Reply shows "Reply is not available for this mailbox yet".
-4. **Database function (production part 30).** `part-30-T-263.sql` then `check-part-30.sql` (every row true). Without it, approving an email on a Microsoft connection is refused
-   (`connection_not_enabled`). It changes one function body and nothing else. Run it before step 3 is tested.
+**First read what the lane SQL turns on** (it is more than "allow sending"; the header of `enable-lane-mail-write-H-072.sql` says the same). It sets `store_outbound_drafts = true`, which means:
+- the text of an email proposal is stored until the action ends and then deleted (D-19); an unanswered proposal expires after 72 hours and is deleted then; history keeps recipients and subject only;
+- the AI's reply drafts are written, in full, into the stored briefing and stay as long as that briefing: 30 days for a 90-day company (briefing retention = the smaller of the company's retention and 30 days);
+- **the briefing job then creates pending "send" proposals by itself** for every reply draft the model marks ready (a Microsoft row only when its connection holds the write permission). Nothing is sent without the owner's approval and authenticator code, but the Approvals page starts filling up without anyone clicking Reply. This is more than "allow drafts and sending"; if you do not want it, do not run the lane SQL for that company;
+- the reply drawer keeps unsent text in this browser tab's session storage (typed draft 24 hours, AI draft 30 minutes, quoted original 24 hours; cleared at sign-out).
 
-Then do the live check H-072: from a Microsoft mailbox, to a recipient you control, approve one "Save as Outlook draft" and one "Approve & send"; confirm one draft and one sent copy
-each in Outlook, in the right conversation for a reply. Record what you see in `docs/plan-review.md` (V-19, V-20).
+1. **Database part 30 (production).** Run `part-30-T-263.sql`, then `check-part-30.sql` (every row true). It replaces one function body. Without it approving an email on a Microsoft
+   connection is refused (`connection_not_enabled`). Do this first so nothing later can half-work.
+2. **Entra app registration (once per tenant; admin consent).** Entra admin centre -> App registrations -> the Nichols app -> API permissions: add the *delegated* Microsoft Graph
+   permissions `Mail.ReadWrite` and `Mail.Send`, then **Grant admin consent for the tenant**. Afterwards the permissions page must list, all as *Delegated* with status *Granted for <tenant>*:
+   `openid`, `offline_access`, `User.Read`, `Mail.Read`, `Calendars.Read`, `Mail.ReadWrite`, `Mail.Send` (a red or amber "not granted" status on any row means consent did not take).
+   `Mail.ReadWrite` allows creating and editing drafts and "does not include permission to send mail"; `Mail.Send` is used only for the send call.
+   *Consequence (decided Nov 22, 2026, spec section 7):* Microsoft's token answer names every permission consented for the app in that tenant, and the connect refuses an account whose
+   granted set differs from the requested one. So **within one tenant one app registration serves either read-only companies or writing companies, not both**: once these two are consented,
+   a company whose policy allows no writes is refused at its next connect. Do this step only for a tenant where every company that uses the app is meant to write; otherwise a second app
+   registration is needed (not built yet).
+3. **The company's rules (SQL).** Fill in and run `enable-lane-mail-write-H-072.sql` (gitignored, in `supabase/core/bootstrap/manual-migrations/`): the lane code, the mail domain and the
+   tenant id exactly as in the T-265 run, and `true` or `false` for approvals go-live. **The live test in step 5 needs `approvals_live` = `true`.** Then run
+   `check-enable-lane-mail-write-H-072.sql` with the same pasted values: every row must be true (a value pasted differently makes rows false: it fails safe). It changes: the policy allows
+   `email_send` and `email_draft` and may store outbound drafts (only from the exact mail-only state the T-265 file wrote; anything else is refused), and one new config version adds `approvals` to
+   `enabled_modules` (a limited company hides Approvals otherwise) and sets `approvals.approvals_live`. It refuses a config with any other approvals setting. It changes no connection, token, member or mail row.
+4. **Each person Reconnects Microsoft** (Settings -> Your Microsoft accounts -> Reconnect; the write permissions are asked for only on a connect after step 3). What they see: Microsoft's
+   sign-in asks them to approve mail read-and-write and send; back on Settings the account is active; on Home a Microsoft mail row now shows **Reply** instead of "Reply is not available for this
+   mailbox yet". What a refused Reconnect looks like: the page says nothing was connected and "remove its access in your provider account"; in Vercel logs look for the event
+   `connector.oauth_callback_failed` (provider `microsoft`; its `reason` and the scrubbed error message say which scope check refused, for example "granted a scope that was not requested" or
+   "did not grant every required scope") and the audit row `connection.connect.grant_not_stored`. The most common cause is step 2 not being consented, or this tenant also serving a read-only company (see step 2).
+5. **The live test (H-072).** From a Microsoft mailbox, to a recipient you control, with `approvals_live` true: approve one "Save as Outlook draft" and one "Approve & send".
+   **First thing to look at: after "Approve & send", does the card end Verified?** (Verified means the sent copy was found by the marker, or by the id check, in Sent Items.) If it says "Sent. Waiting for the copy
+   to show in Sent Items", wait a few minutes: the sweep verifies it; if the history later says it was sent but could not be read back, the mail went out and the read-back could not confirm it. Then
+   confirm one draft and one sent copy each in Outlook, in the right conversation for a reply. Record in `docs/plan-review.md`: V-19, V-20, and the open points listed in the PR note
+   (marker survives the send; Bcc on the sent copy; the text body reads back as plain text; recipient addresses are not rewritten; the PATCH body replaces the quoted original (replies carry no quoted
+   thread: is that wanted); the marker filter works on the Drafts and Sent Items folder paths).
 
-**Undo:** set `write_actions_allowed` back to empty and `store_outbound_drafts` to false for that lane (the policy is a plain row; the app then refuses every proposal and Reply
-disappears for a limited company), and add a config version without `approvals` in `enabled_modules`. Removing the permissions in Entra stops sending at Microsoft's side.
+**Undo (tested, one transaction):** run `undo-enable-lane-mail-write-H-072.sql` (gitignored, next to the others; replace `PASTE-LANE-CODE`). It sets `write_actions_allowed` back to empty and
+`store_outbound_drafts` to false (only when the policy is exactly the enable file's target state) and adds one new config version without the `approvals` block and without `approvals` in
+`enabled_modules`. It is safe to run twice. Pending proposals then fail at approve ("type not allowed"); stored AI reply drafts stay until the briefing retention purge (30 days);
+connections and mail rows are untouched. Removing the two permissions in Entra stops sending at Microsoft's side too.
 
 ## Add the owner later
 

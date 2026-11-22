@@ -21,6 +21,18 @@
 // never a blind resend. A draft left by a failed run is only ever reused when it still carries the marker and still matches the approved text (a person may have edited
 // it in Outlook: then nothing is sent). Nothing is ever deleted, moved or copied (the write client's allow-list has no such route).
 //
+// ONE EXECUTION: the approvals database's single execution claim (`claims.claimOpen`, checked first thing in `executeWrite`) is the ONLY guard against a second `executeWrite` of
+// the same action. A second `executeWrite` after an `outcome_unknown` is FORBIDDEN (the writer cannot tell "never created" from "sent and not visible yet": a hidden sent copy with
+// no draft left looks like nothing happened); recovery after an unknown outcome is `findWrite` / `verifyWrite` only (the reconciler). With the claim closed no Graph request is made.
+//
+// A draft this call did not create is never sent on a partial check: a marked draft found in Drafts BEFORE this run created one is not sent (a person is told to look); a draft
+// recovered by marker after an ambiguous create or PATCH inside this call is accepted only after the FULL check (recipients, subject, conversation, sender, text body, no
+// attachment, no Reply-To, plain-text content type). `email.save_draft` applies the same full check before it answers `already_applied`.
+//
+// A send that Graph accepted (202) but whose Sent Items copy is not visible yet is NOT a failure: the writer declares `sentCopyMayLag`, the approvals executor leaves the action
+// `executing` with its claim at "sent", and the reconciler verifies it later: by the marker in Sent Items, or (the documentation does not say the extended property survives the
+// send) by reading the message by the id returned at create and accepting it only if it is no longer a draft, sits in the Sent Items folder and matches the approved payload.
+//
 // Honest limits: a reply draft exists unmarked between createReply and the PATCH, so a crash in that gap leaves an unmarked draft that no lookup can attribute: the
 // action ends `outcome_unknown` and a person looks in Drafts. A message body is never logged or put in an error.
 import { timingSafeEqual } from "node:crypto";
@@ -32,7 +44,7 @@ import { ConnectorError, isConnectorError } from "../contract/errors";
 import { assertLaneBound, type LaneBoundConnection } from "../contract/lane-bound";
 import type { ExecResult } from "../contract/schemas";
 import { computePayloadSha256, type ApprovedActionShape, type ConnectorWriter } from "../contract/writer";
-import type { ConnectorLogger } from "../log/index";
+import { connectorLog, type ConnectorLogger } from "../log/index";
 import { assertMailAccountAllowed, readMailPolicy } from "../mail-policy";
 import type { ActionClaimReader } from "../vault/write-policy";
 import type { LaneConfigReader } from "../vault/lane-config";
@@ -46,6 +58,7 @@ export const MICROSOFT_EMAIL_ACTIONS = ["email.send", "email.save_draft"] as con
 /** Shown (by the approvals card and as the writer's refusal) when the connection was not granted the write permissions. */
 export const MICROSOFT_WRITE_NOT_GRANTED_MESSAGE = "Sending isn't enabled for this mailbox yet. Reconnect Microsoft with send permission in Settings";
 export const DRAFT_CHANGED_MESSAGE = "The saved draft no longer matches the approved email, so it was not sent";
+export const DRAFT_EXISTS_MESSAGE = "A draft carrying this action's marker already exists in Drafts, so nothing was sent. Check Drafts in Outlook";
 export const NOT_IN_MAILBOX_MESSAGE = "The message was not found in the mailbox";
 
 /** The approver is carried explicitly, as for Google (T-193 replaces this with the branded action). */
@@ -71,6 +84,8 @@ export type MicrosoftEmailWriterDeps = {
 };
 
 export interface MicrosoftEmailWriter extends ConnectorWriter<MicrosoftEmailApprovedAction, "microsoft"> {
+  /** Provider-declared: after an accepted send the Sent Items copy may not be visible yet ("might not succeed immediately", V-20). The approvals executor then leaves the action for the reconciler. */
+  readonly sentCopyMayLag: true;
   /**
    * Reads the message back by the marker and compares recipients, subject, conversation, sender and draft/sent state with the approved payload.
    * Throws `VERIFICATION_MISMATCH_MESSAGE` on a difference and `NOT_IN_MAILBOX_MESSAGE` (not_found) when no copy carries the marker. The id is never assumed:
@@ -89,7 +104,6 @@ const refused = (message: string) => new ConnectorError({ kind: "invalid_input",
 /** Failures after which Microsoft certainly did not create or send anything. */
 const DEFINITE_KINDS: ReadonlySet<string> = new Set(["invalid_input", "forbidden", "reconnect_required", "unsupported_op", "lane_mismatch", "rate_limited", "not_found", "connection_unavailable"]);
 const PREFER = { Prefer: 'IdType="ImmutableId"' } as const;
-const PREFER_TEXT = { Prefer: 'IdType="ImmutableId", outlook.body-content-type="text"' } as const;
 const MESSAGES = "/me/messages";
 const MESSAGE = "/me/messages/{id}";
 const FOLDER_MESSAGES = "/me/mailFolders/{folder}/messages";
@@ -109,6 +123,9 @@ const MessageSchema = z
     ccRecipients: z.array(AddressSchema).nullish(),
     bccRecipients: z.array(AddressSchema).nullish(),
     body: z.object({ contentType: z.string().nullish(), content: z.string().nullish() }).loose().nullish(),
+    hasAttachments: z.boolean().nullish(),
+    replyTo: z.array(AddressSchema).nullish(),
+    parentFolderId: z.string().nullish(),
     singleValueExtendedProperties: z.array(z.object({ id: z.string(), value: z.string().nullish() }).loose()).nullish(),
   })
   .loose();
@@ -139,6 +156,9 @@ export function createMicrosoftEmailWriter(deps: MicrosoftEmailWriterDeps): Micr
   const sleep = deps.sleep ?? ((ms: number) => new Promise<void>((r) => setTimeout(r, ms)));
   const sentPauses = deps.sentRetryPausesMs ?? [1000, 2000];
   const ambiguousPause = deps.ambiguousPauseMs ?? 2000;
+  const baseLog = deps.logger ?? connectorLog;
+  /** A structured line with the lane, connection and ids only: never a body, a subject or a recipient. */
+  const logFor = (laneId: LaneId, connectionId: string) => baseLog.child({ laneId, provider: "microsoft", connectionId });
 
   /** Every check that must pass before Graph is called; returns the authoritative row and the parsed compose. */
   async function prepare(laneId: LaneId, conn: LaneBoundConnection<"microsoft">, action: MicrosoftEmailApprovedAction) {
@@ -198,12 +218,13 @@ export function createMicrosoftEmailWriter(deps: MicrosoftEmailWriterDeps): Micr
   }
 
   /** After an ambiguous failure: look twice (the second after a pause); the first id found, or undefined. A failing lookup counts as "not found". */
-  async function recover(laneId: LaneId, row: LaneBoundConnection<"microsoft">, action: MicrosoftEmailApprovedAction, mailbox: string, folder: typeof DRAFTS_FOLDER | typeof SENT_FOLDER): Promise<string | undefined> {
+  async function recover(laneId: LaneId, row: LaneBoundConnection<"microsoft">, action: MicrosoftEmailApprovedAction, mailbox: string, folder: typeof DRAFTS_FOLDER | typeof SENT_FOLDER, stage: "create" | "patch" | "send"): Promise<string | undefined> {
     let found = (await findOwn(laneId, row, action, mailbox, folder).catch(() => []))[0];
     if (!found) {
       await sleep(ambiguousPause);
       found = (await findOwn(laneId, row, action, mailbox, folder).catch(() => []))[0];
     }
+    logFor(laneId, row.id).warn("microsoft.write.recovery", { action_id: action.id, stage, outcome: found ? "found" : "not_found", ...(found ? { message_id: found } : {}) });
     return found;
   }
 
@@ -217,8 +238,13 @@ export function createMicrosoftEmailWriter(deps: MicrosoftEmailWriterDeps): Micr
   };
 
   /** The draft Microsoft returned must be what was approved (recipients, subject, conversation): checked before anything is sent. */
-  function assertDraftMatches(m: GraphMessage, compose: EmailCompose, mailbox: string, requireBody: boolean): void {
+  function assertDraftMatches(m: GraphMessage, compose: EmailCompose, mailbox: string, full: boolean): void {
     const bad = () => new ConnectorError({ kind: "invalid_input", message: DRAFT_CHANGED_MESSAGE });
+    if (full) {
+      // The FULL check (a draft this call did not just create): no attachment, no Reply-To, the stored content type is plain text (read WITHOUT the text-conversion
+      // header, so an HTML body that merely renders to the same text is a difference), and the text is exactly the approved one.
+      if (m.isDraft !== true || m.hasAttachments !== false || (m.replyTo ?? []).length > 0 || (m.body?.contentType ?? "").toLowerCase() !== "text") throw bad();
+    }
     if (m.isDraft === false) throw bad();
     if (fromIs(m, mailbox) === false) throw bad();
     if (!sameList(addressesOf(m.toRecipients), [...compose.to].sort())) throw bad();
@@ -226,7 +252,7 @@ export function createMicrosoftEmailWriter(deps: MicrosoftEmailWriterDeps): Micr
     if (!sameList(addressesOf(m.bccRecipients), [...compose.bcc].sort())) throw bad();
     if (norm(m.subject) !== norm(compose.subject)) throw bad();
     if (compose.inReplyTo && m.conversationId !== compose.inReplyTo.threadId) throw bad();
-    if (requireBody && normBody(m.body?.content) !== normBody(compose.bodyText)) throw bad();
+    if (full && normBody(m.body?.content) !== normBody(compose.bodyText)) throw bad();
   }
 
   /** Creates the marked draft (a new message, or createReply + PATCH) and returns its id. */
@@ -248,8 +274,11 @@ export function createMicrosoftEmailWriter(deps: MicrosoftEmailWriterDeps): Micr
         return m.id;
       } catch (e) {
         if (!isAmbiguous(e)) throw e;
-        const found = await recover(laneId, row, action, mailbox, DRAFTS_FOLDER);
-        if (found) return found;
+        const found = await recover(laneId, row, action, mailbox, DRAFTS_FOLDER, "create");
+        if (found) {
+          await fullCheckDraft(laneId, row, compose, mailbox, found); // recovered, not seen created: the FULL check before it is used
+          return found;
+        }
         throw unknown();
       }
     }
@@ -266,24 +295,35 @@ export function createMicrosoftEmailWriter(deps: MicrosoftEmailWriterDeps): Micr
     } catch (e) {
       if (!isAmbiguous(e)) throw e;
       // createReply carries no marker, so a lookup cannot attribute a draft to this action: a human checks Drafts.
+      logFor(laneId, row.id).warn("microsoft.write.unmarked_reply_draft", { action_id: action.id, reason: "create_reply_ambiguous" });
       throw unknown();
     }
-    // PATCH only the draft this very call created (its id came from our own createReply response above).
+    // PATCH only the draft this very call created (its id came from our own createReply response above; the write client only limits which fields can be sent).
     try {
       const res = await deps.write.request(laneId, row, { method: "PATCH", path: MESSAGE, params: { id: draftId }, body: { ...content, singleValueExtendedProperties: marker } });
       assertDraftMatches(parseMessage(res.data), compose, mailbox, false);
       return draftId;
     } catch (e) {
-      if (!isAmbiguous(e)) throw e;
-      const found = await recover(laneId, row, action, mailbox, DRAFTS_FOLDER);
-      if (found) return found;
+      if (!isAmbiguous(e)) {
+        logFor(laneId, row.id).warn("microsoft.write.unmarked_reply_draft", { action_id: action.id, draft_id: draftId, reason: "patch_refused" });
+        throw e;
+      }
+      const found = await recover(laneId, row, action, mailbox, DRAFTS_FOLDER, "patch");
+      if (found) {
+        await fullCheckDraft(laneId, row, compose, mailbox, found);
+        return found;
+      }
+      logFor(laneId, row.id).warn("microsoft.write.unmarked_reply_draft", { action_id: action.id, draft_id: draftId, reason: "patch_ambiguous" });
       throw unknown();
     }
   }
 
-  /** A draft left by an earlier run of this action: reused only when it still matches the approved email, body included (a person may have edited it). */
-  async function checkResumedDraft(laneId: LaneId, row: LaneBoundConnection<"microsoft">, compose: EmailCompose, mailbox: string, id: string): Promise<void> {
-    const res = await deps.api.get(laneId, row, MESSAGE, { id }, { $select: "id,conversationId,subject,isDraft,from,toRecipients,ccRecipients,bccRecipients,body" }, { headers: PREFER_TEXT });
+  /**
+   * The FULL check of a draft this call did not create (found by marker before a create, or recovered after an ambiguous failure): every difference refuses.
+   * Read WITHOUT the text-conversion header, so the stored content type is what is checked.
+   */
+  async function fullCheckDraft(laneId: LaneId, row: LaneBoundConnection<"microsoft">, compose: EmailCompose, mailbox: string, id: string): Promise<void> {
+    const res = await deps.api.get(laneId, row, MESSAGE, { id }, { $select: "id,conversationId,subject,isDraft,from,toRecipients,ccRecipients,bccRecipients,replyTo,hasAttachments,body" }, { headers: PREFER });
     assertDraftMatches(parseMessage(res.data), compose, mailbox, true);
   }
 
@@ -314,10 +354,15 @@ export function createMicrosoftEmailWriter(deps: MicrosoftEmailWriterDeps): Micr
       const sent = (await findOwn(laneId, row, action, mailbox, SENT_FOLDER))[0];
       if (sent) return done("already_applied", sent);
     }
-    let draftId = (await findOwn(laneId, row, action, mailbox, DRAFTS_FOLDER))[0];
-    if (draftId && !isSend) return done("already_applied", draftId);
-    if (draftId) await checkResumedDraft(laneId, row, compose, mailbox, draftId);
-    else draftId = await createDraft(laneId, row, action, compose, mailbox);
+    const existing = (await findOwn(laneId, row, action, mailbox, DRAFTS_FOLDER))[0];
+    if (existing) {
+      // Not created by this call. A send never uses it (a person may have touched it, and a partial check is not enough to send on): nothing is sent and the person is told to look.
+      if (isSend) throw new ConnectorError({ kind: "invalid_input", message: DRAFT_EXISTS_MESSAGE });
+      // save_draft: it is already_applied only if the FULL check passes; a different draft is not "already applied".
+      await fullCheckDraft(laneId, row, compose, mailbox, existing);
+      return done("already_applied", existing);
+    }
+    const draftId = await createDraft(laneId, row, action, compose, mailbox);
     if (!isSend) return done("accepted", draftId);
 
     try {
@@ -328,7 +373,7 @@ export function createMicrosoftEmailWriter(deps: MicrosoftEmailWriterDeps): Micr
     } catch (e) {
       if (!isAmbiguous(e)) throw e;
       // The send may have been processed: look twice, and never send again.
-      const found = await recover(laneId, row, action, mailbox, SENT_FOLDER);
+      const found = await recover(laneId, row, action, mailbox, SENT_FOLDER, "send");
       if (found) return done("already_applied", found);
       throw unknown();
     }
@@ -336,6 +381,7 @@ export function createMicrosoftEmailWriter(deps: MicrosoftEmailWriterDeps): Micr
 
   return {
     provider: "microsoft",
+    sentCopyMayLag: true as const,
     actionTypes: MICROSOFT_EMAIL_ACTIONS,
     executeWrite,
     async findWrite(laneId, conn, action) {
@@ -345,9 +391,38 @@ export function createMicrosoftEmailWriter(deps: MicrosoftEmailWriterDeps): Micr
     async verifyWrite(laneId, conn, action, externalId) {
       const { row, compose, mailbox } = await prepare(laneId, conn, action);
       const mismatch = () => new ConnectorError({ kind: "provider_error", message: VERIFICATION_MISMATCH_MESSAGE });
+      const notFound = () => new ConnectorError({ kind: "not_found", message: NOT_IN_MAILBOX_MESSAGE });
       const isSend = action.action_type === "email.send";
+      /** Recipients, subject, conversation, sender and state of a message against the approved payload. Bcc: on a draft strictly; on a sent copy only when Graph returns some (a sent copy may not list it). */
+      const compare = (m: GraphMessage) => {
+        const from = fromIs(m, mailbox);
+        if (from === false || (isSend && from !== true)) throw mismatch();
+        if (isSend ? m.isDraft !== false : m.isDraft === false) throw mismatch();
+        if (compose.inReplyTo && m.conversationId !== compose.inReplyTo.threadId) throw mismatch();
+        if (!sameList(addressesOf(m.toRecipients), [...compose.to].sort())) throw mismatch();
+        if (!sameList(addressesOf(m.ccRecipients), [...compose.cc].sort())) throw mismatch();
+        const bcc = addressesOf(m.bccRecipients);
+        if ((!isSend || bcc.length > 0) && !sameList(bcc, [...compose.bcc].sort())) throw mismatch();
+        if (norm(m.subject) !== norm(compose.subject)) throw mismatch();
+      };
       const ids = isSend ? await findSentWithRetries(laneId, row, action, mailbox) : await findOwn(laneId, row, action, mailbox, DRAFTS_FOLDER);
-      if (ids.length === 0) throw new ConnectorError({ kind: "not_found", message: NOT_IN_MAILBOX_MESSAGE });
+      if (ids.length === 0) {
+        if (!isSend) throw notFound();
+        // The documentation does not say the extended property survives the send. Second way: the message by the id returned at create (the ImmutableId preference is on every
+        // request), accepted as the sent copy only if it is no longer a draft, sits in the Sent Items folder and matches the approved payload. Read routes only.
+        const folder = z.object({ id: z.string().min(1) }).loose().safeParse((await deps.api.get(laneId, row, "/me/mailFolders/{name}", { name: SENT_FOLDER }, { $select: "id" }, { headers: PREFER })).data);
+        if (!folder.success) throw new ConnectorError({ kind: "provider_error", message: "Microsoft folder is not valid" });
+        let byId: GraphMessage;
+        try {
+          byId = parseMessage((await deps.api.get(laneId, row, MESSAGE, { id: externalId }, { $select: "id,conversationId,subject,isDraft,from,toRecipients,ccRecipients,bccRecipients,parentFolderId" }, { headers: PREFER })).data);
+        } catch (e) {
+          if (isConnectorError(e) && e.info.kind === "not_found") throw notFound();
+          throw e;
+        }
+        if (byId.isDraft !== false || byId.parentFolderId !== folder.data.id) throw notFound(); // still a draft, or somewhere else: not (yet) the sent copy
+        compare(byId);
+        return;
+      }
       const id = ids.includes(externalId) ? externalId : ids.length === 1 ? (ids[0] as string) : undefined;
       if (id === undefined) throw mismatch(); // several marked copies and none is the recorded one
       const res = await deps.api.get(
@@ -361,14 +436,7 @@ export function createMicrosoftEmailWriter(deps: MicrosoftEmailWriterDeps): Micr
       const m = parseMessage(res.data);
       const marker = (m.singleValueExtendedProperties ?? []).find((p) => p.id.toLowerCase() === PORTAL_MARKER_PROPERTY_ID.toLowerCase());
       if ((marker?.value ?? "").trim().toLowerCase() !== action.id.toLowerCase()) throw mismatch();
-      const from = fromIs(m, mailbox);
-      if (from === false || (isSend && from !== true)) throw mismatch();
-      if (isSend ? m.isDraft !== false : m.isDraft === false) throw mismatch();
-      if (compose.inReplyTo && m.conversationId !== compose.inReplyTo.threadId) throw mismatch();
-      if (!sameList(addressesOf(m.toRecipients), [...compose.to].sort())) throw mismatch();
-      if (!sameList(addressesOf(m.ccRecipients), [...compose.cc].sort())) throw mismatch();
-      if (!sameList(addressesOf(m.bccRecipients), [...compose.bcc].sort())) throw mismatch();
-      if (norm(m.subject) !== norm(compose.subject)) throw mismatch();
+      compare(m);
     },
   };
 }

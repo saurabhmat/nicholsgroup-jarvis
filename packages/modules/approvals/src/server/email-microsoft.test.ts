@@ -30,6 +30,8 @@ const CANARY = "BODY-CANARY-microsoft-5d2e-not-real";
 const conn = (id: string, provider: string) => ({ bound: true, id, lane_id: "PKG", provider, external_account_id: `${provider}-box@example.test`, status: "active", features: {}, features_checked_at: null, token_expires_at: null, last_sync_at: null, last_error: null, owner_user_id: OWNER }) as never;
 
 function world(providers: ("google" | "microsoft")[], over: { microsoft?: "ok" | "unknown" | "mismatch" } = {}) {
+  /** While true the read-back of that provider answers not_found (the copy is not visible yet). */
+  const notFound = { google: false, microsoft: false };
   const rows = new Map<string, Record<string, unknown> & { id: string; status: string; payload: Record<string, unknown> }>();
   const log: string[] = [];
   const purge = (r: { payload: Record<string, unknown> } & Record<string, unknown>) => {
@@ -65,6 +67,7 @@ function world(providers: ("google" | "microsoft")[], over: { microsoft?: "ok" |
   };
   const spy = (p: string): EmailWriteEntry => ({
     actionTypes: ["email.send", "email.save_draft"],
+    ...(p === "microsoft" ? { sentCopyMayLagDeclared: true } : {}),
     async executeWrite(_l, c, action) {
       log.push(`${p}:execute:${c.id}:${action.id}`);
       if (p === "microsoft" && over.microsoft === "unknown") throw new ConnectorError({ kind: "provider_error", message: OUTCOME_UNKNOWN_MESSAGE });
@@ -72,6 +75,7 @@ function world(providers: ("google" | "microsoft")[], over: { microsoft?: "ok" |
     },
     async verifyWrite(_l, c) {
       log.push(`${p}:verify:${c.id}`);
+      if (notFound[p as "google" | "microsoft"]) throw new ConnectorError({ kind: "not_found", message: "The message was not found in the mailbox" });
       if (p === "microsoft" && over.microsoft === "mismatch") throw new ConnectorError({ kind: "provider_error", message: VERIFICATION_MISMATCH_MESSAGE });
     },
     async findWrite(_l, c) {
@@ -101,7 +105,7 @@ function world(providers: ("google" | "microsoft")[], over: { microsoft?: "ok" |
     rows.set(id, { id, lane_id: "PKG", action_type: type, connection_id: connectionId, provider: connectionId === G ? "google" : "microsoft", target: base.target, payload: base.payload, payload_schema_version: 1, payload_sha256: hash, rationale: null, source_refs: [], proposer_kind: "user", proposer_user_id: OWNER, derived_from_retrieved: false, supersedes_id: null, superseded_by_id: null, status: "approved", expires_at: new Date(Date.now() + 3600_000).toISOString(), approved_by: OWNER, approved_at: new Date().toISOString(), approved_hash: hash, executed_at: null, verified_at: null, result: {}, failure_code: null, payload_purged_at: null, created_at: new Date().toISOString(), updated_at: new Date().toISOString() });
     return id;
   };
-  return { deps, rows, log, dispatch, approved };
+  return { deps, rows, log, dispatch, approved, notFound };
 }
 
 describe("two providers in one lane", () => {
@@ -146,6 +150,38 @@ describe("two providers in one lane", () => {
   });
 });
 
+describe("an accepted send whose copy is not visible yet (security M2)", () => {
+  it("a Microsoft send: the row stays executing with its claim at sent (not failed, not purged), and the reconciler verifies it once the copy shows; sent once", async () => {
+    const w = world(["google", "microsoft"]);
+    w.notFound.microsoft = true;
+    const id = w.approved(M);
+    const r = await executeApproved(w.deps, "PKG", id);
+    expect(r).toEqual({ status: "sent_unverified", actionId: id });
+    expect(w.rows.get(id)?.status).toBe("executing");
+    expect(w.rows.get(id)?.failure_code ?? null).toBeNull();
+    expect(w.log.filter((x) => x.includes(":execute:"))).toHaveLength(1);
+    const handler = createEmailReconciler({ reconciler: { findWrite: w.dispatch.writer.findWrite, verifyWrite: w.dispatch.writer.verifyWrite }, loadWriteConnection: w.dispatch.loadWriteConnection });
+    const row = { id, connectionId: M, approvedBy: OWNER, payloadSha256: w.rows.get(id)?.payload_sha256, payloadSchemaVersion: 1, actionType: "email.send", payload: w.rows.get(id)?.payload, target: w.rows.get(id)?.target };
+    const still = await handler.decide({ laneId: "PKG", row: row as never, claimOutcome: "sent", claimExternalId: "microsoft-msg" } as never);
+    expect(still).toMatchObject({ kind: "undecided", sentUnverified: true }); // the sweep's own give-up then ends it as "sent, not read back"
+    w.notFound.microsoft = false;
+    const done = await handler.decide({ laneId: "PKG", row: row as never, claimOutcome: "sent", claimExternalId: "microsoft-msg" } as never);
+    expect(done).toMatchObject({ kind: "verified", externalId: "microsoft-msg", outcome: "accepted" });
+    expect(w.log.filter((x) => x.includes(":execute:"))).toHaveLength(1);
+  });
+
+  it("a draft is not a send (not_found at read-back is a failure), and a Google row behaves as before (verification_unavailable, body purged)", async () => {
+    const w = world(["google", "microsoft"]);
+    w.notFound.microsoft = true;
+    w.notFound.google = true;
+    const d = w.approved(M, "email.save_draft");
+    expect(await executeApproved(w.deps, "PKG", d)).toMatchObject({ status: "failed", failureCode: "verification_unavailable" });
+    const g = w.approved(G);
+    expect(await executeApproved(w.deps, "PKG", g)).toMatchObject({ status: "failed", failureCode: "verification_unavailable" });
+    expect(w.rows.get(g)?.payload.bodyText).toBeUndefined();
+  });
+});
+
 describe("the reconciler (action.reconcile_stuck) for a Microsoft action", () => {
   it("holds only findWrite and verifyWrite, and dispatches them by the action's connection provider", async () => {
     const w = world(["google", "microsoft"]);
@@ -169,5 +205,30 @@ describe("capability message names the provider's own reconnect", () => {
     expect(capabilityOf("PKG", facts({}), "email.send")).toMatchObject({ enabled: true });
     expect(capabilityOf("PKG", facts({ provider: "microsoft" }), "email.save_draft")).toMatchObject({ enabled: true });
     expect(capabilityOf("PKG", facts({ provider: "microsoft", writeActionsAllowed: [] }), "email.send")).toMatchObject({ enabled: false, message: NOT_ENABLED_MICROSOFT_MESSAGE });
+  });
+});
+
+describe("no Google wording for a Microsoft mailbox", () => {
+  it("approving on a Microsoft mailbox that cannot send says Reconnect Microsoft (capability gate and the database's connection_not_enabled); a Google one keeps its text", async () => {
+    const mk = (provider: "google" | "microsoft", dbRefuses: boolean) => {
+      const w = world(["google", "microsoft"]);
+      const id = w.approved(provider === "google" ? G : M);
+      const row = w.rows.get(id) as Record<string, unknown>;
+      row.status = "proposed";
+      const ctxRpc: Rpc = async (fn) => {
+        if (fn === "act_get") return { data: [structuredClone(row)], error: null };
+        if (fn === "act_approve" && dbRefuses) return { data: null, error: { code: "P0001", message: "act: connection_not_enabled" } };
+        return { data: null, error: { code: "42883", message: "unknown" } };
+      };
+      const deps = { ...w.deps, readFacts: async () => ({ mailbox: "x@example.test", provider, composeGranted: dbRefuses, writeActionsAllowed: ["email_send", "email_draft"], approvalsLive: true, stepUpMaxAgeS: 300 }) as CapabilityFacts };
+      return { deps, ctx: { laneId: "PKG", userId: OWNER, rpc: ctxRpc }, id, hash: String(row.payload_sha256) };
+    };
+    const { approveAndExecute } = await import("./email");
+    for (const dbRefuses of [false, true]) {
+      const m = mk("microsoft", dbRefuses);
+      await expect(approveAndExecute(m.deps as never, m.ctx as never, { actionId: m.id, hashSeen: m.hash })).rejects.toMatchObject({ code: "not_enabled", message: NOT_ENABLED_MICROSOFT_MESSAGE });
+    }
+    const g = mk("google", false);
+    await expect(approveAndExecute(g.deps as never, g.ctx as never, { actionId: g.id, hashSeen: g.hash })).rejects.toMatchObject({ code: "not_enabled", message: NOT_ENABLED_MESSAGE });
   });
 });

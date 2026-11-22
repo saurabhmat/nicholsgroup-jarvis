@@ -16,7 +16,7 @@ import type { AuditEntry } from "@nichols/core/audit";
 import { isConnectorError } from "@nichols/connectors";
 import { OUTCOME_UNKNOWN_MESSAGE, VERIFICATION_MISMATCH_MESSAGE } from "@nichols/connectors/write";
 import { capabilityOf } from "./capability";
-import { ApprovalsError, toApprovalsError } from "./errors";
+import { ApprovalsError, NOT_ENABLED_MICROSOFT_MESSAGE, toApprovalsError } from "./errors";
 import { firstRow, hashOfRow, rowsOf } from "./rows";
 import type { ActionRow, ApprovalsDeps, ApprovalsPublicDeps, EmailActionType, EmailApprovedAction, ProposerKind, Rpc, UserCtx } from "./types";
 import { EMAIL_ACTION_TYPES, isEmailType } from "./types";
@@ -68,7 +68,9 @@ export type ProposeResult = { id: string; hash: string };
 export type ApproveResult =
   | { status: "verified"; actionId: string }
   | { status: "failed"; actionId: string; failureCode: string }
-  | { status: "already_in_progress"; actionId: string };
+  | { status: "already_in_progress"; actionId: string }
+  /** The provider accepted the send and the sent copy is not visible yet (a provider that declares `sentCopyMayLag`): the action stays `executing` with its claim at "sent" and the reconcile sweep finishes it. */
+  | { status: "sent_unverified"; actionId: string };
 
 export function checkLane(laneId: LaneId): void {
   if (typeof laneId !== "string" || !LANE.test(laneId)) throw new ApprovalsError("invalid");
@@ -321,9 +323,9 @@ export async function approveAndExecute(deps: ApprovalsDeps, ctx: UserCtx, input
   checkId(input.actionId);
   if (typeof input.hashSeen !== "string" || !/^[0-9a-f]{64}$/.test(input.hashSeen)) throw new ApprovalsError("invalid");
   const actor = { kind: "user" as const, userId: ctx.userId };
-  const blocked = async (reason: string): Promise<never> => {
+  const blocked = async (reason: string, message?: string): Promise<never> => {
     await audit(deps, ctx.laneId, actor, "action.gate_blocked", input.actionId, { reason }).catch(() => undefined);
-    throw new ApprovalsError(reason as ApprovalsError["code"]);
+    throw new ApprovalsError(reason as ApprovalsError["code"], message);
   };
 
   const row = await getRow(ctx.rpc, ctx.laneId, input.actionId);
@@ -338,7 +340,7 @@ export async function approveAndExecute(deps: ApprovalsDeps, ctx: UserCtx, input
     // A placeholder on the resume path: executeApproved refuses it before any external call and ends the row failed /
     // placeholder_in_body (a terminal state, not an approved row stuck until it expires).
     const capNow = capabilityOf(ctx.laneId, await deps.readFacts(ctx.laneId, row.connectionId), row.actionType);
-    if (!capNow.enabled) return blocked(capNow.reason);
+    if (!capNow.enabled) return blocked(capNow.reason, capNow.message);
     await audit(deps, ctx.laneId, actor, "action.resumed", row.id, { action_type: row.actionType, hash: row.payloadSha256 });
     return executeApproved(deps, ctx.laneId, row.id);
   }
@@ -349,11 +351,13 @@ export async function approveAndExecute(deps: ApprovalsDeps, ctx: UserCtx, input
   if (hasEmailPlaceholder(row.payload, isReplyRow(row))) return blocked("placeholder_in_body");
   const facts = await deps.readFacts(ctx.laneId, row.connectionId);
   const cap = capabilityOf(ctx.laneId, facts, row.actionType);
-  if (!cap.enabled) return blocked(cap.reason);
+  if (!cap.enabled) return blocked(cap.reason, cap.message);
 
   const approved = await ctx.rpc("act_approve", { p_lane: ctx.laneId, p_id: row.id, p_hash_seen: input.hashSeen });
   if (approved.error) {
-    const err = toApprovalsError(approved.error);
+    let err = toApprovalsError(approved.error);
+    // The database's "connection not enabled" speaks for the connection's own provider (never Google's wording for an Outlook mailbox).
+    if (err.code === "not_enabled" && facts.provider === "microsoft") err = new ApprovalsError("not_enabled", NOT_ENABLED_MICROSOFT_MESSAGE);
     await audit(deps, ctx.laneId, actor, "action.gate_blocked", row.id, { reason: err.code }).catch(() => undefined);
     throw err;
   }
@@ -383,6 +387,8 @@ export async function executeApproved(deps: ApprovalsDeps, laneId: LaneId, actio
   let stage: "before" | "send" | "verify" = "before";
   let verified = false;
   let externalId: string | null = null;
+  let sentRecorded = false;
+  let writeConn: Awaited<ReturnType<ApprovalsDeps["loadWriteConnection"]>> | null = null;
   let outcome: "accepted" | "already_applied" = "accepted";
   try {
     // Immediately before the external call: the stored content must still be what was approved.
@@ -403,6 +409,7 @@ export async function executeApproved(deps: ApprovalsDeps, laneId: LaneId, actio
       approved_by: approvedBy,
     };
     const conn = await deps.loadWriteConnection(laneId, row.connectionId);
+    writeConn = conn;
     stage = "send";
     const res = await deps.writer.executeWrite(laneId, conn, action);
     // executeWrite returned: the provider accepted the request. From here nothing is a definite "not sent"; a missing
@@ -413,6 +420,7 @@ export async function executeApproved(deps: ApprovalsDeps, laneId: LaneId, actio
     outcome = res.outcome;
     const sent = await job("act_claim_sent", { p_lane: laneId, p_id: actionId, p_external_id: externalId });
     if (sent.error) throw toApprovalsError(sent.error);
+    sentRecorded = true;
     await deps.writer.verifyWrite(laneId, conn, action, externalId);
     verified = true;
     const done = await job("act_mark_verified", { p_lane: laneId, p_id: actionId, p_external_id: externalId, p_outcome: outcome });
@@ -428,6 +436,12 @@ export async function executeApproved(deps: ApprovalsDeps, laneId: LaneId, actio
       console.error("[approvals] verified send could not be recorded", { laneId, actionId });
       await audit(deps, laneId, { kind: "service" }, "action.record_failed", actionId, { external_id: externalId }).catch(() => undefined);
       return { status: "verified", actionId };
+    }
+    // A send the provider accepted whose sent copy is not visible yet (the provider declares it may lag, V-20): not a failure. The row stays `executing` with its claim at
+    // "sent" and action.reconcile_stuck verifies it later (its give-up, "sent, not read back", is the existing end of that road).
+    if (stage === "verify" && sentRecorded && externalId !== null && row.actionType === "email.send" && writeConn !== null && deps.writer.sentCopyMayLag?.(writeConn) === true && isConnectorError(e) && e.info.kind === "not_found") {
+      await audit(deps, laneId, { kind: "service" }, "action.verification_pending", actionId, { external_id: externalId }).catch(() => undefined);
+      return { status: "sent_unverified", actionId };
     }
     const f = failureOf(e, stage);
     let marked: Awaited<ReturnType<typeof job>>;

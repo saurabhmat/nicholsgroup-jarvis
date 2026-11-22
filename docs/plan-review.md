@@ -1422,6 +1422,7 @@ Method: `pg_proc.prosrc`, `pg_views.definition`, `pg_policies` and `pg_constrain
 | `core.mailbox_ids` (20261124100000, T-247) | `in ('google', 'microsoft')` | Already generalised; leave. Pinned by tests 321, 322 |
 | `core.oauth_state_create` / `core.oauth_state_consume` (20261125100000, T-254) | `in ('google', 'microsoft')` (own_mail) | Already generalised in T-254; leave |
 | `act.insert_proposal` (20261124150000, T-247) | `not in ('google', 'microsoft')` | Already generalised; leave (the email writer itself is T-261 and later) |
+| `act.connection_ok` (20261127100000, T-263) | `case c.provider when 'google' ... when 'microsoft'` (the write grant: `gmail_compose` / `graph_mail_write`) | Generalised in T-263: each provider's own grant, and the action's provider must equal the connection's. Pinned by tests 322, 325 |
 | `raw.is_content_provider` (20261102080000) | list contains `'google'`, `'microsoft'` | Already generalised; leave |
 | `core.connection_activate_composio` (20261108130000) | `n.provider = 'google' and n.transport = 'native'` | **Leave, on purpose**: the D-23 check of the Composio transport, which exists for Google only (Composio is a transport for `provider = 'google'`, D-35). A Microsoft row cannot hold a Composio identity |
 | `core.connection_token_store` (20261108130000) | `v_provider = 'google'` (D0023 against a Composio row of another lane) | **Leave, on purpose**: same reason; a Microsoft account has no Composio twin, and the unique index `connections_one_lane_per_account` still guards Microsoft rows |
@@ -1900,3 +1901,31 @@ Known limits that remain:
 - `core.sync_runs` has no stream column and `core.sync_cursors` no `created_at`; an exact "first mail sync" time would need one of them.
 
 Production: part 29 (`part-29-T-270.sql`, `check-part-29.sql` 10 rows) after part 28; two md5 rows of `check-part-25.sql` turn false by design. Deploy order does not matter.
+
+## T-262 and T-263: subagent reviews (security and code, run after the build, Nov 22, 2026)
+No BLOCKER, no HIGH. What the reviews confirmed: the Graph write client can reach exactly four method + path templates, refused before the mailbox slot, the guard and any token read; no write is repeated by the HTTP client; the writer is exported only through the write subpath and imported only by approvals; `act.connection_ok` is the only approvals SQL that named a provider, and it now asks each provider for its own grant (pgTAP 325, cross-lane denial included); the body purge on every terminal state still holds.
+
+Fixed after review (the "Review fix round" in `.agent/pr/T-262.md`):
+- (writer) A marked draft that existed before this run created one is never sent. A draft recovered after an ambiguous create or PATCH gets the full comparison (recipients, subject, conversation, sender, text body, no attachment, empty Reply-To, plain-text content type) before it is used; `already_applied` for Save as draft needs the same comparison.
+- (writer, approvals) A send that Microsoft accepted whose copy is not in Sent Items yet is not a failure: the Microsoft writer declares `sentCopyMayLag`, the action stays `executing` with its claim at "sent" (result `sent_unverified`, audit `action.verification_pending`) and the reconcile sweep verifies it. Google is unchanged. Read-back also works by the id returned at create.
+- (write client) An allowed-keys list per route, so a request body cannot carry a field the route was not built for.
+- (security L4) The briefing's reply gate (`briefing-gate.ts`): whether the briefing job may propose a reply is decided by the row's own connection (provider and write grant), in the run and again inside `proposeBriefingReply`; an unknown provider, an unreadable connection or unreadable facts give no proposal.
+- (security L5) ESLint restriction for `microsoftEmailWriter`, the same as the Gmail writer's.
+- (approvals, web) Outlook wording for an unknown outcome ("Check Drafts and Sent Items in Outlook"); a provider-specific "not enabled" message when the database refuses a Microsoft connection; stale Gmail-only comments; a page-level Approvals test with a Gmail and an Outlook proposal together.
+- (SQL, docs) The H-072 run file's header lists everything `store_outbound_drafts` turns on and refuses other `approvals` keys; an undo file (`undo-enable-lane-mail-write-H-072.sql`, tested locally); the runbook section re-ordered (part 30, Entra, lane SQL, Reconnect, live test, undo).
+
+Spec §17 test 29: the failure code stored for an action whose connection's provider is no longer enabled is `connection_unhealthy` (the executor's existing mapping of the connector kind `connection_unavailable`, the same for Google); the spec was updated to say so.
+
+Left as is (LOW):
+- `reply-messages.ts` failure texts in the reply drawer still say "Google" (the drawer does not know the provider).
+- `act.connection_ok` does not itself check that the provider is still enabled for the lane (the dispatcher does, at execute).
+- A mismatch found right after a successful write is reported as refused.
+- At writer level, a second `executeWrite` after `outcome_unknown` with a lagging sent copy and no draft left would look like "never created". Approvals cannot reach this (single claim), and the reconciler only looks.
+- A reply draft is unmarked between `createReply` and the PATCH (V-19). A crash in that gap leaves an unmarked draft in Drafts and the action ends `outcome_unknown`; nothing is ever deleted (the allow-list has no DELETE).
+
+For Saurabh to decide or know (also in the PR note):
+- `store_outbound_drafts = true` turns on more than "allow drafts and sending": **the briefing job then creates pending send proposals by itself** (for a Microsoft row only with the write grant). Nothing is sent without approval, but cards appear in the Approval Center unasked.
+- A reply's PATCH body replaces the quoted original, so replies from Outlook carry no quoted thread. Is that wanted?
+- Not settled by Microsoft's documentation, to record at the live check H-072: the marker (extended property) survives the send; Bcc is kept on the sent copy; the body reads back as plain text; addresses are not rewritten; the marker `$filter` works on the Drafts and Sent Items paths; `createReply` accepts `{}`; a new draft returns `from`; the id stays the same in Sent Items under ImmutableId; PATCH accepts `singleValueExtendedProperties`.
+
+Production: part 30 (`part-30-T-263.sql`, `check-part-30.sql` 6 rows) after part 29; no earlier check row turns false. Then, per lane, the H-072 pair (`enable-lane-mail-write-H-072.sql` + check, with its undo).

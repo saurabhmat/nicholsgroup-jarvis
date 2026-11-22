@@ -40,6 +40,11 @@ export type RunDeps = {
   save: (laneId: LaneId, record: SavedBriefing) => Promise<string>;
   /** Creates one email.send proposal (T-231d) and returns its id. Absent: drafts stay on Home only. Throws a coded error. */
   proposeReply?: (laneId: LaneId, reply: ReplyProposal, signal?: AbortSignal) => Promise<string>;
+  /**
+   * Whether a reply may be proposed for a mail row's own CONNECTION: decided by that connection's provider and write grant (security L4), never by whether a source label was shown.
+   * Absent: every connection is allowed here (the proposer and the database still gate). A refusal, an error or an unknown provider: no proposal (fail closed).
+   */
+  canProposeFor?: (laneId: LaneId, connectionId: string) => Promise<boolean>;
 };
 
 /** What the briefing hands to the Approval Center: everything but `bodyText` and `rationale` is mail metadata. */
@@ -78,11 +83,13 @@ async function proposeReplies(deps: RunDeps, laneId: LaneId, content: BriefConte
       content.notes.push(`reply_not_proposed:${d.ref}`);
       continue;
     }
-    // T-260: replying from a Microsoft mailbox is not built yet (T-262, T-263): no proposal is attempted (the facade would answer unsupported_op); the draft stays on Home to copy.
-    // Fail closed: in a labelled view (provider set) only a thread known to be Google's is proposed; an unknown provider ("") is skipped.
-    if (r?.provider !== undefined && r.provider !== "google") {
-      content.notes.push(`reply_not_proposed:${d.ref}`);
-      continue;
+    // T-260, T-262: whether this row's connection may have a reply proposed (provider and write grant), asked of the connection itself; never inferred from a source label.
+    if (r && deps.canProposeFor) {
+      const ok = await deps.canProposeFor(laneId, r.connectionId).catch(() => false);
+      if (!ok) {
+        content.notes.push(`reply_not_proposed:${d.ref}`);
+        continue;
+      }
     }
     // Only a draft checked as ready is proposed (T-231d security review M1): "Awaiting your input" stays on Home.
     if (d.status !== "ready" || !r || !d.text || !to || !r.threadKey || r.threadKey.startsWith("m:") || ownMailboxes.has(to) || isNoReplyAddress(to)) {

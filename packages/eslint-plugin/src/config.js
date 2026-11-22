@@ -154,6 +154,8 @@ export const RESTRICTED_NAMES = {
   executeWrite: { allow: [...APPROVALS, "packages/connectors/src/google/email-writer.test.ts", "packages/connectors/src/microsoft/email-writer.test.ts"], allowReexport: CONNECTORS, hint: "only the approvals package executes writes" },
   // T-232 security review H1: the Gmail email writer and its write connection loader are for approvals only.
   googleEmailWriter: { allow: [...APPROVALS, "packages/connectors/src/google/index.ts", "packages/connectors/src/google/email-writer-boundary.test.ts"], allowReexport: CONNECTORS, hint: "only the approvals package sends email" },
+  // T-262/T-263 review (security L5): the Microsoft email writer, the same as the Gmail one.
+  microsoftEmailWriter: { allow: [...APPROVALS, "packages/connectors/src/microsoft/index.ts", "packages/connectors/src/microsoft/email-writer-boundary.test.ts"], allowReexport: CONNECTORS, hint: "only the approvals package sends email" },
   loadGoogleWriteConnection: { allow: [...APPROVALS, "packages/connectors/src/google/index.ts"], allowReexport: CONNECTORS, hint: "only the approvals package loads a write connection" },
   mintApprovedAction: { allow: APPROVALS, hint: "only the approvals package mints approved actions" },
   getSupabaseSecretKey: { allow: [...LANE_ROUTER, ...TOKEN_VAULT, ...CORE_ENV], hint: "lane router and token vault only" },

@@ -30,6 +30,9 @@ export type FakeWriteMessage = {
   bcc: Addr[];
   bodyContent: string;
   bodyContentType: string;
+  /** What a person could plant in a draft in Outlook: an attachment, a Reply-To. */
+  hasAttachments?: boolean;
+  replyTo?: Addr[];
   isDraft: boolean;
   /** Extended properties by id. */
   props: Map<string, string>;
@@ -55,6 +58,14 @@ export interface FakeMailWrite {
   seed(account: FakeMsAccount, over: Partial<FakeWriteMessage> & { id: string; conversationId: string }): FakeWriteMessage;
   /** The next `n` Sent Items marker lookups find nothing yet for a message that was just sent. Default 0. */
   sentLag: number;
+  /** While a sent copy is still hidden from marker lookups (`sentLag`), a read of it by id answers 404 too (the copy is not there yet at all). */
+  hideIdWhileLagging: boolean;
+  /** After a send the sent copy no longer carries the extended properties (the documentation does not say they survive the send). */
+  dropMarkerOnSend: boolean;
+  /** The next create / patch / send of this kind is APPLIED and then answers this status (an ambiguous failure after the work was done). */
+  failAfterApply(key: "create" | "patch", status: number): void;
+  /** Called right after a create / patch was applied (a test tampers with the draft here). */
+  onApplied: ((key: "create" | "patch", m: FakeWriteMessage) => void) | null;
   /** After a send the message gets a new id (a mailbox that ignores the ImmutableId preference). */
   idChangesOnSend: boolean;
   /** The next send is applied and then fails this way, once. */
@@ -76,6 +87,7 @@ export function createFakeMailWrite(fake: FakeMicrosoft): FakeMailWrite {
   const unexpected: WriteRequest[] = [];
   const counts = { created: 0, replies: 0, patched: 0, sent: 0 };
   const fails: { key: string; status: number; left: number }[] = [];
+  const afterApply: { create: number | null; patch: number | null } = { create: null, patch: null };
   let seq = 0;
   let echoed = "";
 
@@ -132,6 +144,8 @@ export function createFakeMailWrite(fake: FakeMicrosoft): FakeMailWrite {
       bccRecipients: m.bcc,
       body: { contentType: m.bodyContentType, content: m.bodyContent },
       parentFolderId: `folder-${m.folder}`,
+      hasAttachments: m.hasAttachments === true,
+      replyTo: m.replyTo ?? [],
     };
     const res: Record<string, unknown> = {};
     for (const k of Object.keys(all)) if (wanted === null || wanted.has(k) || k === "id") res[k] = all[k];
@@ -161,9 +175,19 @@ export function createFakeMailWrite(fake: FakeMicrosoft): FakeMailWrite {
       if ("response" in a) return a.response;
       const m = find(a.account, decodeURIComponent(String(params.id)));
       if (!m) return gErr(404, "ErrorItemNotFound");
+      if (api.hideIdWhileLagging && m.folder === "sentitems" && m.hiddenLookups > 0) return gErr(404, "ErrorItemNotFound");
       const q = parseQuery(a.req.search);
       const sel = q.get("$select");
       return HttpResponse.json(out(m, sel ? new Set(sel.split(",").map((x) => x.trim())) : null, q.get("$expand") ?? null), { headers: { "request-id": `synthetic-w-${String(++seq)}` } });
+    }),
+
+    // One folder (its id): the Sent Items folder id is what a sent copy's parentFolderId is compared with.
+    http.get(`${GRAPH_V1}/me/mailFolders/:folder`, async ({ request, params }) => {
+      const a = await admit(request, "read");
+      if ("response" in a) return a.response;
+      const folder = decodeURIComponent(String(params.folder));
+      if (!WRITE_FAKE_FOLDERS.includes(folder as WriteFolder)) return gErr(404, "ErrorItemNotFound");
+      return HttpResponse.json({ id: `folder-${folder}` }, { headers: { "request-id": `synthetic-w-${String(++seq)}` } });
     }),
 
     // The marker lookup in one folder: EXACTLY the documented filter (+ $select, $top).
@@ -207,6 +231,12 @@ export function createFakeMailWrite(fake: FakeMicrosoft): FakeMailWrite {
       };
       box(a.account).set(id, m);
       counts.created += 1;
+      api.onApplied?.("create", m);
+      if (afterApply.create !== null) {
+        const st = afterApply.create;
+        afterApply.create = null;
+        return gErr(st, "InjectedFailureAfterApply");
+      }
       return HttpResponse.json(out(m, null, null), { status: 201, headers: { "request-id": `synthetic-w-${String(++seq)}` } });
     }),
 
@@ -246,6 +276,12 @@ export function createFakeMailWrite(fake: FakeMicrosoft): FakeMailWrite {
       }
       for (const p of (b.singleValueExtendedProperties as { id: string; value: string }[] | undefined) ?? []) m.props.set(p.id, p.value);
       counts.patched += 1;
+      api.onApplied?.("patch", m);
+      if (afterApply.patch !== null) {
+        const st = afterApply.patch;
+        afterApply.patch = null;
+        return gErr(st, "InjectedFailureAfterApply");
+      }
       return HttpResponse.json(out(m, null, null), { headers: { "request-id": `synthetic-w-${String(++seq)}` } });
     }),
 
@@ -257,6 +293,7 @@ export function createFakeMailWrite(fake: FakeMicrosoft): FakeMailWrite {
       // Applied: the message leaves Drafts for Sent Items.
       m.isDraft = false;
       m.folder = "sentitems";
+      if (api.dropMarkerOnSend) m.props.clear();
       m.hiddenLookups = api.sentLag;
       if (api.idChangesOnSend) {
         box(a.account).delete(m.id);
@@ -285,6 +322,12 @@ export function createFakeMailWrite(fake: FakeMicrosoft): FakeMailWrite {
     unexpected,
     counts,
     sentLag: 0,
+    dropMarkerOnSend: false,
+    hideIdWhileLagging: false,
+    onApplied: null,
+    failAfterApply(key, status) {
+      afterApply[key] = status;
+    },
     idChangesOnSend: false,
     faultAfterSend: null,
     messages: (a) => [...box(a).values()],
@@ -307,6 +350,10 @@ export function createFakeMailWrite(fake: FakeMicrosoft): FakeMailWrite {
       counts.created = counts.replies = counts.patched = counts.sent = 0;
       fails.length = 0;
       api.sentLag = 0;
+      api.dropMarkerOnSend = false;
+      api.hideIdWhileLagging = false;
+      api.onApplied = null;
+      afterApply.create = afterApply.patch = null;
       api.idChangesOnSend = false;
       api.faultAfterSend = null;
     },

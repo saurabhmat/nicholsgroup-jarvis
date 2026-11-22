@@ -81,6 +81,27 @@ describe("the allow-list (spec §17 test 22)", () => {
     expect(write.requests).toHaveLength(0);
   });
 
+  it("only the allowed body keys per route: attachments, from, replyTo, isRead and any other field are refused before any token read; createReply and send take an empty object only", async () => {
+    const { h, client, conn } = setup();
+    const id = { id: "AAMkD1=" };
+    const bad: GraphWriteRequest[] = [
+      { method: "POST", path: "/me/messages", body: { subject: "x", attachments: [{ name: "a" }] } },
+      { method: "POST", path: "/me/messages", body: { from: { emailAddress: { address: "x@y.test" } } } },
+      { method: "POST", path: "/me/messages", body: { replyTo: [{ emailAddress: { address: "x@y.test" } }] } },
+      { method: "PATCH", path: "/me/messages/{id}", params: id, body: { isRead: true } },
+      { method: "PATCH", path: "/me/messages/{id}", params: id, body: { attachments: [] } },
+      { method: "PATCH", path: "/me/messages/{id}", params: id, body: { replyTo: [] } },
+      { method: "PATCH", path: "/me/messages/{id}", params: id, body: { internetMessageHeaders: [] } }, // headers only at create
+      { method: "POST", path: "/me/messages/{id}/createReply", params: id, body: { comment: "x" } },
+      { method: "POST", path: "/me/messages/{id}/createReply", params: id, body: { message: { body: {} } } },
+      { method: "POST", path: "/me/messages/{id}/send", params: id, body: { subject: "x" } },
+    ];
+    for (const r of bad) await expect(client.request("PKG", conn, r), `${r.method} ${r.path} ${JSON.stringify(Object.keys(r.body))}`).rejects.toMatchObject({ info: { kind: "invalid_input" } });
+    expect(h.stats.tokenReads).toBe(0);
+    expect(h.stats.loads).toBe(0);
+    expect(write.requests).toHaveLength(0);
+  });
+
   it("a forged connection, another lane's connection and a Google connection are refused before any token read", async () => {
     const { h, client, conn } = setup();
     await expect(client.request("PKG", { ...conn }, { method: "POST", path: "/me/messages", body: {} })).rejects.toBeTruthy();

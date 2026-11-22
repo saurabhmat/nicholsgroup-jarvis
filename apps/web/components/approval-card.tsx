@@ -9,6 +9,7 @@ import { useRouter } from "next/navigation";
 import { useState } from "react";
 import { Alert, AlertDescription, AlertTitle, Badge, Button, cn } from "@nichols/ui";
 import type { PendingCard } from "@/lib/approvals";
+import { isOutcomeUnknown } from "@/lib/outcome";
 import { PLACEHOLDER_FAILED } from "@/lib/reply-messages";
 
 const control =
@@ -80,7 +81,7 @@ export function ApprovalCard({ laneId, card, canAct }: { laneId: string; card: P
       return;
     }
     if (status === 200) {
-      setDone(data.status === "verified" ? (isSend ? "Sent and checked in the mailbox." : outlook ? "Saved as an Outlook draft and checked." : "Saved as a Gmail draft and checked.") : data.status === "failed" ? (data.failureCode === "placeholder_in_body" ? PLACEHOLDER_FAILED : "It could not be completed. Check the mailbox before trying again.") : "Already being carried out.");
+      setDone(data.status === "sent_unverified" ? "Sent. Waiting for the copy to show in Sent Items; this page updates when it is confirmed." : data.status === "verified" ? (isSend ? "Sent and checked in the mailbox." : outlook ? "Saved as an Outlook draft and checked." : "Saved as a Gmail draft and checked.") : data.status === "failed" ? (data.failureCode === "placeholder_in_body" ? PLACEHOLDER_FAILED : outlook ? (typeof data.failureCode === "string" && isOutcomeUnknown(data.failureCode) ? "Check Drafts and Sent Items in Outlook before trying again." : "It could not be completed. Check Drafts and Sent Items in Outlook before trying again.") : "It could not be completed. Check the mailbox before trying again.") : "Already being carried out.");
       return router.refresh();
     }
     if (status === 409 && data.error === "hash_mismatch") router.refresh();

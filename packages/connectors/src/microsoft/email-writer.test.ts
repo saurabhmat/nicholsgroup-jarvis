@@ -10,7 +10,8 @@ import { createMicrosoftHarness, HARNESS_OWNER, TENANT_A } from "../testing/micr
 import { useMockServer } from "../testing/msw/index";
 import { createFakeMicrosoft } from "../testing/msw/microsoft/handlers";
 import { createFakeMailWrite } from "../testing/msw/microsoft/mail-write";
-import { DRAFT_CHANGED_MESSAGE, createMicrosoftEmailWriter, MICROSOFT_WRITE_NOT_GRANTED_MESSAGE, NOT_IN_MAILBOX_MESSAGE, OUTCOME_UNKNOWN_MESSAGE, VERIFICATION_MISMATCH_MESSAGE, type MicrosoftEmailApprovedAction } from "./email-writer";
+import { createConnectorLogger, type LogEntry } from "../log/index";
+import { DRAFT_CHANGED_MESSAGE, DRAFT_EXISTS_MESSAGE, createMicrosoftEmailWriter, MICROSOFT_WRITE_NOT_GRANTED_MESSAGE, NOT_IN_MAILBOX_MESSAGE, OUTCOME_UNKNOWN_MESSAGE, VERIFICATION_MISMATCH_MESSAGE, type MicrosoftEmailApprovedAction } from "./email-writer";
 import { GRAPH_MAIL_WRITE_FEATURE, PORTAL_MARKER_PROPERTY_ID } from "./constants";
 import { createGraphWriteClient } from "./write-client";
 
@@ -44,14 +45,17 @@ function setup(over: { features?: Record<string, boolean>; owner?: string | null
     sleeps.push(ms);
     t += ms;
   };
+  const events: LogEntry[] = [];
+  const logger = createConnectorLogger({ sink: (e) => events.push(e) });
   const claimChecks: { actionId: string; hash: string; approvedBy: string }[] = [];
   const writer = createMicrosoftEmailWriter({
     guard: h.guard,
     api: h.api,
-    write: createGraphWriteClient({ guard: h.guard, tokens: h.tokens, logger: undefined as never, httpOptions: { sleep, now: () => t } }),
+    write: createGraphWriteClient({ guard: h.guard, tokens: h.tokens, httpOptions: { sleep, now: () => t } }),
     laneConfig: h.laneConfig,
     claims: { claimOpen: async (_l, actionId, hash, approvedBy) => (claimChecks.push({ actionId, hash, approvedBy }), over.claimOpen ?? true) },
     sleep,
+    logger,
     now: () => Date.parse("2026-11-22T12:00:00Z"),
     ...(over.sentPauses ? { sentRetryPausesMs: over.sentPauses } : {}),
   });
@@ -73,7 +77,7 @@ function setup(over: { features?: Record<string, boolean>; owner?: string | null
     expect(write.requests, "a refused write reached Graph").toHaveLength(0);
     expect(h.stats.tokenReads, "a refused write read a token").toBe(0);
   };
-  return { h, made, writer, action, reply, claimChecks, sleeps, nothingCalled, account: made.account, conn: made.conn };
+  return { h, made, writer, action, reply, claimChecks, sleeps, nothingCalled, events, account: made.account, conn: made.conn };
 }
 
 
@@ -263,24 +267,15 @@ describe("Send (spec §17 test 21)", () => {
     expect(write.counts).toEqual(before);
   });
 
-  it("a draft left by an earlier run (send refused) is reused, not duplicated, when it still matches the approved text", async () => {
+  it("a marked draft found in Drafts BEFORE this run created one is never sent (a person is told to look): nothing is created, nothing is sent", async () => {
     const { writer, action, conn, account } = setup();
     const a = action("email.send");
     write.failNext("send", 403);
     await expect(writer.executeWrite("PKG", conn, a)).rejects.toMatchObject({ info: { kind: "forbidden" } });
-    const r = await writer.executeWrite("PKG", conn, a);
-    expect(r.outcome).toBe("accepted");
-    expect(write.counts).toMatchObject({ created: 1, sent: 1 });
-    expect(write.inFolder(account, "sentitems")).toHaveLength(1);
-  });
-
-  it("a draft a person edited in Outlook after a refused send is NOT sent: it no longer matches the approved email", async () => {
-    const { writer, action, conn, account } = setup();
-    const a = action("email.send");
-    write.failNext("send", 403);
-    await expect(writer.executeWrite("PKG", conn, a)).rejects.toBeTruthy();
-    write.editBody(account, at(write.inFolder(account, "drafts")).id, "A different text typed by a person");
-    await expect(writer.executeWrite("PKG", conn, a)).rejects.toMatchObject({ info: { message: DRAFT_CHANGED_MESSAGE } });
+    const before = { ...write.counts };
+    await expect(writer.executeWrite("PKG", conn, a)).rejects.toMatchObject({ info: { message: DRAFT_EXISTS_MESSAGE } });
+    expect(write.counts).toEqual(before);
+    expect(write.inFolder(account, "drafts")).toHaveLength(1);
     expect(write.counts.sent).toBe(0);
   });
 
@@ -419,5 +414,181 @@ describe("logs and errors never carry the message, the recipients or a token", (
     expect(text).not.toContain(BODY_CANARY);
     expect(text).not.toContain("dana@sender.example.test");
     expect(text).not.toContain(at([...fake.accounts.values()]).refreshToken);
+  });
+});
+
+
+// ---------------------------------------------------------------------------------------------------------------------------------------------
+// Review round (T-262/T-263): planted drafts, the full check after recovery, a lagging sent copy, Bcc, the closed claim, the logger.
+const plant = (t: ReturnType<typeof setup>, a: MicrosoftEmailApprovedAction, over: Record<string, unknown> = {}) => {
+  const payload = a.payload as { to: string[]; cc: string[]; subject: string; bodyText: string };
+  const m = write.seed(t.account, {
+    id: `AAMkPlanted-${a.id}=`, conversationId: "conv-planted", folder: "drafts", isDraft: true, from: MAILBOX, subject: payload.subject,
+    to: payload.to.map((address) => ({ emailAddress: { address } })), cc: payload.cc.map((address) => ({ emailAddress: { address } })),
+    bodyContent: payload.bodyText, bodyContentType: "text", hasAttachments: false, replyTo: [], ...over,
+  });
+  m.props.set(PORTAL_MARKER_PROPERTY_ID, a.id);
+  return m;
+};
+const PLANTS: [string, Record<string, unknown>][] = [
+  ["an attachment", { hasAttachments: true }],
+  ["a changed Reply-To", { replyTo: [{ emailAddress: { address: "elsewhere@sender.example.test" } }] }],
+  ["an HTML body that renders to the same text", { bodyContentType: "html", bodyContent: `<p>Thanks Dana.</p><p>${BODY_CANARY}</p>` }],
+  ["another body text", { bodyContent: "Different words" }],
+  ["another recipient", { to: [{ emailAddress: { address: "someone-else@sender.example.test" } }] }],
+];
+
+describe("a draft this call did not create (security M1)", () => {
+  it.each(PLANTS)("email.send never sends a planted marked draft with %s", async (_n, over) => {
+    const t = setup();
+    const a = t.action("email.send");
+    plant(t, a, over);
+    await expect(t.writer.executeWrite("PKG", t.conn, a)).rejects.toMatchObject({ info: { message: DRAFT_EXISTS_MESSAGE } });
+    expect(write.counts).toEqual({ created: 0, replies: 0, patched: 0, sent: 0 });
+  });
+
+  it.each(PLANTS)("email.save_draft does not answer already_applied for a planted marked draft with %s", async (_n, over) => {
+    const t = setup();
+    const a = t.action("email.save_draft");
+    plant(t, a, over);
+    await expect(t.writer.executeWrite("PKG", t.conn, a)).rejects.toMatchObject({ info: { message: DRAFT_CHANGED_MESSAGE } });
+    expect(write.counts.created + write.counts.replies + write.counts.sent).toBe(0);
+  });
+
+  it("email.save_draft: an identical planted marked draft IS already_applied", async () => {
+    const t = setup();
+    const a = t.action("email.save_draft");
+    const m = plant(t, a);
+    const r = await t.writer.executeWrite("PKG", t.conn, a);
+    expect(r).toMatchObject({ outcome: "already_applied", external_id: m.id });
+  });
+
+  it("a draft recovered after an ambiguous create (applied, then 503) passes the FULL check and the send goes on; tampered meanwhile, it is refused and nothing is sent", async () => {
+    const ok = setup();
+    write.failAfterApply("create", 503);
+    const a = ok.action("email.send");
+    const r = await ok.writer.executeWrite("PKG", ok.conn, a);
+    expect(r.outcome).toBe("accepted");
+    expect(write.counts).toMatchObject({ created: 1, sent: 1 });
+    for (const [name, over] of PLANTS.slice(0, 4)) {
+      const t = setup();
+      write.failAfterApply("create", 503);
+      write.onApplied = (_k, m) => Object.assign(m, over);
+      await expect(t.writer.executeWrite("PKG", t.conn, t.action("email.send")), name).rejects.toMatchObject({ info: { message: DRAFT_CHANGED_MESSAGE } });
+      expect(write.counts.sent, name).toBe(0);
+    }
+  });
+
+  it("a draft recovered after an ambiguous PATCH of a reply gets the same full check", async () => {
+    const t = setup();
+    write.failAfterApply("patch", 503);
+    write.onApplied = (k, m) => {
+      if (k === "patch") m.hasAttachments = true;
+    };
+    await expect(t.writer.executeWrite("PKG", t.conn, t.action("email.send", t.reply))).rejects.toMatchObject({ info: { message: DRAFT_CHANGED_MESSAGE } });
+    expect(write.counts.sent).toBe(0);
+  });
+});
+
+describe("an accepted send whose Sent Items copy is not visible yet (security M2)", () => {
+  it("declares that the copy may lag; execute still answers accepted; the read-back says not_found until the copy shows (marker or id), then verifies; sent exactly once", async () => {
+    const { writer, action, conn } = setup({ sentPauses: [] });
+    expect(writer.sentCopyMayLag).toBe(true);
+    write.sentLag = 3;
+    write.hideIdWhileLagging = true;
+    const a = action("email.send");
+    const r = await writer.executeWrite("PKG", conn, a);
+    expect(r.outcome).toBe("accepted");
+    await expect(writer.verifyWrite("PKG", conn, a, r.external_id as string)).rejects.toMatchObject({ info: { kind: "not_found" } });
+    write.sentLag = 0;
+    await writer.verifyWrite("PKG", conn, a, r.external_id as string);
+    expect(write.counts.sent).toBe(1);
+  });
+
+  it("the marker gone from the sent copy: found by the id returned at create (not a draft, in Sent Items, matching)", async () => {
+    const { writer, action, conn } = setup({ sentPauses: [] });
+    write.dropMarkerOnSend = true;
+    const a = action("email.send", { bcc: ["hidden@sender.example.test"] });
+    const r = await writer.executeWrite("PKG", conn, a);
+    await writer.verifyWrite("PKG", conn, a, r.external_id as string);
+    expect(write.unexpected).toEqual([]);
+    expect(write.requests.filter((q) => q.method !== "GET").map((q) => q.method)).toEqual(["POST", "POST"]); // create + send only: the id check used read routes
+  });
+
+  it("by id, a copy that differs, or is still a draft, or is not in Sent Items, is never accepted", async () => {
+    const { writer, action, conn, account } = setup({ sentPauses: [] });
+    write.dropMarkerOnSend = true;
+    const a = action("email.send");
+    const r = await writer.executeWrite("PKG", conn, a);
+    const copy = at(write.inFolder(account, "sentitems"));
+    copy.to = [{ emailAddress: { address: "someone-else@sender.example.test" } }];
+    await expect(writer.verifyWrite("PKG", conn, a, r.external_id as string)).rejects.toMatchObject({ info: { message: VERIFICATION_MISMATCH_MESSAGE } });
+    copy.to = [{ emailAddress: { address: "dana@sender.example.test" } }];
+    copy.folder = "inbox";
+    await expect(writer.verifyWrite("PKG", conn, a, r.external_id as string)).rejects.toMatchObject({ info: { kind: "not_found" } });
+    copy.folder = "sentitems";
+    copy.isDraft = true;
+    await expect(writer.verifyWrite("PKG", conn, a, r.external_id as string)).rejects.toMatchObject({ info: { kind: "not_found" } });
+    await expect(writer.verifyWrite("PKG", conn, a, "AAMkNoSuchMessage=")).rejects.toMatchObject({ info: { kind: "not_found" } });
+  });
+
+  it("neither the marker nor the id is visible yet: not_found (the reconciler keeps looking; its give-up as unknown is its own, tested in the approvals module)", async () => {
+    const { writer, action, conn } = setup({ sentPauses: [] });
+    write.dropMarkerOnSend = true;
+    write.sentLag = 99;
+    write.hideIdWhileLagging = true;
+    const a = action("email.send");
+    const r = await writer.executeWrite("PKG", conn, a);
+    expect(r.outcome).toBe("accepted");
+    await expect(writer.verifyWrite("PKG", conn, a, r.external_id as string)).rejects.toMatchObject({ info: { kind: "not_found" } });
+    expect(write.counts.sent).toBe(1);
+  });
+});
+
+describe("Bcc on the sent copy (code review)", () => {
+  it("a sent copy that lists no Bcc does not turn a correct send into a mismatch; one that lists a DIFFERENT Bcc does; the draft's Bcc is compared strictly", async () => {
+    const t = setup();
+    const a = t.action("email.send", { bcc: ["hidden@sender.example.test"] });
+    const r = await t.writer.executeWrite("PKG", t.conn, a);
+    const copy = at(write.inFolder(t.account, "sentitems"));
+    expect(copy.bcc.map((x) => x.emailAddress.address)).toEqual(["hidden@sender.example.test"]);
+    copy.bcc = []; // Graph does not list Bcc on the sent copy
+    await t.writer.verifyWrite("PKG", t.conn, a, r.external_id as string);
+    copy.bcc = [{ emailAddress: { address: "another@sender.example.test" } }];
+    await expect(t.writer.verifyWrite("PKG", t.conn, a, r.external_id as string)).rejects.toMatchObject({ info: { message: VERIFICATION_MISMATCH_MESSAGE } });
+    // the draft, before sending, carries the approved Bcc exactly (the create response is compared)
+    const d = setup();
+    const da = d.action("email.save_draft", { bcc: ["hidden@sender.example.test"] });
+    const dr = await d.writer.executeWrite("PKG", d.conn, da);
+    at(write.inFolder(d.account, "drafts")).bcc = [];
+    await expect(d.writer.verifyWrite("PKG", d.conn, da, dr.external_id as string)).rejects.toMatchObject({ info: { message: VERIFICATION_MISMATCH_MESSAGE } });
+  });
+});
+
+describe("one execution (code review M2, L1)", () => {
+  it.each(["email.send", "email.save_draft"] as const)("a closed claim means no Graph call at all (%s)", async (type) => {
+    const t = setup({ claimOpen: false });
+    await expect(t.writer.executeWrite("PKG", t.conn, t.action(type))).rejects.toMatchObject({ info: { kind: "forbidden" } });
+    expect(write.requests.filter((q) => q.method !== "GET")).toEqual([]);
+    expect(write.requests).toHaveLength(0);
+  });
+
+  it("an unmarked reply draft that may be left behind, and each ambiguous recovery, are logged with ids only (never a body, subject or recipient)", async () => {
+    const t = setup();
+    write.failNext("createReply", 503);
+    await expect(t.writer.executeWrite("PKG", t.conn, t.action("email.save_draft", t.reply))).rejects.toBeTruthy();
+    write.failNext("patch", 400);
+    await expect(t.writer.executeWrite("PKG", t.conn, t.action("email.save_draft", t.reply))).rejects.toBeTruthy();
+    write.failAfterApply("create", 503);
+    await t.writer.executeWrite("PKG", t.conn, t.action("email.save_draft"));
+    const names = t.events.map((e) => `${e.event}:${String(e.fields.reason ?? e.fields.outcome ?? "")}`);
+    expect(names).toContain("microsoft.write.unmarked_reply_draft:create_reply_ambiguous");
+    expect(names).toContain("microsoft.write.unmarked_reply_draft:patch_refused");
+    expect(names).toContain("microsoft.write.recovery:found");
+    const text = JSON.stringify(t.events);
+    expect(text).not.toContain(BODY_CANARY);
+    expect(text).not.toContain("Board deck");
+    expect(text).not.toContain("dana@sender.example.test");
+    expect(t.events.find((e) => e.event === "microsoft.write.unmarked_reply_draft" && e.fields.reason === "patch_refused")?.connection_id).toBe(t.conn.id);
   });
 });

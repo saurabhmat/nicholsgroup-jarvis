@@ -5,8 +5,11 @@
 // attachments, sendMail or any other path). A request that is not on the list is refused BEFORE the mailbox slot, the guard and any token read.
 //   POST  /me/messages                       create a draft (a new message)
 //   POST  /me/messages/{id}/createReply      create a reply draft in the conversation of message {id}
-//   PATCH /me/messages/{id}                  update a draft this action created (the writer proves it: the id came from its own create in this run)
+//   PATCH /me/messages/{id}                  update a draft (the writer, not this client, enforces that it is a draft its own createReply returned in this run; the client
+//                                            only limits WHICH fields can be sent, below)
 //   POST  /me/messages/{id}/send             send a draft
+// Allowed body keys per route, also refused before any token read: createReply and send take an empty object only; PATCH takes subject, body, the three recipient lists and
+// singleValueExtendedProperties; POST /me/messages takes those and internetMessageHeaders. So no attachment, sender, reply-to, flag or other field can be set through this client.
 // Never retried: POST and PATCH go out with `retry: false`, so a timeout, a 5xx or a network failure is NOT repeated by the HTTP client (a second send must never
 // happen); an ambiguous failure is resolved by the writer's marker lookup. A 401 means the request was not processed: the token is refreshed once and the request
 // goes out once more. Every request carries `Prefer: IdType="ImmutableId"` (the ids of the synced rows are immutable ids). The guard runs inside the mailbox
@@ -56,6 +59,14 @@ export interface GraphWriteClient {
   request<T = unknown>(laneId: LaneId, conn: unknown, req: GraphWriteRequest): Promise<ConnectorResponse<T>>;
 }
 
+const DRAFT_KEYS = ["subject", "body", "toRecipients", "ccRecipients", "bccRecipients", "singleValueExtendedProperties"] as const;
+/** Body keys allowed per "METHOD path" (an empty list = the empty object only). */
+export const GRAPH_WRITE_BODY_KEYS: Readonly<Record<string, readonly string[]>> = Object.freeze({
+  "POST /me/messages": Object.freeze([...DRAFT_KEYS, "internetMessageHeaders"]),
+  "POST /me/messages/{id}/createReply": Object.freeze([] as string[]),
+  "PATCH /me/messages/{id}": Object.freeze([...DRAFT_KEYS]),
+  "POST /me/messages/{id}/send": Object.freeze([] as string[]),
+});
 const ID_PARAM = /^[A-Za-z0-9_=@.+:-]{1,512}$/;
 const refused = (message: string) => new ConnectorError({ kind: "invalid_input", message });
 
@@ -71,6 +82,8 @@ function assertRequest(req: GraphWriteRequest): void {
     if (typeof v !== "string" || !ID_PARAM.test(v) || v === "." || v === "..") throw refused("A path parameter contains a character that is not allowed");
   }
   if (typeof req.body !== "object" || req.body === null || Array.isArray(req.body)) throw refused("The request body is not valid");
+  const allowed = GRAPH_WRITE_BODY_KEYS[`${req.method} ${req.path}`] ?? [];
+  if (Object.keys(req.body).some((k) => !allowed.includes(k))) throw refused("A field of the request body is not allowed");
 }
 
 export function createGraphWriteClient(deps: GraphWriteClientDeps): GraphWriteClient {

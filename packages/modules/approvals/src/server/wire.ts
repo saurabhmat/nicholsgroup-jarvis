@@ -12,7 +12,9 @@ import { approveAndExecute, executeApproved, proposeEmailAction, type ProposeEma
 import { isQboDisconnectable } from "./capability";
 import { approveAndExecuteQbo, executeApprovedQbo, type QboExecDeps } from "./qbo";
 import { reconcileStuckActions, type ReconcileDeps, type ReconcileSummary } from "./reconcile";
+import { createBriefingReplyGate } from "./briefing-gate";
 import { createEmailReconciler } from "./reconcile-email";
+import { ApprovalsError } from "./errors";
 import { createQboReconciler } from "./reconcile-qbo";
 import { getRow } from "./email";
 import { isEmailType } from "./types";
@@ -87,6 +89,7 @@ const googleEmailEntry: EmailWriteEntry = {
 Object.freeze(googleEmailEntry);
 const microsoftEmailEntry: EmailWriteEntry = {
   actionTypes: microsoftEmailWriter.actionTypes,
+  sentCopyMayLagDeclared: microsoftEmailWriter.sentCopyMayLag,
   executeWrite: (laneId, conn, action) => microsoftEmailWriter.executeWrite(laneId, conn as LaneBoundConnection<"microsoft">, action),
   verifyWrite: (laneId, conn, action, externalId) => microsoftEmailReconciler.verifyWrite(laneId, conn as LaneBoundConnection<"microsoft">, action, externalId),
   findWrite: (laneId, conn, action) => microsoftEmailReconciler.findWrite(laneId, conn as LaneBoundConnection<"microsoft">, action),
@@ -160,7 +163,13 @@ export function reconcileStuckLane(laneId: LaneId): Promise<ReconcileSummary> {
  * The briefing's one entry point (T-231d security review L2): a job proposal for the owner, bound to the real deps, so
  * the briefing never holds `approvalsDeps` (whose jobRpc is the service-role rpc). Proposes only; never approves or sends.
  */
+const briefingGate = createBriefingReplyGate({ loadWriteConnection: emailDispatch.loadWriteConnection, readFacts });
+/** Whether the briefing may propose a reply for this connection (its provider and its write grant; unknown: no). Read-only. */
+export const briefingReplyAllowed = (laneId: LaneId, connectionId: string): Promise<boolean> => briefingGate(laneId, connectionId);
+
 export async function proposeBriefingReply(laneId: LaneId, ownerUserId: string, input: Pick<ProposeEmailInput, "connectionId" | "compose" | "rationale" | "sourceRefs" | "signal">): Promise<string> {
+  // Defence in depth: the same gate again here, so no caller can propose for a connection whose provider or grant is not known to allow it.
+  if (!(await briefingGate(laneId, input.connectionId))) throw new ApprovalsError("not_enabled", "Sending isn't enabled for this mailbox yet.");
   const { id } = await proposeEmailAction(approvalsDeps, laneId, {
     ...input,
     actionType: "email.send",

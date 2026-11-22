@@ -15,7 +15,7 @@ type Provider = EmailProvider;
 export type { EmailConn, EmailApprovedAction };
 
 /** One provider's write entry: the connector's writer, for rows of that provider only. */
-export type EmailWriteEntry = EmailWriteSurface;
+export type EmailWriteEntry = EmailWriteSurface & { readonly sentCopyMayLagDeclared?: boolean };
 
 /** The entry of a provider whose write path is not wired in this build: every call answers `unsupported_op` (kept for tests and builds without the Graph wiring). */
 const unsupported = async (): Promise<never> => {
@@ -40,6 +40,11 @@ export function createEmailWriteDispatch(deps: { loader: { loadConnection(laneId
     /** Execute, read back, find: each by the connection's own provider. Holds executeWrite: approvals only. */
     writer: Object.freeze({
       actionTypes: Object.freeze([...new Set([...deps.entries.google.actionTypes, ...deps.entries.microsoft.actionTypes])]),
+      /** Whether the connection's own provider declared that an accepted send's copy may lag (read-only; false for a row that is not an email connection). */
+      sentCopyMayLag(conn: unknown): boolean {
+        const p = (conn as { provider?: string } | null)?.provider;
+        return isCommsProvider(String(p)) && deps.entries[p as Provider].sentCopyMayLagDeclared === true;
+      },
       async executeWrite(laneId: LaneId, conn: EmailConn, action: EmailApprovedAction): Promise<ExecResult> {
         const r = await entryFor(laneId, conn);
         return r.entry.executeWrite(laneId, r.conn, action);

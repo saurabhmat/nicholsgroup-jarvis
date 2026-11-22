@@ -8,7 +8,7 @@ const m = vi.hoisted(() => ({
 }));
 vi.mock("@nichols/connectors/facade", () => ({ prepareEmailWrite: vi.fn(), laneMailboxes: vi.fn(), mailboxAllowed: vi.fn(), providerGate: { enabled: m.gate } }));
 vi.mock("@nichols/connectors/write", () => ({
-  GRAPH_MAIL_WRITE_FEATURE: "graph_mail_write", emailWriteGate: {}, googleEmailReconciler: {}, googleEmailWriter: { actionTypes: [] }, microsoftEmailReconciler: {}, microsoftEmailWriter: { actionTypes: [] }, loadEmailWriteConnection: vi.fn(), loadQuickbooksWriteConnection: vi.fn(), quickbooksDisconnectVerifier: {}, quickbooksWriter: {},
+  GRAPH_MAIL_WRITE_FEATURE: "graph_mail_write", emailWriteGate: {}, googleEmailReconciler: {}, googleEmailWriter: { actionTypes: [] }, microsoftEmailReconciler: {}, microsoftEmailWriter: { actionTypes: [], sentCopyMayLag: true }, loadEmailWriteConnection: vi.fn(), loadQuickbooksWriteConnection: vi.fn(), quickbooksDisconnectVerifier: {}, quickbooksWriter: {},
 }));
 vi.mock("@nichols/core/lane-router", () => ({
   getAudit: () => ({ log: vi.fn() }),

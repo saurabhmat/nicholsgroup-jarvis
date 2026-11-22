@@ -90,6 +90,8 @@ export interface EmailWriteSurface {
   executeWrite(laneId: LaneId, conn: EmailConn, action: EmailApprovedAction): Promise<ExecResult>;
   verifyWrite(laneId: LaneId, conn: EmailConn, action: EmailApprovedAction, externalId: string): Promise<void>;
   findWrite(laneId: LaneId, conn: EmailConn, action: EmailApprovedAction): Promise<string[]>;
+  /** Provider-declared (by the connection's own provider): after an accepted send the sent copy may not be visible yet, so "not found" at read-back is not a failure (T-263). Absent = false (Google). */
+  sentCopyMayLag?(conn: EmailConn): boolean;
 }
 
 export type ProposedEmail = { proposed: { target: Record<string, unknown>; payload: Record<string, unknown>; payload_schema_version: number }; connection: EmailConn };

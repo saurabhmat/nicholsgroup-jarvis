@@ -1,4 +1,4 @@
-// Approvals (T-232, T-195): emails and QuickBooks disconnects waiting for approval, then recent history. Nothing is sent or saved in Gmail until
+// Approvals (T-232, T-195): emails and QuickBooks disconnects waiting for approval, then recent history. Nothing is sent or saved in a mailbox (Gmail or Outlook) until
 // the owner approves the exact content shown here (with a fresh authenticator code). Pending cards are editable; history
 // shows recipients and subject only: the composed text is deleted when an action finishes (D-19).
 import { Suspense } from "react";
@@ -36,7 +36,7 @@ export async function ApprovalsPage({ params }: { params: Promise<{ laneId: stri
   );
 }
 
-async function ApprovalsBody({ laneId }: { laneId: string }) {
+export async function ApprovalsBody({ laneId }: { laneId: string }) {
   const view = await timed("load.approvals", async () => loadApprovals(await guards(), approvalsDeps, laneId));
   return (
     <>
@@ -79,7 +79,13 @@ async function ApprovalsBody({ laneId }: { laneId: string }) {
                       The disconnect could not be confirmed. Check the QuickBooks connection in Settings before asking again.
                     </p>
                   ) : null}
-                  {h.outcomeUnknown && h.actionType !== "qbo.disconnect" ? (
+                  {h.outcomeUnknown && h.actionType !== "qbo.disconnect" && h.provider === "microsoft" ? (
+                    <p data-testid="approvals-outcome-unknown" className="text-small text-alert-foreground">
+                      {h.failureCode === "reconcile_sent_unverified" ? "It was sent but could not be read back. " : "Outcome unknown: it may have been " + (h.actionType === "email.send" ? "sent" : "saved") + ". "}
+                      Check Drafts and Sent Items in Outlook before trying again.
+                    </p>
+                  ) : null}
+                  {h.outcomeUnknown && h.actionType !== "qbo.disconnect" && h.provider !== "microsoft" ? (
                     <p data-testid="approvals-outcome-unknown" className="text-small text-alert-foreground">
                       {h.failureCode === "reconcile_sent_unverified"
                         ? `It was ${h.actionType === "email.send" ? "sent" : "saved"} but could not be read back. Check the mailbox before asking for it again.`

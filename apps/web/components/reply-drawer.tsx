@@ -412,7 +412,7 @@ export function ReplyDrawer({ laneId, messageId, restored = false, onClose }: { 
         pendingRefresh.current = true;
         return;
       }
-      // No answer (network, a timeout) or a server error: the request may have reached Gmail. Never a blind retry.
+      // No answer (network, a timeout) or a server error: the request may have reached the mailbox (Gmail or Outlook). Never a blind retry.
       if (a.status === 0 || a.status >= 500) {
         setResult({ outcome: "unknown", text: UNKNOWN_MESSAGE });
         dropLocalCopy();
