@@ -4,9 +4,12 @@
 import { checkQuickBooksConnection } from "@nichols/connectors/connection-test";
 import { createConnectionCheckHandler } from "@/lib/connection-test";
 import { guards } from "@/lib/guards";
+import { hiddenModuleResponse } from "@/lib/lane-modules";
 
 const handler = createConnectionCheckHandler({ guards, check: checkQuickBooksConnection });
 
 export async function POST(request: Request) {
+  const hidden = await hiddenModuleResponse(new URL(request.url).searchParams.get("lane"), "finance"); // T-265
+  if (hidden) return hidden;
   return handler(request);
 }

@@ -16,6 +16,7 @@ import { AuthError } from "@nichols/core/auth";
 import { revalidatePath } from "next/cache";
 import { after } from "next/server";
 import { guards, renewSessionFor } from "@/lib/guards";
+import { laneGate } from "@/lib/lane-modules";
 import { beginNews, finishNews } from "@/lib/news";
 import { newsConfigFrom, reserveUsd } from "@/lib/news-domain";
 import { NewsGateError, runNewsFetch } from "@/lib/news-run";
@@ -34,6 +35,7 @@ export async function refreshNews(laneId: string): Promise<RefreshNewsState> {
     await renewSessionFor(SESSION_NEEDED_S);
     const g = await guards();
     const { client, session } = await g.requireRole(laneId as LaneId, ["owner"]);
+    if (!(await laneGate(laneId)).newsShown) return { error: "forbidden" }; // T-265: a limited company that has not turned news on
     if (session.expiresAt === undefined || session.expiresAt - Math.floor(Date.now() / 1000) < SESSION_NEEDED_S) {
       console.error("[news] refresh refused: session too short", { laneId });
       return { error: "unavailable" };

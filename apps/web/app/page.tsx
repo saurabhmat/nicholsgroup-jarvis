@@ -3,6 +3,7 @@
 import { SignOutForm } from "@/components/sign-out-form";
 import { Button, Card, CardContent, CardDescription, CardHeader, CardTitle } from "@nichols/ui";
 import { guards } from "@/lib/guards";
+import { firstLaneId } from "@/lib/landing";
 import { redirect } from "next/navigation";
 import { connection } from "next/server";
 import { Suspense } from "react";
@@ -21,7 +22,7 @@ async function Entry() {
   await connection(); // per request, never prerendered
   let first: string | undefined;
   try {
-    first = (await (await guards()).listLanes())[0]?.laneId;
+    first = await firstLaneId(await guards());
   } catch (e) {
     if (!(e instanceof AuthError)) throw e;
     if (e.reason === "no_session") redirect("/sign-in");
