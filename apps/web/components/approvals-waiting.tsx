@@ -5,8 +5,10 @@ import Link from "next/link";
 import { buttonVariants, laneHref } from "@nichols/ui";
 import { waitingCount } from "@/lib/approvals";
 import { guards } from "@/lib/guards";
+import { laneGate } from "@/lib/lane-modules";
 
 export async function ApprovalsWaiting({ laneId }: { laneId: string }) {
+  if (!(await laneGate(laneId)).visible("approvals")) return null; // T-265: a company without approvals shows no banner
   const count = await waitingCount(await guards(), laneId);
   if (count === 0) return null;
   return (

@@ -10,6 +10,8 @@ const m = vi.hoisted(() => ({
   google: null as unknown,
   microsoft: null as unknown,
   providerReads: 0,
+  newsCalls: 0,
+  providersView: null as unknown,
   providersSeen: [] as unknown[],
   composio: null as unknown,
   quickbooks: null as unknown,
@@ -36,11 +38,11 @@ vi.mock("@/lib/connect-result", () => ({ connectResultFor: (g: unknown) => loade
 vi.mock("@/lib/quickbooks-connection", () => ({ quickbooksSectionFor: (g: unknown) => loader("quickbooks", () => m.quickbooks)(g) }));
 vi.mock("@/lib/google-connection", () => ({ googleSectionFor: (g: unknown) => loader("google", () => m.google)(g) }));
 // T-257: not recorded in `m.started` (the loader-list test below is unchanged); the providers read is counted on its own.
-vi.mock("@/lib/mail-providers", () => ({ mailProvidersFor: async () => { m.providerReads += 1; return { state: "known", google: true, microsoft: null }; } }));
+vi.mock("@/lib/mail-providers", () => ({ mailProvidersFor: async () => { m.providerReads += 1; return m.providersView ?? { state: "known", google: true, microsoft: null }; } }));
 vi.mock("@/lib/microsoft-connection", () => ({ microsoftSectionFor: async (_g: unknown, _l: string, providers: unknown) => { m.providersSeen.push(providers); return m.microsoft; } }));
 vi.mock("@/lib/composio-availability", () => ({ availability: () => ({}), missingSettings: () => ({}) }));
 vi.mock("@/lib/composio-connection", () => ({ composioSectionFor: (g: unknown) => loader("composio", () => m.composio)(g) }));
-vi.mock("@/lib/news-settings", () => ({ newsSectionFor: async () => m.news }));
+vi.mock("@/lib/news-settings", () => ({ newsSectionFor: async () => { m.newsCalls += 1; return m.news; } }));
 vi.mock("@/lib/coverage", () => ({ coverageFor: (g: unknown) => loader("coverage", () => m.coverage)(g) }));
 vi.mock("next/headers", () => ({ cookies: async () => ({ get: () => undefined }) }));
 vi.mock("@/lib/origin-notice-server", () => ({ currentOriginNotice: async () => m.origin }));
@@ -70,6 +72,8 @@ beforeEach(() => {
   m.result = m.google = m.composio = m.brain = m.origin = m.news = null;
   m.quickbooks = null;
   m.coverage = { items: [], unavailable: false };
+  m.newsCalls = 0;
+  m.providersView = null;
   m.started = [];
   m.seenGuards = [];
   m.gate = null;
@@ -257,3 +261,51 @@ describe("Microsoft section (T-257)", () => {
   });
 });
 
+
+describe("Settings of a mail-only company (T-265)", () => {
+  const limitedGuards = (row: unknown) => ({ requireLane: async () => ({ client: { schema: () => ({ from: () => ({ select: () => ({ eq: () => ({ maybeSingle: async () => ({ data: row, error: null }) }) }) }) }) } }) });
+  afterEach(() => {
+    m.sharedGuards = {};
+  });
+  const everything = () => {
+    m.google = { connections: [] };
+    m.microsoft = { connections: [], adminConsentUrl: null };
+    m.quickbooks = { connection: null };
+    m.composio = { toolkits: [] };
+    m.brain = view(1);
+  };
+
+  it("shows Connections (Microsoft, coverage) and nothing for QuickBooks, GovCon news or the AI brain, and does not even load them", async () => {
+    m.sharedGuards = limitedGuards({ modules: ["comms", "calendar", "briefing"], limited: true, news: null });
+    everything();
+    await draw();
+    const s = screen.getByTestId("connections-section");
+    expect(s.getAttribute("data-microsoft")).toBe("true");
+    expect(s.getAttribute("data-quickbooks")).toBe("false");
+    expect(m.started).not.toContain("quickbooks");
+    expect(m.started).not.toContain("brain");
+    expect(m.newsCalls).toBe(0);
+  });
+
+  it("a company that does not limit itself still draws QuickBooks, GovCon news and the AI brain", async () => {
+    m.sharedGuards = limitedGuards({ modules: ["comms"], limited: null, news: null });
+    everything();
+    await draw();
+    expect(screen.getByTestId("connections-section").getAttribute("data-quickbooks")).toBe("true");
+    expect(m.started).toContain("quickbooks");
+    expect(m.started).toContain("brain");
+    expect(m.newsCalls).toBe(1);
+  });
+
+  it("shows no Composio (Gmail and Google Calendar) row when Google is not enabled and nothing is connected through it; a connected row stays", async () => {
+    m.providersView = { state: "known", google: false, microsoft: { cloud: "commercial", tenantIds: [] } };
+    m.microsoft = { connections: [], adminConsentUrl: null };
+    m.composio = { toolkits: [{ toolkit: "gmail", label: "Gmail", configured: true, connection: null }] };
+    await draw();
+    expect(screen.getByTestId("connections-section").getAttribute("data-composio")).toBe("false");
+    cleanup();
+    m.composio = { toolkits: [{ toolkit: "gmail", label: "Gmail", configured: true, connection: { state: "connected" } }] };
+    await draw();
+    expect(screen.getByTestId("connections-section").getAttribute("data-composio")).toBe("true");
+  });
+});

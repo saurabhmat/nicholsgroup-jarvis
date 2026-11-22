@@ -225,6 +225,10 @@ export const mailProviderViewSchema = z
 
 export const laneConfigSchema = z.strictObject({
   enabled_modules: z.array(z.enum(MODULES)).default([]),
+  // T-265: false (the default, and every stored lane today) = the app shows every module whatever `enabled_modules` lists (the list was
+  // never read before, so an older lane's list may be incomplete). true = the app shows ONLY the listed modules: navigation, Home and
+  // Settings drop the rest (see `moduleVisible`). A mail-only lane sets it; nothing else about a lane changes by flipping it.
+  limit_to_enabled_modules: z.boolean().default(false),
   kpis: z.array(z.enum(KPI_IDS)).default([]),
   qbo: z
     .strictObject({
@@ -477,4 +481,20 @@ export function parseLaneConfig(input: unknown): LaneConfig {
   if (secrets.length > 0)
     throw new z.ZodError(secrets.map((p) => ({ code: "custom", message: "secret-like value not allowed", path: [p], input: undefined })));
   return laneConfigSchema.parse(input);
+}
+
+/** A module of a lane (the `enabled_modules` vocabulary). */
+export type LaneModule = (typeof MODULES)[number];
+
+/**
+ * Whether the app shows a module for a lane (T-265). Pure, from the stored config row. A lane that does not set
+ * `limit_to_enabled_modules: true` shows every module (unchanged behaviour). A limited lane shows exactly the listed modules.
+ * Anything that is not a readable object, or a malformed `limit_to_enabled_modules`, reads as NOT limited: this only hides
+ * screens, it never grants access (every read is still gated by RLS).
+ */
+export function moduleVisible(config: unknown, module: LaneModule): boolean {
+  if (config === null || typeof config !== "object" || Array.isArray(config)) return true;
+  const c = config as Record<string, unknown>;
+  if (c.limit_to_enabled_modules !== true) return true;
+  return Array.isArray(c.enabled_modules) && c.enabled_modules.includes(module);
 }

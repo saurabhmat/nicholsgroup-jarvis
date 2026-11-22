@@ -31,6 +31,7 @@ import { loadNewsCard } from "@/lib/news";
 import { ProjectsGlance } from "./home-projects";
 import { TimezoneCookie } from "./timezone-cookie";
 import { loadLane } from "@/lib/lane-page";
+import { laneGate } from "@/lib/lane-modules";
 import { firstNameFor } from "@/lib/first-name";
 import { HomeFinanceSection } from "./home-finance-section";
 import { HomeScope, PersistedDetails } from "./home-scope";
@@ -50,7 +51,9 @@ import { freshWindowText } from "@/lib/fresh-window";
 const HOME_TZ = "America/New_York";
 
 export async function HomePage({ params }: { params: Promise<{ laneId: string }> }) {
-  const lane = await loadLane((await params).laneId);
+  const laneParam = (await params).laneId;
+  // T-265: the company's module list (the layout reads it too; one read per request). A mail-only company has no assistant entry point here.
+  const [lane, gate] = await Promise.all([loadLane(laneParam), laneGate(laneParam)]);
   const now = new Date();
   // The verified user id (from loadLane's lane check) is only a sessionStorage key part for view state (expanded sections, the open drawer).
   const userId = lane.userId;
@@ -77,9 +80,11 @@ export async function HomePage({ params }: { params: Promise<{ laneId: string }>
             <Suspense fallback={null}>
               <HomeCoverageDot laneId={lane.laneId} now={now} />
             </Suspense>
-            <Link href={laneHref(lane.laneId, "assistant")} className={buttonVariants()}>
-              Ask Jarvis
-            </Link>
+            {gate.visible("assistant") ? (
+              <Link href={laneHref(lane.laneId, "assistant")} className={buttonVariants()}>
+                Ask Jarvis
+              </Link>
+            ) : null}
           </>
         }
       />
@@ -125,6 +130,7 @@ async function HomeGreeting({ laneId, now }: { laneId: string; now: Date }) {
 const BANNER_SLOT = "h-[3.25rem]";
 
 async function SetupBanner({ laneId }: { laneId: string }) {
+  if (!(await laneGate(laneId)).visible("brain")) return null;
   return <OnboardingBanner laneId={laneId} progress={await onboardingFor(laneId)} />;
 }
 
@@ -134,7 +140,7 @@ async function HomeSections({ laneId, now }: { laneId: string; now: Date }) {
   const g = await guards();
   // Home v1 counts and the T-231 briefing sections load in parallel. Each shows its own "unavailable" state; neither ever shows an empty day.
   const laneClient = async () => (await g.requireLane(laneId as Parameters<typeof g.requireLane>[0])).client;
-  const [view, brief, saved, isAdmin, isOwner, newsCard, runState, jobFailures] = await Promise.all([
+  const [view, brief, saved, isAdmin, isOwner, newsCard, runState, jobFailures, gate] = await Promise.all([
     timed("load.home", async () => homeFor(g, laneId, now)),
     timed("load.briefing", async () => briefingFor(await laneClient(), laneId, now, tz)),
     timed("load.briefing_latest", async () => latestBriefing(await laneClient(), laneId)),
@@ -154,6 +160,8 @@ async function HomeSections({ laneId, now }: { laneId: string; now: Date }) {
     timed("load.briefing_run_state", async () => loadRunState(await laneClient(), laneId)),
     // Scheduled functions that failed 3 times in a row (T-238 E): owner and admin_technical only, null for everyone else or when unreadable.
     timed("load.job_failures", () => jobFailureBannerFor(g, laneId)),
+    // T-265: which parts of Home this company uses (finance, projects, news). One read, shared with the layout.
+    laneGate(laneId),
   ]);
   // Why there is no AI summary: the AI setup itself (names only), else the stored code of the newest failed attempt.
   const setup = aiSetupFailure();
@@ -176,9 +184,11 @@ async function HomeSections({ laneId, now }: { laneId: string; now: Date }) {
       ) : null}
       {/* KPI row: directly under the approvals banner on desktop, after Today on the phone. Its own boundary: a slow QuickBooks read never holds the rest back. */}
       <div data-testid="home-kpi-slot" className={`${GRID_FULL} order-3 min-w-0 empty:hidden md:order-none md:row-start-2 md:mb-5`}>
-        <Suspense fallback={<KpiStripSkeleton />}>
-          <KpiSection laneId={laneId} feeds={view.feeds} canConnect={isAdmin} />
-        </Suspense>
+        {gate.visible("finance") ? (
+          <Suspense fallback={<KpiStripSkeleton />}>
+            <KpiSection laneId={laneId} feeds={view.feeds} canConnect={isAdmin} />
+          </Suspense>
+        ) : null}
       </div>
       <div data-testid="home-attention-slot" className="order-1 flex min-w-0 flex-col gap-5 md:order-none md:col-span-2 md:col-start-1 md:row-span-3 md:row-start-3 md:mb-5">
         <PageSection title="Needs your attention" note={`Top 5 from the last ${freshWindowText(brief.config.attention.fresh_hours)}`}>
@@ -199,16 +209,18 @@ async function HomeSections({ laneId, now }: { laneId: string; now: Date }) {
         <CalendarSections view={brief} now={now} />
       </div>
       <div data-testid="home-news-slot" className="order-4 min-w-0 md:order-none md:col-start-3 md:row-start-4 md:mb-5">
-        <GovConNews laneId={laneId} card={newsCard} tz={brief.viewerTz} now={now} />
+        {gate.newsShown ? <GovConNews laneId={laneId} card={newsCard} tz={brief.viewerTz} now={now} /> : null}
       </div>
       {/* Finance: md and up only (the iPhone design omits it); hidden entirely when QuickBooks is not connected or for no_access. */}
       <div data-testid="home-finance-slot" className={`${GRID_FULL} hidden min-w-0 empty:hidden md:row-start-6 md:mb-5 md:block`}>
-        <Suspense fallback={null}>
-          <FinanceSlot laneId={laneId} />
-        </Suspense>
+        {gate.visible("finance") ? (
+          <Suspense fallback={null}>
+            <FinanceSlot laneId={laneId} />
+          </Suspense>
+        ) : null}
       </div>
       <div data-testid="home-projects-slot" className={`${GRID_FULL} order-5 min-w-0 md:order-none md:row-start-7`}>
-        <ProjectsGlance laneId={laneId} canConnect={isAdmin} />
+        {gate.visible("projects") ? <ProjectsGlance laneId={laneId} canConnect={isAdmin} /> : null}
       </div>
     </>
   );

@@ -1,6 +1,6 @@
 import type { ReactNode } from "react";
 import { cn } from "../lib/utils";
-import { activeKey, laneHref, MOBILE_TABS, NAV_ITEMS, onboardingEntry, pageHeading, type OnboardingProgress } from "../lib/nav";
+import { activeKey, laneHref, MOBILE_TABS, NAV_ITEMS, onboardingEntry, pageHeading, type NavKey, type OnboardingProgress } from "../lib/nav";
 import { Badge } from "./badge";
 import { TabIcon } from "./tab-icon";
 import { LaneSwitcher, type ShellLane, type ShellLink } from "./lane-switcher";
@@ -15,6 +15,8 @@ export type AppShellProps = {
   pathname: string;
   /** Pending approvals in the SELECTED lane only; the badge is hidden at 0 or when unknown. */
   approvalsCount?: number;
+  /** Entries the company does not use (T-265: a mail-only company has no Finance, Approvals, Assistant or Projects). Home and Settings cannot be hidden. */
+  hiddenKeys?: readonly NavKey[];
   /** Setup progress for the "Get started" entry; omitted (null) for users without the brain view: the entry is not drawn. */
   onboarding?: OnboardingProgress | null;
   /** First name for the Home title on the iPhone header band; omitted when unknown. */
@@ -61,7 +63,8 @@ function CountBadge({ count, className }: { count?: number; className?: string }
  * bottom tabs on iPhone. Presentational only: the app decides what the user may see and passes the lanes in.
  * Light theme, colours from the T-022 tokens only.
  */
-export function AppShell({ brand, lanes, currentLaneId, pathname, approvalsCount, onboarding, firstName, now, signOut, menuExtra, Link = DefaultLink, children }: AppShellProps) {
+export function AppShell({ brand, lanes, currentLaneId, pathname, approvalsCount, hiddenKeys, onboarding, firstName, now, signOut, menuExtra, Link = DefaultLink, children }: AppShellProps) {
+  const hidden = new Set<NavKey>((hiddenKeys ?? []).filter((k) => k !== "home" && k !== "settings"));
   const active = activeKey(currentLaneId, pathname);
   const heading = pageHeading(active, firstName, now);
   const segment = NAV_ITEMS.find((i) => i.key === active)?.segment ?? "";
@@ -87,7 +90,7 @@ export function AppShell({ brand, lanes, currentLaneId, pathname, approvalsCount
         </div>
         <LaneSwitcher lanes={lanes} currentLaneId={currentLaneId} segment={segment} Link={Link} />
         <nav aria-label="Main" className="flex flex-1 flex-col gap-1">
-          {NAV_ITEMS.filter((item) => item.key !== "onboarding" || onboarding).map((item) => {
+          {NAV_ITEMS.filter((item) => !hidden.has(item.key) && (item.key !== "onboarding" || onboarding)).map((item) => {
             const selected = item.key === active;
             const entry = item.key === "onboarding" && onboarding ? onboardingEntry(onboarding) : null;
             return (
@@ -148,7 +151,7 @@ export function AppShell({ brand, lanes, currentLaneId, pathname, approvalsCount
         data-slot="tab-bar"
         className="fixed inset-x-0 bottom-0 z-10 flex border-t border-border bg-card pb-[env(safe-area-inset-bottom)] md:hidden"
       >
-        {MOBILE_TABS.map((tab) => {
+        {MOBILE_TABS.filter((tab) => tab.key === "more" || !hidden.has(tab.key)).map((tab) => {
           const selected = active === tab.key || (active !== null && active !== "more" && tab.covers.includes(active)) || (tab.key === "more" && active === "more");
           return (
             <Link

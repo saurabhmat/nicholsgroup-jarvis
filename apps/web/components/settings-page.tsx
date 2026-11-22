@@ -5,6 +5,7 @@ import { approvalsDeps } from "@nichols/approvals/wire";
 import { Alert, AlertDescription, AlertTitle } from "@nichols/ui";
 import { connectResultFor } from "@/lib/connect-result";
 import { loadLane } from "@/lib/lane-page";
+import { laneGate } from "@/lib/lane-modules";
 import { guards } from "@/lib/guards";
 import { quickbooksSectionFor } from "@/lib/quickbooks-connection";
 import { googleSectionFor } from "@/lib/google-connection";
@@ -42,21 +43,28 @@ export async function SettingsPage({
   // T-257: ONE read of the company's enabled providers per render, shared by the Google and the Microsoft section.
   const providers = timed("load.mail_providers", () => mailProvidersFor(g, lane.laneId));
   const microsoftP = timed("load.microsoft", async () => microsoftSectionFor(g, lane.laneId, await providers));
+  // T-265: which sections this company uses (finance = the QuickBooks row, brain = AI brain, news = GovCon news). One read, shared with the layout.
+  const gate = await laneGate(lane.laneId);
   const [result, quickbooks, google, microsoft, composio, brain, coverage, news, jobFailures] = await Promise.all([
     // The result of a connect the OAuth callback sent back here (fixed, allowlisted text; connect roles only).
     timed("load.connect_result", async () => {
       const section = await microsoftP; // the banner's Microsoft wording follows the same scope list as the section; consent returns show only where Microsoft is enabled
       return connectResultFor(g, lane.laneId, query, { enabled: Boolean(section && !section.paused && !section.unavailable && !section.settingsUnknown), writes: section?.writes ?? null });
     }),
-    timed("load.quickbooks", () => quickbooksSectionFor(g, lane.laneId, undefined, approvalsDeps)),
+    timed("load.quickbooks", async () => (gate.visible("finance") ? quickbooksSectionFor(g, lane.laneId, undefined, approvalsDeps) : null)),
     timed("load.google", async () => googleSectionFor(g, lane.laneId, undefined, await providers)),
     microsoftP,
-    timed("load.composio", () => composioSectionFor(g, lane.laneId, availability, undefined, missingSettings)),
-    onboardingFor(lane.laneId), // null unless the owner has the brain view here
+    timed("load.composio", async () => {
+      const view = await composioSectionFor(g, lane.laneId, availability, undefined, missingSettings);
+      // Composio carries Gmail and Google Calendar only: a company without Google enabled and with no Composio account shows no row for it.
+      const p = await providers;
+      return view && p?.state === "known" && !p.google && view.toolkits.every((t) => t.connection === null) ? null : view;
+    }),
+    gate.visible("brain") ? onboardingFor(lane.laneId) : Promise.resolve(null), // null unless the owner has the brain view here
     // Coverage per source (T-234; it was a card on Home). The SQL answers only for callers with the comms or calendar view.
     timed("load.coverage", () => coverageFor(g, lane.laneId, now)),
     // GovCon news status (T-234 part 4): owner and admin_technical only; null for everyone else.
-    timed("load.news_settings", () => newsSectionFor(g, lane.laneId)),
+    timed("load.news_settings", async () => (gate.newsShown ? newsSectionFor(g, lane.laneId) : null)),
     // Scheduled functions that failed 3 times in a row (T-238 E): owner and admin_technical only.
     timed("load.job_failures", () => jobFailureBannerFor(g, lane.laneId)),
   ]);
