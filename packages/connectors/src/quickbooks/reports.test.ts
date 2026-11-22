@@ -452,7 +452,8 @@ describe("payroll (D-25, default (b)): payroll account rows are not cached, and 
     const ap = entry(h, "ap_aging_summary").payload;
     expect(ap.Rows.Row.map((r) => [r.type, r.ColData[0]?.id])).toEqual([["Data", "1"], ["Data", "2"], ["Header", "3"]]);
     expect(ap.Header.TotalsWithheld).toBe("true");
-    expect(text(ap)).not.toContain("25.00");
+    // The withheld total must be nowhere in the cached report. Header.Time is left out of the scan: it is the clock (":25.000Z" once a minute), not report data.
+    expect(text({ ...ap, Header: { ...ap.Header, Time: "" } })).not.toContain("25.00");
   });
 
   it("a removed customer / vendor withholds that aging TOTAL; the other aging report keeps its TOTAL", async () => {

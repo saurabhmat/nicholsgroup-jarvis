@@ -2,7 +2,7 @@
 // the caller may see: account, last sync, status chip and a FIXED reason when it is not OK (codes only, names only; never
 // provider text). The state is a word in the chip, never colour alone.
 import { Badge } from "@nichols/ui";
-import { ago, formatTimeIn, syncErrorText, type CoverageItem } from "@nichols/briefing/domain";
+import { ago, formatTimeIn, needsSourceLabels, sourceName, syncErrorText, type CoverageItem } from "@nichols/briefing/domain";
 import type { CoverageView } from "@/lib/coverage";
 
 const STATE_BADGE: Record<CoverageItem["state"], { label: string; variant: "success" | "alert" | "muted" | "outline" }> = {
@@ -13,6 +13,8 @@ const STATE_BADGE: Record<CoverageItem["state"], { label: string; variant: "succ
 };
 
 export function CoverageList({ view, tz, now }: { view: CoverageView; tz: string; now: Date }) {
+  // T-260/T-261: Google and Microsoft sources are listed together; with a non-Google source among them each row names its provider ("Gmail", "Google Calendar", "Outlook").
+  const named = needsSourceLabels(view.items.map((i) => i.provider));
   return (
     <div data-testid="coverage-list" className="flex flex-col gap-2 border-t border-border px-6 py-4">
       <h3 className="font-heading text-card-title font-semibold text-foreground">Coverage</h3>
@@ -30,9 +32,12 @@ export function CoverageList({ view, tz, now }: { view: CoverageView; tz: string
           {view.items.map((c) => {
             const badge = STATE_BADGE[c.state];
             return (
-              <li key={`${c.stream}:${c.account}`} data-testid="coverage-item" data-state={c.state} className="flex flex-wrap items-center gap-x-3 gap-y-1 py-2 text-body">
+              <li key={`${c.stream}:${c.account}:${c.connectionId ?? ""}`} data-testid="coverage-item" data-state={c.state} className="flex flex-wrap items-center gap-x-3 gap-y-1 py-2 text-body">
                 <span className="w-20 shrink-0 text-muted-foreground">{c.stream === "mail" ? "Mail" : "Calendar"}</span>
-                <span className="min-w-0 flex-1 truncate font-medium text-foreground">{c.account}</span>
+                <span className="min-w-0 flex-1 truncate font-medium text-foreground">
+                  {c.account}
+                  {named && sourceName(c.provider, c.stream) ? <span data-testid="coverage-provider" className="font-normal text-muted-foreground">{` \u00b7 ${sourceName(c.provider, c.stream) ?? ""}`}</span> : null}
+                </span>
                 <span className="text-small text-muted-foreground">{c.lastSyncAt ? `Synced ${formatTimeIn(c.lastSyncAt, tz)} (${ago(c.lastSyncAt, now)})` : "Never synced"}</span>
                 <Badge variant={badge.variant}>{badge.label}</Badge>
                 {c.reason ? <span className="basis-full text-small text-muted-foreground">{c.reason}</span> : null}

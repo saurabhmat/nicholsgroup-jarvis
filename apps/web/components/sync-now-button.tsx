@@ -1,5 +1,5 @@
 "use client";
-// "Sync now" (T-238 part B): asks the portal to sync every connected Google account right away (POST /api/lanes/<lane>/sync-now;
+// "Sync now" (T-238 part B): asks the portal to sync every connected mail and calendar account (Google and Microsoft, T-260) right away (POST /api/lanes/<lane>/sync-now;
 // owner or admin_technical, one per 2 minutes, checked on the server). Only drawn for those roles (the caller decides). The result
 // is a fixed text by the server's CODE or status, never the server's own message, shown in a polite live region. After a start the
 // page is refreshed twice so the sync status line catches up (the sync takes a few seconds).

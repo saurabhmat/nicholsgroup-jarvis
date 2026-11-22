@@ -21,6 +21,8 @@ export type BriefRef = {
   subject: string | null;
   receivedAt: string;
   sourceUrl: string | null;
+  /** T-260: the provider of the row's own connection ("google" or "microsoft"). Set only when the viewer has a non-Google mailbox (see source-labels.ts); absent = a Google-only viewer; "" = the connection is not in Coverage (unknown; never treated as Google). It is stored with the saved briefing's refs (a provider name, no content). */
+  provider?: string;
   /** Rule-based reason (T-231b). */
   reason: string;
   kind: string;

@@ -49,10 +49,13 @@ const isCleanText = (s: string): boolean => cleanText(s) === s;
 // ISO-8601 as Graph sends it (`2026-11-04T10:00:00Z`, up to 7 fractional digits, or an offset). A string with NO zone is read as UTC (Graph's
 // `receivedDateTime` is UTC; `Date.parse` would otherwise use the server's local zone). Anything that is not this shape is unusable.
 const ISO_TIME = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}(?::\d{2}(?:\.\d{1,9})?)?(Z|[+-]\d{2}:\d{2})?$/i;
-const instant = (v: string | null | undefined): string | null => {
+export const instant = (v: string | null | undefined): string | null => {
   if (typeof v !== "string" || v.length > 40) return null;
   const m = ISO_TIME.exec(v);
   if (!m) return null;
+  // An impossible date (2026-02-30) would roll over into the next month: refuse it.
+  const d = new Date(Date.UTC(Number(v.slice(0, 4)), Number(v.slice(5, 7)) - 1, Number(v.slice(8, 10))));
+  if (d.toISOString().slice(0, 10) !== v.slice(0, 10)) return null;
   const ms = Date.parse(m[1] === undefined ? `${v}Z` : v);
   return Number.isFinite(ms) ? new Date(ms).toISOString() : null;
 };

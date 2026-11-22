@@ -1,5 +1,6 @@
 // Inbox (T-202): the lane's synced mail, metadata only, newest first, with All / Unread / Important and paging. A row
-// opens the message, whose text is read live from Gmail (message-page.tsx). Nothing is changed in Gmail (read-only).
+// opens the message, whose text is read live from its own provider (message-page.tsx). Nothing is changed in the mailbox (read-only).
+// T-260: a viewer with a Microsoft mailbox sees Google and Microsoft mail together, each row with its provider and account and "Open in Gmail" / "Open in Outlook".
 import Link from "next/link";
 import { Suspense } from "react";
 import { Alert, AlertDescription, AlertTitle, Badge, cn, EmptyState, laneHref, PageHeader } from "@nichols/ui";
@@ -125,7 +126,7 @@ function Row({ row, href, when: time }: { row: InboxRow; href: string; when: str
   const sender = row.fromName || row.fromAddress ? senderLabel(row.fromName, row.fromAddress) : "(unknown sender)";
   return (
     <li>
-      {/* No prefetch: opening a message reads it live from Gmail; a list view must not read 50 bodies nobody opened. */}
+      {/* No prefetch: opening a message reads it live from its provider; a list view must not read 50 bodies nobody opened. */}
       <Link href={href} prefetch={false} className={cn("flex items-start gap-3 px-4 py-3 hover:bg-muted sm:px-5", !row.isRead && "bg-primary-tint/40")}>
         <span aria-hidden className={cn("mt-2 size-2 shrink-0 rounded-full", row.isRead ? "bg-transparent" : "bg-primary")} />
         <span className="flex min-w-0 flex-1 flex-col gap-0.5">
@@ -151,6 +152,17 @@ function Row({ row, href, when: time }: { row: InboxRow; href: string; when: str
           </span>
         </span>
       </Link>
+      {/* T-260: outside the row's link (a link cannot hold a link). Only for a viewer with a non-Google mailbox; a Google-only list has no such line. */}
+      {row.source ? (
+        <div data-testid="inbox-source" className="flex flex-wrap items-center gap-x-3 px-4 pb-3 pl-9 text-small text-muted-foreground sm:px-5 sm:pl-10">
+          <span data-testid="inbox-source-label">{row.source.label}</span>
+          {row.source.openUrl ? (
+            <a href={row.source.openUrl} target="_blank" rel="noopener noreferrer" data-testid="inbox-open-in" className="font-medium text-primary underline-offset-2 hover:underline">
+              {row.source.openLabel}
+            </a>
+          ) : null}
+        </div>
+      ) : null}
     </li>
   );
 }

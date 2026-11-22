@@ -39,6 +39,8 @@ export type { ConnSyncOutcome, SyncTrigger } from "./types";
 
 /** Ids of a lane's usable calendar-capable connections, for the scheduled cal.ingest_delta fan-out (T-130). */
 export const listCalendarConnectionIds = (laneId: LaneId) => syncTargetLister.listCalendarConnectionIds(laneId);
+/** T-260: the same list with each connection's provider, for Sync now (a Microsoft connection gets one event per stream). */
+export const listMailTargets = (laneId: LaneId) => syncTargetLister.listMailTargets(laneId);
 /** Ids of a lane's usable mail-capable connections (each connected mailbox), for the scheduled mail.ingest_delta fan-out (T-238). */
 export const listMailConnectionIds = (laneId: LaneId) => syncTargetLister.listMailConnectionIds(laneId);
 export { QBO_SYNC_ENTITIES } from "../quickbooks/entities";

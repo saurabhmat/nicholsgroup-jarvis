@@ -21,7 +21,12 @@ export const MAX_SYNC_TARGETS = 200;
 const LANE_ID = /^[A-Z]{1,8}$/;
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
+/** A usable mail-capable connection with its provider (Sync now sends a Microsoft connection's two streams as two events, T-260). */
+export type MailTarget = { connectionId: string; provider: string };
+
 export interface SyncTargetLister {
+  /** Same list as listMailConnectionIds, with each connection's provider. */
+  listMailTargets(laneId: LaneId): Promise<MailTarget[]>;
   /** Ids of the lane's usable QuickBooks connections, sorted (the nightly report pull, T-052). Throws ConnectorError when unreadable. */
   listQuickbooksConnectionIds(laneId: LaneId): Promise<string[]>;
   /** Ids of the lane's usable connections of calendar-capable providers, sorted. Throws ConnectorError when unreadable. */
@@ -31,7 +36,7 @@ export interface SyncTargetLister {
 }
 
 export function createSyncTargetLister(clientFor: JobClientFor): SyncTargetLister {
-  const list = (providers: readonly string[]) => async (laneId: LaneId): Promise<string[]> => {
+  const listTargets = (providers: readonly string[]) => async (laneId: LaneId): Promise<MailTarget[]> => {
     if (typeof laneId !== "string" || !LANE_ID.test(laneId)) {
       throw new ConnectorError({ kind: "invalid_input", message: "A lane is required" });
     }
@@ -41,7 +46,7 @@ export function createSyncTargetLister(clientFor: JobClientFor): SyncTargetListe
       const { data, error } = await client
         .schema("core")
         .from("connections")
-        .select("id")
+        .select("id, provider")
         .eq("lane_id", laneId)
         .eq("transport", "native") // a Composio connection has no token row; the native sync cannot run on it (T-219)
         .in("provider", [...providers])
@@ -54,12 +59,13 @@ export function createSyncTargetLister(clientFor: JobClientFor): SyncTargetListe
       throw new ConnectorError({ kind: "transient", message: "Connection list unavailable" });
     }
     if (!Array.isArray(rows)) throw new ConnectorError({ kind: "transient", message: "Connection list unavailable" });
-    const ids: string[] = [];
+    const targets: MailTarget[] = [];
     for (const r of rows) {
-      const id = (r as { id?: unknown } | null)?.id;
-      if (typeof id === "string" && UUID.test(id)) ids.push(id);
+      const row = r as { id?: unknown; provider?: unknown } | null;
+      if (typeof row?.id === "string" && UUID.test(row.id)) targets.push({ connectionId: row.id, provider: typeof row.provider === "string" ? row.provider : "" });
     }
-    return ids;
+    return targets;
   };
-  return { listCalendarConnectionIds: list(CALENDAR_PROVIDERS), listMailConnectionIds: list(MAIL_PROVIDERS), listQuickbooksConnectionIds: list(["quickbooks"]) };
+  const list = (providers: readonly string[]) => async (laneId: LaneId): Promise<string[]> => (await listTargets(providers)(laneId)).map((t) => t.connectionId);
+  return { listMailTargets: listTargets(MAIL_PROVIDERS), listCalendarConnectionIds: list(CALENDAR_PROVIDERS), listMailConnectionIds: list(MAIL_PROVIDERS), listQuickbooksConnectionIds: list(["quickbooks"]) };
 }

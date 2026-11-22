@@ -16,7 +16,7 @@ export type HomeMeeting = {
   endAt: string;
   allDay: boolean;
   location: string | null;
-  /** The event in Google Calendar (https only). */
+  /** The event in its own calendar (Google Calendar or Outlook; https only). */
   calendarUrl: string | null;
   /** The video-call link (https only). */
   meetingUrl: string | null;
@@ -241,12 +241,15 @@ export function toMeetings(rows: unknown): HomeMeeting[] {
 
 const PROVIDERS: Record<string, string> = {
   google: "Google",
+  microsoft: "Microsoft",
   quickbooks: "QuickBooks",
   stripe: "Stripe",
   ghl: "GoHighLevel",
   gohighlevel: "GoHighLevel",
   monday: "monday.com",
 };
+/** Providers whose connections feed the mail counts (T-260: Microsoft as well as Google, so a person with only Microsoft feeds sees the unread-important count too). */
+const MAIL_FEEDS: ReadonlySet<string> = new Set(["google", "microsoft"]);
 const providerName = (p: string) => PROVIDERS[p] ?? p;
 
 type ConnectionRow = { id?: unknown; provider: unknown; status: unknown };
@@ -370,7 +373,7 @@ export async function loadHome(client: Db, laneId: string, now: Date): Promise<H
     feeds,
     // No counts row = the caller may not read this lane's mail (decided in SQL). A caller who sees feeds but no mail feed
     // gets nothing either, rather than a "0" about a mailbox that is not connected.
-    unreadImportant: counts && (feeds.length === 0 || feeds.some((f) => f.provider === "google")) ? counts.unread_important : null,
+    unreadImportant: counts && (feeds.length === 0 || feeds.some((f) => MAIL_FEEDS.has(f.provider))) ? counts.unread_important : null,
     attention: toAttention({ connections, meetings: list, mail: counts, now }),
   };
 }

@@ -104,9 +104,9 @@ describe("openMessage", () => {
     expect(await openMessage(both(other) as never, "PKG", "m1", read)).toMatchObject({ meta: { mailbox: null, gmailUrl: null } });
   });
 
-  it("a row from another provider is not_found", async () => {
+  it("a row from a provider that has no mail is not_found (T-260: Microsoft rows open, see inbox-microsoft.test.ts)", async () => {
     const read = vi.fn();
-    expect(await openMessage(client(() => ({ data: [{ ...ref, provider: "microsoft" }], error: null })) as never, "PKG", "m1", read)).toEqual({ state: "not_found" });
+    expect(await openMessage(client(() => ({ data: [{ ...ref, provider: "quickbooks" }], error: null })) as never, "PKG", "m1", read)).toEqual({ state: "not_found" });
     expect(read).not.toHaveBeenCalled();
   });
 

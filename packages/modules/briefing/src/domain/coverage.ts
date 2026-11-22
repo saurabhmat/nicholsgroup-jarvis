@@ -1,5 +1,6 @@
 // Coverage (T-231a): what the briefing could read. Every mail and calendar stream the caller may see appears, with a
 // FIXED reason when it is not OK, so missing access is never shown as "nothing". Reasons never carry provider text.
+import { sourceName, needsSourceLabels } from "./source-labels";
 import { ago } from "./time";
 
 export type CoverageRow = {
@@ -82,7 +83,10 @@ export function coverageLine(items: CoverageItem[], hasAccess: boolean): string 
   if (items.length === 0) return "Coverage: no mailbox or calendar is set up for this company yet. Connect one in Settings.";
   const ok = items.filter((i) => i.state === "ok");
   const bad = items.filter((i) => i.state !== "ok");
-  const okText = ok.length > 0 ? `${ok.map((i) => `${label(i.stream)} ${i.account}`).join(", ")} up to date` : "";
-  const badText = bad.map((i) => `${label(i.stream)} ${i.account}: ${i.state === "not_connected" ? "not connected" : i.state === "stale" ? "stale" : "error"}`).join("; ");
+  // T-260/T-261: with a non-Google connection among them, each source names its provider ("Mail a@x (Outlook)"); a Google-only list reads as before.
+  const named = needsSourceLabels(items.map((i) => i.provider));
+  const who = (i: CoverageItem) => (named && sourceName(i.provider, i.stream) ? `${label(i.stream)} ${i.account} (${sourceName(i.provider, i.stream) ?? ""})` : `${label(i.stream)} ${i.account}`);
+  const okText = ok.length > 0 ? `${ok.map(who).join(", ")} up to date` : "";
+  const badText = bad.map((i) => `${who(i)}: ${i.state === "not_connected" ? "not connected" : i.state === "stale" ? "stale" : "error"}`).join("; ");
   return `Coverage: ${[okText, badText].filter((t) => t !== "").join("; ")}.`;
 }

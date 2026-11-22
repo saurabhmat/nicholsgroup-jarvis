@@ -1,13 +1,14 @@
 import "server-only";
 // Microsoft wiring (T-256): the guard, token manager, Graph client and health check over the real Vault, lane router (through the vault
 // module) and connector env. Server-only. Credentials are read from the connector env at call time (`requireConnectorEnv("graph")`
-// fails closed naming missing variables, never printing values). Nothing here connects an account (T-066) or syncs (T-258, T-067).
+// fails closed naming missing variables, never printing values). Nothing here connects an account (T-066).
 import { requireConnectorEnv } from "@nichols/core/env/server";
 import { attentionEventId, connAttentionNeeded, sendLaneEvent } from "@nichols/core/inngest";
 import { createApiErrorSink } from "../error-log/sink";
 import { createReconnectRecorder } from "../quickbooks/reconnect";
-import { apiErrorStore, connectionLoader, getToken, laneConfigReader, mailIndexStore, microsoftIdentityReader, microsoftIdentityWriter, reconnectStore, revokeToken, rotateToken, writePolicyReader } from "../vault/index";
+import { apiErrorStore, calendarIndexStore, connectionLoader, getToken, laneConfigReader, mailIndexStore, microsoftIdentityReader, microsoftIdentityWriter, reconnectStore, revokeToken, rotateToken, writePolicyReader } from "../vault/index";
 import { SecretValue } from "../vault/secret";
+import { createCalendarSync } from "../comms/cal-sync";
 import { createMailSync } from "../comms/mail-sync";
 import { createGraphApi } from "./api";
 import { createMicrosoftConnectInfo } from "./consent";
@@ -15,6 +16,7 @@ import { createMicrosoftDisconnect } from "./disconnect";
 import { classifyGraphFailure } from "./errors";
 import { createMicrosoftGuard } from "./guard";
 import { createMicrosoftHealth, createMicrosoftHealthSkip } from "./health";
+import { createMicrosoftCalendarProvider } from "./calendar";
 import { createMicrosoftMailProvider } from "./mail";
 import { createMicrosoftOAuthProvider, type MicrosoftClientConfig } from "./provider";
 import { createMicrosoftTokenManager } from "./token-manager";
@@ -46,7 +48,7 @@ const onReconnectRequired = createReconnectRecorder({
 const tokens = createMicrosoftTokenManager({ vault: { getToken, rotateToken }, client, onReconnectRequired });
 const errors = createApiErrorSink({ store: apiErrorStore, messageFor: (info) => classifyGraphFailure(info).message });
 
-/** The guarded, read-only Graph client. The facade's Microsoft entry uses it for the mail sync, live body and search (T-258, T-259); calendar comes with T-067. */
+/** The guarded, read-only Graph client. The facade's Microsoft entry uses it for the mail sync, live body and search (T-258, T-259); calendar since T-067. */
 export const graphApi = createGraphApi({ guard, tokens, errors });
 /** Microsoft mail (T-258 delta sync; T-259 live body, search and header flags with the default bounds). `prepareWrite` answers `unsupported_op` until T-262. */
 export const microsoftMailProvider = createMicrosoftMailProvider({ api: graphApi, guard, laneConfig: laneConfigReader });
@@ -59,6 +61,12 @@ export const microsoftMailProvider = createMicrosoftMailProvider({ api: graphApi
 export const MICROSOFT_MAIL_RUN_BUDGET_MS = 150_000;
 /** Runs one connection's mail metadata sync into comms.message_index. Reached only through the facade (provider gate and owner checks first). */
 export const microsoftMailSync = createMailSync({ mail: microsoftMailProvider, store: mailIndexStore, maxRunMs: MICROSOFT_MAIL_RUN_BUDGET_MS });
+/** Microsoft calendar (T-067, D-59: the default calendar only, `GET /me/calendarView/delta`). Live event body; `prepareWrite` answers `unsupported_op` (phase 4). */
+export const microsoftCalendarProvider = createMicrosoftCalendarProvider({ api: graphApi, guard, laneConfig: laneConfigReader });
+/** Time budget of one calendar run: the same 150 s as the mail run, for the same reasons (checked between pages only; against a 300 s job limit). */
+export const MICROSOFT_CALENDAR_RUN_BUDGET_MS = 150_000;
+/** Runs one connection's calendar metadata sync into cal.event_index. Reached only through the facade (provider gate and owner checks first). */
+export const microsoftCalendarSync = createCalendarSync({ calendar: microsoftCalendarProvider, store: calendarIndexStore, maxRunMs: MICROSOFT_CALENDAR_RUN_BUDGET_MS });
 /** `GET /me`: registered with conn.token_health (health/index.ts). */
 export const microsoftHealth = createMicrosoftHealth({ api: graphApi });
 /** Tells the daily health job to skip a connection whose provider is switched off for the lane (registered in health/index.ts). */

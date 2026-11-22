@@ -1,11 +1,12 @@
 // Functional Inbox (T-202). The list is metadata from comms.message_index through core.inbox_messages (SECURITY
 // INVOKER: RLS applies, so only mail of lanes the user may read in the comms view). Opening a message first proves,
 // with the user's own lane client, that the message is visible (core.inbox_message_ref), then reads the text live from
-// Gmail: never stored (rule 6), shown as plain untrusted text (rule 9), nothing written anywhere (rule 5).
+// the row's own provider (Gmail or Outlook, through the facade with the owner check): never stored (rule 6), shown as plain untrusted text
+// (rule 9), nothing written anywhere (rule 5).
 import type { Guards } from "@nichols/core/auth";
 import type { LaneClient } from "@nichols/core/lane-router";
 import { gmailThreadUrl } from "@nichols/connectors/comms";
-import { parseCoverageRows } from "@nichols/briefing/domain";
+import { httpsUrl, needsSourceLabels, openInText, parseCoverageRows, sourceLabel, sourceTags, type SourceTag } from "@nichols/briefing/domain";
 import { briefingFor } from "./briefing";
 
 export const INBOX_FILTERS = ["all", "unread", "important"] as const;
@@ -22,18 +23,27 @@ export type InboxRow = {
   isImportant: boolean;
   isStarred: boolean;
   hasAttachments: boolean;
+  /**
+   * T-260: the row's provider and account and its own "Open in Gmail" / "Open in Outlook" link. Present only when the viewer has a connection that is
+   * not Google's (a Google-only viewer's rows carry no such key); `openUrl` is the row's `source_url` when it is an https link, else null.
+   */
+  source?: RowSource;
 };
+
+export type RowSource = { provider: string; /** "Outlook \u00b7 name@example.test" */ label: string; /** "Open in Outlook" */ openLabel: string; openUrl: string | null };
 
 export type InboxCursor = { before: string; id: string };
 
 export type InboxView = { filter: InboxFilter; rows: InboxRow[]; next: InboxCursor | null; unavailable?: true };
 
-const MESSAGE_ID = /^[A-Za-z0-9_-]{1,128}$/;
+// Gmail ids are short and use letters, digits, `_` and `-`; Microsoft Graph ids (immutable ids) are longer and may carry `=`. The set is the connectors'
+// ProviderIdParamSchema (comms/schemas.ts): no `/`, `\`, `%`, `?` or `#`, so an id is always one safe path segment (it is encoded again in every URL).
+const MESSAGE_ID = /^[A-Za-z0-9_=@.+:-]{1,512}$/;
 
 type SearchParams = Record<string, string | string[] | undefined>;
 const one = (v: string | string[] | undefined) => (typeof v === "string" ? v : undefined);
 
-export const isMessageId = (v: unknown): v is string => typeof v === "string" && MESSAGE_ID.test(v);
+export const isMessageId = (v: unknown): v is string => typeof v === "string" && MESSAGE_ID.test(v) && v !== "." && v !== "..";
 
 /** `?filter=unread&before=<iso>&bid=<id>`; anything malformed falls back to the first page of "all". */
 export function parseInboxQuery(params: SearchParams): { filter: InboxFilter; cursor: InboxCursor | null } {
@@ -48,13 +58,22 @@ export function parseInboxQuery(params: SearchParams): { filter: InboxFilter; cu
 
 const str = (v: unknown): string | null => (typeof v === "string" && v.trim() !== "" ? v : null);
 
-export function toRows(data: unknown): InboxRow[] {
+/** The label and link of one row (T-260), from its connection's tag; null when the provider is unknown or the connection is not in Coverage. */
+function rowSource(tag: SourceTag | undefined, url: unknown): RowSource | null {
+  const label = tag ? sourceLabel(tag, "mail") : null;
+  const openLabel = tag ? openInText(tag.provider, "mail") : null;
+  return tag && label && openLabel ? { provider: tag.provider, label, openLabel, openUrl: httpsUrl(url) } : null;
+}
+
+export function toRows(data: unknown, tags?: Record<string, SourceTag>): InboxRow[] {
   if (!Array.isArray(data)) return [];
   return data.flatMap((r: Record<string, unknown>) => {
     const t = typeof r.received_at === "string" ? Date.parse(r.received_at) : Number.NaN;
     if (!isMessageId(r.message_id) || Number.isNaN(t)) return [];
+    const source = tags && typeof r.connection_id === "string" ? rowSource(tags[r.connection_id], r.source_url) : null;
     return [
       {
+        ...(source ? { source } : {}),
         messageId: r.message_id,
         fromName: str(r.from_name),
         fromAddress: str(r.from_address),
@@ -71,6 +90,22 @@ export function toRows(data: unknown): InboxRow[] {
 
 type Db = Pick<LaneClient, "schema">;
 
+/**
+ * T-260: provider and account per mail connection from Coverage (core.briefing_coverage answers only for the caller's own accounts), but only when the
+ * viewer has a non-Google connection; otherwise undefined and rows carry no label. A Coverage failure also gives undefined: the rows still show, unlabelled.
+ */
+async function labelTags(client: Db, laneId: string, rows: unknown): Promise<Record<string, SourceTag> | undefined> {
+  if (!Array.isArray(rows) || rows.length === 0) return undefined;
+  try {
+    const { data, error } = await client.schema("core").rpc("briefing_coverage", { p_lane: laneId });
+    if (error) return undefined;
+    const items = parseCoverageRows(data).map((c) => ({ stream: c.stream, connectionId: c.connectionId, provider: c.provider, account: c.account }));
+    return needsSourceLabels(items.map((c) => c.provider)) ? sourceTags(items, "mail") : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
 export async function loadInbox(client: Db, laneId: string, filter: InboxFilter, cursor: InboxCursor | null): Promise<InboxView> {
   const { data, error } = await client.schema("core").rpc("inbox_messages", {
     p_lane: laneId,
@@ -79,7 +114,7 @@ export async function loadInbox(client: Db, laneId: string, filter: InboxFilter,
     ...(cursor ? { p_before: cursor.before, p_before_id: cursor.id } : {}),
   });
   if (error) throw new Error("inbox unavailable");
-  const rows = toRows(data);
+  const rows = toRows(data, await labelTags(client, laneId, data));
   const last = rows[rows.length - 1];
   return { filter, rows, next: rows.length === PAGE_SIZE && last ? { before: last.receivedAt, id: last.messageId } : null };
 }
@@ -111,11 +146,12 @@ export async function waitingFor(g: Pick<Guards, "requireLane">, laneId: string,
   const view = await load(client, laneId, now, "America/New_York");
   const freshHours = view.config.attention.fresh_hours;
   if (!view.mail.access) return { rows: [], freshHours, ...(view.mail.unavailable ? { unavailable: true as const } : {}) };
-  const rows = view.mail.stillWaiting.flatMap((a) =>
-    isMessageId(a.thread.messageId)
-      ? [{ messageId: a.thread.messageId, fromName: a.thread.fromName, fromAddress: a.thread.fromAddress, subject: a.thread.subject, receivedAt: a.thread.receivedAt, isRead: a.thread.unreadCount === 0, isImportant: a.thread.isImportant, isStarred: false, hasAttachments: false }]
-      : [],
-  );
+  const sourceOf = view.mail.sourceOf;
+  const rows = view.mail.stillWaiting.flatMap((a): InboxRow[] => {
+    if (!isMessageId(a.thread.messageId)) return [];
+    const source = sourceOf ? rowSource(sourceOf[a.thread.connectionId], a.thread.sourceUrl) : null;
+    return [{ ...(source ? { source } : {}), messageId: a.thread.messageId, fromName: a.thread.fromName, fromAddress: a.thread.fromAddress, subject: a.thread.subject, receivedAt: a.thread.receivedAt, isRead: a.thread.unreadCount === 0, isImportant: a.thread.isImportant, isStarred: false, hasAttachments: false }];
+  });
   return { rows, freshHours };
 }
 
@@ -131,8 +167,12 @@ export type MessageMeta = {
   receivedAt: string;
   /** The connected mailbox this message sits in (from Coverage), or null when it could not be told. */
   mailbox: string | null;
-  /** "Open in Gmail": https://mail.google.com/mail/?authuser=<mailbox>#all/<thread id>; null unless both are usable. */
+  /** Google rows: "Open in Gmail": https://mail.google.com/mail/?authuser=<mailbox>#all/<thread id>; null unless both are usable. Other providers: null. */
   gmailUrl: string | null;
+  /** T-260: the row's own connection provider ("google" or "microsoft"), the link that opens the message in its mailbox and its label ("Open in Gmail" / "Open in Outlook"). openMessage always sets them; absent (an older caller) = a Google row, read through `gmailUrl`. */
+  provider?: string;
+  openUrl?: string | null;
+  openLabel?: string;
 };
 
 export type MessageView =
@@ -179,8 +219,9 @@ export async function openMessage(client: Db, laneId: string, messageId: string,
   const { data, error } = await client.schema("core").rpc("inbox_message_ref", { p_lane: laneId, p_message_id: messageId });
   if (error) throw new Error("message unavailable");
   const row = Array.isArray(data) ? (data[0] as Record<string, unknown> | undefined) : undefined;
-  if (!row || typeof row.connection_id !== "string" || row.provider !== "google" || typeof row.received_at !== "string") return { state: "not_found" };
+  if (!row || typeof row.connection_id !== "string" || (row.provider !== "google" && row.provider !== "microsoft") || typeof row.received_at !== "string") return { state: "not_found" };
   const mailbox = await mailboxOf(client, laneId, row.connection_id);
+  const gmailUrl = row.provider === "google" ? gmailThreadUrl(mailbox, str(row.thread_id)) : null;
   const meta: MessageMeta = {
     messageId,
     fromName: str(row.from_name),
@@ -190,7 +231,12 @@ export async function openMessage(client: Db, laneId: string, messageId: string,
     subject: (v => v && displayText(v))(str(row.subject)),
     receivedAt: new Date(Date.parse(row.received_at)).toISOString(),
     mailbox,
-    gmailUrl: gmailThreadUrl(mailbox, str(row.thread_id)),
+    gmailUrl,
+    provider: row.provider,
+    // Google keeps the link built from the mailbox and thread id (never the stored URL); Microsoft uses the row's own https link, which the connector checked
+    // against the lane's Outlook hosts when it was stored (never built from mailbox content).
+    openUrl: row.provider === "google" ? gmailUrl : httpsUrl(row.source_url),
+    openLabel: openInText(row.provider, "mail") ?? "",
   };
   try {
     const body = await readBody(laneId, row.connection_id, messageId);
