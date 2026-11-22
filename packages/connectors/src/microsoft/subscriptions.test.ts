@@ -9,8 +9,8 @@ import type { ConnectionHealthPatch, TokenHealthStore } from "../health/types";
 import { RateLimiter } from "../http/rate-limit";
 import { createMicrosoftHarness, TENANT_A } from "../testing/microsoft-harness";
 import { createSubscriptionStoreTwin } from "../testing/microsoft-subscription-store";
-import { useMockServer } from "../testing/msw/index";
-import { createFakeMicrosoft } from "../testing/msw/microsoft/handlers";
+import { HttpResponse, http, useMockServer } from "../testing/msw/index";
+import { GRAPH_V1, createFakeMicrosoft } from "../testing/msw/microsoft/handlers";
 import { createFakeSubscriptions, FAKE_SUBSCRIPTION_MAX_MINUTES } from "../testing/msw/microsoft/subscriptions";
 import { GRAPH_MAX_SUBSCRIPTION_MINUTES, SUBSCRIPTION_LIFETIME_MINUTES, SUBSCRIPTION_RENEW_WINDOW_MS } from "./constants";
 import { createGraphSubscriptionClient } from "./subscription-client";
@@ -18,7 +18,7 @@ import { CLIENT_STATE_BYTES, createMicrosoftSubscriptions } from "./subscription
 
 const fake = createFakeMicrosoft();
 const subs = createFakeSubscriptions(fake);
-useMockServer(...fake.handlers, ...subs.handlers);
+const server = useMockServer(...fake.handlers, ...subs.handlers);
 afterEach(() => RateLimiter.resetForTests());
 
 const T0 = Date.parse("2026-11-23T12:00:00.000Z");
@@ -288,6 +288,17 @@ describe("renew (spec §17 test 25: a subscription expiring in 12 hours is renew
     expect(out).toMatchObject({ created: 2, recreated: 2, renewed: 0 });
     expect(requestsOf("PATCH")).toHaveLength(0);
     expect(requestsOf("POST")).toHaveLength(2);
+  });
+
+  it("a PATCH answer that does not parse is an error, and the requested expiry is NOT recorded as confirmed", async () => {
+    const s = setup();
+    const conn = await created(s);
+    const before = s.twin.liveRows().map((r) => r.expiresAt.getTime());
+    const later = SUBSCRIPTION_LIFETIME_MINUTES * 60_000 - 12 * HOUR;
+    subs.setNow(T0 + later);
+    server.use(http.patch(`${GRAPH_V1}/subscriptions/:id`, () => HttpResponse.json({ id: 7, expirationDateTime: "soon" })));
+    await expect(s.subscriptions.ensure("PKG", conn, { now: at(later) })).rejects.toMatchObject({ info: { kind: "provider_error" } });
+    expect(s.twin.liveRows().map((r) => r.expiresAt.getTime())).toEqual(before);
   });
 
   it("a row recorded as removed is created again by the next run (subscriptionRemoved)", async () => {

@@ -261,6 +261,12 @@ describe("dropped notifications answer exactly as accepted ones do", () => {
     expect(s.twin.calls.lookup).toBe(1);
   });
 
+  it("an unknown id shares a delivery with live ones (a disconnected account's removed subscription): the live ones are still queued", async () => {
+    const s = setup();
+    await s.post(s.body([{ subscriptionId: "sub-removed-long-ago", clientState: STATE_PKG }, { subscriptionId: "sub-pkg-mail", clientState: STATE_PKG }, { subscriptionId: "sub-pkg-cal", clientState: STATE_PKG }]));
+    expect(s.sent.map((e) => e.data.eventType).sort()).toEqual(["calendar.changed", "mail.changed"]);
+  });
+
   it("a subscription whose connection is disconnected, or whose row was removed, is unknown", async () => {
     const s = setup();
     const row = s.h.rows.get(s.a.conn.id);
@@ -281,12 +287,27 @@ describe("dropped notifications answer exactly as accepted ones do", () => {
     expect(s.sent).toHaveLength(0);
   });
 
-  it("at most 25 distinct subscriptions are looked up per delivery", async () => {
+  it("one lookup call per served lane per request, however many distinct ids the delivery holds (a flood of unknown ids costs the same)", async () => {
     const s = setup();
-    const items = Array.from({ length: MICROSOFT_MAX_SUBSCRIPTIONS + 10 }, (_, i) => ({ subscriptionId: `sub-x-${String(i)}`, clientState: STATE_PKG }));
+    const items = Array.from({ length: MICROSOFT_MAX_SUBSCRIPTIONS }, (_, i) => ({ subscriptionId: `sub-x-${String(i)}`, clientState: STATE_PKG }));
     const res = await s.post(s.body(items));
     expect(res.status).toBe(202);
-    expect(s.twin.calls.lookup).toBe(MICROSOFT_MAX_SUBSCRIPTIONS * 2); // two served lanes
+    expect(s.twin.calls.lookup).toBe(2); // two served lanes
+    expect(MICROSOFT_MAX_SUBSCRIPTIONS).toBe(MICROSOFT_MAX_ITEMS); // no verified item is dropped for a cap
+  });
+
+  it("a verified item among 199 unknown ones in one delivery is still queued", async () => {
+    const s = setup();
+    const items = [...Array.from({ length: MICROSOFT_MAX_ITEMS - 1 }, (_, i) => ({ subscriptionId: `sub-x-${String(i)}`, clientState: STATE_PKG })), { subscriptionId: "sub-pkg-mail", clientState: STATE_PKG }];
+    await s.post(s.body(items));
+    expect(s.sent).toHaveLength(1);
+    expect(s.twin.calls.lookup).toBe(2);
+  });
+
+  it("many wrong-state items for one subscription log one line", async () => {
+    const s = setup();
+    await s.post(s.body(Array.from({ length: 30 }, () => ({ subscriptionId: "sub-pkg-mail", clientState: "wrong-wrong-wrong-wrong-wrong-wrong" }))));
+    expect(s.logs.filter((e) => JSON.stringify(e).includes("bad_client_state"))).toHaveLength(1);
   });
 });
 
@@ -311,20 +332,21 @@ describe("replayed and later notifications (the dedupe key, documented)", () => 
     expect(new Set(s.sent.map((e) => e.id)).size).toBe(2);
   });
 
-  it("two different deliveries inside one slot: the second (a different body) is a conflict and is dropped; the first sync covers it", async () => {
+  it("two DIFFERENT verified deliveries for one subscription inside one slot both queue; an identical replay of either is one", async () => {
     const s = setup();
-    await s.post(s.body([{ subscriptionId: "sub-pkg-mail", clientState: STATE_PKG, changeType: "created" }]));
-    await s.post(s.body([{ subscriptionId: "sub-pkg-mail", clientState: STATE_PKG, changeType: "updated" }]));
-    expect(s.sent).toHaveLength(1);
+    const a = s.body([{ subscriptionId: "sub-pkg-mail", clientState: STATE_PKG, changeType: "created" }]);
+    const b = s.body([{ subscriptionId: "sub-pkg-mail", clientState: STATE_PKG, changeType: "updated" }]);
+    for (const body of [a, b, a, b]) expect((await s.post(body)).status).toBe(202);
+    expect(s.sent).toHaveLength(2);
+    expect(new Set(s.sent.map((e) => e.id)).size).toBe(2);
+    expect([...s.mem.rows.values()].map((r) => r.status)).toEqual(["enqueued", "enqueued"]);
   });
 
-  it("the key holds no content: it is derived from the lane, our stored subscription id and the slot", async () => {
+  it("the key holds no content: it is derived from the lane, our stored subscription id, the slot and a hash of the bytes", async () => {
     const s = setup();
-    const a = s.body([{ subscriptionId: "sub-pkg-mail", clientState: STATE_PKG, resource: "Users/x/Messages/AAA" }]);
-    const b = s.body([{ subscriptionId: "sub-pkg-mail", clientState: STATE_PKG, resource: "Users/x/Messages/BBB" }]);
-    await s.post(a);
-    await s.post(b);
-    expect(s.sent).toHaveLength(1);
+    await s.post(s.body([{ subscriptionId: "sub-pkg-mail", clientState: STATE_PKG, resource: `Users/x/Messages/${CANARY}` }]));
+    expect(JSON.stringify([s.sent, [...s.mem.rows.values()]])).not.toContain(CANARY);
+    expect(s.sent[0]?.data.eventId).toMatch(/^ms:change:[0-9a-f]{64}$/);
   });
 });
 
@@ -367,6 +389,44 @@ describe("lifecycle notifications (T-264)", () => {
     expect(s.sent).toHaveLength(0);
     expect(s.twin.rows.every((r) => r.status === "active")).toBe(true);
     expect(s.twin.calls.mark).toBe(0);
+  });
+
+  it("a queue failure on a lifecycle event answers 503 and Graph's retry still queues the renewal (queued before the mark, so the row is still findable)", async () => {
+    const s = setup();
+    s.failures.enqueue = 1;
+    const body = s.body([{ subscriptionId: "sub-pkg-cal", clientState: STATE_PKG, lifecycleEvent: "subscriptionRemoved" }]);
+    expect((await s.post(body)).status).toBe(503);
+    expect(s.twin.rows.find((r) => r.subscriptionId === "sub-pkg-cal")?.status).toBe("active");
+    expect((await s.post(body)).status).toBe(202);
+    expect(s.twin.rows.find((r) => r.subscriptionId === "sub-pkg-cal")?.status).toBe("removed");
+    expect(s.sent).toHaveLength(1);
+    expect(s.sent[0]).toMatchObject({ name: RENEW_EVENT_NAME, data: { laneId: "PKG", connectionId: s.a.conn.id } });
+  });
+
+  it("round trip: subscriptionRemoved through the receiver, then the renewal job's ensure creates a new subscription; reauthorizationRequired, then ensure renews", async () => {
+    const s = setup();
+    const client = createGraphSubscriptionClient({ guard: s.h.guard, tokens: s.h.tokens });
+    const subscriptions = createMicrosoftSubscriptions({ client, store: s.twin.store, laneConfig: s.h.laneConfig, notificationUrl: () => URL_OK });
+    const conn = s.h.connect("PKG", "rt@pubkgroup.example.test");
+    await subscriptions.ensure("PKG", conn.conn, { now: new Date(T0) });
+    const live = s.twin.liveRows().filter((r) => r.connectionId === conn.conn.id);
+    const [mail, cal] = [live.find((r) => r.resource === "mail"), live.find((r) => r.resource === "calendar")];
+    if (!mail || !cal) throw new Error("not created");
+    const state = (id: string) => s.twin.rows.find((r) => r.subscriptionId === id)?.clientState ?? "";
+    graph.requests.length = 0;
+    // removed: the receiver marks it and queues the job; the job creates a new subscription
+    expect((await s.post(s.body([{ subscriptionId: mail.subscriptionId, clientState: state(mail.subscriptionId), lifecycleEvent: "subscriptionRemoved" }]))).status).toBe(202);
+    expect(s.sent.at(-1)).toMatchObject({ name: RENEW_EVENT_NAME, data: { connectionId: conn.conn.id } });
+    const out1 = await subscriptions.ensure("PKG", conn.conn, { now: new Date(T0 + 60_000) });
+    expect(out1).toMatchObject({ created: 1, renewed: 0 });
+    expect(s.twin.liveRows().filter((r) => r.connectionId === conn.conn.id && r.resource === "mail")[0]?.subscriptionId).not.toBe(mail.subscriptionId);
+    // reauthorization: the receiver marks it; the job renews it with a PATCH
+    expect((await s.post(s.body([{ subscriptionId: cal.subscriptionId, clientState: state(cal.subscriptionId), lifecycleEvent: "reauthorizationRequired" }]))).status).toBe(202);
+    graph.requests.length = 0;
+    const out2 = await subscriptions.ensure("PKG", conn.conn, { now: new Date(T0 + 120_000) });
+    expect(out2).toMatchObject({ renewed: 1, created: 0 });
+    expect(graph.requests.map((r) => r.method)).toEqual(["PATCH"]);
+    expect(s.twin.liveRows().find((r) => r.subscriptionId === cal.subscriptionId)?.status).toBe("active");
   });
 
   it("a replayed lifecycle event is one renewal request; the handler itself never calls Graph", async () => {

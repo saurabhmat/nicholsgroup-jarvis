@@ -168,6 +168,9 @@ export const RESTRICTED_NAMES = {
     ],
     hint: "only the Microsoft wiring builds the subscription client; subscriptions are created, renewed and stopped by jobs",
   },
+  // The instance that can create, renew and stop subscriptions, and the renewer built on it (reached by the T-040 renewal job only).
+  microsoftSubscriptions: { allow: ["packages/connectors/src/microsoft/index.ts"], hint: "subscriptions are created, renewed and stopped by the renewal job only" },
+  microsoftSubscriptionRenewer: { allow: ["packages/connectors/src/microsoft/index.ts", "packages/connectors/src/health/index.ts"], hint: "only the T-040 renewal registry calls the Microsoft renewer" },
   loadGoogleWriteConnection: { allow: [...APPROVALS, "packages/connectors/src/google/index.ts"], allowReexport: CONNECTORS, hint: "only the approvals package loads a write connection" },
   mintApprovedAction: { allow: APPROVALS, hint: "only the approvals package mints approved actions" },
   getSupabaseSecretKey: { allow: [...LANE_ROUTER, ...TOKEN_VAULT, ...CORE_ENV], hint: "lane router and token vault only" },

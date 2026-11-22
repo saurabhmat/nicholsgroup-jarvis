@@ -81,13 +81,18 @@ export function createSubscriptionStoreTwin(connections: TwinConnections) {
       }
       return n;
     },
-    async lookup(laneId, subscriptionId): Promise<SubscriptionLookup | null> {
+    async lookupMany(laneId, subscriptionIds) {
       calls.lookup += 1;
       maybeFail();
-      const r = rows.find((x) => x.laneId === laneId && x.subscriptionId === subscriptionId && live(x));
-      const c = r ? connections(laneId, r.connectionId) : undefined;
-      if (!r || !c || c.status === "disconnected" || c.status === "pending" || r.clientState === null) return null;
-      return { laneId, connectionId: r.connectionId, resource: r.resource, status: r.status as "active" | "reauthorization_required", clientState: new SecretValue(r.clientState) };
+      if (subscriptionIds.length > 200) throw new ConnectorError({ kind: "transient", message: "Subscription store unavailable" });
+      const out = new Map<string, SubscriptionLookup>();
+      for (const id of subscriptionIds) {
+        const r = rows.find((x) => x.laneId === laneId && x.subscriptionId === id && live(x));
+        const c = r ? connections(laneId, r.connectionId) : undefined;
+        if (!r || !c || c.status === "disconnected" || c.status === "pending" || r.clientState === null) continue;
+        out.set(id, { laneId, connectionId: r.connectionId, resource: r.resource, status: r.status as "active" | "reauthorization_required", clientState: new SecretValue(r.clientState) });
+      }
+      return out;
     },
     async purge(laneId) {
       calls.purge += 1;

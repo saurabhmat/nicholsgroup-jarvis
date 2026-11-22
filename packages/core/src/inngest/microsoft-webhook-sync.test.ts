@@ -19,7 +19,7 @@ function setup(over: Partial<MicrosoftWebhookSyncDeps> = {}) {
 }
 
 describe("microsoft.webhook_sync", () => {
-  it("batches by lane and connection for 10 seconds (the receiver's dedupe slot), at most 5 per batch, and is triggered by the typed webhook/received event", () => {
+  it("batches by lane and connection for up to 10 seconds from the first event, at most 5 per batch, and is triggered by the typed webhook/received event", () => {
     expect(MICROSOFT_WEBHOOK_BATCH.key).toContain("event.data.laneId");
     expect(MICROSOFT_WEBHOOK_BATCH.key).toContain("event.data.connectionId");
     expect(MICROSOFT_WEBHOOK_BATCH.maxSize).toBeLessThanOrEqual(5);

@@ -1,7 +1,7 @@
 // The database side of Microsoft change-notification subscriptions (T-068, T-264): core.push_subscriptions through the lane's job client (the lane router, wired in
 // vault/index.ts), only via the security-definer functions core.push_subscription_* (service_role only). Every call names a lane and, where it acts on a row, the connection:
 // the SQL checks both, so renew, mark and stop can only touch a subscription recorded for that (lane, connection). The clientState is a Vault secret held by the database: it
-// comes back only from `lookup` (for the receiver's constant-time comparison) and goes in only through `record`, always as a SecretValue / bind parameter, never in a log or an error.
+// comes back only from `lookupMany` (for the receiver's constant-time comparison) and goes in only through `record`, always as a SecretValue / bind parameter, never in a log or an error.
 // Errors carry fixed text: a failure is a failure, never a hint about another lane.
 import type { LaneId } from "@nichols/core";
 import { ConnectorError } from "../contract/errors";
@@ -40,8 +40,11 @@ export interface MicrosoftSubscriptionStore {
   mark(laneId: LaneId, connectionId: string, subscriptionId: string, status: "reauthorization_required" | "removed"): Promise<boolean>;
   /** Marks every live subscription of the connection removed (disconnect, provider switched off). Returns how many. */
   removeConnection(laneId: LaneId, connectionId: string): Promise<number>;
-  /** The live subscription of this lane with that provider id, for a usable connection; null for anything else (unknown, removed, other lane, disconnected). */
-  lookup(laneId: LaneId, subscriptionId: string): Promise<SubscriptionLookup | null>;
+  /**
+   * The live subscriptions of this lane among these provider ids (at most 200, distinct), for usable connections, in ONE database call; ids that are unknown, removed, of another
+   * lane or of a disconnected connection are absent from the map.
+   */
+  lookupMany(laneId: LaneId, subscriptionIds: readonly string[]): Promise<Map<string, SubscriptionLookup>>;
   /** Retention (T-042 calls this per lane): deletes rows removed more than 30 days ago (fixed in SQL). */
   purge(laneId: LaneId): Promise<number>;
 }
@@ -106,13 +109,16 @@ export function createMicrosoftSubscriptionStore(clientFor: JobClientFor): Micro
       const n = await call(laneId, "push_subscriptions_remove_connection", { p_lane: laneId, p_connection_id: connectionId });
       return typeof n === "number" ? n : 0;
     },
-    async lookup(laneId, subscriptionId) {
-      const [r] = rows(await call(laneId, "push_subscription_lookup", { p_lane: laneId, p_provider: PROVIDER, p_subscription_id: subscriptionId }));
-      if (!r) return null;
-      const resource = typeof r.resource === "string" ? resourceByName.get(r.resource) : undefined;
-      const st = status(r.status);
-      if (!resource || !st || typeof r.connection_id !== "string" || typeof r.client_state !== "string" || r.client_state.length === 0) return null;
-      return { laneId, connectionId: r.connection_id, resource, status: st, clientState: new SecretValue(r.client_state) };
+    async lookupMany(laneId, subscriptionIds) {
+      const out = new Map<string, SubscriptionLookup>();
+      if (subscriptionIds.length === 0) return out;
+      for (const r of rows(await call(laneId, "push_subscription_lookup", { p_lane: laneId, p_provider: PROVIDER, p_subscription_ids: [...subscriptionIds] }))) {
+        const resource = typeof r.resource === "string" ? resourceByName.get(r.resource) : undefined;
+        const st = status(r.status);
+        if (!resource || !st || typeof r.subscription_id !== "string" || typeof r.connection_id !== "string" || typeof r.client_state !== "string" || r.client_state.length === 0) continue;
+        out.set(r.subscription_id, { laneId, connectionId: r.connection_id, resource, status: st, clientState: new SecretValue(r.client_state) });
+      }
+      return out;
     },
     async purge(laneId) {
       const n = await call(laneId, "push_subscriptions_purge", { p_lane: laneId });

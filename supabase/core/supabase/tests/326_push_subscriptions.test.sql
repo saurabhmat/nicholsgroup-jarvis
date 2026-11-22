@@ -3,7 +3,7 @@
 -- Covered: shape and privileges, record (checks, Vault secret, supersede, one live row per stream), list / lookup / renewed / mark / remove_connection bound to
 -- (lane, connection), purge (fixed 30 days, enabled lane), reads (CROSS-LANE denial, AAL1, anon, hidden columns, no writes), and that core.webhook_events accepts provider 'microsoft'.
 begin;
-select plan(87);
+select plan(97);
 \ir helpers/lane_rls.psql
 
 update core.lanes set enabled = true where code = 'APK';
@@ -33,7 +33,7 @@ select ok(not has_column_privilege('authenticated', 'core.push_subscriptions', '
           and has_column_privilege('authenticated', 'core.push_subscriptions', 'expires_at', 'select'),
           'the Vault secret id, the provider subscription id and the resource path are not readable through the API; the expiry is');
 select ok(has_function_privilege('service_role', 'core.push_subscription_record(text, uuid, text, text, text, text, timestamptz, text)', 'execute')
-          and has_function_privilege('service_role', 'core.push_subscription_lookup(text, text, text)', 'execute')
+          and has_function_privilege('service_role', 'core.push_subscription_lookup(text, text, text[])', 'execute')
           and has_function_privilege('service_role', 'core.push_subscription_list(text, uuid)', 'execute')
           and has_function_privilege('service_role', 'core.push_subscription_renewed(text, uuid, text, timestamptz)', 'execute')
           and has_function_privilege('service_role', 'core.push_subscription_mark(text, uuid, text, text)', 'execute')
@@ -107,15 +107,20 @@ select is((select count(*)::int from core.push_subscription_list('PKG', '0000000
 select is((select count(*)::int from core.push_subscription_list('APK', '00000000-0000-4000-8000-000000032601')), 0, 'cross-lane: the same connection id asked in another lane lists nothing');
 select throws_ok($$select * from core.push_subscription_list(null, '00000000-0000-4000-8000-000000032601')$$, '22004', null, 'list needs a lane');
 
--- ---------------------------------------------------------------- lookup (receiver)
-select is((select client_state from core.push_subscription_lookup('PKG', 'microsoft', 'sub-mail-1b')), 'CLIENT-STATE-CANARY-0123456789-replacement-abcdefghijklmn', 'lookup returns the clientState of a live row in its lane');
-select is((select resource from core.push_subscription_lookup('PKG', 'microsoft', 'sub-cal-1')), 'calendar', 'lookup returns the stream');
-select is((select connection_id from core.push_subscription_lookup('PKG', 'microsoft', 'sub-cal-1')), '00000000-0000-4000-8000-000000032601'::uuid, 'lookup returns the connection');
-select is((select count(*)::int from core.push_subscription_lookup('APK', 'microsoft', 'sub-mail-1b')), 0, 'cross-lane: a subscription of PKG asked in APK is unknown');
-select is((select count(*)::int from core.push_subscription_lookup('PKG', 'microsoft', 'sub-mail-1')), 0, 'a removed row is unknown');
-select is((select count(*)::int from core.push_subscription_lookup('PKG', 'google', 'sub-mail-1b')), 0, 'another provider is unknown');
-select is((select count(*)::int from core.push_subscription_lookup('PKG', 'microsoft', 'nope')), 0, 'an unknown id is unknown');
-select is((select count(*)::int from core.push_subscription_lookup('PKG', 'microsoft', repeat('x', 257))), 0, 'an over-long id is unknown');
+-- ---------------------------------------------------------------- lookup (receiver): one batched call per lane
+set local role service_role;
+select is((select client_state from core.push_subscription_lookup('PKG', 'microsoft', array['sub-mail-1b'])), 'CLIENT-STATE-CANARY-0123456789-replacement-abcdefghijklmn', 'lookup returns the clientState of a live row in its lane');
+select is((select resource from core.push_subscription_lookup('PKG', 'microsoft', array['sub-cal-1'])), 'calendar', 'lookup returns the stream');
+select is((select connection_id from core.push_subscription_lookup('PKG', 'microsoft', array['sub-cal-1'])), '00000000-0000-4000-8000-000000032601'::uuid, 'lookup returns the connection');
+select is((select count(*)::int from core.push_subscription_lookup('PKG', 'microsoft', array['sub-mail-1b', 'sub-cal-1', 'sub-mail-2', 'nope', 'sub-mail-1'])), 3, 'a batch returns each live row of the lane once (unknown and removed ids return nothing)');
+select is((select count(*)::int from core.push_subscription_lookup('APK', 'microsoft', array['sub-mail-1b', 'sub-cal-1', 'sub-mail-2'])), 0, 'cross-lane: PKG subscriptions asked in APK are unknown, in a batch too');
+select is((select array_agg(subscription_id order by subscription_id) from core.push_subscription_lookup('APK', 'microsoft', array['sub-mail-1b', 'sub-mail-apk'])), array['sub-mail-apk'], 'cross-lane: a mixed batch returns only the asked lane''s own row');
+select is((select count(*)::int from core.push_subscription_lookup('PKG', 'microsoft', array['sub-mail-1'])), 0, 'a removed row is unknown');
+select is((select count(*)::int from core.push_subscription_lookup('PKG', 'google', array['sub-mail-1b'])), 0, 'another provider is unknown');
+select is((select count(*)::int from core.push_subscription_lookup('PKG', 'microsoft', array[repeat('x', 257)])), 0, 'an over-long id is unknown');
+select is((select count(*)::int from core.push_subscription_lookup('PKG', 'microsoft', array[]::text[])), 0, 'an empty batch returns nothing');
+select is((select count(*)::int from core.push_subscription_lookup('PKG', 'microsoft', (select array_agg('x' || g) from generate_series(1, 200) g))), 0, '200 ids are accepted');
+select throws_ok($$select * from core.push_subscription_lookup('PKG', 'microsoft', (select array_agg('x' || g) from generate_series(1, 201) g))$$, '22023', null, 'more than 200 ids are refused');
 reset role;
 
 -- ---------------------------------------------------------------- renewed and mark (bound to lane and connection)
@@ -153,7 +158,7 @@ select is((select count(*)::int from core.push_subscriptions where lane_id = 'AP
 update core.connections set status = 'disconnected' where id = '00000000-0000-4000-8000-000000032602';
 set local role service_role;
 select is(core.push_subscriptions_remove_connection('PKG', '00000000-0000-4000-8000-000000032602'), 1, 'a disconnected connection''s subscription can be removed');
-select is((select count(*)::int from core.push_subscription_lookup('PKG', 'microsoft', 'sub-mail-2')), 0, 'and is unknown to the receiver');
+select is((select count(*)::int from core.push_subscription_lookup('PKG', 'microsoft', array['sub-mail-2'])), 0, 'and is unknown to the receiver');
 reset role;
 update core.connections set status = 'active' where id = '00000000-0000-4000-8000-000000032602';
 
@@ -208,6 +213,19 @@ reset role;
 select is((select count(*)::int from core.push_subscriptions where subscription_id = 'sub-mail-2'), 1, 'a row removed 10 days ago stays');
 select is((select count(*)::int from core.push_subscriptions where lane_id = 'APK'), 1, 'purge is lane-bound: the APK row stays');
 select is((select count(*)::int from core.push_subscriptions where status <> 'removed' and subscription_id in ('sub-mail-3')), 1, 'live rows are never purged');
+-- a disconnect whose removal failed: the live row and its Vault secret of a disconnected connection are removed by the purge, in its own lane only
+set local role service_role;
+select isnt(core.push_subscription_record('PKG', '00000000-0000-4000-8000-000000032602', 'microsoft', 'mail', 'sub-mail-4', 'me/mailfolders(''inbox'')/messages',
+              now() + interval '6 days', 'CLIENT-STATE-CANARY-four-0123456789-abcdefghijklmnopqrst'), null, 'a live row on a connection that is about to be disconnected');
+reset role;
+update core.connections set status = 'disconnected' where id in ('00000000-0000-4000-8000-000000032602', '00000000-0000-4000-8000-000000032603');
+set local role service_role;
+select is(core.push_subscriptions_purge('PKG'), 1, 'purge removes the live row of a disconnected connection');
+reset role;
+select is((select status from core.push_subscriptions where subscription_id = 'sub-mail-4'), 'removed', 'it is marked removed');
+select is((select count(*)::int from vault.decrypted_secrets where decrypted_secret = 'CLIENT-STATE-CANARY-four-0123456789-abcdefghijklmnopqrst'), 0, 'and its Vault secret is deleted');
+select is((select status from core.push_subscriptions where subscription_id = 'sub-mail-3'), 'active', 'a usable connection''s live row stays');
+select is((select status from core.push_subscriptions where subscription_id = 'sub-mail-apk'), 'active', 'cross-lane: a disconnected APK connection is not touched by a PKG purge');
 update core.lanes set enabled = false where code = 'APK';
 set local role service_role;
 select throws_ok($$select core.push_subscriptions_purge('APK')$$, '42501', null, 'a disabled lane is refused');

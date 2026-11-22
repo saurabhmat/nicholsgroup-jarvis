@@ -40,14 +40,14 @@ describe("arguments", () => {
     expect(await store.renewed("PKG", CONN, "sub-1", at)).toBe(true);
     expect(await store.mark("PKG", CONN, "sub-1", "removed")).toBe(true);
     await store.removeConnection("PKG", CONN);
-    await store.lookup("PKG", "sub-1");
+    await store.lookupMany("PKG", ["sub-1", "sub-2"]);
     await store.purge("PKG");
     expect(f.calls.map((c) => [c.fn, c.args])).toEqual([
       ["push_subscription_list", { p_lane: "PKG", p_connection_id: CONN }],
       ["push_subscription_renewed", { p_lane: "PKG", p_connection_id: CONN, p_subscription_id: "sub-1", p_expires_at: at.toISOString() }],
       ["push_subscription_mark", { p_lane: "PKG", p_connection_id: CONN, p_subscription_id: "sub-1", p_status: "removed" }],
       ["push_subscriptions_remove_connection", { p_lane: "PKG", p_connection_id: CONN }],
-      ["push_subscription_lookup", { p_lane: "PKG", p_provider: "microsoft", p_subscription_id: "sub-1" }],
+      ["push_subscription_lookup", { p_lane: "PKG", p_provider: "microsoft", p_subscription_ids: ["sub-1", "sub-2"] }],
       ["push_subscriptions_purge", { p_lane: "PKG" }],
     ]);
   });
@@ -60,16 +60,20 @@ describe("results", () => {
     expect(await store.list("PKG", CONN)).toEqual([{ resource: "calendar", subscriptionId: "s1", status: "active", expiresAt: new Date("2026-11-28T12:00:00.000Z") }]);
   });
 
-  it("lookup returns the lane, the connection, the stream and the clientState as a SecretValue; anything malformed or empty is null", async () => {
-    const row = { connection_id: CONN, resource: "mail", status: "active", client_state: STATE };
-    const found = await createMicrosoftSubscriptionStore(fake({ data: [row] }).clientFor).lookup("PKG", "s1");
+  it("lookupMany returns, by provider id, the lane, connection, stream and clientState (a SecretValue); anything malformed or empty is absent; an empty batch makes no call", async () => {
+    const row = { subscription_id: "s1", connection_id: CONN, resource: "mail", status: "active", client_state: STATE };
+    const f = fake({ data: [row] });
+    const found = (await createMicrosoftSubscriptionStore(f.clientFor).lookupMany("PKG", ["s1"])).get("s1");
     expect(found).toMatchObject({ laneId: "PKG", connectionId: CONN, resource: "mail", status: "active" });
     expect(found?.clientState).toBeInstanceOf(SecretValue);
     expect(JSON.stringify(found)).not.toContain(STATE);
     expect(String(found?.clientState)).not.toContain(STATE);
-    for (const data of [[], null, [{ ...row, resource: "x" }], [{ ...row, client_state: "" }], [{ ...row, status: "removed" }], [{ ...row, connection_id: 5 }]]) {
-      expect(await createMicrosoftSubscriptionStore(fake({ data }).clientFor).lookup("PKG", "s1")).toBeNull();
+    for (const data of [[], null, [{ ...row, resource: "x" }], [{ ...row, client_state: "" }], [{ ...row, status: "removed" }], [{ ...row, connection_id: 5 }], [{ ...row, subscription_id: 5 }]]) {
+      expect((await createMicrosoftSubscriptionStore(fake({ data }).clientFor).lookupMany("PKG", ["s1"])).size).toBe(0);
     }
+    const none = fake({ data: [row] });
+    expect((await createMicrosoftSubscriptionStore(none.clientFor).lookupMany("PKG", [])).size).toBe(0);
+    expect(none.calls).toHaveLength(0);
   });
 
   it("renewed and mark are false for anything but true", async () => {
@@ -82,9 +86,9 @@ describe("failures carry fixed text", () => {
   it("a database error, a lane that cannot be reached and a refusal: fixed kinds, no database text, no clientState", async () => {
     const dbText = `permission denied for ${STATE} secret db text`;
     const store = createMicrosoftSubscriptionStore(fake({ error: { code: "XX000", message: dbText } }).clientFor);
-    const err = await store.lookup("PKG", "s1").catch((e: unknown) => e);
+    const err = await store.lookupMany("PKG", ["s1"]).catch((e: unknown) => e);
     expect(JSON.stringify(err)).not.toContain("secret db text");
-    expect(await kind(store.lookup("PKG", "s1"))).toBe("transient");
+    expect(await kind(store.lookupMany("PKG", ["s1"]))).toBe("transient");
     expect(await kind(createMicrosoftSubscriptionStore(fake({ error: { code: "42501", message: dbText } }).clientFor).record("PKG", { connectionId: CONN, resource: "mail", subscriptionId: "s", expiresAt: new Date(), clientState: new SecretValue(STATE) }))).toBe("connection_unavailable");
     expect(await kind(createMicrosoftSubscriptionStore(async () => { throw new Error(dbText); }).list("PKG", CONN))).toBe("transient");
     expect(await kind(createMicrosoftSubscriptionStore(fake(() => { throw new Error(dbText); }).clientFor).list("PKG", CONN))).toBe("transient");

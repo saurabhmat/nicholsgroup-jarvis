@@ -152,34 +152,38 @@ comment on function core.push_subscription_record(text, uuid, text, text, text, 
 revoke all on function core.push_subscription_record(text, uuid, text, text, text, text, timestamptz, text) from public, anon, authenticated;
 grant execute on function core.push_subscription_record(text, uuid, text, text, text, text, timestamptz, text) to service_role;
 
--- ---------------------------------------------------------------- lookup: a notification's subscription (receiver)
--- Asked per lane with the id from the notification. Returns the live row with its clientState only when the connection is still usable and the lane is enabled;
--- an unknown id, a removed row, another lane's row and a disconnected connection all return nothing. The receiver compares the clientState in constant time.
-create function core.push_subscription_lookup(p_lane text, p_provider text, p_subscription_id text)
-returns table (connection_id uuid, resource text, status text, client_state text)
+-- ---------------------------------------------------------------- lookup: notification subscriptions (receiver), ONE call per lane per request
+-- Asked per lane with the distinct ids of one delivery (at most 200, the receiver's item cap; more is refused). Returns each live row with its clientState only when the
+-- connection is still usable and the lane is enabled; an unknown id, a removed row, another lane's row and a disconnected connection return nothing. The receiver compares
+-- the clientState in constant time.
+create function core.push_subscription_lookup(p_lane text, p_provider text, p_subscription_ids text[])
+returns table (subscription_id text, connection_id uuid, resource text, status text, client_state text)
 language plpgsql
 stable
 security definer
 set search_path = ''
 as $$
 begin
-  if p_lane is null or p_provider is null or p_subscription_id is null or pg_catalog.length(p_subscription_id) not between 1 and 256 then
+  if p_lane is null or p_provider is null or p_subscription_ids is null then
     return;
   end if;
+  if pg_catalog.cardinality(p_subscription_ids) > 200 then
+    raise exception 'at most 200 subscription ids per lookup' using errcode = '22023';
+  end if;
   return query
-    select s.connection_id, s.resource, s.status, d.decrypted_secret::text
+    select s.subscription_id, s.connection_id, s.resource, s.status, d.decrypted_secret::text
     from core.push_subscriptions s
     join core.connections c on c.id = s.connection_id and c.lane_id = s.lane_id
     join core.lanes l on l.code = s.lane_id and l.enabled
     join vault.decrypted_secrets d on d.id = s.vault_secret_id
-    where s.lane_id = p_lane and s.provider = p_provider and s.subscription_id = p_subscription_id
+    where s.lane_id = p_lane and s.provider = p_provider and s.subscription_id = any (p_subscription_ids)
       and s.status <> 'removed' and c.status not in ('disconnected', 'pending');
 end;
 $$;
-comment on function core.push_subscription_lookup(text, text, text) is
-  'Change notifications (T-068): the live subscription of a lane by the provider id, with its clientState, for a usable connection; service_role only.';
-revoke all on function core.push_subscription_lookup(text, text, text) from public, anon, authenticated;
-grant execute on function core.push_subscription_lookup(text, text, text) to service_role;
+comment on function core.push_subscription_lookup(text, text, text[]) is
+  'Change notifications (T-068): the live subscriptions of a lane for up to 200 provider ids, with their clientState, for usable connections; service_role only.';
+revoke all on function core.push_subscription_lookup(text, text, text[]) from public, anon, authenticated;
+grant execute on function core.push_subscription_lookup(text, text, text[]) to service_role;
 
 -- ---------------------------------------------------------------- renewed: the expiry moved
 create function core.push_subscription_renewed(p_lane text, p_connection_id uuid, p_subscription_id text, p_expires_at timestamptz)
@@ -284,6 +288,7 @@ revoke all on function core.push_subscriptions_remove_connection(text, uuid) fro
 grant execute on function core.push_subscriptions_remove_connection(text, uuid) to service_role;
 
 -- ---------------------------------------------------------------- purge (retention)
+-- Also removes the live rows (and Vault secrets) of connections that are disconnected: a disconnect whose best-effort removal failed must not leave a secret for ever.
 create function core.push_subscriptions_purge(p_lane text)
 returns integer
 language plpgsql
@@ -291,18 +296,31 @@ security definer
 set search_path = ''
 as $$
 declare
-  v_n integer;
+  v_n integer := 0;
+  v_d integer;
+  v_row record;
 begin
   if p_lane is null or not exists (select 1 from core.lanes l where l.code = p_lane and l.enabled) then
     raise exception 'lane is not available' using errcode = '42501';
   end if;
+  for v_row in
+    select s.id, s.vault_secret_id from core.push_subscriptions s
+    join core.connections c on c.id = s.connection_id and c.lane_id = s.lane_id
+    where s.lane_id = p_lane and s.status <> 'removed' and c.status = 'disconnected' for update of s
+  loop
+    update core.push_subscriptions s set status = 'removed', removed_at = pg_catalog.now(), vault_secret_id = null where s.id = v_row.id;
+    if v_row.vault_secret_id is not null then
+      delete from vault.secrets where id = v_row.vault_secret_id;
+    end if;
+    v_n := v_n + 1;
+  end loop;
   delete from core.push_subscriptions s
   where s.lane_id = p_lane and s.status = 'removed' and s.removed_at < pg_catalog.now() - interval '30 days';
-  get diagnostics v_n = row_count;
-  return v_n;
+  get diagnostics v_d = row_count;
+  return v_n + v_d;
 end;
 $$;
 comment on function core.push_subscriptions_purge(text) is
-  'Retention (T-068, called by the T-042 purge job): deletes a lane''s removed subscription rows older than a fixed 30 days.';
+  'Retention (T-068, called by the T-042 purge job): removes live rows of disconnected connections (and their Vault secrets), then deletes a lane''s removed rows older than a fixed 30 days.';
 revoke all on function core.push_subscriptions_purge(text) from public, anon, authenticated;
 grant execute on function core.push_subscriptions_purge(text) to service_role;

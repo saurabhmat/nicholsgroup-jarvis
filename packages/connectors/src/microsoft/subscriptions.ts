@@ -143,8 +143,10 @@ export function createMicrosoftSubscriptions(deps: MicrosoftSubscriptionsDeps): 
     const expires = new Date(now.getTime() + SUBSCRIPTION_LIFETIME_MINUTES * 60_000);
     const res = await deps.client.request<unknown>(laneId, conn, { method: "PATCH", path: "/subscriptions/{id}", params: { id: row.subscriptionId }, body: { expirationDateTime: expires.toISOString() } });
     const parsed = GraphSubscription.safeParse(res.data);
-    // Graph may answer with a different value than asked (it raises a short one, caps a long one): the answer is what is recorded.
-    const at = parsed.success ? new Date(parsed.data.expirationDateTime) : expires;
+    // Graph may answer with a different value than asked (it raises a short one, caps a long one): the answer is what is recorded. An answer that does not parse is an error (as for
+    // create): the requested expiry is never recorded as if Microsoft had confirmed it.
+    if (!parsed.success) throw new ConnectorError({ kind: "provider_error", message: "Microsoft's answer to the subscription request was not understood" });
+    const at = new Date(parsed.data.expirationDateTime);
     if (!(at.getTime() > now.getTime()) || at.getTime() > now.getTime() + 8 * DAY_MS) throw new ConnectorError({ kind: "provider_error", message: "Microsoft gave a subscription expiry outside the expected range" });
     if (!(await deps.store.renewed(laneId, conn.id, row.subscriptionId, at))) throw new ConnectorError({ kind: "not_found", message: "The subscription is no longer recorded for this connection" });
     return at;

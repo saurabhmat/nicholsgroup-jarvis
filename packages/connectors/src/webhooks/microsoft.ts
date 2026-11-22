@@ -12,25 +12,27 @@
 //   4. content type application/json              -> 415
 //   5. raw body read, capped (256 KiB)            -> 413 / 400
 //   6. strict parse (Zod): `{ value: [...] }`, at most 200 items -> 400. Each item must carry a well-formed `subscriptionId`; a bad item is dropped.
-//   7. per distinct subscription id (at most 25): look it up by that id in each served lane (core.push_subscription_lookup, service path). The lane and the connection come from the
-//      STORED row, never from the request. Unknown, removed, disconnected or ambiguous -> the item is dropped.
+//   7. the distinct subscription ids of the delivery (at most 200, so no item is dropped for a cap) are looked up with ONE batched call per served lane, lanes in parallel
+//      (core.push_subscription_lookup, service path): at most as many database calls as lanes, whatever the body holds. The lane and the connection come from the STORED row,
+//      never from the request. Unknown, removed, disconnected or ambiguous -> the item is dropped.
 //   8. per item: `clientState` compared with the stored secret in constant time; a wrong or missing one -> dropped (logged with ids only: the lane and connection of the subscription).
 //   9. per verified item, by kind:
-//        change notification     -> claim (dedupe) -> queue a `webhook/received` event (provider microsoft, `mail.changed` / `calendar.changed`, ids only) that the debounced
+//        change notification     -> claim (dedupe) -> queue a `webhook/received` event (provider microsoft, `mail.changed` / `calendar.changed`, ids only) that the batching
 //                                   microsoft-webhook-sync job turns into ONE delta sync of that connection's stream
 //        missed                  -> the same with `*.missed` (a delta resync)
 //        reauthorizationRequired -> claim -> mark the row `reauthorization_required` -> queue the connection's renewal job (conn/subscription.renew.requested)
-//        subscriptionRemoved     -> claim -> mark the row `removed` -> queue the connection's renewal job, which creates a new subscription
+//        subscriptionRemoved     -> claim -> queue the connection's renewal job (which creates a new subscription) -> mark the row `removed`
 //   10. every delivery whose items were read answers 202 with an empty body, whether items were accepted, deduped or dropped, so a prober learns nothing. A queue or store failure after
 //       the clientState check answers 503 so Graph retries (the retry claims the failed row again).
 //
 // What a notification can do: select "sync THIS connection" (or "renew this connection's subscription"). Its `resource`, `resourceData`, `changeType` and every other field are never read
 // (rule 9), nothing is fetched from Graph here, no content is read or stored, and nothing is forwarded except ids. The `clientState`, the validation token and bodies are never logged.
 //
-// Dedupe key: Graph notifications carry no event id, and the same delivery is retried with the same bytes, so neither an id nor the body can tell a replay from a LATER change to the
-// same mailbox. The key is therefore (lane, subscription, kind, 10-second slot of OUR clock): a replay inside the slot is a duplicate; a change in a later slot is a new event and
-// queues another sync. A late retry in a later slot costs one extra delta sync, which is idempotent and metadata-only; a missed sync costs up to 15 minutes (the poll). The slot equals the
-// debounce window of the sync job, so a change that lands inside a slot whose sync has not run yet is picked up by that sync.
+// Dedupe key: Graph notifications carry no event id, and the same delivery is retried with the same bytes. The key is (lane, subscription, kind, 10-second slot of OUR clock, SHA-256 of the
+// delivery's bytes): identical bytes inside the slot are a replay (a duplicate, 202); a delivery with DIFFERENT bytes is a new event and queues its own sync request, so a verified item is
+// never dropped because another verified delivery took the slot. Identical bytes in a LATER slot (a later change that looks the same, or a late retry) queue another sync; the extra sync is
+// idempotent and metadata-only. The sync job BATCHES requests per connection for up to 10 seconds from the batch's first event (it is not aligned to our slots and a batch of 5 closes it
+// early); a change that arrives after that batch's delta read waits for the next notification or the 15-minute poll.
 import { randomUUID } from "node:crypto";
 import type { LaneId } from "@nichols/core";
 import { z } from "zod";
@@ -45,9 +47,10 @@ export const MICROSOFT_WEBHOOK_KEY = "microsoft";
 /** A delivery is small (no resource data is ever requested); this cap is generous for 200 items. */
 export const MICROSOFT_MAX_BODY_BYTES = 256 * 1024;
 export const MICROSOFT_MAX_ITEMS = 200;
-export const MICROSOFT_MAX_SUBSCRIPTIONS = 25;
+/** Distinct subscriptions looked up per delivery: as many as items, so a verified item is never dropped for a cap; the lookup is ONE batched call per lane (SQL accepts 200). */
+export const MICROSOFT_MAX_SUBSCRIPTIONS = MICROSOFT_MAX_ITEMS;
 export const MAX_VALIDATION_TOKEN_CHARS = 1024;
-/** The dedupe slot of change and missed notifications (equal to the sync job's debounce window). */
+/** The dedupe slot of change and missed notifications (the sync job batches for up to 10 s from its first event; the two are not aligned). */
 export const CHANGE_SLOT_MS = 10_000;
 /** The dedupe slot of lifecycle notifications: Microsoft asks not to reauthorize twice within 10 minutes; one renewal per 5 minutes is plenty. */
 export const LIFECYCLE_SLOT_MS = 300_000;
@@ -70,7 +73,7 @@ const LIFECYCLE: Readonly<Record<string, Kind>> = { missed: "missed", reauthoriz
 
 export interface MicrosoftNotificationDeps {
   /** Finds a notification's subscription by its id (the lane and connection come from the stored row) and records a lifecycle status. */
-  subscriptions: Pick<MicrosoftSubscriptionStore, "lookup" | "mark">;
+  subscriptions: Pick<MicrosoftSubscriptionStore, "lookupMany" | "mark">;
   /** Dedupe and receipt (core.webhook_events). */
   store: Pick<WebhookStore, "claim" | "mark">;
   /** The lanes this deployment serves, asked in turn (a subscription id is unique to one lane's database). */
@@ -123,7 +126,7 @@ export function createMicrosoftNotificationHandler(deps: MicrosoftNotificationDe
 
     const payloadHash = sha256Hex(read.bytes);
     const at = now();
-    const counts = { items: delivery.value.length, malformed: 0, unknown: 0, ambiguous: 0, bad_state: 0, unknown_event: 0, enqueued: 0, duplicate: 0, conflict: 0, failed: 0, too_many: 0 };
+    const counts = { items: delivery.value.length, malformed: 0, unknown: 0, ambiguous: 0, bad_state: 0, unknown_event: 0, enqueued: 0, duplicate: 0, conflict: 0, failed: 0 };
 
     // Read each item's id, state and kind; only these three fields are looked at.
     const items: { subscriptionId: string; clientState: string; kind: Kind | "unknown" }[] = [];
@@ -143,30 +146,32 @@ export function createMicrosoftNotificationHandler(deps: MicrosoftNotificationDe
 
     const found = new Map<string, SubscriptionLookup | null>();
     try {
-      for (const { subscriptionId } of items) {
-        if (found.has(subscriptionId)) continue;
-        if (found.size >= MICROSOFT_MAX_SUBSCRIPTIONS) {
-          counts.too_many += 1;
-          continue;
+      const ids = [...new Set(items.map((i) => i.subscriptionId))];
+      if (ids.length > 0) {
+        const perLane = await Promise.all(deps.lanes().map((laneId) => deps.subscriptions.lookupMany(laneId, ids)));
+        for (const id of ids) {
+          const hits = perLane.map((m) => m.get(id)).filter((h): h is SubscriptionLookup => h !== undefined);
+          if (hits.length > 1) counts.ambiguous += 1; // cannot happen with provider GUIDs; treated as unknown
+          found.set(id, hits.length === 1 ? (hits[0] ?? null) : null);
         }
-        const hits = (await Promise.all(deps.lanes().map((laneId) => deps.subscriptions.lookup(laneId, subscriptionId)))).filter((h): h is SubscriptionLookup => h !== null);
-        if (hits.length > 1) counts.ambiguous += 1; // cannot happen with provider GUIDs; treated as unknown
-        found.set(subscriptionId, hits.length === 1 ? (hits[0] ?? null) : null);
       }
 
       // One action per (subscription, kind) with a verified clientState.
       const actions = new Map<string, { sub: SubscriptionLookup; subscriptionId: string; kind: Kind }>();
+      const loggedBad = new Set<string>();
       for (const item of items) {
         const sub = found.get(item.subscriptionId);
-        if (sub === undefined) continue; // beyond the subscription cap (counted)
-        if (sub === null) {
+        if (!sub) {
           counts.unknown += 1;
           continue;
         }
         // Constant time. A missing state compares as "" and never equals the stored secret (at least 32 characters).
         if (!safeEqual(item.clientState, sub.clientState.reveal())) {
           counts.bad_state += 1;
-          baseLog.child({ laneId: sub.laneId, connectionId: sub.connectionId }).warn("webhook.skipped", { outcome: "bad_client_state", request_id: requestId });
+          if (!loggedBad.has(item.subscriptionId)) {
+            loggedBad.add(item.subscriptionId); // once per subscription per delivery, however many items
+            baseLog.child({ laneId: sub.laneId, connectionId: sub.connectionId }).warn("webhook.skipped", { outcome: "bad_client_state", request_id: requestId });
+          }
           continue;
         }
         if (item.kind === "unknown") {
@@ -181,8 +186,8 @@ export function createMicrosoftNotificationHandler(deps: MicrosoftNotificationDe
         const elog = baseLog.child({ laneId, connectionId: sub.connectionId });
         const lifecycle = kind === "reauthorizationRequired" || kind === "subscriptionRemoved";
         const slot = Math.floor(at.getTime() / (lifecycle ? LIFECYCLE_SLOT_MS : CHANGE_SLOT_MS));
-        // An id derived from OUR records (lane, the subscription, the kind and the slot): nothing from a notification's content goes into it.
-        const eventId = `ms:${kind}:${sha256Hex(`${laneId}|${subscriptionId}|${String(slot)}`)}`;
+        // An id derived from OUR records (lane, the subscription, the kind, the slot) and a hash of the bytes: no content goes into it.
+        const eventId = `ms:${kind}:${sha256Hex(`${laneId}|${subscriptionId}|${String(slot)}|${payloadHash}`)}`;
         const eventType = lifecycle ? `${sub.resource}.${kind}`.slice(0, 128) : `${sub.resource}.${kind === "change" ? "changed" : "missed"}`;
         const claim = await deps.store.claim(laneId, sub.connectionId, "microsoft", { id: eventId, type: eventType, payloadHash });
         if (claim !== "process") {
@@ -192,9 +197,17 @@ export function createMicrosoftNotificationHandler(deps: MicrosoftNotificationDe
         }
         try {
           if (lifecycle) {
-            // Record what Microsoft told us first, so the renewal job sees it, then ask the job to run for this connection.
-            await deps.subscriptions.mark(laneId, sub.connectionId, subscriptionId, kind === "subscriptionRemoved" ? "removed" : "reauthorization_required");
-            await deps.enqueue({ name: RENEW_EVENT_NAME, id: `msub:${laneId}:${sub.connectionId}:${kind}:${String(slot)}`, data: { laneId, connectionId: sub.connectionId } });
+            const renewal = { name: RENEW_EVENT_NAME, id: `msub:${laneId}:${sub.connectionId}:${kind}:${String(slot)}`, data: { laneId, connectionId: sub.connectionId } };
+            if (kind === "subscriptionRemoved") {
+              // Queue FIRST, then mark: a removed row is no longer found by the lookup, so if the queue failed after the mark, Graph's retry could never queue the renewal. A failure of
+              // either step is a 503 and the retry (which takes the claim again) does both; the job runs a moment after the queue, normally after the mark.
+              await deps.enqueue(renewal);
+              await deps.subscriptions.mark(laneId, sub.connectionId, subscriptionId, "removed");
+            } else {
+              // The row stays findable, so it is marked first (the job then sees it) and queued after.
+              await deps.subscriptions.mark(laneId, sub.connectionId, subscriptionId, "reauthorization_required");
+              await deps.enqueue(renewal);
+            }
           } else {
             await deps.enqueue({
               name: WEBHOOK_EVENT_NAME,

@@ -99,7 +99,7 @@ const functionsFor = (inngest: Parameters<Parameters<typeof inngestRoute>[0]>[0]
     enabledLanes: () => getServerEnv().ENABLED_LANES,
     allowedEntities: QBO_SYNC_ENTITIES,
   }),
-  // microsoft.webhook_sync (T-068): accepted Microsoft change notifications -> one debounced conn/sync.requested per connection and stream (mail or calendar). Needs a sync of
+  // microsoft.webhook_sync (T-068): accepted Microsoft change notifications -> one batched conn/sync.requested per connection and stream (mail or calendar). Needs a sync of
   // this function in Inngest Cloud after the deploy (backlog H-073).
   ...microsoftWebhookSyncFunctions(inngest, {
     isUsable: (laneId, connectionId) => isMicrosoftConnectionUsable(laneId as LaneId, connectionId),

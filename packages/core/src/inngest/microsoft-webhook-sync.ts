@@ -1,10 +1,11 @@
 import "server-only";
 // microsoft.webhook_sync (T-068, T-264): turns accepted Microsoft change notifications (webhook/received, provider "microsoft", queued by the Microsoft receiver after the clientState check, the
-// stored-subscription lookup and the dedupe claim) into ONE conn/sync.requested per connection and stream (mail or calendar), debounced.
+// stored-subscription lookup and the dedupe claim) into ONE conn/sync.requested per connection and stream (mail or calendar), batched.
 //   - The notification never calls Graph and never reads content: this function only decides whether to ask conn.sync for a delta sync of one stream, and conn.sync does the metadata read through
 //     the connector (rule 5, rule 9). The notification's own content selected nothing but "sync this connection": the stream comes from the STORED subscription (the event type is
 //     `mail.changed|mail.missed|calendar.changed|calendar.missed`, set by the receiver from our record), never from the notification.
-//   - Debounce: events of one connection are collected for 10 seconds (the receiver's dedupe slot), so a burst of changes costs one delta sync per stream, not one per notification.
+//   - Batching (not a debounce): events of one connection are collected for up to 10 seconds measured from the batch's FIRST event (not aligned to the receiver's dedupe slots; a batch of 5 closes it early), so a burst
+//     of changes costs one delta sync per stream, not one per notification. A change that arrives after that batch's delta read waits for the next notification or the 15-minute poll.
 //   - No sync for a connection that is not usable (`reconnect_required`, disconnected, pending...): a read through the lane router (`isUsable`); conn.sync checks again, and also skips a
 //     connection whose provider is not enabled for its lane (`provider_disabled`, no Graph call). The 15-minute polling jobs are unchanged and are the fallback for any change missed here.
 //   - Idempotent: the conn/sync.requested id is derived from the connection, the stream and the batch's event ids, so a replayed batch is dropped by Inngest.
