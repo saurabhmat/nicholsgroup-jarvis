@@ -1964,3 +1964,25 @@ Known limits that remain (LOW, accepted):
 Not settled by Microsoft's documentation (live check H-073): that `me/events` covers exactly the default calendar; that one address is accepted as both the notification and the lifecycle address and validated twice; that a renewing token need not be the creating user's; the real delivery delay and the 3-second answer budget under load; that lifecycle notifications carry the same `clientState`.
 
 Production: part 31 (`part-31-T-068.sql`, `check-part-31.sql` 11 rows) after part 30; no earlier check row turns false. Then `GRAPH_NOTIFICATION_URL` in Vercel Production, redeploy, Inngest sync, invoke `conn-subscriptions-renew-scan` once (runbook, "Turn on Microsoft change notifications").
+
+## H-072 live test: drafts and sending from a Microsoft mailbox (production lane `NC`, Nov 22, 2026)
+
+Reported by Saurabh, not checked by the agent. Steps 1 to 4 of the runbook section "Allow drafts and sending in a lane" done for `NC` (Entra `Mail.ReadWrite` and `Mail.Send` with admin consent, the enable SQL, `check-enable-lane-mail-write-H-072.sql` every row true, Reconnect Microsoft); Home then showed Reply on a Microsoft row. Live test from his own mailbox `saurabh@nichols.capital` to himself: "i replied to myself and it worked"; asked about the Verified state of the send card, one draft from "Save as Outlook draft" and one sent copy that reads correctly, he answered "they worked". H-072 is closed on that.
+
+- **V-19 (marker):** the send ended Verified as reported, which means the sent copy was found again by the marker or by the id check. Which of the two found it was not looked at.
+- **V-20 (createReply, PATCH, send):** a draft and a sent reply were produced in Outlook as reported.
+- **Not observed one by one** (PR note of T-262/T-263): Bcc on the sent copy; that the text body reads back as plain text; that recipient addresses are not rewritten; that the marker filter works on both folder paths; whether replies without the quoted original thread are wanted (no objection raised). Recipient and sender were the same mailbox, so delivery to another organisation was not exercised.
+
+Seen on Home the same day (`NC`), open, a fix task is proposed and not yet approved: (1) an automated DMARC aggregate report is ranked as mail from a person ("Waiting on you" chip, Reply offered): its sender matches none of `briefing` `automated_senders` and the row carries no auto-generated flag; (2) the AI summary contained "I could not check whether the payment actually went through" with nothing about a payment on the page: `grounded()` checks figures and dates only, so a sentence without numbers passes. The saved briefing has not been read yet (read-only query given to Saurabh).
+
+## H-068 and H-073 closed on Saurabh's word (Nov 22, 2026)
+
+Both boxes were checked at his request ("close H-068 and H-073 too"), not on evidence seen by the agent.
+- **H-068:** not confirmed in words: that the `GRAPH_*` variables exist in Vercel Production only (never Preview) and belong to the Nov 21 app registration. Production `NC` connects, syncs, drafts and sends with them. The outputs of `check-part-30.sql` and `check-part-31.sql` were not pasted.
+- **H-073 / V-21:** no observation recorded. Open as unknowns, not as work: the subscription expiry on Settings ("Live updates until ..."), the delivery delay of a new message, the fall-back to polling, that `me/events` covers exactly the default calendar, that one address serves as notification and lifecycle address, and the 3-second answer. A failure of any of these leaves the 15-minute polling in place.
+
+## Home observations in `NC`: fix task declined (Nov 22, 2026)
+
+Saurabh: "no to dmarc task". No task is created for the automated DMARC report being ranked as mail from a person; the behaviour stays as built (the sender matches none of `briefing` `automated_senders`; a lane can add a pattern in its lane_config later without code). Later the same day the row was no longer on his Home ("Nothing new needs you in the mail that was read").
+The summary sentence "I could not check whether the payment actually went through" is still unexplained: the saved briefing was not read (he pasted Home's text, not the query result). Known gap, logged, not scheduled: `grounded()` checks figures and dates only, so an unsupported sentence without numbers reaches Home.
+
