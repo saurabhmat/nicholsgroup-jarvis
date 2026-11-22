@@ -1,7 +1,7 @@
 // What a mailbox may do through approvals (T-232): which buttons are enabled and why. Pure over the facts the policy,
 // the lane config and the connection give; the database enforces the same gates at approve and at claim.
 import type { LaneId } from "@nichols/core";
-import { NOT_ENABLED_MESSAGE, NOT_LIVE_MESSAGE, QBO_NOT_ENABLED_MESSAGE } from "./errors";
+import { NOT_ENABLED_MESSAGE, NOT_ENABLED_MICROSOFT_MESSAGE, NOT_LIVE_MESSAGE, QBO_NOT_ENABLED_MESSAGE } from "./errors";
 import type { ActionType, ApprovalsDeps, CapabilityFacts, EmailActionType } from "./types";
 import { isEmailType } from "./types";
 
@@ -30,7 +30,7 @@ export function capabilityOf(laneId: LaneId, facts: CapabilityFacts, type: Actio
   // Not enabled (no compose grant, or the lane policy lacks the type, or no usable connection) comes before "not live":
   // reconnecting is something the owner can do now, the go-live gate is not.
   if (facts.mailbox === null || !facts.composeGranted || !facts.writeActionsAllowed.includes(POLICY_KEY[type])) {
-    return { enabled: false, reason: "not_enabled", message: NOT_ENABLED_MESSAGE, settingsHref: `/${laneId}/settings#connections` };
+    return { enabled: false, reason: "not_enabled", message: facts.provider === "microsoft" ? NOT_ENABLED_MICROSOFT_MESSAGE : NOT_ENABLED_MESSAGE, settingsHref: `/${laneId}/settings#connections` };
   }
   if (!facts.approvalsLive) return { enabled: false, reason: "not_live", message: NOT_LIVE_MESSAGE, settingsHref: null };
   return { enabled: true, reason: null, message: null, settingsHref: null };

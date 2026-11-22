@@ -4,10 +4,10 @@ import "server-only";
 // every call below passes the lane and the database re-checks it (act.* functions are lane-scoped definer functions).
 import type { LaneBoundConnection } from "@nichols/connectors";
 import { prepareEmailWrite, laneMailboxes, mailboxAllowed, providerGate } from "@nichols/connectors/facade";
-import { emailWriteGate, googleEmailReconciler, googleEmailWriter, loadEmailWriteConnection, loadQuickbooksWriteConnection, quickbooksDisconnectVerifier, quickbooksWriter } from "@nichols/connectors/write";
+import { GRAPH_MAIL_WRITE_FEATURE, emailWriteGate, googleEmailReconciler, googleEmailWriter, loadEmailWriteConnection, microsoftEmailReconciler, microsoftEmailWriter, loadQuickbooksWriteConnection, quickbooksDisconnectVerifier, quickbooksWriter } from "@nichols/connectors/write";
 import type { LaneId } from "@nichols/core";
 import { getAudit, getLaneJobClient } from "@nichols/core/lane-router";
-import { createEmailWriteDispatch, microsoftEmailWriteEntry, type EmailWriteEntry } from "./email-dispatch";
+import { createEmailWriteDispatch, type EmailWriteEntry } from "./email-dispatch";
 import { approveAndExecute, executeApproved, proposeEmailAction, type ProposeEmailInput } from "./email";
 import { isQboDisconnectable } from "./capability";
 import { approveAndExecuteQbo, executeApprovedQbo, type QboExecDeps } from "./qbo";
@@ -39,17 +39,21 @@ async function readFacts(laneId: LaneId, connectionId: string): Promise<Capabili
   if (conn.error || policy.error || config.error) throw new Error("capability facts unavailable");
   const c = conn.data as { provider: string; external_account_id: string; status: string; features: Record<string, unknown> } | null;
   // T-260: a connection whose provider the lane has not enabled (paused, D-57) is not usable, so Reply is not offered on it (it would be refused at prepare anyway).
-  // The gate is asked only for a Google row (the only provider with an email writer until T-262); an unreadable config fails closed (not usable), never an error page.
-  const providerOn = c !== null && c.provider === "google" ? await providerGate.enabled(laneId, c.provider).catch(() => false) : false;
-  const usable = c !== null && c.provider === "google" && providerOn && (c.status === "active" || c.status === "degraded");
+  // T-263: both email providers have a writer; the gate is asked for the row's own provider. An unreadable config fails closed (not usable), never an error page.
+  const emailProvider = c !== null && (c.provider === "google" || c.provider === "microsoft") ? c.provider : null;
+  const providerOn = emailProvider !== null ? await providerGate.enabled(laneId, emailProvider).catch(() => false) : false;
+  const usable = c !== null && emailProvider !== null && providerOn && (c.status === "active" || c.status === "degraded");
+  // The write permission is recorded per provider at connect time: Google's `gmail_compose`, Microsoft's `graph_mail_write`.
+  const grantFeature = emailProvider === "microsoft" ? GRAPH_MAIL_WRITE_FEATURE : "gmail_compose";
   // T-195: a QuickBooks connection of the lane that is not disconnected (reconnect_required can still be disconnected).
   const qboOk = c !== null && c.provider === "quickbooks" && isQboDisconnectable(c.status);
   const approvals = ((config.data?.config as { approvals?: Record<string, unknown> } | null | undefined)?.approvals ?? {}) as Record<string, unknown>;
   const age = approvals.step_up_max_age_s;
   return {
     mailbox: usable ? c.external_account_id.toLowerCase() : null,
+    provider: usable ? emailProvider : null,
     qbo: qboOk ? { realmId: c.external_account_id } : null,
-    composeGranted: usable && c.features?.gmail_compose === true,
+    composeGranted: usable && c.features?.[grantFeature] === true,
     writeActionsAllowed: ((policy.data?.write_actions_allowed as string[] | undefined) ?? []).filter((x) => typeof x === "string"),
     approvalsLive: approvals.approvals_live === true,
     stepUpMaxAgeS: typeof age === "number" && Number.isInteger(age) && age >= 30 && age <= 900 ? age : 300,
@@ -62,7 +66,7 @@ async function readFacts(laneId: LaneId, connectionId: string): Promise<Capabili
  */
 export const approvalsDeps: ApprovalsPublicDeps = Object.freeze({
   jobRpc,
-  // T-255: through the facade (by the connection row's provider); the approvals types stay Google-shaped until T-262.
+  // T-255, T-262: through the facade (by the connection row's provider).
   prepareEmailWrite: prepareEmailWrite as ApprovalsPublicDeps["prepareEmailWrite"],
   laneMailboxes,
   mailboxAllowed,
@@ -70,9 +74,10 @@ export const approvalsDeps: ApprovalsPublicDeps = Object.freeze({
   audit: getAudit(),
 });
 
-// T-255: the email writer, the write-connection loader and the reconciler's read side go by the connection row's provider (never a lane-level
-// value) and refuse a provider the lane has not enabled, before any token read. Google is the existing writer; Microsoft answers
-// unsupported_op until T-262 / T-263. The reconciler is handed `findWrite` and `verifyWrite` only (the dispatch's other member is not exposed to it).
+// T-255, T-263: the email writer, the write-connection loader and the reconciler's read side go by the connection row's provider (never a lane-level
+// value) and refuse a provider the lane has not enabled, before any token read. A lane with both providers executes a Google and a Microsoft proposal each with
+// its own writer. The reconciler is handed `findWrite` and `verifyWrite` only (the dispatch's other member is not exposed to it); each provider's reconciler read
+// side has no `executeWrite` at all.
 const googleEmailEntry: EmailWriteEntry = {
   actionTypes: googleEmailWriter.actionTypes,
   executeWrite: (laneId, conn, action) => googleEmailWriter.executeWrite(laneId, conn as LaneBoundConnection<"google">, action),
@@ -80,14 +85,21 @@ const googleEmailEntry: EmailWriteEntry = {
   findWrite: (laneId, conn, action) => googleEmailReconciler.findWrite(laneId, conn as LaneBoundConnection<"google">, action),
 };
 Object.freeze(googleEmailEntry);
-const emailDispatch = createEmailWriteDispatch({ loader: { loadConnection: loadEmailWriteConnection }, gate: emailWriteGate, entries: { google: googleEmailEntry, microsoft: microsoftEmailWriteEntry } });
+const microsoftEmailEntry: EmailWriteEntry = {
+  actionTypes: microsoftEmailWriter.actionTypes,
+  executeWrite: (laneId, conn, action) => microsoftEmailWriter.executeWrite(laneId, conn as LaneBoundConnection<"microsoft">, action),
+  verifyWrite: (laneId, conn, action, externalId) => microsoftEmailReconciler.verifyWrite(laneId, conn as LaneBoundConnection<"microsoft">, action, externalId),
+  findWrite: (laneId, conn, action) => microsoftEmailReconciler.findWrite(laneId, conn as LaneBoundConnection<"microsoft">, action),
+};
+Object.freeze(microsoftEmailEntry);
+const emailDispatch = createEmailWriteDispatch({ loader: { loadConnection: loadEmailWriteConnection }, gate: emailWriteGate, entries: { google: googleEmailEntry, microsoft: microsoftEmailEntry } });
 const emailReconcilerReadSide = Object.freeze({ findWrite: emailDispatch.writer.findWrite, verifyWrite: emailDispatch.writer.verifyWrite });
 
 const fullDeps: ApprovalsDeps = Object.freeze({
   ...approvalsDeps,
-  // T-255: dispatched by the connection row's provider; the approvals types stay Google-shaped until T-262 generalises them.
-  loadWriteConnection: emailDispatch.loadWriteConnection as ApprovalsDeps["loadWriteConnection"],
-  writer: emailDispatch.writer as unknown as ApprovalsDeps["writer"],
+  // T-255, T-263: dispatched by the connection row's provider.
+  loadWriteConnection: emailDispatch.loadWriteConnection,
+  writer: emailDispatch.writer,
 });
 
 /** The QuickBooks disconnect executor's deps (T-195): the approvals-only writer and the read-back verifier, private to this file. */
@@ -136,7 +148,7 @@ const reconcileDeps: ReconcileDeps = Object.freeze({
   jobRpc,
   audit: approvalsDeps.audit,
   reconcilers: Object.freeze([
-    createEmailReconciler({ reconciler: emailReconcilerReadSide as unknown as Parameters<typeof createEmailReconciler>[0]["reconciler"], loadWriteConnection: emailDispatch.loadWriteConnection as ApprovalsDeps["loadWriteConnection"] }),
+    createEmailReconciler({ reconciler: emailReconcilerReadSide, loadWriteConnection: emailDispatch.loadWriteConnection }),
     createQboReconciler({ verifier: quickbooksDisconnectVerifier as QboExecDeps["verifier"], loadWriteConnection: loadQuickbooksWriteConnection as QboExecDeps["loadWriteConnection"] }),
   ]),
 });

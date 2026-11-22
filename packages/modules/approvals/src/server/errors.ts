@@ -30,6 +30,8 @@ export type ApprovalsErrorCode = (typeof APPROVALS_ERROR_CODES)[number];
 
 /** Shown when the mailbox cannot send: the scope was not granted or the lane policy does not allow the type. */
 export const NOT_ENABLED_MESSAGE = "Sending isn't enabled for this mailbox yet. Reconnect Google with send permission in Settings";
+/** The same for a Microsoft mailbox (T-263): `graph_mail_write` was not recorded at the last connect, or the lane policy does not allow the type. */
+export const NOT_ENABLED_MICROSOFT_MESSAGE = "Sending isn't enabled for this mailbox yet. Reconnect Microsoft with send permission in Settings";
 /** Shown when everything is enabled but the company is not yet switched on (T-170 gate). */
 export const NOT_LIVE_MESSAGE = "Approvals are not live for this company yet.";
 

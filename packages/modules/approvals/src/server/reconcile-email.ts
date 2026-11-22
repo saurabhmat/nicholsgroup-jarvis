@@ -1,17 +1,17 @@
-// The email handler of action.reconcile_stuck (T-192): Gmail marker lookup and read-back through the Google connector.
-// Read-only (rule 4/5): it holds `GoogleEmailReconciler` (findWrite + verifyWrite), which has no executeWrite, and it
-// reaches Gmail only through the connector (tokens stay in the Vault).
-import { isConnectorError, type LaneBoundConnection } from "@nichols/connectors";
-import { VERIFICATION_MISMATCH_MESSAGE, type GoogleEmailApprovedAction, type GoogleEmailReconciler } from "@nichols/connectors/write";
+// The email handler of action.reconcile_stuck (T-192, T-263): marker lookup and read-back through the connection's own provider connector (Gmail or Graph).
+// Read-only (rule 4/5): it holds only `findWrite` + `verifyWrite` (each provider's reconciler read side has no executeWrite), dispatched by the action's
+// connection row, and it reaches the provider only through the connector (tokens stay in the Vault).
+import { isConnectorError } from "@nichols/connectors";
+import { VERIFICATION_MISMATCH_MESSAGE } from "@nichols/connectors/write";
 import type { LaneId } from "@nichols/core";
 import type { ActionReconciler, ReconcileDecision } from "./reconcile";
-import { EMAIL_ACTION_TYPES } from "./types";
+import { EMAIL_ACTION_TYPES, type EmailApprovedAction, type EmailConn, type EmailWriteSurface } from "./types";
 
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
 export type EmailReconcilerDeps = {
-  reconciler: GoogleEmailReconciler;
-  loadWriteConnection(laneId: LaneId, connectionId: string): Promise<LaneBoundConnection<"google">>;
+  reconciler: Pick<EmailWriteSurface, "findWrite" | "verifyWrite">;
+  loadWriteConnection(laneId: LaneId, connectionId: string): Promise<EmailConn>;
 };
 
 const isMismatch = (e: unknown): boolean => isConnectorError(e) && e.info.message === VERIFICATION_MISMATCH_MESSAGE;
@@ -32,18 +32,18 @@ export function createEmailReconciler(deps: EmailReconcilerDeps): ActionReconcil
     actionTypes: EMAIL_ACTION_TYPES,
     async decide({ laneId, row, claimOutcome, claimExternalId }) {
       if (typeof row.approvedBy !== "string" || !UUID.test(row.approvedBy)) return { kind: "failed", code: "reconcile_payload_changed", outcome: "outcome_unknown" };
-      const action: GoogleEmailApprovedAction = {
+      const action: EmailApprovedAction = {
         id: row.id,
         lane_id: laneId,
         connection_id: row.connectionId,
         action_type: row.actionType,
-        target: row.target as GoogleEmailApprovedAction["target"],
-        payload: row.payload as GoogleEmailApprovedAction["payload"],
+        target: row.target as EmailApprovedAction["target"],
+        payload: row.payload as EmailApprovedAction["payload"],
         payload_schema_version: row.payloadSchemaVersion,
         payload_sha256: row.payloadSha256,
         approved_by: row.approvedBy,
       };
-      let conn: LaneBoundConnection<"google">;
+      let conn: EmailConn;
       try {
         conn = await deps.loadWriteConnection(laneId, row.connectionId);
       } catch (e) {

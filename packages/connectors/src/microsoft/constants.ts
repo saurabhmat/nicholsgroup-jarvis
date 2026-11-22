@@ -105,3 +105,15 @@ export const OUTLOOK_WEB_HOSTS: Readonly<Record<MicrosoftCloud, ReadonlySet<stri
   commercial: new Set(["outlook.office.com", "outlook.office365.com"]),
   gcc_high: new Set<string>(),
 });
+
+/** The connection feature the connect callback records when Microsoft granted `Mail.ReadWrite` and `Mail.Send` (T-066, spec §7; the Microsoft counterpart of Google's `gmail_compose`). */
+export const GRAPH_MAIL_WRITE_FEATURE = "graph_mail_write";
+/**
+ * The idempotency marker of an approved email (T-262, spec §10, V-19): a single-value extended property, id form `String {guid} Name <name>` (the name is case
+ * sensitive), holding the action id. Custom `internetMessageHeaders` can be set only when a message is created, so they cannot mark a reply draft; this property
+ * can be set by PATCH on a draft. The GUID is ours alone (a fixed property set; any GUID is valid for a named property).
+ */
+export const PORTAL_MARKER_PROPERTY_ID = "String {b3c1d2e4-5f60-4a7b-8c9d-0e1f2a3b4c5d} Name NicholsPortalActionId";
+/** Well-known folder names the writer looks in (they work as a path segment of `/me/mailFolders/{id}/messages`). */
+export const DRAFTS_FOLDER = "drafts";
+export const SENT_FOLDER = "sentitems";

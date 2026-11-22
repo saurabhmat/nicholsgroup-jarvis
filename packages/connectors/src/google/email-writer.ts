@@ -12,6 +12,7 @@
 // is searched once more; no hit ends in `OUTCOME_UNKNOWN_MESSAGE` (a human checks the mailbox), never a blind resend.
 import { timingSafeEqual } from "node:crypto";
 import type { LaneId } from "@nichols/core";
+import { OUTCOME_UNKNOWN_MESSAGE, VERIFICATION_MISMATCH_MESSAGE } from "../comms/email-write";
 import { EmailComposeSchema, type EmailCompose } from "../comms/schemas";
 import { ConnectorError, isConnectorError } from "../contract/errors";
 import { assertStatusUsable } from "../contract/guards";
@@ -35,8 +36,7 @@ import type { GoogleTokenManager } from "./token-manager";
 export const GOOGLE_EMAIL_ACTIONS = ["email.send", "email.save_draft"] as const;
 /** The connection feature set by the connect callback when Google granted `gmail.compose` (T-232). */
 export const GMAIL_COMPOSE_FEATURE = "gmail_compose";
-export const OUTCOME_UNKNOWN_MESSAGE = "The send outcome is unknown; check the mailbox before trying again";
-export const VERIFICATION_MISMATCH_MESSAGE = "The message in the mailbox does not match the approved action";
+export { OUTCOME_UNKNOWN_MESSAGE, VERIFICATION_MISMATCH_MESSAGE };
 
 /** T-193 replaces this with the branded `ApprovedAction`; until then the approver is carried explicitly. */
 export type GoogleEmailApprovedAction = ApprovedActionShape & { readonly approved_by: string };

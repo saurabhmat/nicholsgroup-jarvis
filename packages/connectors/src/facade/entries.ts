@@ -1,6 +1,6 @@
 // The registered entries of the comms facade (T-255). Google is the existing Gmail + Google Calendar wiring, unchanged. Microsoft: the mail
 // metadata sync is real since T-258, the live body and search since T-259 and the calendar sync since T-067 (they are passed in, so this file builds no
-// client and reads no token itself); every other operation answers `unsupported_op` until its own task lands (T-262 writes).
+// client and reads no token itself); since T-262 `prepareWrite` builds the proposal payload (it makes no request). Every other operation answers `unsupported_op`.
 import type { LaneId } from "@nichols/core";
 import type { CalendarSyncRunResult } from "../comms/cal-sync";
 import type { MailSyncRunResult } from "../comms/mail-sync";
@@ -35,7 +35,7 @@ export const microsoftEntry: CommsEntry = Object.freeze({
  */
 export function createMicrosoftEntry(deps: {
   mailSync: { run(laneId: LaneId, conn: LaneBoundConnection<"microsoft">): Promise<MailSyncRunResult> };
-  mail?: Pick<MailProvider<"microsoft">, "readBody" | "search">;
+  mail?: Pick<MailProvider<"microsoft">, "readBody" | "search" | "prepareWrite">;
   calendarSync?: { run(laneId: LaneId, conn: LaneBoundConnection<"microsoft">): Promise<CalendarSyncRunResult> };
 }): CommsEntry {
   const calendarSync = deps.calendarSync;
@@ -50,7 +50,7 @@ export function createMicrosoftEntry(deps: {
         }
       : unsupported,
     search: mail ? (laneId: LaneId, conn: FacadeConn, query: Parameters<CommsEntry["search"]>[2]) => mail.search(laneId, conn as LaneBoundConnection<"microsoft">, query) : unsupported,
-    prepareWrite: unsupported,
+    prepareWrite: mail ? (laneId: LaneId, conn: FacadeConn, intent: Parameters<CommsEntry["prepareWrite"]>[2]) => mail.prepareWrite(laneId, conn as LaneBoundConnection<"microsoft">, intent) : unsupported,
     mailSync: Object.freeze({ run: (laneId: LaneId, conn: FacadeConn) => deps.mailSync.run(laneId, conn as LaneBoundConnection<"microsoft">) }),
     calendarSync: Object.freeze({ run: calendarSync ? (laneId: LaneId, conn: FacadeConn) => calendarSync.run(laneId, conn as LaneBoundConnection<"microsoft">) : unsupported }),
   });

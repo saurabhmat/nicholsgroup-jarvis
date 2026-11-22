@@ -133,13 +133,16 @@ describe("facade.syncMail for a Microsoft row", () => {
   });
 });
 
-describe("the other Microsoft operations still answer unsupported_op (T-262)", () => {
-  it("prepareEmailWrite: refused, no request, no token read", async () => {
+describe("prepareWrite through the facade (T-262)", () => {
+  it("prepareEmailWrite builds the payload of the row's own provider with no request and no token read; a Google row never reaches the Microsoft entry", async () => {
     const { m, facade, ms, mail, cal } = setup();
-    await expect(facade.prepareEmailWrite("PKG", ms.conn.id, { action_type: "email.send", compose: {} } as never)).rejects.toMatchObject({ info: { kind: "unsupported_op", message: MICROSOFT_UNSUPPORTED_MESSAGE } });
+    const compose = { fromMailbox: ms.address, to: ["dana@sender.example.test"], cc: [], bcc: [], subject: "Re: Plan", bodyText: "Synthetic.", inReplyTo: { threadId: "conv-1", messageId: "msg-1" } };
+    const r = await facade.prepareEmailWrite("PKG", ms.conn.id, { action_type: "email.save_draft", compose } as never);
+    expect(r.proposed).toMatchObject({ provider: "microsoft", connection_id: ms.conn.id, action_type: "email.save_draft", target: { mailbox: ms.address, thread_id: "conv-1" } });
     expect(mail.requests).toHaveLength(0);
     expect(cal.requests).toHaveLength(0);
     expect(m.h.stats.tokenReads).toBe(0);
+    await expect(facade.prepareEmailWrite("PKG", ms.conn.id, { action_type: "email.send", compose: { ...compose, fromMailbox: "someone-else@pubkgroup.example.test" } } as never)).rejects.toMatchObject({ info: { kind: "forbidden" } });
   });
 
   it("an entry built without a calendar runner (a build without the Graph calendar wiring) still answers unsupported_op for the calendar stream, with no request", async () => {

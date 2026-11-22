@@ -231,6 +231,36 @@ connected, and a summary made before the first sync is renewed once when you nex
 - `conn.sync.*` (`conn.sync.skipped` with its `reason`, `conn.sync.full_reload`, `conn.sync.cursor_conflict`, `conn.sync.log_failed`): the generic sync runner.
   `skipped` with `provider_disabled` or `connection_not_usable` explains a connection that is not syncing on purpose.
 
+## Allow drafts and sending in a lane (T-262, T-263; live check H-072)
+
+A mail-only company starts read-only. To let a mailbox owner **save a draft** or **approve and send** from the portal (Reply on Home, the Approvals page), four things
+change, in this order. Nothing here is done by the app on its own: it is your decision, per company.
+
+1. **Entra app registration (once per tenant; admin consent).** In the Entra admin centre -> App registrations -> the Nichols app -> API permissions, add the
+   *delegated* Microsoft Graph permissions `Mail.ReadWrite` and `Mail.Send`, then **Grant admin consent for the tenant**. `Mail.ReadWrite` allows creating and editing
+   drafts and "does not include permission to send mail"; `Mail.Send` is only used for the send call. *Consequence (decided Nov 22, 2026, spec section 7):* Microsoft's
+   token answer names every permission consented for the app in that tenant, not only the ones asked for, and the connect refuses an account whose granted set differs from
+   the requested one. So **within one tenant one app registration serves either read-only companies or companies that write, not both**. A tenant that needs both gets a
+   second app registration later (not built yet). Do this step only for a tenant where every company that uses the app is meant to write.
+2. **The company's rules (SQL).** Fill in and run `enable-lane-mail-write-H-072.sql` (gitignored, in `supabase/core/bootstrap/manual-migrations/`, same way as the T-265
+   file): paste the lane code, the mail domain and the tenant id exactly as in the T-265 run, and `true` or `false` for approvals go-live. Then run
+   `check-enable-lane-mail-write-H-072.sql` (the same pasted values): every row must be true. What it does, for that one lane only: the policy allows `email_send` and
+   `email_draft` and may store outbound drafts (only from the exact mail-only state the T-265 file wrote; anything else is refused), and one new config version adds
+   `approvals` to `enabled_modules` (a limited company hides Approvals otherwise) and sets `approvals.approvals_live`. It changes no connection, token, member or mail row.
+   A company limited to its modules also hides Reply when its policy allows no email write; after this step Reply appears for Microsoft rows (only for a connection that holds
+   the write permission, step 3).
+3. **Each person Reconnects Microsoft** (Settings -> Your Microsoft accounts -> Reconnect). The write permissions are asked for only on a connect that happens after step 2, and
+   the connection records `graph_mail_write` when they were granted. Until then the card says "Sending isn't enabled for this mailbox yet. Reconnect Microsoft with send
+   permission in Settings" and Reply shows "Reply is not available for this mailbox yet".
+4. **Database function (production part 30).** `part-30-T-263.sql` then `check-part-30.sql` (every row true). Without it, approving an email on a Microsoft connection is refused
+   (`connection_not_enabled`). It changes one function body and nothing else. Run it before step 3 is tested.
+
+Then do the live check H-072: from a Microsoft mailbox, to a recipient you control, approve one "Save as Outlook draft" and one "Approve & send"; confirm one draft and one sent copy
+each in Outlook, in the right conversation for a reply. Record what you see in `docs/plan-review.md` (V-19, V-20).
+
+**Undo:** set `write_actions_allowed` back to empty and `store_outbound_drafts` to false for that lane (the policy is a plain row; the app then refuses every proposal and Reply
+disappears for a limited company), and add a config version without `approvals` in `enabled_modules`. Removing the permissions in Entra stops sending at Microsoft's side.
+
 ## Add the owner later
 
 When the first run named no owner: the owner signs in to the portal once (email code, then authenticator). Then put the owner's sign-in

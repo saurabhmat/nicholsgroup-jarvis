@@ -1,6 +1,6 @@
 // Microsoft Graph MailProvider: metadata delta sync (T-258, spec §8.1, §8.2, §8.5), and since T-259 the live body, the search and the header flags
-// (spec §8.3, §8.4). The write path is T-262: `prepareWrite` answers `unsupported_op` AFTER the guard (so a refused connection is refused for the right
-// reason and no request or token read happens). Read-only against Graph by construction (the Graph client has GET only).
+// (spec §8.3, §8.4). Since T-262 `prepareWrite` builds the exact payload of an email proposal (guard first, then the intent is checked; no request, no token read,
+// no external effect: the write itself is ./email-writer.ts, reachable from the approvals module only). Read-only against Graph by construction (the Graph client has GET only).
 //
 // T-259: `readBody` is a live `GET /me/messages/{id}?$select=body` (text preferred; the type is read from the answer), returned in an `UntrustedBody`
 // and never stored, logged or put in an error. `search` sends `$search="<plain words>"` (./mail-live.ts reduces the caller's text first, so no operator
@@ -20,9 +20,10 @@
 import type { LaneId } from "@nichols/core";
 import { z } from "zod";
 import type { MailCapabilities, MailProvider } from "../comms/provider";
+import { EMAIL_PAYLOAD_SCHEMA_VERSION, MailWriteIntentSchema } from "../comms/schemas";
 import { UntrustedBody } from "../comms/ephemeral";
 import { CommsCursorSchema, CommsSyncOptionsSchema, MailSyncResultSchema, MessageMetaSchema, ProviderIdParamSchema, ReadBodyOptionsSchema, SearchQuerySchema, type MailSyncResult, type MessageMeta, type MessageRemoval, type WatchInfo } from "../comms/schemas";
-import type { SourceResult } from "../contract/schemas";
+import { ProposedPayloadSchema, type ProposedPayload, type SourceResult } from "../contract/schemas";
 import { ConnectorError, isConnectorError } from "../contract/errors";
 import { connectorLog, type ConnectorLogger } from "../log/index";
 import { PROVIDER_DISABLED_MESSAGE, providerEnabledIn } from "../facade/gate";
@@ -106,7 +107,7 @@ export function createMicrosoftMailProvider(deps: MicrosoftMailDeps): MailProvid
   const now = deps.now ?? Date.now;
   const log = deps.logger ?? connectorLog;
   const fullDays = deps.fullSyncDays ?? DEFAULT_FULL_SYNC_DAYS;
-  const capabilities: MailCapabilities = { watch: "polling", prepareWrite: false };
+  const capabilities: MailCapabilities = { watch: "polling", prepareWrite: true };
   const headerCfg = deps.headerFlags === false ? null : (deps.headerFlags ?? {});
   const headerReadTimeout = deps.headerReadTimeoutMs ?? HEADER_READ_TIMEOUT_MS;
   const headerDeadline = deps.headerPageDeadlineMs ?? HEADER_PAGE_DEADLINE_MS;
@@ -122,7 +123,6 @@ export function createMicrosoftMailProvider(deps: MicrosoftMailDeps): MailProvid
   const preferFor = (pageSize: number) => ({ Prefer: `IdType="ImmutableId", odata.maxpagesize=${String(pageSize)}` });
 
   type GuardedConn = Awaited<ReturnType<MicrosoftGuard>>["conn"];
-  const unsupported = (what: string) => new ConnectorError({ kind: "unsupported_op", message: `${what} is not available for Microsoft yet` });
   const pollingWatch = (): WatchInfo => ({ mode: "polling", resource: "mail", channel_id: null, resource_id: null, expires_at: null, created_at: new Date(now()).toISOString() });
 
   /** Resolves one well-known folder to its Graph id. */
@@ -390,10 +390,26 @@ export function createMicrosoftMailProvider(deps: MicrosoftMailDeps): MailProvid
     async stop(laneId, conn) {
       await deps.guard(laneId, conn);
     },
-    // T-262: the write path.
-    async prepareWrite(laneId, conn) {
-      await deps.guard(laneId, conn);
-      throw unsupported("Preparing an email write");
+    // T-262: the exact payload of an email proposal. Same rules as Gmail's: this connection's own mailbox is the sender; the conversation id is the reply thread.
+    async prepareWrite(laneId, conn, intent): Promise<ProposedPayload<"microsoft">> {
+      const g = await deps.guard(laneId, conn);
+      const parsed = MailWriteIntentSchema.safeParse(intent);
+      if (!parsed.success) throw new ConnectorError({ kind: "invalid_input", message: "Invalid mail write intent" });
+      const { action_type, compose } = parsed.data;
+      // The approvals module also checks lane_config.mailboxes at propose time; here: this connection only.
+      if (compose.fromMailbox.toLowerCase() !== g.conn.external_account_id.toLowerCase()) {
+        throw new ConnectorError({ kind: "forbidden", message: "fromMailbox is not this connection's mailbox" });
+      }
+      return ProposedPayloadSchema.parse({
+        lane_id: laneId,
+        provider: "microsoft",
+        connection_id: g.conn.id,
+        action_type,
+        target: { mailbox: g.conn.external_account_id, ...(compose.inReplyTo ? { thread_id: compose.inReplyTo.threadId } : {}) },
+        payload: JSON.parse(JSON.stringify(compose)) as ProposedPayload["payload"],
+        payload_schema_version: EMAIL_PAYLOAD_SCHEMA_VERSION,
+        expected_before: null,
+      }) as ProposedPayload<"microsoft">;
     },
   };
   return provider;

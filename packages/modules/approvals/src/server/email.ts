@@ -14,11 +14,11 @@
 import type { LaneId } from "@nichols/core";
 import type { AuditEntry } from "@nichols/core/audit";
 import { isConnectorError } from "@nichols/connectors";
-import { OUTCOME_UNKNOWN_MESSAGE, VERIFICATION_MISMATCH_MESSAGE, type GoogleEmailApprovedAction } from "@nichols/connectors/write";
+import { OUTCOME_UNKNOWN_MESSAGE, VERIFICATION_MISMATCH_MESSAGE } from "@nichols/connectors/write";
 import { capabilityOf } from "./capability";
 import { ApprovalsError, toApprovalsError } from "./errors";
 import { firstRow, hashOfRow, rowsOf } from "./rows";
-import type { ActionRow, ApprovalsDeps, ApprovalsPublicDeps, EmailActionType, ProposerKind, Rpc, UserCtx } from "./types";
+import type { ActionRow, ApprovalsDeps, ApprovalsPublicDeps, EmailActionType, EmailApprovedAction, ProposerKind, Rpc, UserCtx } from "./types";
 import { EMAIL_ACTION_TYPES, isEmailType } from "./types";
 
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
@@ -391,13 +391,13 @@ export async function executeApproved(deps: ApprovalsDeps, laneId: LaneId, actio
     if (!isEmailType(row.actionType) || typeof row.payload.bodyText !== "string") throw new TamperError();
     // Last line of defence right before the external call (a job-path execute, a row approved before this rule): refuse.
     if (hasEmailPlaceholder(row.payload, isReplyRow(row))) throw new PlaceholderError();
-    const action: GoogleEmailApprovedAction = {
+    const action: EmailApprovedAction = {
       id: row.id,
       lane_id: laneId,
       connection_id: row.connectionId,
       action_type: row.actionType,
-      target: row.target as GoogleEmailApprovedAction["target"],
-      payload: row.payload as GoogleEmailApprovedAction["payload"],
+      target: row.target as EmailApprovedAction["target"],
+      payload: row.payload as EmailApprovedAction["payload"],
       payload_schema_version: row.payloadSchemaVersion,
       payload_sha256: row.payloadSha256,
       approved_by: approvedBy,

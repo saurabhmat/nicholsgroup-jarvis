@@ -151,7 +151,7 @@ export const TYPE_IMPORTS_ALLOWED = [...Object.keys(DB_DRIVERS), "inngest"];
 
 /** Restricted names: where each may be used (see rules/no-restricted-names.js). */
 export const RESTRICTED_NAMES = {
-  executeWrite: { allow: [...APPROVALS, "packages/connectors/src/google/email-writer.test.ts"], allowReexport: CONNECTORS, hint: "only the approvals package executes writes" },
+  executeWrite: { allow: [...APPROVALS, "packages/connectors/src/google/email-writer.test.ts", "packages/connectors/src/microsoft/email-writer.test.ts"], allowReexport: CONNECTORS, hint: "only the approvals package executes writes" },
   // T-232 security review H1: the Gmail email writer and its write connection loader are for approvals only.
   googleEmailWriter: { allow: [...APPROVALS, "packages/connectors/src/google/index.ts", "packages/connectors/src/google/email-writer-boundary.test.ts"], allowReexport: CONNECTORS, hint: "only the approvals package sends email" },
   loadGoogleWriteConnection: { allow: [...APPROVALS, "packages/connectors/src/google/index.ts"], allowReexport: CONNECTORS, hint: "only the approvals package loads a write connection" },

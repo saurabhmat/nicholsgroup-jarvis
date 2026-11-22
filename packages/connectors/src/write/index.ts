@@ -17,6 +17,19 @@ export {
   type GoogleEmailWriter,
 } from "../google/email-writer";
 
+// T-262, T-263: the Microsoft email writer (Graph) and its reconciler read side. The write client itself is not exported: only the writer holds it.
+export { microsoftEmailReconciler, microsoftEmailWriter } from "../microsoft/index";
+export {
+  DRAFT_CHANGED_MESSAGE,
+  MICROSOFT_EMAIL_ACTIONS,
+  MICROSOFT_WRITE_NOT_GRANTED_MESSAGE,
+  NOT_IN_MAILBOX_MESSAGE,
+  type MicrosoftEmailApprovedAction,
+  type MicrosoftEmailReconciler,
+  type MicrosoftEmailWriter,
+} from "../microsoft/email-writer";
+export { GRAPH_MAIL_WRITE_FEATURE } from "../microsoft/constants";
+
 // T-255: what the approvals module's email dispatch (by the connection row's provider) needs. The dispatch itself lives in
 // packages/modules/approvals; these are the read-only pieces: the lane's enabled-provider gate, the generic write-connection loader and
 // the refusal test. A write or read-back for a connection whose provider is not enabled for the lane is refused before any token read.

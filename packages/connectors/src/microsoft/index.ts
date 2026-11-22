@@ -6,13 +6,15 @@ import { requireConnectorEnv } from "@nichols/core/env/server";
 import { attentionEventId, connAttentionNeeded, sendLaneEvent } from "@nichols/core/inngest";
 import { createApiErrorSink } from "../error-log/sink";
 import { createReconnectRecorder } from "../quickbooks/reconnect";
-import { apiErrorStore, calendarIndexStore, connectionLoader, getToken, laneConfigReader, mailIndexStore, microsoftIdentityReader, microsoftIdentityWriter, reconnectStore, revokeToken, rotateToken, writePolicyReader } from "../vault/index";
+import { actionClaimReader, apiErrorStore, calendarIndexStore, connectionLoader, getToken, laneConfigReader, mailIndexStore, microsoftIdentityReader, microsoftIdentityWriter, reconnectStore, revokeToken, rotateToken, writePolicyReader } from "../vault/index";
 import { SecretValue } from "../vault/secret";
 import { createCalendarSync } from "../comms/cal-sync";
 import { createMailSync } from "../comms/mail-sync";
 import { createGraphApi } from "./api";
 import { createMicrosoftConnectInfo } from "./consent";
 import { createMicrosoftDisconnect } from "./disconnect";
+import { createMicrosoftEmailWriter, type MicrosoftEmailReconciler } from "./email-writer";
+import { createGraphWriteClient } from "./write-client";
 import { classifyGraphFailure } from "./errors";
 import { createMicrosoftGuard } from "./guard";
 import { createMicrosoftHealth, createMicrosoftHealthSkip } from "./health";
@@ -50,7 +52,7 @@ const errors = createApiErrorSink({ store: apiErrorStore, messageFor: (info) => 
 
 /** The guarded, read-only Graph client. The facade's Microsoft entry uses it for the mail sync, live body and search (T-258, T-259); calendar since T-067. */
 export const graphApi = createGraphApi({ guard, tokens, errors });
-/** Microsoft mail (T-258 delta sync; T-259 live body, search and header flags with the default bounds). `prepareWrite` answers `unsupported_op` until T-262. */
+/** Microsoft mail (T-258 delta sync; T-259 live body, search and header flags with the default bounds). `prepareWrite` builds the proposal payload (T-262). */
 export const microsoftMailProvider = createMicrosoftMailProvider({ api: graphApi, guard, laneConfig: laneConfigReader });
 /**
  * Time budget of one mail run: the first load of a large folder takes many pages, so a run stops after this long and the next one continues from the cursor
@@ -92,3 +94,17 @@ export const microsoftConnectInfo = createMicrosoftConnectInfo({
 
 /** Local Disconnect (T-257, D-55): deletes the Vault tokens and marks the row `disconnected`. No request to Microsoft. */
 export const disconnectMicrosoft = createMicrosoftDisconnect({ loader: connectionLoader, vault: { revokeToken } });
+
+/**
+ * Send or save-as-draft an approved email through Graph (T-262, T-263; approvals only, via the write subpath). The write client's allow-list is four method + path
+ * templates; nothing else can be sent. Never called by a route, job or tool.
+ */
+export const microsoftEmailWriter = createMicrosoftEmailWriter({
+  guard,
+  api: graphApi,
+  write: createGraphWriteClient({ guard, tokens, errors }),
+  laneConfig: laneConfigReader,
+  claims: actionClaimReader,
+});
+/** Recovery (T-192): the writer's read side only (marker lookup and read-back). It has no `executeWrite`, so a reconciler cannot send. */
+export const microsoftEmailReconciler: MicrosoftEmailReconciler = Object.freeze({ findWrite: microsoftEmailWriter.findWrite, verifyWrite: microsoftEmailWriter.verifyWrite });

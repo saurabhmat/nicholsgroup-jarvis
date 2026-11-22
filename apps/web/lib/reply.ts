@@ -93,6 +93,8 @@ export function createLimiter(opts: { windowMs: number; max: number; now?: () =>
 
 export type MessageRef = {
   messageId: string;
+  /** The provider of the message's OWN connection (never the lane's): decides which writer the proposal is prepared for (T-262). */
+  provider: "google" | "microsoft";
   connectionId: string;
   threadId: string;
   fromName: string | null;
@@ -105,14 +107,15 @@ const str = (v: unknown): string | null => (typeof v === "string" && v.trim() !=
 
 /**
  * The message's metadata under RLS (the user's own client): a message the user may not see, in another lane, or malformed is
- * `not_found`. Only Gmail messages that belong to a real Gmail thread can be replied to.
+ * `not_found`. Only Gmail and Outlook messages that belong to a real thread (a Gmail thread, an Outlook conversation) can be replied to; the Microsoft case is
+ * further gated by `assertReplyAllowed` (the connection must hold the write permissions and the lane must allow an email write).
  */
 export async function loadMessageRef(ctx: UserCtx, messageId: string): Promise<MessageRef> {
   if (!isMessageId(messageId)) throw new ApprovalsError("not_found");
   const { data, error } = await ctx.rpc("inbox_message_ref", { p_lane: ctx.laneId, p_message_id: messageId });
   if (error) throw new ApprovalsError("unavailable");
   const row = Array.isArray(data) ? (data[0] as Record<string, unknown> | undefined) : undefined;
-  if (!row || typeof row.connection_id !== "string" || row.provider !== "google") throw new ApprovalsError("not_found");
+  if (!row || typeof row.connection_id !== "string" || (row.provider !== "google" && row.provider !== "microsoft")) throw new ApprovalsError("not_found");
   const threadId = str(row.thread_id);
   if (!threadId || threadId.startsWith("m:")) throw new ReplyError("not_replyable");
   // T-249: a no-reply / system sender ("no-reply@accounts.google.com") takes no replies: no drawer context, no AI draft, no save.
@@ -120,6 +123,7 @@ export async function loadMessageRef(ctx: UserCtx, messageId: string): Promise<M
   if (isNoReplyAddress(fromAddress)) throw new ReplyError("no_reply_sender");
   return {
     messageId,
+    provider: row.provider,
     connectionId: row.connection_id,
     threadId,
     fromName: str(row.from_name),
@@ -127,6 +131,18 @@ export async function loadMessageRef(ctx: UserCtx, messageId: string): Promise<M
     subject: str(row.subject),
     receivedAt: typeof row.received_at === "string" ? row.received_at : "",
   };
+}
+
+/**
+ * T-262: Reply for a Microsoft row only where its connection holds `graph_mail_write` and the lane policy allows an email write; anything else is `not_found`
+ * (fail closed, as before T-262). Google rows keep today's behaviour exactly (the drawer shows the capability message when sending is not enabled).
+ */
+export async function assertReplyAllowed(approvals: ApprovalsPublicDeps, laneId: UserCtx["laneId"], ref: Pick<MessageRef, "provider" | "connectionId">): Promise<CapabilityFacts> {
+  const facts = await approvals.readFacts(laneId, ref.connectionId);
+  if (ref.provider === "microsoft" && !(facts.mailbox !== null && facts.provider === "microsoft" && facts.composeGranted && facts.writeActionsAllowed.some((a) => a === "email_send" || a === "email_draft"))) {
+    throw new ApprovalsError("not_found");
+  }
+  return facts;
 }
 
 /** "Re: <subject>" from metadata: one line, at most 998 characters (the proposal's own limit). */
@@ -241,8 +257,8 @@ const strs = (v: unknown): string[] => (Array.isArray(v) ? v.filter((x): x is st
 
 export async function replyContext(ctx: UserCtx, db: Db, approvals: ApprovalsPublicDeps, deps: ReplyDeps, messageId: string): Promise<ReplyContext> {
   const ref = await loadMessageRef(ctx, messageId);
-  const [facts, policy, state, own] = await Promise.all([
-    approvals.readFacts(ctx.laneId, ref.connectionId),
+  const facts = await assertReplyAllowed(approvals, ctx.laneId, ref); // first: a refused Microsoft row reads nothing else
+  const [policy, state, own] = await Promise.all([
     readReplyPolicy(db, ctx.laneId),
     loadReplyState(ctx, ref),
     approvals.laneMailboxes(ctx.laneId).catch(() => [] as string[]),
@@ -304,6 +320,7 @@ export type SaveInput = { messageId: string; to: readonly string[]; cc: readonly
  */
 export async function saveReply(ctx: UserCtx, db: Db, approvals: ApprovalsPublicDeps, deps: Pick<ReplyDeps, "now">, input: SaveInput): Promise<{ id: string; hash: string; unchanged: boolean }> {
   const ref = await loadMessageRef(ctx, input.messageId);
+  await assertReplyAllowed(approvals, ctx.laneId, ref);
   const policy = await readReplyPolicy(db, ctx.laneId);
   if (!policy.storesDrafts) throw new ApprovalsError("drafts_not_allowed");
   const state = await loadReplyState(ctx, ref);
@@ -378,6 +395,7 @@ const drafting = new Set<string>();
  */
 export async function draftReply(ctx: UserCtx, db: Db, approvals: ApprovalsPublicDeps, deps: ReplyDeps, messageId: string): Promise<DraftResult> {
   const ref = await loadMessageRef(ctx, messageId);
+  await assertReplyAllowed(approvals, ctx.laneId, ref);
   const policy = await readReplyPolicy(db, ctx.laneId);
   if (!policy.aiEmail) throw new ReplyError("ai_not_allowed");
   const llm = deps.llm();
@@ -403,7 +421,7 @@ async function draftOnce(ctx: UserCtx, approvals: ApprovalsPublicDeps, deps: Rep
   } catch {
     throw new ReplyError("body_unavailable");
   }
-  const facts: CapabilityFacts = await approvals.readFacts(ctx.laneId, ref.connectionId);
+  const facts: CapabilityFacts = await assertReplyAllowed(approvals, ctx.laneId, ref);
   const briefRef: BriefRef = {
     ref: "r1",
     connectionId: ref.connectionId,

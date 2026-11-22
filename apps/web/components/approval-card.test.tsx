@@ -11,6 +11,7 @@ afterEach(cleanup);
 
 const card = (over: Partial<PendingCard> = {}): PendingCard => ({
   id: "00000000-0000-4000-8000-0000000000aa",
+  provider: "google",
   actionType: "email.send",
   mailbox: "exec@pubkgroup.example.test",
   to: ["dana@sender.example.test"],
@@ -98,5 +99,19 @@ describe("ApprovalCard", () => {
     render(<ApprovalCard laneId="PKG" card={card()} canAct={false} />);
     expect(screen.queryByRole("button", { name: "Approve & send" })).toBeNull();
     expect((screen.getByLabelText("Subject") as HTMLInputElement).disabled).toBe(true);
+  });
+});
+
+describe("provider label (T-263)", () => {
+  it("a Microsoft draft says Outlook (badge, title and button) and keeps the mailbox line; a Google card is unchanged", () => {
+    render(<ApprovalCard laneId="PKG" card={card({ provider: "microsoft", actionType: "email.save_draft" })} canAct />);
+    expect(screen.getByTestId("approval-provider").textContent).toBe("Outlook");
+    expect(screen.getByText("Outlook draft")).toBeTruthy();
+    expect(screen.getByRole("button", { name: "Save as Outlook draft" })).toBeTruthy();
+    expect(screen.getByTestId("sends-as").textContent).toBe("Sends as exec@pubkgroup.example.test");
+    cleanup();
+    render(<ApprovalCard laneId="PKG" card={card({ actionType: "email.save_draft" })} canAct />);
+    expect(screen.getByTestId("approval-provider").textContent).toBe("Gmail");
+    expect(screen.getByRole("button", { name: "Save as Gmail draft" })).toBeTruthy();
   });
 });

@@ -1,9 +1,9 @@
 // Email write dispatch by the connection row's provider (T-255). Lives in the approvals module (rule 5: only approvals executes writes): the
 // executor and the reconciler hold these, never a route or a job. A write or a read-back for a connection whose provider is not enabled for the lane is refused before any token read
-// (`connection_unavailable`, fixed text); a provider whose write path has not landed answers `unsupported_op`. Pure over injected parts.
+// (`connection_unavailable`, fixed text); a provider whose write path is not wired answers `unsupported_op`. Pure over injected parts.
 import type { LaneId } from "@nichols/core";
 import { ConnectorError, assertLaneBound, type ExecResult, type LaneBoundConnection } from "@nichols/connectors";
-import type { GoogleEmailApprovedAction } from "@nichols/connectors/write";
+import type { EmailApprovedAction, EmailConn, EmailProvider, EmailWriteSurface } from "./types";
 
 /** The one thing the dispatch needs from the lane's provider gate (`createProviderGate` in the connectors): throws when the provider is not enabled for the lane. */
 export interface EnabledGate {
@@ -11,23 +11,17 @@ export interface EnabledGate {
 }
 const isCommsProvider = (p: string): p is Provider => p === "google" || p === "microsoft";
 
-type Provider = "google" | "microsoft";
-export type EmailConn = LaneBoundConnection<Provider>;
-/** Google-shaped until T-262 generalises the approved email action. */
-export type EmailApprovedAction = GoogleEmailApprovedAction;
+type Provider = EmailProvider;
+export type { EmailConn, EmailApprovedAction };
 
-export interface EmailWriteEntry {
-  readonly actionTypes: readonly string[];
-  executeWrite(laneId: LaneId, conn: EmailConn, action: EmailApprovedAction): Promise<ExecResult>;
-  verifyWrite(laneId: LaneId, conn: EmailConn, action: EmailApprovedAction, externalId: string): Promise<void>;
-  findWrite(laneId: LaneId, conn: EmailConn, action: EmailApprovedAction): Promise<string[]>;
-}
+/** One provider's write entry: the connector's writer, for rows of that provider only. */
+export type EmailWriteEntry = EmailWriteSurface;
 
+/** The entry of a provider whose write path is not wired in this build: every call answers `unsupported_op` (kept for tests and builds without the Graph wiring). */
 const unsupported = async (): Promise<never> => {
-  throw new ConnectorError({ kind: "unsupported_op", message: "Microsoft email actions are not available yet" });
+  throw new ConnectorError({ kind: "unsupported_op", message: "Email actions are not available for this provider" });
 };
-/** Registered, not built: T-262 and T-263 replace it. */
-export const microsoftEmailWriteEntry: EmailWriteEntry = Object.freeze({ actionTypes: Object.freeze([] as string[]), executeWrite: unsupported, verifyWrite: unsupported, findWrite: unsupported });
+export const unavailableEmailWriteEntry: EmailWriteEntry = Object.freeze({ actionTypes: Object.freeze([] as string[]), executeWrite: unsupported, verifyWrite: unsupported, findWrite: unsupported });
 
 export function createEmailWriteDispatch(deps: { loader: { loadConnection(laneId: LaneId, connectionId: string): Promise<LaneBoundConnection<string>> }; gate: EnabledGate; entries: Readonly<Record<Provider, EmailWriteEntry>> }) {
   async function entryFor(laneId: LaneId, conn: unknown): Promise<{ conn: EmailConn; entry: EmailWriteEntry }> {

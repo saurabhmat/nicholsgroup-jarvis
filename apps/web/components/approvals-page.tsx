@@ -71,6 +71,7 @@ async function ApprovalsBody({ laneId }: { laneId: string }) {
                   <p className="truncate font-medium text-foreground">{h.subject || "(no subject)"}</p>
                   <p className="truncate text-small text-muted-foreground">
                     {h.actionType === "qbo.disconnect" ? "QuickBooks connection" : `${h.actionType === "email.send" ? "To" : "Draft to"} ${h.to.join(", ") || "unknown"}`}
+                    {h.provider === "microsoft" ? " · Outlook" : h.provider === "google" ? " · Gmail" : ""}
                     {h.failureCode ? ` · ${h.failureCode.replaceAll("_", " ")}` : ""}
                   </p>
                   {h.outcomeUnknown && h.actionType === "qbo.disconnect" ? (
