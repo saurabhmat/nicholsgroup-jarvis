@@ -69,3 +69,32 @@ export async function requireModule(laneId: string, module: LaneModule): Promise
   // Belt and braces: the gate only answers "hidden" for a company the caller really belongs to (the lane check ran), and the code is a plain code.
   if (/^[A-Z]{1,8}$/.test(laneId) && !(await laneGate(laneId)).visible(module)) redirect(laneHref(laneId));
 }
+
+/**
+ * For an API route of a module (T-265): a limited company that does not list the module answers 404 `not_found` (the routes' own JSON error
+ * style), so a hidden module has no endpoint either. Returns null to carry on with the route's own checks, which always run next: for an
+ * unlimited company (and for anyone who is not a member, whose lane check fails inside `laneGate`) this returns null and the route behaves
+ * exactly as before. This is tidiness, not a permission: RLS, the lane policy and each route's role checks remain the real gates.
+ */
+export async function hiddenModuleResponse(laneId: string | null, module: LaneModule): Promise<Response | null> {
+  if (laneId === null || !/^[A-Z]{1,8}$/.test(laneId)) return null;
+  if ((await laneGate(laneId)).visible(module)) return null;
+  return Response.json({ error: "not_found" }, { status: 404, headers: { "cache-control": "no-store" } });
+}
+
+/**
+ * Whether the company's lane policy allows any email write action (`email_send` or `email_draft`). Used only for a LIMITED company, to
+ * hide Reply where nothing could ever be saved or sent (the server already refuses with `drafts_not_allowed` / "not enabled"). A read
+ * that fails answers true, so nothing is hidden on a guess. The caller must hold the `lane_policies` view (owner, admin_technical).
+ */
+export async function emailWriteAllowed(client: unknown, laneId: string): Promise<boolean> {
+  type PolicyDb = { schema(n: "core"): { from(t: "lane_policies"): { select(c: string): { eq(k: string, v: string): { maybeSingle(): PromiseLike<{ data: { write_actions_allowed?: unknown } | null; error: unknown }> } } } } };
+  try {
+    const { data, error } = await (client as PolicyDb).schema("core").from("lane_policies").select("write_actions_allowed").eq("lane_id", laneId).maybeSingle();
+    if (error || !data) return true;
+    const list = data.write_actions_allowed;
+    return Array.isArray(list) && (list.includes("email_send") || list.includes("email_draft"));
+  } catch {
+    return true;
+  }
+}

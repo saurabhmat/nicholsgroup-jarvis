@@ -3,9 +3,16 @@
 // @nichols/connectors/oauth (createConnectHandlers) where it is tested.
 import { createConnectHandlers, oauthFlow } from "@nichols/connectors/oauth";
 import { connectAuthorizer } from "@/lib/connect";
+import { hiddenModuleResponse } from "@/lib/lane-modules";
 
 const handlers = createConnectHandlers(oauthFlow, connectAuthorizer);
 
 export async function POST(request: Request, ctx: RouteContext<"/api/connect/[provider]/start">) {
-  return handlers.start(request, (await ctx.params).provider);
+  const provider = (await ctx.params).provider;
+  // T-265: QuickBooks belongs to the finance module; a limited company that does not list it has no QuickBooks connect.
+  if (provider === "qbo") {
+    const hidden = await hiddenModuleResponse(new URL(request.url).searchParams.get("lane"), "finance");
+    if (hidden) return hidden;
+  }
+  return handlers.start(request, provider);
 }

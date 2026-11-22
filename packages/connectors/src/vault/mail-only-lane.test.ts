@@ -47,3 +47,36 @@ describe("readers over a mail-only lane config (T-265)", () => {
     expect(await r.retentionConfig("XX")).toMatchObject({ webhookDays: 30 });
   });
 });
+
+// T-265: the real planners over a lane that answers the mail-only config (and, for the QuickBooks lists, has no QuickBooks connection).
+describe("fan-out planners over a mail-only lane (T-265)", () => {
+  it("fin.sync and fin.qbo_reports plan no work and report no failed lane; PKG-like lanes in the same tick are unaffected", async () => {
+    const { planFinSync, planFinReports } = await import("@nichols/core/inngest");
+    const r = reader(MAIL_ONLY);
+    const conn = "22222222-2222-4222-8222-222222222222";
+    const deps = {
+      enabledLanes: () => ["XX", "YY"],
+      listConnections: async (lane: string) => (lane === "YY" ? [conn] : []), // XX: mail-only, no QuickBooks connection; YY: a full lane
+      intervalHours: (lane: string) => r.qboSyncIntervalHours(lane as never),
+    };
+    for (const hour of [0, 4, 7]) {
+      const plan = await planFinSync(deps, hour);
+      expect(plan.failedLanes, `hour ${String(hour)}`).toEqual([]);
+      expect(plan.sends.filter((s) => s.laneId === "XX")).toEqual([]);
+    }
+    expect((await planFinSync(deps, 4)).sends).toEqual([{ laneId: "YY", connectionId: conn }]);
+    const reports = await planFinReports(deps);
+    expect(reports.failedLanes).toEqual([]);
+    expect(reports.sends).toEqual([{ laneId: "YY", connectionId: conn }]);
+    const mailOnly = await planFinSync({ ...deps, enabledLanes: () => ["XX"] }, 4);
+    expect(mailOnly).toEqual({ sends: [], failedLanes: [] });
+  });
+
+  it("a stored config with an unknown root key still reads fine (readers use narrow views, not the strict whole-config schema)", async () => {
+    const r = reader({ ...MAIL_ONLY, some_future_key: { a: 1 } });
+    expect(await r.mailProviders("XX")).toEqual(["microsoft"]);
+    expect(await r.qboSyncIntervalHours("XX")).toBe(4);
+    expect(await r.retentionConfig("XX")).toMatchObject({ webhookDays: 30 });
+    expect(await r.mailProviderSettings("XX")).toMatchObject({ providers: ["microsoft"] });
+  });
+});

@@ -30,7 +30,7 @@ Tick every line. Each one has an exact way to check it.
 
 1. **The code is deployed.** The production deployment is built from a `main` that contains T-265 and the whole Microsoft read side
    (T-255 to T-261, T-066, T-067, T-269). Vercel dashboard -> the project -> **Deployments** -> the top **Production** row: its commit
-   message or commit id is on `main` after the T-265 merge. *Expect:* yes. If not, merge and deploy first. (T-067 and T-260 matter most: until
+   message or commit id is on `main` after the T-265 merge. *Expect:* yes. If not, merge and deploy first. (The code comes before the SQL because an older deployment ignores the new `limit_to_enabled_modules` setting, so the company would show every module, finance tiles and QuickBooks strip included.) (T-067 and T-260 matter most: until
    they are deployed every Microsoft calendar sync fails and raises an alert, H-069.)
 2. **H-068 is done.** Vercel dashboard -> Settings -> Environment Variables: `GRAPH_CLIENT_ID`, `GRAPH_CLIENT_SECRET` and `GRAPH_REDIRECT_URI`
    exist for **Production** only (not Preview), and `GRAPH_TENANT_ID` exists nowhere. The redirect address ends in `/api/connect/microsoft/callback`
@@ -42,7 +42,7 @@ Tick every line. Each one has an exact way to check it.
    themselves. For `NC` you are the tenant admin, so this is done (backlog H-063). For another company: ask its admin (spec section 5.5).
 5. **Both people have signed in to the portal once** (email code, then the authenticator code), so a user exists for each. Robert and you
    already have, through `PKG`. For a new person: they open the portal address and sign in once.
-6. **You know the five values** (never write them in any committed file or chat; they go only into the gitignored SQL file on your machine):
+6. **You know the eight values** (six items; two of them are an address plus a name) (never write them in any committed file or chat; they go only into the gitignored SQL file on your machine):
 
    | Value | Example (NC) | Where it comes from |
    |---|---|---|
@@ -57,7 +57,9 @@ Tick every line. Each one has an exact way to check it.
    ```sql
    select (select version from core.lane_config_current where lane_id = 'PKG') as pkg_config_version,
           (select count(*) from core.lanes where enabled) as enabled_lanes,
-          (select count(*) from core.connections where lane_id = 'PKG') as pkg_connections;
+          (select count(*) from core.connections where lane_id = 'PKG') as pkg_connections,
+          (select count(*) from core.memberships where lane_id = 'PKG') as pkg_members,
+          (select updated_at from core.lane_policies where lane_id = 'PKG') as pkg_policy_updated_at;
    ```
    Also note the current **Production** value of `ENABLED_LANES` in Vercel (expected `PKG`). *Expect:* the lane you are about to add is not in it.
 
@@ -71,7 +73,7 @@ The files are in `supabase/core/bootstrap/manual-migrations/` and are gitignored
    address, owner display name, admin_technical sign-in address, admin_technical display name. (The two display names are used only if that person
    has no portal profile row yet; for Robert and you they are not used, but the file still needs a valid name.)
 2. Open `check-enable-lane-mail-T-265.sql`. There are two places: the `do $guard$` block and the `with p as (select ...)` block. Paste the
-   **same** five values there (lane code, mail domain, tenant id, the two sign-in addresses) in both places.
+   **same** five values there (lane code, mail domain, tenant id, the two sign-in addresses; the lane name and the two display names are not needed) in both places.
 3. Do not touch anything else. In particular do not edit the JSON between `$cfg$` markers: it is the exact settings text the app was tested with.
 
 *Expect:* nothing runs yet. If you press Run now, with a `PASTE-` left, the file stops with "A PASTE-... placeholder is still in the block".
@@ -82,11 +84,11 @@ Supabase dashboard (the **production** project: check the project name in the to
 `enable-lane-mail-T-265.sql` -> **Run**.
 
 *Expect:* the result panel says success, and the messages (the "Messages" or "Notices" tab) read, in this order:
-`Lane NC created and enabled.` (or `Lane NC enabled.`), `Lane policy written.`, `Lane config version 1 written.`,
+`OWNER resolved: display name ..., sign-in email ..., already member of: ...` and `ADMIN_TECHNICAL resolved: ...` (**read these two lines: the names and emails must be Robert and you**. The SQL Editor shows the messages only after the script has finished, so if either is the wrong person the change is already written: do not go on, do not set `ENABLED_LANES`, and take the company out of service with rollback level 2, step 3, below, then tell the agent), then `Lane NC created and enabled.` (or `Lane NC enabled.`), `Lane policy written.`, `Lane config version 1 written.`,
 `Owner membership written.`, `Admin_technical membership written.`, `Done. Now run check-enable-lane-mail-T-265.sql...`.
 
 *If it stops with an error,* nothing was written (the script is one transaction). The message says what to fix:
-- "No portal sign-in for the owner address yet" -> that person signs in once; run again.
+- "No portal sign-in for the owner address yet", "... not confirmed" or "... no verified authenticator" -> that person finishes sign-in once (email code, then authenticator); run again. "More than one sign-in matches" or "... already has members other than these two people" -> stop and tell the agent.
 - "... already has a lane config ... that differs" / "... a lane policy with different settings" / "... a different membership" -> someone
   configured this company before. **Stop and tell the agent.** The file never overwrites.
 - "... not a core-plane lane" or "... already has a QuickBooks, Stripe or GoHighLevel connection" -> this is not a mail-only company. Stop.
@@ -100,13 +102,23 @@ Supabase dashboard (the **production** project: check the project name in the to
 SQL Editor -> new query -> paste the whole `check-enable-lane-mail-T-265.sql` -> **Run**.
 
 *Expect:* 14 rows, every `ok` = `true`. Do **not** go on with any false row.
+Then two more result sets with real values: the lane row (`code`, `name`, `enabled`) and one row per member (role, display name, sign-in email, confirmed, authenticator). **Confirm the two names shown are the owner and you**, there are exactly two rows, and `enabled` is `true`. (Some SQL editors show only the last result set; use the tabs under the Run button.)
+
+**Then put the placeholders back.** In both SQL files replace every value you pasted by its `PASTE-...` again (or delete your filled copies, or keep filled copies outside the repository). The files are gitignored, but a filled file must not sit in the checkout.
 Two rows look at "the last 2 hours" for other companies' settings and policies: if one of them is false because you changed another
 company on purpose in the last two hours, say so to the agent; otherwise it is a real warning that something else was touched.
 
 ## 4. Turn the company on in the app (Vercel Production)
 
-Order matters: the SQL (steps 2 and 3) **must come first**. A company listed in `ENABLED_LANES` that the database does not know yet makes
-every scheduled job fail for that company and makes every webhook lookup fail for all companies, including `PKG`.
+Order matters: the SQL (steps 2 and 3) **must come first**. A company listed in `ENABLED_LANES` that the database does not know or has not enabled
+makes the webhook lookup fail for **all** companies, including `PKG` (it asks every served company), and makes that company's scheduled runs fail
+(the run is marked failed, and three in a row can raise the failure banner); the other companies' scheduled work still goes out.
+
+Before you save the variable, copy the company code from the check output (the `code` column, step 3) and run once more:
+```sql
+select code, enabled from core.lanes where code = 'PASTE-LANE-CODE';
+```
+*Expect:* exactly one row, `enabled` = `true`. Only then continue.
 
 1. Vercel dashboard -> the project -> **Settings** -> **Environment Variables**.
 2. Find `ENABLED_LANES` -> the three dots -> **Edit**. Environments: tick **Production** only. Value: the old value plus the new code,
@@ -132,7 +144,7 @@ Sign in (email code, then authenticator) and check each line.
 1. **`PKG` is unchanged.** Open the portal address: you land on `PKG` (the landing page prefers a company that shows every
    module, so a mail-only company never becomes the first page). Its menu is as before (Home, Finance, Inbox, Calendar, Approvals, Assistant,
    Projects, Settings); Home shows the QuickBooks figures as before. In the SQL Editor re-run the "before" query of step 7 above:
-   *Expect:* `pkg_config_version` and `pkg_connections` unchanged, `enabled_lanes` one higher.
+   *Expect:* `pkg_config_version`, `pkg_connections`, `pkg_members` and `pkg_policy_updated_at` unchanged, `enabled_lanes` one higher.
 2. **The company switcher** (top of the side menu, a chip on the phone) now lists both companies. Pick the new one.
 3. **Its menu** shows Home, Inbox, Calendar and Settings only. No Finance, Approvals, Assistant, Projects, no "Get started".
 4. **Its Home** has "Needs your attention" and the calendar sections and nothing about QuickBooks, cash, AR or bills, no approvals banner,
@@ -204,7 +216,7 @@ Both providers:
 }
 ```
 `limit_to_enabled_modules: true` is what hides the other modules; without it a company shows everything, as `PKG` does. Adding a module
-later (for example `approvals`) is a new settings version with the longer list.
+later (for example `approvals`) is a new settings version with the longer list. Turning on write actions for such a company later (the lane policy's `write_actions_allowed`, by a human) also needs `approvals` in `enabled_modules`, or its approvals page and API stay hidden.
 
 ## Turn a provider off later
 
@@ -217,19 +229,20 @@ A company's list cannot be empty. So this only works when another provider stays
 (next section) instead. For a company with both:
 
 ```sql
--- Supabase SQL Editor (production). Replace PASTE-LANE-CODE (keep the quotes) in both places; write nothing else.
+-- Supabase SQL Editor (production). Edit ONLY the two values in the first line (keep the quotes); write nothing else.
 begin;
-with cur as (select c.lane_id, c.version, c.config from core.lane_config_current c where c.lane_id = 'PASTE-LANE-CODE'),
+with p as (select 'PASTE-LANE-CODE'::text as lane, 'microsoft'::text as provider),   -- provider: 'microsoft' or 'google'
+     cur as (select c.lane_id, c.version, c.config from core.lane_config_current c, p where c.lane_id = p.lane),
      keep as (select coalesce(jsonb_agg(e), '[]'::jsonb) as list
-                from cur, jsonb_array_elements_text(cur.config -> 'mail' -> 'providers') e where e <> 'microsoft')
+                from cur, p, jsonb_array_elements_text(cur.config -> 'mail' -> 'providers') e where e <> p.provider)
 insert into core.lane_config (lane_id, version, config, created_by)
 select cur.lane_id, cur.version + 1, jsonb_set(cur.config, '{mail,providers}', keep.list), null
-from cur, keep
-where jsonb_array_length(keep.list) >= 1 and (cur.config -> 'mail' -> 'providers') ? 'microsoft';
-select version, config -> 'mail' -> 'providers' as providers from core.lane_config_current where lane_id = 'PASTE-LANE-CODE';
+from cur, keep, p
+where jsonb_array_length(keep.list) >= 1 and (cur.config -> 'mail' -> 'providers') ? p.provider;
+select c.version, c.config -> 'mail' -> 'providers' as providers from core.lane_config_current c, p where c.lane_id = p.lane;
 commit;
 ```
-(Replace `'microsoft'` with `'google'` to turn Google off.) *Expect:* one row, the providers without the one you removed. If the version
+(Set `provider` to `'google'` in that one place to turn Google off.) *Expect:* one row, the providers without the one you removed. If the version
 did not change, the provider was not in the list, or it was the only one.
 
 ## Roll back this run
@@ -250,8 +263,8 @@ Pick the smallest step that fixes the problem. Nothing below deletes mail metada
       select code, enabled from core.lanes where code = 'PASTE-LANE-CODE';
       ```
       *Expect:* `enabled` = `false`. To bring it back: `enabled = true`, then step 4 of this runbook again.
-   Never disable the company in the database while it is still in `ENABLED_LANES`: every scheduled job then fails for it and every webhook
-   lookup fails for all companies.
+   Never disable the company in the database while it is still in `ENABLED_LANES`: the webhook lookup then fails for all companies and the
+   company's scheduled runs are marked failed (three in a row can raise the banner).
 3. **Undo only the app change** (the company works in the database but should not show): do 2.2 only.
 
 If `PKG` misbehaves at any point of this run, do 2.2 first (that returns the app to the "before" state) and tell the agent.

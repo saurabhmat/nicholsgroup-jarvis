@@ -76,3 +76,22 @@ describe("lane gate", () => {
     expect(typeof laneGate).toBe("function");
   });
 });
+
+describe("emailWriteAllowed and hiddenModuleResponse (T-265)", () => {
+  it("is true only when the policy lists an email write action; an unreadable policy answers true (nothing is hidden on a guess)", async () => {
+    const { emailWriteAllowed } = await import("@/lib/lane-modules");
+    for (const [data, want] of [[{ write_actions_allowed: [] }, false], [{ write_actions_allowed: ["calendar"] }, false], [{ write_actions_allowed: ["email_draft"] }, true], [{ write_actions_allowed: ["email_send"] }, true], [null, true]] as const) {
+      row = data;
+      expect(await emailWriteAllowed(client, "XX"), JSON.stringify(data)).toBe(want);
+    }
+    failWith = { message: "db" };
+    expect(await emailWriteAllowed(client, "XX")).toBe(true);
+  });
+  it("hiddenModuleResponse ignores a malformed lane code (nothing is read)", async () => {
+    const { hiddenModuleResponse } = await import("@/lib/lane-modules");
+    row = LIMITED;
+    expect(await hiddenModuleResponse("../x", "finance")).toBeNull();
+    expect(await hiddenModuleResponse(null, "finance")).toBeNull();
+    expect(selected).toEqual([]);
+  });
+});

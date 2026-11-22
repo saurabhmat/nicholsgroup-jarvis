@@ -31,7 +31,7 @@ import { loadNewsCard } from "@/lib/news";
 import { ProjectsGlance } from "./home-projects";
 import { TimezoneCookie } from "./timezone-cookie";
 import { loadLane } from "@/lib/lane-page";
-import { laneGate } from "@/lib/lane-modules";
+import { emailWriteAllowed, laneGate } from "@/lib/lane-modules";
 import { firstNameFor } from "@/lib/first-name";
 import { HomeFinanceSection } from "./home-finance-section";
 import { HomeScope, PersistedDetails } from "./home-scope";
@@ -163,6 +163,8 @@ async function HomeSections({ laneId, now }: { laneId: string; now: Date }) {
     // T-265: which parts of Home this company uses (finance, projects, news). One read, shared with the layout.
     laneGate(laneId),
   ]);
+  // T-265: a limited company whose policy allows no email write has no Reply (nothing could be saved or sent). Any other company: unchanged.
+  const replyAllowed = !gate.limited || !isOwner || (await emailWriteAllowed(await laneClient(), laneId));
   // Why there is no AI summary: the AI setup itself (names only), else the stored code of the newest failed attempt.
   const setup = aiSetupFailure();
   const failure = setup?.code ?? (saved && (saved.status === "failed" || saved.lastFailedAt) ? await lastFailureReason(await laneClient(), laneId) : null);
@@ -193,7 +195,7 @@ async function HomeSections({ laneId, now }: { laneId: string; now: Date }) {
       <div data-testid="home-attention-slot" className="order-1 flex min-w-0 flex-col gap-5 md:order-none md:col-span-2 md:col-start-1 md:row-span-3 md:row-start-3 md:mb-5">
         <PageSection title="Needs your attention" note={`Top 5 from the last ${freshWindowText(brief.config.attention.fresh_hours)}`}>
           <AiBriefing laneId={laneId} brief={saved} fallbackLines={view.unavailable ? [] : composeBriefing(view, now)} tz={brief.viewerTz} controls={isOwner && brief.mail.access ? <BriefingAuto laneId={laneId} preparedAt={saved && saved.status !== "failed" ? saved.preparedAt : null} initial={runState} tz={brief.viewerTz} /> : null} now={now} failure={failure} failureHint={failureHint} staleLine={brief.unavailable ? null : staleDataLine(brief.coverage, now, saved && saved.status !== "failed" ? saved.preparedAt : null)} />
-          <AttentionSection laneId={laneId} mail={withSummaryApplied(brief.mail, saved)} now={now} notes={notesByMessage(saved)} replies={repliesByMessage(saved)} canReply={isOwner} tz={brief.viewerTz} />
+          <AttentionSection laneId={laneId} mail={withSummaryApplied(brief.mail, saved)} now={now} notes={notesByMessage(saved)} replies={repliesByMessage(saved)} canReply={isOwner && replyAllowed} tz={brief.viewerTz} />
           {saved && saved.status !== "failed" ? (
             // Folded so the card stays short: reply drafts (with Copy) and deadlines from the briefing.
             <PersistedDetails id="attention-extras" testId="attention-extras" className="border-t border-border pt-3" summaryClassName="cursor-pointer text-small font-medium text-primary" summary="Drafts and deadlines">

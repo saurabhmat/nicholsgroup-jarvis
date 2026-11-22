@@ -308,4 +308,11 @@ describe("Settings of a mail-only company (T-265)", () => {
     await draw();
     expect(screen.getByTestId("connections-section").getAttribute("data-composio")).toBe("true");
   });
+
+  it("with Google enabled (PKG's path) the Composio row is shown even with nothing connected through it: unchanged", async () => {
+    m.microsoft = null;
+    m.composio = { toolkits: [{ toolkit: "gmail", label: "Gmail", configured: true, connection: null }] };
+    await draw();
+    expect(screen.getByTestId("connections-section").getAttribute("data-composio")).toBe("true");
+  });
 });

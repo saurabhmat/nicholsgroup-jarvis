@@ -6,6 +6,7 @@ import { readBody as readMailBody } from "@nichols/connectors/facade";
 import type { LaneId } from "@nichols/core";
 import { handleApprovals } from "@/lib/approvals";
 import { guards } from "@/lib/guards";
+import { hiddenModuleResponse } from "@/lib/lane-modules";
 import { createLimiter } from "@/lib/reply";
 
 export const maxDuration = 60; // approve also sends the email and reads it back; a draft is one model call
@@ -15,6 +16,8 @@ const draftLimiter = createLimiter({ windowMs: 60_000, max: 1 });
 
 export async function POST(request: Request, ctx: { params: Promise<{ laneId: string }> }) {
   const { laneId } = await ctx.params;
+  const hidden = await hiddenModuleResponse(laneId, "approvals"); // T-265: a limited company that hides this module has no endpoint
+  if (hidden) return hidden;
   return handleApprovals(request, laneId, {
     guards,
     approvals: approvalsDeps,
