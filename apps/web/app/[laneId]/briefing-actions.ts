@@ -33,7 +33,7 @@ import { guards } from "@/lib/guards";
 import { viewerZone } from "@/lib/briefing";
 import { BACKGROUND_RUN_TIMEOUT_MS, policyFrom, runBriefingBounded } from "@/lib/briefing-run";
 import { replyProposer } from "@/lib/briefing-proposals";
-import { briefingRunStateFrom, hasUsableSource, type BriefingGate, type BriefingRunStateView } from "@/lib/briefing-runs";
+import { briefingRunStateFrom, hasSyncedMail, hasUsableSource, type BriefingGate, type BriefingRunStateView } from "@/lib/briefing-runs";
 
 export type BriefingStartState =
   | { started: true }
@@ -79,7 +79,10 @@ async function start(laneId: string, kind: "auto" | "regenerate"): Promise<Brief
     // is not enough: with nothing connected the summary would be a model call that says "nothing is connected" and then lingers. Before the claim.
     const cov = await lane.schema("core").rpc("briefing_coverage", { p_lane: laneId });
     if (cov.error) return { error: "unavailable" };
-    if (!hasUsableSource(parseCoverageRows(cov.data))) return { started: false, gate: "no_sources" };
+    const covRows = parseCoverageRows(cov.data);
+    if (!hasUsableSource(covRows)) return { started: false, gate: "no_sources" };
+    // Connected but the mail stream has not synced yet (the calendar may have): no run either, so a summary is never written without mail and then kept for 3 hours.
+    if (!hasSyncedMail(covRows)) return { started: false, gate: "not_synced" };
     const claim = await lane.schema("core").rpc(kind === "auto" ? "briefing_claim_auto" : "briefing_claim_regenerate", { p_lane: laneId });
     if (claim.error) return { error: "unavailable" };
     const res = claim.data as { id?: unknown; gate?: unknown } | null;

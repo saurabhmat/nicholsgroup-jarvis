@@ -359,7 +359,11 @@ describe("refused after the exchange: the grant is dropped, never stored, and th
     const { loggableScopes } = await import("./provider");
     const many = Array.from({ length: 14 }, (_, i) => `Scope${String(i)}.Read`);
     expect(loggableScopes(many)).toEqual([...many.slice(0, 10), "other"]);
-    expect(loggableScopes(["a".repeat(65), "x y", "tok/en", "ok_name-1.2", `${GRAPH_SCOPE_PREFIX}Files.Read`, "ok_name-1.2"])).toEqual(["ok_name-1.2", "Files.Read", "other"]);
+    expect(loggableScopes(["a".repeat(65), "x y", "tok/en", "Okname.Read-1", `${GRAPH_SCOPE_PREFIX}Files.Read`, "Okname.Read-1", "UserAuthMethod-Email.Read.All", "openid", "Offline_Access"])).toEqual(["Okname.Read-1", "Files.Read", "UserAuthMethod-Email.Read.All", "openid", "Offline_Access", "other"]);
+    // M2: opaque values that merely use safe characters are "other": a 40-character base64url-looking string, a JWT-like three-segment value, an underscore name, a name over 48 characters
+    expect(loggableScopes(["Q2hhbmdlTWUtbm90LWEtcmVhbC1zZWNyZXQtMTIzNDU2"])).toEqual(["other"]);
+    expect(loggableScopes(["eyJhbGciOiJSUzI1NiJ9.eyJzdWIiOiJ4In0.c2lnbmF0dXJl"])).toEqual(["other"]);
+    expect(loggableScopes(["some_name.Read", `A.${"b".repeat(48)}`])).toEqual(["other"]);
     expect(loggableScopes([])).toEqual([]);
   });
 

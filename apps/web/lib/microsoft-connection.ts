@@ -51,10 +51,8 @@ export async function microsoftSectionFor(
   // T-270: whether this person may use "Sync now" (owner, admin_technical), the same rule as the Google section; the one Sync now button on Settings reads it from either view.
   const canSync = await g.requireRole(laneId, [...CONNECT_ROLES]).then(
     () => true,
-    (e: unknown) => {
-      if (e instanceof AuthError) return false;
-      throw e;
-    },
+    // Any refusal or outage of this optional check only hides Sync now; it must never fail the Settings render.
+    () => false,
   );
   const sync = canSync ? { canSync: true as const } : {};
   const settings = providers.state === "unknown" ? null : providers.microsoft;

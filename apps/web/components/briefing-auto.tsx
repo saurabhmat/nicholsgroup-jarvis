@@ -42,6 +42,8 @@ const clock = (ms: number, tz: string): string => {
   }
 };
 
+const NOT_SYNCED_TEXT = "Your mailbox has not synced yet. Try again in a few minutes.";
+
 const START_MESSAGES: Record<string, string> = {
   forbidden: "Only the owner can regenerate the summary.",
   not_configured: "The AI is not set up for this deployment yet.",
@@ -114,6 +116,7 @@ export function BriefingAuto({ laneId, preparedAt, initial, tz }: { laneId: stri
     if (ensuredRecently(laneId, Date.now())) return;
     void ensureFreshBriefing(laneId).then((r) => {
       if ("started" in r && (r.started || r.gate === "running")) poll();
+      else if ("gate" in r && r.gate === "not_synced") setMessage(NOT_SYNCED_TEXT);
     });
     // eslint-disable-next-line react-hooks/exhaustive-deps -- deliberately once per page load
   }, []);
@@ -162,6 +165,7 @@ export function BriefingAuto({ laneId, preparedAt, initial, tz }: { laneId: stri
       if (s) setState(s);
       setNowMs(Date.now());
       if (r.gate === "running") poll();
+      if (r.gate === "not_synced") setMessage(NOT_SYNCED_TEXT);
       return;
     }
     setMessage(START_MESSAGES[r.error] ?? START_MESSAGES.unavailable ?? null);

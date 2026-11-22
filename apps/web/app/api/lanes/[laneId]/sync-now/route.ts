@@ -1,4 +1,4 @@
-// POST /api/lanes/<lane>/sync-now (T-238): run every usable Google connection of the lane now. Owner or admin_technical at AAL2;
+// POST /api/lanes/<lane>/sync-now (T-238): run every usable mail and calendar connection of the lane now (Google or Microsoft). Owner or admin_technical at AAL2;
 // one per lane per 2 minutes; audited. Logic and checks: lib/sync-now.ts.
 import { connSyncRequested, sendLaneEvent } from "@nichols/core/inngest";
 import { getAudit } from "@nichols/core/lane-router";

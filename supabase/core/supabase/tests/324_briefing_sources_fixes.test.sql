@@ -2,10 +2,11 @@
 -- newest connection first synced is stale (brief.briefing_sources_newer / core.briefing_sources_newer / the auto claim).
 -- Synthetic: lane PKG (a Google-only lane, which must keep behaving as before), lane APK with a Microsoft connection, example.test addresses.
 -- Covered: coverage mail vs calendar (a calendar-only success never makes mail look synced; a succeeded run is not a stand-in); both
--- providers; the stale rule and its gates (one renewal, then not_stale; the 10-minute pause still applies); a Google connection that synced
--- before the summary changes nothing; cross-lane and cross-user denial; privileges.
+-- providers; the stale rule and its gates (one renewal, then not_stale); with the flag TRUE the cooldown and the daily cap still hold, for the owner's claim
+-- and for the job path (claim_refresh); a Google connection that synced before the summary changes nothing, one whose first run is after it sets the
+-- flag; another member's connection, a disconnected one and a mail cursor with no succeeded run do not; cross-lane and cross-user denial; privileges.
 begin;
-select plan(24);
+select plan(35);
 \ir helpers/lane_rls.psql
 
 update core.lanes set enabled = true where code = 'APK';
@@ -101,6 +102,60 @@ select isnt(core.briefing_save('PKG', pg_temp.uid('owner@example.test'), 'schedu
 reset role;
 update brief.briefings set prepared_at = now() - interval '1 hour' where lane_id = 'PKG';
 select is(brief.briefing_sources_newer('PKG', pg_temp.uid('owner@example.test')), false, 'Google lane (no sync run row, cursors only): never newer, its 3-hour rule is unchanged');
+
+-- ---------------------------------------------------------------- limits still hold with the flag TRUE (APK, Microsoft)
+delete from brief.briefing_runs where lane_id = 'APK';
+delete from brief.briefings where lane_id = 'APK';
+set local role service_role;
+select isnt(core.briefing_save('APK', pg_temp.uid('owner@example.test'), 'schedule', 'ready', now() - interval '1 day', now() - interval '3 hours', '{"lines": ["c"]}', '[]', '[]', 'mock'), null, 'a summary is saved for the limit checks');
+reset role;
+update brief.briefings set prepared_at = now() - interval '150 minutes' where lane_id = 'APK'; -- before the first sync (finished ~2 h ago), inside 3 h
+select is(brief.briefing_sources_newer('APK', pg_temp.uid('owner@example.test')), true, 'flag true for the limit checks');
+insert into brief.briefing_runs (lane_id, owner_user_id, kind, started_at, finished_at, status) values
+  ('APK', pg_temp.uid('owner@example.test'), 'auto', now() - interval '5 minutes', now() - interval '4 minutes', 'done');
+select pg_temp.claims('owner@example.test', 'aal2');
+set local role authenticated;
+select is((select core.briefing_claim_auto('APK') ->> 'gate'), 'cooldown', 'flag true, last run 5 minutes ago: cooldown');
+reset role;
+set local role service_role;
+select is(core.briefing_claim_refresh('APK', pg_temp.uid('owner@example.test')) ->> 'gate', 'cooldown', 'the job path (claim_refresh): cooldown too');
+reset role;
+delete from brief.briefing_runs where lane_id = 'APK';
+insert into brief.briefing_runs (lane_id, owner_user_id, kind, started_at, finished_at, status)
+select 'APK', pg_temp.uid('owner@example.test'), 'auto', now() - interval '2 hours', now() - interval '2 hours', 'done' from generate_series(1, 6);
+select pg_temp.claims('owner@example.test', 'aal2');
+set local role authenticated;
+select is((select core.briefing_claim_auto('APK') ->> 'gate'), 'cap_reached', 'flag true, 6 runs today: cap_reached');
+reset role;
+set local role service_role;
+select is(core.briefing_claim_refresh('APK', pg_temp.uid('owner@example.test')) ->> 'gate', 'cap_reached', 'the job path: cap_reached too');
+reset role;
+delete from brief.briefing_runs where lane_id = 'APK';
+
+-- ---------------------------------------------------------------- what sets the flag (PKG, Google, the owner's connection 32402)
+insert into core.sync_runs (lane_id, connection_id, kind, trigger, status, started_at, finished_at) values
+  ('PKG', '00000000-0000-4000-8000-000000032402', 'full', 'schedule', 'succeeded', now() - interval '2 hours', now() - interval '2 hours' + interval '1 minute');
+update brief.briefings set prepared_at = now() - interval '30 minutes' where lane_id = 'PKG';
+select is(brief.briefing_sources_newer('PKG', pg_temp.uid('owner@example.test')), false, 'Google: a succeeded run BEFORE the summary: false');
+update brief.briefings set prepared_at = now() - interval '3 hours' where lane_id = 'PKG';
+select is(brief.briefing_sources_newer('PKG', pg_temp.uid('owner@example.test')), true, 'Google: the first run AFTER the summary: true');
+-- another member's connection in the same lane (admin_technical, newer than the owner's summary) does not set the flag for the owner
+update brief.briefings set prepared_at = now() - interval '30 minutes' where lane_id = 'PKG';
+insert into core.connections (id, lane_id, provider, external_account_id, status, features, owner_user_id) values
+  ('00000000-0000-4000-8000-000000032403', 'PKG', 'google', 'saurabh@g-lane.example.test', 'active', '{}', pg_temp.uid('admin-technical@example.test'));
+insert into core.sync_cursors (lane_id, connection_id, stream, cursor_value) values
+  ('PKG', '00000000-0000-4000-8000-000000032403', 'mail', 'g1.00000000-0000-4000-8000-000000032403.h:1');
+insert into core.sync_runs (lane_id, connection_id, kind, trigger, status, started_at, finished_at) values
+  ('PKG', '00000000-0000-4000-8000-000000032403', 'full', 'schedule', 'succeeded', now() - interval '10 minutes', now() - interval '9 minutes');
+select is(brief.briefing_sources_newer('PKG', pg_temp.uid('owner@example.test')), false, 'another member''s newer connection does not set my flag');
+-- a disconnected connection is excluded
+update core.connections set status = 'disconnected' where id = '00000000-0000-4000-8000-000000032402';
+update brief.briefings set prepared_at = now() - interval '3 hours' where lane_id = 'PKG';
+select is(brief.briefing_sources_newer('PKG', pg_temp.uid('owner@example.test')), false, 'a disconnected connection (run after the summary) is excluded');
+update core.connections set status = 'active' where id = '00000000-0000-4000-8000-000000032402';
+-- a mail cursor with no succeeded run
+delete from core.sync_runs where connection_id = '00000000-0000-4000-8000-000000032402';
+select is(brief.briefing_sources_newer('PKG', pg_temp.uid('owner@example.test')), false, 'a mail cursor with no succeeded run: false');
 
 -- ---------------------------------------------------------------- denial for the read of another user / lane
 select pg_temp.claims('admin-technical@example.test', 'aal2');

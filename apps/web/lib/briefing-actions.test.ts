@@ -145,10 +145,22 @@ describe.each([
     expect(state.brainLoad).not.toHaveBeenCalled();
   });
 
+  it.each([["microsoft", "m1"], ["google", "g1"]])("T-270 review M1: %s person connected at :05, calendar synced at :15, Home opened at :18: gate not_synced, no claim, no brain load, no model call; once mail synced it starts", async (provider) => {
+    const row = (stream: string, at: string | null) => ({ stream, account: "a@x.example.test", connection_id: "c9", provider, status: "active", configured: false, last_sync_at: at });
+    state.rpc.mockImplementation(async (fn: string) => (fn === "briefing_coverage" ? { data: [row("mail", null), row("calendar", "2026-11-22T15:15:00Z")], error: null } : { data: { id: "x", gate: null }, error: null }));
+    expect(await action("NC")).toEqual({ started: false, gate: "not_synced" });
+    expect(state.rpc.mock.calls.map((c) => c[0])).not.toContain(claimFn);
+    expect(state.after).not.toHaveBeenCalled();
+    expect(state.run).not.toHaveBeenCalled();
+    expect(state.brainLoad).not.toHaveBeenCalled();
+    state.rpc.mockImplementation(async (fn: string) => (fn === "briefing_coverage" ? { data: [row("mail", "2026-11-22T15:22:00Z"), row("calendar", "2026-11-22T15:15:00Z")], error: null } : { data: { id: "claim-9", gate: null }, error: null }));
+    expect(await action("NC")).toEqual({ started: true });
+  });
+
   it("T-270: a Microsoft-only lane with an active own mailbox starts a run (a Google lane is the default of every other test here)", async () => {
     state.rpc.mockImplementation(async (fn: string) =>
       fn === "briefing_coverage"
-        ? { data: [{ stream: "mail", account: "a@ms.example.test", connection_id: "c9", provider: "microsoft", status: "active", configured: false, last_sync_at: null }], error: null }
+        ? { data: [{ stream: "mail", account: "a@ms.example.test", connection_id: "c9", provider: "microsoft", status: "active", configured: false, last_sync_at: "2026-11-22T11:22:00Z" }], error: null }
         : { data: { id: "claim-9", gate: null }, error: null },
     );
     expect(await action("NC")).toEqual({ started: true });

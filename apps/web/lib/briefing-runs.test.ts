@@ -1,6 +1,6 @@
 // T-235 part 1: the pure helpers of the run claims: staleness (3 h), Regenerate availability (30 min), parsing the RPC row.
 import { describe, expect, it } from "vitest";
-import { briefingRunStateFrom, hasUsableSource, isStale, needsRenewal, regenerateAvailableAt, STALE_AFTER_MS } from "./briefing-runs";
+import { briefingRunStateFrom, hasSyncedMail, hasUsableSource, isStale, needsRenewal, regenerateAvailableAt, STALE_AFTER_MS } from "./briefing-runs";
 
 const NOW = Date.parse("2026-11-12T15:00:00Z");
 
@@ -53,5 +53,15 @@ describe("T-270: loadRunState merges the sources-newer read", () => {
     expect((await loadRunState(db({ data: false }) as never, "PKG"))?.sourcesNewer).toBe(false);
     expect((await loadRunState(db({ data: null, error: { code: "42883" } }) as never, "PKG"))?.sourcesNewer).toBe(false);
     expect((await loadRunState(db("throws") as never, "PKG"))?.sourcesNewer).toBe(false);
+  });
+});
+
+describe("T-270 review M1: hasSyncedMail", () => {
+  const r = (over: Partial<{ stream: string; connectionId: string | null; status: string; lastSyncAt: string | null }>) => ({ stream: "mail", connectionId: "c1", status: "active", lastSyncAt: "2026-11-22T15:22:00Z", ...over });
+  it("needs a usable mail row with its own sync time", () => {
+    expect(hasSyncedMail([r({})])).toBe(true);
+    expect(hasSyncedMail([r({ lastSyncAt: null }), r({ stream: "calendar" })])).toBe(false);
+    expect(hasSyncedMail([r({ status: "pending" })])).toBe(false);
+    expect(hasSyncedMail([])).toBe(false);
   });
 });

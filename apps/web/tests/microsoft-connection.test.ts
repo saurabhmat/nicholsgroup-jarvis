@@ -101,6 +101,13 @@ describe("T-270: Sync now is available to the roles that may sync, on the Micros
     expect(v?.connections.length).toBeGreaterThan(0);
     expect(v?.canSync).toBeUndefined();
   });
+  it("a failure of the canSync role check that is not an AuthError does not fail the render: canSync is simply absent", async () => {
+    let n = 0;
+    const flaky = { requireRole: async () => { n += 1; if (n === 2) throw new Error("outage"); return { session: { userId: ME }, client: client() } as never; } };
+    const v = await microsoftSectionFor(flaky, "PKG", both, undefined, consent);
+    expect(v?.connections.length).toBeGreaterThan(0);
+    expect(v?.canSync).toBeUndefined();
+  });
   it("a paused Microsoft view keeps canSync (the bar itself ignores a paused view)", async () => {
     const view = await microsoftSectionFor(guards(), "PKG", microsoftOff, undefined, consent);
     expect(view?.paused).toBe(true);

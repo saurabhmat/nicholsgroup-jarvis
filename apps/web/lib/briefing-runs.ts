@@ -4,8 +4,8 @@ export const STALE_AFTER_MS = 3 * 3_600_000;
 export const REGENERATE_EVERY_MS = 30 * 60_000;
 export const DAILY_RUN_CAP = 6;
 
-/** `no_sources` is the app's own gate (no mail view: nothing to summarise); the rest come from the SQL claim. */
-export type BriefingGate = "not_stale" | "running" | "cap_reached" | "cooldown" | "rate_limited" | "no_sources";
+/** `no_sources` and `not_synced` are the app's own gates (no own mail connection in use: nothing to summarise; a mailbox connected whose mail has not synced yet); the rest come from the SQL claim. */
+export type BriefingGate = "not_stale" | "running" | "cap_reached" | "cooldown" | "rate_limited" | "no_sources" | "not_synced";
 
 /** What the card needs from core.briefing_run_state. Times are ISO strings or null. */
 export type BriefingRunStateView = {
@@ -49,6 +49,11 @@ export function needsRenewal(preparedAt: string | null, nowMs: number, sourcesNe
 /** T-270: a source the summary can be built from: the person's own connection, in use (not pending, not needing a reconnect), with its mail stream. */
 export function hasUsableSource(rows: ReadonlyArray<{ stream: string; connectionId: string | null; status: string }>): boolean {
   return rows.some((r) => r.stream === "mail" && r.connectionId !== null && (r.status === "active" || r.status === "degraded"));
+}
+
+/** T-270: a usable mail row whose mail stream has stored its position (its own sync time is known). A mailbox connected but not synced yet is not ready: a summary made now would have no mail. */
+export function hasSyncedMail(rows: ReadonlyArray<{ stream: string; connectionId: string | null; status: string; lastSyncAt: string | null }>): boolean {
+  return rows.some((r) => r.stream === "mail" && r.connectionId !== null && (r.status === "active" || r.status === "degraded") && r.lastSyncAt !== null);
 }
 
 /** When Regenerate is available again (ms), or null when it is available now. */

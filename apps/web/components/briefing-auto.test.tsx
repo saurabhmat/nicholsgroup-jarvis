@@ -58,6 +58,20 @@ describe("the automatic trigger", () => {
     expect(act_.ensure).toHaveBeenCalledWith("PKG");
   });
 
+  it("T-270 review M1: a mailbox not synced yet shows the fixed text instead of a summary run, for the load and for Regenerate", async () => {
+    act_.ensure.mockResolvedValueOnce({ started: false, gate: "not_synced" });
+    draw({ preparedAt: null, initial: { ...idle, latestPreparedAt: null } });
+    await advance(0);
+    expect(screen.getByTestId("briefing-regenerate-message").textContent).toBe("Your mailbox has not synced yet. Try again in a few minutes.");
+    cleanup();
+    act_.regen.mockResolvedValueOnce({ started: false, gate: "not_synced" });
+    draw({ preparedAt: FRESH });
+    fireEvent.click(screen.getByTestId("briefing-menu-button"));
+    fireEvent.click(screen.getByTestId("briefing-regenerate"));
+    await advance(0);
+    expect(screen.getByTestId("briefing-regenerate-message").textContent).toContain("has not synced yet");
+  });
+
   it("T-270: a fresh summary with sources not newer (a Google lane as before) asks for nothing", async () => {
     draw({ preparedAt: FRESH, initial: { ...idle, latestPreparedAt: FRESH, sourcesNewer: false } });
     await advance(0);

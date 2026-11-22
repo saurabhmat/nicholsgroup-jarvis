@@ -24,7 +24,7 @@
 // Nothing a provider answers is copied into a message, a redirect, a log line or an audit row, with ONE deliberate, tightly bounded exception
 // (T-270): when a grant is refused because it holds a scope that was not requested, the structured log field `unexpected_scopes` of
 // `connector.oauth_callback_failed` names those scopes, so the person who configures the Entra app can see which permission to remove. A name is
-// copied only when it matches /^[A-Za-z0-9._-]{1,64}$/ (after the Graph prefix is dropped), at most 10 names; anything else (another resource's
+// copied only when it matches /^[A-Za-z0-9._-]{1,64}$/ AND looks like a permission name (letter first, at most 48 characters, dotted Graph name or openid/profile/email/offline_access; after the Graph prefix is dropped), at most 10 names; anything else (another resource's
 // URL, odd characters, too long, the 11th and later) is counted as the single entry "other". The user-facing message, the redirect and the audit
 // row never carry them. Tokens, the id_token, the code, the
 // verifier and the client secret are SecretValues or are never held past the call. A grant refused after the exchange is dropped.
@@ -92,6 +92,12 @@ const OIDC_EXTRAS: ReadonlySet<string> = new Set(["openid", "profile", "email", 
 /** Scope names a refused grant carried, kept beside the error (never inside its message or its info): the callback logs them as a structured field. */
 const refusedScopes = new WeakMap<object, readonly string[]>();
 const SAFE_SCOPE = /^[A-Za-z0-9._-]{1,64}$/;
+/** A name is logged only if it also looks like a permission name (a dotted Graph name, or a known plain OpenID name): an opaque string (a token-like value) is "other". */
+// The first segment may hold a dash too (real names such as UserAuthMethod-Email.Read.All). A JWT-like value ("eyJ" is base64 of {") or a long opaque segment is not a name.
+const PERMISSION_LIKE = /^(?!eyJ)[A-Za-z][A-Za-z0-9-]{0,23}(\.[A-Za-z0-9-]{1,24}){1,4}$/;
+const PLAIN_NAMES: ReadonlySet<string> = new Set(["openid", "profile", "email", "offline_access"]);
+const MAX_SCOPE_NAME = 48;
+const loggable = (n: string): boolean => SAFE_SCOPE.test(n) && n.length <= MAX_SCOPE_NAME && (PERMISSION_LIKE.test(n) || PLAIN_NAMES.has(n.toLowerCase()));
 const MAX_LOGGED_SCOPES = 10;
 
 /** The names to log for the unexpected scopes: safe-pattern names only (without the Graph prefix), at most 10, everything else as one "other". */
@@ -100,8 +106,8 @@ export function loggableScopes(unexpected: readonly string[]): string[] {
   let other = false;
   for (const raw of unexpected) {
     const name = raw.toLowerCase().startsWith(GRAPH_SCOPE_PREFIX) ? raw.slice(GRAPH_SCOPE_PREFIX.length) : raw;
-    if (SAFE_SCOPE.test(name) && !out.includes(name) && out.length < MAX_LOGGED_SCOPES) out.push(name);
-    else if (!SAFE_SCOPE.test(name) || out.length >= MAX_LOGGED_SCOPES) other = true;
+    if (loggable(name) && !out.includes(name) && out.length < MAX_LOGGED_SCOPES) out.push(name);
+    else if (!loggable(name) || out.length >= MAX_LOGGED_SCOPES) other = true;
   }
   if (other) out.push("other");
   return out;
