@@ -23,6 +23,7 @@ import {
   newsDailyFunction,
   platformFunctions,
   qboWebhookSyncFunctions,
+  microsoftWebhookSyncFunctions,
   retentionPurgeFunctions,
   sendLaneEvent,
   shouldNormalizeAfterSync,
@@ -33,7 +34,7 @@ import type { LaneId } from "@nichols/core";
 import { getLaneJobClient } from "@nichols/core/lane-router";
 import { BRAIN_RETENTION, createImportPurge } from "@nichols/brain/jobs";
 import { getServerEnv } from "@nichols/core/env/server";
-import { QBO_SYNC_ENTITIES, connSyncJob, isQuickbooksConnectionUsable, listCalendarConnectionIds, listMailConnectionIds, listQuickbooksSyncConnectionIds, qboSyncIntervalHours } from "@nichols/connectors/sync";
+import { QBO_SYNC_ENTITIES, connSyncJob, isMicrosoftConnectionUsable, isQuickbooksConnectionUsable, listCalendarConnectionIds, listMailConnectionIds, listQuickbooksSyncConnectionIds, qboSyncIntervalHours } from "@nichols/connectors/sync";
 import { listHealthConnectionIds, listRenewConnectionIds, markReconnectNotified, subscriptionRenewJob, tokenHealthJob } from "@nichols/connectors/health";
 import { retentionPurgeJob, retentionRegistry } from "@nichols/connectors/retention";
 import { listQuickbooksConnectionIds, qboReportsJob } from "@nichols/connectors/reports";
@@ -97,6 +98,12 @@ const functionsFor = (inngest: Parameters<Parameters<typeof inngestRoute>[0]>[0]
     isUsable: (laneId, connectionId) => isQuickbooksConnectionUsable(laneId as LaneId, connectionId),
     enabledLanes: () => getServerEnv().ENABLED_LANES,
     allowedEntities: QBO_SYNC_ENTITIES,
+  }),
+  // microsoft.webhook_sync (T-068): accepted Microsoft change notifications -> one debounced conn/sync.requested per connection and stream (mail or calendar). Needs a sync of
+  // this function in Inngest Cloud after the deploy (backlog H-073).
+  ...microsoftWebhookSyncFunctions(inngest, {
+    isUsable: (laneId, connectionId) => isMicrosoftConnectionUsable(laneId as LaneId, connectionId),
+    enabledLanes: () => getServerEnv().ENABLED_LANES,
   }),
   // fin.qbo_normalize (T-056): raw.source_records -> fin.* for one QuickBooks connection, lane-scoped.
   ...finQboNormalizeFunctions(inngest, {

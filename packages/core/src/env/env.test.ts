@@ -1047,6 +1047,7 @@ function valueFor(key: string): string {
   if (key === "INTUIT_REDIRECT_URI") return "http://localhost:3000/cb";
   if (key === "GOOGLE_REDIRECT_URI") return "http://localhost:3000/api/connect/google/callback";
   if (key === "GRAPH_REDIRECT_URI" || key === "GRAPH_USGOV_REDIRECT_URI") return "http://localhost:3000/api/connect/microsoft/callback";
+  if (key === "GRAPH_NOTIFICATION_URL") return "https://app.example.test/api/webhooks/microsoft";
   if (key === "APP_ENV") return "local";
   if (key === "VERCEL_ENV") return "preview";
   if (key === "VAPID_SUBJECT") return "mailto:admin@example.com";

@@ -50,6 +50,7 @@ import { mapEvent, removalOf } from "./cal-map";
 import type { MicrosoftGuard } from "./guard";
 import { bodyFromAnswer } from "./mail-live";
 import { isExpiredDeltaState } from "./mail";
+import type { MicrosoftSubscriptions } from "./subscriptions";
 
 export type MicrosoftCalendarDeps = {
   /** The guarded, read-only Graph client (it runs the guard again before every request attempt). */
@@ -61,6 +62,8 @@ export type MicrosoftCalendarDeps = {
   logger?: ConnectorLogger;
   /** Default body length of `readBody` when the caller names none. */
   defaultMaxBodyChars?: number;
+  /** T-068: see the mail provider's `subscriptions` (the default calendar's `me/events` subscription). Without it the provider polls only. */
+  subscriptions?: Pick<MicrosoftSubscriptions, "ensure" | "stop" | "watchInfo">;
 };
 
 const PATH_EVENT = "/me/events/{id}";
@@ -90,7 +93,7 @@ export const calendarPrefer = (pageSize: number): { Prefer: string } => ({ Prefe
 export function createMicrosoftCalendarProvider(deps: MicrosoftCalendarDeps): CalendarProvider<"microsoft"> {
   const now = deps.now ?? Date.now;
   const log = deps.logger ?? connectorLog;
-  const capabilities: CalendarCapabilities = { watch: "polling", prepareWrite: false };
+  const capabilities: CalendarCapabilities = { watch: deps.subscriptions ? "push" : "polling", prepareWrite: false };
   const defaultMaxChars = deps.defaultMaxBodyChars ?? DEFAULT_CALENDAR_BODY_CHARS;
   type GuardedConn = Awaited<ReturnType<MicrosoftGuard>>["conn"];
 
@@ -234,14 +237,23 @@ export function createMicrosoftCalendarProvider(deps: MicrosoftCalendarDeps): Ca
     // Graph change notifications are T-068 / T-264: until then the calendar is polled, no subscription is created.
     async watch(laneId, conn): Promise<WatchInfo[]> {
       await deps.guard(laneId, conn);
-      return [pollingWatch()];
+      const subs = deps.subscriptions;
+      if (!subs) return [pollingWatch()];
+      const at = new Date(now());
+      await subs.ensure(laneId, conn, { now: at });
+      return [await subs.watchInfo(laneId, conn, "calendar", at)];
     },
     async renew(laneId, conn): Promise<WatchInfo> {
       await deps.guard(laneId, conn);
-      return pollingWatch();
+      const subs = deps.subscriptions;
+      if (!subs) return pollingWatch();
+      const at = new Date(now());
+      await subs.ensure(laneId, conn, { now: at });
+      return subs.watchInfo(laneId, conn, "calendar", at);
     },
     async stop(laneId, conn): Promise<void> {
       await deps.guard(laneId, conn);
+      await deps.subscriptions?.stop(laneId, conn);
     },
 
     async prepareWrite(laneId, conn, intent) {

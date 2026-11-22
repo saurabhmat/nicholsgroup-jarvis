@@ -13,6 +13,7 @@ import {
   resolveInngestEnv,
   type ConnectorEnv,
   type ConnectorName,
+  graphNotificationUrl,
   type EnvRecord,
   type ServerEnv,
 } from "./schema";
@@ -110,4 +111,13 @@ export function requireConnectorEnv<C extends ConnectorName>(
   env: EnvRecord = process.env,
 ): ConnectorEnv<C> {
   return withRedaction(parseConnectorEnv(connector, env, runtimeFlags(process.env)));
+}
+
+/**
+ * The Microsoft change-notification URL (T-068): `GRAPH_NOTIFICATION_URL`, or null when it is not set (no subscription is attempted). Throws EnvValidationError (names and a fixed
+ * rule, never the value) when the Microsoft credentials are missing or the URL is not https, not on the app's own origin or not the receiver path. Server configuration only: the
+ * URL is never taken from a request.
+ */
+export function getGraphNotificationUrl(env: EnvRecord = process.env): string | null {
+  return graphNotificationUrl(requireConnectorEnv("graph", env), runtimeFlags(process.env));
 }

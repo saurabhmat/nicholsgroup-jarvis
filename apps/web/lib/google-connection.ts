@@ -26,6 +26,11 @@ export type GoogleConnectionView = {
   /** ISO times of the last cursor write per stream; null = not synced yet. */
   lastMailSyncAt: string | null;
   lastCalendarSyncAt: string | null;
+  /**
+   * T-068: when a Microsoft connection's change-notification subscription expires (the earliest of its live subscriptions), as the health view reads it; absent when there is none,
+   * when the reader may not see the health view, or when the read failed (polling is then the only way mail and calendar arrive). Ids and times only; never a secret or a resource.
+   */
+  pushExpiresAt?: string;
 };
 
 /** `unavailable`: the connection state could not be read (database outage); the page says so instead of "not connected". */
@@ -109,6 +114,7 @@ export async function loadMailSection(client: Db, laneId: string, userId: string
     core.from("lane_config_current").select("mailboxes:config->mailboxes, mail:config->mail").eq("lane_id", laneId).maybeSingle(),
   ]);
   if (cursors.error) throw new Error("sync state unavailable");
+  const pushAt = provider === "microsoft" ? await loadPushExpiry(core, laneId, ids) : new Map<string, string>();
   const at = new Map<string, string | null>();
   for (const c of cursors.data ?? []) at.set(`${String(c.connection_id)}:${String(c.stream)}`, iso(c.updated_at));
 
@@ -124,8 +130,31 @@ export async function loadMailSection(client: Db, laneId: string, userId: string
       mine: r.mine,
       lastMailSyncAt: at.get(`${r.id}:mail`) ?? null,
       lastCalendarSyncAt: at.get(`${r.id}:calendar`) ?? null,
+      ...(pushAt.has(r.id) ? { pushExpiresAt: pushAt.get(r.id) as string } : {}),
     })),
   };
+}
+
+/**
+ * The earliest expiry of each connection's live change-notification subscription (T-068), through the signed-in user's own lane client: the RLS "health" view of core.push_subscriptions
+ * decides who sees anything (owner, admin_technical at AAL2); everyone else, and any failure, gets an empty map. Never throws: this line is optional and must not take Settings down.
+ */
+async function loadPushExpiry(core: ReturnType<Db["schema"]>, laneId: string, ids: string[]): Promise<Map<string, string>> {
+  const out = new Map<string, string>();
+  type PushRow = { connection_id: string; expires_at: string };
+  type PushQuery = { select(c: string): { eq(c: string, v: string): { in(c: string, v: string[]): { neq(c: string, v: string): PromiseLike<{ data: PushRow[] | null; error: unknown }> } } } };
+  try {
+    const res = await (core as unknown as { from(t: string): PushQuery }).from("push_subscriptions").select("connection_id, expires_at").eq("lane_id", laneId).in("connection_id", ids).neq("status", "removed");
+    if (res.error) return out;
+    for (const r of res.data ?? []) {
+      const t = iso(r.expires_at);
+      const known = out.get(r.connection_id);
+      if (t !== null && (known === undefined || t < known)) out.set(r.connection_id, t);
+    }
+  } catch {
+    return new Map();
+  }
+  return out;
 }
 
 /**

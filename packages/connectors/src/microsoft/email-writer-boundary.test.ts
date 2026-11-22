@@ -43,8 +43,15 @@ describe("the Microsoft write path is reachable only from approvals", () => {
       .filter((f) => rel(f).startsWith("packages/connectors/src/microsoft/") && /method:\s*"(POST|PATCH|PUT|DELETE)"/.test(readFileSync(f, "utf8")))
       .map(rel)
       .sort();
-    // the token manager POSTs to the sign-in host (token endpoint), not to Graph; the write client and the writer are the Graph writers
-    expect(posters).toEqual(["packages/connectors/src/microsoft/email-writer.ts", "packages/connectors/src/microsoft/token-manager.ts", "packages/connectors/src/microsoft/write-client.ts"]);
+    // the token manager POSTs to the sign-in host (token endpoint), not to Graph; the write client and the writer are the Graph MESSAGE writers. T-068: the subscription client and its
+    // job code (subscriptions.ts) change provider-side subscription state only (three routes, no content, jobs only; see subscription-boundary.test.ts); they are listed here on purpose.
+    expect(posters).toEqual([
+      "packages/connectors/src/microsoft/email-writer.ts",
+      "packages/connectors/src/microsoft/subscription-client.ts",
+      "packages/connectors/src/microsoft/subscriptions.ts",
+      "packages/connectors/src/microsoft/token-manager.ts",
+      "packages/connectors/src/microsoft/write-client.ts",
+    ]);
     const importers = files
       .filter((f) => /from\s+["']@nichols\/connectors\/write["']/.test(readFileSync(f, "utf8")))
       .map(rel)

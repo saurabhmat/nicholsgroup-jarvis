@@ -10,9 +10,14 @@
 //   - it must be a Microsoft row and owned by the user asking: otherwise `not_found` (the same answer, so a row of another person is not
 //     revealed to someone who cannot see it);
 //   - it does NOT matter whether Microsoft is currently enabled for the lane: a paused connection can be disconnected too (no config read).
+//   - T-264: the connection's change-notification subscriptions are marked removed in our own records afterwards (`subscriptions.removeConnection`, a database call, still
+//     nothing sent to Microsoft: the token is gone and a request in a user request is not allowed). It is best effort and never blocks or fails the disconnect. Microsoft's side of
+//     the subscription lapses at its expiry (at most 6 days); until then the receiver drops everything that arrives for it, because no live row exists. A lookup also refuses a
+//     disconnected connection, so a failed mark changes nothing for the receiver.
 import type { LaneId } from "@nichols/core";
 import { ConnectorError } from "../contract/errors";
 import type { ConnectionLoader } from "../contract/lane-bound";
+import { connectorLog, type ConnectorLogger } from "../log/index";
 import type { TokenVault } from "../vault/tokens";
 
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
@@ -20,6 +25,9 @@ const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 export type MicrosoftDisconnectDeps = {
   loader: Pick<ConnectionLoader<string>, "loadConnection">;
   vault: Pick<TokenVault, "revokeToken">;
+  /** Marks the connection's change-notification subscriptions removed (T-264). Optional: without it nothing is recorded. */
+  subscriptions?: { removeConnection(laneId: LaneId, connectionId: string): Promise<unknown> };
+  logger?: ConnectorLogger;
 };
 
 export function createMicrosoftDisconnect(deps: MicrosoftDisconnectDeps) {
@@ -28,6 +36,13 @@ export function createMicrosoftDisconnect(deps: MicrosoftDisconnectDeps) {
     if (typeof actorUserId !== "string" || !UUID.test(actorUserId)) throw new ConnectorError({ kind: "invalid_input", message: "A signed-in user is required" });
     const conn = await deps.loader.loadConnection(laneId, connectionId);
     if (conn.provider !== "microsoft" || conn.owner_user_id !== actorUserId) throw new ConnectorError({ kind: "not_found", message: "Connection not found" });
-    return deps.vault.revokeToken(laneId, conn, actorUserId);
+    const deleted = await deps.vault.revokeToken(laneId, conn, actorUserId);
+    try {
+      await deps.subscriptions?.removeConnection(laneId, conn.id);
+    } catch {
+      // Best effort (the message could name a lane or a row: ids and an enum only).
+      (deps.logger ?? connectorLog).warn("microsoft.disconnect.subscriptions_unconfirmed", { laneId, connectionId: conn.id, provider: "microsoft" });
+    }
+    return deleted;
   };
 }

@@ -2,9 +2,10 @@
 // imports from "@nichols/connectors/health".
 //   - Health checkers: QuickBooks (read-only CompanyInfo call), Microsoft (read-only `GET /me`, T-256). Google has no `health` yet (the mail/calendar
 //     connectors are provider interfaces), so its connections get the expiry rule only. Add checkers as providers land.
-//   - Renewers: none. The renewal job is an interface; no provider creates or extends a subscription yet.
+//   - Renewers: Microsoft (T-068, T-264): ensures the connection's change-notification subscriptions (create when missing, renew within 24 hours of expiry, recreate when gone;
+//     stops them when the provider is paused). Google has none (Gmail watch is T-065, not built).
 import { connectionLoader, tokenHealthStore as store } from "../vault/index";
-import { microsoftHealth, microsoftHealthSkip } from "../microsoft/index";
+import { microsoftHealth, microsoftHealthSkip, microsoftSubscriptionRenewer } from "../microsoft/index";
 import { quickbooksConnector } from "../quickbooks/index";
 import { createSubscriptionRenewJob, createTokenHealthJob } from "./job";
 import type { HealthChecker, SubscriptionRenewer } from "./types";
@@ -13,7 +14,7 @@ const checkers: Record<string, HealthChecker> = {
   microsoft: microsoftHealth,
   quickbooks: (laneId, conn) => quickbooksConnector.health(laneId, conn as Parameters<typeof quickbooksConnector.health>[1]),
 };
-const renewers: Record<string, SubscriptionRenewer> = {};
+const renewers: Record<string, SubscriptionRenewer> = { microsoft: microsoftSubscriptionRenewer };
 
 export const tokenHealthJob = createTokenHealthJob({ loader: connectionLoader, store, checkers, skips: { microsoft: microsoftHealthSkip } });
 export const subscriptionRenewJob = createSubscriptionRenewJob({ loader: connectionLoader, store, renewers });

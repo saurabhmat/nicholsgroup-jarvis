@@ -30,6 +30,7 @@ import { PROVIDER_DISABLED_MESSAGE, providerEnabledIn } from "../facade/gate";
 import type { LaneConfigReader } from "../vault/lane-config";
 import type { GraphApi } from "./api";
 import type { MicrosoftGuard } from "./guard";
+import type { MicrosoftSubscriptions } from "./subscriptions";
 import { CANONICAL_FOLDER, encodeCursor, fingerprintOf, isFolderId, MAIL_FOLDER_NAMES, MAX_LINK_CHARS, OPTIONAL_FOLDERS, parseCursor, validateDeltaLink, type CursorState, type FolderState, type MailFolderName } from "./mail-cursor";
 import { createHeaderBudget, EVENT_MESSAGE_TYPE, flagsFromAnswer, HEADER_PAGE_DEADLINE_MS, HEADER_READ_TIMEOUT_MS, HEADER_READS_PER_WINDOW, HEADERS_QUERY, type HeaderFlags } from "./mail-headers";
 import { bodyFromAnswer, MAX_SEARCH_RESULTS, plainSearchWords, searchParam } from "./mail-live";
@@ -51,6 +52,11 @@ export type MicrosoftMailDeps = {
   /** Header read limits (T-259): per read and per page (default 8 s and 20 s; the clock is `now`). */
   headerReadTimeoutMs?: number;
   headerPageDeadlineMs?: number;
+  /**
+   * T-068: when injected, `capabilities.watch` is `push` and `watch`/`renew`/`stop` run the change-notification subscriptions of this connection (the inbox). Jobs only
+   * (never a request); the callback URL is server configuration. Without it the provider polls only, as before.
+   */
+  subscriptions?: Pick<MicrosoftSubscriptions, "ensure" | "stop" | "watchInfo">;
   /** Default body length of `readBody` when the caller names none. */
   defaultMaxBodyChars?: number;
 };
@@ -107,7 +113,7 @@ export function createMicrosoftMailProvider(deps: MicrosoftMailDeps): MailProvid
   const now = deps.now ?? Date.now;
   const log = deps.logger ?? connectorLog;
   const fullDays = deps.fullSyncDays ?? DEFAULT_FULL_SYNC_DAYS;
-  const capabilities: MailCapabilities = { watch: "polling", prepareWrite: true };
+  const capabilities: MailCapabilities = { watch: deps.subscriptions ? "push" : "polling", prepareWrite: true };
   const headerCfg = deps.headerFlags === false ? null : (deps.headerFlags ?? {});
   const headerReadTimeout = deps.headerReadTimeoutMs ?? HEADER_READ_TIMEOUT_MS;
   const headerDeadline = deps.headerPageDeadlineMs ?? HEADER_PAGE_DEADLINE_MS;
@@ -378,17 +384,26 @@ export function createMicrosoftMailProvider(deps: MicrosoftMailDeps): MailProvid
       }
       return envelope(laneId, g.conn, "mail.search", metas);
     },
-    // Graph change notifications are T-068 / T-264: until then mail is polled, no subscription is created.
+    // Graph change notifications (T-068, T-264): with `subscriptions` injected the inbox subscription is ensured and reported; the 15-minute poll stays as the fallback either way.
     async watch(laneId, conn) {
       await deps.guard(laneId, conn);
-      return pollingWatch();
+      const subs = deps.subscriptions;
+      if (!subs) return pollingWatch();
+      const at = new Date(now());
+      await subs.ensure(laneId, conn, { now: at });
+      return subs.watchInfo(laneId, conn, "mail", at);
     },
     async renew(laneId, conn) {
       await deps.guard(laneId, conn);
-      return pollingWatch();
+      const subs = deps.subscriptions;
+      if (!subs) return pollingWatch();
+      const at = new Date(now());
+      await subs.ensure(laneId, conn, { now: at });
+      return subs.watchInfo(laneId, conn, "mail", at);
     },
     async stop(laneId, conn) {
       await deps.guard(laneId, conn);
+      await deps.subscriptions?.stop(laneId, conn);
     },
     // T-262: the exact payload of an email proposal. Same rules as Gmail's: this connection's own mailbox is the sender; the conversation id is the reply thread.
     async prepareWrite(laneId, conn, intent): Promise<ProposedPayload<"microsoft">> {
