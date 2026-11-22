@@ -73,3 +73,13 @@ describe("the stale line and the sync status treat a Microsoft stream like a Goo
     expect(syncStatus(items, now)[0]?.text).toBe("Mail sync failed: Microsoft access expired. Reconnect in Settings.");
   });
 });
+
+describe("T-270 (b): a stream with no sync time of its own is never shown as synced or OK, for either provider", () => {
+  const NOW = new Date("2026-11-22T16:00:00Z");
+  const row = (provider: string, stream: "mail" | "calendar", lastSyncAt: string | null): CoverageRow => ({ stream, account: "a@x.test", connectionId: "c1", provider, status: "active", configured: false, lastSyncAt, errorKind: null });
+  it.each(["microsoft", "google"])("%s: calendar synced, mail not yet: Calendar is OK with its time, Mail is 'Not synced yet' with no time", (provider) => {
+    const [mail, cal] = toCoverage([row(provider, "mail", null), row(provider, "calendar", "2026-11-22T15:55:00Z")], NOW, 60);
+    expect(mail).toMatchObject({ stream: "mail", state: "stale", reason: "Not synced yet.", lastSyncAt: null });
+    expect(cal).toMatchObject({ stream: "calendar", state: "ok", lastSyncAt: "2026-11-22T15:55:00Z" });
+  });
+});

@@ -5,6 +5,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { cleanup, render, screen, within } from "@testing-library/react";
 import type { ComposioSectionView } from "@/lib/composio-connection";
 import type { GoogleSectionView } from "@/lib/google-connection";
+import type { MicrosoftSectionView } from "@/lib/microsoft-connection";
 import type { QuickBooksSectionView } from "@/lib/quickbooks-connection";
 import { SUPPORT_EMAIL, SUPPORT_HREF } from "@/lib/support";
 import { ConnectionsSection } from "./connections-section";
@@ -104,6 +105,44 @@ describe("ConnectionsSection", () => {
     cleanup();
     render(<ConnectionsSection laneId="PKG" google={{ connections: google.connections.map((c) => ({ ...c, state: "reconnect_required" as const })) }} quickbooks={null} composio={null} />);
     expect(screen.queryByTestId("settings-sync-now")).toBeNull();
+  });
+
+  describe("T-270: one provider-neutral Sync now", () => {
+    const ms = (over: Partial<MicrosoftSectionView> = {}): MicrosoftSectionView => ({
+      canSync: true,
+      adminConsentUrl: null,
+      writes: false,
+      connections: [{ id: "m1", mailbox: "me@ms.example.test", state: "connected", mailboxAllowed: true, mine: true, lastMailSyncAt: null, lastCalendarSyncAt: null }],
+      ...over,
+    });
+    it("a Microsoft-only company (no Google view) has Sync now", () => {
+      render(<ConnectionsSection laneId="NC" google={null} microsoft={ms()} quickbooks={null} composio={null} />);
+      expect(screen.getByTestId("settings-sync-now").tagName).toBe("BUTTON");
+    });
+    it("Google and Microsoft both connected: exactly one button", () => {
+      render(<ConnectionsSection laneId="PKG" google={google} microsoft={ms()} quickbooks={null} composio={null} />);
+      expect(screen.getAllByTestId("settings-sync-now")).toHaveLength(1);
+    });
+    it("Google connected, Microsoft listed but not connected: one button (any usable connection is enough)", () => {
+      render(<ConnectionsSection laneId="PKG" google={google} microsoft={ms({ connections: [] })} quickbooks={null} composio={null} />);
+      expect(screen.getAllByTestId("settings-sync-now")).toHaveLength(1);
+    });
+    it("Microsoft needs a reconnect and nothing else is usable: none; a person who may not sync (no canSync): none; paused or unavailable: none", () => {
+      const reconnect = ms({ connections: [{ id: "m1", mailbox: "me@ms.example.test", state: "reconnect_required", mailboxAllowed: true, mine: true, lastMailSyncAt: null, lastCalendarSyncAt: null }] });
+      render(<ConnectionsSection laneId="NC" google={null} microsoft={reconnect} quickbooks={null} composio={null} />);
+      expect(screen.queryByTestId("settings-sync-now")).toBeNull();
+      cleanup();
+      const { canSync: _drop, ...viewer } = ms();
+      void _drop;
+      render(<ConnectionsSection laneId="NC" google={null} microsoft={viewer} quickbooks={null} composio={null} />);
+      expect(screen.queryByTestId("settings-sync-now")).toBeNull();
+      cleanup();
+      render(<ConnectionsSection laneId="NC" google={null} microsoft={ms({ paused: true })} quickbooks={null} composio={null} />);
+      expect(screen.queryByTestId("settings-sync-now")).toBeNull();
+      cleanup();
+      render(<ConnectionsSection laneId="NC" google={null} microsoft={ms({ unavailable: true })} quickbooks={null} composio={null} />);
+      expect(screen.queryByTestId("settings-sync-now")).toBeNull();
+    });
   });
 
   it("T-247: your own accounts have the buttons; another person's account is listed for status only, with no buttons and no Sync now without the connections view", () => {

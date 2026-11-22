@@ -439,3 +439,29 @@ describe("replyable (T-249)", () => {
     expect(failures?.replyable).toBe(false);
   });
 });
+
+// T-270 (d): an automated report in a Microsoft mailbox (a DMARC aggregate report: sender at a company domain, "Report Domain: ... Report-ID: ...") was tagged
+// "Waiting on you". The rule is waitingOnYou = owner in the To of the latest message AND the sender is not automated, where "automated" comes from the header
+// flags read at sync (Auto-Submitted other than "no" -> isGenerated; List-* or Precedence bulk/list/junk -> isBulk; auto-reply headers -> isAuto) and the lane's
+// own sender lists (lane_config). A Microsoft row has isAuthPass false always. These tests pin what the rule already does with each documented signal; a
+// message that carries none of them and comes from a sender on none of the lane's lists is, correctly by the rule, a person's mail. No sender or company
+// name in code separates it, so no rule was added (the cause and the options are in the T-270 report).
+describe("T-270: automated mail and \"Waiting on you\" (Microsoft rows: isAuthPass false)", () => {
+  const report = { fromAddress: "dmarcreport@sender.example.test", subject: "Report Domain: corp.example.test Submitter: mail.example.test Report-ID: <1234>", lastToOwner: true, unreadCount: 0, isAuthPass: false };
+  const top = (over: Partial<ThreadRow>) => rankAttention([t({ ...report, ...over })], rules, now).top[0];
+  it.each([
+    ["Auto-Submitted: auto-generated (isGenerated)", { isGenerated: true }],
+    ["List-Unsubscribe / List-Id / Precedence: bulk (isBulk)", { isBulk: true }],
+    ["Auto-Submitted: auto-replied (isAuto)", { isAuto: true }],
+  ])("with %s it is left out of the list altogether, never \"Waiting on you\"", (_why, flags) => {
+    expect(top(flags)).toBeUndefined();
+  });
+  it("with none of those signals and a sender on none of the lane's lists, it is kept and counts as a person's mail (the live case)", () => {
+    const item = top({});
+    expect(item?.flags.waitingOnYou).toBe(true);
+  });
+  it("a sender the LANE lists as automated (lane_config exclusions.automated_senders) is not on the list at all: the fix for this case is configuration, not code", () => {
+    const custom: AttentionRules = { ...rules, exclusions: { ...rules.exclusions, automated_senders: [...rules.exclusions.automated_senders, "dmarc"] } };
+    expect(rankAttention([t(report)], custom, now).top).toEqual([]); // automated and read: not a person's mail, so not on the list (and never "Waiting on you")
+  });
+});

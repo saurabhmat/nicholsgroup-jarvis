@@ -1,7 +1,7 @@
 -- T-196: core.connector_api_errors (RLS, service-role-only writes, database guards, purge) and run logging for every QuickBooks
 -- job (core.sync_runs.job). Includes the cross-lane denial.
 begin;
-select plan(36);
+select plan(37);
 \ir helpers/lane_rls.psql
 
 update core.lanes set enabled = true where code = 'APK';
@@ -126,8 +126,13 @@ reset role;
 insert into core.sync_runs (lane_id, connection_id, kind, trigger, job, status, finished_at) values
   ('PKG', '00000000-0000-4000-8000-000000009603', 'incremental', 'schedule', 'sync', 'succeeded', now());
 set local role service_role;
+select is((select max(last_sync_at) from core.briefing_coverage('PKG', pg_temp.uid('owner@example.test')) where connection_id = '00000000-0000-4000-8000-000000009603'), null::timestamptz,
+  'T-270: neither does a succeeded sync run: only a stream''s own cursor time counts');
+reset role;
+insert into core.sync_cursors (lane_id, connection_id, stream, cursor_value) values ('PKG', '00000000-0000-4000-8000-000000009603', 'mail', 'g1.00000000-0000-4000-8000-000000009603.h:1');
+set local role service_role;
 select isnt((select max(last_sync_at) from core.briefing_coverage('PKG', pg_temp.uid('owner@example.test')) where connection_id = '00000000-0000-4000-8000-000000009603'), null::timestamptz,
-  'a succeeded sync run does');
+  'a stored mail cursor does');
 reset role;
 
 select * from finish();

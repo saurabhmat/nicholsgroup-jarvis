@@ -63,7 +63,8 @@ export function createConnectHandlers(flow: Pick<ReturnType<typeof createOAuthFl
         if (kind === "forbidden") return json("forbidden", 403);
         if (kind === "not_found") return json("not_found", 404);
         if (kind === "rate_limited") return json("too_many_connects", 429);
-        console.error("[api/connect/start] unavailable:", e instanceof Error ? e.name : typeof e);
+        // The class name, and for a ConnectorError its kind and fixed (already redacted) message: enough to tell a configuration refusal from an outage.
+        console.error("[api/connect/start] unavailable:", e instanceof Error ? e.name : typeof e, isConnectorError(e) ? { kind: e.info.kind, message: e.info.message } : {});
         return json("unavailable", 503);
       }
     },

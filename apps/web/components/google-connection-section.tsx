@@ -5,9 +5,8 @@
 // the route checks the origin, the role and AAL2, then sends you to Google's consent page. T-238: every row has its OWN "Reconnect"
 // (the same flow bound to that connection: the callback accepts only that row's account, replaces its tokens and never creates a
 // second row). It is the primary button for a row that needs it (reconnect needed, disconnected, with problems) and an outline
-// button on a healthy row (to refresh access, for example to grant a new permission). "Sync now" sits above the list. There is no Disconnect button (D-24).
+// button on a healthy row (to refresh access, for example to grant a new permission). "Sync now" is no longer here: it is one provider-neutral bar in connections-section.tsx (T-270). There is no Disconnect button (D-24).
 import { Alert, AlertDescription, AlertTitle, Badge, buttonVariants } from "@nichols/ui";
-import { SyncNowButton } from "./sync-now-button";
 import type { GoogleConnectionState, GoogleSectionView } from "@/lib/google-connection";
 import { ConnectionRow, when } from "./connection-rows";
 
@@ -39,17 +38,6 @@ export function GoogleNotices({ view }: { view: GoogleSectionView }) {
         </Alert>
       ) : null}
     </>
-  );
-}
-
-/** "Sync now" for the Google accounts (owner or admin_technical: the view is null for everyone else). Drawn only with a connected account. */
-export function GoogleSyncBar({ laneId, view }: { laneId: string; view: GoogleSectionView }) {
-  if (view.unavailable || view.paused || !view.canSync || !view.connections.some((c) => c.state === "connected" || c.state === "degraded")) return null;
-  return (
-    <div data-testid="google-sync-bar" className="flex flex-wrap items-center gap-3 text-small text-muted-foreground">
-      <span>Mail and calendar sync every 15 minutes. To check for new items right now:</span>
-      <SyncNowButton laneId={laneId} testId="settings-sync-now" />
-    </div>
   );
 }
 

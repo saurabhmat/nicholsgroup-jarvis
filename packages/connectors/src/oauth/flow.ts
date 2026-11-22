@@ -104,6 +104,11 @@ export interface OAuthProvider {
    * The connected account and the expiry of the credential whose loss forces a reconnect. Throw a ConnectorError to
    * refuse the account (e.g. a QuickBooks realm that is not the lane's). May call the provider with `http`.
    */
+  /**
+   * Extra structured fields for the `connector.oauth_callback_failed` log line of a refusal this provider threw (T-270). Must return only
+   * values the provider has already bounded (never a token, code or address). Never in the user message, the redirect or the audit row.
+   */
+  logFields?(cause: unknown): Record<string, unknown> | undefined;
   identify(input: { laneId: LaneId; tokens: TokenResponse; callback: URLSearchParams; http: HttpClient; nonce?: string }): Promise<{
     externalAccountId: string;
     expiresAt: Date | null;
@@ -366,6 +371,7 @@ export function createOAuthFlow(deps: OAuthFlowDeps) {
         (deps.logger ?? connectorLog).child({ laneId, provider: p.provider }).warn("connector.oauth_callback_failed", {
           reason,
           error: isConnectorError(cause) ? cause : { error_name: cause instanceof Error ? cause.name : typeof cause },
+          ...(p.logFields?.(cause) ?? {}),
         });
         if (exchanged) {
           await deps.audit

@@ -691,6 +691,9 @@ isOneToOne: false
 "briefing_save_own":
 { Args: { "p_content": Json,"p_coverage": Json,"p_lane": string,"p_model": string,"p_source_refs": Json,"p_status": string,"p_window_from": string,"p_window_to": string }; Returns: string
                            },
+"briefing_sources_newer":
+{ Args: { "p_lane": string }; Returns: boolean
+                           },
 "briefing_threads":
 { Args: { "p_lane": string,"p_owner"?: string,"p_since": string }; Returns: {
               "connection_id": string,"from_address": string,"from_name": string,"inbound_count": number,"is_auth_pass": boolean,"is_auto": boolean,"is_bulk": boolean,"is_calendar": boolean,"is_generated": boolean,"is_important": boolean,"labels": (string)[],"last_at": string,"last_is_owner": boolean,"last_to_owner": boolean,"message_id": string,"owner_replied": boolean,"received_at": string,"source_url": string,"subject": string,"thread_key": string,"unread_count": number

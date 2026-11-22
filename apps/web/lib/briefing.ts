@@ -320,8 +320,13 @@ export async function latestBriefing(client: Db, laneId: string): Promise<SavedB
 /** The owner's run state for the card (null for anyone else or on error: no controls). */
 export async function loadRunState(client: Db, laneId: string): Promise<BriefingRunStateView | null> {
   try {
-    const { data, error } = await client.schema("core").rpc("briefing_run_state", { p_lane: laneId });
-    return error ? null : briefingRunStateFrom(data);
+    const [state, newer] = await Promise.all([
+      client.schema("core").rpc("briefing_run_state", { p_lane: laneId }),
+      // T-270: a failed or missing read counts as "not newer": the 3-hour rule alone then applies, as before.
+      Promise.resolve(client.schema("core").rpc("briefing_sources_newer", { p_lane: laneId })).then((r) => r.data === true, () => false),
+    ]);
+    const view = state.error ? null : briefingRunStateFrom(state.data);
+    return view === null ? null : { ...view, sourcesNewer: newer };
   } catch {
     return null;
   }

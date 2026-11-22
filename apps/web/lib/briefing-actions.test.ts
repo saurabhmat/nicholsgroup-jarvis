@@ -132,6 +132,41 @@ describe.each([
     expect(state.after).not.toHaveBeenCalled();
   });
 
+  it.each([
+    ["nothing connected (the 'nothing set up' marker rows)", [{ stream: "mail", account: null, connection_id: null, provider: null, status: "not_configured", configured: false, last_sync_at: null }, { stream: "calendar", account: null, connection_id: null, provider: null, status: "not_configured", configured: false, last_sync_at: null }]],
+    ["a Microsoft connection that is only pending", [{ stream: "mail", account: "a@ms.example.test", connection_id: "c9", provider: "microsoft", status: "pending", configured: false, last_sync_at: null }]],
+    ["a Microsoft connection that needs a reconnect", [{ stream: "mail", account: "a@ms.example.test", connection_id: "c9", provider: "microsoft", status: "reconnect_required", configured: false, last_sync_at: null }]],
+  ])("T-270: %s: gate no_sources, no claim, no model call, nothing scheduled", async (_label, rows) => {
+    state.rpc.mockImplementation(async (fn: string) => (fn === "briefing_coverage" ? { data: rows, error: null } : { data: { id: "x", gate: null }, error: null }));
+    expect(await action("NC")).toEqual({ started: false, gate: "no_sources" });
+    expect(state.rpc.mock.calls.map((c) => c[0])).not.toContain(claimFn);
+    expect(state.after).not.toHaveBeenCalled();
+    expect(state.run).not.toHaveBeenCalled();
+    expect(state.brainLoad).not.toHaveBeenCalled();
+  });
+
+  it.each([["microsoft", "m1"], ["google", "g1"]])("T-270 review M1: %s person connected at :05, calendar synced at :15, Home opened at :18: gate not_synced, no claim, no brain load, no model call; once mail synced it starts", async (provider) => {
+    const row = (stream: string, at: string | null) => ({ stream, account: "a@x.example.test", connection_id: "c9", provider, status: "active", configured: false, last_sync_at: at });
+    state.rpc.mockImplementation(async (fn: string) => (fn === "briefing_coverage" ? { data: [row("mail", null), row("calendar", "2026-11-22T15:15:00Z")], error: null } : { data: { id: "x", gate: null }, error: null }));
+    expect(await action("NC")).toEqual({ started: false, gate: "not_synced" });
+    expect(state.rpc.mock.calls.map((c) => c[0])).not.toContain(claimFn);
+    expect(state.after).not.toHaveBeenCalled();
+    expect(state.run).not.toHaveBeenCalled();
+    expect(state.brainLoad).not.toHaveBeenCalled();
+    state.rpc.mockImplementation(async (fn: string) => (fn === "briefing_coverage" ? { data: [row("mail", "2026-11-22T15:22:00Z"), row("calendar", "2026-11-22T15:15:00Z")], error: null } : { data: { id: "claim-9", gate: null }, error: null }));
+    expect(await action("NC")).toEqual({ started: true });
+  });
+
+  it("T-270: a Microsoft-only lane with an active own mailbox starts a run (a Google lane is the default of every other test here)", async () => {
+    state.rpc.mockImplementation(async (fn: string) =>
+      fn === "briefing_coverage"
+        ? { data: [{ stream: "mail", account: "a@ms.example.test", connection_id: "c9", provider: "microsoft", status: "active", configured: false, last_sync_at: "2026-11-22T11:22:00Z" }], error: null }
+        : { data: { id: "claim-9", gate: null }, error: null },
+    );
+    expect(await action("NC")).toEqual({ started: true });
+    expect(state.rpc).toHaveBeenCalledWith(claimFn, { p_lane: "NC" });
+  });
+
   it("the brain context never gets the current lane's client for another lane; after the load window every request is refused", async () => {
     let storeFor: ((l: string) => Promise<unknown>) | null = null;
     state.brainLoad.mockImplementation(async () => {
@@ -200,7 +235,7 @@ describe.each([
 describe("briefingRunState", () => {
   it("returns the owner's run state; null for a non-owner, a bad lane or an error", async () => {
     state.rpc.mockResolvedValueOnce({ data: [{ running: true, last_regenerate_at: null, runs_today: 2, latest_prepared_at: "2026-11-12T10:00:00Z", last_attempt_at: "2026-11-12T10:00:00Z" }], error: null });
-    expect(await briefingRunState("PKG")).toEqual({ running: true, lastRegenerateAt: null, runsToday: 2, latestPreparedAt: "2026-11-12T10:00:00Z", lastAttemptAt: "2026-11-12T10:00:00Z" });
+    expect(await briefingRunState("PKG")).toEqual({ running: true, lastRegenerateAt: null, runsToday: 2, latestPreparedAt: "2026-11-12T10:00:00Z", lastAttemptAt: "2026-11-12T10:00:00Z", sourcesNewer: false });
     expect(state.requireRole).toHaveBeenLastCalledWith("PKG", ["owner", "admin_technical", "viewer"]);
     state.rpc.mockResolvedValueOnce({ data: [], error: null });
     expect(await briefingRunState("PKG")).toBeNull();
