@@ -1981,3 +1981,8 @@ Both boxes were checked at his request ("close H-068 and H-073 too"), not on evi
 - **H-068:** not confirmed in words: that the `GRAPH_*` variables exist in Vercel Production only (never Preview) and belong to the Nov 21 app registration. Production `NC` connects, syncs, drafts and sends with them. The outputs of `check-part-30.sql` and `check-part-31.sql` were not pasted.
 - **H-073 / V-21:** no observation recorded. Open as unknowns, not as work: the subscription expiry on Settings ("Live updates until ..."), the delivery delay of a new message, the fall-back to polling, that `me/events` covers exactly the default calendar, that one address serves as notification and lifecycle address, and the 3-second answer. A failure of any of these leaves the 15-minute polling in place.
 
+## Home observations in `NC`: fix task declined (Nov 22, 2026)
+
+Saurabh: "no to dmarc task". No task is created for the automated DMARC report being ranked as mail from a person; the behaviour stays as built (the sender matches none of `briefing` `automated_senders`; a lane can add a pattern in its lane_config later without code). Later the same day the row was no longer on his Home ("Nothing new needs you in the mail that was read").
+The summary sentence "I could not check whether the payment actually went through" is still unexplained: the saved briefing was not read (he pasted Home's text, not the query result). Known gap, logged, not scheduled: `grounded()` checks figures and dates only, so an unsupported sentence without numbers reaches Home.
+
