@@ -1842,3 +1842,15 @@ Logged for later:
 - (security L6) First names appear in pgTAP comments with `example.test` addresses; neutral role names would be cleaner.
 - (builder) The check file's "no other lane changed in the last 2 hours" rows can warn falsely when another lane was edited on purpose in that window.
 - The module check on API routes adds one lane check and one config read per call of those routes for every lane (React `cache` does not memoise in route handlers; calling session's reading, not measured).
+
+## T-265 follow-up: the manual SQL adapted to what production really has (Nov 22, 2026)
+The first production run stopped without writing anything ("No portal sign-in for the owner address yet"). Read-only queries by Saurabh showed: production has ONE portal user (Saurabh, `owner` of `PKG`); Robert has no sign-in; `NC` exists, disabled, with the untouched bootstrap policy (nothing allowed, 30 days), no config, no members, no connections. The SQL and runbook had been written from the documents (two people; a fresh policy), and the builder's local runs used a lane code that did not exist, so the "lane exists with the default policy" case was never run (backlog H-074).
+
+Changed by the calling session in the two gitignored files (`enable-lane-mail-T-265.sql`, `check-enable-lane-mail-T-265.sql`) and the runbook:
+- The owner is optional (`''`): the first run names the admin_technical only; the same file run again with the owner's address adds the owner and changes nothing else. The "other members" refusal no longer uses `not in (v_owner, v_tech)`, which would have passed silently with no owner named.
+- The policy step replaces the policy only when it is exactly the untouched bootstrap default (every column at its most restrictive default and `updated_at = created_at`), setting `llm_allowed_categories = {email, calendar}` and `retention_days = 90` (spec §12.1). Any other existing policy is still refused.
+- The check accepts "no owner named" only when the lane has no owner and exactly one member.
+
+Tested on the local database in rolled-back transactions with the local `NC` made to look like production: run without owner, second run (nothing changed), check 14 of 14 true, owner added later, check again; refusals for an edited policy, a policy with a write action, a stray member and a stray owner; and a rehearsal of the filled files with a local user given the same sign-in address. One security review of the change: no BLOCKER, no HIGH; MEDIUM (runbook still described two people: fixed) and LOW-2 (owner lookup evaluated with an empty address: fixed). Logged: (LOW-1) a policy deliberately inserted with exactly the default values cannot be told from the bootstrap one; (LOW-3) no notice when the policy already matches.
+
+Lesson for later runbooks: before writing production SQL from the documents, have the human run a read-only state query first.

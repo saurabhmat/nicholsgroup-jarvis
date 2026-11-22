@@ -40,8 +40,17 @@ Tick every line. Each one has an exact way to check it.
    *Expect:* every row `true` in each (13, 5 and 5 rows; they were applied on Nov 21, 2026). If a check shows `false`, do not go on.
 4. **Consent is granted in the company's Microsoft tenant** (H-063): the tenant admin has approved the portal's app once, or users may consent
    themselves. For `NC` you are the tenant admin, so this is done (backlog H-063). For another company: ask its admin (spec section 5.5).
-5. **Both people have signed in to the portal once** (email code, then the authenticator code), so a user exists for each. Robert and you
-   already have, through `PKG`. For a new person: they open the portal address and sign in once.
+5. **Each person you name has signed in to the portal once** (email code, then the authenticator code), so a user exists for them. Do not
+   assume it: check with this read-only query in the SQL Editor (production), which lists every portal user:
+   ```sql
+   select u.email, u.email_confirmed_at is not null as confirmed,
+          exists (select 1 from auth.mfa_factors f where f.user_id = u.id and f.status = 'verified') as authenticator
+   from auth.users u order by u.email;
+   ```
+   *Expect:* a row with `confirmed` and `authenticator` both `true` for each person you will name. (Nov 22, 2026: production had one portal
+   user only, so the first run for `NC` named no owner.) **The owner is optional:** when the owner has no portal sign-in yet, leave the owner
+   address and name empty (`''`) in both files; the company then has the admin_technical member only. Add the owner later with the section
+   "Add the owner later" below.
 6. **You know the eight values** (six items; two of them are an address plus a name) (never write them in any committed file or chat; they go only into the gitignored SQL file on your machine):
 
    | Value | Example (NC) | Where it comes from |
@@ -50,7 +59,7 @@ Tick every line. Each one has an exact way to check it.
    | Lane display name | the company's name as the portal should show it | only used when the company has no row yet |
    | Mail domain | the company's mail domain, lower case | the part of the mailbox address after `@` |
    | Tenant id | a lower-case UUID | Entra admin centre -> **Overview** -> **Tenant ID** (backlog H-063 has it) |
-   | Owner sign-in address and name | Robert's portal sign-in address | the address he signs in to the portal with, not necessarily his mailbox |
+   | Owner sign-in address and name | Robert's portal sign-in address, or empty (`''`) for both when he has no portal sign-in yet | the address he signs in to the portal with, not necessarily his mailbox |
    | admin_technical sign-in address and name | your portal sign-in address | the address you sign in to the portal with |
 
 7. **Write down the "before" state** (you compare against it at the end). Supabase SQL Editor (production), run:
@@ -83,8 +92,8 @@ The files are in `supabase/core/bootstrap/manual-migrations/` and are gitignored
 Supabase dashboard (the **production** project: check the project name in the top left) -> **SQL Editor** -> **New query** -> paste the whole
 `enable-lane-mail-T-265.sql` -> **Run**.
 
-*Expect:* the result panel says success, and the messages (the "Messages" or "Notices" tab) read, in this order:
-`OWNER resolved: display name ..., sign-in email ..., already member of: ...` and `ADMIN_TECHNICAL resolved: ...` (**read these two lines: the names and emails must be Robert and you**. The SQL Editor shows the messages only after the script has finished, so if either is the wrong person the change is already written: do not go on, do not set `ENABLED_LANES`, and take the company out of service with rollback level 2, step 3, below, then tell the agent), then `Lane NC created and enabled.` (or `Lane NC enabled.`), `Lane policy written.`, `Lane config version 1 written.`,
+*Expect:* the result panel says success, and the messages (the "Messages" or "Notices" tab) read, in this order (with no owner named the first line is `OWNER: none named. ...` and there is no `Owner membership written.`; for a company that already had the unused default policy the policy line is `Lane policy: the untouched bootstrap policy (nothing allowed, 30 days) replaced by the mail-only policy ...`):
+`OWNER resolved: display name ..., sign-in email ..., already member of: ...` and `ADMIN_TECHNICAL resolved: ...` (**read these two lines: the names and emails must be Robert and you**; when no owner was named, only the ADMIN_TECHNICAL line names a person, and it must be you. The SQL Editor shows the messages only after the script has finished, so if either is the wrong person the change is already written: do not go on, do not set `ENABLED_LANES`, and take the company out of service with rollback level 2, step 3, below, then tell the agent), then `Lane NC created and enabled.` (or `Lane NC enabled.`), `Lane policy written.`, `Lane config version 1 written.`,
 `Owner membership written.`, `Admin_technical membership written.`, `Done. Now run check-enable-lane-mail-T-265.sql...`.
 
 *If it stops with an error,* nothing was written (the script is one transaction). The message says what to fix:
@@ -102,7 +111,7 @@ Supabase dashboard (the **production** project: check the project name in the to
 SQL Editor -> new query -> paste the whole `check-enable-lane-mail-T-265.sql` -> **Run**.
 
 *Expect:* 14 rows, every `ok` = `true`. Do **not** go on with any false row.
-Then two more result sets with real values: the lane row (`code`, `name`, `enabled`) and one row per member (role, display name, sign-in email, confirmed, authenticator). **Confirm the two names shown are the owner and you**, there are exactly two rows, and `enabled` is `true`. (Some SQL editors show only the last result set; use the tabs under the Run button.)
+Then two more result sets with real values: the lane row (`code`, `name`, `enabled`) and one row per member (role, display name, sign-in email, confirmed, authenticator). **Confirm the two names shown are the owner and you**, there are exactly two rows, and `enabled` is `true`. (When no owner was named: exactly **one** row, you as admin_technical. Do not add anyone by hand.) (Some SQL editors show only the last result set; use the tabs under the Run button.)
 
 **Then put the placeholders back.** In both SQL files replace every value you pasted by its `PASTE-...` again (or delete your filled copies, or keep filled copies outside the repository). The files are gitignored, but a filled file must not sit in the checkout.
 Two rows look at "the last 2 hours" for other companies' settings and policies: if one of them is false because you changed another
@@ -179,6 +188,14 @@ roles; checked in code, see the PR notes).
 
 Write down for the agent, step by step, "ok" or the message you saw word for word. Never paste a token or a code. These answers settle the
 live checks of `docs/plan-review.md` (H-070 step 3).
+
+## Add the owner later
+
+When the first run named no owner: the owner signs in to the portal once (email code, then authenticator). Then put the owner's sign-in
+address and name into `enable-lane-mail-T-265.sql` and the address into both places of the check file, keep every other value exactly as in
+the first run, and run both again (sections 2 and 3). *Expect:* `OWNER resolved: ...`, `Lane config version 1 is already exactly this:
+nothing written.`, `Owner membership written.`, then the check with every row true and two member rows. Nothing else changes: no new
+settings version, no policy change, no redeploy.
 
 ## Add a second provider, or use another provider, later
 
