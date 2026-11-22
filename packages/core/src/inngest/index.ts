@@ -36,6 +36,8 @@ export { BRAIN_IMPORT_PURGE_CRON, BRAIN_IMPORT_PURGE_RETRIES, brainImportPurgeFu
 export type { BrainImportPurgeDeps } from "./brain-import-purge";
 export { QBO_WEBHOOK_BATCH, QBO_WEBHOOK_RETRIES, handleQboWebhookSync, qboWebhookSyncEventId, qboWebhookSyncFunctions } from "./qbo-webhook-sync";
 export type { QboWebhookSyncDeps, QboWebhookSyncResult } from "./qbo-webhook-sync";
+export { MICROSOFT_WEBHOOK_BATCH, MICROSOFT_WEBHOOK_RETRIES, handleMicrosoftWebhookSync, microsoftWebhookSyncEventId, microsoftWebhookSyncFunctions } from "./microsoft-webhook-sync";
+export type { MicrosoftWebhookSyncDeps, MicrosoftWebhookSyncResult } from "./microsoft-webhook-sync";
 export {
   CAL_INGEST_CADENCE_MS,
   CAL_INGEST_CRON,

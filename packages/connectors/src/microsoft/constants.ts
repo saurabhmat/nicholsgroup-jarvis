@@ -105,3 +105,39 @@ export const OUTLOOK_WEB_HOSTS: Readonly<Record<MicrosoftCloud, ReadonlySet<stri
   commercial: new Set(["outlook.office.com", "outlook.office365.com"]),
   gcc_high: new Set<string>(),
 });
+
+/** The connection feature the connect callback records when Microsoft granted `Mail.ReadWrite` and `Mail.Send` (T-066, spec §7; the Microsoft counterpart of Google's `gmail_compose`). */
+export const GRAPH_MAIL_WRITE_FEATURE = "graph_mail_write";
+/**
+ * The idempotency marker of an approved email (T-262, spec §10, V-19): a single-value extended property, id form `String {guid} Name <name>` (the name is case
+ * sensitive), holding the action id. Custom `internetMessageHeaders` can be set only when a message is created, so they cannot mark a reply draft; this property
+ * can be set by PATCH on a draft. The GUID is ours alone (a fixed property set; any GUID is valid for a named property).
+ */
+export const PORTAL_MARKER_PROPERTY_ID = "String {b3c1d2e4-5f60-4a7b-8c9d-0e1f2a3b4c5d} Name NicholsPortalActionId";
+/** Well-known folder names the writer looks in (they work as a path segment of `/me/mailFolders/{id}/messages`). */
+export const DRAFTS_FOLDER = "drafts";
+export const SENT_FOLDER = "sentitems";
+
+// ---- Change notifications (T-068, T-264; spec §14, V-21 checked against Microsoft's documentation on Nov 22, 2026) ----
+/** The resources subscribed to (V-21): the inbox's messages (delegated `Mail.Read`) and `me/events` (`Calendars.Read`). A default-calendar-only resource string is not documented; D-59 syncs only the default calendar and `me/events` is read as exactly that (H-073 lists what it covers). */
+export const SUBSCRIPTION_RESOURCES = Object.freeze({
+  mail: "me/mailfolders('inbox')/messages",
+  calendar: "me/events",
+} as const);
+export type SubscriptionResource = keyof typeof SUBSCRIPTION_RESOURCES;
+/** Graph's longest lifetime of an Outlook message or event subscription without resource data: 10,080 minutes, a little under seven days (V-21). */
+export const GRAPH_MAX_SUBSCRIPTION_MINUTES = 10_080;
+/**
+ * The expiry we ask for: 6 days (8,640 minutes), a day under Graph's maximum so clock skew or a rounding on Microsoft's side can never make Graph refuse the value
+ * (a refused value would leave the connection on polling). Every renewal asks for the same lifetime again from the renewal time.
+ */
+export const SUBSCRIPTION_LIFETIME_MINUTES = 8_640;
+/**
+ * A subscription is renewed once it expires within 24 hours. The renewal scan (conn.subscriptions_renew) runs every 12 hours, so a subscription is always renewed with
+ * at least 12 hours left, and one missed scan still leaves the next one before it lapses. Do not shorten the window below twice the scan interval.
+ */
+export const SUBSCRIPTION_RENEW_WINDOW_MS = 24 * 3600_000;
+/** `changeType` of every subscription: all three, so a deleted or edited message also triggers the (metadata-only) delta sync. */
+export const SUBSCRIPTION_CHANGE_TYPES = "created,updated,deleted";
+/** The templates of the subscription routes (exact strings; a path is never built from data). */
+export const isSubscriptionsPath = (path: string): boolean => path === "/subscriptions" || path === "/subscriptions/{id}";

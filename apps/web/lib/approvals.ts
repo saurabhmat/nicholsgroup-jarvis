@@ -225,6 +225,8 @@ export type CardCapability = { enabled: boolean; message: string | null; setting
 export type PendingCard = {
   id: string;
   actionType: "email.send" | "email.save_draft";
+  /** The provider of the sending connection (T-263): the card is labelled with it and the mailbox. */
+  provider: "google" | "microsoft";
   mailbox: string;
   to: string[];
   cc: string[];
@@ -254,6 +256,8 @@ export { isOutcomeUnknown };
 export type HistoryItem = {
   id: string;
   actionType: ActionRow["actionType"];
+  /** `google`, `microsoft` or null for an action that is not an email (T-263). */
+  provider: "google" | "microsoft" | null;
   status: ActionRow["status"];
   to: string[];
   subject: string;
@@ -308,6 +312,7 @@ export function toCard(row: ActionRow, facts: CapabilityFacts, laneId: string, i
   return {
     id: row.id,
     actionType,
+    provider: row.provider === "microsoft" ? "microsoft" : "google",
     mailbox: typeof row.payload.fromMailbox === "string" ? row.payload.fromMailbox : (facts.mailbox ?? ""),
     to: strs(row.payload.to),
     cc: strs(row.payload.cc),
@@ -330,6 +335,7 @@ export function toHistory(row: ActionRow): HistoryItem {
   return {
     id: row.id,
     actionType: row.actionType,
+    provider: row.provider === "microsoft" ? "microsoft" : row.provider === "google" ? "google" : null,
     status: row.status,
     to: strs(row.payload.to),
     subject: row.actionType === "qbo.disconnect" ? "Disconnect QuickBooks" : typeof row.payload.subject === "string" ? row.payload.subject : "",

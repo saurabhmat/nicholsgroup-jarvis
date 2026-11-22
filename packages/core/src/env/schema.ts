@@ -241,6 +241,10 @@ export const connectorEnvShapes = {
     GRAPH_CLIENT_ID: nonEmpty,
     GRAPH_CLIENT_SECRET: nonEmpty,
     GRAPH_REDIRECT_URI: httpUrl().optional(),
+    // T-068: the public https URL Microsoft calls with change notifications (ends with /api/webhooks/microsoft). Optional everywhere: unset
+    // means no subscription is created and polling stays the only way mail and calendar are fetched (the normal local and preview state).
+    // Any string passes here on purpose; `graphNotificationUrl` checks it, so a typo cannot stop Microsoft connect, sync or health.
+    GRAPH_NOTIFICATION_URL: nonEmpty.max(2048).optional(),
   },
   // A separate app registered inside the GCC High cloud. Defined only; nothing reads it until T-267.
   graph_usgov: {
@@ -304,6 +308,33 @@ function checkRedirect(value: string | undefined, name: string, flags: RuntimeFl
   if (value === undefined) ctx.addIssue({ code: "custom", message: "required outside local development", path: [name] });
   else if (!value.startsWith("https://")) ctx.addIssue({ code: "custom", message: "https required", path: [name] });
   else if (new URL(value).origin !== flags.appOrigin) ctx.addIssue({ code: "custom", message: "must be on the app's own origin", path: [name] });
+}
+
+/** The path Microsoft's change notifications are sent to (T-068); the receiver route is `app/api/webhooks/microsoft`. */
+export const MICROSOFT_NOTIFICATION_PATH = "/api/webhooks/microsoft";
+
+/**
+ * GRAPH_NOTIFICATION_URL rules (T-068): optional; when set it must be https (Microsoft cannot call anything else, in local development too), have no credentials, query or
+ * fragment, end exactly with the receiver path, and outside local sit on the app's own origin. The value is the only source of the notification URL: it is never taken from a request
+ * header or host. Returns the fixed rule text it breaks, or null. It is NOT part of the `graph` schema on purpose: a mistake in this one optional variable must not stop Microsoft
+ * connect, sync or health (those read the same group); it only stops subscriptions (see `graphNotificationUrl`).
+ */
+export function notificationUrlProblem(value: string, flags: RuntimeFlags): string | null {
+  const url = URL.canParse(value) ? new URL(value) : null;
+  if (!url || url.protocol !== "https:") return "https required";
+  // One fixed rule text (the error text never carries a value): no credentials, query or fragment, and exactly the receiver path.
+  if (url.username !== "" || url.password !== "" || url.search !== "" || url.hash !== "" || url.pathname !== MICROSOFT_NOTIFICATION_PATH) return "must be the receiver URL";
+  if (!flags.local && url.origin !== flags.appOrigin) return "must be on the app's own origin";
+  return null;
+}
+
+/** The checked notification URL of a parsed `graph` group: null when unset; an EnvValidationError (name and fixed rule only) when set and wrong. */
+export function graphNotificationUrl(group: { GRAPH_NOTIFICATION_URL?: string | undefined }, flags: RuntimeFlags): string | null {
+  const value = group.GRAPH_NOTIFICATION_URL;
+  if (value === undefined) return null;
+  const rule = notificationUrlProblem(value, flags);
+  if (rule !== null) throw new EnvValidationError("graph", [], ["GRAPH_NOTIFICATION_URL"], { GRAPH_NOTIFICATION_URL: rule });
+  return value;
 }
 
 /** One schema factory per connector. The returned values contain only the connector's own variables. */
@@ -373,6 +404,7 @@ export const ENV_RULE_TEXTS: ReadonlySet<string> = new Set([
   "required outside local development",
   "https required",
   "must be on the app's own origin",
+  "must be the receiver URL",
   "must be explicit in production",
   "only in staging or production",
 ]);

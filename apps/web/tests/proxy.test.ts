@@ -149,6 +149,7 @@ describe("proxy matcher (T-036)", () => {
   it("does not run for provider webhooks, which carry no session", () => {
     expect(matches("/api/webhooks/quickbooks")).toBe(false);
     expect(matches("/api/webhooks/stripe/")).toBe(false);
+    expect(matches("/api/webhooks/microsoft")).toBe(false); // T-068: Microsoft change notifications carry no session either (clientState and the validation handshake are the credentials)
   });
 
   it("still runs for other API routes and pages", () => {

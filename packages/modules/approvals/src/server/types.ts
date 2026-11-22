@@ -1,8 +1,8 @@
 // Shapes of the approvals module (T-232).
 import type { LaneId } from "@nichols/core";
 import type { Audit } from "@nichols/core/audit";
-import type { LaneBoundConnection } from "@nichols/connectors";
-import type { GoogleEmailWriter } from "@nichols/connectors/write";
+import type { ExecResult, LaneBoundConnection } from "@nichols/connectors";
+import type { GoogleEmailApprovedAction, MicrosoftEmailApprovedAction } from "@nichols/connectors/write";
 
 export const EMAIL_ACTION_TYPES = ["email.send", "email.save_draft"] as const;
 export type EmailActionType = (typeof EMAIL_ACTION_TYPES)[number];
@@ -60,9 +60,11 @@ export type Rpc = (fn: string, args: Record<string, unknown>) => Promise<RpcResu
 
 /** What the policy, the lane config and the connection say about sending from one mailbox. */
 export type CapabilityFacts = {
-  /** The connection's mailbox (its `external_account_id`), or null when the connection is not a usable Google connection of the lane. */
+  /** The connection's mailbox (its `external_account_id`), or null when the connection is not a usable Google or Microsoft connection of the lane. */
   mailbox: string | null;
-  /** `features.gmail_compose`: Google granted gmail.compose on the last connect. */
+  /** The connection's provider, when it is a usable email connection (T-263: the card and the messages name it). Absent: Google (older callers). */
+  provider?: EmailProvider | null;
+  /** `features.gmail_compose` (Google granted gmail.compose) or, for a Microsoft connection, `features.graph_mail_write` (Mail.ReadWrite and Mail.Send granted) on the last connect. */
   composeGranted: boolean;
   /** `core.lane_policies.write_actions_allowed` */
   writeActionsAllowed: readonly string[];
@@ -77,7 +79,22 @@ export type CapabilityFacts = {
   qbo?: { realmId: string } | null;
 };
 
-export type ProposedEmail = { proposed: { target: Record<string, unknown>; payload: Record<string, unknown>; payload_schema_version: number }; connection: LaneBoundConnection<"google"> };
+/** The email providers (T-262, T-263): the writer is picked by the action's connection row, never by the lane. */
+export type EmailProvider = "google" | "microsoft";
+export type EmailConn = LaneBoundConnection<EmailProvider>;
+/** The approved action as either provider's writer takes it (the two shapes are the same). */
+export type EmailApprovedAction = GoogleEmailApprovedAction | MicrosoftEmailApprovedAction;
+/** What the executor and the reconciler hold: execute, read back and find, each by the connection's own provider (see ./email-dispatch.ts). */
+export interface EmailWriteSurface {
+  readonly actionTypes: readonly string[];
+  executeWrite(laneId: LaneId, conn: EmailConn, action: EmailApprovedAction): Promise<ExecResult>;
+  verifyWrite(laneId: LaneId, conn: EmailConn, action: EmailApprovedAction, externalId: string): Promise<void>;
+  findWrite(laneId: LaneId, conn: EmailConn, action: EmailApprovedAction): Promise<string[]>;
+  /** Provider-declared (by the connection's own provider): after an accepted send the sent copy may not be visible yet, so "not found" at read-back is not a failure (T-263). Absent = false (Google). */
+  sentCopyMayLag?(conn: EmailConn): boolean;
+}
+
+export type ProposedEmail = { proposed: { target: Record<string, unknown>; payload: Record<string, unknown>; payload_schema_version: number }; connection: EmailConn };
 
 /** Everything but the write path: what request code (pages, routes, the briefing) may hold (T-232 security review H1). */
 export type ApprovalsPublicDeps = Omit<ApprovalsDeps, "writer" | "loadWriteConnection">;
@@ -92,8 +109,8 @@ export type ApprovalsDeps = {
   /** T-247: whether this address may be a sender in the lane (allowed domain, and the exact list when the lane keeps one). */
   mailboxAllowed(laneId: LaneId, address: string): Promise<boolean>;
   readFacts(laneId: LaneId, connectionId: string): Promise<CapabilityFacts>;
-  loadWriteConnection(laneId: LaneId, connectionId: string): Promise<LaneBoundConnection<"google">>;
-  writer: GoogleEmailWriter;
+  loadWriteConnection(laneId: LaneId, connectionId: string): Promise<EmailConn>;
+  writer: EmailWriteSurface;
   audit: Audit;
 };
 

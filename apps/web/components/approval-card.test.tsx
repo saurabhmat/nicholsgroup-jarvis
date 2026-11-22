@@ -11,6 +11,7 @@ afterEach(cleanup);
 
 const card = (over: Partial<PendingCard> = {}): PendingCard => ({
   id: "00000000-0000-4000-8000-0000000000aa",
+  provider: "google",
   actionType: "email.send",
   mailbox: "exec@pubkgroup.example.test",
   to: ["dana@sender.example.test"],
@@ -98,5 +99,39 @@ describe("ApprovalCard", () => {
     render(<ApprovalCard laneId="PKG" card={card()} canAct={false} />);
     expect(screen.queryByRole("button", { name: "Approve & send" })).toBeNull();
     expect((screen.getByLabelText("Subject") as HTMLInputElement).disabled).toBe(true);
+  });
+});
+
+describe("provider label (T-263)", () => {
+  it("a Microsoft draft says Outlook (badge, title and button) and keeps the mailbox line; a Google card is unchanged", () => {
+    render(<ApprovalCard laneId="PKG" card={card({ provider: "microsoft", actionType: "email.save_draft" })} canAct />);
+    expect(screen.getByTestId("approval-provider").textContent).toBe("Outlook");
+    expect(screen.getByText("Outlook draft")).toBeTruthy();
+    expect(screen.getByRole("button", { name: "Save as Outlook draft" })).toBeTruthy();
+    expect(screen.getByTestId("sends-as").textContent).toBe("Sends as exec@pubkgroup.example.test");
+    cleanup();
+    render(<ApprovalCard laneId="PKG" card={card({ actionType: "email.save_draft" })} canAct />);
+    expect(screen.getByTestId("approval-provider").textContent).toBe("Gmail");
+    expect(screen.getByRole("button", { name: "Save as Gmail draft" })).toBeTruthy();
+  });
+});
+
+describe("what the owner reads after Approve (T-263)", () => {
+  const approveWith = async (c: PendingCard, body: Record<string, unknown>) => {
+    vi.stubGlobal("fetch", vi.fn(async () => ({ status: 200, json: async () => body })));
+    render(<ApprovalCard laneId="PKG" card={c} canAct />);
+    fireEvent.click(screen.getByRole("button", { name: /Approve|Save as/ }));
+    return screen.findByText(/./, { selector: "[data-testid=approval-done], p, div[role=status]" }).catch(() => null);
+  };
+  it("an Outlook action with an unknown outcome says where to look; a lagging sent copy says so; a Gmail failure keeps its text", async () => {
+    await approveWith(card({ provider: "microsoft" }), { status: "failed", failureCode: "outcome_unknown" });
+    expect(await screen.findByText("Check Drafts and Sent Items in Outlook before trying again.")).toBeTruthy();
+    cleanup();
+    await approveWith(card({ provider: "microsoft" }), { status: "sent_unverified" });
+    expect(await screen.findByText(/Waiting for the copy to show in Sent Items/)).toBeTruthy();
+    cleanup();
+    await approveWith(card({}), { status: "failed", failureCode: "outcome_unknown" });
+    expect(await screen.findByText("It could not be completed. Check the mailbox before trying again.")).toBeTruthy();
+    vi.unstubAllGlobals();
   });
 });

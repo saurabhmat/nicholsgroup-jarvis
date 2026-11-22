@@ -6,7 +6,7 @@ import { providerGate, syncRunners } from "../facade/index";
 import { quickbooksConnector } from "../quickbooks/index";
 import { connectionLoader, laneConfigReader, rawRecords, syncCursorStore, syncRunStore, syncTargetLister } from "../vault/index";
 import { createConnSyncJob } from "./job";
-import { createQuickbooksUsableCheck } from "./usable";
+import { createQuickbooksUsableCheck, createUsableCheck } from "./usable";
 import { createConnectorSyncRunner } from "./runners";
 
 export const connSyncJob = createConnSyncJob({
@@ -24,6 +24,9 @@ export const connSyncJob = createConnSyncJob({
 
 /** Whether a QuickBooks connection of the lane can be synced now (see ./usable.ts). Used by the webhook follow-up (T-053). */
 export const isQuickbooksConnectionUsable = createQuickbooksUsableCheck(connectionLoader);
+
+/** Whether a Microsoft connection of the lane can be synced now (T-068): the Microsoft webhook follow-up asks it before it queues a sync. */
+export const isMicrosoftConnectionUsable = createUsableCheck(connectionLoader, "microsoft");
 
 export { SYNC_TRIGGERS } from "./types";
 

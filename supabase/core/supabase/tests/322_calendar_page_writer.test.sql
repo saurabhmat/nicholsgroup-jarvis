@@ -134,7 +134,7 @@ select ok((select prosecdef and proconfig::text like '%search_path%' from pg_pro
 -- ---------------------------------------------------------------- the inventory: every function naming 'google' (the latest bodies)
 select is((select array_agg(n.nspname || '.' || p.proname order by n.nspname, p.proname) from pg_proc p join pg_namespace n on n.oid = p.pronamespace
             where p.prosrc ilike '%''google''%' and n.nspname in ('core', 'act', 'raw', 'comms', 'cal', 'brief', 'audit', 'mem', 'ops', 'public')),
-  array['act.insert_proposal', 'core.briefing_coverage', 'core.cal_events_apply_page', 'core.comms_mail_apply_page', 'core.connection_activate_composio',
+  array['act.connection_ok', 'act.insert_proposal', 'core.briefing_coverage', 'core.cal_events_apply_page', 'core.comms_mail_apply_page', 'core.connection_activate_composio',
         'core.connection_token_store', 'core.home_calendar_status', 'core.mailbox_ids', 'core.oauth_state_consume', 'core.oauth_state_create', 'raw.is_content_provider'],
   'the functions naming google are exactly the inventoried ones (a new one must be added to docs/plan-review.md and here)');
 select is((select array_agg(n.nspname || '.' || p.proname order by n.nspname, p.proname) from pg_proc p join pg_namespace n on n.oid = p.pronamespace

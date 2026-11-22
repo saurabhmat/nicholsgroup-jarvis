@@ -4,7 +4,7 @@
 import type { LaneId } from "@nichols/core";
 import { ConnectorError } from "../contract/errors";
 import { createHttpClient, type HttpClient, type HttpClientOptions } from "../http/client";
-import { GRAPH_REQUEST_ID_HEADER, isGraphPath, microsoftHostsFor, type MicrosoftCloud } from "./constants";
+import { GRAPH_REQUEST_ID_HEADER, isGraphPath, isSubscriptionsPath, microsoftHostsFor, type MicrosoftCloud } from "./constants";
 import { assertGraphHost } from "./guard";
 
 /**
@@ -25,16 +25,18 @@ export function graphErrorCode(body: unknown): string | undefined {
 export type GraphHttpFor = (laneId: LaneId, connectionId: string | undefined, baseUrl: string) => HttpClient;
 
 /**
- * `kind: "api"` is Graph (base `https://graph.microsoft.com/v1.0`, only `/me/...` paths); `kind: "token"` is the sign-in host of the
+ * `kind: "api"` is Graph (base `https://graph.microsoft.com/v1.0`, only `/me/...` paths); `kind: "subscriptions"` is the same Graph host with
+ * ONLY the two subscription path templates (T-068: `/subscriptions` and `/subscriptions/{id}`; never `/me/...`); `kind: "token"` is the sign-in host of the
  * same cloud (token endpoint). Throws `invalid_input` for any other host, and for every host of a cloud this build does not serve.
  */
-export function createGraphHttp(options: Omit<HttpClientOptions, "provider" | "errorCode">, cloud: MicrosoftCloud, kind: "api" | "token"): HttpClient {
-  assertGraphHost(options.baseUrl, microsoftHostsFor(cloud, kind));
+export function createGraphHttp(options: Omit<HttpClientOptions, "provider" | "errorCode">, cloud: MicrosoftCloud, kind: "api" | "token" | "subscriptions"): HttpClient {
+  assertGraphHost(options.baseUrl, microsoftHostsFor(cloud, kind === "token" ? "token" : "api"));
   const client = createHttpClient({ ...options, provider: "microsoft", requestIdHeader: GRAPH_REQUEST_ID_HEADER, errorCode: graphErrorCode });
   if (kind === "token") return client;
+  const allowed = kind === "subscriptions" ? isSubscriptionsPath : isGraphPath;
   return {
     request(req) {
-      if (!isGraphPath(req.path)) throw new ConnectorError({ kind: "invalid_input", message: "Path is not an allowed Graph path" });
+      if (!allowed(req.path)) throw new ConnectorError({ kind: "invalid_input", message: "Path is not an allowed Graph path" });
       return client.request(req);
     },
   };

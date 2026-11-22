@@ -23,6 +23,7 @@ import { createMailIndexStore } from "../comms/mail-store";
 import { createApiErrorStore } from "../error-log/store";
 import { createComposioConnectionStore } from "../composio/store";
 import { createMicrosoftIdentityReader, createMicrosoftIdentityWriter } from "../microsoft/identity";
+import { createMicrosoftSubscriptionStore } from "../microsoft/subscription-store";
 
 const vault = createTokenVault(getLaneJobClient);
 
@@ -76,6 +77,9 @@ export const reconnectStore = createReconnectStore(getLaneJobClient);
 export const microsoftIdentityReader = createMicrosoftIdentityReader(getLaneJobClient);
 /** Sets `tenant_id` and `cloud` of a Microsoft connection once, at connect time (T-066), with the lane's job client. */
 export const microsoftIdentityWriter = createMicrosoftIdentityWriter(getLaneJobClient);
+
+/** Records Microsoft change-notification subscriptions (core.push_subscriptions) and finds a notification's subscription by its id, with the lane's job client (T-068). */
+export const microsoftSubscriptionStore = createMicrosoftSubscriptionStore(getLaneJobClient);
 
 /** Writes the QuickBooks edition flags onto core.connections with the lane's job client (T-051). */
 export const qboFeatureStore = createQboFeatureStore(getLaneJobClient);

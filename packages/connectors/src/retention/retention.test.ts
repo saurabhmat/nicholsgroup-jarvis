@@ -140,6 +140,7 @@ describe("default tables", () => {
       purgeEventIndex: vi.fn(async () => 2),
       purgeSourceRecordBodies: vi.fn(async () => 3),
       purgeConnectorApiErrors: vi.fn(async () => 5),
+      purgePushSubscriptions: vi.fn(async () => 6),
     };
     const webhooks = { purge: vi.fn(async () => 4) };
     return { store, webhooks, registry: createRetentionRegistry(defaultRetentionTables({ store, webhooks })) };
@@ -153,6 +154,7 @@ describe("default tables", () => {
       "core.webhook_events:webhooks",
       "raw.source_records:policy",
       "core.connector_api_errors:policy",
+      "core.push_subscriptions:policy",
     ]);
     const r = await createRetentionPurgeJob({ registry, settings: async () => ({ comms: 90, calendar: 120, conversations: 180, webhooks: 14 }), logger: silent() }).run("PKG");
     expect(store.purgeMessageIndex).toHaveBeenCalledWith("PKG", 90);
@@ -161,6 +163,8 @@ describe("default tables", () => {
     expect(store.purgeSourceRecordBodies).toHaveBeenCalledWith("PKG");
     // T-196: the connector error log has a fixed 90-day window in SQL; the job passes the lane only (no days to widen it).
     expect(store.purgeConnectorApiErrors).toHaveBeenCalledWith("PKG");
+    // T-068: removed change-notification subscriptions have a fixed 30-day window in SQL; the job passes the lane only.
+    expect(store.purgePushSubscriptions).toHaveBeenCalledWith("PKG");
     expect(r.ok).toBe(true);
   });
 
@@ -200,12 +204,14 @@ describe("store", () => {
     await store.purgeEventIndex("PKG", 180);
     await store.purgeSourceRecordBodies("PKG");
     await store.purgeConnectorApiErrors("PKG");
+    await store.purgePushSubscriptions("PKG");
     expect(clientFor).toHaveBeenCalledWith("PKG");
     expect(calls).toEqual([
       { schema: "core", fn: "retention_comms_purge", args: { p_lane: "PKG", p_keep: "90 days" } },
       { schema: "core", fn: "retention_cal_purge", args: { p_lane: "PKG", p_keep: "180 days" } },
       { schema: "core", fn: "source_records_purge_bodies", args: { p_lane: "PKG" } },
       { schema: "core", fn: "connector_api_errors_purge", args: { p_lane: "PKG" } },
+      { schema: "core", fn: "push_subscriptions_purge", args: { p_lane: "PKG" } },
     ]);
   });
 

@@ -140,7 +140,7 @@ describe("replySubject and recipients", () => {
     expect(replySubject("x".repeat(2000)).length).toBeLessThanOrEqual(990);
   });
   it("replies to the sender, unless that is one of the lane's own mailboxes", () => {
-    const ref = { messageId: "m1", connectionId: CONN, threadId: "t", fromName: null, fromAddress: "Dana@Sender.Example.Test", subject: null, receivedAt: "" };
+    const ref = { messageId: "m1", provider: "google" as const, connectionId: CONN, threadId: "t", fromName: null, fromAddress: "Dana@Sender.Example.Test", subject: null, receivedAt: "" };
     expect(defaultRecipients(ref, [MAILBOX])).toEqual(["dana@sender.example.test"]);
     expect(defaultRecipients({ ...ref, fromAddress: MAILBOX.toUpperCase() }, [MAILBOX])).toEqual([]);
     expect(defaultRecipients({ ...ref, fromAddress: "not an address" }, [MAILBOX])).toEqual([]);

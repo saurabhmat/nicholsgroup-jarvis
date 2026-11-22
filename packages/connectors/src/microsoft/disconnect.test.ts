@@ -87,6 +87,50 @@ describe("what it does and does not do", () => {
   });
 });
 
+describe("change-notification subscriptions (T-264)", () => {
+  const withSubs = (removeConnection: (lane: string, id: string) => Promise<unknown>) => {
+    const s = setup();
+    const entries: unknown[] = [];
+    const logger = { child: () => logger, info: () => undefined, error: () => undefined, debug: () => undefined, warn: (_m: string, f: unknown) => void entries.push(f) };
+    return { s, entries, disconnect: createMicrosoftDisconnect({ loader: s.loader as never, vault: s.vault as never, subscriptions: { removeConnection }, logger: logger as never }) };
+  };
+
+  it("after the Vault call, the connection's subscriptions are marked removed for exactly this lane and connection; nothing is sent to Microsoft", async () => {
+    const fetchSpy = vi.fn(async () => new Response("{}"));
+    vi.stubGlobal("fetch", fetchSpy);
+    const removeConnection = vi.fn(async () => 2);
+    const { s, disconnect } = withSubs(removeConnection);
+    expect(await disconnect("PKG", CID, OWNER)).toBe(true);
+    expect(removeConnection).toHaveBeenCalledExactlyOnceWith("PKG", CID);
+    expect(s.revoked).toHaveLength(1);
+    expect(fetchSpy).not.toHaveBeenCalled();
+  });
+
+  it("a failure to mark them never blocks or fails the disconnect (best effort); the log line carries ids only", async () => {
+    const { s, entries, disconnect } = withSubs(async () => { throw new ConnectorError({ kind: "transient", message: "Subscription store unavailable for SECRET-TEXT" }); });
+    expect(await disconnect("PKG", CID, OWNER)).toBe(true);
+    expect(s.revoked).toHaveLength(1);
+    expect(JSON.stringify(entries)).not.toContain("SECRET-TEXT");
+    expect(entries).toEqual([{ laneId: "PKG", connectionId: CID, provider: "microsoft" }]);
+  });
+
+  it("nothing is marked when the caller is refused (another user's connection, another lane's id)", async () => {
+    const removeConnection = vi.fn(async () => 0);
+    const { disconnect } = withSubs(removeConnection);
+    expect((await refused(disconnect("PKG", CID, OTHER))).info.kind).toBe("not_found");
+    expect((await refused(disconnect("APK", CID, OWNER))).info.kind).toBe("not_found");
+    expect(removeConnection).not.toHaveBeenCalled();
+  });
+
+  it("a Vault failure means the subscriptions are not marked either (the connection is still connected)", async () => {
+    const removeConnection = vi.fn(async () => 0);
+    const { s, disconnect } = withSubs(removeConnection);
+    s.vault.revokeToken.mockRejectedValueOnce(new ConnectorError({ kind: "transient", message: "x" }));
+    await refused(disconnect("PKG", CID, OWNER));
+    expect(removeConnection).not.toHaveBeenCalled();
+  });
+});
+
 describe("no way to reach Microsoft (source level)", () => {
   it("microsoft/disconnect.ts imports no HTTP client, token manager, guard, Graph api, provider or http module", () => {
     const source = readFileSync(new URL("./disconnect.ts", import.meta.url), "utf8");

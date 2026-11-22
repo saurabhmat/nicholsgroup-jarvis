@@ -4,7 +4,7 @@ import "server-only";
 // approvals deps and no service client). proposerKind "job", the owner as the person it is for, derivedFromRetrieved
 // true (recipient and thread came from email: the card shows the banner and the recipient flags).
 import type { LaneId } from "@nichols/core";
-import { proposeBriefingReply } from "@nichols/approvals/wire";
+import { briefingReplyAllowed, proposeBriefingReply } from "@nichols/approvals/wire";
 import type { ReplyProposal } from "./briefing-run";
 
 export function replyProposer(ownerUserId: string): (laneId: LaneId, reply: ReplyProposal, signal?: AbortSignal) => Promise<string> {
@@ -17,3 +17,6 @@ export function replyProposer(ownerUserId: string): (laneId: LaneId, reply: Repl
       ...(signal ? { signal } : {}),
     });
 }
+
+/** The run's gate: may a reply be proposed for this connection (its provider and write grant; unknown: no). */
+export const canProposeFor = (laneId: LaneId, connectionId: string): Promise<boolean> => briefingReplyAllowed(laneId, connectionId);

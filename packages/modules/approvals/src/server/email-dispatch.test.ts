@@ -1,5 +1,5 @@
 // T-255: the email writer and the reconciler's read side dispatch by the connection row's provider; a provider not enabled for the lane is
-// refused before any call (no token read); Microsoft answers unsupported_op. Synthetic data only (rule 10).
+// refused before any call (no token read); an entry that is not wired answers unsupported_op. Synthetic data only (rule 10).
 import { describe, expect, it, vi } from "vitest";
 // Connections are minted only inside the connectors (lint); here a plain object stands for a loaded row and the brand check is stood in for.
 vi.mock("@nichols/connectors", async (orig) => ({
@@ -10,7 +10,7 @@ vi.mock("@nichols/connectors", async (orig) => ({
 }));
 import { ConnectorError } from "@nichols/connectors";
 import { createProviderGate, isProviderDisabledError } from "@nichols/connectors/write";
-import { createEmailWriteDispatch, microsoftEmailWriteEntry, type EmailApprovedAction, type EmailWriteEntry } from "./email-dispatch";
+import { createEmailWriteDispatch, unavailableEmailWriteEntry, type EmailApprovedAction, type EmailWriteEntry } from "./email-dispatch";
 
 const G = "00000000-0000-4000-8000-000000000e01";
 const M = "00000000-0000-4000-8000-000000000e02";
@@ -28,7 +28,7 @@ function setup(providers: ("google" | "microsoft")[], microsoftReal = false) {
   });
   const settings = { providers, microsoft: providers.includes("microsoft") ? { cloud: "commercial" as const, tenantIds: [], allowGcc: false, mailFolders: [], calendarIds: null } : null };
   const gate = createProviderGate({ laneConfig: { mailProviderSettings: async () => settings } as never });
-  const d = createEmailWriteDispatch({ loader, gate, entries: { google: spy("google"), microsoft: microsoftReal ? microsoftEmailWriteEntry : spy("microsoft") } });
+  const d = createEmailWriteDispatch({ loader, gate, entries: { google: spy("google"), microsoft: microsoftReal ? unavailableEmailWriteEntry : spy("microsoft") } });
   return { log, d };
 }
 
@@ -55,7 +55,7 @@ describe("email write dispatch", () => {
     expect([...onlyGoogle.log, ...onlyMs.log]).toEqual([]);
   });
 
-  it("the Microsoft write entry answers unsupported_op; a QuickBooks row is not an email connection; a copied connection is refused", async () => {
+  it("an entry that is not wired answers unsupported_op; a QuickBooks row is not an email connection; a copied connection is refused", async () => {
     const { d } = setup(["google", "microsoft"], true);
     const m = await d.loadWriteConnection("PKG", M);
     await expect(d.writer.executeWrite("PKG", m, action)).rejects.toMatchObject({ info: { kind: "unsupported_op" } });

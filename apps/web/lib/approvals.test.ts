@@ -180,6 +180,14 @@ describe("recipientFlags (T-232 security review M1)", () => {
       { address: "boss@pubkgroup.example.test", field: "bcc", flags: ["bcc"] },
     ]);
   });
+  it("T-263: each email card and history line carries the provider of its sending connection, so Google and Microsoft proposals of one lane list together, labelled", () => {
+    const g = toCard(row({ provider: "google" }), facts, "PKG");
+    const m = toCard(row({ provider: "microsoft", payload: { ...row().payload, fromMailbox: "robert@pubkgroup.example.test" } }), { ...facts, provider: "microsoft" }, "PKG");
+    expect([g.provider, m.provider]).toEqual(["google", "microsoft"]);
+    expect(m.mailbox).toBe("robert@pubkgroup.example.test");
+    expect([toHistory(row({ provider: "microsoft" })).provider, toHistory(row({ provider: "google" })).provider]).toEqual(["microsoft", "google"]);
+  });
+
   it("toCard counts the sending mailbox's domain as internal", () => {
     expect(toCard(row(), facts, "PKG").recipientFlags).toEqual([{ address: "dana@sender.example.test", field: "to", flags: ["external"] }]);
   });

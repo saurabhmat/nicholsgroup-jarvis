@@ -151,9 +151,26 @@ export const TYPE_IMPORTS_ALLOWED = [...Object.keys(DB_DRIVERS), "inngest"];
 
 /** Restricted names: where each may be used (see rules/no-restricted-names.js). */
 export const RESTRICTED_NAMES = {
-  executeWrite: { allow: [...APPROVALS, "packages/connectors/src/google/email-writer.test.ts"], allowReexport: CONNECTORS, hint: "only the approvals package executes writes" },
+  executeWrite: { allow: [...APPROVALS, "packages/connectors/src/google/email-writer.test.ts", "packages/connectors/src/microsoft/email-writer.test.ts"], allowReexport: CONNECTORS, hint: "only the approvals package executes writes" },
   // T-232 security review H1: the Gmail email writer and its write connection loader are for approvals only.
   googleEmailWriter: { allow: [...APPROVALS, "packages/connectors/src/google/index.ts", "packages/connectors/src/google/email-writer-boundary.test.ts"], allowReexport: CONNECTORS, hint: "only the approvals package sends email" },
+  // T-262/T-263 review (security L5): the Microsoft email writer, the same as the Gmail one.
+  microsoftEmailWriter: { allow: [...APPROVALS, "packages/connectors/src/microsoft/index.ts", "packages/connectors/src/microsoft/email-writer-boundary.test.ts"], allowReexport: CONNECTORS, hint: "only the approvals package sends email" },
+  // T-068/T-264: the Graph subscription client (an exact allow-list of three subscription routes) is built only by the Microsoft wiring; the watch/renew/stop code takes it as a
+  // parameter and never names it. Test files that build one are listed one by one.
+  createGraphSubscriptionClient: {
+    allow: [
+      "packages/connectors/src/microsoft/index.ts",
+      "packages/connectors/src/microsoft/subscription-client.test.ts",
+      "packages/connectors/src/microsoft/subscriptions.test.ts",
+      "packages/connectors/src/microsoft/subscription-boundary.test.ts",
+      "packages/connectors/src/webhooks/microsoft.test.ts",
+    ],
+    hint: "only the Microsoft wiring builds the subscription client; subscriptions are created, renewed and stopped by jobs",
+  },
+  // The instance that can create, renew and stop subscriptions, and the renewer built on it (reached by the T-040 renewal job only).
+  microsoftSubscriptions: { allow: ["packages/connectors/src/microsoft/index.ts"], hint: "subscriptions are created, renewed and stopped by the renewal job only" },
+  microsoftSubscriptionRenewer: { allow: ["packages/connectors/src/microsoft/index.ts", "packages/connectors/src/health/index.ts"], hint: "only the T-040 renewal registry calls the Microsoft renewer" },
   loadGoogleWriteConnection: { allow: [...APPROVALS, "packages/connectors/src/google/index.ts"], allowReexport: CONNECTORS, hint: "only the approvals package loads a write connection" },
   mintApprovedAction: { allow: APPROVALS, hint: "only the approvals package mints approved actions" },
   getSupabaseSecretKey: { allow: [...LANE_ROUTER, ...TOKEN_VAULT, ...CORE_ENV], hint: "lane router and token vault only" },

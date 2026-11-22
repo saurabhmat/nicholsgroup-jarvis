@@ -231,6 +231,65 @@ connected, and a summary made before the first sync is renewed once when you nex
 - `conn.sync.*` (`conn.sync.skipped` with its `reason`, `conn.sync.full_reload`, `conn.sync.cursor_conflict`, `conn.sync.log_failed`): the generic sync runner.
   `skipped` with `provider_disabled` or `connection_not_usable` explains a connection that is not syncing on purpose.
 
+## Allow drafts and sending in a lane (T-262, T-263; live check H-072)
+
+A mail-only company starts read-only. To let a mailbox owner **save a draft** or **approve and send** from the portal (Reply on Home, the Approvals page), do these steps **in this
+order**. Nothing is done by the app on its own: it is your decision, per company.
+
+**First read what the lane SQL turns on** (it is more than "allow sending"; the header of `enable-lane-mail-write-H-072.sql` says the same). It sets `store_outbound_drafts = true`, which means:
+- the text of an email proposal is stored until the action ends and then deleted (D-19); an unanswered proposal expires after 72 hours and is deleted then; history keeps recipients and subject only;
+- the AI's reply drafts are written, in full, into the stored briefing and stay as long as that briefing: 30 days for a 90-day company (briefing retention = the smaller of the company's retention and 30 days);
+- **the briefing job then creates pending "send" proposals by itself** for every reply draft the model marks ready (a Microsoft row only when its connection holds the write permission). Nothing is sent without the owner's approval and authenticator code, but the Approvals page starts filling up without anyone clicking Reply. This is more than "allow drafts and sending"; if you do not want it, do not run the lane SQL for that company;
+- the reply drawer keeps unsent text in this browser tab's session storage (typed draft 24 hours, AI draft 30 minutes, quoted original 24 hours; cleared at sign-out).
+
+1. **Database part 30 (production).** Run `part-30-T-263.sql`, then `check-part-30.sql` (every row true). It replaces one function body. Without it approving an email on a Microsoft
+   connection is refused (`connection_not_enabled`). Do this first so nothing later can half-work.
+2. **Entra app registration (once per tenant; admin consent).** Entra admin centre -> App registrations -> the Nichols app -> API permissions: add the *delegated* Microsoft Graph
+   permissions `Mail.ReadWrite` and `Mail.Send`, then **Grant admin consent for the tenant**. Afterwards the permissions page must list, all as *Delegated* with status *Granted for <tenant>*:
+   `openid`, `offline_access`, `User.Read`, `Mail.Read`, `Calendars.Read`, `Mail.ReadWrite`, `Mail.Send` (a red or amber "not granted" status on any row means consent did not take).
+   `Mail.ReadWrite` allows creating and editing drafts and "does not include permission to send mail"; `Mail.Send` is used only for the send call.
+   *Consequence (decided Nov 22, 2026, spec section 7):* Microsoft's token answer names every permission consented for the app in that tenant, and the connect refuses an account whose
+   granted set differs from the requested one. So **within one tenant one app registration serves either read-only companies or writing companies, not both**: once these two are consented,
+   a company whose policy allows no writes is refused at its next connect. Do this step only for a tenant where every company that uses the app is meant to write; otherwise a second app
+   registration is needed (not built yet).
+3. **The company's rules (SQL).** Fill in and run `enable-lane-mail-write-H-072.sql` (gitignored, in `supabase/core/bootstrap/manual-migrations/`): the lane code, the mail domain and the
+   tenant id exactly as in the T-265 run, and `true` or `false` for approvals go-live. **The live test in step 5 needs `approvals_live` = `true`.** Then run
+   `check-enable-lane-mail-write-H-072.sql` with the same pasted values: every row must be true (a value pasted differently makes rows false: it fails safe). It changes: the policy allows
+   `email_send` and `email_draft` and may store outbound drafts (only from the exact mail-only state the T-265 file wrote; anything else is refused), and one new config version adds `approvals` to
+   `enabled_modules` (a limited company hides Approvals otherwise) and sets `approvals.approvals_live`. It refuses a config with any other approvals setting. It changes no connection, token, member or mail row.
+4. **Each person Reconnects Microsoft** (Settings -> Your Microsoft accounts -> Reconnect; the write permissions are asked for only on a connect after step 3). What they see: Microsoft's
+   sign-in asks them to approve mail read-and-write and send; back on Settings the account is active; on Home a Microsoft mail row now shows **Reply** instead of "Reply is not available for this
+   mailbox yet". What a refused Reconnect looks like: the page says nothing was connected and "remove its access in your provider account"; in Vercel logs look for the event
+   `connector.oauth_callback_failed` (provider `microsoft`; its `reason` and the scrubbed error message say which scope check refused, for example "granted a scope that was not requested" or
+   "did not grant every required scope") and the audit row `connection.connect.grant_not_stored`. The most common cause is step 2 not being consented, or this tenant also serving a read-only company (see step 2).
+5. **The live test (H-072).** From a Microsoft mailbox, to a recipient you control, with `approvals_live` true: approve one "Save as Outlook draft" and one "Approve & send".
+   **First thing to look at: after "Approve & send", does the card end Verified?** (Verified means the sent copy was found by the marker, or by the id check, in Sent Items.) If it says "Sent. Waiting for the copy
+   to show in Sent Items", wait a few minutes: the sweep verifies it; if the history later says it was sent but could not be read back, the mail went out and the read-back could not confirm it. Then
+   confirm one draft and one sent copy each in Outlook, in the right conversation for a reply. Record in `docs/plan-review.md`: V-19, V-20, and the open points listed in the PR note
+   (marker survives the send; Bcc on the sent copy; the text body reads back as plain text; recipient addresses are not rewritten; the PATCH body replaces the quoted original (replies carry no quoted
+   thread: is that wanted); the marker filter works on the Drafts and Sent Items folder paths).
+
+**Undo (tested, one transaction):** run `undo-enable-lane-mail-write-H-072.sql` (gitignored, next to the others; replace `PASTE-LANE-CODE`). It sets `write_actions_allowed` back to empty and
+`store_outbound_drafts` to false (only when the policy is exactly the enable file's target state) and adds one new config version without the `approvals` block and without `approvals` in
+`enabled_modules`. It is safe to run twice. Pending proposals then fail at approve ("type not allowed"); stored AI reply drafts stay until the briefing retention purge (30 days);
+connections and mail rows are untouched. Removing the two permissions in Entra stops sending at Microsoft's side too.
+
+## Turn on Microsoft change notifications (T-068, T-264; live check H-073)
+
+Without this, Microsoft mail and calendar arrive by the 15-minute poll. With it, Microsoft tells the portal when something changes and a new message shows within about a minute; the poll keeps running as the fallback. **Production only**: Microsoft must reach a public https address. Do it after Microsoft mail works (H-070) and Inngest is synced. Local and preview deployments leave the variable unset and keep polling.
+
+1. **SQL, once.** Supabase SQL Editor (production): run `supabase/core/bootstrap/manual-migrations/part-31-T-068.sql` (on your machine, not in git), then `check-part-31.sql`. *Expect:* every row `true`. It only adds a table and seven functions; nothing visible changes yet.
+2. **Variable.** Vercel -> Settings -> Environment Variables -> add `GRAPH_NOTIFICATION_URL` -> **Production** only -> value `https://<your portal's own address>/api/webhooks/microsoft` (the same address as `GRAPH_REDIRECT_URI` and `NEXT_PUBLIC_APP_URL`, path exactly `/api/webhooks/microsoft`; no query, no `www` mismatch) -> Save -> Deployments -> top Production row -> **Redeploy**. Wait for **Ready**. A wrong value (http, another host, another path) only means no subscription is created: the renewal scan logs `microsoft.subscription.config_unreadable` naming `GRAPH_NOTIFICATION_URL` and the rule it breaks (never the value), and Microsoft connect, sync and health are not affected. Fix the value and redeploy.
+3. **Sync the background jobs.** Inngest -> Apps -> **Sync new deployment**. A new function appears: `microsoft-webhook-sync`.
+4. **Create the subscriptions now** (otherwise they appear within 12 hours). Inngest -> Functions -> `conn-subscriptions-renew-scan` -> **Invoke**. Wait a minute.
+5. **What Settings shows.** Settings -> Connections -> Your Microsoft accounts: under *Last sync*, **Live updates until <date, time> ET** (about 6 days ahead). Owners and administrators see it; other members do not. A connection that was just connected shows it after the next scan.
+6. **What to look for in the logs** (Vercel -> Logs, filter `webhook` or `microsoft.subscription`): `microsoft.subscription.ensured` (counts of created and renewed), `webhook.enqueued` (outcome `enqueued`) for each accepted notification, `webhook.skipped` with `outcome` `duplicate` (a replay, normal), `bad_client_state` (someone sent a notification that is not Microsoft's, or a subscription was recreated meanwhile: one or two are fine, a stream of them is worth telling the agent) and `unknown_account`-style drops. Ids and counts only: no address, subject or secret is ever logged. A failed create or renewal shows as `microsoft.subscription.failed` with a kind and, once permanent, an attention alert (`subscription_renewal_failed`); the connection keeps polling.
+7. **Live check (H-073).** Send yourself a mail from another account: it should be on Home within a minute. Record in the backlog what Microsoft did.
+
+**Turn it off.** Vercel -> Environment Variables -> **delete** `GRAPH_NOTIFICATION_URL` (Production) -> Redeploy. The next renewal scan (within 12 hours, or invoke it as in step 4) stops the subscriptions it created and marks them removed; polling carries on unchanged. Nothing is deleted from mail or calendar data. To stop sooner, or if Microsoft is switched off for the company, no action is needed: a paused provider's subscriptions are marked removed by the same scan, and the portal drops anything Microsoft still sends for them. Disconnecting an account marks its subscriptions removed at once in the portal's records (no request reaches Microsoft: its token is gone). Microsoft keeps posting to the portal for up to 6 days; the portal answers 202 and drops it. If the marking failed, the daily retention purge removes the leftover row.
+
+**If it does not work.** Settings shows no *Live updates* line after step 4: check the variable's exact value (step 2) and that the function ran (Inngest -> Runs). A message takes the full 15 minutes to arrive: notifications are not reaching the portal (Microsoft refused the address during creation, so no subscription exists) or the sync job is not synced (step 3); polling is unaffected, and nothing needs rolling back.
+
 ## Add the owner later
 
 When the first run named no owner: the owner signs in to the portal once (email code, then authenticator). Then put the owner's sign-in

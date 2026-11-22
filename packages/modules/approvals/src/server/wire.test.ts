@@ -8,7 +8,7 @@ const m = vi.hoisted(() => ({
 }));
 vi.mock("@nichols/connectors/facade", () => ({ prepareEmailWrite: vi.fn(), laneMailboxes: vi.fn(), mailboxAllowed: vi.fn(), providerGate: { enabled: m.gate } }));
 vi.mock("@nichols/connectors/write", () => ({
-  emailWriteGate: {}, googleEmailReconciler: {}, googleEmailWriter: { actionTypes: [] }, loadEmailWriteConnection: vi.fn(), loadQuickbooksWriteConnection: vi.fn(), quickbooksDisconnectVerifier: {}, quickbooksWriter: {},
+  GRAPH_MAIL_WRITE_FEATURE: "graph_mail_write", emailWriteGate: {}, googleEmailReconciler: {}, googleEmailWriter: { actionTypes: [] }, microsoftEmailReconciler: {}, microsoftEmailWriter: { actionTypes: [], sentCopyMayLag: true }, loadEmailWriteConnection: vi.fn(), loadQuickbooksWriteConnection: vi.fn(), quickbooksDisconnectVerifier: {}, quickbooksWriter: {},
 }));
 vi.mock("@nichols/core/lane-router", () => ({
   getAudit: () => ({ log: vi.fn() }),
@@ -48,10 +48,24 @@ describe("readFacts and the provider gate", () => {
     m.gate.mockRejectedValue(new Error("config unreadable"));
     await expect(approvalsDeps.readFacts("PKG" as never, "00000000-0000-4000-8000-0000000c2601")).resolves.toMatchObject({ mailbox: null, composeGranted: false });
   });
-  it("a Microsoft connection is not usable for email writes yet (T-262), and the gate is not asked for it", async () => {
-    m.conn = { provider: "microsoft", external_account_id: "robert@pubkgroup.example.test", status: "active", features: {} };
+  it("T-263: a Microsoft connection is usable when the lane has Microsoft enabled: the gate is asked for ITS provider and the grant is graph_mail_write (not gmail_compose)", async () => {
+    m.conn = { provider: "microsoft", external_account_id: "robert@pubkgroup.example.test", status: "active", features: { graph_mail_write: true } };
     m.gate.mockResolvedValue(true);
+    expect(await approvalsDeps.readFacts("PKG" as never, "00000000-0000-4000-8000-0000000c2602")).toMatchObject({ mailbox: "robert@pubkgroup.example.test", provider: "microsoft", composeGranted: true });
+    expect(m.gate).toHaveBeenCalledWith("PKG", "microsoft");
+    m.conn = { provider: "microsoft", external_account_id: "robert@pubkgroup.example.test", status: "active", features: { gmail_compose: true } };
+    expect(await approvalsDeps.readFacts("PKG" as never, "00000000-0000-4000-8000-0000000c2602")).toMatchObject({ mailbox: "robert@pubkgroup.example.test", provider: "microsoft", composeGranted: false });
+    m.conn = { provider: "google", external_account_id: "robert@pubk.example.test", status: "active", features: { graph_mail_write: true } };
+    expect(await approvalsDeps.readFacts("PKG" as never, "00000000-0000-4000-8000-0000000c2601")).toMatchObject({ provider: "google", composeGranted: false });
+  });
+  it("a Microsoft connection of a lane that paused Microsoft, or a status that is not usable, has no mailbox and no grant; any other provider is never an email connection", async () => {
+    m.conn = { provider: "microsoft", external_account_id: "robert@pubkgroup.example.test", status: "active", features: { graph_mail_write: true } };
+    m.gate.mockResolvedValue(false);
     expect(await approvalsDeps.readFacts("PKG" as never, "00000000-0000-4000-8000-0000000c2602")).toMatchObject({ mailbox: null, composeGranted: false });
-    expect(m.gate).not.toHaveBeenCalled();
+    m.gate.mockResolvedValue(true);
+    m.conn = { provider: "microsoft", external_account_id: "robert@pubkgroup.example.test", status: "reconnect_required", features: { graph_mail_write: true } };
+    expect(await approvalsDeps.readFacts("PKG" as never, "00000000-0000-4000-8000-0000000c2602")).toMatchObject({ mailbox: null, composeGranted: false });
+    m.conn = { provider: "quickbooks", external_account_id: "123", status: "active", features: { graph_mail_write: true, gmail_compose: true } };
+    expect(await approvalsDeps.readFacts("PKG" as never, "00000000-0000-4000-8000-0000000c2603")).toMatchObject({ mailbox: null, composeGranted: false });
   });
 });

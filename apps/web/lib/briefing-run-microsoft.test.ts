@@ -32,7 +32,7 @@ const withCoverage = (rows: unknown[]) => ({
 
 const reply = JSON.stringify({ lines: ["Two threads need you."], attention: [], deadlines: [], priorities: [], more_replies: [], replies: [{ ref: "r1", status: "ready", context: "x", text: "Thanks, noted." }, { ref: "r2", status: "ready", context: "y", text: "Thanks, noted." }] });
 
-function run(coverageRows?: unknown[]) {
+function run(coverageRows?: unknown[], canProposeFor?: RunDeps["canProposeFor"]) {
   const saved: SavedBriefing[] = [];
   const reads: { connection: string; message: string }[] = [];
   const proposed: { connectionId: string }[] = [];
@@ -44,6 +44,8 @@ function run(coverageRows?: unknown[]) {
     policy: { email: true, calendar: true, storeDrafts: true },
     save: async (_l, r) => (saved.push(r), "id-1"),
     proposeReply: async (_l, r) => (proposed.push(r), "00000000-0000-4000-8000-0000000000d1"),
+    // The connection's own provider and grant decide (security L4): the Google connection is allowed, the Microsoft one only when it holds the write grant.
+    canProposeFor: canProposeFor ?? (async (_l, c) => c === G),
   };
   return { d, saved, reads, proposed };
 }
@@ -61,11 +63,26 @@ describe("a briefing run for a person with a Google and a Microsoft mailbox", ()
     expect(JSON.stringify(s)).not.toContain("Plain synthetic body");
   });
 
-  it("fail closed: a thread whose connection is not in Coverage (provider unknown) in a view that has a Microsoft mailbox is never proposed a reply", async () => {
+  it("fail closed: a thread whose connection's provider is unknown to the gate (not in Coverage, not loadable) is never proposed a reply", async () => {
     // Coverage lists only the Microsoft connection M and a Google one G2; the Google thread's connection G is missing, so its provider is unknown.
     const G2 = "00000000-0000-4000-8000-0000000c2699";
-    const { d, proposed } = run([cov("mail", "google", G2, "other@pubk.example.test"), cov("mail", "microsoft", M, "robert@pubkgroup.example.test")]);
+    const { d, proposed } = run([cov("mail", "google", G2, "other@pubk.example.test"), cov("mail", "microsoft", M, "robert@pubkgroup.example.test")], async () => false);
     await runBriefing(d, { laneId: "PKG" as LaneId, ownerUserId: OWNER, trigger: "manual", now: NOW, viewerTz: "America/New_York" });
     expect(proposed).toEqual([]);
+  });
+
+  it("security L4: the decision is the connection's (provider and grant), never a source label: empty or unreadable coverage changes nothing, and a Microsoft connection WITH the grant is proposed", async () => {
+    const open = { ...{}, calls: [] as string[] };
+    for (const rows of [[], undefined, [cov("mail", "microsoft", M, "robert@pubkgroup.example.test")]]) {
+      const { d, proposed } = run(rows as unknown[] | undefined, async (_l, c) => (open.calls.push(c), c === G)); // Microsoft without the grant, whatever coverage says
+      await runBriefing(d, { laneId: "PKG" as LaneId, ownerUserId: OWNER, trigger: "manual", now: NOW, viewerTz: "America/New_York" });
+      expect(proposed.map((p) => p.connectionId).filter((c) => c !== G)).toEqual([]);
+    }
+    const granted = run(undefined, async () => true);
+    await runBriefing(granted.d, { laneId: "PKG" as LaneId, ownerUserId: OWNER, trigger: "manual", now: NOW, viewerTz: "America/New_York" });
+    expect(granted.proposed.map((p) => p.connectionId).sort()).toEqual([G, M].sort());
+    const broken = run(undefined, async () => { throw new Error("facts unreadable"); });
+    await runBriefing(broken.d, { laneId: "PKG" as LaneId, ownerUserId: OWNER, trigger: "manual", now: NOW, viewerTz: "America/New_York" });
+    expect(broken.proposed).toEqual([]); // fail closed
   });
 });

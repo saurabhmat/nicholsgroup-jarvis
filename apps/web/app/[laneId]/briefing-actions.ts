@@ -32,7 +32,7 @@ import { after } from "next/server";
 import { guards } from "@/lib/guards";
 import { viewerZone } from "@/lib/briefing";
 import { BACKGROUND_RUN_TIMEOUT_MS, policyFrom, runBriefingBounded } from "@/lib/briefing-run";
-import { replyProposer } from "@/lib/briefing-proposals";
+import { canProposeFor, replyProposer } from "@/lib/briefing-proposals";
 import { briefingRunStateFrom, hasSyncedMail, hasUsableSource, type BriefingGate, type BriefingRunStateView } from "@/lib/briefing-runs";
 
 export type BriefingStartState =
@@ -131,6 +131,7 @@ async function start(laneId: string, kind: "auto" | "regenerate"): Promise<Brief
             policy,
             save: (l, r) => saveOwnBriefing(lane, l, r),
             proposeReply: replyProposer(userId),
+            canProposeFor,
           },
           { laneId: laneId as LaneId, ownerUserId: userId, trigger: "manual", now: new Date(), viewerTz },
           { timeoutMs: Math.max(5_000, BACKGROUND_RUN_TIMEOUT_MS - (Date.now() - t0)) },

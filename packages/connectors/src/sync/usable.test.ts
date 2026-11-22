@@ -1,7 +1,7 @@
 // Webhook follow-up connection check (T-053): only an active or degraded QuickBooks connection of THIS lane is usable.
 import { describe, expect, it } from "vitest";
 import { ConnectorError } from "../contract/errors";
-import { createQuickbooksUsableCheck } from "./usable";
+import { createQuickbooksUsableCheck, createUsableCheck } from "./usable";
 
 const CONN = "00000000-0000-4000-8000-000000000533";
 const loaderOf = (result: { provider?: string; status?: string } | Error) =>
@@ -22,5 +22,15 @@ describe("createQuickbooksUsableCheck", () => {
   it("rethrows infrastructure failures so the job retries instead of dropping the change", async () => {
     await expect(createQuickbooksUsableCheck(loaderOf(new Error("db down")))("PKG", CONN)).rejects.toThrow("db down");
     await expect(createQuickbooksUsableCheck(loaderOf(new ConnectorError({ kind: "transient", message: "x" })))("PKG", CONN)).rejects.toBeInstanceOf(ConnectorError);
+  });
+});
+
+describe("createUsableCheck (T-068: Microsoft change notifications)", () => {
+  it("is true for active and degraded connections of the named provider only", async () => {
+    for (const [status, want] of [["active", true], ["degraded", true], ["reconnect_required", false], ["disconnected", false], ["pending", false]] as const) {
+      expect(await createUsableCheck(loaderOf({ provider: "microsoft", status }), "microsoft")("PKG", CONN), status).toBe(want);
+    }
+    expect(await createUsableCheck(loaderOf({ provider: "google", status: "active" }), "microsoft")("PKG", CONN)).toBe(false);
+    expect(await createUsableCheck(loaderOf(new ConnectorError({ kind: "not_found", message: "no" })), "microsoft")("PKG", CONN)).toBe(false);
   });
 });

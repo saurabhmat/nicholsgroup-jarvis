@@ -17,6 +17,8 @@ export function defaultRetentionTables(deps: { store: RetentionStore; webhooks: 
     { id: "raw.source_records", class: "policy", purge: (lane) => store.purgeSourceRecordBodies(lane) },
     // Fixed 90-day window set in SQL (T-196): operational error rows for provider support, not a lane setting.
     { id: "core.connector_api_errors", class: "policy", purge: (lane) => store.purgeConnectorApiErrors(lane) },
+    // Rows of removed change-notification subscriptions: a fixed 30 days in SQL (T-068); live rows are never purged.
+    { id: "core.push_subscriptions", class: "policy", purge: (lane) => store.purgePushSubscriptions(lane) },
   ];
 }
 

@@ -2,17 +2,23 @@ import "server-only";
 // Microsoft wiring (T-256): the guard, token manager, Graph client and health check over the real Vault, lane router (through the vault
 // module) and connector env. Server-only. Credentials are read from the connector env at call time (`requireConnectorEnv("graph")`
 // fails closed naming missing variables, never printing values). Nothing here connects an account (T-066).
-import { requireConnectorEnv } from "@nichols/core/env/server";
+import { EnvValidationError, describeEnvError, getGraphNotificationUrl, requireConnectorEnv } from "@nichols/core/env/server";
 import { attentionEventId, connAttentionNeeded, sendLaneEvent } from "@nichols/core/inngest";
+import { ConnectorError } from "../contract/errors";
 import { createApiErrorSink } from "../error-log/sink";
 import { createReconnectRecorder } from "../quickbooks/reconnect";
-import { apiErrorStore, calendarIndexStore, connectionLoader, getToken, laneConfigReader, mailIndexStore, microsoftIdentityReader, microsoftIdentityWriter, reconnectStore, revokeToken, rotateToken, writePolicyReader } from "../vault/index";
+import { actionClaimReader, apiErrorStore, calendarIndexStore, connectionLoader, getToken, laneConfigReader, mailIndexStore, microsoftIdentityReader, microsoftIdentityWriter, microsoftSubscriptionStore, reconnectStore, revokeToken, rotateToken, writePolicyReader } from "../vault/index";
 import { SecretValue } from "../vault/secret";
 import { createCalendarSync } from "../comms/cal-sync";
 import { createMailSync } from "../comms/mail-sync";
 import { createGraphApi } from "./api";
 import { createMicrosoftConnectInfo } from "./consent";
 import { createMicrosoftDisconnect } from "./disconnect";
+import { createMicrosoftEmailWriter, type MicrosoftEmailReconciler } from "./email-writer";
+import { createGraphWriteClient } from "./write-client";
+import { createGraphSubscriptionClient } from "./subscription-client";
+import { createMicrosoftSubscriptions } from "./subscriptions";
+import type { SubscriptionRenewer } from "../health/types";
 import { classifyGraphFailure } from "./errors";
 import { createMicrosoftGuard } from "./guard";
 import { createMicrosoftHealth, createMicrosoftHealthSkip } from "./health";
@@ -50,8 +56,32 @@ const errors = createApiErrorSink({ store: apiErrorStore, messageFor: (info) => 
 
 /** The guarded, read-only Graph client. The facade's Microsoft entry uses it for the mail sync, live body and search (T-258, T-259); calendar since T-067. */
 export const graphApi = createGraphApi({ guard, tokens, errors });
-/** Microsoft mail (T-258 delta sync; T-259 live body, search and header flags with the default bounds). `prepareWrite` answers `unsupported_op` until T-262. */
-export const microsoftMailProvider = createMicrosoftMailProvider({ api: graphApi, guard, laneConfig: laneConfigReader });
+/**
+ * Change-notification subscriptions (T-068, T-264): create, renew and stop through their own client (an exact allow-list of three routes; lint restricts who may name it). Called
+ * only by `microsoftSubscriptionRenewer` below (the T-040 renewal job) and by the providers' `watch`/`renew`/`stop` (jobs only). The notification URL is server configuration
+ * only: `GRAPH_NOTIFICATION_URL`, validated by the env schema (https, own origin, ending /api/webhooks/microsoft); unset = no subscription is attempted and polling stays.
+ */
+export const microsoftSubscriptions = createMicrosoftSubscriptions({
+  client: createGraphSubscriptionClient({ guard, tokens, errors }),
+  store: microsoftSubscriptionStore,
+  laneConfig: laneConfigReader,
+  notificationUrl: () => {
+    try {
+      return getGraphNotificationUrl();
+    } catch (e) {
+      // The text is the variable's NAME and a fixed rule (describeEnvError), never a value: safe for the log line `ensure` writes.
+      throw new ConnectorError({ kind: "connection_unavailable", message: e instanceof EnvValidationError ? describeEnvError(e) : "The notification URL could not be read" });
+    }
+  },
+});
+/** Registered in the T-040 `conn.subscriptions_renew` registry (health/index.ts): ensures the connection's subscriptions (create when missing, renew within 24 hours of expiry, recreate when gone). */
+export const microsoftSubscriptionRenewer: SubscriptionRenewer = async (laneId, conn, input) => {
+  const outcome = await microsoftSubscriptions.ensure(laneId, conn, input);
+  return { renewed: outcome.created + outcome.renewed > 0, expires_at: outcome.expiresAt ? outcome.expiresAt.toISOString() : null };
+};
+
+/** Microsoft mail (T-258 delta sync; T-259 live body, search and header flags with the default bounds). `prepareWrite` builds the proposal payload (T-262). */
+export const microsoftMailProvider = createMicrosoftMailProvider({ api: graphApi, guard, laneConfig: laneConfigReader, subscriptions: microsoftSubscriptions });
 /**
  * Time budget of one mail run: the first load of a large folder takes many pages, so a run stops after this long and the next one continues from the cursor
  * (spec §8.5). It is checked BETWEEN pages only. A normal page takes about a second, but the worst case of ONE request is four attempts of 30 s each plus
@@ -62,7 +92,7 @@ export const MICROSOFT_MAIL_RUN_BUDGET_MS = 150_000;
 /** Runs one connection's mail metadata sync into comms.message_index. Reached only through the facade (provider gate and owner checks first). */
 export const microsoftMailSync = createMailSync({ mail: microsoftMailProvider, store: mailIndexStore, maxRunMs: MICROSOFT_MAIL_RUN_BUDGET_MS });
 /** Microsoft calendar (T-067, D-59: the default calendar only, `GET /me/calendarView/delta`). Live event body; `prepareWrite` answers `unsupported_op` (phase 4). */
-export const microsoftCalendarProvider = createMicrosoftCalendarProvider({ api: graphApi, guard, laneConfig: laneConfigReader });
+export const microsoftCalendarProvider = createMicrosoftCalendarProvider({ api: graphApi, guard, laneConfig: laneConfigReader, subscriptions: microsoftSubscriptions });
 /** Time budget of one calendar run: the same 150 s as the mail run, for the same reasons (checked between pages only; against a 300 s job limit). */
 export const MICROSOFT_CALENDAR_RUN_BUDGET_MS = 150_000;
 /** Runs one connection's calendar metadata sync into cal.event_index. Reached only through the facade (provider gate and owner checks first). */
@@ -91,4 +121,18 @@ export const microsoftConnectInfo = createMicrosoftConnectInfo({
 });
 
 /** Local Disconnect (T-257, D-55): deletes the Vault tokens and marks the row `disconnected`. No request to Microsoft. */
-export const disconnectMicrosoft = createMicrosoftDisconnect({ loader: connectionLoader, vault: { revokeToken } });
+export const disconnectMicrosoft = createMicrosoftDisconnect({ loader: connectionLoader, vault: { revokeToken }, subscriptions: microsoftSubscriptionStore });
+
+/**
+ * Send or save-as-draft an approved email through Graph (T-262, T-263; approvals only, via the write subpath). The write client's allow-list is four method + path
+ * templates; nothing else can be sent. Never called by a route, job or tool.
+ */
+export const microsoftEmailWriter = createMicrosoftEmailWriter({
+  guard,
+  api: graphApi,
+  write: createGraphWriteClient({ guard, tokens, errors }),
+  laneConfig: laneConfigReader,
+  claims: actionClaimReader,
+});
+/** Recovery (T-192): the writer's read side only (marker lookup and read-back). It has no `executeWrite`, so a reconciler cannot send. */
+export const microsoftEmailReconciler: MicrosoftEmailReconciler = Object.freeze({ findWrite: microsoftEmailWriter.findWrite, verifyWrite: microsoftEmailWriter.verifyWrite });

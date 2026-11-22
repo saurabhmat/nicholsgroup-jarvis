@@ -25,6 +25,18 @@ const google = (over: Partial<GoogleSectionView> = {}): GoogleSectionView => ({ 
 const draw = (g: GoogleSectionView | null, m: MicrosoftSectionView | null) => render(<ConnectionsSection laneId="PKG" google={g} microsoft={m} quickbooks={null} composio={null} />);
 const LINK = "https://login.microsoftonline.com/11111111-1111-4111-8111-111111111111/v2.0/adminconsent?client_id=synthetic";
 
+describe("change notifications (T-068)", () => {
+  it("a connection with a live subscription shows when it expires (ET); one without shows nothing about it; a paused section hides it", () => {
+    draw(null, ms({ connections: [conn({ pushExpiresAt: "2026-11-29T17:00:00.000Z" }), conn({ id: "00000000-0000-4000-8000-0000000000c3", mailbox: "two@corp.example.test" })] }));
+    const lines = screen.getAllByTestId("microsoft-push-expiry");
+    expect(lines).toHaveLength(1);
+    expect(lines[0]?.textContent).toBe("Live updates until Nov 29, 2026, 12:00 PM ET");
+    cleanup();
+    draw(null, ms({ paused: true, connections: [conn({ pushExpiresAt: "2026-11-29T17:00:00.000Z" })] }));
+    expect(screen.queryByTestId("microsoft-push-expiry")).toBeNull();
+  });
+});
+
 describe("both providers enabled", () => {
   it("draws both sections; the same user's Google and Microsoft rows are each in their own", () => {
     draw(google(), ms());

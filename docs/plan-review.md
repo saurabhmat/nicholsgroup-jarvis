@@ -1422,6 +1422,7 @@ Method: `pg_proc.prosrc`, `pg_views.definition`, `pg_policies` and `pg_constrain
 | `core.mailbox_ids` (20261124100000, T-247) | `in ('google', 'microsoft')` | Already generalised; leave. Pinned by tests 321, 322 |
 | `core.oauth_state_create` / `core.oauth_state_consume` (20261125100000, T-254) | `in ('google', 'microsoft')` (own_mail) | Already generalised in T-254; leave |
 | `act.insert_proposal` (20261124150000, T-247) | `not in ('google', 'microsoft')` | Already generalised; leave (the email writer itself is T-261 and later) |
+| `act.connection_ok` (20261127100000, T-263) | `case c.provider when 'google' ... when 'microsoft'` (the write grant: `gmail_compose` / `graph_mail_write`) | Generalised in T-263: each provider's own grant, and the action's provider must equal the connection's. Pinned by tests 322, 325 |
 | `raw.is_content_provider` (20261102080000) | list contains `'google'`, `'microsoft'` | Already generalised; leave |
 | `core.connection_activate_composio` (20261108130000) | `n.provider = 'google' and n.transport = 'native'` | **Leave, on purpose**: the D-23 check of the Composio transport, which exists for Google only (Composio is a transport for `provider = 'google'`, D-35). A Microsoft row cannot hold a Composio identity |
 | `core.connection_token_store` (20261108130000) | `v_provider = 'google'` (D0023 against a Composio row of another lane) | **Leave, on purpose**: same reason; a Microsoft account has no Composio twin, and the unique index `connections_one_lane_per_account` still guards Microsoft rows |
@@ -1900,3 +1901,66 @@ Known limits that remain:
 - `core.sync_runs` has no stream column and `core.sync_cursors` no `created_at`; an exact "first mail sync" time would need one of them.
 
 Production: part 29 (`part-29-T-270.sql`, `check-part-29.sql` 10 rows) after part 28; two md5 rows of `check-part-25.sql` turn false by design. Deploy order does not matter.
+
+## T-262 and T-263: subagent reviews (security and code, run after the build, Nov 22, 2026)
+No BLOCKER, no HIGH. What the reviews confirmed: the Graph write client can reach exactly four method + path templates, refused before the mailbox slot, the guard and any token read; no write is repeated by the HTTP client; the writer is exported only through the write subpath and imported only by approvals; `act.connection_ok` is the only approvals SQL that named a provider, and it now asks each provider for its own grant (pgTAP 325, cross-lane denial included); the body purge on every terminal state still holds.
+
+Fixed after review (the "Review fix round" in `.agent/pr/T-262.md`):
+- (writer) A marked draft that existed before this run created one is never sent. A draft recovered after an ambiguous create or PATCH gets the full comparison (recipients, subject, conversation, sender, text body, no attachment, empty Reply-To, plain-text content type) before it is used; `already_applied` for Save as draft needs the same comparison.
+- (writer, approvals) A send that Microsoft accepted whose copy is not in Sent Items yet is not a failure: the Microsoft writer declares `sentCopyMayLag`, the action stays `executing` with its claim at "sent" (result `sent_unverified`, audit `action.verification_pending`) and the reconcile sweep verifies it. Google is unchanged. Read-back also works by the id returned at create.
+- (write client) An allowed-keys list per route, so a request body cannot carry a field the route was not built for.
+- (security L4) The briefing's reply gate (`briefing-gate.ts`): whether the briefing job may propose a reply is decided by the row's own connection (provider and write grant), in the run and again inside `proposeBriefingReply`; an unknown provider, an unreadable connection or unreadable facts give no proposal.
+- (security L5) ESLint restriction for `microsoftEmailWriter`, the same as the Gmail writer's.
+- (approvals, web) Outlook wording for an unknown outcome ("Check Drafts and Sent Items in Outlook"); a provider-specific "not enabled" message when the database refuses a Microsoft connection; stale Gmail-only comments; a page-level Approvals test with a Gmail and an Outlook proposal together.
+- (SQL, docs) The H-072 run file's header lists everything `store_outbound_drafts` turns on and refuses other `approvals` keys; an undo file (`undo-enable-lane-mail-write-H-072.sql`, tested locally); the runbook section re-ordered (part 30, Entra, lane SQL, Reconnect, live test, undo).
+
+Spec §17 test 29: the failure code stored for an action whose connection's provider is no longer enabled is `connection_unhealthy` (the executor's existing mapping of the connector kind `connection_unavailable`, the same for Google); the spec was updated to say so.
+
+Left as is (LOW):
+- `reply-messages.ts` failure texts in the reply drawer still say "Google" (the drawer does not know the provider).
+- `act.connection_ok` does not itself check that the provider is still enabled for the lane (the dispatcher does, at execute).
+- A mismatch found right after a successful write is reported as refused.
+- At writer level, a second `executeWrite` after `outcome_unknown` with a lagging sent copy and no draft left would look like "never created". Approvals cannot reach this (single claim), and the reconciler only looks.
+- A reply draft is unmarked between `createReply` and the PATCH (V-19). A crash in that gap leaves an unmarked draft in Drafts and the action ends `outcome_unknown`; nothing is ever deleted (the allow-list has no DELETE).
+
+For Saurabh to decide or know (also in the PR note):
+- `store_outbound_drafts = true` turns on more than "allow drafts and sending": **the briefing job then creates pending send proposals by itself** (for a Microsoft row only with the write grant). Nothing is sent without approval, but cards appear in the Approval Center unasked.
+- A reply's PATCH body replaces the quoted original, so replies from Outlook carry no quoted thread. Is that wanted?
+- Not settled by Microsoft's documentation, to record at the live check H-072: the marker (extended property) survives the send; Bcc is kept on the sent copy; the body reads back as plain text; addresses are not rewritten; the marker `$filter` works on the Drafts and Sent Items paths; `createReply` accepts `{}`; a new draft returns `from`; the id stays the same in Sent Items under ImmutableId; PATCH accepts `singleValueExtendedProperties`.
+
+Production: part 30 (`part-30-T-263.sql`, `check-part-30.sql` 6 rows) after part 29; no earlier check row turns false. Then, per lane, the H-072 pair (`enable-lane-mail-write-H-072.sql` + check, with its undo).
+
+## T-068 and T-264: subagent reviews (security and code, run after the build, Nov 22, 2026)
+No BLOCKER, no HIGH. Built in one pass (commit fa7161c), fixes in 9beb1b6.
+
+What the reviews confirmed from the code: a request with `validationToken` does nothing but echo it (`text/plain`, nosniff, capped at 1,024 characters, control characters refused); the lane and the connection come only from the stored subscription row, never from the request; `clientState` is read from the Vault per subscription, compared in constant time, never logged or returned; unknown, wrong-state, duplicate and accepted deliveries all answer 202 with an empty body; no unverified item writes a `core.webhook_events` row or queues anything; notification content (`resource`, `resourceData`, `changeType`) is never read (rule 9); the subscription client reaches exactly `POST /subscriptions`, `PATCH /subscriptions/{id}` and `DELETE /subscriptions/{id}` with an allowed-keys list (`includeResourceData` cannot be sent), refused before the guard and any token read, never retried; `notificationUrl` comes only from `GRAPH_NOTIFICATION_URL` (https, own origin, exact path; the origin is `NEXT_PUBLIC_APP_URL`, an operator-set variable, never a request value); renew and stop use only ids recorded for the same (lane, connection) and the SQL binds both again; the table has `lane_id`, RLS (the health view at AAL2, without `subscription_id`, `resource_path` or the secret's id), seven definer functions with an empty `search_path` executable by `service_role` only, every UPDATE/DELETE with a WHERE; part 31 has the same bodies and grants as the migration; Settings shows only a connection id and an expiry to owner and admin_technical of the same lane; no existing test assertion was weakened; Google lanes and QuickBooks webhooks are untouched.
+
+Fixed after review (commit 9beb1b6):
+- (security M1, code MEDIUM-2) One unauthenticated request could cause up to 25 lookups per lane, one after another, before any secret was checked. Now one batched lookup per lane per request (`core.push_subscription_lookup` takes up to 200 ids), lanes in parallel; the distinct-id cap equals the item cap (200), so no verified item is dropped for a cap (security L3). "Stop at the first unknown id" was not used: a removed subscription can share a delivery with live ones.
+- (security M2, code MEDIUM-1) A genuine second notification in the same 10-second slot was dropped as a `conflict`, and the stated reason ("the sync job's window equals the slot") was wrong. The dedupe key now includes the SHA-256 of the delivery's bytes: identical bytes in the slot are a replay, different bytes queue their own sync. The wording says "batching" everywhere. What remains true: a change that arrives after a batch's delta read waits for the next notification or the 15-minute poll.
+- (security L5) Lint restriction for `microsoftSubscriptions` (allowed only in `packages/connectors/src/microsoft/index.ts`) and `microsoftSubscriptionRenewer` (that file and `packages/connectors/src/health/index.ts`), beside `createGraphSubscriptionClient` (the wiring and four tests).
+- (security L2) `bad_client_state` is logged once per subscription per delivery.
+- (code LOW-1) For `subscriptionRemoved` the renewal is queued before the row is marked removed, so a retry after a failed queue still queues it.
+- (code LOW-5) A renewal answer that does not parse is an error; the requested expiry is never recorded as confirmed.
+- (security L4) `core.push_subscriptions_purge` also removes the live rows and Vault secrets of disconnected connections (own lane only).
+- Tests added: two different verified deliveries in one slot; a removed id beside live ones; one verified item among 199 unknown; lifecycle round trips (`subscriptionRemoved` then a new subscription; `reauthorizationRequired` then a renewal); pgTAP 326 now 97 assertions.
+
+Decisions made in the build (not in the spec text; spec §14 updated):
+- Subscriptions are created only by the T-040 `conn.subscriptions_renew` scan (every 12 hours): create when missing, renew within 24 hours of expiry, recreate when gone. Requested lifetime 8,640 minutes (6 days; Graph's maximum is 10,080).
+- The Microsoft receiver is a handler of its own beside the T-036 pipeline (which assumes one shared signing secret and an HMAC); it reuses the body reader and size cap, `safeEqual`, the `core.webhook_events` claim/mark and the Inngest hand-off.
+- `GRAPH_NOTIFICATION_URL` is checked outside the `graph` env schema on purpose, so a typo cannot stop Microsoft connect, sync or health; a wrong or missing value means no subscription and polling as before.
+- `email-writer-boundary.test.ts` now lists `subscription-client.ts` and `subscriptions.ts` among the files that name a Graph POST/PATCH/DELETE; a new `subscription-boundary.test.ts` pins who may use them.
+
+Known limits that remain (LOW, accepted):
+- **Stop is local only** on disconnect and on a switched-off provider: rows marked removed, secret deleted, no delete sent to Microsoft; Microsoft keeps posting for up to 6 days and the receiver drops it. Decision D-61.
+- Orphan subscriptions at Microsoft are possible and harmless (a create that timed out after Microsoft made it and was retried by the job; a crash between create and record; a superseded row): unknown ids are dropped with 202 and lapse within 6 days.
+- A notification that arrives between the create and the record is dropped; the poll covers it.
+- Lifecycle-triggered renewals share the one-run-per-connection-per-hour limit of `conn-subscriptions-renew`; a request dropped by it waits for the next scan (up to 12 hours); polling covers the gap.
+- A known subscription id answers slower than an unknown one (Vault read); the id is a Graph GUID.
+- `capabilities.watch` reports `push` even when the address is not configured; nothing branches on it today.
+- One warn line per scan per connection while `GRAPH_NOTIFICATION_URL` is invalid.
+- "Each synced calendar" is one subscription on `me/events` (D-59: default calendar only).
+
+Not settled by Microsoft's documentation (live check H-073): that `me/events` covers exactly the default calendar; that one address is accepted as both the notification and the lifecycle address and validated twice; that a renewing token need not be the creating user's; the real delivery delay and the 3-second answer budget under load; that lifecycle notifications carry the same `clientState`.
+
+Production: part 31 (`part-31-T-068.sql`, `check-part-31.sql` 11 rows) after part 30; no earlier check row turns false. Then `GRAPH_NOTIFICATION_URL` in Vercel Production, redeploy, Inngest sync, invoke `conn-subscriptions-renew-scan` once (runbook, "Turn on Microsoft change notifications").

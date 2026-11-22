@@ -160,3 +160,17 @@ describe("Coverage (Settings) lists both providers' connections of a lane togeth
     error.mockRestore();
   });
 });
+
+describe("Reply for a Microsoft row (T-262)", () => {
+  it("a Microsoft row whose connection is in the replyable set gets Reply; one that is not gets the fixed note; the Google row is unchanged", () => {
+    render(<AttentionSection laneId="PKG" now={now} mail={mail([item(G, "g-1", GMAIL), item(M, "ms-1", OUTLOOK)], { sourceOf })} canReply microsoftReply={new Set([M])} />);
+    const [g, o] = screen.getAllByTestId("attention-item") as [HTMLElement, HTMLElement];
+    expect(within(g).getByTestId("attention-reply")).toBeTruthy();
+    expect(within(o).getByTestId("attention-reply")).toBeTruthy();
+    expect(within(o).queryByTestId("attention-reply-unavailable")).toBeNull();
+    cleanup();
+    render(<AttentionSection laneId="PKG" now={now} mail={mail([item(M, "ms-1", OUTLOOK)], { sourceOf })} canReply microsoftReply={new Set()} />);
+    expect(screen.getByTestId("attention-reply-unavailable").textContent).toBe(REPLY_NOT_AVAILABLE_YET);
+    expect(screen.queryByTestId("attention-reply")).toBeNull();
+  });
+});

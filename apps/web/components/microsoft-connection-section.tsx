@@ -60,6 +60,11 @@ export function MicrosoftRows({ laneId, view }: { laneId: string; view: Microsof
     <>
       <span className="block">Mail: {when(c.lastMailSyncAt)}</span>
       <span className="block">Calendar: {when(c.lastCalendarSyncAt)}</span>
+      {c.pushExpiresAt && !paused ? (
+        <span className="block text-small text-muted-foreground" data-testid="microsoft-push-expiry">
+          Live updates until {when(c.pushExpiresAt)}
+        </span>
+      ) : null}
     </>
   );
   const connectButton = locked ? null : (
