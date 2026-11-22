@@ -1974,3 +1974,10 @@ Reported by Saurabh, not checked by the agent. Steps 1 to 4 of the runbook secti
 - **Not observed one by one** (PR note of T-262/T-263): Bcc on the sent copy; that the text body reads back as plain text; that recipient addresses are not rewritten; that the marker filter works on both folder paths; whether replies without the quoted original thread are wanted (no objection raised). Recipient and sender were the same mailbox, so delivery to another organisation was not exercised.
 
 Seen on Home the same day (`NC`), open, a fix task is proposed and not yet approved: (1) an automated DMARC aggregate report is ranked as mail from a person ("Waiting on you" chip, Reply offered): its sender matches none of `briefing` `automated_senders` and the row carries no auto-generated flag; (2) the AI summary contained "I could not check whether the payment actually went through" with nothing about a payment on the page: `grounded()` checks figures and dates only, so a sentence without numbers passes. The saved briefing has not been read yet (read-only query given to Saurabh).
+
+## H-068 and H-073 closed on Saurabh's word (Nov 22, 2026)
+
+Both boxes were checked at his request ("close H-068 and H-073 too"), not on evidence seen by the agent.
+- **H-068:** not confirmed in words: that the `GRAPH_*` variables exist in Vercel Production only (never Preview) and belong to the Nov 21 app registration. Production `NC` connects, syncs, drafts and sends with them. The outputs of `check-part-30.sql` and `check-part-31.sql` were not pasted.
+- **H-073 / V-21:** no observation recorded. Open as unknowns, not as work: the subscription expiry on Settings ("Live updates until ..."), the delivery delay of a new message, the fall-back to polling, that `me/events` covers exactly the default calendar, that one address serves as notification and lifecycle address, and the 3-second answer. A failure of any of these leaves the 15-minute polling in place.
+
