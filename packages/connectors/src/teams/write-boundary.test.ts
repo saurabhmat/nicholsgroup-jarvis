@@ -1,5 +1,6 @@
-// Rule 5 boundary for the Teams write path (T-279): the Teams Graph write client may be BUILT only by packages/modules/approvals (T-286); nothing builds one in this build, and no
-// production file other than the write client and its HTTP wrapper names a POST to a Teams route. A test file is not production. The first assertions prove the scan finds what it must.
+// Rule 5 boundary for the Teams write path (T-279, T-286, T-287): the Teams Graph write client is BUILT in exactly one file, the approvals-only writer wiring (teams/writer-entry.ts), which only the
+// connectors write subpath re-exports to packages/modules/approvals; no production file other than the write client and its HTTP wrapper names a POST to a Teams route; and no route, page, job or
+// tool can reach the writer. A test file is not production. The first assertions prove the scan finds what it must.
 import { readdirSync, readFileSync, statSync } from "node:fs";
 import { join, relative, resolve } from "node:path";
 import { describe, expect, it } from "vitest";
@@ -23,16 +24,44 @@ const rel = (f: string) => relative(root, f);
 const text = (f: string) => readFileSync(f, "utf8");
 
 describe("the Teams write path is reachable only from approvals", () => {
-  it("only the write client names the factory or the client type (the scan finds them), and nothing builds one yet", () => {
+  it("only the write client, the writer (a type) and the writer wiring name the factory or the client type (the scan finds them), and exactly one file builds a client", () => {
     const named = production()
       .filter((f) => /createTeamsWriteClient|TeamsWriteClient/.test(text(f)))
       .map(rel)
       .filter((f) => !f.startsWith("packages/eslint-plugin/src/"))
       .sort();
-    // the client's own file, and nothing else: no wiring (teams/index.ts), no reader, no route, no job. T-286 adds the approvals wiring to this list.
-    expect(named).toEqual(["packages/connectors/src/teams/write-client.ts"]);
+    // the client's own file, the message writer (it holds the client as a parameter and imports its TYPE only), and the one wiring file: no teams/index.ts, no reader, no route, no job.
+    expect(named).toEqual(["packages/connectors/src/teams/write-client.ts", "packages/connectors/src/teams/writer-entry.ts", "packages/connectors/src/teams/writer.ts"]);
     const callers = production().filter((f) => /(?<!function )createTeamsWriteClient\s*\(/.test(text(f))).map(rel);
-    expect(callers).toEqual([]);
+    expect(callers).toEqual(["packages/connectors/src/teams/writer-entry.ts"]);
+    expect(text(join(root, "packages/connectors/src/teams/writer.ts"))).toMatch(/import type \{ TeamsWriteClient \} from "\.\/write-client"/);
+    expect(text(join(root, "packages/connectors/src/teams/writer.ts"))).not.toMatch(/import \{[^}]*createTeamsWriteClient/);
+  });
+
+  it("the message writer and its reconciler are named only by the writer wiring, the write subpath and the approvals module; the wiring file is imported by the write subpath only", () => {
+    const named = production()
+      .filter((f) => /\bteamsMessageWriter\b|\bteamsMessageReconciler\b/.test(text(f)))
+      .map(rel)
+      .filter((f) => !f.startsWith("packages/eslint-plugin/src/"))
+      .sort();
+    expect(named).toEqual(["packages/connectors/src/teams/writer-entry.ts", "packages/connectors/src/write/index.ts", "packages/modules/approvals/src/server/wire.ts"]);
+    const importers = production()
+      .filter((f) => /from "(\.\.?\/)+(teams\/)?writer-entry"/.test(text(f)))
+      .map(rel)
+      .sort();
+    expect(importers).toEqual(["packages/connectors/src/write/index.ts"]);
+    // the shared wiring (guard, token manager) is imported by the Teams index and the writer wiring only
+    const wiring = production()
+      .filter((f) => /from "(\.\/|\.\.\/teams\/)wiring"/.test(text(f)))
+      .map(rel)
+      .sort();
+    expect(wiring).toEqual(["packages/connectors/src/teams/index.ts", "packages/connectors/src/teams/writer-entry.ts"]);
+    // nothing outside approvals imports the write subpath (apps, other modules, jobs, tools)
+    const importsWrite = production()
+      .filter((f) => /(?:from|import\()\s*["']@nichols\/connectors\/write["']/.test(text(f)))
+      .map(rel)
+      .filter((f) => !f.startsWith("packages/modules/approvals/") && !f.startsWith("packages/eslint-plugin/src/"));
+    expect(importsWrite).toEqual([]);
   });
 
   it("no production file other than the Teams write client sends a POST to a Teams route, and the HTTP wrapper only allows the write templates for the write kind", () => {
@@ -48,9 +77,22 @@ describe("the Teams write path is reachable only from approvals", () => {
     expect(http).toMatch(/req\.method === "POST" && isTeamsWritePath/);
   });
 
-  it("the write subpath does not export a Teams writer or client yet, and the read client's wiring (index.ts) does not build a write client", () => {
-    expect(text(join(root, "packages/connectors/src/write/index.ts"))).not.toMatch(/teams/i);
-    expect(text(join(root, "packages/connectors/src/teams/index.ts"))).not.toMatch(/write-client|createTeamsWriteClient/);
+  it("the write subpath exports the Teams writer and its reconciler (the approvals module's door) but never the write client, and the read client's wiring (index.ts) does not build a write client or a writer", () => {
+    const write = text(join(root, "packages/connectors/src/write/index.ts"));
+    expect(write).toMatch(/export \{ teamsMessageReconciler, teamsMessageWriter \} from "\.\.\/teams\/writer-entry"/);
+    expect(write).not.toMatch(/createTeamsWriteClient|TeamsWriteClient|write-client/);
+    const index = text(join(root, "packages/connectors/src/teams/index.ts"));
+    expect(index).not.toMatch(/write-client|createTeamsWriteClient|writer-entry|teamsMessageWriter|createTeamsMessageWriter/);
+    expect(text(join(root, "packages/connectors/src/teams/wiring.ts"))).not.toMatch(/write-client|createTeamsWriteClient|writer-entry|teamsMessageWriter|createTeamsMessageWriter/);
+  });
+
+  it("the message writer reaches Microsoft only through the guarded read client and the write client: no fetch, no HTTP method, no token read, no other write route", () => {
+    const t = text(join(root, "packages/connectors/src/teams/writer.ts"));
+    expect(t).not.toMatch(/\bfetch\(|XMLHttpRequest|method:\s*"|createTeamsHttp|getToken|tokens\.|accessToken|markChatReadForUser|setReaction|softDelete|console\./);
+    expect(t).toMatch(/retry: false/);
+    // the POST templates it can name are exactly the three the write client allows
+    expect([...t.matchAll(/path = s\.type === [\s\S]*?: "(\/[^"]+)";/g)].length).toBe(1);
+    for (const f of ["send-schema.ts", "actions-purge-store.ts"]) expect(text(join(root, "packages/connectors/src/teams", f)), f).not.toMatch(/\bfetch\(|"POST"|createTeamsWriteClient/);
   });
 
   it("the Teams connector never names a subscription route (notices are T-289) or a mail route", () => {

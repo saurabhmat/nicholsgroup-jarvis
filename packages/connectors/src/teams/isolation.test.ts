@@ -132,6 +132,9 @@ describe("source scan: every production file that names the provider is on this 
         "packages/connectors/src/teams/provider.ts",
         "packages/connectors/src/testing/teams-harness.ts",
         "packages/connectors/src/vault/connections.ts",
+        // T-286: the approvals-only write door (the loader that refuses a non-Teams row) and the approvals module's facts and executor wiring
+        "packages/connectors/src/write/index.ts",
+        "packages/modules/approvals/src/server/wire.ts",
       ].sort(),
     );
   });

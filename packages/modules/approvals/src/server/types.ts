@@ -2,22 +2,30 @@
 import type { LaneId } from "@nichols/core";
 import type { Audit } from "@nichols/core/audit";
 import type { ExecResult, LaneBoundConnection } from "@nichols/connectors";
-import type { GoogleEmailApprovedAction, MicrosoftEmailApprovedAction } from "@nichols/connectors/write";
+import type { GoogleEmailApprovedAction, MicrosoftEmailApprovedAction, TeamsApprovedAction, TeamsLookupWindow } from "@nichols/connectors/write";
 
 export const EMAIL_ACTION_TYPES = ["email.send", "email.save_draft"] as const;
 export type EmailActionType = (typeof EMAIL_ACTION_TYPES)[number];
 /** The QuickBooks disconnect (T-195, D-24): revoking our grant at Intuit is an external write, so it is an approvals action. */
 export const QBO_DISCONNECT = "qbo.disconnect" as const;
 export type QboActionType = typeof QBO_DISCONNECT;
-export const ACTION_TYPES = [...EMAIL_ACTION_TYPES, QBO_DISCONNECT] as const;
+/** A message in a Teams chat or channel (T-286, T-287; docs/specs/messages.md 10): an external write by the person who owns the Teams connection. */
+export const TEAMS_ACTION_TYPES = ["teams.chat.send", "teams.channel.post", "teams.channel.reply"] as const;
+export type TeamsActionType = (typeof TEAMS_ACTION_TYPES)[number];
+export const ACTION_TYPES = [...EMAIL_ACTION_TYPES, QBO_DISCONNECT, ...TEAMS_ACTION_TYPES] as const;
 export type ActionType = (typeof ACTION_TYPES)[number];
 export const isEmailType = (t: ActionType): t is EmailActionType => (EMAIL_ACTION_TYPES as readonly string[]).includes(t);
+export const isTeamsType = (t: ActionType): t is TeamsActionType => (TEAMS_ACTION_TYPES as readonly string[]).includes(t);
 /** The roles that may propose, approve and reject an action type (mirrors act.write_roles in the database). */
 export const WRITE_ROLES: Readonly<Record<ActionType, readonly ["owner"] | readonly ["owner", "admin_technical"]>> = {
   // T-247: whoever owns the mailbox (the database also requires the connection to be the caller's own).
   "email.send": ["owner", "admin_technical"],
   "email.save_draft": ["owner", "admin_technical"],
   "qbo.disconnect": ["owner", "admin_technical"],
+  // T-286 (D-68 default): whoever owns the Teams connection (the database also requires the connection to be the caller's own).
+  "teams.chat.send": ["owner", "admin_technical"],
+  "teams.channel.post": ["owner", "admin_technical"],
+  "teams.channel.reply": ["owner", "admin_technical"],
 };
 export type ActionStatus = "proposed" | "approved" | "executing" | "verified" | "failed" | "rejected" | "expired" | "invalidated";
 export type ProposerKind = "user" | "assistant" | "job";
@@ -50,6 +58,8 @@ export type ActionRow = {
   result: Record<string, unknown>;
   failureCode: string | null;
   payloadPurgedAt: string | null;
+  /** When the single claim was taken (the Teams lookup window starts a little before it). Absent from older callers' literals. */
+  executingAt?: string | null;
   createdAt: string;
   updatedAt: string;
 };
@@ -77,6 +87,11 @@ export type CapabilityFacts = {
    * not a QuickBooks connection of the lane, or is disconnected.
    */
   qbo?: { realmId: string } | null;
+  /**
+   * The connection as a usable Teams connection of the lane (T-286): its owner, and whether the connection and the lane's `teams` block both allow chat sends and channel sends.
+   * Null (or absent) when it is not a usable Teams connection of the lane.
+   */
+  teams?: { ownerUserId: string | null; chatSend: boolean; channelsSend: boolean } | null;
 };
 
 /** The email providers (T-262, T-263): the writer is picked by the action's connection row, never by the lane. */
@@ -116,3 +131,12 @@ export type ApprovalsDeps = {
 
 /** The signed-in user acting in one lane. `rpc` is the user's own (RLS) client, from requireLane; the route has already checked the role and step-up. */
 export type UserCtx = { laneId: LaneId; userId: string; rpc: Rpc };
+
+/** The approvals-only Teams writer as the executor and the reconciler hold it (T-286, T-287): execute once, read back, and look up. The reconciler is handed `findWrite` and `verifyWrite` only. */
+export type TeamsConn = LaneBoundConnection<"microsoft_teams">;
+export interface TeamsWriteSurface {
+  readonly actionTypes: readonly string[];
+  executeWrite(laneId: LaneId, conn: TeamsConn, action: TeamsApprovedAction): Promise<ExecResult>;
+  verifyWrite(laneId: LaneId, conn: TeamsConn, action: TeamsApprovedAction, externalId: string, window?: TeamsLookupWindow): Promise<void>;
+  findWrite(laneId: LaneId, conn: TeamsConn, action: TeamsApprovedAction, window?: TeamsLookupWindow): Promise<string[]>;
+}

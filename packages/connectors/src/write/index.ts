@@ -35,7 +35,46 @@ export { GRAPH_MAIL_WRITE_FEATURE } from "../microsoft/constants";
 // the refusal test. A write or read-back for a connection whose provider is not enabled for the lane is refused before any token read.
 export { createProviderGate, isProviderDisabledError } from "../facade/gate";
 import { createProviderGate as makeProviderGate } from "../facade/gate";
+import { ConnectorError } from "../contract/errors";
+import { assertTeamsConnection } from "../teams/guard";
 import { connectionLoader as writeConnectionLoader, laneConfigReader as writeLaneConfig } from "../vault/index";
 export const emailWriteGate = makeProviderGate({ laneConfig: writeLaneConfig });
 /** The authoritative, lane-bound connection row, whatever its provider (the dispatch refuses a provider that is not mail/calendar). */
 export const loadEmailWriteConnection = (laneId: Parameters<typeof writeConnectionLoader.loadConnection>[0], connectionId: string) => writeConnectionLoader.loadConnection(laneId, connectionId);
+
+// T-286, T-287: the Teams message writer (chat send, channel post, channel reply) and its reconciler read side. The write client itself is not exported: only the writer holds it.
+// `loadTeamsWriteConnection` is the authoritative, lane-bound connection row and refuses a row that is not a Teams connection.
+export { teamsMessageReconciler, teamsMessageWriter } from "../teams/writer-entry";
+export {
+  TEAMS_ACTION_TYPES,
+  TEAMS_CLAIM_SKEW_MS,
+  TEAMS_SEND_FAILURES,
+  prepareTeamsWrite,
+  teamsFailureCodeOf,
+  type PreparedTeamsWrite,
+  type TeamsApprovedAction,
+  type TeamsLookupWindow,
+  type TeamsMessageReconciler,
+  type TeamsMessageWriter,
+  type TeamsSendFailureCode,
+} from "../teams/writer";
+export {
+  TEAMS_PAYLOAD_VERSION,
+  TEAMS_POLICY_CLASS,
+  TEAMS_SEND_FEATURE,
+  TEAMS_TEXT_MAX_CHARS,
+  isTeamsActionType,
+  normalizeTeamsText,
+  parseTeamsSend,
+  teamsProposalContent,
+  teamsTextProblem,
+  type TeamsActionType,
+  type TeamsProposalContent,
+  type TeamsSend,
+} from "../teams/send-schema";
+export async function loadTeamsWriteConnection(laneId: Parameters<typeof writeConnectionLoader.loadConnection>[0], connectionId: string) {
+  const conn = await writeConnectionLoader.loadConnection(laneId, connectionId);
+  if (conn.provider !== "microsoft_teams") throw new ConnectorError({ kind: "not_found", message: "Connection not found" });
+  assertTeamsConnection(conn);
+  return conn;
+}

@@ -464,6 +464,8 @@ export const laneConfigSchema = z.strictObject({
       // Only the owner approves (approvals spec §8 test 4: viewer, finance_operator and admin_technical are denied).
       approver_roles: z.array(z.literal("owner")).min(1).default(["owner"]),
       step_up_max_age_s: z.int().min(30).max(900).default(300),
+      // T-286, D-67 (open): the authenticator window for `teams.*` sends only (email keeps step_up_max_age_s). 300 = the same as email until the owner decides; the database clamps to 300..43,200.
+      teams_step_up_max_age_s: z.int().min(300).max(43200).default(300),
       // `email.draft` is an alias of `email.save_draft`: a legacy-only key is copied over, and two different values are
       // refused, so approvals (which use email.save_draft) always see one expiry (T-211 review M1/L3).
       expire_after_hours: z

@@ -26,6 +26,7 @@ import { createMicrosoftIdentityReader, createMicrosoftIdentityWriter } from "..
 import { createMicrosoftSubscriptionStore } from "../microsoft/subscription-store";
 import { createTeamsIdentityReader, createTeamsIdentityWriter } from "../teams/identity";
 import { createTeamsChatReadsStore } from "../teams/chat-reads-store";
+import { createTeamsActionsStore } from "../teams/actions-purge-store";
 
 const vault = createTokenVault(getLaneJobClient);
 
@@ -88,6 +89,8 @@ export const teamsIdentityReader = createTeamsIdentityReader(getLaneJobClient);
 export const teamsIdentityWriter = createTeamsIdentityWriter(getLaneJobClient);
 /** Deletes a Teams connection's read markers on disconnect (T-282). */
 export const teamsChatReadsStore = createTeamsChatReadsStore(getLaneJobClient);
+/** Closes a Teams connection's open send actions (text purged) on disconnect (T-286). */
+export const teamsActionsStore = createTeamsActionsStore(getLaneJobClient);
 
 /** Writes the QuickBooks edition flags onto core.connections with the lane's job client (T-051). */
 export const qboFeatureStore = createQboFeatureStore(getLaneJobClient);

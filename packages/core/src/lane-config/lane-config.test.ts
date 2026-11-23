@@ -67,6 +67,7 @@ describe("lane config schema", () => {
     expect(c.finance).toEqual({ accounting_method: "accrual", weekly_cash_time: "06:00", monthly_close_trigger: "manual", payroll: { account_ids: [], account_subtypes: [...QBO_PAYROLL_SUBTYPES], excluded_entity_ids: [] }, reports: { period: "year_to_date", kinds: ["pnl", "ar_aging_summary", "ap_aging_summary"] }, qbo_sync: { interval_hours: 4 } });
     expect(c.approvals.approvals_live).toBe(false);
     expect(c.approvals.step_up_max_age_s).toBe(300);
+    expect(c.approvals.teams_step_up_max_age_s).toBe(300); // T-286, D-67 open: the same as email until the owner decides
     expect(c.approvals.expire_after_hours).toEqual({ "email.save_draft": 72, "email.draft": 72, "email.send": 72, "monday.item": 168 });
     expect(c.retention).toEqual({ calendar_days: 180, conversations_days: 180, webhook_days: 30 });
     expect(c.controls).toEqual({ unreconciled_over_days: 30, disconnected_feed_hours: 36, stripe_ghl_mismatch_threshold: 0 });
@@ -147,6 +148,13 @@ describe("lane config schema", () => {
     expect(() => parseLaneConfig({ approvals: { approver_roles: ["owner", "finance_operator"] } })).toThrow(z.ZodError);
     expect(() => parseLaneConfig({ approvals: { approver_roles: [] } })).toThrow(z.ZodError);
     expect(() => parseLaneConfig({ approvals: { step_up_max_age_s: 3600 } })).toThrow(z.ZodError);
+    // T-286 (D-67): the Teams window is its own key, 300 to 43,200 seconds; email's key stays capped at 900
+    expect(parseLaneConfig({ approvals: { teams_step_up_max_age_s: 28800 } }).approvals.teams_step_up_max_age_s).toBe(28800);
+    expect(() => parseLaneConfig({ approvals: { teams_step_up_max_age_s: 299 } })).toThrow(z.ZodError);
+    expect(() => parseLaneConfig({ approvals: { teams_step_up_max_age_s: 43201 } })).toThrow(z.ZodError);
+    expect(parseLaneConfig({ approvals: { teams_step_up_max_age_s: 3600 } }).approvals.step_up_max_age_s).toBe(300);
+    // (the Teams types are not in ACTION_TYPES: that list maps one to one to the employee permission table of the brain module; the database's 1-hour Teams expiry needs no setting)
+    expect(ACTION_TYPES).not.toContain("teams.chat.send");
     // T-192: the reconcile give-up time is at least the reconcile threshold + 5 minutes.
     expect(parseLaneConfig({ approvals: {} }).approvals).toMatchObject({ reconcile_after_minutes: 10, reconcile_give_up_minutes: 60 });
     expect(parseLaneConfig({ approvals: { reconcile_after_minutes: 20, reconcile_give_up_minutes: 25 } }).approvals.reconcile_give_up_minutes).toBe(25);

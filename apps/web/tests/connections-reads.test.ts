@@ -66,8 +66,8 @@ describe("every read of core.connections is classified", () => {
     expect(src.match(/\.in\(\s*["']provider["']\s*,[^)]*\)/g)?.some((m) => m.includes("microsoft_teams")) ?? false, file).toBe(false);
   });
 
-  it("the files that read connections AND name the Teams provider are the reviewed ones (Home excludes it, the Teams section and identity read it, the store sets its owner)", () => {
+  it("the files that read connections AND name the Teams provider are the reviewed ones (Home excludes it, the Teams section and identity read it, the store sets its owner, the approvals facts read the owner and send features of a Teams connection: T-286)", () => {
     const named = production().filter((f) => /["']microsoft_teams["']/.test(readFileSync(f, "utf8")) && /\.from\(\s*["']connections["']\s*\)/.test(readFileSync(f, "utf8"))).map(rel).sort();
-    expect(named).toEqual(["apps/web/lib/home.ts", "apps/web/lib/teams-connection.ts", "packages/connectors/src/teams/identity.ts", "packages/connectors/src/vault/connections.ts"]);
+    expect(named).toEqual(["apps/web/lib/home.ts", "apps/web/lib/teams-connection.ts", "packages/connectors/src/teams/identity.ts", "packages/connectors/src/vault/connections.ts", "packages/modules/approvals/src/server/wire.ts"]);
   });
 });

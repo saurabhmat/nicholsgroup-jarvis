@@ -151,7 +151,7 @@ export const TYPE_IMPORTS_ALLOWED = [...Object.keys(DB_DRIVERS), "inngest"];
 
 /** Restricted names: where each may be used (see rules/no-restricted-names.js). */
 export const RESTRICTED_NAMES = {
-  executeWrite: { allow: [...APPROVALS, "packages/connectors/src/google/email-writer.test.ts", "packages/connectors/src/microsoft/email-writer.test.ts"], allowReexport: CONNECTORS, hint: "only the approvals package executes writes" },
+  executeWrite: { allow: [...APPROVALS, "packages/connectors/src/google/email-writer.test.ts", "packages/connectors/src/microsoft/email-writer.test.ts", "packages/connectors/src/teams/writer.test.ts"], allowReexport: CONNECTORS, hint: "only the approvals package executes writes" },
   // T-232 security review H1: the Gmail email writer and its write connection loader are for approvals only.
   googleEmailWriter: { allow: [...APPROVALS, "packages/connectors/src/google/index.ts", "packages/connectors/src/google/email-writer-boundary.test.ts"], allowReexport: CONNECTORS, hint: "only the approvals package sends email" },
   // T-262/T-263 review (security L5): the Microsoft email writer, the same as the Gmail one.
@@ -171,12 +171,23 @@ export const RESTRICTED_NAMES = {
   // The instance that can create, renew and stop subscriptions, and the renewer built on it (reached by the T-040 renewal job only).
   microsoftSubscriptions: { allow: ["packages/connectors/src/microsoft/index.ts"], hint: "subscriptions are created, renewed and stopped by the renewal job only" },
   microsoftSubscriptionRenewer: { allow: ["packages/connectors/src/microsoft/index.ts", "packages/connectors/src/health/index.ts"], hint: "only the T-040 renewal registry calls the Microsoft renewer" },
-  // T-279: the Teams Graph write client (an exact allow-list of three POST templates for a message the person pressed Send on) is built only by the approvals wiring (T-286). Nothing
-  // builds one in this build: the two test files below exercise the client itself and the boundary.
+  // T-279, T-286: the Teams Graph write client (an exact allow-list of three POST templates for a message the person pressed Send on) is built in ONE file: the approvals-only writer wiring
+  // (teams/writer-entry.ts), which only the write subpath re-exports to the approvals module. The test files below exercise the client itself, the writer over it, and the boundary.
   createTeamsWriteClient: {
-    allow: [...APPROVALS, "packages/connectors/src/teams/write-client.test.ts", "packages/connectors/src/teams/write-boundary.test.ts"],
+    allow: ["packages/connectors/src/teams/writer-entry.ts", "packages/connectors/src/teams/write-client.test.ts", "packages/connectors/src/teams/writer.test.ts", "packages/connectors/src/teams/write-boundary.test.ts"],
+    allowReexport: [],
+    hint: "only the approvals-only Teams writer wiring (teams/writer-entry.ts) builds the write client",
+  },
+  // T-287: the Teams message writer and its reconciler read side, the same as the email writers: built in the wiring file, used by the approvals package, tested by the listed tests.
+  teamsMessageWriter: {
+    allow: [...APPROVALS, "packages/connectors/src/teams/writer-entry.ts", "packages/connectors/src/teams/writer.test.ts", "packages/connectors/src/teams/write-boundary.test.ts"],
     allowReexport: CONNECTORS,
     hint: "only the approvals package sends Teams messages",
+  },
+  teamsMessageReconciler: {
+    allow: [...APPROVALS, "packages/connectors/src/teams/writer-entry.ts", "packages/connectors/src/teams/writer.test.ts", "packages/connectors/src/teams/write-boundary.test.ts"],
+    allowReexport: CONNECTORS,
+    hint: "only the approvals package reconciles Teams messages",
   },
   // T-278 review S6: the Teams HTTP wrapper takes a "read" or "write" kind; the "write" kind can send a POST. Only the Teams read client, the write client and the OAuth provider (the `/me`
   // read at connect time) build one; the harness builds the read kind for tests. Anything else goes through those.

@@ -9,6 +9,7 @@ const m = vi.hoisted(() => ({
 vi.mock("@nichols/connectors/facade", () => ({ prepareEmailWrite: vi.fn(), laneMailboxes: vi.fn(), mailboxAllowed: vi.fn(), providerGate: { enabled: m.gate } }));
 vi.mock("@nichols/connectors/write", () => ({
   GRAPH_MAIL_WRITE_FEATURE: "graph_mail_write", emailWriteGate: {}, googleEmailReconciler: {}, googleEmailWriter: { actionTypes: [] }, microsoftEmailReconciler: {}, microsoftEmailWriter: { actionTypes: [], sentCopyMayLag: true }, loadEmailWriteConnection: vi.fn(), loadQuickbooksWriteConnection: vi.fn(), quickbooksDisconnectVerifier: {}, quickbooksWriter: {},
+  loadTeamsWriteConnection: vi.fn(), teamsMessageReconciler: { findWrite: vi.fn(), verifyWrite: vi.fn() }, teamsMessageWriter: { executeWrite: vi.fn() },
 }));
 vi.mock("@nichols/core/lane-router", () => ({
   getAudit: () => ({ log: vi.fn() }),
@@ -26,7 +27,7 @@ vi.mock("@nichols/core/lane-router", () => ({
   }),
 }));
 
-import { approvalsDeps } from "./wire";
+import { approvalsDeps, approveAndExecuteAction } from "./wire";
 
 beforeEach(() => {
   m.gate.mockReset();
@@ -67,5 +68,34 @@ describe("readFacts and the provider gate", () => {
     expect(await approvalsDeps.readFacts("PKG" as never, "00000000-0000-4000-8000-0000000c2602")).toMatchObject({ mailbox: null, composeGranted: false });
     m.conn = { provider: "quickbooks", external_account_id: "123", status: "active", features: { graph_mail_write: true, gmail_compose: true } };
     expect(await approvalsDeps.readFacts("PKG" as never, "00000000-0000-4000-8000-0000000c2603")).toMatchObject({ mailbox: null, composeGranted: false });
+  });
+});
+
+describe("T-286: Teams facts", () => {
+  const TEAMS_CONN = "00000000-0000-4000-8000-0000000c3001";
+  it("a usable Teams connection reports its owner and, per send feature, the lane's teams block AND the connection's own permission; it is never a mailbox", async () => {
+    m.conn = { provider: "microsoft_teams", external_account_id: "robert@teams.example.test", status: "active", features: { teams_chat_send: true, teams_channels_send: false }, owner_user_id: "00000000-0000-4000-8000-0000000000a1" };
+    m.gate.mockResolvedValue(true);
+    const f = await approvalsDeps.readFacts("PKG" as never, TEAMS_CONN);
+    expect(f).toMatchObject({ mailbox: null, provider: null, composeGranted: false, qbo: null });
+    // the mocked lane config has no teams block: both are off
+    expect(f.teams).toEqual({ ownerUserId: "00000000-0000-4000-8000-0000000000a1", chatSend: false, channelsSend: false });
+  });
+  it("a Teams connection that needs a reconnect, or a mail connection, has no Teams facts", async () => {
+    m.gate.mockResolvedValue(true);
+    m.conn = { provider: "microsoft_teams", external_account_id: "robert@teams.example.test", status: "reconnect_required", features: { teams_chat_send: true }, owner_user_id: "00000000-0000-4000-8000-0000000000a1" };
+    expect((await approvalsDeps.readFacts("PKG" as never, TEAMS_CONN)).teams).toBeNull();
+    m.conn = { provider: "microsoft", external_account_id: "robert@example.test", status: "active", features: { teams_chat_send: true, graph_mail_write: true }, owner_user_id: "00000000-0000-4000-8000-0000000000a1" };
+    expect((await approvalsDeps.readFacts("PKG" as never, TEAMS_CONN)).teams).toBeNull();
+  });
+  it("the generic approvals entry never approves or sends a Teams message (its own entry has its own step-up window)", async () => {
+    const row = { id: "00000000-0000-4000-8000-0000000000e1", lane_id: "PKG", action_type: "teams.chat.send", connection_id: TEAMS_CONN, provider: "microsoft_teams", target: { chat_id: "19:abc@thread.v2", client_request_id: "5e11d0c0-0000-4000-8000-000000000001" }, payload: { content_type: "text", text: "x" }, payload_schema_version: 1, payload_sha256: "a".repeat(64), rationale: null, source_refs: [], proposer_kind: "user", proposer_user_id: null, derived_from_retrieved: false, supersedes_id: null, superseded_by_id: null, status: "proposed", expires_at: new Date().toISOString(), approved_by: null, approved_at: null, approved_hash: null, executed_at: null, verified_at: null, result: {}, failure_code: null, payload_purged_at: null, created_at: new Date().toISOString(), updated_at: new Date().toISOString() };
+    const calls: string[] = [];
+    const rpc = async (fn: string) => {
+      calls.push(fn);
+      return { data: fn === "act_get" ? [row] : null, error: null };
+    };
+    await expect(approveAndExecuteAction({ laneId: "PKG" as never, userId: "00000000-0000-4000-8000-0000000000a1", rpc }, { actionId: row.id, hashSeen: "a".repeat(64) })).rejects.toMatchObject({ code: "invalid" });
+    expect(calls).toEqual(["act_get"]);
   });
 });

@@ -1,9 +1,9 @@
 // What a mailbox may do through approvals (T-232): which buttons are enabled and why. Pure over the facts the policy,
 // the lane config and the connection give; the database enforces the same gates at approve and at claim.
 import type { LaneId } from "@nichols/core";
-import { NOT_ENABLED_MESSAGE, NOT_ENABLED_MICROSOFT_MESSAGE, NOT_LIVE_MESSAGE, QBO_NOT_ENABLED_MESSAGE } from "./errors";
+import { NOT_ENABLED_MESSAGE, NOT_ENABLED_MICROSOFT_MESSAGE, NOT_LIVE_MESSAGE, QBO_NOT_ENABLED_MESSAGE, TEAMS_NOT_ENABLED_MESSAGE } from "./errors";
 import type { ActionType, ApprovalsDeps, CapabilityFacts, EmailActionType } from "./types";
-import { isEmailType } from "./types";
+import { isEmailType, isTeamsType } from "./types";
 
 const POLICY_KEY: Record<EmailActionType, string> = { "email.send": "email_send", "email.save_draft": "email_draft" };
 
@@ -20,6 +20,15 @@ export type EmailWriteCapability = {
 };
 
 export function capabilityOf(laneId: LaneId, facts: CapabilityFacts, type: ActionType): Capability {
+  if (isTeamsType(type)) {
+    // T-286: a usable Teams connection of the lane, the connection's send permission and the lane's teams.features (chat_send for a chat, channels_send for a channel), the lane policy class
+    // `teams_send`, then the same go-live gate as email (approvals_live). "Not enabled" before "not live": reconnecting is something the owner can do now.
+    const t = facts.teams;
+    const featureOn = t !== null && t !== undefined && (type === "teams.chat.send" ? t.chatSend : t.channelsSend);
+    if (!featureOn || !facts.writeActionsAllowed.includes("teams_send")) return { enabled: false, reason: "not_enabled", message: TEAMS_NOT_ENABLED_MESSAGE, settingsHref: `/${laneId}/settings#connections` };
+    if (!facts.approvalsLive) return { enabled: false, reason: "not_live", message: NOT_LIVE_MESSAGE, settingsHref: null };
+    return { enabled: true, reason: null, message: null, settingsHref: null };
+  }
   if (!isEmailType(type)) {
     // qbo.disconnect (T-195): a QuickBooks connection of the lane that is not disconnected, the lane policy class `qbo_disconnect`,
     // and the same go-live gate as email (approvals_live). Same order: "not enabled" before "not live".

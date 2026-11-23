@@ -70,7 +70,9 @@ export type ApproveResult =
   | { status: "failed"; actionId: string; failureCode: string }
   | { status: "already_in_progress"; actionId: string }
   /** The provider accepted the send and the sent copy is not visible yet (a provider that declares `sentCopyMayLag`): the action stays `executing` with its claim at "sent" and the reconcile sweep finishes it. */
-  | { status: "sent_unverified"; actionId: string };
+  | { status: "sent_unverified"; actionId: string }
+  /** A Teams send whose outcome is not known yet (the request timed out and the lookup found nothing): the action stays `executing`, the reconcile sweep keeps looking, and nothing is ever posted again (T-287). */
+  | { status: "outcome_pending"; actionId: string };
 
 export function checkLane(laneId: LaneId): void {
   if (typeof laneId !== "string" || !LANE.test(laneId)) throw new ApprovalsError("invalid");
