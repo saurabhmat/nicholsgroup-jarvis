@@ -24,6 +24,8 @@ const m = vi.hoisted(() => ({
   seenGuards: [] as unknown[],
   gate: null as Promise<void> | null,
   sharedGuards: {},
+  // T-271: modules the company hides. The older tests run with Approvals and Assistant hidden, so they keep testing the other sections alone.
+  hidden: [] as string[] | null, // null = the real lane gate (the T-265 tests read lane_config through the guards)
 }));
 const loader = <T,>(name: string, value: () => T) => async (g?: unknown) => {
   m.started.push(name);
@@ -32,6 +34,16 @@ const loader = <T,>(name: string, value: () => T) => async (g?: unknown) => {
   return value();
 };
 
+vi.mock("@/lib/lane-modules", async (importActual) => {
+  const actual = await importActual<typeof import("@/lib/lane-modules")>();
+  return {
+    ...actual,
+    laneGate: async (laneId: string) => {
+      const hidden = m.hidden;
+      return hidden === null ? actual.laneGate(laneId) : { limited: hidden.length > 0, visible: (mod: string) => !hidden.includes(mod), newsShown: true };
+    },
+  };
+});
 vi.mock("@/lib/lane-page", () => ({ loadLane: async () => ({ laneId: "PKG", name: "Pub K Group", lanes: [] }) }));
 vi.mock("@/lib/guards", () => ({ guards: async () => m.sharedGuards }));
 vi.mock("@/lib/connect-result", () => ({ connectResultFor: (g: unknown) => loader("result", () => m.result)(g) }));
@@ -77,6 +89,7 @@ beforeEach(() => {
   m.started = [];
   m.seenGuards = [];
   m.gate = null;
+  m.hidden = ["approvals", "assistant"];
 });
 afterEach(cleanup);
 
@@ -264,6 +277,9 @@ describe("Microsoft section (T-257)", () => {
 
 describe("Settings of a mail-only company (T-265)", () => {
   const limitedGuards = (row: unknown) => ({ requireLane: async () => ({ client: { schema: () => ({ from: () => ({ select: () => ({ eq: () => ({ maybeSingle: async () => ({ data: row, error: null }) }) }) }) }) } }) });
+  beforeEach(() => {
+    m.hidden = null; // the real gate, from the lane_config row the guards return
+  });
   afterEach(() => {
     m.sharedGuards = {};
   });
@@ -314,5 +330,34 @@ describe("Settings of a mail-only company (T-265)", () => {
     m.composio = { toolkits: [{ toolkit: "gmail", label: "Gmail", configured: true, connection: null }] };
     await draw();
     expect(screen.getByTestId("connections-section").getAttribute("data-composio")).toBe("true");
+  });
+});
+
+describe("T-271: Approvals and Assistant are opened from Settings", () => {
+  it("a company that uses both gets the section first, a sub-nav entry for it, and no placeholder, even with nothing else to show", async () => {
+    m.hidden = [];
+    expect(await draw()).toBe("false");
+    expect(navLabelsOf()).toEqual(["Approvals and Assistant|#pages"]);
+    const links = within(screen.getByRole("region", { name: "Approvals and Assistant" })).getAllByRole("link");
+    expect(links.map((l) => l.getAttribute("href"))).toEqual(["/PKG/approvals", "/PKG/assistant"]);
+  });
+
+  it("it comes before Connections and AI brain in the sub-nav", async () => {
+    m.hidden = [];
+    m.google = { connections: [] };
+    m.brain = view(3);
+    await draw();
+    expect(navLabelsOf()).toEqual(["Approvals and Assistant|#pages", "Connections|#connections", "AI brain|#ai-brain"]);
+  });
+
+  it("a company that hides one module shows only the other; hiding both shows no section", async () => {
+    m.hidden = ["assistant"];
+    await draw();
+    expect(navLabelsOf()).toEqual(["Approvals|#pages"]);
+    expect(within(screen.getByRole("region", { name: "Approvals" })).getAllByRole("link").map((l) => l.getAttribute("href"))).toEqual(["/PKG/approvals"]);
+    cleanup();
+    m.hidden = ["approvals", "assistant"];
+    expect(await draw()).toBe("true");
+    expect(screen.queryByTestId("settings-pages")).toBeNull();
   });
 });

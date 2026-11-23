@@ -5,7 +5,7 @@ import { usePathname } from "next/navigation";
 import type { ReactNode } from "react";
 import { clearAllDrafts } from "@/lib/reply-draft-store";
 import { ThemeToggle } from "./theme-toggle";
-import { AppShell, type NavKey, type OnboardingProgress, type ShellBrand, type ShellLane, type ShellLink } from "@nichols/ui";
+import { AppShell, type NavKey, type ShellBrand, type ShellLane, type ShellLink } from "@nichols/ui";
 
 const NextLink: ShellLink = ({ href, ...rest }) => <Link href={href} {...rest} />;
 
@@ -13,11 +13,8 @@ export function Shell(props: {
   brand: ShellBrand;
   lanes: ShellLane[];
   currentLaneId: string;
-  approvalsCount?: number;
   /** Navigation entries the company does not use (lib/lane-modules.ts). */
   hiddenKeys?: readonly NavKey[];
-  /** Setup progress; null for users without the brain view. */
-  onboarding?: OnboardingProgress | null;
   /** The session user's first name for the phone header band's Home title. */
   firstName?: string;
   /** The server's time (the greeting), so the client render never reads the clock (T-243). */

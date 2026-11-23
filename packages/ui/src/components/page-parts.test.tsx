@@ -112,7 +112,7 @@ describe("AppShell iPhone header and tabs", () => {
     for (const link of within(tabs).getAllByRole("link")) {
       expect(link.querySelector("svg")?.getAttribute("aria-hidden")).toBe("true");
     }
-    expect(within(tabs).getAllByRole("link").map((l) => l.textContent)).toEqual(["Home", "Approvals", "Inbox", "Ask", "More"]);
+    expect(within(tabs).getAllByRole("link").map((l) => l.textContent)).toEqual(["Home", "Inbox", "Calendar", "Claude", "More"]);
   });
 });
 

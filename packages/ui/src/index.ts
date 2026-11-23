@@ -30,15 +30,16 @@ export {
   homeHeading,
   laneHref,
   MOBILE_TABS,
+  menuKeyFor,
   MORE_ITEMS,
   NAV_ITEMS,
+  SETTINGS_PAGES,
+  SIDE_MENU,
   navItem,
-  onboardingEntry,
   pageHeading,
   type MobileTab,
   type NavItem,
   type NavKey,
-  type OnboardingProgress,
   type TabIconName,
 } from "./lib/nav";
 export { applyTheme, readTheme, THEME_INIT, THEME_KEY, THEMES, type Theme } from "./lib/theme";

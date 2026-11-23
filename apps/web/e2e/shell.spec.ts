@@ -45,11 +45,11 @@ test("a member sees the shell, a switcher with only the allowed lane, and a 404 
 
   if (isMobile) {
     const tabs = page.getByRole("navigation", { name: "Tabs" });
-    await expect(tabs.getByRole("link")).toHaveText(["Home", "Approvals", "Inbox", "Ask", "More"]);
+    await expect(tabs.getByRole("link")).toHaveText(["Home", "Inbox", "Calendar", "Claude", "More"]); // T-271
     await tabs.getByRole("link", { name: "Inbox" }).click();
   } else {
     const menu = page.getByRole("navigation", { name: "Main" });
-    await expect(menu.getByRole("link")).toHaveText([/^Get started\d+ of \d+$/, "Home", "Finance", "Inbox", "Calendar", "Approvals", "Assistant", "Projects", "Settings"]); // the desktop persona is the owner (brain view): Get started first (T-226)
+    await expect(menu.getByRole("link")).toHaveText(["Home", "Inbox", "Calendar", "Claude", "ChatGPT", "Finance", "Tasks", "Contacts", "Messages", "Settings"]); // T-271: one menu for every company; Get started, Approvals and Assistant are opened from Settings
     await menu.getByRole("link", { name: "Inbox" }).click();
   }
   await expect(page).toHaveURL(/\/PKG\/inbox$/, { timeout: 30_000 }); // first visit compiles the route in next dev
@@ -83,7 +83,7 @@ test("a member sees the shell, a switcher with only the allowed lane, and a 404 
   await expect(page.getByRole("region", { name: "Today's calendar" })).toBeVisible();
   // T-235 part 5: news off and no project board are slim one-line cards (labelled regions, no heading).
   await expect(page.getByRole("region", { name: "GovCon news" })).toContainText("GovCon news is off");
-  await expect(page.getByRole("region", { name: "Projects at a glance" })).toContainText("No project board connected");
+  await expect(page.getByRole("region", { name: "Tasks at a glance" })).toContainText("No task board connected");
   await expect(page.getByRole("button", { name: /Next 7 days/ })).toHaveAttribute("aria-expanded", "false"); // T-234: collapsed by default
   // T-237 part B: nothing connected -> one Connect QuickBooks tile, not empty tiles. The tile is for roles that can connect sources: the desktop
   // member is the owner (sees it); the phone member is finance-operator (by design: no banner and no empty tiles).

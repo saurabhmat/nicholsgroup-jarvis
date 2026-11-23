@@ -17,34 +17,33 @@ function shell(over: Partial<Parameters<typeof AppShell>[0]> = {}) {
 }
 
 describe("AppShell", () => {
-  it("shows the signed-off side menu in order, linked inside the current lane", () => {
+  it("T-271: shows the side menu in the new order, linked inside the current lane", () => {
     shell();
     const nav = screen.getByRole("navigation", { name: "Main" });
     const links = within(nav).getAllByRole("link");
-    expect(links.map((l) => l.textContent)).toEqual(["Home", "Finance", "Inbox", "Calendar", "Approvals", "Assistant", "Projects", "Settings"]);
-    expect(links.map((l) => l.getAttribute("href"))).toEqual(["/PKG", "/PKG/finance", "/PKG/inbox", "/PKG/calendar", "/PKG/approvals", "/PKG/assistant", "/PKG/projects", "/PKG/settings"]);
+    expect(links.map((l) => l.textContent)).toEqual(["Home", "Inbox", "Calendar", "Claude", "ChatGPT", "Finance", "Tasks", "Contacts", "Messages", "Settings"]);
+    expect(links.map((l) => l.getAttribute("href"))).toEqual(["/PKG", "/PKG/inbox", "/PKG/calendar", "/PKG/claude", "/PKG/chatgpt", "/PKG/finance", "/PKG/projects", "/PKG/contacts", "/PKG/messages", "/PKG/settings"]);
   });
 
-  it("draws Get started first, with the live count, only when the app passes setup progress (brain view)", () => {
-    const { unmount } = shell();
-    expect(within(screen.getByRole("navigation", { name: "Main" })).queryByRole("link", { name: /Get started|AI brain/ })).toBeNull();
-    unmount();
-    shell({ onboarding: { done: 3, total: 10 }, pathname: "/PKG/onboarding" });
-    const links = within(screen.getByRole("navigation", { name: "Main" })).getAllByRole("link");
-    expect(links.map((l) => l.getAttribute("href"))[0]).toBe("/PKG/onboarding");
-    expect(links[0]?.textContent).toBe("Get started3 of 10");
-    expect(links[0]?.getAttribute("aria-current")).toBe("page");
-    expect(links[1]?.textContent).toBe("Home");
-    // no new iPhone tab
-    expect(within(screen.getByRole("navigation", { name: "Tabs" })).getAllByRole("link")).toHaveLength(5);
+  it("T-271: Get started, Approvals and Assistant have no menu entry; Settings is selected while one of them is open", () => {
+    for (const path of ["/PKG/onboarding", "/PKG/approvals", "/PKG/assistant"]) {
+      const { unmount } = shell({ pathname: path });
+      const nav = screen.getByRole("navigation", { name: "Main" });
+      expect(within(nav).queryByRole("link", { name: /Get started|AI brain|Approvals|Assistant|Ask/ })).toBeNull();
+      expect(within(nav).getByRole("link", { name: "Settings" }).getAttribute("aria-current")).toBe("page");
+      expect(within(nav).getAllByRole("link").filter((l) => l.hasAttribute("aria-current"))).toHaveLength(1);
+      // on the phone they sit under More
+      expect(within(screen.getByRole("navigation", { name: "Tabs" })).getByRole("link", { name: "More" }).getAttribute("aria-current")).toBe("page");
+      unmount();
+    }
   });
 
-  it("changes to AI brain with a check, still first, once every section is done", () => {
-    shell({ onboarding: { done: 10, total: 10 } });
-    const first = within(screen.getByRole("navigation", { name: "Main" })).getAllByRole("link")[0];
-    expect(first?.textContent).toBe("AI brain");
-    expect(first?.querySelector("svg[aria-label='Setup complete']")).not.toBeNull();
-    expect(first?.querySelector("[data-testid=onboarding-badge]")).toBeNull();
+  it("T-271: the company switcher keeps the page for a new page and for a page under Settings", () => {
+    for (const [path, href] of [["/PKG/claude", "/APK/claude"], ["/PKG/approvals", "/APK/approvals"]] as const) {
+      const { container, unmount } = shell({ lanes: TWO, pathname: path });
+      expect([...container.querySelectorAll("a")].map((a) => a.getAttribute("href"))).toContain(href);
+      unmount();
+    }
   });
 
   it("has no Search, Commitments or All companies entry anywhere", () => {
@@ -86,27 +85,33 @@ describe("AppShell", () => {
     expect(brand.querySelector("[data-slot=brand-product]")?.className).toContain("text-sidebar-section");
   });
 
-  it("has the iPhone tabs Home, Approvals, Inbox, Ask, More and no back link", () => {
-    shell({ pathname: "/PKG/assistant" });
+  it("T-271: has the iPhone tabs Home, Inbox, Calendar, Claude, More and no back link", () => {
+    shell({ pathname: "/PKG/claude" });
     const tabs = screen.getByRole("navigation", { name: "Tabs" });
     const links = within(tabs).getAllByRole("link");
-    expect(links.map((l) => l.textContent)).toEqual(["Home", "Approvals", "Inbox", "Ask", "More"]);
-    expect(links.map((l) => l.getAttribute("href"))).toEqual(["/PKG", "/PKG/approvals", "/PKG/inbox", "/PKG/assistant", "/PKG/more"]);
-    expect(within(tabs).getByRole("link", { name: "Ask" }).getAttribute("aria-current")).toBe("page");
+    expect(links.map((l) => l.textContent)).toEqual(["Home", "Inbox", "Calendar", "Claude", "More"]);
+    expect(links.map((l) => l.getAttribute("href"))).toEqual(["/PKG", "/PKG/inbox", "/PKG/calendar", "/PKG/claude", "/PKG/more"]);
+    expect(within(tabs).getByRole("link", { name: "Claude" }).getAttribute("aria-current")).toBe("page");
     expect(screen.queryByText(/‹|Back/)).toBeNull();
   });
 
   it("T-265: hiddenKeys drops the entries a company does not use from the side menu and the phone tabs; Home, Settings and More stay", () => {
-    shell({ hiddenKeys: ["finance", "approvals", "assistant", "projects", "onboarding", "home", "settings"], onboarding: { done: 1, total: 10 } });
+    shell({ hiddenKeys: ["finance", "approvals", "assistant", "projects", "onboarding", "home", "settings"] });
     const menu = within(screen.getByRole("navigation", { name: "Main" })).getAllByRole("link");
-    expect(menu.map((l) => l.textContent)).toEqual(["Home", "Inbox", "Calendar", "Settings"]); // home and settings cannot be hidden
+    expect(menu.map((l) => l.textContent)).toEqual(["Home", "Inbox", "Calendar", "Claude", "ChatGPT", "Contacts", "Messages", "Settings"]); // home and settings cannot be hidden
     const tabs = within(screen.getByRole("navigation", { name: "Tabs" })).getAllByRole("link");
-    expect(tabs.map((l) => l.textContent)).toEqual(["Home", "Inbox", "More"]);
+    expect(tabs.map((l) => l.textContent)).toEqual(["Home", "Inbox", "Calendar", "Claude", "More"]);
+  });
+
+  it("T-265: a company without mail or calendar loses those entries and tabs", () => {
+    shell({ hiddenKeys: ["inbox", "calendar"] });
+    expect(within(screen.getByRole("navigation", { name: "Main" })).getAllByRole("link").map((l) => l.textContent)).toEqual(["Home", "Claude", "ChatGPT", "Finance", "Tasks", "Contacts", "Messages", "Settings"]);
+    expect(within(screen.getByRole("navigation", { name: "Tabs" })).getAllByRole("link").map((l) => l.textContent)).toEqual(["Home", "Claude", "More"]);
   });
 
   it("T-265: no hiddenKeys, no change", () => {
     shell({ hiddenKeys: [] });
-    expect(within(screen.getByRole("navigation", { name: "Main" })).getAllByRole("link")).toHaveLength(8);
+    expect(within(screen.getByRole("navigation", { name: "Main" })).getAllByRole("link")).toHaveLength(10);
     expect(within(screen.getByRole("navigation", { name: "Tabs" })).getAllByRole("link")).toHaveLength(5);
   });
 
@@ -120,15 +125,10 @@ describe("AppShell", () => {
     expect(within(screen.getByRole("navigation", { name: "Tabs" })).getByRole("link", { name: "More" }).getAttribute("aria-current")).toBe("page");
   });
 
-  it("shows the approvals count only when above zero", () => {
-    const { rerender } = shell({ approvalsCount: 3 });
-    expect(screen.getAllByLabelText("3 pending")).toHaveLength(2); // side menu and tab
-    rerender(
-      <AppShell brand={BRAND} lanes={ONE} currentLaneId="PKG" pathname="/PKG" signOut={noop} approvalsCount={0}>
-        x
-      </AppShell>,
-    );
+  it("T-271: the menu carries no badge or count (the approvals count and the setup badge left with their entries)", () => {
+    const { container } = shell();
     expect(screen.queryByLabelText(/pending/)).toBeNull();
+    expect(container.querySelector("[data-testid=onboarding-badge]")).toBeNull();
   });
 
   it("limits the content width with the token and renders the page content", () => {

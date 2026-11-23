@@ -128,14 +128,12 @@ test("owner: a brain .zip is read in the browser, previewed per page, saved only
   await expect(pageCard).toContainText("1 line(s) that read like instructions");
   await expectNoAxeViolations(page);
 
-  // Still nothing saved: the menu shows no progress until Save.
-  const menu = page.getByRole("navigation", { name: "Main" });
-  await expect(menu.getByRole("link").first()).toHaveText(/^Get started0 of 10$/);
+  // T-271: the menu's progress badge is gone; progress is read on Settings -> AI brain after the save below.
   await pageCard.getByRole("button", { name: "Save Context/Work.md" }).click();
   await expect(pageCard).toContainText("Saved.", { timeout: 30_000 });
 
-  await page.goto("/PKG/onboarding");
-  await expect(page.getByRole("navigation", { name: "Main" }).getByRole("link").first()).toHaveText(/^Get started1 of 10$/, { timeout: 30_000 });
+  await page.goto("/PKG/settings");
+  await expect(page.getByRole("region", { name: "AI brain" })).toContainText("1 of 10 sections done", { timeout: 30_000 });
 });
 
 test("owner, iPhone width: the import page has no horizontal scroll, 44 px targets and passes axe in both themes", async ({ page }, info) => {
