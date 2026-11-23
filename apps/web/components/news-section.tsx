@@ -10,7 +10,7 @@ export function NewsSection({ view, tz, now }: { view: NewsSettingsView; tz: str
   const fetches = String(view.monthFetches) + (view.monthFetches === 1 ? " fetch" : " fetches");
   const last = view.lastFetchAt ? newsTime(view.lastFetchAt, tz, now) + " · " + (view.lastStatus === "failed" ? "failed: " + (view.lastFailure ?? "an unexpected error") : (view.lastStatus ?? "")) : "None yet";
   return (
-    <Card id="news" role="region" aria-labelledby="news-title" data-testid="news-section" className="min-w-0 scroll-mt-24">
+    <Card role="region" aria-labelledby="news-title" data-testid="news-section" className="min-w-0">
       <h2 id="news-title" className="font-heading text-card-title font-semibold text-foreground">
         GovCon news
       </h2>

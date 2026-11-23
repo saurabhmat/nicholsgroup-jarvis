@@ -29,7 +29,7 @@ describe("ConnectionsSection", () => {
   it("one region with a header line (provider, account, status, last sync, actions) and a row for Google", () => {
     render(<ConnectionsSection laneId="PKG" google={google} quickbooks={null} composio={null} />);
     const region = screen.getByRole("region", { name: "Connections" });
-    expect(region.id).toBe("connections");
+    expect(region.id).toBe("");
     const list = within(region).getByTestId("connections-list");
     expect(list.textContent).toContain("ProviderAccountStatusLast syncActions");
     const row = within(list).getByTestId("google-connection");

@@ -28,7 +28,8 @@ import { newsSectionFor } from "@/lib/news-settings";
 import { jobFailureBannerFor } from "@/lib/job-failures";
 import { ModulePage, ModulePlaceholder } from "./module-page";
 import { CardSkeleton } from "./page-skeleton";
-import { Suspense } from "react";
+import { Suspense, type ReactNode } from "react";
+import { SectionBoundary } from "./section-boundary";
 import type { LaneGate } from "@/lib/lane-modules";
 import { SettingsPagesSection, settingsPagesTitle } from "./settings-pages-section";
 
@@ -111,18 +112,20 @@ export async function SettingsPage({
     // Scheduled functions that failed 3 times in a row (T-238 E): owner and admin_technical only.
     jobFailures: started(timed("load.job_failures", () => jobFailureBannerFor(g, laneId))),
   };
+  // A connect result or error in the address (the names connectResultFor reads): the banner arrives late, so its slot is reserved. Nothing of the query is kept.
+  const reserveNotice = ["connect", "error", "notice"].some((k) => query[k] !== undefined);
   return (
     <div className="flex flex-col gap-4">
       <ModulePage module="settings" params={params} placeholder={false} />
-      <Suspense fallback={<CardSkeleton />}>
-        <SettingsBody laneId={laneId} sections={sections} tz={tz} now={now} />
+      <Suspense fallback={<BodyFallback reserveNotice={reserveNotice} />}>
+        <SettingsBody laneId={laneId} sections={sections} tz={tz} now={now} reserveNotice={reserveNotice} />
       </Suspense>
     </div>
   );
 }
 
 /** The sub-navigation and the section slots. Waits only for the module list and the role answers (and, for someone who is not an administrator, the Coverage answer that decides whether Connections exists for them). */
-async function SettingsBody({ laneId, sections, tz, now }: { laneId: string; sections: Sections; tz: string; now: Date }) {
+async function SettingsBody({ laneId, sections, tz, now, reserveNotice }: { laneId: string; sections: Sections; tz: string; now: Date; reserveNotice: boolean }) {
   const [gate, isAdmin, canSeeAccounts, isOwner] = await Promise.all([sections.gate, sections.admin, sections.mailConnect, sections.owner]);
   // T-271: Approvals and Assistant have no side menu entry; they are opened from here (a company that hides the module shows no link).
   const pages = (["approvals", "assistant"] as const).filter((m) => gate.visible(m));
@@ -140,37 +143,84 @@ async function SettingsBody({ laneId, sections, tz, now }: { laneId: string; sec
   ];
   return (
     <>
-      <Suspense fallback={null}>
-        <Notices sections={sections} />
-      </Suspense>
+      <SectionBoundary>
+        <Suspense fallback={reserveNotice ? <NoticeSlot /> : null}>
+          <Notices sections={sections} />
+        </Suspense>
+      </SectionBoundary>
       {nav.length > 0 ? (
         <div className="grid gap-4 lg:grid-cols-[200px_minmax(0,1fr)] lg:gap-8">
           <SettingsNav items={nav} />
           <div className="flex min-w-0 flex-col gap-4">
             <SettingsPagesSection laneId={laneId} pages={pages} />
             {connections ? (
-              <Suspense fallback={<CardSkeleton />}>
+              <Slot id="connections">
                 <ConnectionsSlot laneId={laneId} sections={sections} tz={tz} now={now} />
-              </Suspense>
+              </Slot>
             ) : null}
             {news ? (
-              <Suspense fallback={<CardSkeleton />}>
+              <Slot id="news">
                 <NewsSlot sections={sections} tz={tz} now={now} />
-              </Suspense>
+              </Slot>
             ) : null}
             {brain ? (
-              <Suspense fallback={<CardSkeleton />}>
+              <Slot id="ai-brain">
                 <BrainSlot laneId={laneId} sections={sections} />
-              </Suspense>
+              </Slot>
             ) : null}
           </div>
         </div>
       ) : (
-        // The "not set up yet" card only stands in for a page with nothing real on it (no section can be drawn for this viewer).
-        <ModulePlaceholder module="settings" />
+        // The "not set up yet" card only stands in for a page with nothing real on it: no section can be drawn for this viewer and no connect result is shown.
+        <SectionBoundary>
+          <Suspense fallback={null}>
+            <PlaceholderUnlessResult sections={sections} />
+          </Suspense>
+        </SectionBoundary>
       )}
     </>
   );
+}
+
+/**
+ * The link target and the streamed section in one: the wrapper (id, scroll margin) is drawn at once, outside the boundary, so a link such as /LANE/settings#connections
+ * has its target from the first paint; the section streams inside it, under its own error boundary. An empty wrapper (the section turned out to have nothing for this
+ * person) is hidden, so it leaves no gap.
+ */
+function Slot({ id, children }: { id: string; children: ReactNode }) {
+  return (
+    <div id={id} className="scroll-mt-8 empty:hidden">
+      <SectionBoundary>
+        <Suspense fallback={<CardSkeleton />}>{children}</Suspense>
+      </SectionBoundary>
+    </div>
+  );
+}
+
+/** The grey block that holds the place of a connect result banner (about its height) while it loads. No text. */
+function NoticeSlot() {
+  return <div aria-hidden data-testid="notice-slot" className="h-20 rounded-card bg-muted motion-safe:animate-pulse" />;
+}
+
+/** While the body decides, the link targets already exist (empty, zero height) so a hash link can land; the body replaces them with the real wrappers. */
+function BodyFallback({ reserveNotice }: { reserveNotice: boolean }) {
+  return (
+    <>
+      {reserveNotice ? <NoticeSlot /> : null}
+      <div data-testid="settings-anchors" aria-hidden>
+        {["pages", "connections", "news", "ai-brain"].map((id) => (
+          <div key={id} id={id} className="scroll-mt-8" />
+        ))}
+      </div>
+      <CardSkeleton />
+    </>
+  );
+}
+
+/** The "not set up yet" card, unless a connect result is shown (the old rule: a visible result counts as a section). */
+async function PlaceholderUnlessResult({ sections }: { sections: Sections }) {
+  const result = await sections.result.catch(() => null);
+  return result ? null : <ModulePlaceholder module="settings" />;
 }
 
 /** The connect result and the origin notice (hosts only; only for users who can connect). */

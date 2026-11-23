@@ -8,7 +8,7 @@ import type { OnboardingView } from "@/lib/onboarding";
 export function BrainSection({ laneId, view }: { laneId: string; view: OnboardingView }) {
   const base = `/${encodeURIComponent(laneId)}/onboarding`;
   return (
-    <section id="ai-brain" aria-labelledby="ai-brain-title" className="scroll-mt-8">
+    <section aria-labelledby="ai-brain-title">
       <Card>
         <CardHeader>
           <CardTitle as="h2" id="ai-brain-title">

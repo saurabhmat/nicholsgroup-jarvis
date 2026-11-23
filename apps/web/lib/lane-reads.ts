@@ -9,7 +9,10 @@ import type { LaneClient } from "@nichols/core/lane-router";
 
 type Db = Pick<LaneClient, "schema">;
 
-/** `core.lane_config_current` for the lane (all callers select the whole `config`; readable only to the roles the view allows, anyone else gets an error or no row). */
+/**
+ * SECURITY: the whole `config` row is read into server memory for every page that asks (the gate runs on every gated page). `lane_config_current` must therefore never
+ * hold a secret (CLAUDE.md rule 4: tokens, keys and client secrets live only in the Vault, never in lane_config). Callers copy out ONLY their own keys and keep nothing else.
+ * `core.lane_config_current` for the lane (all callers select the whole `config`; readable only to the roles the view allows, anyone else gets an error or no row). */
 export const laneConfigRow = cache((client: Db, laneId: string) => Promise.resolve(client.schema("core").from("lane_config_current").select("config").eq("lane_id", laneId).maybeSingle()));
 
 /** `core.briefing_coverage` for the CALLER's own accounts (no `p_owner`: job callers that name an owner read directly). */

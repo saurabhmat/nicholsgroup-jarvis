@@ -36,7 +36,7 @@ vi.mock("next/headers", () => ({ cookies: async () => ({ get: (n: string) => (n 
 vi.mock("next/navigation", () => ({ useRouter: () => ({ refresh: () => undefined }) }));
 vi.mock("@/lib/briefing", async (orig) => ({
   ...(await orig<typeof import("@/lib/briefing")>()),
-  briefingFor: async (_c: unknown, _l: string, _n: Date, tz: string) => (m.briefingTz.push(tz), { viewerTz: "America/New_York", coverage: m.briefCoverage, coverageLine: "Coverage: test.", calendar: { access: false }, mail: m.mail.access ? { access: true, attention: [], more: 0, stillWaiting: [], money: [], mailboxOf: {}, ...(m.mail.sourceOf ? { sourceOf: m.mail.sourceOf } : {}) } : { access: false }, config: { attention: { fresh_hours: m.freshHours } }, mailboxes: [] }),
+  briefingFor: async (_c: unknown, _l: string, _n: Date, tz: string) => (m.briefingTz.push(tz), { viewerTz: "America/New_York", coverage: m.briefCoverage, coverageLine: "Coverage: test.", calendar: { access: false }, mail: m.mail.access ? { attention: [], more: 0, stillWaiting: [], money: [], mailboxOf: {}, ...m.mail } : { access: false }, config: { attention: { fresh_hours: m.freshHours } }, mailboxes: [] }),
 }));
 vi.mock("@/lib/coverage", async (orig) => ({ ...(await orig<typeof import("@/lib/coverage")>()), coverageFor: async () => m.coverage }));
 vi.mock("@/lib/job-failures", async (orig) => ({ ...(await orig<typeof import("@/lib/job-failures")>()), jobFailureBannerFor: async () => m.jobFailures }));
@@ -435,5 +435,22 @@ describe("faster navigation (T-276)", () => {
     m.owner = false; // a viewer who cannot reply has nothing to check
     await draw();
     expect(m.replyChecks).toEqual([]);
+  });
+});
+
+describe("Microsoft Reply after the check (T-276 review)", () => {
+  it("a successful check lets the Microsoft row reply; a failed check leaves the fixed note (fail closed)", async () => {
+    const row = { key: "c-ms:ms-1", kind: "priority" as const, reason: "Priority sender, unread", flags: { vip: true, money: null, deadline: false, waitingOnYou: false }, replyable: true, thread: { threadKey: "t1", fromAddress: "dana@acme.example.test", fromName: "Dana", subject: "Board deck", receivedAt: "2026-11-11T13:00:00Z", labels: ["INBOX"], isImportant: false, lastIsOwner: false, ownerReplied: false, unreadCount: 1, inboundCount: 1, connectionId: "c-ms", messageId: "ms-1", sourceUrl: null } };
+    m.view = view();
+    m.owner = true;
+    m.mail = { access: true, attention: [row], more: 0, sourceOf: { "c-ms": { provider: "microsoft", account: "a@pubk.test" } } } as typeof m.mail;
+    await draw();
+    expect(screen.getByTestId("attention-reply")).toBeTruthy();
+    expect(screen.queryByTestId("attention-reply-unavailable")).toBeNull();
+    cleanup();
+    m.replyFails = true;
+    await draw();
+    expect(screen.queryByTestId("attention-reply")).toBeNull();
+    expect(screen.getByTestId("attention-reply-unavailable")).toBeTruthy();
   });
 });

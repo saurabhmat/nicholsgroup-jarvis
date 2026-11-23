@@ -452,3 +452,65 @@ describe("T-271: Approvals and Assistant are opened from Settings", () => {
     expect(screen.queryByTestId("settings-pages")).toBeNull();
   });
 });
+
+describe("link targets and notices while sections stream (T-276 review)", () => {
+  /** What the page shows before any Suspense boundary has answered: every boundary replaced by its fallback. */
+  function fallbackOf(node: ReactNode): ReactNode {
+    if (Array.isArray(node)) return node.map(fallbackOf);
+    if (!isValidElement(node)) return node;
+    const el = node as ReactElement<{ children?: ReactNode; fallback?: ReactNode }>;
+    if (el.type === Suspense) return el.props.fallback ?? null;
+    if (el.props.children === undefined) return el;
+    return cloneElement(el, undefined, fallbackOf(el.props.children));
+  }
+  const idCount = (id: string) => document.querySelectorAll(`[id="${id}"]`).length;
+  const TARGETS = ["pages", "connections", "news", "ai-brain"];
+
+  it("the hash targets exist from the first paint, and each appears exactly once when the sections have arrived", async () => {
+    m.hidden = [];
+    m.newsShown = true;
+    m.owner = true;
+    m.google = { connections: [] };
+    m.news = { webAllowed: true, enabled: true, capUsd: 20, monthSpendUsd: 1, monthFetches: 1, lastStatus: "ok", lastFailure: null, lastFetchAt: "2026-11-12T11:00:00Z" };
+    m.brain = view(2);
+    const page = await SettingsPage(props);
+    render(<>{fallbackOf(page)}</>);
+    for (const id of TARGETS) expect(idCount(id), `fallback ${id}`).toBe(1);
+    cleanup();
+    render(<>{await resolve(page)}</>);
+    for (const id of TARGETS) expect(idCount(id), `final ${id}`).toBe(1);
+    // the wrappers carry the scroll margin
+    expect(document.getElementById("connections")?.className).toMatch(/scroll-mt-8/);
+    expect(document.getElementById("ai-brain")?.className).toMatch(/scroll-mt-8/);
+  });
+
+  it("a section that turns out empty leaves a hidden (empty) wrapper, not a gap", async () => {
+    m.owner = true; // the AI brain chip and wrapper exist for the owner; the loader returns nothing
+    m.brain = null;
+    render(<>{await resolve(await SettingsPage(props))}</>);
+    const wrapper = document.getElementById("ai-brain");
+    expect(wrapper?.className).toMatch(/empty:hidden/);
+    expect(wrapper?.childNodes.length).toBe(0);
+  });
+
+  it("a connect result or error in the address reserves the banner's slot (no query text); without one nothing is reserved", async () => {
+    const withQuery = { params: props.params, searchParams: Promise.resolve({ connect: "wrong_account", error: "secret-value", provider: "google" }) };
+    render(<>{fallbackOf(await SettingsPage(withQuery))}</>);
+    expect(screen.getByTestId("notice-slot").textContent).toBe("");
+    expect(document.body.innerHTML).not.toContain("secret-value");
+    expect(document.body.innerHTML).not.toContain("wrong_account");
+    cleanup();
+    render(<>{fallbackOf(await SettingsPage(props))}</>);
+    expect(screen.queryByTestId("notice-slot")).toBeNull();
+  });
+
+  it("a connect result with an empty navigation still hides the 'not set up yet' card (the old rule)", async () => {
+    noRoles();
+    m.result = { tone: "alert", title: "Google isn't configured on this server.", description: "x" };
+    expect(await draw()).toBe("false");
+    expect(screen.getByTestId("connect-result")).toBeTruthy();
+    cleanup();
+    m.result = null;
+    expect(await draw()).toBe("true");
+  });
+});

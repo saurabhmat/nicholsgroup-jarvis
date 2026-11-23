@@ -219,11 +219,11 @@ async function HomeSections({ laneId, now }: { laneId: string; now: Date }) {
         <PageSection title="Needs your attention" note={`Top 5 from the last ${freshWindowText(brief.config.attention.fresh_hours)}`}>
           <AiBriefing laneId={laneId} brief={saved} fallbackLines={view.unavailable ? [] : composeBriefing(view, now)} tz={brief.viewerTz} controls={isOwner && brief.mail.access ? <BriefingAuto laneId={laneId} preparedAt={saved && saved.status !== "failed" ? saved.preparedAt : null} initial={runState} tz={brief.viewerTz} /> : null} now={now} failure={failure} failureHint={failureHint} staleLine={brief.unavailable ? null : staleDataLine(brief.coverage, now, saved && saved.status !== "failed" ? saved.preparedAt : null)} />
           {replyCheck ? (
-            <Suspense fallback={<AttentionRows {...attentionProps} microsoftReply={NO_REPLY} />}>
+            <Suspense fallback={<AttentionSection {...attentionProps} microsoftReply={NO_REPLY} />}>
               <AttentionWithReply reply={replyCheck} {...attentionProps} />
             </Suspense>
           ) : (
-            <AttentionRows {...attentionProps} microsoftReply={NO_REPLY} />
+            <AttentionSection {...attentionProps} microsoftReply={NO_REPLY} />
           )}
           {saved && saved.status !== "failed" ? (
             // Folded so the card stays short: reply drafts (with Copy) and deadlines from the briefing.
@@ -261,7 +261,6 @@ const GRID_FULL = "md:col-span-3 md:col-start-1";
 
 const NO_REPLY: ReadonlySet<string> = new Set<string>();
 type AttentionProps = Omit<ComponentProps<typeof AttentionSection>, "microsoftReply">;
-const AttentionRows = (props: AttentionProps & { microsoftReply: ReadonlySet<string> }) => <AttentionSection {...props} />;
 
 /** The attention rows once the Microsoft reply check has answered (T-276: streamed behind the same rows without Microsoft Reply). */
 async function AttentionWithReply({ reply, ...props }: AttentionProps & { reply: Promise<ReadonlySet<string>> }) {

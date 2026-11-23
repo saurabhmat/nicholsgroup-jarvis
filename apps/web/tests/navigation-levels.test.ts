@@ -109,7 +109,10 @@ async function resolve(node: ReactNode): Promise<ReactNode> {
     t.rendered.push((el.type as { name: string }).name);
     return resolve(await (el.type as (p: unknown) => Promise<ReactNode>)(el.props));
   }
-  if (typeof el.type === "function") return resolve((el.type as (p: unknown) => ReactNode)(el.props));
+  if (typeof el.type === "function") {
+    t.rendered.push((el.type as { name: string }).name);
+    return resolve((el.type as (p: unknown) => ReactNode)(el.props));
+  }
   if (el.props.children === undefined) return el;
   return cloneElement(el, undefined, await resolve(el.props.children));
 }
@@ -222,6 +225,8 @@ describe("the gate stays in charge (T-276)", () => {
       const { default: Page } = await (PAGES[dir] as NonNullable<(typeof PAGES)[string]>)();
       await expect(resolve(Page({ params: params(), searchParams: sp() } as never) as ReactNode), dir).rejects.toThrow("NOT_FOUND");
       expect(t.calls.filter((c) => c.name.startsWith("rpc:") || (c.name.startsWith("from:") && c.name !== "from:lane_config_current")), dir).toEqual([]);
+      // None of the page's body components ran: the lane check refused before anything data-bearing was drawn.
+      for (const body of ["InboxList", "CalendarBody", "CalendarScreen", "FinanceView"]) expect(t.rendered, `${dir} ${body}`).not.toContain(body);
     }
   });
 
@@ -234,5 +239,17 @@ describe("the gate stays in charge (T-276)", () => {
       const { default: Page } = await import("@/app/[laneId]/inbox/page");
       await expect(resolve(Page({ params: params(), searchParams: sp() } as never) as ReactNode)).rejects.toThrow(`REDIRECT ${to}`);
     }
+  });
+});
+
+describe("Home with a refused lane (T-276 review)", () => {
+  it("is a 404 and the early Finance start asks the database for nothing beyond the lane check (real loaders, recording client)", async () => {
+    t.laneError = new AuthError("forbidden");
+    const { HomePage } = await import("@/components/home-page");
+    await expect(resolve(HomePage({ params: params() }) as unknown as ReactNode)).rejects.toThrow("NOT_FOUND");
+    await new Promise((r) => setTimeout(r, 40)); // let the early finance start run to its end
+    const other = t.calls.filter((c) => c.name !== "lane.check" && c.name !== "lane.list");
+    expect(other).toEqual([]);
+    expect(t.rendered).not.toContain("HomeSections");
   });
 });
