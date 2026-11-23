@@ -22,10 +22,27 @@ const LANE_CODE = /^[A-Z]{1,8}$/;
 const ENV_ERROR_CODES: Readonly<Record<string, string>> = { google: "google_env" };
 const GENERIC_ENV_ERROR_CODE = "connect_env";
 
+/** The providers' own check of their redirect address (`<NAME>_REDIRECT_URI must end with <callback path>`): a fixed message, no value in it. */
+const REDIRECT_URI_SETTING = /^[A-Z][A-Z0-9_]{0,40}_REDIRECT_URI must end with \/[a-z0-9/_-]{1,80}$/;
+function isRedirectUriSetting(e: unknown): boolean {
+  return isConnectorError(e) && e.info.kind === "connection_unavailable" && REDIRECT_URI_SETTING.test(e.info.message);
+}
+
 /** A connect button is a plain form POST (the browser navigates); a script or API client is not. */
 function isFormNavigation(request: Request): boolean {
   const type = (request.headers.get("content-type") ?? "").toLowerCase();
   return type.startsWith("application/x-www-form-urlencoded") || type.startsWith("multipart/form-data") || request.headers.get("sec-fetch-mode") === "navigate";
+}
+
+/**
+ * The answer to a person's Connect click when the server is not configured: back to the lane's Settings page with a fixed code
+ * (the lane must be a lane code; the code comes from the fixed map, own keys only). Null for a script caller or any other lane value.
+ */
+function notConfigured(request: Request, url: URL, provider: string): Response | null {
+  const lane = url.searchParams.get("lane") ?? "";
+  if (!isFormNavigation(request) || !LANE_CODE.test(lane)) return null;
+  const code = Object.hasOwn(ENV_ERROR_CODES, provider) ? ENV_ERROR_CODES[provider] : GENERIC_ENV_ERROR_CODE;
+  return new Response(null, { status: 303, headers: { ...NO_STORE, location: `/${lane}/settings?error=${code}` } });
 }
 
 /** How long the callback waits for its follow-up before redirecting anyway. */
@@ -52,12 +69,7 @@ export function createConnectHandlers(flow: Pick<ReturnType<typeof createOAuthFl
         if (e instanceof EnvValidationError) {
           // Variable NAMES and the rule each broke, never values (the error carries none).
           console.error(`[api/connect/start] not configured (${provider}, ${e.scope.slice(0, 80)}): ${describeEnvError(e)}`);
-          const lane = url.searchParams.get("lane") ?? "";
-          if (isFormNavigation(request) && LANE_CODE.test(lane)) {
-            const code = ENV_ERROR_CODES[provider] ?? GENERIC_ENV_ERROR_CODE;
-            return new Response(null, { status: 303, headers: { ...NO_STORE, location: `/${lane}/settings?error=${code}` } });
-          }
-          return json("unavailable", 503);
+          return notConfigured(request, url, provider) ?? json("unavailable", 503);
         }
         const kind = isConnectorError(e) ? e.info.kind : undefined;
         if (kind === "forbidden") return json("forbidden", 403);
@@ -65,7 +77,10 @@ export function createConnectHandlers(flow: Pick<ReturnType<typeof createOAuthFl
         if (kind === "rate_limited") return json("too_many_connects", 429);
         // The class name, and for a ConnectorError its kind and fixed (already redacted) message: enough to tell a configuration refusal from an outage.
         console.error("[api/connect/start] unavailable:", e instanceof Error ? e.name : typeof e, isConnectorError(e) ? { kind: e.info.kind, message: e.info.message } : {});
-        return json("unavailable", 503);
+        // T-275: a redirect address that does not end with the provider's callback path is a server setting, like a missing variable:
+        // a person who clicked a Connect button is sent back to Settings with the same fixed banner instead of a bare JSON answer.
+        // (Reached only after the origin check above and `authorize` inside flow.start, which runs before the provider's client() check.)
+        return (isRedirectUriSetting(e) ? notConfigured(request, url, provider) : null) ?? json("unavailable", 503);
       }
     },
 

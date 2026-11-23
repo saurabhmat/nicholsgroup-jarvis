@@ -66,7 +66,8 @@ describe("T-270: [api/connect/start] unavailable names what refused", () => {
     const { ConnectorError } = await import("../contract/errors");
     const log = vi.spyOn(console, "error").mockImplementation(() => undefined);
     const form = { "content-type": "application/x-www-form-urlencoded" };
-    const res = await handlers(new ConnectorError({ kind: "connection_unavailable", message: "GRAPH_REDIRECT_URI must end with /api/connect/microsoft/callback" })).start(post("?lane=PKG", form), "google");
+    // (a script caller: a person's form post is sent back to Settings, see the T-275 tests below)
+    const res = await handlers(new ConnectorError({ kind: "connection_unavailable", message: "GRAPH_REDIRECT_URI must end with /api/connect/microsoft/callback" })).start(post("?lane=PKG", { "content-type": "application/json" }), "google");
     expect(res.status).toBe(503);
     const out = JSON.stringify(log.mock.calls);
     expect(out).toContain("[api/connect/start] unavailable:");
@@ -77,5 +78,75 @@ describe("T-270: [api/connect/start] unavailable names what refused", () => {
     await handlers(new Error(`boom ${CANARY}`)).start(post("?lane=PKG", form), "google");
     expect(JSON.stringify(log.mock.calls)).not.toContain(CANARY);
     expect(JSON.stringify(log.mock.calls)).toContain("Error");
+  });
+});
+
+describe("T-275: a redirect address that does not end with the callback path", () => {
+  const form = { "content-type": "application/x-www-form-urlencoded" };
+  const wrongUri = async (name = "GOOGLE_REDIRECT_URI", path = "/api/connect/google/callback") => {
+    const { ConnectorError } = await import("../contract/errors");
+    return new ConnectorError({ kind: "connection_unavailable", message: `${name} must end with ${path}` });
+  };
+
+  it("sends a person's form post back to Settings with the fixed code and still logs what refused", async () => {
+    const log = vi.spyOn(console, "error").mockImplementation(() => undefined);
+    const res = await handlers(await wrongUri()).start(post("?lane=PKG", form), "google");
+    expect(res.status).toBe(303);
+    expect(res.headers.get("location")).toBe("/PKG/settings?error=google_env");
+    expect(res.headers.get("cache-control")).toBe("no-store");
+    expect(JSON.stringify(log.mock.calls)).toContain("GOOGLE_REDIRECT_URI must end with /api/connect/google/callback");
+  });
+
+  it("another provider gets the generic code", async () => {
+    vi.spyOn(console, "error").mockImplementation(() => undefined);
+    const res = await handlers(await wrongUri("INTUIT_REDIRECT_URI", "/api/connect/qbo/callback")).start(post("?lane=PKG", form), "mockqbo");
+    expect(res.headers.get("location")).toBe("/PKG/settings?error=connect_env");
+  });
+
+  it("a script caller, and a lane that is not a lane code, keep the JSON 503", async () => {
+    vi.spyOn(console, "error").mockImplementation(() => undefined);
+    const api = await handlers(await wrongUri()).start(post("?lane=PKG", { "content-type": "application/json" }), "google");
+    expect(api.status).toBe(503);
+    expect(await api.json()).toEqual({ error: "unavailable" });
+    const badLane = await handlers(await wrongUri()).start(post("?lane=..%2Fx", form), "google");
+    expect(badLane.status).toBe(503);
+    expect(badLane.headers.get("location")).toBeNull();
+  });
+
+  it("any other connection_unavailable error is still the plain 503 (an outage is not a setting)", async () => {
+    vi.spyOn(console, "error").mockImplementation(() => undefined);
+    const { ConnectorError } = await import("../contract/errors");
+    const res = await handlers(new ConnectorError({ kind: "connection_unavailable", message: "Lane is not available for connection health" })).start(post("?lane=PKG", form), "google");
+    expect(res.status).toBe(503);
+    expect(res.headers.get("location")).toBeNull();
+  });
+});
+
+describe("T-275: the providers' real redirect-address refusals are recognised", () => {
+  const form = { "content-type": "application/x-www-form-urlencoded" };
+  const thrownBy = (check: (uri: string) => void): unknown => {
+    try {
+      check("https://app.example.test/wrong/path");
+    } catch (e) {
+      return e;
+    }
+    throw new Error("the check did not refuse a wrong path");
+  };
+
+  it("Google, QuickBooks and Microsoft: the error their own check throws sends a form post back to Settings", async () => {
+    vi.spyOn(console, "error").mockImplementation(() => undefined);
+    const google = await import("../google/provider");
+    const quickbooks = await import("../quickbooks/provider");
+    const microsoft = await import("../microsoft/provider");
+    const cases: [unknown, string, string][] = [
+      [thrownBy(google.assertRedirectUri), "google", "/PKG/settings?error=google_env"],
+      [thrownBy(quickbooks.assertRedirectUri), "mockqbo", "/PKG/settings?error=connect_env"],
+      [thrownBy(microsoft.assertRedirectUri), "mockqbo", "/PKG/settings?error=connect_env"],
+    ];
+    for (const [error, provider, location] of cases) {
+      const res = await handlers(error).start(post("?lane=PKG", form), provider);
+      expect(res.status).toBe(303);
+      expect(res.headers.get("location")).toBe(location);
+    }
   });
 });
