@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { activeKey, greetingFor, homeHeading, laneHref, menuKeyFor, onboardingEntry, pageHeading, MOBILE_TABS, MORE_ITEMS, NAV_ITEMS, navItem, SETTINGS_PAGES, SIDE_MENU } from "./nav";
+import { activeKey, greetingFor, homeHeading, laneHref, menuKeyFor, pageHeading, MOBILE_TABS, MORE_ITEMS, NAV_ITEMS, navItem, SETTINGS_PAGES, SIDE_MENU } from "./nav";
 
 describe("navigation data", () => {
   it("T-271: the side menu order is Home, Inbox, Calendar, Claude, ChatGPT, Finance, Tasks, Contacts, Messages, Settings, with no hidden modules", () => {
@@ -42,14 +42,6 @@ describe("navigation data", () => {
     expect(MOBILE_TABS.find((t) => t.key === "more")?.covers).toEqual([...MORE_ITEMS, ...SETTINGS_PAGES]);
     expect(MOBILE_TABS.map((t) => t.key)).not.toContain("onboarding");
     expect(navItem("onboarding").heading).toEqual({ lead: "Set up your", accent: "brain" });
-  });
-
-  it("shows the live count until every section is done, then AI brain with a check", () => {
-    expect(onboardingEntry({ done: 3, total: 10 })).toEqual({ label: "Get started", badge: "3 of 10", complete: false });
-    expect(onboardingEntry({ done: 0, total: 10 })).toEqual({ label: "Get started", badge: "0 of 10", complete: false });
-    expect(onboardingEntry({ done: 9, total: 10 }).complete).toBe(false);
-    expect(onboardingEntry({ done: 10, total: 10 })).toEqual({ label: "AI brain", complete: true });
-    expect(onboardingEntry({ done: null, total: 10 })).toEqual({ label: "Get started", complete: false });
   });
 
   it("has no company names (rule 2)", () => {

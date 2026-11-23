@@ -20,7 +20,7 @@ export function ExternalChatView({ chat, laneName }: { chat: ExternalChatKey; la
         <CardHeader>
           <CardTitle as="h2">Open {c.name}</CardTitle>
           <CardDescription>
-            {c.name} opens in a new tab, where you sign in with your own {c.name} account. {c.vendor} does not allow {c.name} to be shown inside another site, and nothing from this portal is sent to it.
+            {c.name} opens in a new tab, where you sign in with your own {c.name} account. Nothing from this portal is sent to {c.vendor}.
           </CardDescription>
         </CardHeader>
         <CardContent>

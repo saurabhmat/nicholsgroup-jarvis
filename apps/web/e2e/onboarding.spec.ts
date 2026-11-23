@@ -42,18 +42,21 @@ const setTheme = (page: Page, theme: "light" | "dark") => page.evaluate((t) => d
 test.beforeEach(cleanup);
 test.afterAll(cleanup);
 
-test("owner, desktop: Get started is first in the menu, the wizard previews, saves on click, skips and deep-links", async ({ page }, info) => {
+test("owner, desktop: setup opens from Settings (AI brain), the wizard previews, saves on click, skips and deep-links", async ({ page }, info) => {
   test.skip(info.project.name !== "desktop", "owner persona is the desktop project's member");
   test.setTimeout(240_000);
   await signIn(page, personas(info).member);
 
+  // T-271: the side menu has no Get started entry; setup opens from Settings -> AI brain, and Settings stays selected.
   const menu = page.getByRole("navigation", { name: "Main" });
-  const first = menu.getByRole("link").first();
-  await expect(first).toHaveText(/^Get started0 of 10$/);
-  await first.click();
+  await expect(menu.getByRole("link", { name: /Get started|AI brain/ })).toHaveCount(0);
+  await page.goto("/PKG/settings");
+  const brainCard = page.getByRole("region", { name: "AI brain" });
+  await expect(brainCard).toContainText("0 of 10 sections done", { timeout: 30_000 });
+  await brainCard.getByRole("link", { name: "Continue setup" }).click();
   await expect(page).toHaveURL(/\/PKG\/onboarding$/, { timeout: 30_000 });
   await expect(page.getByRole("heading", { name: "Set up your brain", level: 1 })).toBeVisible();
-  await expect(first).toHaveAttribute("aria-current", "page");
+  await expect(menu.getByRole("link", { name: "Settings" })).toHaveAttribute("aria-current", "page");
 
   // Intro: three lines and Start.
   const intro = page.getByTestId("wizard-intro");
@@ -103,7 +106,7 @@ test("owner, desktop: Get started is first in the menu, the wizard previews, sav
   await expect(page.getByTestId("interview-group")).toHaveAttribute("data-group", "B-3", { timeout: 30_000 });
   await page.goto("/PKG/onboarding?step=%3Cscript%3E");
   await expect(page.getByTestId("interview-group")).toHaveAttribute("data-group", "A-2", { timeout: 30_000 });
-  await expect(menu.getByRole("link").first()).toHaveText(/^Get started1 of 10$/);
+  // T-271: progress is shown on Settings -> AI brain (the menu badge is gone); the Settings test below reads it.
 
   // Nothing to add: marks a section done without writing anything (T-227).
   await page.goto("/PKG/onboarding?step=B-3");
@@ -126,7 +129,7 @@ test("owner, desktop: Get started is first in the menu, the wizard previews, sav
   await expectNoAxeViolations(page);
 });
 
-test("owner, iPhone width: More row, Home banner, Step N of 10 and a sticky Save above the tab bar", async ({ page }, info) => {
+test("owner, iPhone width: Home banner, Step N of 10 and a sticky Save above the tab bar", async ({ page }, info) => {
   test.skip(info.project.name !== "desktop", "owner persona is the desktop project's member");
   test.setTimeout(240_000);
   await page.setViewportSize({ width: 390, height: 844 });
@@ -134,18 +137,17 @@ test("owner, iPhone width: More row, Home banner, Step N of 10 and a sticky Save
 
   // No new tab; Home banner while incomplete.
   const tabs = page.getByRole("navigation", { name: "Tabs" });
-  await expect(tabs.getByRole("link")).toHaveText(["Home", "Approvals", "Inbox", "Ask", "More"]);
+  await expect(tabs.getByRole("link")).toHaveText(["Home", "Inbox", "Calendar", "Claude", "More"]); // T-271
   const banner = page.getByTestId("onboarding-banner");
   await expect(banner).toContainText("Finish setting up Jarvis (0 of 10)");
   expect(await noHorizontalScroll(page)).toBe(true);
 
-  // Top of More.
+  // T-271: More has no Get started row any more; on the phone setup opens from the Home banner (or Settings -> AI brain).
   await tabs.getByRole("link", { name: "More" }).click();
   await expect(page.getByRole("heading", { name: "More", level: 1 })).toBeVisible({ timeout: 30_000 });
-  const rows = page.getByRole("main").getByRole("listitem");
-  await expect(rows.first()).toContainText("Get started");
-  await expect(rows.first()).toContainText("0 of 10");
-  await rows.first().getByRole("link").click();
+  await expect(page.getByRole("main").getByText("Get started")).toHaveCount(0);
+  await tabs.getByRole("link", { name: "Home" }).click();
+  await banner.click();
   await expect(page).toHaveURL(/\/PKG\/onboarding$/, { timeout: 30_000 });
 
   await page.getByRole("button", { name: "Start" }).click();

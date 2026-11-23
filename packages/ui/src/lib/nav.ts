@@ -62,16 +62,6 @@ export function menuKeyFor(key: NavKey | "more" | null): NavKey | "more" | null 
   return key !== null && key !== "more" && SETTINGS_PAGES.includes(key) ? "settings" : key;
 }
 
-/** Setup progress shown on a "Get started" entry: completed sections out of the bank's section count (`done` null = could not be read). */
-export type OnboardingProgress = { done: number | null; total: number };
-
-/** What the "Get started" entry shows: "3 of 10" badge until every section is done, then "AI brain" with a check. */
-export function onboardingEntry(progress: OnboardingProgress): { label: string; badge?: string; complete: boolean } {
-  const complete = progress.done !== null && progress.total > 0 && progress.done >= progress.total;
-  if (complete) return { label: "AI brain", complete: true };
-  return progress.done === null ? { label: "Get started", complete: false } : { label: "Get started", badge: `${String(progress.done)} of ${String(progress.total)}`, complete: false };
-}
-
 const EASTERN_HOUR = new Intl.DateTimeFormat("en-US", { timeZone: "America/New_York", hour: "numeric", hourCycle: "h23" });
 
 /** "Good morning" before 12:00, "Good afternoon" from 12:00 to 16:59, "Good evening" from 17:00, by America/New_York time whatever the viewer's zone (T-240). */

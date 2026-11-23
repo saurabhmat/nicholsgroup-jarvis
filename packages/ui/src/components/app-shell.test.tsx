@@ -38,6 +38,14 @@ describe("AppShell", () => {
     }
   });
 
+  it("T-271: the company switcher keeps the page for a new page and for a page under Settings", () => {
+    for (const [path, href] of [["/PKG/claude", "/APK/claude"], ["/PKG/approvals", "/APK/approvals"]] as const) {
+      const { container, unmount } = shell({ lanes: TWO, pathname: path });
+      expect([...container.querySelectorAll("a")].map((a) => a.getAttribute("href"))).toContain(href);
+      unmount();
+    }
+  });
+
   it("has no Search, Commitments or All companies entry anywhere", () => {
     const { container } = shell({ lanes: TWO });
     const text = container.textContent ?? "";

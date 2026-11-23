@@ -21,7 +21,7 @@ const ROUTES = [
   { key: "inbox", path: "/PKG/inbox", link: "Inbox", heading: /^Inbox/ },
   { key: "calendar", path: "/PKG/calendar", link: "Calendar", heading: /^Calendar/ },
   { key: "settings", path: "/PKG/settings", link: "Settings", heading: /^Settings/ },
-  { key: "onboarding", path: "/PKG/onboarding", link: /^Get started/, heading: /^Set up your/ },
+  { key: "claude", path: "/PKG/claude", link: "Claude", heading: /^Claude/ }, // T-271: Get started left the menu; a light page takes its place in the measurement
 ] as const;
 const RUNS = Number(process.env.PERF_RUNS ?? 7);
 
