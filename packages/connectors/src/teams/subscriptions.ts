@@ -14,7 +14,7 @@
 //   3. no live row -> create; expired -> mark removed, create; reauthorization_required -> renew; expiring within 24 hours -> renew; a renewal that answers 404 -> gone: create again.
 //   4. Microsoft's answer is the lifetime that counts: the expiry it gives is recorded. An answer under 26 hours cannot be kept alive by a 12-hourly scan: the subscription is DELETED at Microsoft and
 //      not recorded (or, for a renewal, marked removed), `teams.subscription.lifetime_too_short` is logged and the connection stays on "refresh on open".
-//   5. a create that Microsoft REFUSES (400, 403, 404 or 501: the resource is not supported for a delegated token, the quota is used, the permission is missing) is logged as
+//   5. a create that Microsoft REFUSES (400, 402, 403, 404 or 501: the resource is not supported for a delegated token, the quota is used, the permission is missing) is logged as
 //      `teams.subscription.unsupported` with the status and Microsoft's short error code, never thrown: notices are simply off for that connection and Settings says "Live updates unavailable". NO per-chat
 //      fallback. The next scan asks again (twice a day), so a change on Microsoft's side is picked up. Any other failure (401, 429, 5xx, a timeout, a credential problem) is thrown so the job retries or reports.
 // Every row is recorded BEFORE anything can act on it (the record call follows the create call at once; if recording fails the just-created subscription is stopped, best effort). Renew and stop use only
@@ -49,7 +49,7 @@ import type { TeamsSubscriptionClient } from "./subscription-client";
 export const TEAMS_CLIENT_STATE_BYTES = 32;
 const DAY_MS = 86_400_000;
 /** What Microsoft can answer to a refused create that means "not for this connection": the resource is not supported, the quota is used or the permission is missing. */
-const REFUSED_STATUSES: readonly number[] = [400, 403, 404, 501];
+const REFUSED_STATUSES: readonly number[] = [400, 402, 403, 404, 501];
 
 /** What Graph answers to a create or a renew: only these two fields are read; the rest (which echoes our clientState) is dropped. */
 const GraphSubscription = z.object({

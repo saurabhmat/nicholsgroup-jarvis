@@ -249,6 +249,17 @@ describe("listMessages", () => {
     expect(decode(fake.state.graphRequests[0]?.search ?? "")).toEqual({ $top: "50", $orderby: "lastModifiedDateTime desc", $filter: "lastModifiedDateTime gt 2026-11-21T08:45:00.000Z" });
     expect(r.messages.map((m) => m.id)).toEqual(["b", "a"]);
     expect(r.nextBefore).toBeNull();
+    expect(r.truncated).toBe(false);
+  });
+
+  it("new since a time: a full page (50) is `truncated` (changes may be missing: the caller reads the chat again instead of merging); a page of 49 is not; a normal page read has no flag", async () => {
+    const { fake, reader, conn } = setup();
+    const many = (n: number) => Array.from({ length: n }, (_, i) => msg(`m${String(i)}`, `2026-11-21T09:${String(Math.floor(i / 60)).padStart(2, "0")}:${String(i % 60).padStart(2, "0")}Z`));
+    fake.state.messagesByChat.set(CHAT, many(50));
+    expect((await reader.listMessages("PKG", conn, asUser, CHAT, { sinceModified: "2026-11-21T08:00:00Z" })).truncated).toBe(true);
+    fake.state.messagesByChat.set(CHAT, many(49));
+    expect((await reader.listMessages("PKG", conn, asUser, CHAT, { sinceModified: "2026-11-21T08:00:00Z" })).truncated).toBe(false);
+    expect((await reader.listMessages("PKG", conn, asUser, CHAT)).truncated).toBeUndefined();
   });
 
   it("the times in a filter are validated and rebuilt, never pasted; both options together are refused; nothing is sent", async () => {

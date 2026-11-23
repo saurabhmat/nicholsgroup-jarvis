@@ -4,7 +4,7 @@
 -- the provider trigger, deletion on disconnect and retention, and the push_subscriptions checks that tie each resource to its provider (mail and calendar keep working; teams_chats only for Teams).
 -- CROSS-LANE AND CROSS-USER denial throughout. Synthetic data only: example UUIDs, example.test addresses.
 begin;
-select plan(116);
+select plan(122);
 \ir helpers/lane_rls.psql
 
 update core.lanes set enabled = true where code = 'APK';
@@ -190,6 +190,16 @@ select lives_ok($$select core.push_subscription_record('PKG', '00000000-0000-400
 select is((select count(*)::int from core.push_subscription_list('PKG', '00000000-0000-4000-8000-000000033106')), 1, 'exactly one live all-chats subscription per connection');
 select is((select resource from core.push_subscription_lookup('PKG', 'microsoft_teams', array['sub-33106b'])), 'teams_chats', 'the lookup returns the resource for the Teams provider');
 select is((select count(*)::int from core.push_subscription_lookup('PKG', 'microsoft', array['sub-33106b'])), 0, 'and nothing under provider microsoft (the receiver asks both)');
+reset role;
+
+-- ---------------------------------------------------------------- the receiver's claim names the connection's provider (a Teams subscription's connection is `microsoft_teams`)
+set local role service_role;
+select is((select core.webhook_event_claim('PKG', '00000000-0000-4000-8000-000000033102', 'microsoft_teams', 'ms:change:t289a', 'teams_chats.changed', repeat('a', 64))), 'process', 'a Teams notice is claimed under microsoft_teams');
+select is((select core.webhook_event_claim('PKG', '00000000-0000-4000-8000-000000033102', 'microsoft_teams', 'ms:change:t289a', 'teams_chats.changed', repeat('a', 64))), 'duplicate', 'and a replay is a duplicate');
+select throws_ok($$select core.webhook_event_claim('PKG', '00000000-0000-4000-8000-000000033102', 'microsoft', 'ms:change:t289b', 'teams_chats.changed', repeat('a', 64))$$, '42501', null, 'the same claim naming provider microsoft is refused (the connection is a Teams one)');
+select throws_ok($$select core.webhook_event_claim('APK', '00000000-0000-4000-8000-000000033102', 'microsoft_teams', 'ms:change:t289c', 'teams_chats.changed', repeat('a', 64))$$, '42501', null, 'cross-lane: a PKG Teams connection named with lane APK is refused');
+select is((select core.webhook_event_mark('PKG', 'microsoft_teams', 'ms:change:t289a', 'enqueued')), true, 'the Teams receipt is marked enqueued');
+select is((select core.webhook_event_mark('APK', 'microsoft_teams', 'ms:change:t289a', 'failed')), false, 'cross-lane: another lane cannot mark it');
 reset role;
 
 -- ---------------------------------------------------------------- the renewal's ownership question (the job asks core.teams_connection_ids for the owner, as the service role)

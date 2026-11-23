@@ -61,6 +61,7 @@ export function MessagesRefresh({ label = "Refresh", mode = "page" }: { label?: 
 }
 
 export function ConversationMessages({ laneId, chatKey, initial, nextBefore, group }: { laneId: string; chatKey: string; initial: MessageView[]; nextBefore: string | null; group: boolean }) {
+  const router = useRouter();
   // Older pages the person asked for. After a Refresh the server sends a new `initial`; the pages kept here are merged BY MESSAGE ID and the "older than" time is the oldest message shown, so no
   // hole can appear between what was loaded before and what the refresh returned (C2).
   const [older, setOlder] = useState<MessageView[]>([]);
@@ -75,7 +76,11 @@ export function ConversationMessages({ laneId, chatKey, initial, nextBefore, gro
   const seen = new Set(initial.map((m) => m.id));
   const kept = older.filter((m) => !seen.has(m.id));
   const byId = new Map<string, MessageView>();
-  for (const m of [...kept, ...initial, ...fresh]) byId.set(m.id, m);
+  // two copies of one message (the server's page, a live re-read, an older page): the one with the later lastModifiedDateTime wins; with no time on either, the later source wins
+  for (const m of [...kept, ...initial, ...fresh]) {
+    const have = byId.get(m.id);
+    if (!have || (m.modifiedAt ?? "") >= (have.modifiedAt ?? "")) byId.set(m.id, m);
+  }
   const all = [...byId.values()].sort((a, b) => (a.at < b.at ? -1 : a.at > b.at ? 1 : 0));
   const oldestShown = all.length > 0 ? all[0]?.at ?? null : null;
   const newestShown = all.length > 0 ? all[all.length - 1]?.at ?? null : null;
@@ -97,8 +102,14 @@ export function ConversationMessages({ laneId, chatKey, initial, nextBefore, gro
           setRefreshFailed(true);
           return;
         }
-        const b = (await res.json()) as { messages?: MessageView[] };
+        const b = (await res.json()) as { messages?: MessageView[]; truncated?: boolean };
         if (!Array.isArray(b.messages)) throw new Error("shape");
+        if (b.truncated === true) {
+          // the page was full (or had a next link): changes may be missing from it, and merging it would leave a hole that never closes. The conversation is read again from the server instead.
+          setRefreshFailed(false);
+          router.refresh();
+          return;
+        }
         const el = box.current;
         stick.current = el ? el.scrollHeight - el.scrollTop - el.clientHeight < 96 : false; // only follow the newest message when the person is already at the bottom
         setRefreshFailed(false);

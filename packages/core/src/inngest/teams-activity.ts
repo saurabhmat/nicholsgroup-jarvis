@@ -18,8 +18,17 @@ export type TeamsActivityDeps = {
 };
 
 export const TEAMS_ACTIVITY_RETRIES = 3;
+/**
+ * The trigger sees only what this function handles: a Teams change (or a missed-notification) event of provider `microsoft`; every other `webhook/received` of every provider never starts a run.
+ * Event types are set by OUR receiver from the stored subscription row.
+ */
+export const TEAMS_ACTIVITY_TRIGGER_IF = "event.data.provider == 'microsoft' && (event.data.eventType == 'teams_chats.changed' || event.data.eventType == 'teams_chats.missed')";
+/** A burst of notices of one connection becomes ONE write: the run waits until the connection has been quiet for this long, and at most TEAMS_ACTIVITY_DEBOUNCE_MAX. Nothing is lost: the write says "a notice arrived". */
+export const TEAMS_ACTIVITY_DEBOUNCE = { key: "event.data.laneId + '/' + event.data.connectionId", period: "10s", timeout: "30s" } as const;
 /** The one event type this function handles: the receiver's `${resource}.changed` for a `teams_chats` subscription row. */
 export const TEAMS_ACTIVITY_EVENT_TYPE = "teams_chats.changed";
+/** Microsoft's "missed" lifecycle notice (not sent for Teams per the fact sheet, but handled as a notice should it come): the receiver queues it as `teams_chats.missed`. */
+export const TEAMS_ACTIVITY_MISSED_TYPE = "teams_chats.missed";
 
 type StepApi = { run: <T>(id: string, fn: () => T | Promise<T>) => Promise<T> };
 
@@ -31,14 +40,14 @@ export async function handleTeamsActivity(deps: TeamsActivityDeps, raw: unknown,
   if (parsed.issues) return { recorded: false, skipped: "invalid" };
   const data = parsed.value;
   if (data.provider !== "microsoft") return { recorded: false, skipped: "not_microsoft" };
-  if (data.eventType !== TEAMS_ACTIVITY_EVENT_TYPE) return { recorded: false, skipped: "not_teams_notice" };
+  if (data.eventType !== TEAMS_ACTIVITY_EVENT_TYPE && data.eventType !== TEAMS_ACTIVITY_MISSED_TYPE) return { recorded: false, skipped: "not_teams_notice" };
   if (!deps.enabledLanes().includes(data.laneId)) return { recorded: false, skipped: "lane_not_served" };
   const recorded = await step.run(`notice:${data.laneId}:${data.connectionId}`, () => deps.recordNotice(data.laneId, data.connectionId));
   return recorded ? { recorded: true, skipped: null } : { recorded: false, skipped: "not_usable" };
 }
 
 export function teamsActivityFunctions(inngest: Inngest, deps: TeamsActivityDeps): InngestFunction.Any[] {
-  const fn = inngest.createFunction({ id: "teams-activity", triggers: [webhookReceived], retries: TEAMS_ACTIVITY_RETRIES }, async ({ event, step }) =>
+  const fn = inngest.createFunction({ id: "teams-activity", triggers: [{ event: webhookReceived.event, if: TEAMS_ACTIVITY_TRIGGER_IF }], retries: TEAMS_ACTIVITY_RETRIES, debounce: TEAMS_ACTIVITY_DEBOUNCE }, async ({ event, step }) =>
     handleTeamsActivity(deps, event.data, step as unknown as StepApi),
   );
   return [fn];

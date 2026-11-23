@@ -18,7 +18,7 @@ const KEY = encodeChatKey("19:abc123def456@thread.v2");
 const msg = (id: string, at: string, over: Record<string, unknown> = {}): MessageView => ({ id, at, time: "9:05 AM", fullTime: "x", day: at.slice(0, 10), sender: "Pat", mine: false, edited: false, deleted: false, system: false, nodes: [{ t: "text", v: `text ${id}` }], truncated: false, attachments: [], ...over }) as unknown as MessageView;
 const row = (key: string, title: string, unread = false): ChatRowView => ({ key, title, preview: `p ${title}`, time: "9:00 AM", unread, external: false });
 
-type Server = { live: boolean; lastNoticeAt: string | null; dot: boolean; activityStatus: number; chats: ChatRowView[]; chatsStatus: number; newer: MessageView[]; newerStatus: number };
+type Server = { truncated?: boolean; live: boolean; lastNoticeAt: string | null; dot: boolean; activityStatus: number; chats: ChatRowView[]; chatsStatus: number; newer: MessageView[]; newerStatus: number };
 let server: Server;
 let vis: "visible" | "hidden" = "visible";
 const calls = { activity: 0, seen: 0, chats: 0, newer: 0, read: 0, urls: [] as string[] };
@@ -33,7 +33,7 @@ const fetchMock = vi.fn((url: string, init?: RequestInit) => {
       return json(200, { live: server.live, liveUntil: null, dot: false, lastNoticeAt: server.lastNoticeAt });
     }
     calls.activity += 1;
-    return server.activityStatus === 200 ? json(200, { live: server.live, liveUntil: null, dot: server.dot, lastNoticeAt: server.lastNoticeAt }) : json(server.activityStatus, { error: "x" });
+    return server.activityStatus === 200 ? json(200, { live: server.live, liveUntil: null, dot: server.dot, lastNoticeAt: server.lastNoticeAt, serverNow: new Date().toISOString() }) : json(server.activityStatus, { error: "x" });
   }
   if (u.includes("/messages/chats")) {
     calls.chats += 1;
@@ -41,7 +41,7 @@ const fetchMock = vi.fn((url: string, init?: RequestInit) => {
   }
   if (u.includes("/messages/newer")) {
     calls.newer += 1;
-    return server.newerStatus === 200 ? json(200, { messages: server.newer }) : json(server.newerStatus, { error: "busy" });
+    return server.newerStatus === 200 ? json(200, { messages: server.newer, truncated: server.truncated === true }) : json(server.newerStatus, { error: "busy" });
   }
   if (u.includes("/messages/read")) {
     calls.read += 1;
@@ -207,6 +207,22 @@ describe("with working notices: the loop asks OUR database, never Microsoft", ()
     expect(texts[1]).toContain("deleted");
   });
 
+  it("two copies of one message: the one with the later lastModifiedDateTime wins, whichever source it came from", async () => {
+    const edited = [msg("m1", "2026-11-23T14:00:00.000Z", { modifiedAt: "2026-11-23T16:00:00.000Z", nodes: [{ t: "text", v: "newest text" }] }), msg("m2", "2026-11-23T14:05:00.000Z")];
+    render(
+      <MessagesLiveProvider laneId="PKG">
+        <ConversationMessages laneId="PKG" chatKey={KEY} initial={edited} nextBefore={null} group />
+      </MessagesLiveProvider>,
+    );
+    await tick(0);
+    server.lastNoticeAt = "2026-11-23T15:00:10.000Z";
+    server.newer = [msg("m1", "2026-11-23T14:00:00.000Z", { modifiedAt: "2026-11-23T15:00:00.000Z", nodes: [{ t: "text", v: "stale text" }] })];
+    await tick(ACTIVITY_POLL_MS);
+    const texts = screen.getAllByTestId("message").map((m) => m.textContent ?? "");
+    expect(texts[0]).toContain("newest text");
+    expect(texts[0]).not.toContain("stale text");
+  });
+
   it("the chat list shown is replaced by the re-read (a new chat appears, its unread dot comes with it); a failed re-read keeps what is shown and says so", async () => {
     await start();
     server.chats = [row("k2", "Sam", true), row(KEY, "Pat")];
@@ -241,6 +257,56 @@ describe("with working notices: the loop asks OUR database, never Microsoft", ()
     await tick(5 * 60_000);
     expect(graphCalls()).toBe(0);
     expect(calls.seen).toBe(1);
+  });
+});
+
+describe("the first answer (T-290 review M2, M3)", () => {
+  it("a first answer that FAILS does not turn live updates off for the page view: the next tick asks again, and once the database says live the loop and the notices work", async () => {
+    server.activityStatus = 503;
+    await start();
+    expect(calls.activity).toBe(1);
+    await tick(ACTIVITY_POLL_MS);
+    expect(calls.activity).toBe(2); // asked again (still the first answer)
+    server.activityStatus = 200;
+    await tick(ACTIVITY_POLL_MS);
+    expect(calls.activity).toBe(3);
+    expect(calls.seen).toBe(1); // the chat list was opened: seen, once the first answer came
+    server.lastNoticeAt = "2026-11-23T15:03:00.000Z";
+    await tick(ACTIVITY_POLL_MS);
+    expect(calls.chats).toBe(1);
+  });
+
+  it("only an explicit `live: false` stops the loop: after it, nothing more is asked", async () => {
+    server.live = false;
+    await start();
+    await tick(10 * 60_000);
+    expect(calls.activity).toBe(1);
+  });
+
+  it("a notice within 30 s of the server's clock at the first answer (it may have come after the page's server read) is ONE re-read; Refresh then honestly says up to date; an older notice is not", async () => {
+    server.lastNoticeAt = "2026-11-23T14:59:45.000Z"; // 15 s before the server's now
+    server.dot = true;
+    await start();
+    expect([calls.chats, calls.newer]).toEqual([1, 1]);
+    fireEvent.click(screen.getByTestId("messages-refresh"));
+    await tick(0);
+    expect([calls.chats, calls.newer]).toEqual([1, 1]);
+    expect(screen.getByTestId("messages-refresh-note").textContent).toMatch(/Already up to date/);
+    await tick(5 * 60_000);
+    expect([calls.chats, calls.newer]).toEqual([1, 1]); // the same value is not a second re-read
+  });
+});
+
+describe("a truncated newer-messages page (T-290 review M4)", () => {
+  it("is not merged (it could leave a hole that never closes): the conversation is read again from the server instead", async () => {
+    await start();
+    server.truncated = true;
+    server.newer = [msg("m9", "2026-11-23T14:30:00.000Z")];
+    server.lastNoticeAt = "2026-11-23T15:00:10.000Z";
+    await tick(ACTIVITY_POLL_MS);
+    expect(calls.newer).toBe(1);
+    expect(screen.getAllByTestId("message")).toHaveLength(2); // m9 was NOT merged
+    expect(refresh).toHaveBeenCalledTimes(1);
   });
 });
 

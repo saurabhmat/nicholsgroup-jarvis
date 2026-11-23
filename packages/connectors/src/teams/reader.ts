@@ -75,7 +75,7 @@ export type ChatMessage = {
   truncated: boolean;
   attachments: AttachmentStub[];
 };
-export type MessagePage = { messages: ChatMessage[]; /** The `createdAt` to ask "older than" next; null when this was the last page. */ nextBefore: string | null; self: TeamsSelf };
+export type MessagePage = { messages: ChatMessage[]; /** The `createdAt` to ask "older than" next; null when this was the last page. */ nextBefore: string | null; /** `sinceModified` only: the page was full or had a next link, so changes may be missing from it (the caller must read the chat again, not merge). */ truncated?: boolean; self: TeamsSelf };
 
 export type CallTargets = { ok: true; upns: string[] } | { ok: false; reason: "no_one" | "external" | "too_many" | "unresolved" };
 
@@ -368,7 +368,7 @@ export function createTeamsReader(deps: TeamsReaderDeps) {
       const page = pageOf(res.data);
       const messages = page.value.flatMap((m) => messageOf(m, res.self, { kind: "chat", chatId }) ?? []);
       const oldest = messages.reduce<string | null>((acc, m) => (acc === null || m.createdAt < acc ? m.createdAt : acc), null);
-      return { messages, nextBefore: since === undefined && (page.value.length >= top || typeof page["@odata.nextLink"] === "string") && oldest !== null ? oldest : null, self: res.self };
+      return { messages, nextBefore: since === undefined && (page.value.length >= top || typeof page["@odata.nextLink"] === "string") && oldest !== null ? oldest : null, ...(since !== undefined ? { truncated: page.value.length >= top || typeof page["@odata.nextLink"] === "string" } : {}), self: res.self };
     },
 
     /**

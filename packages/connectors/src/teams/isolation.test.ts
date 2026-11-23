@@ -131,6 +131,8 @@ describe("source scan: every production file that names the provider is on this 
         "packages/connectors/src/teams/guard.ts",
         "packages/connectors/src/teams/http.ts",
         "packages/connectors/src/teams/identity.ts",
+        // T-289: the in-memory twin of the subscription store labels a Teams subscription's provider (as the real store does); test support only
+        "packages/connectors/src/testing/microsoft-subscription-store.ts",
         "packages/connectors/src/teams/provider.ts",
         "packages/connectors/src/testing/teams-harness.ts",
         "packages/connectors/src/vault/connections.ts",

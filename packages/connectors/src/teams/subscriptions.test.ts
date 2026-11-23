@@ -158,7 +158,7 @@ describe("create (spec 17 test 14)", () => {
 });
 
 describe("a refused resource (spec 9.1: `teams.subscription.unsupported`, no per-chat fallback)", () => {
-  for (const status of [400, 403, 404, 501]) {
+  for (const status of [400, 402, 403, 404, 501]) {
     it(`Microsoft answers ${String(status)}: logged once with the status and Microsoft's short code, nothing recorded, not thrown, one POST only and no per-chat resource is ever tried`, async () => {
       const s = setup();
       const { conn } = s.connect();

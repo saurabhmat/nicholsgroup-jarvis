@@ -17,7 +17,11 @@ export function useMessagesDot(laneId: string): boolean {
   );
 }
 
-export function MessagesDot({ laneId }: { laneId: string }) {
+/**
+ * `onDark`: the navy side menu (raw gold, 7:1 or better in both themes). Otherwise the card surface of the More tab and list: `gold-foreground` (the token for gold that carries meaning on a light surface:
+ * 5:1 on white in the light theme, 8:1 on the dark card in the dark theme; raw gold on white is about 2:1).
+ */
+export function MessagesDot({ laneId, onDark = false }: { laneId: string; onDark?: boolean }) {
   const dot = useMessagesDot(laneId);
   const pathname = usePathname();
   useEffect(() => {
@@ -33,7 +37,7 @@ export function MessagesDot({ laneId }: { laneId: string }) {
   if (!dot) return null;
   return (
     <>
-      <span aria-hidden="true" data-testid="messages-dot" className="ml-auto inline-block size-2 shrink-0 rounded-full bg-gold" />
+      <span aria-hidden="true" data-testid="messages-dot" className={`ml-auto inline-block size-2.5 shrink-0 rounded-full ${onDark ? "bg-gold" : "bg-gold-foreground"}`} />
       <span className="sr-only">{MESSAGES_NEW_DOT_LABEL}</span>
     </>
   );

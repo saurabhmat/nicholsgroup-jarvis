@@ -17,6 +17,12 @@ const OTHER_CONN = "00000000-0000-4000-8000-0000000000c2";
 const CHAT = "19:abc123def456@thread.v2";
 const KEY = encodeChatKey(CHAT);
 const row = (over: Record<string, unknown> = {}) => ({ id: CONN, account: "me@teams.example.test", state: "connected", mine: true, has: ["chat_read", "call_links"], ...over });
+/** The answer without the server's clock (which must be there, as a time). */
+const noClock = (b: unknown) => {
+  const { serverNow, ...rest } = b as Record<string, unknown>;
+  expect(Number.isNaN(Date.parse(String(serverNow)))).toBe(false);
+  return rest;
+};
 const T = (m: number) => new Date(Date.UTC(2026, 10, 23, 15, m)).toISOString();
 
 type Rec = { fn: string; args: Record<string, unknown> };
@@ -69,8 +75,8 @@ describe("GET /messages/activity", () => {
     expect(res.status).toBe(200);
     expect(res.headers.get("cache-control")).toBe("no-store");
     const body = (await res.json()) as Record<string, unknown>;
-    expect(body).toEqual({ live: true, liveUntil: T(50), dot: true, lastNoticeAt: T(10) });
-    expect(Object.keys(body).sort()).toEqual(["dot", "lastNoticeAt", "live", "liveUntil"]);
+    expect(noClock(body)).toEqual({ live: true, liveUntil: T(50), dot: true, lastNoticeAt: T(10) });
+    expect(Object.keys(body).sort()).toEqual(["dot", "lastNoticeAt", "live", "liveUntil", "serverNow"]);
     expect(JSON.stringify(body)).not.toContain(CONN);
     // exactly one database call, with the lane and the person's own connection; Microsoft is never touched
     expect(s.rpc).toEqual([{ fn: "core.teams_activity_get", args: { p_lane: "PKG", p_connection: CONN } }]);
@@ -91,7 +97,7 @@ describe("GET /messages/activity", () => {
     for (const s of [setup({ rows: [] }), setup({ rows: [row({ id: OTHER_CONN, mine: false })] }), setup({ rows: [row({ state: "reconnect_required" })] }), setup({ get: [] }), setup({ get: [{ live: false, live_until: null, last_notice_at: null, last_seen_at: null }] })]) {
       const res = await s.routes.activity(req("activity"), "PKG");
       expect(res.status).toBe(200);
-      expect(await res.json()).toEqual({ live: false, liveUntil: null, dot: false, lastNoticeAt: null });
+      expect(noClock(await res.json())).toEqual({ live: false, liveUntil: null, dot: false, lastNoticeAt: null });
     }
     // another person's connection (an admin sees its health) is never even asked about
     const s = setup({ rows: [row({ id: OTHER_CONN, mine: false })] });
@@ -154,7 +160,7 @@ describe("POST /messages/activity (the chat list was opened)", () => {
     const s = setup({ get: [{ live: true, live_until: T(50), last_notice_at: T(10), last_seen_at: T(11) }] });
     const res = await s.routes.seen(req("activity", "POST"), "PKG");
     expect(res.status).toBe(200);
-    expect(await res.json()).toEqual({ live: true, liveUntil: T(50), dot: false, lastNoticeAt: T(10) });
+    expect(noClock(await res.json())).toEqual({ live: true, liveUntil: T(50), dot: false, lastNoticeAt: T(10) });
     expect(s.rpc.map((r) => r.fn)).toEqual(["core.teams_activity_seen", "core.teams_activity_get"]);
     expect(s.rpc[0]?.args).toEqual({ p_lane: "PKG", p_connection: CONN });
     nothingFromMicrosoft();
@@ -164,7 +170,7 @@ describe("POST /messages/activity (the chat list was opened)", () => {
     expect((await setup().routes.seen(req("activity", "POST", {}), "PKG")).status).toBe(403);
     expect((await setup().routes.seen(req("activity", "POST", { origin: "https://evil.example.test", "sec-fetch-site": "same-origin" }), "PKG")).status).toBe(403);
     const none = setup({ rows: [] });
-    expect(await (await none.routes.seen(req("activity", "POST"), "PKG")).json()).toEqual({ live: false, liveUntil: null, dot: false, lastNoticeAt: null });
+    expect(noClock(await (await none.routes.seen(req("activity", "POST"), "PKG")).json())).toEqual({ live: false, liveUntil: null, dot: false, lastNoticeAt: null });
     expect(none.rpc).toEqual([]);
     const refused = setup({ seenError: { code: "P0002" } });
     expect((await refused.routes.seen(req("activity", "POST"), "PKG")).status).toBe(409);
@@ -187,7 +193,7 @@ describe("GET /messages/chats and /messages/newer (the re-reads)", () => {
     const s = setup();
     const res = await s.routes.newer(req(`newer?chat=${KEY}&since=${encodeURIComponent("2026-11-23T14:05:00Z")}`), "PKG");
     expect(res.status).toBe(200);
-    expect(await res.json()).toEqual({ messages: [] });
+    expect(await res.json()).toEqual({ messages: [], truncated: false });
     expect(reader.listMessages).toHaveBeenCalledWith("PKG", CONN, ME, CHAT, { sinceModified: "2026-11-23T14:05:00.000Z" });
     expect(s.rpc.some((r) => r.fn.includes("activity"))).toBe(false);
   });

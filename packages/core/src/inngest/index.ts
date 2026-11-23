@@ -38,7 +38,7 @@ export { QBO_WEBHOOK_BATCH, QBO_WEBHOOK_RETRIES, handleQboWebhookSync, qboWebhoo
 export type { QboWebhookSyncDeps, QboWebhookSyncResult } from "./qbo-webhook-sync";
 export { MICROSOFT_WEBHOOK_BATCH, MICROSOFT_WEBHOOK_RETRIES, handleMicrosoftWebhookSync, microsoftWebhookSyncEventId, microsoftWebhookSyncFunctions } from "./microsoft-webhook-sync";
 export type { MicrosoftWebhookSyncDeps, MicrosoftWebhookSyncResult } from "./microsoft-webhook-sync";
-export { TEAMS_ACTIVITY_EVENT_TYPE, TEAMS_ACTIVITY_RETRIES, handleTeamsActivity, teamsActivityFunctions } from "./teams-activity";
+export { TEAMS_ACTIVITY_DEBOUNCE, TEAMS_ACTIVITY_EVENT_TYPE, TEAMS_ACTIVITY_MISSED_TYPE, TEAMS_ACTIVITY_RETRIES, TEAMS_ACTIVITY_TRIGGER_IF, handleTeamsActivity, teamsActivityFunctions } from "./teams-activity";
 export type { TeamsActivityDeps, TeamsActivityResult } from "./teams-activity";
 export {
   CAL_INGEST_CADENCE_MS,

@@ -57,7 +57,7 @@ export function signMock(body: string, opts: { secret?: string; timestamp?: numb
 export interface MemoryRow { laneId: LaneId; connectionId: string; provider: string; eventId: string; eventType: string; payloadHash: string; status: "received" | "enqueued" | "failed"; attempts: number }
 
 /** accounts: `provider:lower(account)` -> lane + connection (as core.webhook_resolve_connection would return). */
-export function createMemoryWebhookStore(accounts: Record<string, { laneId: LaneId; connectionId: string }[]>, faults: { resolve?: boolean; claim?: boolean } = {}) {
+export function createMemoryWebhookStore(accounts: Record<string, { laneId: LaneId; connectionId: string }[]>, faults: { resolve?: boolean; claim?: boolean } = {}, providerOf?: (laneId: string, connectionId: string) => string | undefined) {
   const rows = new Map<string, MemoryRow>();
   const calls: { resolve: { provider: string; account: string }[]; claim: string[] } = { resolve: [], claim: [] };
   const key = (l: string, p: string, e: string) => `${l}|${p}|${e}`;
@@ -72,6 +72,8 @@ export function createMemoryWebhookStore(accounts: Record<string, { laneId: Lane
     async claim(laneId, connectionId, provider, event): Promise<ClaimResult> {
       calls.claim.push(`${laneId}|${provider}|${event.id}`);
       if (faults.claim) throw new Error("db down");
+      // core.webhook_event_claim: the connection must be in this lane AND be of the provider named (42501 otherwise). Only where a test says what each connection's provider is.
+      if (providerOf && providerOf(laneId, connectionId) !== provider) throw new Error("connection not found in this lane");
       const k = key(laneId, provider, event.id);
       const row = rows.get(k);
       if (!row) {

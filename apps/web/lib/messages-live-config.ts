@@ -19,3 +19,5 @@ export const NEWER_EPOCH = "2020-01-01T00:00:00.000Z";
 /** The two re-read routes (the chat list again, newer messages of the open chat) read MICROSOFT, so their per-person allowance is smaller: a client bug can never become a request storm to Microsoft. */
 export const READ_LIMIT_MAX = 12;
 export const READ_LIMIT_WINDOW_MS = 60_000;
+/** A notice newer than this (by the SERVER's clock, at the first answer) may have come after the server read the page was drawn from: the page re-reads once. */
+export const NOTICE_FRESH_MS = 30_000;

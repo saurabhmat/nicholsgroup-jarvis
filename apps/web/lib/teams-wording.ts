@@ -88,7 +88,6 @@ export const CHANNELS_POSTS_ORDER_TEXT = "Posts with the newest replies come fir
 export const CHANNELS_SHARED_OPEN_TEXT = "This is a shared channel. The portal does not read shared channels: open it in Teams.";
 
 // ---- live updates (T-290, spec 9.4)
-export const MESSAGES_LIVE_ON_TEXT = "Live updates: on";
 export const MESSAGES_LIVE_OFF_TEXT = "Live updates unavailable";
 export const MESSAGES_NEW_DOT_LABEL = "New messages";
 export const messagesLiveUntilText = (when: string): string => `Live updates until ${when}`;

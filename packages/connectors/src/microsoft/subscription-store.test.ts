@@ -64,14 +64,16 @@ describe("results", () => {
 
   it("lookupMany returns, by provider id, the lane, connection, stream and clientState (a SecretValue); anything malformed or empty is absent; an empty batch makes no call", async () => {
     const row = { subscription_id: "s1", connection_id: CONN, resource: "mail", status: "active", client_state: STATE };
-    const f = fake({ data: [row] });
+    // the database answers per provider: only the mail provider holds this row
+    const onlyMail = (data: unknown) => ({ clientFor: vi.fn(async () => ({ schema: () => ({ rpc: async (_f: string, a: Record<string, unknown>) => ({ data: a.p_provider === "microsoft" ? data : [], error: null }) }) }) as never) });
+    const f = onlyMail([row]);
     const found = (await createMicrosoftSubscriptionStore(f.clientFor).lookupMany("PKG", ["s1"])).get("s1");
     expect(found).toMatchObject({ laneId: "PKG", connectionId: CONN, resource: "mail", status: "active" });
     expect(found?.clientState).toBeInstanceOf(SecretValue);
     expect(JSON.stringify(found)).not.toContain(STATE);
     expect(String(found?.clientState)).not.toContain(STATE);
     for (const data of [[], null, [{ ...row, resource: "x" }], [{ ...row, client_state: "" }], [{ ...row, status: "removed" }], [{ ...row, connection_id: 5 }], [{ ...row, subscription_id: 5 }]]) {
-      expect((await createMicrosoftSubscriptionStore(fake({ data }).clientFor).lookupMany("PKG", ["s1"])).size).toBe(0);
+      expect((await createMicrosoftSubscriptionStore(onlyMail(data).clientFor).lookupMany("PKG", ["s1"])).size).toBe(0);
     }
     const none = fake({ data: [row] });
     expect((await createMicrosoftSubscriptionStore(none.clientFor).lookupMany("PKG", [])).size).toBe(0);
@@ -130,6 +132,22 @@ describe("Teams subscriptions (T-289)", () => {
     expect(found.get("m1")?.resource).toBe("mail");
     expect(calls.every((c) => c.args.p_lane === "PKG")).toBe(true);
     expect(calls).toHaveLength(2);
+  });
+
+  it("the provider that answered is carried on the result (the receiver's claim must name it); an id that answers under BOTH providers is ambiguous and dropped, with one content-free log line", async () => {
+    const warn = vi.fn();
+    const both = { subscription_id: "dup", connection_id: CONN, resource: "mail", status: "active", client_state: STATE };
+    const answers: Record<string, unknown[]> = {
+      microsoft: [both, { ...both, subscription_id: "m1" }],
+      microsoft_teams: [{ ...both, subscription_id: "dup", resource: "teams_chats" }, { ...both, subscription_id: "t1", resource: "teams_chats" }],
+    };
+    const client = { schema: () => ({ rpc: async (_fn: string, args: Record<string, unknown>) => ({ data: answers[String(args.p_provider)] ?? [], error: null }) }) };
+    const found = await createMicrosoftSubscriptionStore(vi.fn(async () => client as never), { warn } as never).lookupMany("PKG", ["dup", "m1", "t1"]);
+    expect([...found.keys()].sort()).toEqual(["m1", "t1"]);
+    expect(found.get("m1")?.provider).toBe("microsoft");
+    expect(found.get("t1")?.provider).toBe("microsoft_teams");
+    expect(warn).toHaveBeenCalledWith("microsoft.subscription.ambiguous_lookup", { laneId: "PKG", count: 1 });
+    expect(JSON.stringify(warn.mock.calls)).not.toContain("dup");
   });
 
   it("a failure of either provider's lookup is a failure of the lookup (the receiver answers 503 and Graph retries), with a fixed message", async () => {

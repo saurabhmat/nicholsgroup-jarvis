@@ -5,6 +5,7 @@
 // Errors carry fixed text: a failure is a failure, never a hint about another lane.
 import type { LaneId } from "@nichols/core";
 import { ConnectorError } from "../contract/errors";
+import { connectorLog, type ConnectorLogger } from "../log/index";
 import { SecretValue } from "../vault/secret";
 import type { JobClientFor } from "../vault/tokens";
 import { SUBSCRIPTION_RESOURCES, type SubscriptionResource } from "./constants";
@@ -36,6 +37,8 @@ export type RecordTeamsSubscription = {
 /** What the receiver learns about a notification's subscription: the lane and connection come from the stored row, never from the request. */
 export type SubscriptionLookup = {
   laneId: LaneId;
+  /** The provider of the subscription's CONNECTION (the call that answered): the receiver's claim must name it, as core.webhook_event_claim checks it against the connection. */
+  provider: "microsoft" | "microsoft_teams";
   connectionId: string;
   resource: StoredResource;
   status: StoredSubscriptionStatus;
@@ -72,7 +75,7 @@ type Rpc = (fn: string, args: Record<string, unknown>) => Promise<{ data: unknow
 
 const unavailable = () => new ConnectorError({ kind: "transient", message: "Subscription store unavailable" });
 
-export function createMicrosoftSubscriptionStore(clientFor: JobClientFor): MicrosoftSubscriptionStore {
+export function createMicrosoftSubscriptionStore(clientFor: JobClientFor, logger: ConnectorLogger = connectorLog): MicrosoftSubscriptionStore {
   const call = async (laneId: LaneId, fn: string, args: Record<string, unknown>): Promise<unknown> => {
     let result: Awaited<ReturnType<Rpc>>;
     try {
@@ -130,13 +133,25 @@ export function createMicrosoftSubscriptionStore(clientFor: JobClientFor): Micro
       const out = new Map<string, SubscriptionLookup>();
       if (subscriptionIds.length === 0) return out;
       // one call per provider, together (a Teams subscription is recorded under `microsoft_teams`, a mail one under `microsoft`; an id is unique to one of them)
-      const answers = await Promise.all(LOOKUP_PROVIDERS.map((provider) => call(laneId, "push_subscription_lookup", { p_lane: laneId, p_provider: provider, p_subscription_ids: [...subscriptionIds] })));
-      for (const r of answers.flatMap((a) => rows(a))) {
-        const resource = typeof r.resource === "string" ? resourceByName.get(r.resource) : undefined;
-        const st = status(r.status);
-        if (!resource || !st || typeof r.subscription_id !== "string" || typeof r.connection_id !== "string" || typeof r.client_state !== "string" || r.client_state.length === 0) continue;
-        out.set(r.subscription_id, { laneId, connectionId: r.connection_id, resource, status: st, clientState: new SecretValue(r.client_state) });
+      const answers = await Promise.all(LOOKUP_PROVIDERS.map(async (provider) => ({ provider, data: await call(laneId, "push_subscription_lookup", { p_lane: laneId, p_provider: provider, p_subscription_ids: [...subscriptionIds] }) })));
+      const seen = new Map<string, "microsoft" | "microsoft_teams">();
+      const ambiguous = new Set<string>();
+      for (const { provider, data } of answers) {
+        for (const r of rows(data)) {
+          const resource = typeof r.resource === "string" ? resourceByName.get(r.resource) : undefined;
+          const st = status(r.status);
+          if (!resource || !st || typeof r.subscription_id !== "string" || typeof r.connection_id !== "string" || typeof r.client_state !== "string" || r.client_state.length === 0) continue;
+          // an id that answers under BOTH providers cannot be told apart (it cannot happen with provider GUIDs): dropped, as an unknown id
+          if (seen.has(r.subscription_id)) {
+            ambiguous.add(r.subscription_id);
+            continue;
+          }
+          seen.set(r.subscription_id, provider);
+          out.set(r.subscription_id, { laneId, provider, connectionId: r.connection_id, resource, status: st, clientState: new SecretValue(r.client_state) });
+        }
       }
+      for (const id of ambiguous) out.delete(id);
+      if (ambiguous.size > 0) logger.warn("microsoft.subscription.ambiguous_lookup", { laneId, count: ambiguous.size });
       return out;
     },
     async purge(laneId) {

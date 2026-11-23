@@ -31,6 +31,6 @@ export function Shell(props: {
   };
   // T-290: the "new" dot of Messages (side menu, and the iPhone More tab that holds Messages). Only when the company shows Messages; fetched by the dot itself after this renders.
   const messagesShown = !(props.hiddenKeys ?? []).includes("messages");
-  const navAccessory = (key: NavKey | "more") => (messagesShown && (key === "messages" || key === "more") ? <MessagesDot laneId={props.currentLaneId} /> : null);
+  const navAccessory = (key: NavKey | "more") => (messagesShown && (key === "messages" || key === "more") ? <MessagesDot laneId={props.currentLaneId} onDark={key === "messages"} /> : null);
   return <AppShell {...props} signOut={signOut} pathname={pathname} Link={NextLink} menuExtra={<ThemeToggle />} navAccessory={navAccessory} />;
 }

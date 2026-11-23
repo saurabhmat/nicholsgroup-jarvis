@@ -38,7 +38,10 @@ function setup(opts: { jobs?: boolean } = {}) {
     const r = h.rows.get(id);
     return r && r.lane_id === laneId ? { status: r.status } : undefined;
   });
-  const mem = createMemoryWebhookStore({});
+  const mem = createMemoryWebhookStore({}, {}, (laneId, id) => {
+    const r = h.rows.get(id);
+    return r && r.lane_id === laneId ? r.provider : undefined;
+  });
   const sent: Sent[] = [];
   const logs: LogEntry[] = [];
   const logger = createConnectorLogger({ sink: (e) => logs.push(e) });
@@ -58,7 +61,6 @@ function setup(opts: { jobs?: boolean } = {}) {
   const b = h.connect("APK", "b@teams.example.test");
   const expires = new Date(T0 + 2 * 86_400_000);
   twin.plant("PKG", a.conn.id, "teams_chats", "sub-teams-pkg", expires, STATE);
-  twin.plant("PKG", a.conn.id, "mail", "sub-mail-pkg", expires, STATE); // a mail row planted on the same store: unchanged behaviour
   twin.plant("APK", b.conn.id, "teams_chats", "sub-teams-apk", expires, "synthetic-apk-teams-state-0123456789-abcdefghi");
   const body = (items: Parameters<typeof graph.notificationBody>[0]) => graph.notificationBody(items);
   return { fake, graph, h, twin, mem, sent, logs, post, handler, a, b, body, advance: (ms: number) => void (clock += ms) };
@@ -78,17 +80,17 @@ describe("a valid Teams notification (spec 17 test 14)", () => {
     expect(s.sent).toHaveLength(1);
     expect(s.sent[0]?.name).toBe(WEBHOOK_EVENT_NAME);
     expect(s.sent[0]?.data).toEqual({ laneId: "PKG", provider: "microsoft", connectionId: s.a.conn.id, eventId: expect.stringMatching(/^ms:change:[0-9a-f]{64}$/), eventType: "teams_chats.changed", refs: [] });
-    expect([...s.mem.rows.values()].map((r) => [r.laneId, r.provider, r.eventType, r.status])).toEqual([["PKG", "microsoft", "teams_chats.changed", "enqueued"]]);
+    expect([...s.mem.rows.values()].map((r) => [r.laneId, r.provider, r.eventType, r.status])).toEqual([["PKG", "microsoft_teams", "teams_chats.changed", "enqueued"]]);
     noGraph(s);
     expect(s.h.stats.tokenReads).toBe(0);
     // the chat and message named by the notification are in no event, receipt or log line
     expect(JSON.stringify([s.sent, [...s.mem.rows.values()], s.logs])).not.toMatch(/canary/);
   });
 
-  it("a mail notification beside it is unchanged (`mail.changed`), and each is queued for its own connection", async () => {
+  it("two Teams connections of two lanes in one delivery are two events, each for its own connection (mail's own receiver tests are webhooks/microsoft.test.ts, unchanged)", async () => {
     const s = setup();
-    await s.post(s.body([{ subscriptionId: "sub-mail-pkg", clientState: STATE }, { subscriptionId: "sub-teams-pkg", clientState: STATE }]));
-    expect(s.sent.map((e) => e.data.eventType).sort()).toEqual(["mail.changed", "teams_chats.changed"]);
+    await s.post(s.body([{ subscriptionId: "sub-teams-apk", clientState: "synthetic-apk-teams-state-0123456789-abcdefghi" }, { subscriptionId: "sub-teams-pkg", clientState: STATE }]));
+    expect(s.sent.map((e) => [e.data.laneId, e.data.connectionId, e.data.eventType]).sort()).toEqual([["APK", s.b.conn.id, "teams_chats.changed"], ["PKG", s.a.conn.id, "teams_chats.changed"]]);
   });
 
   it("the whole payload is untrusted: resource, resourceData, ids and text claims select nothing and reach no event, receipt or log; another lane's id in it changes nothing", async () => {
@@ -201,6 +203,35 @@ describe("hostile and unknown deliveries answer exactly as accepted ones do (202
     await s.post(JSON.stringify({ value: Array.from({ length: 200 }, (_, i) => ({ subscriptionId: `unknown-${String(i)}`, clientState: STATE })) }));
     expect(s.twin.calls.lookup).toBe(2); // PKG and APK
     expect(s.sent).toHaveLength(0);
+  });
+});
+
+describe("the claim names the connection's provider (the real core.webhook_event_claim refuses any other)", () => {
+  it("a Teams notice and a Teams lifecycle event are claimed and marked under `microsoft_teams`; the queued event keeps provider `microsoft`", async () => {
+    const s = setup();
+    expect((await s.post(s.body([{ subscriptionId: "sub-teams-pkg", clientState: STATE }]))).status).toBe(202);
+    expect((await s.post(s.body([{ subscriptionId: "sub-teams-pkg", clientState: STATE, lifecycleEvent: "reauthorizationRequired" }]))).status).toBe(202);
+    expect([...s.mem.rows.values()].map((r) => `${r.provider}:${r.eventType}:${r.status}`).sort()).toEqual(["microsoft_teams:teams_chats.changed:enqueued", "microsoft_teams:teams_chats.reauthorizationRequired:enqueued"]);
+    expect(s.sent.filter((e) => e.name === WEBHOOK_EVENT_NAME).map((e) => e.data.provider)).toEqual(["microsoft"]);
+  });
+
+  it("the memory store mirrors the SQL: a claim naming the wrong provider for a connection fails", async () => {
+    const s = setup();
+    await expect(s.mem.store.claim("PKG", s.a.conn.id, "microsoft", { id: "x", type: "teams_chats.changed", payloadHash: "h" })).rejects.toThrow();
+    await expect(s.mem.store.claim("PKG", s.a.conn.id, "microsoft_teams", { id: "x", type: "teams_chats.changed", payloadHash: "h" })).resolves.toBe("process");
+  });
+
+  it("one item whose claim fails does not stop the others of the delivery; the answer is still 503 so Graph retries", async () => {
+    const s = setup();
+    const realClaim = s.mem.store.claim.bind(s.mem.store);
+    let n = 0;
+    s.mem.store.claim = async (...a) => {
+      if (++n === 1) throw new Error("db down");
+      return realClaim(...a);
+    };
+    const res = await s.post(s.body([{ subscriptionId: "sub-teams-pkg", clientState: STATE }, { subscriptionId: "sub-teams-apk", clientState: "synthetic-apk-teams-state-0123456789-abcdefghi" }]));
+    expect(res.status).toBe(503);
+    expect(s.sent).toHaveLength(1);
   });
 });
 

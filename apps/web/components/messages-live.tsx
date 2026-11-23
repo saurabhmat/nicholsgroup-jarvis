@@ -11,7 +11,7 @@
 // Nothing from a chat is stored in the browser: lists and messages live in component state.
 import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { getActivity, postSeen, publishDot } from "@/lib/messages-activity-client";
-import { ACTIVITY_POLL_MS, REFETCH_MIN_GAP_MS } from "@/lib/messages-live-config";
+import { ACTIVITY_POLL_MS, NOTICE_FRESH_MS, REFETCH_MIN_GAP_MS } from "@/lib/messages-live-config";
 import { hrefFor } from "@/lib/messages-href";
 import type { ChatRowView } from "@/lib/teams-chats";
 import { MESSAGES_EMPTY_LIST_TEXT, MESSAGES_REFRESH_FAILED_TEXT, messagesRefreshWaitText } from "@/lib/teams-wording";
@@ -65,7 +65,9 @@ export function MessagesLiveProvider({ laneId, children }: { laneId: string; chi
   useEffect(() => {
     const ac = new AbortController();
     let timer: ReturnType<typeof setInterval> | null = null;
-    let started = false;
+    // `begun`: the first answer of the database has come (an answer that failed is not one: the next tick asks again). `off`: the database SAID notices are not working: only that stops the loop.
+    let begun = false;
+    let off = false;
     r.current.at = Date.now();
     const stopLoop = () => {
       if (timer !== null) clearInterval(timer);
@@ -75,14 +77,18 @@ export function MessagesLiveProvider({ laneId, children }: { laneId: string; chi
       r.current.live = live;
       setState((s) => (s.live === live ? s : { ...s, live }));
     };
+    const turnOff = () => {
+      off = true;
+      apply(false);
+      publishDot(laneId, false);
+      stopLoop();
+    };
     async function poll(): Promise<void> {
       const a = await getActivity(laneId, ac.signal);
       if (a === null || ac.signal.aborted) return; // a failed ask changes nothing; the next tick asks again
       if (!a.live) {
         // notices are not working (or stopped): no dot, no loop; the page offers Refresh
-        apply(false);
-        publishDot(laneId, false);
-        stopLoop();
+        turnOff();
         return;
       }
       apply(true);
@@ -91,41 +97,48 @@ export function MessagesLiveProvider({ laneId, children }: { laneId: string; chi
         bump("notice"); // ONE re-read per move of last_notice_at
       } else publishDot(laneId, a.dot);
     }
-    const startLoop = () => {
-      // The ONLY loop. It asks our own database; it never calls Microsoft.
-      if (timer === null && r.current.live && document.visibilityState === "visible") timer = setInterval(() => void poll(), ACTIVITY_POLL_MS);
-    };
     async function begin(): Promise<void> {
-      started = true;
       const a = await getActivity(laneId, ac.signal);
-      if (a === null || ac.signal.aborted) return;
-      apply(a.live);
+      if (a === null || ac.signal.aborted) return; // not begun: the next tick or the tab coming back asks again
+      begun = true;
       if (!a.live) {
-        publishDot(laneId, false);
+        turnOff();
+        return;
+      }
+      apply(true);
+      const had = r.current.lastNotice;
+      r.current.lastNotice = a.lastNoticeAt;
+      // A notice that arrived within NOTICE_FRESH_MS of this answer may have come AFTER the server read this page was drawn from (the page streams in; this runs after it): one re-read, counted as a read.
+      const fresh = a.lastNoticeAt !== null && a.serverNow !== null && Date.parse(a.serverNow) - Date.parse(a.lastNoticeAt) <= NOTICE_FRESH_MS && a.lastNoticeAt !== had;
+      if (fresh) {
+        bump("notice");
         return;
       }
       // Opening the chat list is what this page just did: the notices that arrived before it are covered by the read it made.
-      r.current.lastNotice = a.lastNoticeAt;
       const seen = await postSeen(laneId, ac.signal);
       if (seen) publishDot(laneId, seen.dot);
-      startLoop();
     }
+    const startLoop = () => {
+      // The ONLY loop. It asks our own database; it never calls Microsoft. Until the first answer has come (or when it failed) the tick asks for that first answer again.
+      if (timer === null && !off && document.visibilityState === "visible") timer = setInterval(() => void (begun ? poll() : begin()), ACTIVITY_POLL_MS);
+    };
     const onVisibility = () => {
       if (document.visibilityState !== "visible") {
         stopLoop(); // hidden: nothing is asked while nobody looks
         return;
       }
-      if (!started) void begin();
-      else if (r.current.live) {
-        void poll();
-        startLoop();
-      }
+      if (off) return;
+      void (begun ? poll() : begin());
+      startLoop();
     };
     const onFocus = () => {
       // coming back to the window: a person's action, bounded to once a minute
       if (Date.now() - r.current.at >= REFETCH_MIN_GAP_MS) bump("focus");
     };
-    if (document.visibilityState === "visible") void begin();
+    if (document.visibilityState === "visible") {
+      void begin();
+      startLoop();
+    }
     document.addEventListener("visibilitychange", onVisibility);
     window.addEventListener("focus", onFocus);
     return () => {

@@ -34,7 +34,6 @@ type SearchParams = Record<string, string | string[] | undefined>;
 const one = (v: string | string[] | undefined) => (typeof v === "string" ? v : undefined);
 const CURSOR = /^[A-Za-z0-9_-]{1,3200}$/;
 
-export { hrefFor };
 
 // ---- skeletons: the final shape (rows of a list, a header and bubbles), so nothing jumps
 function Block({ className }: { className?: string }) {

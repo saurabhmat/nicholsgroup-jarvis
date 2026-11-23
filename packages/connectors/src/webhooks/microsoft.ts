@@ -150,6 +150,7 @@ export function createMicrosoftNotificationHandler(deps: MicrosoftNotificationDe
       });
     }
 
+    let claimFailed = false;
     const found = new Map<string, SubscriptionLookup | null>();
     try {
       const ids = [...new Set(items.map((i) => i.subscriptionId))];
@@ -195,7 +196,17 @@ export function createMicrosoftNotificationHandler(deps: MicrosoftNotificationDe
         // An id derived from OUR records (lane, the subscription, the kind, the slot) and a hash of the bytes: no content goes into it.
         const eventId = `ms:${kind}:${sha256Hex(`${laneId}|${subscriptionId}|${String(slot)}|${payloadHash}`)}`;
         const eventType = lifecycle ? `${sub.resource}.${kind}`.slice(0, 128) : `${sub.resource}.${kind === "change" ? "changed" : "missed"}`;
-        const claim = await deps.store.claim(laneId, sub.connectionId, "microsoft", { id: eventId, type: eventType, payloadHash });
+        // The claim names the provider of the subscription's CONNECTION (core.webhook_event_claim refuses any other): `microsoft` for mail and calendar, the Teams provider's name for a Teams chat subscription.
+        // The queued `webhook/received` event keeps provider "microsoft" and the event type (`teams_chats.changed`): that is what `teams-activity` and `microsoft-webhook-sync` filter on.
+        let claim: Awaited<ReturnType<typeof deps.store.claim>>;
+        try {
+          claim = await deps.store.claim(laneId, sub.connectionId, sub.provider, { id: eventId, type: eventType, payloadHash });
+        } catch {
+          // one item's store failure does not stop the other items of the delivery; the answer is still 503 (Graph retries the whole delivery; the claims already made dedupe)
+          claimFailed = true;
+          elog.error("webhook.claim_failed", { outcome: "store_unavailable", request_id: requestId });
+          continue;
+        }
         if (claim !== "process") {
           counts[claim] += 1;
           elog[claim === "conflict" ? "warn" : "info"]("webhook.skipped", { outcome: claim, request_id: requestId });
@@ -223,18 +234,19 @@ export function createMicrosoftNotificationHandler(deps: MicrosoftNotificationDe
           }
         } catch {
           counts.failed += 1;
-          await deps.store.mark(laneId, "microsoft", eventId, "failed").catch(() => false);
+          await deps.store.mark(laneId, sub.provider, eventId, "failed").catch(() => false);
           elog.error("webhook.enqueue_failed", { outcome: "enqueue_failed", request_id: requestId });
           continue;
         }
         counts.enqueued += 1;
-        await deps.store.mark(laneId, "microsoft", eventId, "enqueued").catch(() => false);
+        await deps.store.mark(laneId, sub.provider, eventId, "enqueued").catch(() => false);
         elog.info("webhook.enqueued", { outcome: "enqueued", kind, request_id: requestId });
       }
     } catch {
       return refuse(503, "unavailable", "store_unavailable", counts);
     }
 
+    if (claimFailed) return refuse(503, "unavailable", "store_unavailable", counts);
     if (counts.failed > 0) return refuse(503, "enqueue_failed", "enqueue_failed", counts);
     baseLog.info("webhook.done", { outcome: "ok", request_id: requestId, ...counts });
     return reply(202);

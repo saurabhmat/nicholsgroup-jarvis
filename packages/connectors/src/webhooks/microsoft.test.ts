@@ -43,7 +43,10 @@ function setup(opts: { lanes?: string[]; jobs?: boolean } = {}) {
     const r = h.rows.get(id);
     return r && r.lane_id === laneId ? { status: r.status } : undefined;
   });
-  const mem = createMemoryWebhookStore({});
+  const mem = createMemoryWebhookStore({}, {}, (laneId, id) => {
+    const r = h.rows.get(id);
+    return r && r.lane_id === laneId ? r.provider : undefined;
+  });
   const sent: Sent[] = [];
   const logs: LogEntry[] = [];
   const logger = createConnectorLogger({ sink: (e) => logs.push(e) });

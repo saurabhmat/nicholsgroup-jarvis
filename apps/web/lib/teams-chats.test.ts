@@ -214,7 +214,7 @@ describe("privacy (rule 6)", () => {
 
   it("messageView carries only what the page draws (no raw body, no ids of members)", () => {
     const v = messageView(msg("m1", "2026-11-23T14:05:00.000Z") as never);
-    expect(Object.keys(v).sort()).toEqual(["at", "attachments", "day", "deleted", "edited", "fullTime", "id", "images", "mine", "nodes", "sender", "system", "time", "truncated"]);
+    expect(Object.keys(v).sort()).toEqual(["at", "attachments", "day", "deleted", "edited", "fullTime", "id", "images", "mine", "modifiedAt", "nodes", "sender", "system", "time", "truncated"]);
   });
 });
 

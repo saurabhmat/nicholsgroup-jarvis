@@ -2,7 +2,7 @@
 import { Inngest } from "inngest";
 import { describe, expect, it, vi } from "vitest";
 import { handleMicrosoftWebhookSync } from "./microsoft-webhook-sync";
-import { TEAMS_ACTIVITY_EVENT_TYPE, handleTeamsActivity, teamsActivityFunctions, type TeamsActivityDeps } from "./teams-activity";
+import { TEAMS_ACTIVITY_DEBOUNCE, TEAMS_ACTIVITY_EVENT_TYPE, TEAMS_ACTIVITY_TRIGGER_IF, handleTeamsActivity, teamsActivityFunctions, type TeamsActivityDeps } from "./teams-activity";
 
 const CONN = "00000000-0000-4000-8000-000000028901";
 const ev = (eventType: string, over: Record<string, unknown> = {}) => ({ laneId: "PKG", provider: "microsoft", connectionId: CONN, eventId: "ms:change:abc", eventType, refs: [], ...over });
@@ -22,8 +22,15 @@ function setup(over: Partial<TeamsActivityDeps> = {}) {
 describe("teams.activity", () => {
   it("is triggered by the typed webhook/received event, with a few retries and no batching or Graph client", () => {
     const fn = teamsActivityFunctions(new Inngest({ id: "test-app", isDev: true }), setup().deps)[0] as unknown as { opts: Record<string, unknown> };
-    const opts = JSON.parse(JSON.stringify(fn.opts)) as { id: string; retries: number; batchEvents?: unknown };
+    const opts = JSON.parse(JSON.stringify(fn.opts)) as { id: string; retries: number; batchEvents?: unknown; debounce?: unknown; triggers?: unknown };
     expect(opts.id).toBe("teams-activity");
+    // only a Teams change or missed event of provider microsoft starts a run, and a burst of one connection is one run (10 s quiet, at most 30 s)
+    expect(opts.triggers).toEqual([{ event: "webhook/received", if: TEAMS_ACTIVITY_TRIGGER_IF }]);
+    expect(TEAMS_ACTIVITY_TRIGGER_IF).toContain("event.data.provider == 'microsoft'");
+    expect(TEAMS_ACTIVITY_TRIGGER_IF).toContain("teams_chats.changed");
+    expect(TEAMS_ACTIVITY_TRIGGER_IF).toContain("teams_chats.missed");
+    expect(opts.debounce).toEqual(TEAMS_ACTIVITY_DEBOUNCE);
+    expect(TEAMS_ACTIVITY_DEBOUNCE).toEqual({ key: "event.data.laneId + '/' + event.data.connectionId", period: "10s", timeout: "30s" });
     expect(opts.retries).toBe(3);
     expect(opts.batchEvents).toBeUndefined();
     expect(TEAMS_ACTIVITY_EVENT_TYPE).toBe("teams_chats.changed");
@@ -36,6 +43,11 @@ describe("teams.activity", () => {
     expect(s.deps.recordNotice).toHaveBeenCalledWith("PKG", CONN);
     expect(s.steps).toEqual([`notice:PKG:${CONN}`]);
     expect(Object.keys(s.deps).sort()).toEqual(["enabledLanes", "recordNotice"]);
+  });
+
+  it("a `teams_chats.missed` event is a notice too", async () => {
+    const s = setup();
+    expect(await s.run(ev("teams_chats.missed"))).toEqual({ recorded: true, skipped: null });
   });
 
   it("a connection that is no longer a usable Teams connection (the database says so) is dropped, not a failure", async () => {
@@ -55,7 +67,6 @@ describe("teams.activity", () => {
       [ev("calendar.changed"), "not_teams_notice"],
       [ev("teams_chats.reauthorizationRequired"), "not_teams_notice"],
       [ev("teams_chats.subscriptionRemoved"), "not_teams_notice"],
-      [ev("teams_chats.missed"), "not_teams_notice"],
       [ev("teams_chats.changed ", {}), "not_teams_notice"],
       [ev("teams_chats.changed", { provider: "quickbooks" }), "not_microsoft"],
       [ev("teams_chats.changed", { provider: "microsoft_teams" }), "not_microsoft"],

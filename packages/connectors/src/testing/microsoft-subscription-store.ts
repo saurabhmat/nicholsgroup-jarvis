@@ -90,7 +90,7 @@ export function createSubscriptionStoreTwin(connections: TwinConnections) {
         const r = rows.find((x) => x.laneId === laneId && x.subscriptionId === id && live(x));
         const c = r ? connections(laneId, r.connectionId) : undefined;
         if (!r || !c || c.status === "disconnected" || c.status === "pending" || r.clientState === null) continue;
-        out.set(id, { laneId, connectionId: r.connectionId, resource: r.resource, status: r.status as "active" | "reauthorization_required", clientState: new SecretValue(r.clientState) });
+        out.set(id, { laneId, provider: r.resource === "teams_chats" ? "microsoft_teams" : "microsoft", connectionId: r.connectionId, resource: r.resource, status: r.status as "active" | "reauthorization_required", clientState: new SecretValue(r.clientState) });
       }
       return out;
     },

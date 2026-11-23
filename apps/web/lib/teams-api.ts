@@ -235,8 +235,8 @@ export function createTeamsRoutes(deps: TeamsRouteDeps) {
         if (!sameSite(request, "GET")) return json({ error: "forbidden" }, 403);
         const w = await find(laneId, { limit: "activity" });
         if (w instanceof Response) return w;
-        if (w === null) return json(ACTIVITY_OFF, 200);
-        return json(await readActivity(w.client, laneId, w.connectionId), 200);
+        if (w === null) return json({ ...ACTIVITY_OFF, serverNow: new Date().toISOString() }, 200);
+        return json({ ...(await readActivity(w.client, laneId, w.connectionId)), serverNow: new Date().toISOString() }, 200);
       }),
 
     /** The person opened the chat list (T-290): `teams_activity_seen`, then the state as it is now. */
@@ -245,9 +245,9 @@ export function createTeamsRoutes(deps: TeamsRouteDeps) {
         if (!sameSite(request, "POST")) return json({ error: "forbidden" }, 403);
         const w = await find(laneId, { limit: "activity" });
         if (w instanceof Response) return w;
-        if (w === null) return json(ACTIVITY_OFF, 200);
+        if (w === null) return json({ ...ACTIVITY_OFF, serverNow: new Date().toISOString() }, 200);
         if (!(await markSeen(w.client, laneId, w.connectionId))) return json({ error: "not_recorded" }, 409);
-        return json(await readActivity(w.client, laneId, w.connectionId), 200);
+        return json({ ...(await readActivity(w.client, laneId, w.connectionId)), serverNow: new Date().toISOString() }, 200);
       }),
 
     /** The chat list again (T-290), after a notice or a Refresh: the very read the page makes (one page of chats and the person's own markers). */
@@ -281,7 +281,7 @@ export function createTeamsRoutes(deps: TeamsRouteDeps) {
         if (chatId === null || since === null) return json({ error: "bad_request" }, 400);
         const r = await loadNewer(w, chatId, since);
         if (r.kind !== "ok") return failure(r);
-        return json({ messages: r.messages }, 200);
+        return json({ messages: r.messages, truncated: r.truncated }, 200);
       }),
 
     /** Call / Video call. */

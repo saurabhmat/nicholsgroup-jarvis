@@ -6,6 +6,8 @@ import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-li
 
 const nav = vi.hoisted(() => ({ replace: vi.fn(), refresh: vi.fn() }));
 vi.mock("next/navigation", () => ({ useRouter: () => nav }));
+// the live-updates line has its own test (teams-live-status.test.tsx) and asks the portal's database after mount: stubbed here so the "nothing is requested before the person confirms" assertions stay exact
+vi.mock("./teams-live-status", () => ({ TeamsLiveStatus: ({ children }: { children: string }) => children }));
 
 import { ConnectionsSection } from "./connections-section";
 import type { GoogleSectionView } from "@/lib/google-connection";
@@ -112,8 +114,7 @@ describe("Disconnect", () => {
     vi.stubGlobal("fetch", fetchMock);
     draw(teams());
     fireEvent.click(screen.getByRole("button", { name: "Disconnect me@teams.example.test" }));
-    // T-289: the row asks the portal's own database whether live updates work (a GET, never a change); nothing else is requested before the person confirms
-    expect((fetchMock.mock.calls as unknown[][]).filter((c) => !String(c[0]).endsWith("/messages/activity"))).toEqual([]);
+    expect(fetchMock).not.toHaveBeenCalled();
     expect(screen.getByTestId("teams-disconnect-confirm").textContent).toContain("Microsoft may still list the app");
     fireEvent.click(within(screen.getByTestId("teams-disconnect-confirm")).getByRole("button", { name: "Disconnect" }));
     await waitFor(() => expect(nav.replace).toHaveBeenCalledWith("/PKG/settings?connect=disconnected&provider=microsoft_teams"));

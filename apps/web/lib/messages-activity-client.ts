@@ -3,13 +3,13 @@
 // component. No timer lives here: the only loop is in components/messages-live.tsx, with a comment that says why it is allowed.
 import { DOT_MIN_GAP_MS } from "./messages-live-config";
 
-export type ActivityAnswer = { live: boolean; liveUntil: string | null; dot: boolean; lastNoticeAt: string | null };
+export type ActivityAnswer = { live: boolean; liveUntil: string | null; dot: boolean; lastNoticeAt: string | null; /** The server's clock when it answered (null from an older server): only to compare with `lastNoticeAt`. */ serverNow: string | null };
 
 function parse(v: unknown): ActivityAnswer | null {
   if (typeof v !== "object" || v === null) return null;
   const r = v as Record<string, unknown>;
   const at = (x: unknown) => (typeof x === "string" && !Number.isNaN(Date.parse(x)) ? x : null);
-  return { live: r.live === true, liveUntil: at(r.liveUntil), dot: r.dot === true, lastNoticeAt: at(r.lastNoticeAt) };
+  return { live: r.live === true, liveUntil: at(r.liveUntil), dot: r.dot === true, lastNoticeAt: at(r.lastNoticeAt), serverNow: at(r.serverNow) };
 }
 
 /** The state from the portal's own database. Null on any failure (never a guess): the caller keeps what it knew. */

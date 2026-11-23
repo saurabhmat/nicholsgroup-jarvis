@@ -33,20 +33,26 @@ const target = (n: number, hosted = "h1") => ({ kind: "chat" as const, chatId: c
 const key = (n: number, hosted = "h1") => `chats/${chatId(n)}/messages/1700000000001/${hosted}`;
 
 describe("their own slots", () => {
-  it("a message list with 30 pictures does not delay a concurrent chat-list read or a read of older messages (the shared slots stay free)", async () => {
+  it("a message list with 30 pictures does not hold up a concurrent chat-list read or a read of older messages (the shared slots stay free), and never has more than two pictures in flight (structure, no wall-clock bound)", async () => {
     const { fake, images, reader, conn } = setup();
-    for (let n = 0; n < 30; n++) fake.state.hosted.set(key(n), { body: PNG, delayMs: 150 });
+    for (let n = 0; n < 30; n++) fake.state.hosted.set(key(n), { body: PNG, delayMs: 100 });
     fake.state.chatPages = [[]];
-    const pics = Promise.allSettled(Array.from({ length: 30 }, (_, n) => images.fetchHostedImage("PKG", conn, TEAMS_OWNER, target(n))));
-    await new Promise((r) => setTimeout(r, 50)); // the pictures are queued and running
-    const t0 = Date.now();
+    let settled = 0;
+    const pics = Promise.allSettled(Array.from({ length: 30 }, (_, n) => images.fetchHostedImage("PKG", conn, TEAMS_OWNER, target(n)).finally(() => void (settled += 1))));
+    // in flight = picture requests that reached Microsoft minus pictures that finished; sampled while they run
+    const sent = () => fake.state.graphRequests.filter((r) => r.path.includes("hostedContents")).length;
+    let maxInFlight = 0;
+    const sampler = setInterval(() => void (maxInFlight = Math.max(maxInFlight, sent() - settled)), 5);
+    while (sent() === 0) await new Promise((r) => setTimeout(r, 5)); // the pictures are queued and running
     await reader.listChats("PKG", conn, TEAMS_OWNER);
     await reader.listMessages("PKG", conn, TEAMS_OWNER, chatId(900), {}).catch(() => undefined);
-    expect(Date.now() - t0).toBeLessThan(700); // picture 1 of 15 rounds of 150 ms would be ~2 s behind
+    const doneWhenListsAnswered = settled;
+    expect(doneWhenListsAnswered).toBeLessThan(30); // the lists were served while pictures were still pending, not behind all 30
     const done = await pics;
+    clearInterval(sampler);
     expect(done.every((d) => d.status === "fulfilled")).toBe(true);
-    // never more than two pictures in flight at once: 30 pictures of 150 ms need at least 15 rounds
-    expect(Date.now() - t0).toBeGreaterThan(1500);
+    expect(maxInFlight).toBeGreaterThan(0);
+    expect(maxInFlight).toBeLessThanOrEqual(2); // their own two slots
   }, 20_000);
 
   it("a channel's pictures have their own bucket, apart from its posts: a picture does not delay the posts of the same channel", async () => {
