@@ -157,7 +157,7 @@ export function ChannelRows({ laneId, teamId, selectedKey, view, connectionId }:
             <span dir="auto" className="min-w-0 truncate text-body">
               <span aria-hidden>#</span> {c.name}
             </span>
-            <span className="shrink-0 rounded-full border border-border px-2 text-small text-muted-foreground">Shared</span>
+            {c.kind === "shared" ? <span className="shrink-0 rounded-full border border-border px-2 text-small text-muted-foreground">Shared</span> : null}
             <a href={c.openUrl} target="_blank" rel="noopener noreferrer" className={cn(LINK, "text-small")}>
               Open in Teams
             </a>

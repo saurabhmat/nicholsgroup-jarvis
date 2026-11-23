@@ -51,9 +51,10 @@ describe("teams and channels", () => {
       { id: C3, displayName: "Partners", membershipType: "shared", webUrl: "http://teams.microsoft.com/l/channel/x" },
       { id: "../etc", displayName: "bad", membershipType: "standard" },
       { id: "19:ok@thread.tacv2", displayName: "No type" },
+      { id: "19:future@thread.tacv2", displayName: "Future", membershipType: "unknownFutureValue" },
     ]);
     const r = await reader.listChannels("PKG", conn, TEAMS_OWNER, T1);
-    expect(r.channels.map((c) => [c.channelId, c.name, c.kind, c.webUrl !== null])).toEqual([[C1, "General", "standard", true], [C2, "Leads", "private", false], [C3, "Partners", "shared", false], ["19:ok@thread.tacv2", "No type", "standard", false]]);
+    expect(r.channels.map((c) => [c.channelId, c.name, c.kind, c.webUrl !== null])).toEqual([[C1, "General", "standard", true], [C2, "Leads", "private", false], [C3, "Partners", "shared", false], ["19:ok@thread.tacv2", "No type", "standard", false], ["19:future@thread.tacv2", "Future", "other", false]]); // an unknown kind is listed, never read (the page opens it in Teams)
     expect(fake.state.graphRequests).toHaveLength(1);
     expect(fake.state.graphRequests[0]?.path).toBe(`/v1.0/teams/${T1}/channels`);
     expect(decode(fake.state.graphRequests[0]?.search ?? "")).toEqual({ $select: "id,displayName,membershipType,webUrl" });

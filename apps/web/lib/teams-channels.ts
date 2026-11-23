@@ -17,8 +17,8 @@ export type TeamListView = { kind: "ok"; teams: TeamRowView[]; more: boolean } |
 export type ChannelRowView = {
   key: string;
   name: string;
-  kind: "standard" | "private" | "shared";
-  /** A shared channel is not read here (spec 14: reading one across tenants is not confirmed): it opens in Teams. */
+  kind: "standard" | "private" | "shared" | "other";
+  /** Only a standard or private channel is read here; a shared one (spec 14) or one of a kind this build does not know is not: opens in Teams (spec 14: reading a shared channel across tenants is not confirmed). */
   readable: boolean;
   openUrl: string;
 };
@@ -45,7 +45,7 @@ export async function loadTeams(p: Omit<TeamsPerson, "client">): Promise<TeamLis
 
 export function channelRow(c: ChannelSummary): ChannelRowView | null {
   try {
-    return { key: encodeChannelKey(c.channelId), name: c.name, kind: c.kind, readable: c.kind !== "shared", openUrl: openChannelUrl(c.webUrl) };
+    return { key: encodeChannelKey(c.channelId), name: c.name, kind: c.kind, readable: c.kind === "standard" || c.kind === "private", openUrl: openChannelUrl(c.webUrl) };
   } catch {
     return null; // an id the page cannot encode is not shown
   }

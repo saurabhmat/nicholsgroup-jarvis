@@ -82,6 +82,8 @@ export type HttpRequest = {
   /**
    * T-285: a bound on the time spent WAITING for this client's rate limit before the request is sent (not on the request itself). When it aborts while the caller's own `signal` has not,
    * the call ends at once with `rate_limited` (retry after 2 s) instead of sleeping on. Without it (every mail and QuickBooks call) the wait is unbounded, as before.
+   * GET only (refused for any other method: on a write, `rate_limited` could label an unknown outcome as a definite failure), and applied to the wait before the FIRST attempt only: a retried
+   * attempt, or a retry after a token refresh, waits as it always did, because a request may already have gone out.
    */
   waitSignal?: AbortSignal;
 };
@@ -223,6 +225,7 @@ export function createHttpClient(options: HttpClientOptions): HttpClient {
     async request<T>(req: HttpRequest): Promise<ConnectorResponse<T>> {
       const url = buildUrl(req);
       const endpoint = req.path;
+      if (req.waitSignal && req.method !== "GET") throw new ConnectorError({ kind: "invalid_input", message: "waitSignal is for GET requests only", endpoint });
       const label = `${provider} ${req.method} ${endpoint}`;
       const retryable = req.retry ?? (req.method === "GET" || req.method === "PUT" || req.method === "DELETE");
       const responseType = req.responseType ?? "json";
@@ -348,7 +351,7 @@ export function createHttpClient(options: HttpClientOptions): HttpClient {
       for (;;) {
         throwIfCancelled();
         if (limiter) {
-          if (req.waitSignal) {
+          if (req.waitSignal && attempt === 0) {
             try {
               await limiter.take(req.signal ? AbortSignal.any([req.signal, req.waitSignal]) : req.waitSignal);
             } catch (e) {

@@ -98,6 +98,32 @@ describe("the picture", () => {
     expect(probe.mock.calls).toHaveLength(1); // nothing more by itself
   });
 
+  it("when the probe answers a picture, THAT response is shown (a blob made from it, typed by an allowed type), revoked when replaced and on unmount; no third download", async () => {
+    const created: string[] = [];
+    const revoked: string[] = [];
+    vi.stubGlobal("URL", Object.assign(URL, { createObjectURL: (b: Blob) => (created.push(b.type), `blob:synthetic-${String(created.length)}`), revokeObjectURL: (u: string) => revoked.push(u) }));
+    const probe = vi.fn(async () => new Response(new Uint8Array([1, 2]), { status: 200, headers: { "content-type": "image/png" } }));
+    vi.stubGlobal("fetch", probe);
+    const { unmount } = draw([{ t: "image", hosted: "aWQ9" }]);
+    await act(async () => void fireEvent.error(screen.getByTestId("hosted-image")));
+    expect(screen.getByTestId("hosted-image").getAttribute("src")).toBe("blob:synthetic-1");
+    expect(created).toEqual(["image/png"]);
+    expect(probe).toHaveBeenCalledTimes(1);
+    expect(screen.getByTestId("hosted-image-link").getAttribute("href")).toBe(`${BASE}&hosted=aWQ9`); // the click target stays the route
+    unmount();
+    expect(revoked).toEqual(["blob:synthetic-1"]);
+  });
+
+  it("a probe that answers 200 with something that is not an allowed picture type shows no blob, only the button", async () => {
+    const make = vi.fn();
+    vi.stubGlobal("URL", Object.assign(URL, { createObjectURL: make, revokeObjectURL: vi.fn() }));
+    vi.stubGlobal("fetch", vi.fn(async () => new Response("<svg/>", { status: 200, headers: { "content-type": "image/svg+xml" } })));
+    draw([{ t: "image", hosted: "aWQ9" }]);
+    await act(async () => void fireEvent.error(screen.getByTestId("hosted-image")));
+    expect(make).not.toHaveBeenCalled();
+    expect(screen.getByTestId("image-retry")).toBeTruthy();
+  });
+
   it("a failed probe (offline) leaves the button at once", async () => {
     vi.stubGlobal("fetch", vi.fn(async () => Promise.reject(new TypeError("offline"))));
     draw([{ t: "image", hosted: "aWQ9" }]);

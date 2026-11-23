@@ -5,12 +5,15 @@ import { RateLimiter } from "../http/rate-limit";
 import { useMockServer } from "../testing/msw/index";
 import { createFakeTeams } from "../testing/msw/teams/handlers";
 import { createTeamsHarness, TEAMS_OWNER } from "../testing/teams-harness";
-import { createTeamsApi } from "./api";
+import { createTeamsApi, resetPictureForbiddenForTests } from "./api";
 import { createTeamsImageReader } from "./images";
 import { createTeamsReader } from "./reader";
 
 const server = useMockServer();
-afterEach(() => RateLimiter.resetForTests());
+afterEach(() => {
+  RateLimiter.resetForTests();
+  resetPictureForbiddenForTests();
+});
 
 const PNG = Uint8Array.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 1]);
 const chatId = (n: number) => `19:chat${String(n).padStart(3, "0")}@thread.v2`;
@@ -126,13 +129,34 @@ describe("bounded waiting and cancellation", () => {
   });
 });
 
+describe("only the wait cap is relabelled rate_limited", () => {
+  it("a guard or database error thrown AFTER the cap has expired keeps its own kind", async () => {
+    const fake = createFakeTeams();
+    server.use(...fake.handlers);
+    const h = createTeamsHarness({ fake, lanes: { PKG: { teams: { features: ["chat_read"] }, mailProviders: ["google"] } } });
+    const c = h.connect("PKG", "person@teams.example.test", { features: ["chat_read"] });
+    const boom = new Error("database went away");
+    const slowGuard = async (...a: Parameters<typeof h.guard>) => {
+      await new Promise((r) => setTimeout(r, 120)); // the 50 ms cap expires while the guard runs
+      if (a.length) throw boom;
+      return h.guard(...a);
+    };
+    const api = createTeamsApi({ guard: slowGuard as never, tokens: h.tokens, imageMaxWaitMs: 50 });
+    const e = await createTeamsImageReader({ api }).fetchHostedImage("PKG", c.conn, TEAMS_OWNER, target(1)).catch((x: unknown) => x);
+    expect(e).toBe(boom);
+  });
+});
+
 describe("no error rows for content someone else wrote (L5)", () => {
   it("a 404 or 403 of a picture adds no row to the API error store; a 404 of any other template still does", async () => {
     const { fake, h, images, reader, conn } = setup();
     await expect(images.fetchHostedImage("PKG", conn, TEAMS_OWNER, target(1, "gone"))).rejects.toMatchObject({ info: { kind: "not_found" } });
-    fake.state.hosted.set(key(1, "no"), { status: 403 });
-    await expect(images.fetchHostedImage("PKG", conn, TEAMS_OWNER, target(1, "no"))).rejects.toMatchObject({ info: { kind: "forbidden" } });
-    expect(h.apiErrors).toHaveLength(0);
+    expect(h.apiErrors).toHaveLength(0); // a 404 is never recorded
+    // a 403 is recorded at most once per connection per hour: a signal for a tenant-wide problem, not a row per view
+    for (const id of ["no1", "no2", "no3"]) fake.state.hosted.set(key(1, id), { status: 403 });
+    for (const id of ["no1", "no2", "no3"]) await expect(images.fetchHostedImage("PKG", conn, TEAMS_OWNER, target(1, id))).rejects.toMatchObject({ info: { kind: "forbidden" } });
+    expect(h.apiErrors).toHaveLength(1);
+    h.apiErrors.length = 0;
     fake.state.hosted.set(key(1, "boom"), { status: 500 });
     await expect(images.fetchHostedImage("PKG", conn, TEAMS_OWNER, target(1, "boom"))).rejects.toBeTruthy();
     const afterServerError = h.apiErrors.length;

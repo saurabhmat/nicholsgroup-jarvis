@@ -118,6 +118,21 @@ function bucketFor(connectionId: string, req: TeamsGetRequest): { key: string; l
   return { key: connectionId, limit: TEAMS_DEFAULT_RATE_LIMIT };
 }
 
+const PICTURE_403_EVERY_MS = 60 * 60 * 1000;
+const lastPicture403 = new Map<string, number>();
+/** True when a 403 of a picture may be recorded now (and notes it): at most once per connection per hour, in this process. */
+function pictureForbiddenDue(connectionId: string, nowMs: number): boolean {
+  const last = lastPicture403.get(connectionId);
+  if (last !== undefined && nowMs - last < PICTURE_403_EVERY_MS) return false;
+  if (lastPicture403.size > 1000) for (const [k, v] of lastPicture403) if (nowMs - v >= PICTURE_403_EVERY_MS) lastPicture403.delete(k);
+  lastPicture403.set(connectionId, nowMs);
+  return true;
+}
+/** Test helper. */
+export function resetPictureForbiddenForTests(): void {
+  lastPicture403.clear();
+}
+
 export function createTeamsApi(deps: TeamsApiDeps): TeamsApi {
   const max = deps.maxConcurrent ?? TEAMS_MAX_CONCURRENT;
   return {
@@ -182,7 +197,8 @@ export function createTeamsApi(deps: TeamsApiDeps): TeamsApi {
           if (credentialError !== undefined) throw toConnectorError(credentialError);
           const mapped = toConnectorError(mapGraphError(e));
           // Content written by someone else (a hosted picture that is gone or not allowed) must not be able to add an error row on every view: a 403 or 404 of a picture is not recorded.
-          const pictureGone = image && (mapped.info.http_status === 403 || mapped.info.http_status === 404);
+          // A 404 is never recorded. A 403 is recorded at most once per connection per hour (a signal for a tenant-wide problem, without letting a message's content add a row per view).
+          const pictureGone = image && (mapped.info.http_status === 404 || (mapped.info.http_status === 403 && !pictureForbiddenDue(g.conn.id, (deps.httpOptions?.now ?? Date.now)())));
           if (!pictureGone && isProviderApiError(mapped.toJSON())) await deps.errors?.record(laneId, g.conn, mapped.toJSON());
           throw mapped;
         }
@@ -191,7 +207,8 @@ export function createTeamsApi(deps: TeamsApiDeps): TeamsApi {
         return await run();
       } catch (e) {
         // the wait for a slot ran out (the caller did not cancel): the same answer as a rate limit that ran out
-        if (waitSignal?.aborted && !req.signal?.aborted && !isConnectorError(e)) throw new ConnectorError({ kind: "rate_limited", message: "Pictures are busy; try again in a moment", retry_after_seconds: 2 });
+        // only the cap's own abort (its TimeoutError) is relabelled; every other error, a late guard or database error included, keeps its own kind
+        if (waitSignal?.aborted && !req.signal?.aborted && e === waitSignal.reason) throw new ConnectorError({ kind: "rate_limited", message: "Pictures are busy; try again in a moment", retry_after_seconds: 2 });
         throw e;
       }
     },

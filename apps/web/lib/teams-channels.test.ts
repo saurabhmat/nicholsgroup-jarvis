@@ -138,6 +138,13 @@ describe("gateChannel (T-291 review L1)", () => {
     expect(gateChannel({ kind: "busy", seconds: 4 }, KEY)).toEqual({ ok: false, view: { kind: "busy", seconds: 4 } });
   });
 
+  it("a channel of a kind this build does not know is listed but never read (fail closed): it opens in Teams", () => {
+    const row = channelRow({ channelId: CH, name: "Future", kind: "other", webUrl: null });
+    expect(row).toMatchObject({ kind: "other", readable: false });
+    if (!row) throw new Error("row expected");
+    expect(gateChannel({ kind: "ok", channels: [row] }, KEY)).toEqual({ ok: false, view: { kind: "shared", openUrl: "https://teams.microsoft.com" } });
+  });
+
   it("a refused channel does not touch the others: the list loads while that channel's posts are forbidden", async () => {
     reader.listChannels.mockResolvedValue({ channels: [{ channelId: CH, name: "General", kind: "standard", webUrl: null }, { channelId: "19:o@thread.tacv2", name: "Other", kind: "standard", webUrl: null }], self });
     reader.listChannelPosts.mockRejectedValue({ info: { kind: "forbidden" } });

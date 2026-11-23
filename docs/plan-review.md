@@ -2059,3 +2059,11 @@ Inline images through a server route and team channels (list and read). Details 
 - **Shared channels** are refused in the posts pane too (the team's channel list is read first; a channel not in it is "not found" without a Microsoft request). The cost: the posts and replies start after the channel list answers (one extra step on opening a channel).
 - **Archived teams:** marked only when `joinedTeams` includes `isArchived` (not in the fact sheet; no extra request). H-084 shows whether it is there.
 - **A 403 or 404 of a picture is not written to the API error store** (content written by someone else must not add error rows on every view).
+
+### T-285, T-291 re-check follow-up (Nov 24, 2026)
+
+- **`waitSignal`** (shared HTTP client) is refused for any method but GET and bounds only the wait before the first attempt; no write client passes it (only the Teams read client does, for pictures).
+- **Picture 403s:** a 404 is never recorded; a 403 is recorded at most once per connection per hour (in-process throttle), so a tenant-wide picture 403 leaves a row without letting message content add one per view.
+- **Unknown channel kinds** (a `membershipType` Microsoft adds later) are listed and open in Teams, never read; only `standard` and `private` are read.
+- **Status probe:** when the picture route answers an allowed image type to the page's one status probe, that response is shown (a `blob:` address made only from it, revoked on replacement and unmount): no third download. A failed probe costs one extra request to the route (and so to Graph).
+- **The image route does not apply the shared-channel rule** (accepted): it needs ids the portal never shows for shared channels, uses the person's own token and stores nothing; the rule is a scope choice, not an access boundary.

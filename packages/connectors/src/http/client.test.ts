@@ -395,6 +395,24 @@ describe("errors", () => {
   });
 });
 
+describe("waitSignal (T-285 review)", () => {
+  it("is refused for any method but GET, and bounds only the wait before the FIRST attempt", async () => {
+    let n = 0;
+    server.use(http.get(`${BASE}/g`, () => (++n === 1 ? new HttpResponse(null, { status: 503 }) : HttpResponse.json({ ok: true }))), http.post(`${BASE}/p`, () => HttpResponse.json({})));
+    const { c } = client({ rateLimit: { requests: 1, perMs: 50 } });
+    for (const method of ["POST", "PUT", "PATCH", "DELETE"] as const) await expect(Promise.resolve().then(() => c.request({ method, path: "/p", waitSignal: new AbortController().signal }))).rejects.toMatchObject({ info: { kind: "invalid_input" } });
+    // the cap has already expired when the retry's own wait starts: the retry still goes out (only the first wait is bounded)
+    const ctl = new AbortController();
+    const done = c.request({ method: "GET", path: "/g", waitSignal: ctl.signal });
+    setTimeout(() => ctl.abort(), 10);
+    expect((await done).data).toEqual({ ok: true });
+    expect(n).toBe(2);
+    // before the first attempt an expired cap is rate_limited
+    const gone = AbortSignal.abort();
+    await expect(c.request({ method: "GET", path: "/g", waitSignal: gone })).rejects.toMatchObject({ info: { kind: "rate_limited" } });
+  });
+});
+
 describe("logging", () => {
   it("logs one line per attempt with the endpoint template, never the URL, query, token or body", async () => {
     const statuses = [503];

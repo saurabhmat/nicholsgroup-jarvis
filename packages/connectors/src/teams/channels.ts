@@ -23,7 +23,8 @@ const SUBJECT_CHARS = 200;
 const TEAMS_WEB_HOST = "teams.microsoft.com";
 
 export type TeamSummary = { teamId: string; name: string; /** `isArchived: true` in the answer (only when Graph includes it; no second request is made to find out). */ archived: boolean };
-export type ChannelKind = "standard" | "private" | "shared";
+/** `other`: a membership type this build does not know (Microsoft adds values): listed, never read (fail closed). */
+export type ChannelKind = "standard" | "private" | "shared" | "other";
 export type ChannelSummary = {
   channelId: string;
   name: string;
@@ -86,7 +87,7 @@ export function createTeamsChannelReader(deps: TeamsChannelReaderDeps) {
         // the id is checked against the same format the client checks before any request: a made-up one is not listed
         if (!r.success || !/^19:[A-Za-z0-9._@:-]{1,197}$/.test(r.data.id)) return [];
         const t = (r.data.membershipType ?? "standard").toLowerCase();
-        return [{ channelId: r.data.id, name: text(r.data.displayName, NAME_CHARS) || NO_NAME, kind: t === "private" ? "private" : t === "shared" ? "shared" : "standard", webUrl: teamsHostUrl(r.data.webUrl) }];
+        return [{ channelId: r.data.id, name: text(r.data.displayName, NAME_CHARS) || NO_NAME, kind: t === "private" ? "private" : t === "shared" ? "shared" : t === "standard" ? "standard" : "other", webUrl: teamsHostUrl(r.data.webUrl) }];
       });
       return { channels, self: res.self };
     },
