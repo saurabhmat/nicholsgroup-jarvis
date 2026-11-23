@@ -262,3 +262,16 @@ describe("C2: Refresh after Load older messages leaves no hole", () => {
     await waitFor(() => expect(screen.getByTestId("call-error").textContent).toBe("Someone in this chat no longer has an account. Open the chat in Teams."));
   });
 });
+
+describe("L4: a window whose opener cannot be set is still a successful open", () => {
+  it("no error is shown and no fallback link either", async () => {
+    (window.open as unknown as ReturnType<typeof vi.fn>).mockImplementation(() => Object.defineProperty({}, "opener", { set() { throw new DOMException("cross-origin", "SecurityError"); } }));
+    fetchMock.mockImplementation(() => reply(200, { url: "https://teams.microsoft.com/l/call/0/0?users=pat@teams.example.test" }));
+    render(<CallButtons laneId="PKG" chatKey={KEY} call="available" openUrl="https://teams.microsoft.com/l/chat/19:abc123def456@thread.v2/conversations" />);
+    fireEvent.click(screen.getByRole("button", { name: "Call" }));
+    await waitFor(() => expect(window.open).toHaveBeenCalled());
+    await waitFor(() => expect(screen.getByRole("button", { name: "Call" }).hasAttribute("disabled")).toBe(false));
+    expect(screen.queryByTestId("call-error")).toBeNull();
+    expect(screen.queryByTestId("call-link")).toBeNull();
+  });
+});

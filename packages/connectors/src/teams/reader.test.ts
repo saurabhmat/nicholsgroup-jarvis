@@ -470,8 +470,8 @@ describe("resolveCallTargets (T-284, spec 13)", () => {
 
 describe("T-281 review follow-ups", () => {
   it("SM1: a file link is kept only on a Microsoft file host (dot-boundary suffix); look-alikes, userinfo, a trailing dot and punycode give no link", async () => {
-    for (const ok of ["contoso.sharepoint.com", "contoso-my.sharepoint.com", "sharepoint.com", "onedrive.live.com", "1drv.ms", "a.1drv.ms"]) expect(isMicrosoftFileHost(ok), ok).toBe(true);
-    for (const bad of ["sharepoint.com.evil.example", "evilsharepoint.com", "sharepoint.com.", "xn--sharepoint-x.com", "live.com", "evil-onedrive.live.com.example", "1drv.ms.example", "xn--1drv-ms.example"]) expect(isMicrosoftFileHost(bad), bad).toBe(false);
+    for (const ok of ["contoso.sharepoint.com", "contoso-my.sharepoint.com", "sharepoint.com", "onedrive.live.com"]) expect(isMicrosoftFileHost(ok), ok).toBe(true);
+    for (const bad of ["sharepoint.com.evil.example", "evilsharepoint.com", "sharepoint.com.", "xn--sharepoint-x.com", "live.com", "evil-onedrive.live.com.example", "1drv.ms", "a.1drv.ms", "xn--1drv-ms.example"]) expect(isMicrosoftFileHost(bad), bad).toBe(false);
     const { fake, reader, conn } = setup();
     const urls = ["https://sharepoint.com.evil.example/f", "https://evilsharepoint.com/f", "https://user@contoso.sharepoint.com/f", "https://contoso.sharepoint.com./f", "https://xn--sharepont-q1a.com/f", "https://contoso.sharepoint.com/f"];
     fake.state.messagesByChat.set(CHAT, [msg("m1", "2026-11-21T09:00:00Z", { attachments: urls.map((contentUrl) => ({ contentType: "reference", contentUrl, name: "f.docx" })) })]);

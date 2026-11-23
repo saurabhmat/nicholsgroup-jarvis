@@ -130,7 +130,13 @@ export function CallButtons({ laneId, chatKey, call, openUrl }: { laneId: string
       // The click is the person's action; Teams itself asks before it calls. If the browser blocks the new tab, the link is shown to click.
       // (`noopener` in the feature string would make window.open return null even when the tab opened, so the opener is cut afterwards instead; the fallback link shows only when the browser really refused.)
       const w = window.open(url, "_blank");
-      if (w !== null) w.opener = null;
+      if (w !== null) {
+        try {
+          w.opener = null; // cut the new page's reach back to this one; a browser that hands back a cross-origin window may refuse, which is not a failed call
+        } catch {
+          /* the tab did open */
+        }
+      }
       setState({ busy: null, error: null, link: w === null ? url : null });
     } catch {
       setState({ busy: null, error: "Teams could not be reached. Try again.", link: null });

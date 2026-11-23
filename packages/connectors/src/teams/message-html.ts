@@ -1,10 +1,10 @@
 // Teams message HTML -> a small typed list of safe nodes (T-281, spec 8.4, rule 9). A message body is untrusted: it may carry any markup. Nothing here produces HTML. The output is DATA
 // (strings and a fixed set of node kinds) that React draws as text, so no raw HTML ever reaches the browser. What survives, and nothing else:
 //   text, line break, paragraph (p, div, headings), bold, italic, underline, strike, inline code, code block, quote, bullet and numbered list with items, a link, a mention (as "@Name" text),
-//   an emoji (its alt text), an image placeholder (only for hosted content of Microsoft itself; any other image is dropped, never loaded).
+//   an emoji (its alt text), an image placeholder (every picture is one, except a tracking pixel; no image address is read into the output or loaded).
 // Everything else is dropped with its content (script, style, iframe, object, embed, form controls, svg, math, template, noscript, ...) or flattened to its text (unknown and table tags).
 // Attributes are read ONLY for: a link's `href` (https only, no credentials, at most 2,048 characters, no control or space character, normalised by the URL parser so what is checked is what is
-// drawn), an emoji's `alt`, and an image's `src` (to tell hosted content from anything else; the address is never kept). Event handlers, styles, classes and `javascript:`/`data:` URLs are never read.
+// drawn), an emoji's `alt`, and an image's `itemtype`, `alt`, `width` and `height` (to tell an emoji and a tracking pixel from a picture; no `src` is read or kept). Event handlers, styles, classes and `javascript:`/`data:` URLs are never read.
 // Text has bidirectional overrides, zero-width spaces and control characters removed, so a message cannot reorder or hide what the person reads. Bounded: ONE linear pass (open elements are counted per tag, so no close tag and no link walks the stack; at most MAX_STACK open elements; input read up to MAX_INPUT_CHARS), at most MAX_NODES
 // nodes, nesting capped at MAX_DEPTH, and the text cut at MAX_TEXT_CHARS (the cut is reported, never silent). The converter never throws on input and never builds a message from content.
 
@@ -23,7 +23,7 @@ export type MessageNode =
   | { t: "br" }
   | { t: "mention"; v: string }
   | { t: "emoji"; v: string }
-  /** A picture the message holds in Microsoft's own storage: drawn as a neutral placeholder only (T-285 adds the proxy). Never a URL. */
+  /** A picture: drawn as a neutral placeholder only (T-285 adds the proxy). Never a URL; every picture except a tracking pixel becomes one. */
   | { t: "image" }
   | { t: "link"; href: string; host: string; c: MessageNode[] }
   | { t: "b" | "i" | "u" | "s" | "code" | "p" | "quote" | "codeblock" | "ul" | "ol" | "li"; c: MessageNode[] };

@@ -253,7 +253,7 @@ No per-user read state or "mark read" exists for channels [B], so channels show 
 
 ### 8.4 HTML to safe nodes (rule 9)
 
-Message bodies are mostly HTML. The server converts them into a small typed node list: text, line break, paragraph, bold, italic, underline, strike, code, code block, quote, list and item, link (https only, no credentials, shown with its host; `rel="noopener noreferrer nofollow"`, new tab), mention (text), emoji (its alt text), image placeholder (hosted content of the SAME message only; external `src` dropped), table cells flattened to text. Everything else (script, style, iframe, object, form, svg, event attributes, `javascript:`/`data:` links, CSS) is dropped. React renders the nodes; **no raw HTML reaches the browser** (no `dangerouslySetInnerHTML`). The text is cut at 20,000 characters per message. Unit tests feed a hostile-HTML corpus.
+Message bodies are mostly HTML. The server converts them into a small typed node list: text, line break, paragraph, bold, italic, underline, strike, code, code block, quote, list and item, link (https only, no credentials, shown with its host; `rel="noopener noreferrer nofollow"`, new tab), mention (text), emoji (its alt text), image placeholder (every picture becomes a neutral placeholder except a tracking pixel of 3 px or less; no image address is read or emitted), table cells flattened to text. Everything else (script, style, iframe, object, form, svg, event attributes, `javascript:`/`data:` links, CSS) is dropped. React renders the nodes; **no raw HTML reaches the browser** (no `dangerouslySetInnerHTML`). The text is cut at 20,000 characters per message. Unit tests feed a hostile-HTML corpus.
 
 ### 8.5 Inline images (T-285, optional within phase 2)
 

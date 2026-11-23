@@ -219,10 +219,10 @@ function skipTokenFrom(cursor: string, path: string): string {
 }
 
 /**
- * The hosts a file attachment's link may point to (SM1): SharePoint and OneDrive. A suffix match on a dot boundary: `x.sharepoint.com` yes, `sharepoint.com.evil.example`, `evilsharepoint.com`, a trailing-dot
+ * The hosts a file attachment's link may point to (SM1): SharePoint and OneDrive ("hosted at Microsoft", not "your company's files"). A suffix match on a dot boundary: `x.sharepoint.com` yes, `sharepoint.com.evil.example`, `evilsharepoint.com`, a trailing-dot
  * host and a punycode look-alike no. (The fact sheet says only "SharePoint/OneDrive links"; the host names are the public ones, checked live in H-081.) Any other host: no link, "open it in Teams".
  */
-export const MICROSOFT_FILE_HOSTS: readonly string[] = ["sharepoint.com", "onedrive.live.com", "1drv.ms"];
+export const MICROSOFT_FILE_HOSTS: readonly string[] = ["sharepoint.com", "onedrive.live.com"]; // no short-link service (1drv.ms): Graph returns the full address; H-081 shows whether it is ever needed
 export const isMicrosoftFileHost = (host: string): boolean => MICROSOFT_FILE_HOSTS.some((d) => host === d || host.endsWith(`.${d}`));
 
 function attachmentOf(raw: unknown): AttachmentStub | null {

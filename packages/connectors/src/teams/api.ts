@@ -6,7 +6,7 @@
 //  - every failure leaves through the shared Graph error map and is recorded once, scrubbed, by the T-196 error log (a fixed message, never Microsoft's text).
 // The actor is explicit: `{ kind: "user", userId }` for a page request (the guard checks that the row's owner is this user) or `{ kind: "service" }` for a job or a health check, which
 // may read `/me` only: nothing of a person's chats is ever read without naming the person.
-import { createHash } from "node:crypto";
+import { createHmac, randomBytes } from "node:crypto";
 import type { LaneId } from "@nichols/core";
 import { ConnectorError, isConnectorError, toConnectorError } from "../contract/errors";
 import { assertLaneBound } from "../contract/lane-bound";
@@ -87,11 +87,17 @@ function assertRequest(req: TeamsGetRequest): import("@nichols/core/lane-config"
   return TEAMS_READ_ROUTES[req.path] ?? null;
 }
 
+/** A random key made when the process starts, never stored or shared: the pacing keys are per process, so an HMAC with it cannot be matched against a guessed chat id by anyone with log access (L3). */
+const PACING_KEY = randomBytes(32);
+
+/** The short keyed hash of a chat id used in the pacing key (exported for the test). */
+export const chatPacingToken = (chatId: string): string => createHmac("sha256", PACING_KEY).update(chatId).digest("hex").slice(0, 12);
+
 /** Our own bucket per route (see the header comment). */
 function bucketFor(connectionId: string, req: TeamsGetRequest): { key: string; limit: { requests: number; perMs: number } } {
   if (req.path === "/me/chats") return { key: `${connectionId}:chats`, limit: TEAMS_CHATS_RATE_LIMIT };
-  // The key is logged on every request line and kept in a process-wide map: a short one-way hash of the chat id, never the id itself (SL2).
-  if (req.path === "/chats/{chatId}/messages") return { key: `${connectionId}:chat:${createHash("sha256").update(req.params?.chatId ?? "").digest("hex").slice(0, 12)}`, limit: TEAMS_CHAT_MESSAGES_RATE_LIMIT };
+  // The key is logged on every request line and kept in a process-wide map: a short keyed hash of the chat id, never the id itself (SL2).
+  if (req.path === "/chats/{chatId}/messages") return { key: `${connectionId}:chat:${chatPacingToken(req.params?.chatId ?? "")}`, limit: TEAMS_CHAT_MESSAGES_RATE_LIMIT };
   return { key: connectionId, limit: TEAMS_DEFAULT_RATE_LIMIT };
 }
 

@@ -206,3 +206,17 @@ describe("a read", () => {
     untouched(h, fake);
   });
 });
+
+describe("L3: the per-chat pacing key", () => {
+  it("is a keyed hash made at process start: the same within one instance, different between two instances, and never the chat id", async () => {
+    const { vi } = await import("vitest");
+    const a = await import("./api");
+    const x = a.chatPacingToken(CHAT);
+    expect(a.chatPacingToken(CHAT)).toBe(x);
+    expect(x).toMatch(/^[0-9a-f]{12}$/);
+    expect(x).not.toContain("abc123");
+    vi.resetModules();
+    const b = await import("./api");
+    expect(b.chatPacingToken(CHAT)).not.toBe(x);
+  });
+});

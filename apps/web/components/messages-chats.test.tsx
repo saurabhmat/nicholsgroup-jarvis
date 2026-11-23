@@ -325,12 +325,19 @@ describe("T-281 review follow-ups (view)", () => {
     expect(screen.getByTestId("back-to-chats").getAttribute("href")).toBe("/PKG/messages?more=cur0");
   });
 
-  it("C7e: the host is not repeated when the link text already holds it; it is shown when it does not", () => {
-    const nodes = htmlToNodes('<a href="https://docs.example.test/a">see docs.example.test now</a> <a href="https://other.example.test/">click here</a>').nodes;
-    render(<ConversationPane view={conv({ messages: [msg("m1", "2026-11-23T14:00:00.000Z", { nodes })] })} laneId="PKG" connectionId={CONN} />);
-    const body = screen.getByTestId("message-body").textContent ?? "";
-    expect(body).not.toContain("(docs.example.test)");
-    expect(body).toContain("(other.example.test)");
+  it("C7e / M1: the host label is hidden ONLY when the link text is that very host or address; look-alike text keeps it", () => {
+    const body = (html: string) => {
+      cleanup();
+      render(<ConversationPane view={conv({ messages: [msg("m1", "2026-11-23T14:00:00.000Z", { nodes: htmlToNodes(html).nodes })] })} laneId="PKG" connectionId={CONN} />);
+      return screen.getByTestId("message-body").textContent ?? "";
+    };
+    expect(body('<a href="https://t.co/xyz">microsoft.com/signin</a>')).toContain("(t.co)"); // "microsof t.co m" holds t.co, the label stays
+    expect(body('<a href="https://soft.com/x">microsoft.com</a>')).toContain("(soft.com)");
+    expect(body('<a href="https://docs.example.test/a">https://docs.example.test/a</a>')).not.toContain("(docs.example.test)"); // the text IS the address
+    expect(body('<a href="https://docs.example.test/a">docs.example.test</a>')).not.toContain("(docs.example.test)");
+    expect(body('<a href="https://docs.example.test/a">https://other.example.test/</a>')).toContain("(docs.example.test)"); // a different URL
+    expect(body('<a href="https://docs.example.test/a">see docs.example.test</a>')).toContain("(docs.example.test)"); // anything around it
+    expect(body('<a href="https://docs.example.test:8443/a">docs.example.test</a>')).toContain("(docs.example.test:8443)"); // a non-default port is always shown
   });
 
   it("C7f: the heading can take focus, the day separator is not an li, and C7g: the conversation sizes itself for a phone", () => {

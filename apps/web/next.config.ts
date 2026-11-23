@@ -14,6 +14,10 @@ const nextConfig: NextConfig = {
   experimental: {
     agentFeedback: true,
   },
+  // The browsers' default stated explicitly (no Referrer-Policy header was set anywhere): links the page opens in a new tab send only the origin, never a path or a query (a chat key, a cursor).
+  async headers() {
+    return [{ source: "/:path*", headers: [{ key: "Referrer-Policy", value: "strict-origin-when-cross-origin" }] }];
+  },
   cacheComponents: true,
   partialPrefetching: true,
   turbopack: {
