@@ -1,4 +1,6 @@
-// The three small routes behind the Messages page (T-283, T-284), each for the SIGNED-IN person's OWN Teams connection in the lane:
+// The small routes behind the Messages page (T-283, T-284, T-285), each for the SIGNED-IN person's OWN Teams connection in the lane:
+//   GET  /api/lanes/<lane>/messages/image?chat=<key>&message=<id>&hosted=<id>      an inline picture of a chat message, streamed by the server (T-285)
+//   GET  /api/lanes/<lane>/messages/image?team=<id>&channel=<key>&message=<id>&hosted=<id>   the same for a root post of a channel (T-291)
 //   GET  /api/lanes/<lane>/messages/older?chat=<key>&before=<iso>   "Load older messages": one more page of a chat, by the person's click
 //   POST /api/lanes/<lane>/messages/read      {chat, readThrough}    opening a chat records the portal's own read marker (never a write at Microsoft)
 //   POST /api/lanes/<lane>/messages/call-link {chat, video}          the Call / Video call link for a chat: validated values only, returned, never opened here
@@ -10,17 +12,31 @@ import { AuthError, authErrorResponse, type Guards } from "@nichols/core/auth";
 import type { LaneId } from "@nichols/core";
 import type { LaneClient } from "@nichols/core/lane-router";
 import { MAIL_CONNECT_ROLES } from "@nichols/connectors/oauth";
-import { resolveCallTargets } from "@nichols/connectors/teams-reader";
+import { fetchHostedImage, resolveCallTargets } from "@nichols/connectors/teams-reader";
 import { callUrl, normalizeTime } from "@nichols/connectors/teams-pure";
 import type { TeamsFeature } from "@nichols/core/lane-config";
 import { loadLaneGate, type LaneGate } from "./lane-modules";
 import { loadTeamsRows, type TeamsConnectionView } from "./teams-connection";
 import { decodeChatKey } from "./teams-chat-key";
+import { isMessageId, isTeamId } from "./teams-channel-key";
 import { teamsFailure, type TeamsFailure } from "./teams-errors";
 import { loadOlder } from "./teams-chats";
 import { markRead } from "./teams-reads";
 
 const NO_STORE = { "cache-control": "no-store" } as const;
+/**
+ * What the image route sends with the bytes (T-285). The type is the one the server decided from the bytes; `nosniff` and a sandbox policy keep a browser from treating the body as anything else
+ * if someone opens the address; nothing is cached anywhere (an image in a chat is message content, rule 6); the file name is fixed.
+ */
+const IMAGE_HEADERS = {
+  "x-content-type-options": "nosniff",
+  "content-disposition": 'inline; filename="image"',
+  "cache-control": "private, no-store",
+  "content-security-policy": "default-src 'none'; sandbox",
+  "cross-origin-resource-policy": "same-origin",
+  "referrer-policy": "no-referrer",
+} as const;
+const IMAGE_PARAMS = new Set(["chat", "team", "channel", "message", "hosted"]);
 const json = (body: unknown, status: number, extra: Record<string, string> = {}) => Response.json(body, { status, headers: { ...NO_STORE, ...extra } });
 const LANE = /^[A-Z]{1,8}$/;
 const MAX_BODY = 2_000;
@@ -114,7 +130,42 @@ export function createTeamsRoutes(deps: TeamsRouteDeps) {
     }
   };
 
+  /** The picture an address names: exactly one of `chat` or `team` + `channel`, plus `message` and `hosted`, each once, each valid; no other parameter. Null for anything else. */
+  function imageTarget(q: URLSearchParams): import("@nichols/connectors/teams-pure").HostedTarget | null {
+    for (const k of new Set(q.keys())) if (!IMAGE_PARAMS.has(k) || q.getAll(k).length !== 1) return null;
+    const message = q.get("message");
+    const hostedId = q.get("hosted");
+    if (!isMessageId(message) || !isMessageId(hostedId)) return null;
+    if (q.has("chat")) {
+      if (q.has("team") || q.has("channel")) return null;
+      const chatId = decodeChatKey(q.get("chat"));
+      return chatId === null ? null : { kind: "chat", chatId, messageId: message, hostedId };
+    }
+    const teamId = q.get("team");
+    const channelId = decodeChatKey(q.get("channel"));
+    return isTeamId(teamId) && channelId !== null ? { kind: "channel", teamId, channelId, messageId: message, hostedId } : null;
+  }
+
   return {
+    /** One inline picture (T-285): the bytes of a hosted content of a message the person's own connection can read. GET only; the server decides the type; nothing is stored. */
+    image: (request: Request, laneId: string): Promise<Response> =>
+      guarded(async () => {
+        if (!sameSite(request, "GET")) return json({ error: "forbidden" }, 403);
+        const w = await who(laneId);
+        if (w instanceof Response) return w;
+        const target = imageTarget(new URL(request.url).searchParams);
+        if (target === null) return json({ error: "bad_request" }, 400);
+        if (!w.has.includes(target.kind === "chat" ? "chat_read" : "channels_read")) return json({ error: "feature_missing" }, 409);
+        try {
+          const r = await fetchHostedImage(laneId as LaneId, w.connectionId, w.userId, target);
+          if (!r.ok) return json({ error: r.reason }, r.reason === "too_large" ? 413 : 415);
+          // a fresh Uint8Array over the same bytes: the Response body is exactly these bytes, nothing else
+          return new Response(new Uint8Array(r.bytes), { status: 200, headers: { ...IMAGE_HEADERS, "content-type": r.contentType, "content-length": String(r.bytes.byteLength) } });
+        } catch (e) {
+          return failure(teamsFailure(e));
+        }
+      }),
+
     /** "Load older messages". */
     older: (request: Request, laneId: string): Promise<Response> =>
       guarded(async () => {

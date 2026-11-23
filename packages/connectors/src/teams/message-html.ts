@@ -1,12 +1,16 @@
 // Teams message HTML -> a small typed list of safe nodes (T-281, spec 8.4, rule 9). A message body is untrusted: it may carry any markup. Nothing here produces HTML. The output is DATA
 // (strings and a fixed set of node kinds) that React draws as text, so no raw HTML ever reaches the browser. What survives, and nothing else:
 //   text, line break, paragraph (p, div, headings), bold, italic, underline, strike, inline code, code block, quote, bullet and numbered list with items, a link, a mention (as "@Name" text),
-//   an emoji (its alt text), an image placeholder (every picture is one, except a tracking pixel; no image address is read into the output or loaded).
+//   an emoji (its alt text), an image (a neutral placeholder; every picture is one, except a tracking pixel; it carries a hosted-content ID only when its address is exactly the documented Graph
+//   address of a hosted content of THIS message, see ./hosted-content.ts: no address is ever kept, emitted or loaded).
 // Everything else is dropped with its content (script, style, iframe, object, embed, form controls, svg, math, template, noscript, ...) or flattened to its text (unknown and table tags).
 // Attributes are read ONLY for: a link's `href` (https only, no credentials, at most 2,048 characters, no control or space character, normalised by the URL parser so what is checked is what is
-// drawn), an emoji's `alt`, and an image's `itemtype`, `alt`, `width` and `height` (to tell an emoji and a tracking pixel from a picture; no `src` is read or kept). Event handlers, styles, classes and `javascript:`/`data:` URLs are never read.
+// drawn), an emoji's `alt`, and an image's `itemtype`, `alt`, `width` and `height` (to tell an emoji and a tracking pixel from a picture) and, only when the caller names the message, its `src`, which
+// is read by the strict hosted-content parser alone (it returns an id or nothing; the address itself is dropped). Event handlers, styles, classes and `javascript:`/`data:` URLs are never read.
 // Text has bidirectional overrides, zero-width spaces and control characters removed, so a message cannot reorder or hide what the person reads. Bounded: ONE linear pass (open elements are counted per tag, so no close tag and no link walks the stack; at most MAX_STACK open elements; input read up to MAX_INPUT_CHARS), at most MAX_NODES
 // nodes, nesting capped at MAX_DEPTH, and the text cut at MAX_TEXT_CHARS (the cut is reported, never silent). The converter never throws on input and never builds a message from content.
+
+import { hostedRefFromSrc, type HostedScope } from "./hosted-content";
 
 /** Text kept per message (spec 8.4). */
 export const MAX_TEXT_CHARS = 20_000;
@@ -23,10 +27,13 @@ export type MessageNode =
   | { t: "br" }
   | { t: "mention"; v: string }
   | { t: "emoji"; v: string }
-  /** A picture: drawn as a neutral placeholder only (T-285 adds the proxy). Never a URL; every picture except a tracking pixel becomes one. */
-  | { t: "image" }
+  /** A picture: a neutral placeholder. Never a URL; every picture except a tracking pixel becomes one. `hosted` (T-285) is the validated id of a hosted content of this same message: the page draws it through the portal's own image route. */
+  | { t: "image"; hosted?: string }
   | { t: "link"; href: string; host: string; c: MessageNode[] }
   | { t: "b" | "i" | "u" | "s" | "code" | "p" | "quote" | "codeblock" | "ul" | "ol" | "li"; c: MessageNode[] };
+
+/** The message being converted (T-285): the scope it lives in and its own id. Only a hosted content of exactly this message is given an id. */
+export type HostedOf = { scope: HostedScope; messageId: string };
 
 export type ConvertedMessage = { nodes: MessageNode[]; truncated: boolean };
 
@@ -218,7 +225,7 @@ class Budget {
 }
 
 /** Converts Teams message HTML. Never throws; the result is bounded (see the header). */
-export function htmlToNodes(input: string): ConvertedMessage {
+export function htmlToNodes(input: string, of?: HostedOf): ConvertedMessage {
   const budget = new Budget();
   const html = input.length > MAX_INPUT_CHARS ? input.slice(0, MAX_INPUT_CHARS) : input;
   const cut = html.length < input.length;
@@ -348,7 +355,10 @@ export function htmlToNodes(input: string): ConvertedMessage {
         if (itemtype.includes("emoji") && alt !== "" && alt.length <= 16) push({ t: "emoji", v: alt });
         // Any other picture becomes the same neutral placeholder, so an image-only message is not drawn as empty (C7i). Its address is never kept or loaded (no tracker, no remote picture, no data: URL).
         // A declared size of 3 pixels or less (a tracking pixel) leaves nothing at all.
-        else if (!tiny(tok.attrs.get("width")) && !tiny(tok.attrs.get("height"))) push({ t: "image" });
+        else if (!tiny(tok.attrs.get("width")) && !tiny(tok.attrs.get("height"))) {
+          const hosted = of !== undefined ? hostedRefFromSrc(decodeEntities(tok.attrs.get("src") ?? ""), of.scope, of.messageId) : null;
+          push(hosted !== null ? { t: "image", hosted } : { t: "image" });
+        }
         break;
       }
       case "a": {
@@ -446,11 +456,11 @@ export function textToNodes(text: string): ConvertedMessage {
 }
 
 /** The body of a Teams message as safe nodes, by its content type (`html` is converted; anything else is plain text). */
-export function bodyToNodes(contentType: string | null | undefined, content: string | null | undefined): ConvertedMessage {
+export function bodyToNodes(contentType: string | null | undefined, content: string | null | undefined, hosted?: HostedOf): ConvertedMessage {
   if (typeof content !== "string" || content === "") return { nodes: [], truncated: false };
   // The input itself is bounded before any work (a 50 MB body must not cost 50 MB of tokens): 8x the kept text is more than any real message.
   const bounded = content.length > MAX_INPUT_CHARS ? content.slice(0, MAX_INPUT_CHARS) : content;
-  const r = contentType?.toLowerCase() === "html" ? htmlToNodes(bounded) : textToNodes(bounded);
+  const r = contentType?.toLowerCase() === "html" ? htmlToNodes(bounded, hosted) : textToNodes(bounded);
   return bounded.length < content.length ? { nodes: r.nodes, truncated: true } : r;
 }
 

@@ -375,6 +375,24 @@ describe("errors", () => {
     expect(await failure(c.request({ method: "GET", path: "/html" }))).toMatchObject({ kind: "provider_error", endpoint: "/html" });
     expect((await c.request({ method: "GET", path: "/html", responseType: "text" })).data).toBe("<html>maintenance</html>");
   });
+
+  it("bytes (T-285): the raw bytes come back unchanged, an empty body is null, and the cap still applies while streaming", async () => {
+    const png = Uint8Array.from([0x89, 0x50, 0x4e, 0x47, 0xff, 0x00, 0xfe, 0x80]);
+    server.use(
+      http.get(`${BASE}/bin`, () => new HttpResponse(png, { headers: { "content-type": "image/png" } })),
+      http.get(`${BASE}/empty`, () => new HttpResponse(null, { headers: { "content-type": "image/png" } })),
+      http.get(`${BASE}/huge`, () => new HttpResponse(new Uint8Array(4096), { headers: { "content-type": "image/png" } })),
+    );
+    const { c } = client({ maxResponseBytes: 1024 });
+    const r = await c.request<Buffer>({ method: "GET", path: "/bin", responseType: "bytes" });
+    expect([...(r.data as Uint8Array)]).toEqual([...png]);
+    expect((await c.request({ method: "GET", path: "/empty", responseType: "bytes" })).data).toBeNull();
+    expect(await failure(c.request({ method: "GET", path: "/huge", responseType: "bytes" }))).toMatchObject({ kind: "provider_error", endpoint: "/huge" });
+    let pulled = 0;
+    const endless = client({ maxResponseBytes: 1024, fetch: async () => new Response(new ReadableStream({ pull: (ctl) => (pulled++, ctl.enqueue(new Uint8Array(512))) })) }).c;
+    expect(await failure(endless.request({ method: "GET", path: "/chunked", responseType: "bytes" }))).toMatchObject({ kind: "provider_error" });
+    expect(pulled).toBeLessThan(10);
+  });
 });
 
 describe("logging", () => {

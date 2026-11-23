@@ -71,8 +71,8 @@ export type HttpRequest = {
    */
   body?: unknown;
   auth?: { scheme: "Bearer" | "Basic"; secret: SecretValue | (() => Promise<SecretValue>) };
-  /** "json" (default): a 2xx with a non-JSON body is a provider_error. "text": the body as a string. */
-  responseType?: "json" | "text";
+  /** "json" (default): a 2xx with a non-JSON body is a provider_error. "text": the body as a string. "bytes": the raw bytes as a Buffer (null when empty), still cut at `maxResponseBytes` while streaming (T-285). */
+  responseType?: "json" | "text" | "bytes";
   /**
    * Retry on 5xx, timeouts and network failures. Default: true for GET/PUT/DELETE, false for POST/PATCH (the request
    * may have been processed). A 429 is retried unless this is explicitly false: the provider did not process it.
@@ -385,7 +385,7 @@ export function createHttpClient(options: HttpClientOptions): HttpClient {
  * read also races the attempt's signal, so a stalled body times out even if the fetch implementation does not tie its
  * stream to the signal.
  */
-async function readBody(res: Response, maxBytes: number, type: "json" | "text", signal: AbortSignal): Promise<unknown> {
+async function readBody(res: Response, maxBytes: number, type: "json" | "text" | "bytes", signal: AbortSignal): Promise<unknown> {
   const tooBig = () => new ConnectorError({ kind: "provider_error", message: "Response is larger than the limit" });
   const declared = Number(res.headers.get("content-length") ?? "0");
   if (declared > maxBytes) {
@@ -415,6 +415,7 @@ async function readBody(res: Response, maxBytes: number, type: "json" | "text", 
     }
   }
   if (total === 0) return null;
+  if (type === "bytes") return Buffer.concat(chunks, total);
   const text = new TextDecoder().decode(Buffer.concat(chunks, total));
   if (type === "text") return text;
   if (!/\bjson\b/i.test(res.headers.get("content-type") ?? "")) {

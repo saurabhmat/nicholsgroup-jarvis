@@ -202,9 +202,19 @@ describe("privacy (rule 6)", () => {
     vi.restoreAllMocks();
   });
 
+  it("T-285: a conversation's messages carry the same-site image address of THEIR OWN message (chat key and message id, validated), and none for an id that is not valid", async () => {
+    reader.openChat.mockResolvedValue({ chat: chat({ topic: "Team chat", members: [] }), members: [member("Me", { self: true }), member("Pat")], membersMore: false });
+    reader.listMessages.mockResolvedValue({ messages: [msg("1700000000001", "2026-11-23T14:05:00.000Z"), msg("bad id/with slash", "2026-11-23T14:06:00.000Z")], nextBefore: null, self });
+    const v = await loadConversation(person(), CHAT, encodeChatKey(CHAT), { laneListsCalls: true, connectionHasCalls: true });
+    expect(v.kind === "ok" && v.messages.map((m) => m.images)).toEqual([null, `/api/lanes/PKG/messages/image?chat=${encodeChatKey(CHAT)}&message=1700000000001`]); // oldest first: the second message has no valid id
+    reader.listMessages.mockResolvedValue({ messages: [msg("1700000000002", "2026-11-23T13:00:00.000Z")], nextBefore: null, self });
+    const older = await loadOlder(person(), CHAT, "2026-11-23T14:00:00.000Z");
+    expect(older.kind === "ok" && older.messages[0]?.images).toBe(`/api/lanes/PKG/messages/image?chat=${encodeChatKey(CHAT)}&message=1700000000002`);
+  });
+
   it("messageView carries only what the page draws (no raw body, no ids of members)", () => {
     const v = messageView(msg("m1", "2026-11-23T14:05:00.000Z") as never);
-    expect(Object.keys(v).sort()).toEqual(["at", "attachments", "day", "deleted", "edited", "fullTime", "id", "mine", "nodes", "sender", "system", "time", "truncated"]);
+    expect(Object.keys(v).sort()).toEqual(["at", "attachments", "day", "deleted", "edited", "fullTime", "id", "images", "mine", "nodes", "sender", "system", "time", "truncated"]);
   });
 });
 

@@ -10,7 +10,8 @@ import { listChats, listMessages, openChat } from "@nichols/connectors/teams-rea
 import { callBlockReason, chatIsUnread, openChatUrl, type ChatMessage, type MessageNode, type TeamsChat, type TeamsMember } from "@nichols/connectors/teams-pure";
 import { teamsFailure, type TeamsFailure } from "./teams-errors";
 import { clockTime, dayKey, fullTime, listTime } from "./teams-format";
-import { encodeChatKey } from "./teams-chat-key";
+import { decodeChatKey, encodeChatKey } from "./teams-chat-key";
+import { isMessageId } from "./teams-channel-key";
 import { readMarkers } from "./teams-reads";
 
 export type ChatRowView = {
@@ -27,6 +28,11 @@ export type ChatListView = { kind: "ok"; rows: ChatRowView[]; moreCursor: string
 export type AttachmentView = { kind: "file" | "reply" | "card" | "other"; name: string; href: string | null; /** The link's host, drawn beside it. */ host: string | null };
 export type MessageView = {
   id: string;
+  /**
+   * The same-site address a picture of THIS message is drawn from (T-285), without the hosted-content id the node carries: `/api/lanes/<lane>/messages/image?chat=<key>&message=<id>` (or `team=`,
+   * `channel=`). Built here from validated values; never an address from Teams. Null: no message address (every picture is a placeholder).
+   */
+  images: string | null;
   /** ISO time (Microsoft's clock). */
   at: string;
   time: string;
@@ -128,9 +134,15 @@ function subtitleOf(members: readonly TeamsMember[], more: boolean): { text: str
   return { text: external ? `${people}, includes external people` : people, external };
 }
 
-export function messageView(m: ChatMessage): MessageView {
+/** The image route's address for a message of a chat. The ids are validated (a chat id by its key, the message id by the connector's format), then encoded. */
+export function chatImagesBase(laneId: string, chatKey: string, messageId: string): string | null {
+  return isMessageId(messageId) && decodeChatKey(chatKey) !== null ? `/api/lanes/${encodeURIComponent(laneId)}/messages/image?chat=${encodeURIComponent(chatKey)}&message=${encodeURIComponent(messageId)}` : null;
+}
+
+export function messageView(m: ChatMessage, images: string | null = null): MessageView {
   return {
     id: m.id,
+    images,
     at: m.createdAt,
     time: clockTime(m.createdAt),
     fullTime: fullTime(m.createdAt),
@@ -161,7 +173,7 @@ export async function loadConversation(p: TeamsPerson, chatId: string, chatKey: 
     else if (!policy.laneListsCalls) call = "off_lane";
     else if (!policy.connectionHasCalls) call = "needs_reconnect";
     // Events that are not a person's message are not drawn (C4) but still count: the newest item of any kind is what opening the chat marks as read
-    const messages = [...page.messages].filter((m) => !m.system).reverse().map(messageView);
+    const messages = [...page.messages].filter((m) => !m.system).reverse().map((m) => messageView(m, chatImagesBase(p.laneId, chatKey, m.id)));
     const newestAny = page.messages.reduce<string | null>((a, m) => (a === null || m.createdAt > a ? m.createdAt : a), null);
     return {
       kind: "ok",
@@ -185,7 +197,8 @@ export async function loadConversation(p: TeamsPerson, chatId: string, chatKey: 
 export async function loadOlder(p: Omit<TeamsPerson, "client">, chatId: string, before: string): Promise<{ kind: "ok"; messages: MessageView[]; nextBefore: string | null } | TeamsFailure> {
   try {
     const page = await listMessages(p.laneId as LaneId, p.connectionId, p.userId, chatId, { before });
-    return { kind: "ok", messages: [...page.messages].filter((m) => !m.system).reverse().map(messageView), nextBefore: page.nextBefore };
+    const key = encodeChatKey(chatId);
+    return { kind: "ok", messages: [...page.messages].filter((m) => !m.system).reverse().map((m) => messageView(m, chatImagesBase(p.laneId, key, m.id))), nextBefore: page.nextBefore };
   } catch (e) {
     return teamsFailure(e);
   }

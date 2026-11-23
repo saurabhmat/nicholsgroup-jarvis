@@ -22,7 +22,12 @@ function assertSafe(nodes: readonly MessageNode[]): void {
     expect(KINDS.has(n.t)).toBe(true);
     const keys = Object.keys(n).sort().join(",");
     if (n.t === "text" || n.t === "mention" || n.t === "emoji") expect(keys).toBe("t,v");
-    else if (n.t === "br" || n.t === "image") expect(keys).toBe("t");
+    else if (n.t === "br") expect(keys).toBe("t");
+    else if (n.t === "image") {
+      // T-285: the only extra key is a hosted-content ID (validated string, never an address)
+      expect(["t", "hosted,t"]).toContain(keys);
+      if (n.hosted !== undefined) expect(n.hosted).toMatch(/^[A-Za-z0-9._:=@-]{1,256}$/);
+    }
     else if (n.t === "link") {
       expect(keys).toBe("c,host,href,t");
       expect(n.href.startsWith("https://")).toBe(true);
@@ -66,6 +71,50 @@ describe("what survives", () => {
     assertSafe(r.nodes);
     expect(r.nodes).toEqual([{ t: "image" }, { t: "image" }, { t: "image" }, { t: "image" }]); // hosted, http hosted, data:, look-alike; the 1x1 tracker is nothing
     expect(JSON.stringify(r.nodes)).not.toMatch(/tracker|evil|data:/);
+  });
+
+  it("images of the SAME message carry a hosted-content id only (T-285): another message, host, scheme, query, port, user name or path shape leaves a plain placeholder, and no address is kept", () => {
+    const CHAT = "19:x@thread.v2";
+    const ctx = { scope: { kind: "chat" as const, chatId: CHAT }, messageId: "1700000000000" };
+    const base = `https://graph.microsoft.com/v1.0/chats/${CHAT}/messages/1700000000000/hostedContents`;
+    const img = (src: string) => `<img src="${src}">`;
+    const html = [
+      img(`${base}/aGVsbG8=/$value`), // ok
+      img(`https://graph.microsoft.com/v1.0/chats/${encodeURIComponent(CHAT)}/messages/1700000000000/hostedContents/b2s/$value`), // encoded chat id: same chat
+      img(`https://graph.microsoft.com/v1.0/chats/${CHAT}/messages/999/hostedContents/x/$value`), // another message
+      img(`https://graph.microsoft.com/v1.0/chats/19:other@thread.v2/messages/1700000000000/hostedContents/x/$value`), // another chat
+      img(`http://graph.microsoft.com/v1.0/chats/${CHAT}/messages/1700000000000/hostedContents/x/$value`), // http
+      img(`https://graph.microsoft.com.evil.example.test/v1.0/chats/${CHAT}/messages/1700000000000/hostedContents/x/$value`),
+      img(`https://evil.example.test/v1.0/chats/${CHAT}/messages/1700000000000/hostedContents/x/$value`),
+      img(`https://user:pw@graph.microsoft.com/v1.0/chats/${CHAT}/messages/1700000000000/hostedContents/x/$value`),
+      img(`https://graph.microsoft.com:444/v1.0/chats/${CHAT}/messages/1700000000000/hostedContents/x/$value`),
+      img(`${base}/x/$value?redirect=https://evil.example.test`),
+      img(`${base}/x/$value#frag`),
+      img(`https://graph.microsoft.com/beta/chats/${CHAT}/messages/1700000000000/hostedContents/x/$value`),
+      img(`${base}/../../x/$value`),
+      img(`${base}/%2e%2e/$value`),
+      img(`${base}/a%2Fb/$value`),
+      img(`${base}/x/%24value`.replace("%24value", "content")),
+      img(`${base}/${"a".repeat(300)}/$value`),
+    ].join("");
+    const r = htmlToNodes(html, ctx);
+    assertSafe(r.nodes);
+    expect(r.nodes.map((n) => (n.t === "image" ? (n.hosted ?? null) : "?"))).toEqual(["aGVsbG8=", "b2s", ...Array.from({ length: 15 }, () => null)]);
+    expect(JSON.stringify(r.nodes)).not.toMatch(/graph\.microsoft|evil|https?:/);
+    // without a message to compare with, nothing carries an id (the chat list's previews, a message with no known id)
+    expect(htmlToNodes(img(`${base}/aGVsbG8=/$value`)).nodes).toEqual([{ t: "image" }]);
+  });
+
+  it("images in a channel post: the team, channel and post must all match", () => {
+    const T = "11111111-1111-4111-8111-111111111111";
+    const C = "19:chan1@thread.tacv2";
+    const ctx = { scope: { kind: "channel" as const, teamId: T, channelId: C }, messageId: "1700000000001" };
+    const url = (t: string, c: string, m: string) => `<img src="https://graph.microsoft.com/v1.0/teams/${t}/channels/${c}/messages/${m}/hostedContents/aWQ9/$value">`;
+    const r = bodyToNodes("html", [url(T, C, "1700000000001"), url(T.toUpperCase(), C, "1700000000001"), url("33333333-3333-4333-8333-333333333333", C, "1700000000001"), url(T, "19:chan2@thread.tacv2", "1700000000001"), url(T, C, "1700000000002")].join(""), ctx);
+    expect(r.nodes.map((n) => (n.t === "image" ? (n.hosted ?? null) : "?"))).toEqual(["aWQ9", "aWQ9", null, null, null]);
+    // a chat address in a channel post, and the reverse, are not accepted
+    const chat = bodyToNodes("html", `<img src="https://graph.microsoft.com/v1.0/chats/${C}/messages/1700000000001/hostedContents/aWQ9/$value">`, ctx);
+    expect(chat.nodes).toEqual([{ t: "image" }]);
   });
 
   it("a table is flattened to text, cells separated, rows on their own line", () => {

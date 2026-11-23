@@ -25,3 +25,18 @@ export function messagesStateOf(view: TeamsSectionView | null): MessagesState {
   // Channels need a tenant administrator's approval once: when the company lists them and this connection lacks them, say so (chats keep working).
   return { kind: "connected", connectionId: usable.id, account: usable.account, degraded: usable.state === "degraded", missing, laneFeatures: [...view.laneFeatures], adminConsent: view.needsAdminConsent && missing.includes("channels_read") };
 }
+
+/**
+ * What the Channels tab shows before any read (T-291, spec 11 "States"), decided from the connect state alone, so nothing is requested from Microsoft unless it can work:
+ *   off        the company does not list `channels_read`: "Channels are not switched on for this company"
+ *   reconnect  the company lists it and this connection does not have it (connected before channels were switched on, or the administrator's approval was not given when it connected):
+ *              "Reconnect Teams to add channels" (and, since `ChannelMessage.Read.All` always needs a tenant administrator, the administrator's approval text)
+ *   ready      channels may be read (a read can still be refused by Microsoft: that is the tab's own "needs approval" / "could not load" state)
+ */
+export type ChannelsAvailability = { kind: "off" } | { kind: "reconnect"; adminConsent: boolean } | { kind: "ready" };
+
+export function channelsAvailability(state: Extract<MessagesState, { kind: "connected" }>): ChannelsAvailability {
+  if (!state.laneFeatures.includes("channels_read")) return { kind: "off" };
+  if (state.missing.includes("channels_read")) return { kind: "reconnect", adminConsent: state.adminConsent };
+  return { kind: "ready" };
+}

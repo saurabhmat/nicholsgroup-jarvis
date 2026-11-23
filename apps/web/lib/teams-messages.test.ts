@@ -1,6 +1,6 @@
 // T-280: the Messages page's connect states (spec 11), decided from the Settings section view.
 import { describe, expect, it } from "vitest";
-import { messagesStateOf } from "./teams-messages";
+import { channelsAvailability, messagesStateOf } from "./teams-messages";
 import type { TeamsConnectionView, TeamsSectionView } from "./teams-connection";
 
 const c = (over: Partial<TeamsConnectionView> = {}): TeamsConnectionView => ({ id: "00000000-0000-4000-8000-0000000000c1", account: "me@teams.example.test", state: "connected", mine: true, has: ["chat_read", "call_links"], ...over });
@@ -39,5 +39,23 @@ describe("T-278 review", () => {
   it("C5: an unserved cloud is a paused page with that reason, even with no connection of one's own", () => {
     expect(messagesStateOf(v({ paused: true, unsupportedCloud: true, connections: [] }))).toEqual({ kind: "paused", unsupportedCloud: true });
     expect(messagesStateOf(v({ paused: true }))).toEqual({ kind: "paused" });
+  });
+});
+
+describe("channelsAvailability (T-291): decided from the connect state alone, before any Microsoft read", () => {
+  const state = (over: Parameters<typeof v>[0] = {}) => {
+    const s = messagesStateOf(v(over));
+    if (s.kind !== "connected") throw new Error("expected connected");
+    return s;
+  };
+  it("the company does not list channels_read: off (even when the connection has the feature)", () => {
+    expect(channelsAvailability(state())).toEqual({ kind: "off" });
+    expect(channelsAvailability(state({ connections: [c({ has: ["chat_read", "channels_read"] })] }))).toEqual({ kind: "off" });
+  });
+  it("the company lists it and the connection lacks it (made before, or approval not given at connect): reconnect, with the administrator's approval text", () => {
+    expect(channelsAvailability(state({ laneFeatures: ["chat_read", "channels_read"], needsAdminConsent: true }))).toEqual({ kind: "reconnect", adminConsent: true });
+  });
+  it("the company lists it and the connection has it: ready", () => {
+    expect(channelsAvailability(state({ laneFeatures: ["chat_read", "channels_read"], needsAdminConsent: true, connections: [c({ has: ["chat_read", "channels_read"] })] }))).toEqual({ kind: "ready" });
   });
 });

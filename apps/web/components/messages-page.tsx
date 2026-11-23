@@ -12,6 +12,9 @@ import { teamsSectionFor } from "@/lib/teams-connection";
 import { reconnectToAddText, TEAMS_ADMIN_CONSENT_TEXT, TEAMS_CLOUD_UNSUPPORTED_PAGE_TEXT, TEAMS_CONNECTS_TEXT, TEAMS_NOT_SET_UP_TEXT, TEAMS_PAUSED_PAGE_TEXT } from "@/lib/teams-wording";
 import { LaneEyebrow } from "./module-page";
 import { MessagesWorkspace } from "./messages-chats";
+import { ChannelsUnavailable, ChannelsWorkspace } from "./messages-channels";
+import { decodeChannelKey, isTeamId } from "@/lib/teams-channel-key";
+import { channelsAvailability } from "@/lib/teams-messages";
 import { decodeChatKey } from "@/lib/teams-chat-key";
 import { SignIn } from "./messages-view";
 import { CardSkeleton } from "./page-skeleton";
@@ -43,20 +46,72 @@ export function MessagesPage({ params, searchParams }: { params: Promise<{ laneI
 async function MessagesBody({ params, searchParams }: { params: Promise<{ laneId: string }>; searchParams: Promise<SearchParams> }) {
   const laneId = (await params).laneId;
   const state = await messagesState(laneId);
-  const chat = (await searchParams)?.chat;
-  const chatOpen = state.kind === "connected" && decodeChatKey(typeof chat === "string" ? chat : null) !== null;
-  return <MessagesScreen laneId={laneId} state={state} chatOpen={chatOpen} workspace={state.kind === "connected" ? <ConnectedWorkspace laneId={laneId} state={state} searchParams={searchParams} /> : null} />;
+  const sp = await searchParams;
+  const tab = tabOf(sp?.tab);
+  const chat = sp?.chat;
+  // a conversation (a chat, or a channel's posts) is open: on a phone it gets the screen
+  const chatOpen = state.kind === "connected" && (tab === "channels" ? isTeamId(sp?.team) && decodeChannelKey(typeof sp?.channel === "string" ? sp.channel : null) !== null : decodeChatKey(typeof chat === "string" ? chat : null) !== null);
+  return <MessagesScreen laneId={laneId} state={state} chatOpen={chatOpen} tab={tab} workspace={state.kind === "connected" ? <ConnectedWorkspace laneId={laneId} state={state} tab={tab} chatOpen={chatOpen} searchParams={searchParams} /> : null} />;
+}
+
+export type MessagesTab = "chats" | "channels";
+/** `?tab=channels` opens the Channels tab; anything else is Chats (as before). */
+export const tabOf = (v: string | string[] | undefined): MessagesTab => (v === "channels" ? "channels" : "chats");
+
+/** Chats | Channels (T-291). Plain links, so a tab is a stable address; hidden on a phone while a conversation has the screen. */
+export function MessagesTabs({ laneId, tab, hideOnPhone }: { laneId: string; tab: MessagesTab; hideOnPhone: boolean }) {
+  const base = laneHref(laneId, "messages");
+  const item = (id: MessagesTab, label: string, href: string) => (
+    <Link
+      key={id}
+      href={href}
+      scroll={false}
+      aria-current={tab === id ? "page" : undefined}
+      data-testid={`tab-${id}`}
+      className={`inline-flex min-h-11 items-center rounded-control border px-4 text-body font-medium ${tab === id ? "border-primary bg-primary/10 text-foreground" : "border-border text-muted-foreground hover:bg-muted"}`}
+    >
+      {label}
+    </Link>
+  );
+  return (
+    <nav aria-label="Messages" data-testid="messages-tabs" className={`flex gap-2 ${hideOnPhone ? "hidden lg:flex" : ""}`}>
+      {item("chats", "Chats", base)}
+      {item("channels", "Channels", `${base}?tab=channels`)}
+    </nav>
+  );
 }
 
 /** Chats need the company's `chat_read` and the connection's: otherwise the page says so (the "Reconnect Teams to add chats" note is the connected card's), never an empty list. */
-function ConnectedWorkspace({ laneId, state, searchParams }: { laneId: string; state: Extract<MessagesState, { kind: "connected" }>; searchParams: Promise<SearchParams> }) {
-  if (!state.laneFeatures.includes("chat_read")) return <EmptyState title="Chats are not enabled" description="Chats are not turned on for this company's Teams." />;
-  if (state.missing.includes("chat_read")) return null; // the feature-missing note above carries the Reconnect button
-  return <MessagesWorkspace laneId={laneId} state={state} searchParams={searchParams} />;
+function ConnectedWorkspace({ laneId, state, tab, chatOpen, searchParams }: { laneId: string; state: Extract<MessagesState, { kind: "connected" }>; tab: MessagesTab; chatOpen: boolean; searchParams: Promise<SearchParams> }) {
+  const tabs = <MessagesTabs laneId={laneId} tab={tab} hideOnPhone={chatOpen} />;
+  // T-291: Channels is a second tab. Microsoft is asked about teams and channels only here, only for a company that lists `channels_read` and a connection that has it; otherwise a short neutral state.
+  if (tab === "channels") {
+    return (
+      <>
+        {tabs}
+        {channelsAvailability(state).kind === "ready" ? <ChannelsWorkspace laneId={laneId} state={state} searchParams={searchParams} /> : <ChannelsUnavailable laneId={laneId} state={state} />}
+      </>
+    );
+  }
+  if (!state.laneFeatures.includes("chat_read")) {
+    return (
+      <>
+        {tabs}
+        <EmptyState title="Chats are not enabled" description="Chats are not turned on for this company's Teams." />
+      </>
+    );
+  }
+  if (state.missing.includes("chat_read")) return tabs; // the feature-missing note above carries the Reconnect button
+  return (
+    <>
+      {tabs}
+      <MessagesWorkspace laneId={laneId} state={state} searchParams={searchParams} />
+    </>
+  );
 }
 
 /** The page below the header, for a given state (the tests render this directly). */
-export function MessagesScreen({ laneId, state, workspace = null, chatOpen = false }: { laneId: string; state: MessagesState; /** A chat is open: on a phone the conversation gets the screen, so the "Connected as" card is hidden there (wide screens keep it). */ chatOpen?: boolean; /** The connected person's chats (streamed sections); null where there are none to draw. */ workspace?: ReactNode }) {
+export function MessagesScreen({ laneId, state, workspace = null, chatOpen = false, tab = "chats" }: { laneId: string; state: MessagesState; /** A chat or channel is open: on a phone the conversation gets the screen, so the "Connected as" card is hidden there (wide screens keep it). */ chatOpen?: boolean; /** The open tab: on Channels the feature-missing note leaves out channels (the tab itself says so). */ tab?: MessagesTab; /** The connected person's chats (streamed sections); null where there are none to draw. */ workspace?: ReactNode }) {
   switch (state.kind) {
     case "no_access":
     case "not_enabled":
@@ -94,7 +149,9 @@ export function MessagesScreen({ laneId, state, workspace = null, chatOpen = fal
           </div>
         </Card>
       );
-    case "connected":
+    case "connected": {
+      // On the Channels tab the note about channels is the tab's own (no second copy); every other missing feature is still listed.
+      const missingHere = tab === "channels" ? state.missing.filter((f) => f !== "channels_read") : state.missing;
       return (
         <div className="flex flex-col gap-4" data-testid="messages-connected">
           <Card className={chatOpen ? "hidden lg:block" : undefined}>
@@ -115,11 +172,11 @@ export function MessagesScreen({ laneId, state, workspace = null, chatOpen = fal
               <AlertDescription>The last check of your Teams connection failed. If it keeps happening, reconnect Teams in Settings.</AlertDescription>
             </Alert>
           ) : null}
-          {state.missing.length > 0 ? (
+          {missingHere.length > 0 ? (
             <Alert data-testid="messages-feature-missing">
               <AlertDescription>
-                {reconnectToAddText(state.missing)}
-                {state.adminConsent ? ` ${TEAMS_ADMIN_CONSENT_TEXT}` : ""}
+                {reconnectToAddText(missingHere)}
+                {state.adminConsent && missingHere.includes("channels_read") ? ` ${TEAMS_ADMIN_CONSENT_TEXT}` : ""}
               </AlertDescription>
               <div className="pt-2">
                 <SignIn laneId={laneId} connectionId={state.connectionId} label="Reconnect Teams" />
@@ -129,5 +186,6 @@ export function MessagesScreen({ laneId, state, workspace = null, chatOpen = fal
           {workspace}
         </div>
       );
+    }
   }
 }

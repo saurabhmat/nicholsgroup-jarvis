@@ -22,7 +22,7 @@ describe("Messages source rules", () => {
     expect(c).not.toMatch(/console\.(log|info|debug)/);
   });
 
-  it("only two files import the Teams reader; nothing in apps/web names the Graph host, a write route or a mark-read call", () => {
+  it("only three files import the Teams reader (the routes, the chat loaders, the channel loaders); nothing in apps/web names the Graph host, a write route or a mark-read call", () => {
     const files: string[] = [];
     const walk = (dir: string) => {
       for (const name of readdirSync(dir)) {
@@ -34,9 +34,11 @@ describe("Messages source rules", () => {
     };
     walk(web);
     const importers = files.filter((f) => /@nichols\/connectors\/teams-reader/.test(readFileSync(f, "utf8"))).map((f) => relative(web, f)).sort();
-    expect(importers).toEqual(["lib/teams-api.ts", "lib/teams-chats.ts"]); // the reader is server-only; components get types and the pure rules from teams-pure
+    expect(importers).toEqual(["lib/teams-api.ts", "lib/teams-channels.ts", "lib/teams-chats.ts"]); // T-291 added lib/teams-channels.ts (the channel loaders, same server-only rule); // the reader is server-only; components get types and the pure rules from teams-pure
     expect(read("components/messages-view.tsx")).toMatch(/import type \{ MessageNode \} from "@nichols\/connectors\/teams-pure"/);
-    for (const f of ["components/messages-view.tsx", "components/messages-client.tsx", "components/messages-chats.tsx"]) expect(read(f), f).not.toMatch(/connectors\/teams-reader/);
+    for (const f of ["components/messages-view.tsx", "components/messages-client.tsx", "components/messages-chats.tsx", "components/messages-channels.tsx", "components/messages-image.tsx"]) expect(read(f), f).not.toMatch(/connectors\/teams-reader/);
+    // the picture component loads nothing itself: the browser's <img> reads the portal's own route and the component makes no request of its own
+    expect(read("components/messages-image.tsx")).not.toMatch(/\bfetch\(|XMLHttpRequest|https?:\/\//);
     for (const f of files) {
       const t = readFileSync(f, "utf8");
       expect(t, relative(web, f)).not.toMatch(/graph\.microsoft\.(com|us)|login\.microsoftonline|markChatReadForUser|\/chats\/[^"'`\s]*\/messages["'`]\s*,\s*\{\s*method/);

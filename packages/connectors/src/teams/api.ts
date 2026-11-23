@@ -37,6 +37,10 @@ export type TeamsGetRequest = {
   retry?: boolean;
   /** Per attempt, in ms (default: the shared client's 30 s). A page read asks for less so a slow answer becomes "could not load" at once. */
   timeoutMs?: number;
+  /** `"bytes"` (T-285, a hosted image): the body as raw bytes, cut at `maxBytes` while streaming. Only the hosted-content templates may ask for it. Default: JSON. */
+  responseType?: "json" | "bytes";
+  /** The largest body accepted (default: the shared client's 20 MB). Required with `"bytes"`. */
+  maxBytes?: number;
 };
 
 /** What the guard approved for this call, handed back so a reader can tell the person's own messages and external members without a second read: the account's tenant and Entra object id. */
@@ -73,6 +77,9 @@ function assertRequest(req: TeamsGetRequest): import("@nichols/core/lane-config"
     if (typeof v !== "string" || format === undefined || !format.test(v)) throw refused("A path parameter is not valid");
   }
   if (req.timeoutMs !== undefined && !(Number.isInteger(req.timeoutMs) && req.timeoutMs >= 1000 && req.timeoutMs <= 30_000)) throw refused("The request timeout is not valid");
+  if (req.responseType !== undefined && req.responseType !== "json" && req.responseType !== "bytes") throw refused("The response type is not valid");
+  if (req.responseType === "bytes" && !req.path.endsWith("/hostedContents/{hostedId}/$value")) throw refused("Only a hosted content may be read as bytes");
+  if (req.responseType === "bytes" ? !(Number.isInteger(req.maxBytes) && (req.maxBytes as number) >= 1024 && (req.maxBytes as number) <= 8 * 1024 * 1024) : req.maxBytes !== undefined) throw refused("The size limit is not valid");
   const actor = req.actor;
   if (actor?.kind === "user") {
     if (typeof actor.userId !== "string" || !USER_ID.test(actor.userId)) throw refused("A signed-in user is required");
@@ -98,6 +105,10 @@ function bucketFor(connectionId: string, req: TeamsGetRequest): { key: string; l
   if (req.path === "/me/chats") return { key: `${connectionId}:chats`, limit: TEAMS_CHATS_RATE_LIMIT };
   // The key is logged on every request line and kept in a process-wide map: a short keyed hash of the chat id, never the id itself (SL2).
   if (req.path === "/chats/{chatId}/messages") return { key: `${connectionId}:chat:${chatPacingToken(req.params?.chatId ?? "")}`, limit: TEAMS_CHAT_MESSAGES_RATE_LIMIT };
+  // T-285: an inline image of a chat message is paced per chat (its own bucket, so a message with several pictures does not delay the next page of messages)
+  if (req.path === "/chats/{chatId}/messages/{messageId}/hostedContents/{hostedId}/$value") return { key: `${connectionId}:chatimg:${chatPacingToken(req.params?.chatId ?? "")}`, limit: TEAMS_CHAT_MESSAGES_RATE_LIMIT };
+  // T-291: a channel's posts, replies and pictures are paced per channel (1 request per channel per second, vendor facts A2)
+  if (req.path.startsWith("/teams/{teamId}/channels/{channelId}/messages")) return { key: `${connectionId}:chan:${chatPacingToken(req.params?.channelId ?? "")}`, limit: TEAMS_CHAT_MESSAGES_RATE_LIMIT };
   return { key: connectionId, limit: TEAMS_DEFAULT_RATE_LIMIT };
 }
 
@@ -112,7 +123,7 @@ export function createTeamsApi(deps: TeamsApiDeps): TeamsApi {
         const g = await deps.guard(laneId, conn, requirement); // decided inside the slot: after any wait for it
         const bucket = bucketFor(g.conn.id, req);
         const http: HttpClient = createTeamsHttp(
-          { ...deps.httpOptions, baseUrl: TEAMS_GRAPH_BASE, laneId, connectionId: g.conn.id, rateLimitKey: bucket.key, rateLimit: bucket.limit, ...(req.timeoutMs !== undefined ? { timeoutMs: req.timeoutMs } : {}), ...(deps.logger ? { logger: deps.logger } : {}) },
+          { ...deps.httpOptions, baseUrl: TEAMS_GRAPH_BASE, laneId, connectionId: g.conn.id, rateLimitKey: bucket.key, rateLimit: bucket.limit, ...(req.timeoutMs !== undefined ? { timeoutMs: req.timeoutMs } : {}), ...(req.maxBytes !== undefined ? { maxResponseBytes: req.maxBytes } : {}), ...(deps.logger ? { logger: deps.logger } : {}) },
           g.cloud,
           "read",
         );
@@ -126,6 +137,7 @@ export function createTeamsApi(deps: TeamsApiDeps): TeamsApi {
             ...(req.params ? { params: req.params } : {}),
             ...(req.query ? { query: req.query } : {}),
             ...(req.retry === false ? { retry: false } : {}),
+            ...(req.responseType === "bytes" ? { responseType: "bytes" as const } : {}),
             auth: {
               scheme: "Bearer",
               secret: async () => {

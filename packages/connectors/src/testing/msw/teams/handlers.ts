@@ -87,6 +87,15 @@ export interface FakeTeams {
     messagesByChat: Map<string, Record<string, unknown>[]>;
     /** `GET /users/{id}`: the sign-in name each synthetic user answers. */
     upnByUser: Map<string, string>;
+    /** T-291: `GET /me/joinedTeams` answers these (raw Graph shapes, synthetic). */
+    joinedTeams: unknown[];
+    /** T-291: `GET /teams/{id}/channels` answers `channelsByTeam.get(teamId)`. */
+    channelsByTeam: Map<string, unknown[]>;
+    /**
+     * T-285: what `.../hostedContents/{id}/$value` answers, key `<container path>/<hostedId>` with the container decoded (`chats/<chatId>/messages/<messageId>` or
+     * `teams/<teamId>/channels/<channelId>/messages/<messageId>`). A key that is not here answers 404. `body` is bytes or text; `contentType: null` sends none.
+     */
+    hosted: Map<string, { status?: number; body?: Uint8Array | string; contentType?: string | null; headers?: Record<string, string>; delayMs?: number; endless?: boolean }>;
     /** The `scope` a refresh answers with (default: the connection's own two); a test plants a foreign scope here. */
     refreshScope: string | null;
   };
@@ -105,7 +114,7 @@ export function createFakeTeams(): FakeTeams {
   const byRefresh = new Map<string, FakeTeamsAccount>();
   const codes = new Map<string, FakeTeamsGrant>();
   let counter = 0;
-  const state: FakeTeams["state"] = { tokenRequests: [], graphRequests: [], refreshes: 0, codeGrants: 0, idTokens: [], failRefresh: null, unauthorizedOnce: 0, graphFail: null, postStatus: null, postPlan: [], channelMessages: new Map(), replies: new Map(), chatPages: [[]], refuseCombinedExpand: false, membersByChat: new Map(), chatById: new Map(), messagesByChat: new Map(), upnByUser: new Map(), refreshScope: null };
+  const state: FakeTeams["state"] = { tokenRequests: [], graphRequests: [], refreshes: 0, codeGrants: 0, idTokens: [], failRefresh: null, unauthorizedOnce: 0, graphFail: null, postStatus: null, postPlan: [], channelMessages: new Map(), replies: new Map(), chatPages: [[]], refuseCombinedExpand: false, membersByChat: new Map(), chatById: new Map(), messagesByChat: new Map(), upnByUser: new Map(), joinedTeams: [], channelsByTeam: new Map(), hosted: new Map(), refreshScope: null };
 
   const issueAccess = (a: FakeTeamsAccount): string => {
     const t = `synthetic-teams-access-${String(++counter)}-${randomUUID()}`;
@@ -205,6 +214,19 @@ export function createFakeTeams(): FakeTeams {
     }
     if (answer !== 201) return HttpResponse.json({ error: { code: "Forbidden", message: TEAMS_ERROR_TEXT_CANARY } }, { status: answer, headers: { "request-id": randomUUID() } });
     return HttpResponse.json({ id }, { status: 201, headers: { "request-id": randomUUID() } });
+  }
+
+  async function hostedAnswer(request: Request, key: string): Promise<Response> {
+    const r = await graph(request);
+    if ("response" in r) return r.response;
+    const hit = state.hosted.get(key);
+    if (!hit) return HttpResponse.json({ error: { code: "NotFound", message: TEAMS_ERROR_TEXT_CANARY } }, { status: 404, headers: { "request-id": randomUUID() } });
+    if (hit.delayMs) await delay(hit.delayMs);
+    if (hit.status && hit.status !== 200) return HttpResponse.json({ error: { code: "Error", message: TEAMS_ERROR_TEXT_CANARY } }, { status: hit.status, headers: { "request-id": randomUUID(), ...(hit.headers ?? {}) } });
+    const headers: Record<string, string> = { "request-id": randomUUID(), ...(hit.headers ?? {}) };
+    if (hit.contentType !== null) headers["content-type"] = hit.contentType ?? "image/png";
+    if (hit.endless) return new HttpResponse(new ReadableStream({ pull: (ctl) => ctl.enqueue(new Uint8Array(65536)) }), { headers });
+    return new HttpResponse(hit.body ?? new Uint8Array(0), { headers });
   }
 
   const handlers: RequestHandler[] = [
@@ -331,8 +353,20 @@ export function createFakeTeams(): FakeTeams {
     }),
     http.get(`${GRAPH_V1}/me/joinedTeams`, async ({ request }) => {
       const r = await graph(request);
-      return "response" in r ? r.response : HttpResponse.json({ value: [] });
+      return "response" in r ? r.response : HttpResponse.json({ value: state.joinedTeams }, { headers: { "request-id": randomUUID() } });
     }),
+    http.get(`${GRAPH_V1}/teams/:teamId/channels`, async ({ request, params }) => {
+      const r = await graph(request);
+      if ("response" in r) return r.response;
+      const found = state.channelsByTeam.get(String(params.teamId));
+      if (!found) return HttpResponse.json({ error: { code: "NotFound", message: TEAMS_ERROR_TEXT_CANARY } }, { status: 404, headers: { "request-id": randomUUID() } });
+      return HttpResponse.json({ value: found }, { headers: { "request-id": randomUUID() } });
+    }),
+    // T-285: the bytes of a hosted content (a chat message, or a root post of a channel). Raw bytes with whatever content type the test plants; Microsoft's header is never trusted by the portal.
+    http.get(`${GRAPH_V1}/chats/:chatId/messages/:messageId/hostedContents/:hostedId/\\$value`, async ({ request, params }) =>
+      hostedAnswer(request, `chats/${decodeURIComponent(String(params.chatId))}/messages/${decodeURIComponent(String(params.messageId))}/${decodeURIComponent(String(params.hostedId))}`)),
+    http.get(`${GRAPH_V1}/teams/:teamId/channels/:channelId/messages/:messageId/hostedContents/:hostedId/\\$value`, async ({ request, params }) =>
+      hostedAnswer(request, `teams/${String(params.teamId)}/channels/${decodeURIComponent(String(params.channelId))}/messages/${decodeURIComponent(String(params.messageId))}/${decodeURIComponent(String(params.hostedId))}`)),
     // The writes the Teams connector may make (the approvals executor, T-286, T-287): a message in a chat, a channel post, a channel reply.
     http.post(`${GRAPH_V1}/chats/:chatId/messages`, async ({ request, params }) => postMessage(request, { kind: "chat", chatId: decodeURIComponent(String(params.chatId)) })),
     http.post(`${GRAPH_V1}/teams/:teamId/channels/:channelId/messages`, async ({ request, params }) =>
@@ -350,7 +384,12 @@ export function createFakeTeams(): FakeTeams {
       const r = await graph(request);
       if ("response" in r) return r.response;
       const list = [...(state.channelMessages.get(`${String(params.teamId)}/${decodeURIComponent(String(params.channelId))}`) ?? [])].reverse();
-      return HttpResponse.json({ value: list.slice(0, Number(new URL(request.url).searchParams.get("$top") ?? 20)) }, { headers: { "request-id": randomUUID() } });
+      const q = new URL(request.url).searchParams;
+      const top = Number(q.get("$top") ?? 20);
+      const k = Number(/^page-(\d+)$/.exec(q.get("$skiptoken") ?? "")?.[1] ?? "0");
+      const value = list.slice(k * top, (k + 1) * top);
+      const next = list.length > (k + 1) * top ? { "@odata.nextLink": `${GRAPH_V1}/teams/${String(params.teamId)}/channels/${encodeURIComponent(decodeURIComponent(String(params.channelId)))}/messages?$top=${String(top)}&$skiptoken=page-${String(k + 1)}` } : {};
+      return HttpResponse.json({ value, ...next }, { headers: { "request-id": randomUUID() } });
     }),
     http.get(`${GRAPH_V1}/teams/:teamId/channels/:channelId/messages/:messageId/replies`, async ({ request, params }) => {
       const r = await graph(request);

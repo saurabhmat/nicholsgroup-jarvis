@@ -128,7 +128,7 @@ describe("the Teams write path is reachable only from approvals", () => {
   });
 
   it("the chat reader (T-281) can only read: it names no write client, no write route, no HTTP method but the read client's GET, no direct fetch, and its one log line holds no content", () => {
-    for (const name of ["reader.ts", "reader-entry.ts", "deep-links.ts", "message-html.ts", "chat-reads-store.ts"]) {
+    for (const name of ["reader.ts", "reader-entry.ts", "deep-links.ts", "message-html.ts", "chat-reads-store.ts", "channels.ts", "images.ts", "hosted-content.ts"]) {
       const t = text(join(root, "packages/connectors/src/teams", name));
       expect(t, name).not.toMatch(/write-client|TEAMS_WRITE_ROUTES|createTeamsWriteClient|isTeamsWritePath/);
       expect(t, name).not.toMatch(/\bfetch\(|XMLHttpRequest|"POST"|"PATCH"|"PUT"|"DELETE"|markChatReadForUser|setReaction|softDelete/);
@@ -141,5 +141,18 @@ describe("the Teams write path is reachable only from approvals", () => {
     // every request goes through the guarded read client with an explicit user actor and no retry
     expect(reader).toMatch(/actor: \{ kind: "user", userId \}, retry: false/);
     expect(reader).not.toMatch(/kind: "service"/);
+  });
+
+  it("the channel reader and the image reader (T-291, T-285) read only: GET through the guarded client with the signed-in owner as actor and no retry, no log call at all, no console, and the image reader's one raw-bytes read is the hosted-content template", () => {
+    const channels = text(join(root, "packages/connectors/src/teams/channels.ts"));
+    expect(channels).toMatch(/actor: \{ kind: "user", userId \}, retry: false/);
+    expect(channels).not.toMatch(/kind: "service"|\blog\.|connectorLog|logger/);
+    expect(channels).not.toMatch(/\/tenants\/|@odata\.id|beta/); // paths are built from ids only (the cross-tenant shared-channel known issue, vendor facts B)
+    const images = text(join(root, "packages/connectors/src/teams/images.ts"));
+    expect(images).toMatch(/actor: \{ kind: "user" as const, userId \}, retry: false/);
+    expect(images).not.toMatch(/kind: "service"|\blog\.|connectorLog|logger/);
+    expect([...images.matchAll(/path: "([^"]+)"/g)].map((m) => m[1])).toEqual(["/chats/{chatId}/messages/{messageId}/hostedContents/{hostedId}/$value", "/teams/{teamId}/channels/{channelId}/messages/{messageId}/hostedContents/{hostedId}/$value"]);
+    // the hosted-content parser returns an id or nothing: it builds no request and imports no client
+    expect(text(join(root, "packages/connectors/src/teams/hosted-content.ts"))).not.toMatch(/import .*from "\.\/(api|http|guard|token-manager)"/);
   });
 });

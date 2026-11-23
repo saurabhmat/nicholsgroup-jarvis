@@ -8,7 +8,8 @@ import { buttonVariants, cn } from "@nichols/ui";
 import type { MessageNode } from "@nichols/connectors/teams-pure";
 import { dayLabel } from "@/lib/teams-format";
 import type { AttachmentView, ChatRowView, MessageView } from "@/lib/teams-chats";
-import { MESSAGES_FILE_OPENS_IN_MICROSOFT, MESSAGES_IMAGE_TEXT, MESSAGES_TRUNCATED_TEXT } from "@/lib/teams-wording";
+import { MESSAGES_FILE_OPENS_IN_MICROSOFT, MESSAGES_TRUNCATED_TEXT } from "@/lib/teams-wording";
+import { HostedImage, ImagePlaceholder } from "./messages-image";
 
 // ---- message bodies: typed nodes -> elements
 const LINK_CLASS = "font-medium text-primary underline underline-offset-2 [overflow-wrap:anywhere]";
@@ -42,7 +43,11 @@ const hostLabel = (href: string, host: string): string => {
   }
 };
 
-export function renderNodes(nodes: readonly MessageNode[]): ReactNode[] {
+/**
+ * `images` (T-285) is the same-site address a picture of THIS message is drawn from, without the hosted-content id (see MessageView.images). A picture node that carries an id is drawn through that
+ * route only; every other picture is the neutral placeholder. The id is URL-encoded and checked against the connector's id format again here.
+ */
+export function renderNodes(nodes: readonly MessageNode[], images: string | null = null): ReactNode[] {
   return nodes.map((n, i) => {
     switch (n.t) {
       case "text":
@@ -58,68 +63,64 @@ export function renderNodes(nodes: readonly MessageNode[]): ReactNode[] {
       case "emoji":
         return <span key={i}>{n.v}</span>;
       case "image":
-        return (
-          <span key={i} data-testid="image-placeholder" className="inline-block rounded-control border border-dashed border-border px-2 py-0.5 text-small text-muted-foreground">
-            {MESSAGES_IMAGE_TEXT}
-          </span>
-        );
+        return n.hosted !== undefined && images !== null && /^\/api\/lanes\//.test(images) && /^[A-Za-z0-9._:=@-]{1,256}$/.test(n.hosted) ? <HostedImage key={i} src={`${images}&hosted=${encodeURIComponent(n.hosted)}`} /> : <ImagePlaceholder key={i} />;
       case "link":
         // The converter only emits https links; this is a second look, so a node that somehow carried anything else is drawn as its text and nothing is clickable.
-        if (!/^https:\/\//i.test(n.href)) return <span key={i}>{n.c.length > 0 ? renderNodes(n.c) : n.host}</span>;
+        if (!/^https:\/\//i.test(n.href)) return <span key={i}>{n.c.length > 0 ? renderNodes(n.c, images) : n.host}</span>;
         return (
           <span key={i}>
             <a href={n.href} target="_blank" rel="noopener noreferrer nofollow" className={LINK_CLASS}>
-              {n.c.length > 0 ? renderNodes(n.c) : n.host}
+              {n.c.length > 0 ? renderNodes(n.c, null) : n.host /* a picture inside a link is a placeholder: no clickable thing inside another */}
             </a>
             {textIsHost(linkText(n.c), n.host) && new URL(n.href).port === "" ? null : <span className="text-small text-muted-foreground"> ({hostLabel(n.href, n.host)})</span>}
           </span>
         );
       case "b":
-        return <strong key={i}>{renderNodes(n.c)}</strong>;
+        return <strong key={i}>{renderNodes(n.c, images)}</strong>;
       case "i":
-        return <em key={i}>{renderNodes(n.c)}</em>;
+        return <em key={i}>{renderNodes(n.c, images)}</em>;
       case "u":
-        return <u key={i}>{renderNodes(n.c)}</u>;
+        return <u key={i}>{renderNodes(n.c, images)}</u>;
       case "s":
-        return <s key={i}>{renderNodes(n.c)}</s>;
+        return <s key={i}>{renderNodes(n.c, images)}</s>;
       case "code":
         return (
           <code key={i} className="rounded bg-muted px-1 font-mono text-small">
-            {renderNodes(n.c)}
+            {renderNodes(n.c, images)}
           </code>
         );
       case "p":
         return (
           <p key={i} className="my-1 first:mt-0 last:mb-0">
-            {renderNodes(n.c)}
+            {renderNodes(n.c, images)}
           </p>
         );
       case "quote":
         return (
           <blockquote key={i} className="my-1 border-l-2 border-border pl-3 text-muted-foreground">
-            {renderNodes(n.c)}
+            {renderNodes(n.c, images)}
           </blockquote>
         );
       case "codeblock":
         return (
           <pre key={i} className="my-1 overflow-x-auto whitespace-pre-wrap rounded-control bg-muted p-2 font-mono text-small [overflow-wrap:anywhere]">
-            {renderNodes(n.c)}
+            {renderNodes(n.c, images)}
           </pre>
         );
       case "ul":
         return (
           <ul key={i} className="my-1 list-disc pl-5">
-            {renderNodes(n.c)}
+            {renderNodes(n.c, images)}
           </ul>
         );
       case "ol":
         return (
           <ol key={i} className="my-1 list-decimal pl-5">
-            {renderNodes(n.c)}
+            {renderNodes(n.c, images)}
           </ol>
         );
       case "li":
-        return <li key={i}>{renderNodes(n.c)}</li>;
+        return <li key={i}>{renderNodes(n.c, images)}</li>;
     }
   });
 }
@@ -147,7 +148,7 @@ function Attachment({ a }: { a: AttachmentView }) {
   );
 }
 
-export function MessageItem({ m, showSender }: { m: MessageView; showSender: boolean }) {
+export function MessageItem({ m, showSender, subject = null, footer = null }: { m: MessageView; showSender: boolean; /** A channel post's own title (plain text), drawn above the text. */ subject?: string | null; /** Drawn under the time line, inside the same item (a post's reply and Open in Teams links, and its replies). */ footer?: ReactNode }) {
   return (
     <li data-testid="message" data-mine={m.mine ? "true" : "false"} className={cn("flex flex-col gap-0.5", m.mine ? "items-end" : "items-start")}>
       <div className={cn("max-w-[92%] min-w-0 rounded-card border px-3 py-2 sm:max-w-[80%]", m.mine ? "border-primary/30 bg-primary/10" : "border-border bg-card")}>
@@ -156,13 +157,18 @@ export function MessageItem({ m, showSender }: { m: MessageView; showSender: boo
             {m.sender}
           </p>
         ) : null}
+        {subject ? (
+          <p dir="auto" data-testid="post-subject" className="mb-0.5 text-body font-semibold [overflow-wrap:anywhere]">
+            {subject}
+          </p>
+        ) : null}
         {m.deleted ? (
           <p className="text-body italic text-muted-foreground">This message was deleted</p>
         ) : m.system ? (
           <p className="text-body italic text-muted-foreground">Teams event</p>
         ) : (
           <div dir="auto" data-testid="message-body" className="min-w-0 text-body [overflow-wrap:anywhere]">
-            {m.nodes.length > 0 ? renderNodes(m.nodes) : m.attachments.length === 0 ? <span className="text-muted-foreground">(no text)</span> : null}
+            {m.nodes.length > 0 ? renderNodes(m.nodes, m.images) : m.attachments.length === 0 ? <span className="text-muted-foreground">(no text)</span> : null}
           </div>
         )}
         {m.truncated ? <p className="mt-1 text-small text-muted-foreground">{MESSAGES_TRUNCATED_TEXT}</p> : null}
@@ -180,6 +186,7 @@ export function MessageItem({ m, showSender }: { m: MessageView; showSender: boo
         </time>
         {m.edited ? " · Edited" : ""}
       </p>
+      {footer}
     </li>
   );
 }

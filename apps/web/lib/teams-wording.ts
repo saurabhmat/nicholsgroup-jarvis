@@ -63,3 +63,21 @@ export function callUnavailableText(reason: "external" | "too_many" | "no_one" |
       return null;
   }
 }
+
+// ---- Channels (T-291, spec 11 "States"). Fixed text only; a team's or channel's own words are never part of a sentence here.
+export const CHANNELS_NOT_ON_TEXT = "Channels are not switched on for this company.";
+export const CHANNELS_APPROVAL_TITLE = "Channels need your Microsoft administrator's approval";
+export const CHANNELS_APPROVAL_TEXT = "Channels need your Microsoft administrator's approval. Ask them to approve the portal's Teams app, then reconnect Teams.";
+export const CHANNELS_LOAD_ERROR_TEXT = "The portal could not read your teams just now. Nothing was changed. Try again.";
+export const CHANNELS_FORBIDDEN_TEXT = "Teams did not let the portal read this. A private channel can be read only by its members.";
+export const CHANNELS_NO_TEAMS_TEXT = "You have not joined any team, or none the portal can show.";
+export const CHANNELS_NO_CHANNELS_TEXT = "This team has no channels you can see.";
+export const CHANNELS_NO_TEAM_SELECTED_TEXT = "Choose a team, then a channel, to read its posts. Posts are read from Teams when you open them; the portal stores none of them. Teams offers no unread marker for channels.";
+export const CHANNELS_NO_CHANNEL_SELECTED_TEXT = "Choose a channel to read its posts.";
+export const CHANNELS_NOT_FOUND_TEXT = "This channel could not be opened. It may have been removed, or you are not a member of it.";
+export const CHANNELS_NO_POSTS_TEXT = "No posts in this channel yet.";
+export const CHANNELS_SHARED_TEXT = "Shared channel: open it in Teams.";
+export const CHANNELS_MORE_TEAMS_TEXT = "More teams exist than are listed here.";
+export const CHANNELS_REPLIES_MORE_TEXT = "There are more replies; open the post in Teams to read the rest.";
+export const CHANNELS_REPLIES_ERROR_TEXT = "The replies could not be read just now. Try again.";
+export const CHANNELS_NO_REPLIES_TEXT = "No replies.";

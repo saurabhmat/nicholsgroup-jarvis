@@ -11,6 +11,8 @@ import { SecretValue } from "../vault/secret";
 import { createTeamsDisconnect } from "./disconnect";
 import { createTeamsHealth, createTeamsHealthSkip } from "./health";
 import { createTeamsOAuthProvider, type TeamsClientConfig } from "./provider";
+import { createTeamsChannelReader } from "./channels";
+import { createTeamsImageReader } from "./images";
 import { createTeamsReader } from "./reader";
 import { teamsApi } from "./wiring";
 
@@ -49,3 +51,8 @@ export const disconnectTeams = createTeamsDisconnect({
 
 /** The chat reader (T-281, T-284): read-only, over the guarded Teams client. Used through `@nichols/connectors/teams-reader` only (a narrow, server-only surface). */
 export const teamsReader = createTeamsReader({ api: teamsApi });
+
+/** The channel reader (T-291): joined teams, channels, root posts and replies, read only, over the same guarded client. */
+export const teamsChannelReader = createTeamsChannelReader({ api: teamsApi });
+/** The inline-image reader (T-285): the bytes of one hosted content, read only, over the same guarded client. */
+export const teamsImageReader = createTeamsImageReader({ api: teamsApi });
