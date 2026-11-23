@@ -103,16 +103,22 @@ export function parseCalendarQuery(params: Record<string, string | string[] | un
   const explicitView = v !== undefined && (CALENDAR_VIEWS as readonly string[]).includes(v);
   const view = explicitView ? (v as CalendarView) : defaultView;
   const d = one(params.date);
-  let date = isYmd(d) ? d : today;
-  const away = daysBetween(today, date);
-  if (away > MAX_DISTANCE_DAYS) date = addDays(today, MAX_DISTANCE_DAYS);
-  else if (away < -MAX_DISTANCE_DAYS) date = addDays(today, -MAX_DISTANCE_DAYS);
+  const date = clampDate(isYmd(d) ? d : today, today);
   return { view, date, explicitView };
 }
 
-/** The phone default is Day; everything else Week. From the User-Agent only (a hint for the default, never a permission). */
+/** The phone default is Day; everything else Week. From the first 512 characters of the User-Agent only, with simple tests (a hint for the default, never a permission). */
 export function defaultViewFor(userAgent: string | null | undefined): CalendarView {
-  return typeof userAgent === "string" && /iPhone|iPod|Windows Phone|Android.+Mobile|Mobile.+Android/i.test(userAgent) ? "day" : DEFAULT_VIEW;
+  if (typeof userAgent !== "string") return DEFAULT_VIEW;
+  const ua = userAgent.slice(0, 512);
+  const phone = /iPhone|iPod|Windows Phone/i.test(ua) || (/Android/i.test(ua) && /Mobile/i.test(ua));
+  return phone ? "day" : DEFAULT_VIEW;
+}
+
+/** A date clamped to two years either side of today (the same rule the URL parser applies). */
+export function clampDate(date: Ymd, today: Ymd): Ymd {
+  const away = daysBetween(today, date);
+  return away > MAX_DISTANCE_DAYS ? addDays(today, MAX_DISTANCE_DAYS) : away < -MAX_DISTANCE_DAYS ? addDays(today, -MAX_DISTANCE_DAYS) : date;
 }
 
 // ---------------------------------------------------------------------------------------------------------- windows
@@ -249,4 +255,10 @@ export function hourRange(segments: readonly { top: number; bottom: number }[]):
     endHour = Math.max(endHour, Math.ceil(s.bottom / 60));
   }
   return { startHour: Math.max(0, startHour), endHour: Math.min(24, endHour) };
+}
+
+/** Where Previous or Next goes, or null when that would land back in the same period (the two-year limit). */
+export function stepTarget(view: CalendarView, date: Ymd, dir: -1 | 1, today: Ymd): Ymd | null {
+  const target = clampDate(step(view, date, dir), today);
+  return periodFor(view, target).days[0] === periodFor(view, date).days[0] ? null : target;
 }

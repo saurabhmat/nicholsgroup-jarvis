@@ -4,7 +4,7 @@
 -- at the window edges (end_date exclusive); window length and null rules; grants (anon and service_role cannot execute).
 -- Synthetic data only: example UUIDs, example.test addresses. Window used: 2026-12-01 00:00 to 2026-12-08 00:00 New York (UTC-5).
 begin;
-select plan(25);
+select plan(28);
 \ir helpers/lane_rls.psql
 
 update core.lanes set enabled = true where code = 'APK';
@@ -30,6 +30,11 @@ insert into cal.event_index (lane_id, connection_id, provider, calendar_id, even
   -- The same meeting on two of Robert's Google calendars: the first copy has no link, the second has one (the better copy wins).
   ('PKG', '00000000-0000-4000-8000-000000032701', 'google', 'primary', 'dup-a', 'u-dup', 'Shared meeting', '2026-12-04 15:00+00', '2026-12-04 16:00+00', false, null, null, 'confirmed', '[]', null, null, null, null, now()),
   ('PKG', '00000000-0000-4000-8000-000000032703', 'google', 'primary', 'dup-b', 'u-dup', 'Shared meeting', '2026-12-04 15:00+00', '2026-12-04 16:00+00', false, null, null, 'confirmed', '[]', 'https://calendar.example.test/dup-b', 'https://meet.example.test/dup-b', null, null, now()),
+  -- ANOTHER user's copy of the same meeting (same ical_uid and start), with a title, links and attendees that would win the tie-break: it must change nothing for Robert.
+  ('PKG', '00000000-0000-4000-8000-000000032704', 'google', 'primary', 'dup-other', 'u-dup', 'Other user wins the tie-break', '2026-12-04 15:00+00', '2026-12-04 16:00+00', false, null, null, 'confirmed', '[{"email": "a@example.test"}]', 'https://calendar.example.test/other', 'https://meet.example.test/other', 'other@example.test', 'America/New_York', now()),
+  -- Two instances of one series (same ical_uid, different start): two rows.
+  ('PKG', '00000000-0000-4000-8000-000000032701', 'google', 'primary', 'rec-1', 'u-rec', 'Weekly sync', '2026-12-05 15:00+00', '2026-12-05 16:00+00', false, null, null, 'confirmed', '[]', null, null, null, null, now()),
+  ('PKG', '00000000-0000-4000-8000-000000032701', 'google', 'primary', 'rec-2', 'u-rec', 'Weekly sync', '2026-12-06 15:00+00', '2026-12-06 16:00+00', false, null, null, 'confirmed', '[]', null, null, null, null, now()),
   -- Another user in the same lane, the finance operator (no own_mail), and Robert's other lane.
   ('PKG', '00000000-0000-4000-8000-000000032704', 'google', 'primary', 's-1', 'u-s1', 'Saurabh private meeting', '2026-12-02 15:00+00', '2026-12-02 16:00+00', false, null, null, 'confirmed', '[]', null, null, null, null, now()),
   ('PKG', '00000000-0000-4000-8000-000000032706', 'google', 'primary', 'f-1', 'u-f1', 'Finance private meeting', '2026-12-02 15:00+00', '2026-12-02 16:00+00', false, null, null, 'confirmed', '[]', null, null, null, null, now()),
@@ -44,7 +49,7 @@ grant execute on function pg_temp.titles(text, timestamptz, timestamptz) to publ
 select pg_temp.claims('owner@example.test', 'aal2');
 set local role authenticated;
 select is(pg_temp.titles('PKG'),
-  'All day first day | All day last day | Google meeting | Outlook meeting | Shared meeting',
+  'All day first day | All day last day | Google meeting | Outlook meeting | Shared meeting | Weekly sync | Weekly sync',
   'both providers together: all-day first, then by start; cancelled, other people, other lane and out-of-window all-day events are left out');
 select is((select count(*)::int from core.calendar_events('PKG', '2026-12-01 05:00+00', '2026-12-08 05:00+00') where title = 'Shared meeting'), 1, 'the same ical_uid on two connections is one row');
 select is((select connection_ids from core.calendar_events('PKG', '2026-12-01 05:00+00', '2026-12-08 05:00+00') where title = 'Shared meeting'),
@@ -71,10 +76,24 @@ select throws_ok($$select * from core.calendar_events('PKG', null, '2026-12-01 0
 select throws_ok($$select * from core.calendar_events(null, '2026-12-01 05:00+00', '2026-12-02 05:00+00')$$, '22004', null, 'a null lane is refused');
 reset role;
 
+select pg_temp.claims('owner@example.test', 'aal2');
+set local role authenticated;
+select is((select title || '|' || source_url || '|' || cardinality(connection_ids)::text from core.calendar_events('PKG', '2026-12-04 05:00+00', '2026-12-05 05:00+00')),
+  'Shared meeting|https://calendar.example.test/dup-b|2', 'another user''s copy of the same meeting (same ical_uid and start) changes nothing: Robert''s own title, link and connection ids');
+select is((select count(*)::int from core.calendar_events('PKG', '2026-12-01 05:00+00', '2026-12-08 05:00+00') where title = 'Weekly sync'), 2, 'two instances of a series (same ical_uid, different start) stay two rows');
+reset role;
+insert into cal.event_index (lane_id, connection_id, provider, calendar_id, event_id, ical_uid, title, start_at, end_at, status, attendees, source_updated_at)
+select 'PKG', '00000000-0000-4000-8000-000000032701', 'google', 'primary', 'cap-' || g, 'u-cap-' || g, 'Cap ' || g, '2026-12-02 12:00+00'::timestamptz + (g || ' minutes')::interval, '2026-12-02 12:00+00'::timestamptz + (g || ' minutes')::interval + interval '5 minutes', 'confirmed', '[]', now()
+from generate_series(1, 502) g;
+select pg_temp.claims('owner@example.test', 'aal2');
+set local role authenticated;
+select is((select count(*)::int from core.calendar_events('PKG', '2026-12-01 05:00+00', '2026-12-08 05:00+00')), 501, 'the result is capped at 501 rows (the page shows 500 and says there are more)');
+reset role;
+
 -- ---------------------------------------------------------------- other people, no MFA, no own_mail, other lane, anon
 select pg_temp.claims('admin-technical@example.test', 'aal2');
 set local role authenticated;
-select is(pg_temp.titles('PKG'), 'Saurabh private meeting', 'another user in the same lane reads only their own calendar (never Robert''s)');
+select is(pg_temp.titles('PKG'), 'Saurabh private meeting | Other user wins the tie-break', 'another user in the same lane reads only their own calendar (never Robert''s)');
 select is(pg_temp.titles('APK'), '', 'cross-lane denial: a user with no APK membership reads nothing from APK');
 reset role;
 select pg_temp.claims('owner@example.test', 'aal1');

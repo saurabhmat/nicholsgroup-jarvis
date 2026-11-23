@@ -4,6 +4,7 @@ import {
   addDays,
   addMonths,
   dayStart,
+  clampDate,
   defaultViewFor,
   eventsOnDay,
   hoursInDay,
@@ -15,6 +16,7 @@ import {
   periodFor,
   segmentOn,
   step,
+  stepTarget,
   ymdOf,
   type Span,
 } from "./calendar-time";
@@ -65,6 +67,15 @@ describe("the URL", () => {
     expect(defaultViewFor("Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15")).toBe("week");
     expect(defaultViewFor("Mozilla/5.0 (iPad; CPU OS 18_0 like Mac OS X)")).toBe("week");
     expect(defaultViewFor(null)).toBe("week");
+    expect(defaultViewFor("Mozilla/5.0 (Linux; Android 14) Mobile")).toBe("day");
+    expect(defaultViewFor("Mozilla/5.0 (Linux; Android 14; Tablet)")).toBe("week");
+  });
+  it("reads only the first 512 characters of a very long User-Agent, quickly", () => {
+    const long = `Mozilla/5.0 (X11; Linux x86_64) ${"Android ".repeat(2000)}`; // 16 KB, no "Mobile"
+    const t = Date.now();
+    expect(defaultViewFor(long)).toBe("week");
+    expect(defaultViewFor(`${"a".repeat(600)} iPhone`)).toBe("week"); // past the limit
+    expect(Date.now() - t).toBeLessThan(200);
   });
 });
 
@@ -225,5 +236,16 @@ describe("the hour grid range", () => {
     expect(hourRange([])).toEqual({ startHour: 8, endHour: 20 });
     expect(hourRange([{ top: 6 * 60 + 30, bottom: 7 * 60 }])).toEqual({ startHour: 6, endHour: 20 });
     expect(hourRange([{ top: 21 * 60, bottom: 1440 }])).toEqual({ startHour: 8, endHour: 24 });
+  });
+});
+
+describe("Previous and Next at the two-year limit", () => {
+  it("clamps, and gives no target when it would land in the same period", () => {
+    expect(clampDate("2040-01-01", TODAY)).toBe("2028-11-23");
+    expect(stepTarget("day", "2028-11-23", 1, TODAY)).toBeNull();
+    expect(stepTarget("day", "2028-11-23", -1, TODAY)).toBe("2028-11-22");
+    expect(stepTarget("day", "2024-11-22", -1, TODAY)).toBeNull();
+    expect(stepTarget("week", "2028-11-23", 1, TODAY)).toBeNull(); // the next week clamps back into this one
+    expect(stepTarget("week", "2028-11-12", 1, TODAY)).toBe("2028-11-19");
   });
 });

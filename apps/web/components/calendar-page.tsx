@@ -17,7 +17,7 @@ import {
   layoutOverlaps,
   parseCalendarQuery,
   periodFor,
-  step,
+  stepTarget,
   weekday,
   ymdOf,
   type CalendarView,
@@ -56,7 +56,7 @@ export async function CalendarPage({ params, searchParams }: { params: Promise<{
   );
 }
 
-async function CalendarBody({ laneId, searchParams }: { laneId: string; searchParams: Promise<Record<string, string | string[] | undefined>> }) {
+export async function CalendarBody({ laneId, searchParams }: { laneId: string; searchParams: Promise<Record<string, string | string[] | undefined>> }) {
   const sp = await searchParams;
   const ua = (await headers()).get("user-agent");
   const today = ymdOf(new Date().getTime()); // the clock is read only after the request (searchParams, headers) is known
@@ -107,12 +107,8 @@ function Toolbar({ laneId, today, period }: { laneId: string; today: Ymd; period
           <Link href={href(laneId, view, today)} className={btn}>
             Today
           </Link>
-          <Link href={href(laneId, view, step(view, date, -1))} aria-label={`Previous ${view}`} className={btn}>
-            <span aria-hidden>{"‹"}</span>
-          </Link>
-          <Link href={href(laneId, view, step(view, date, 1))} aria-label={`Next ${view}`} className={btn}>
-            <span aria-hidden>{"›"}</span>
-          </Link>
+          <StepControl laneId={laneId} view={view} to={stepTarget(view, date, -1, today)} label={`Previous ${view}`} glyph={"\u2039"} className={btn} />
+          <StepControl laneId={laneId} view={view} to={stepTarget(view, date, 1, today)} label={`Next ${view}`} glyph={"\u203A"} className={btn} />
           <h2 data-testid="calendar-title" className="ml-1 font-heading text-card-title font-semibold text-foreground">
             {periodTitle(view, date, period.days)}
           </h2>
@@ -132,6 +128,22 @@ function Toolbar({ laneId, today, period }: { laneId: string; today: Ymd; period
       </div>
       <p className="text-small text-muted-foreground">Times are Eastern Time</p>
     </div>
+  );
+}
+
+/** Previous / next: a link, or a disabled control at the two-year limit (where the target is the same period). */
+function StepControl({ laneId, view, to, label, glyph, className }: { laneId: string; view: CalendarView; to: Ymd | null; label: string; glyph: string; className: string }) {
+  if (to === null) {
+    return (
+      <span role="link" aria-disabled="true" aria-label={label} className={cn(className, "cursor-not-allowed opacity-40 hover:bg-card")}>
+        <span aria-hidden>{glyph}</span>
+      </span>
+    );
+  }
+  return (
+    <Link href={href(laneId, view, to)} aria-label={label} className={className}>
+      <span aria-hidden>{glyph}</span>
+    </Link>
   );
 }
 
@@ -180,7 +192,12 @@ function accountOf(ctx: Ctx, e: CalendarEvent): CalendarAccount | null {
 
 /** The details of an event, as text and https links only (shown inside the event's <details>). */
 function EventPanel({ ctx, e, className }: { ctx: Ctx; e: CalendarEvent; className?: string }) {
-  const account = accountOf(ctx, e);
+  // The winning copy's account first, then the other accounts the meeting is on.
+  const ids = [e.connectionId, ...e.connectionIds.filter((id) => id !== e.connectionId)];
+  const accounts = ids.flatMap((id) => {
+    const a = ctx.accounts.get(id);
+    return a ? [a.label] : [];
+  });
   return (
     <div data-testid="event-panel" className={cn("flex flex-col gap-1.5 rounded-card border border-border bg-popover p-3 text-small text-popover-foreground shadow-md", className)}>
       <p className="text-body font-semibold">{e.title}</p>
@@ -188,7 +205,7 @@ function EventPanel({ ctx, e, className }: { ctx: Ctx; e: CalendarEvent; classNa
       {e.tentative ? <p className="text-muted-foreground">Tentative</p> : null}
       {e.location ? <p>{`Place: ${e.location}`}</p> : null}
       {e.organizer ? <p>{`Organizer: ${e.organizer}`}</p> : null}
-      {account ? <p>{`Account: ${account.label}`}</p> : null}
+      {accounts.length > 0 ? <p>{`${accounts.length > 1 ? "Accounts" : "Account"}: ${accounts.join(", ")}`}</p> : null}
       {e.calendarUrl || e.meetingUrl ? (
         <p className="flex flex-wrap gap-x-4 gap-y-1">
           {e.calendarUrl ? (
@@ -220,6 +237,7 @@ function EventDetails({
   summary,
   floating = false,
   right = false,
+  up = false,
   className,
   style,
   summaryClassName,
@@ -229,17 +247,19 @@ function EventDetails({
   summary: React.ReactNode;
   floating?: boolean;
   right?: boolean;
+  /** Open the panel above the chip (events low in the grid or in the last month rows, so it is not cut off by the page's end). */
+  up?: boolean;
   className?: string;
   style?: CSSProperties;
   summaryClassName?: string;
 }) {
   return (
-    <details data-testid="event" className={cn(floating && "open:z-30", className)} style={style}>
+    <details data-testid="event" name="calendar-event" className={cn(floating && "open:z-30", className)} style={style}>
       <summary className={cn("block cursor-pointer list-none rounded-control text-small focus-visible:outline-2 focus-visible:outline-ring [&::-webkit-details-marker]:hidden", chipClass(ctx, e), summaryClassName)}>
         {summary}
         {e.tentative ? <span className="sr-only"> (tentative)</span> : null}
       </summary>
-      <EventPanel ctx={ctx} e={e} className={floating ? cn("absolute top-full z-30 mt-1 w-72 max-w-[80vw]", right ? "right-0" : "left-0") : "mt-1"} />
+      <EventPanel ctx={ctx} e={e} className={floating ? cn("absolute z-30 w-72 max-w-[80vw]", up ? "bottom-full mb-1" : "top-full mt-1", right ? "right-0" : "left-0") : "mt-1"} />
     </details>
   );
 }
@@ -275,8 +295,8 @@ function TimeView({ ctx, today, period, events }: { ctx: Ctx; today: Ymd; period
   const isWeek = period.view === "week";
   return (
     <>
-      <div data-testid="calendar-grid" className={cn("overflow-hidden rounded-card border border-border bg-card", isWeek && "hidden md:block")}>
-        <div className="grid border-b border-border" style={{ gridTemplateColumns: cols }}>
+      <div data-testid="calendar-grid" className={cn("rounded-card border border-border bg-card", isWeek && "hidden md:block")}>
+        <div className="grid rounded-t-card border-b border-border" style={{ gridTemplateColumns: cols }}>
           <div />
           {perDay.map((d) => (
             <div key={d.day} className="border-l border-divider p-1">
@@ -294,7 +314,7 @@ function TimeView({ ctx, today, period, events }: { ctx: Ctx; today: Ymd; period
             </div>
           ))}
         </div>
-        <div className="grid" style={{ gridTemplateColumns: cols }}>
+        <div className="grid rounded-b-card" style={{ gridTemplateColumns: cols }}>
           <div className="relative" style={{ height: hours.length * HOUR_PX }}>
             {hours.map((h, i) => (
               <span key={h} className="absolute right-1 -translate-y-1/2 text-label text-muted-foreground" style={{ top: i * HOUR_PX, display: i === 0 ? "none" : undefined }}>
@@ -313,6 +333,7 @@ function TimeView({ ctx, today, period, events }: { ctx: Ctx; today: Ymd; period
                   ctx={ctx}
                   e={p.event}
                   floating
+                  up={p.top - startMin > span / 2}
                   right={period.days.length > 1 ? ci >= period.days.length - 3 : p.column > 0}
                   className="absolute px-px"
                   style={placeStyle(p, startMin, span)}
@@ -381,8 +402,8 @@ const MONTH_MAX = 3;
 function MonthView({ ctx, today, period, events }: { ctx: Ctx; today: Ymd; period: Period; events: CalendarEvent[] }) {
   const month = period.date.slice(0, 7);
   return (
-    <div data-testid="calendar-month" className="overflow-hidden rounded-card border border-border bg-card">
-      <div className="grid grid-cols-7 border-b border-border text-center text-label text-muted-foreground">
+    <div data-testid="calendar-month" className="rounded-card border border-border bg-card">
+      <div className="grid grid-cols-7 rounded-t-card border-b border-border text-center text-label text-muted-foreground">
         {WEEKDAYS.map((w) => (
           <div key={w} className="py-1.5">
             {w}
@@ -397,8 +418,10 @@ function MonthView({ ctx, today, period, events }: { ctx: Ctx; today: Ymd; perio
           const more = all.length - shown.length;
           const isToday = day === today;
           const col = i % 7;
+          const last = period.days.length - 1;
+          const lastRows = i >= period.days.length - 14;
           return (
-            <div key={day} data-testid="calendar-cell" data-day={day} className={cn("relative min-h-14 border-b border-l border-divider p-1 md:min-h-28", day.slice(0, 7) !== month && "bg-muted/50 text-muted-foreground")}>
+            <div key={day} data-testid="calendar-cell" data-day={day} className={cn("relative min-h-14 border-b border-l border-divider p-1 md:min-h-28", day.slice(0, 7) !== month && "bg-muted/50 text-muted-foreground", i === last - 6 && "rounded-bl-card", i === last && "rounded-br-card")}>
               <Link
                 href={href(ctx.laneId, "day", day)}
                 aria-current={isToday ? "date" : undefined}
@@ -415,7 +438,7 @@ function MonthView({ ctx, today, period, events }: { ctx: Ctx; today: Ymd; perio
               </div>
               <div className="mt-1 hidden flex-col gap-0.5 md:flex">
                 {shown.map((e) => (
-                  <EventDetails key={e.key} ctx={ctx} e={e} floating right={col >= 4} className="relative" summary={<span className="block truncate px-1.5 py-0.5">{`${timeLabel(e)}${e.title}`}</span>} />
+                  <EventDetails key={e.key} ctx={ctx} e={e} floating up={lastRows} right={col >= 4} className="relative" summary={<span className="block truncate px-1.5 py-0.5">{`${timeLabel(e)}${e.title}`}</span>} />
                 ))}
                 {more > 0 ? (
                   <Link href={href(ctx.laneId, "day", day)} className="px-1.5 text-small font-medium text-accent-italic hover:underline">

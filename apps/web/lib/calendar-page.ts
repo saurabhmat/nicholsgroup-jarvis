@@ -30,6 +30,8 @@ export type CalendarEvent = Span & {
   title: string;
   /** The winning copy's connection; the colour and the account name come from it. */
   connectionId: string;
+  /** Every one of the person's connections that holds a copy of the meeting (the winning one included). */
+  connectionIds: string[];
   provider: CalendarProvider;
   tentative: boolean;
   timezone: string | null;
@@ -82,6 +84,7 @@ export function toEvents(rows: unknown): CalendarEvent[] {
         key: `${connectionId}:${text(r.calendar_id) ?? ""}:${text(r.event_id) ?? String(i)}`,
         title: text(r.title) ?? "(No title)",
         connectionId,
+        connectionIds: [...new Set([connectionId, ...(Array.isArray(r.connection_ids) ? r.connection_ids.filter((x): x is string => typeof x === "string" && x !== "") : [])])],
         provider: r.provider,
         tentative: r.status === "tentative",
         timezone: text(r.timezone),

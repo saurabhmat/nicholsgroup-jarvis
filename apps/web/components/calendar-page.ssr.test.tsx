@@ -116,7 +116,38 @@ describe("Calendar page, server-side render", () => {
     const { html } = await ssr("day", TODAY, connected([dup]));
     expect(html.match(/Shared meeting/g)?.length).toBe(2); // the chip and its panel, not two events
     expect(html.match(/data-testid="event"/g)?.length).toBe(1);
-    expect(html).toContain("Account: Outlook · robert@ms.example.test");
+    expect(html).toContain("Accounts: Outlook · robert@ms.example.test, Google Calendar · robert@example.test"); // the winner first
+    expect(html).toMatch(/border-l-chart-2/); // the winning connection's colour
+    const single = await ssr("day", TODAY, connected([row({ title: "Solo" })]));
+    expect(single.html).toContain("Account: Google Calendar · robert@example.test");
+    expect(single.html).not.toContain("Accounts:");
+  });
+
+  it("the grids do not clip the details panel; late events and last-row month events open upward; every event shares one exclusive group", async () => {
+    const late = row({ title: "Late one", start_at: "2026-11-23T23:00:00Z", end_at: "2026-11-24T00:00:00Z" }); // 6 PM Eastern: lower half of 8 AM to 8 PM
+    const early = row({ event_id: "e2", title: "Early one", start_at: "2026-11-23T14:00:00Z", end_at: "2026-11-23T14:30:00Z" });
+    const { html } = await ssr("day", TODAY, connected([late, early]));
+    const grid = html.match(/<div data-testid="calendar-grid" class="([^"]*)"/)?.[1] ?? "";
+    expect(grid).not.toContain("overflow-hidden");
+    const after = (h: string, t: string) => h.slice(h.indexOf(t), h.indexOf(t) + 1500);
+    expect(after(html, "Late one")).toContain("bottom-full");
+    expect(after(html, "Early one")).toContain("top-full");
+    expect(html.match(/<details[^>]*name="calendar-event"/g)?.length).toBe(2);
+    const month = await ssr("month", TODAY, connected([row({ title: "Last row", start_at: "2026-12-03T15:00:00Z", end_at: "2026-12-03T16:00:00Z" }), row({ event_id: "e3", title: "First row", start_at: "2026-11-03T15:00:00Z", end_at: "2026-11-03T16:00:00Z" })]));
+    expect(month.html).not.toMatch(/data-testid="calendar-month" class="[^"]*overflow-hidden/);
+    expect(after(month.html, "Last row")).toContain("bottom-full");
+    expect(after(month.html, "First row")).toContain("top-full");
+    expect(month.html).toContain('name="calendar-event"');
+  });
+
+  it("Previous and Next are disabled at the two-year limit", async () => {
+    const edge = "2028-11-23"; // today (2026-11-23) + 731 days
+    const { html } = await ssr("day", edge, connected([]));
+    expect(html).toMatch(/aria-disabled="true"[^>]*aria-label="Next day"|aria-label="Next day"[^>]*aria-disabled="true"/);
+    expect(html).not.toContain('href="/PKG/calendar?view=day&amp;date=2028-11-24"');
+    expect(html).toContain('href="/PKG/calendar?view=day&amp;date=2028-11-22"');
+    const mid = await ssr("day", TODAY, connected([]));
+    expect(mid.html).not.toContain('aria-disabled="true"');
   });
 
   it("an all-day event spans its days, the end date being exclusive", async () => {

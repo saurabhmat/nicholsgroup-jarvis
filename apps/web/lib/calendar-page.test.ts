@@ -60,6 +60,10 @@ describe("toEvents", () => {
     const [ok] = toEvents([row({ provider: "microsoft", status: "tentative" })]);
     expect(ok).toMatchObject({ calendarUrl: "https://calendar.example.test/e1", meetingUrl: "https://meet.example.test/e1", openLabel: "Open in Outlook", tentative: true });
   });
+  it("keeps every connection that holds a copy, the winning one first and without duplicates", () => {
+    expect(toEvents([row({ connection_id: M, provider: "microsoft", connection_ids: [G, M, M, 5, ""] })])[0]?.connectionIds).toEqual([M, G]);
+    expect(toEvents([row({ connection_ids: null })])[0]?.connectionIds).toEqual([G]);
+  });
   it("refuses a link with credentials", () => {
     expect(toEvents([row({ online_meeting_url: "https://meet.example.test@evil.test/x" })])[0]?.meetingUrl).toBeNull();
   });
