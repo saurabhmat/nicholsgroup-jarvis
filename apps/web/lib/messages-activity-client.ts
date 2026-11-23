@@ -12,14 +12,22 @@ function parse(v: unknown): ActivityAnswer | null {
   return { live: r.live === true, liveUntil: at(r.liveUntil), dot: r.dot === true, lastNoticeAt: at(r.lastNoticeAt), serverNow: at(r.serverNow) };
 }
 
-/** The state from the portal's own database. Null on any failure (never a guess): the caller keeps what it knew. */
-export async function getActivity(laneId: string, signal?: AbortSignal): Promise<ActivityAnswer | null> {
+/** The state from the portal's own database, or why not: the HTTP status of a refusal (null: the request itself failed). */
+export async function askActivity(laneId: string, signal?: AbortSignal): Promise<{ ok: true; answer: ActivityAnswer } | { ok: false; status: number | null }> {
   try {
     const res = await fetch(`/api/lanes/${encodeURIComponent(laneId)}/messages/activity`, { credentials: "same-origin", cache: "no-store", ...(signal ? { signal } : {}) });
-    return res.ok ? parse(await res.json()) : null;
+    if (!res.ok) return { ok: false, status: res.status };
+    const answer = parse(await res.json());
+    return answer ? { ok: true, answer } : { ok: false, status: null };
   } catch {
-    return null;
+    return { ok: false, status: null };
   }
+}
+
+/** The state from the portal's own database. Null on any failure (never a guess): the caller keeps what it knew. */
+export async function getActivity(laneId: string, signal?: AbortSignal): Promise<ActivityAnswer | null> {
+  const r = await askActivity(laneId, signal);
+  return r.ok ? r.answer : null;
 }
 
 /** The person opened the chat list: records it and returns the state as it is now. */

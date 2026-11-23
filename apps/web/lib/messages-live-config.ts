@@ -21,3 +21,8 @@ export const READ_LIMIT_MAX = 12;
 export const READ_LIMIT_WINDOW_MS = 60_000;
 /** A notice newer than this (by the SERVER's clock, at the first answer) may have come after the server read the page was drawn from: the page re-reads once. */
 export const NOTICE_FRESH_MS = 30_000;
+/** While the FIRST answer of the activity route keeps failing: after this many failures in a row the loop asks at most every FIRST_ANSWER_BACKOFF_MS (and again when the tab comes back). */
+export const FIRST_ANSWER_FAILURES_BEFORE_BACKOFF = 3;
+export const FIRST_ANSWER_BACKOFF_MS = 5 * 60_000;
+/** An answer that means "not for this person, ever, in this page view": the loop stops for the page view. */
+export const FIRST_ANSWER_FINAL_STATUSES: readonly number[] = [401, 403, 404];

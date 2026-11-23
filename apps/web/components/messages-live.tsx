@@ -10,8 +10,8 @@
 // Parts: `MessagesLiveProvider` owns the loop and the bounds and hands a `version` down; `ChatListLive` and `ConversationMessages` (messages-client.tsx) re-read on a new `version` only.
 // Nothing from a chat is stored in the browser: lists and messages live in component state.
 import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
-import { getActivity, postSeen, publishDot } from "@/lib/messages-activity-client";
-import { ACTIVITY_POLL_MS, NOTICE_FRESH_MS, REFETCH_MIN_GAP_MS } from "@/lib/messages-live-config";
+import { askActivity, getActivity, postSeen, publishDot } from "@/lib/messages-activity-client";
+import { ACTIVITY_POLL_MS, FIRST_ANSWER_BACKOFF_MS, FIRST_ANSWER_FAILURES_BEFORE_BACKOFF, FIRST_ANSWER_FINAL_STATUSES, NOTICE_FRESH_MS, REFETCH_MIN_GAP_MS } from "@/lib/messages-live-config";
 import { hrefFor } from "@/lib/messages-href";
 import type { ChatRowView } from "@/lib/teams-chats";
 import { MESSAGES_EMPTY_LIST_TEXT, MESSAGES_REFRESH_FAILED_TEXT, messagesRefreshWaitText } from "@/lib/teams-wording";
@@ -68,6 +68,8 @@ export function MessagesLiveProvider({ laneId, children }: { laneId: string; chi
     // `begun`: the first answer of the database has come (an answer that failed is not one: the next tick asks again). `off`: the database SAID notices are not working: only that stops the loop.
     let begun = false;
     let off = false;
+    let failures = 0; // consecutive failures of the FIRST answer
+    let lastTry = 0;
     r.current.at = Date.now();
     const stopLoop = () => {
       if (timer !== null) clearInterval(timer);
@@ -98,8 +100,19 @@ export function MessagesLiveProvider({ laneId, children }: { laneId: string; chi
       } else publishDot(laneId, a.dot);
     }
     async function begin(): Promise<void> {
-      const a = await getActivity(laneId, ac.signal);
-      if (a === null || ac.signal.aborted) return; // not begun: the next tick or the tab coming back asks again
+      lastTry = Date.now();
+      const got = await askActivity(laneId, ac.signal);
+      if (ac.signal.aborted) return;
+      if (!got.ok) {
+        // not begun: the next tick or the tab coming back asks again; a refusal that cannot change (not signed in, not allowed, no such route) stops the loop for this page view
+        if (got.status !== null && FIRST_ANSWER_FINAL_STATUSES.includes(got.status)) {
+          off = true;
+          stopLoop();
+        } else failures += 1;
+        return;
+      }
+      failures = 0;
+      const a = got.answer;
       begun = true;
       if (!a.live) {
         turnOff();
@@ -118,9 +131,14 @@ export function MessagesLiveProvider({ laneId, children }: { laneId: string; chi
       const seen = await postSeen(laneId, ac.signal);
       if (seen) publishDot(laneId, seen.dot);
     }
+    /** The loop's retry of the first answer: after a few failures in a row, at most every FIRST_ANSWER_BACKOFF_MS (the tab coming back asks at once). */
+    const tryBegin = async (): Promise<void> => {
+      if (failures >= FIRST_ANSWER_FAILURES_BEFORE_BACKOFF && Date.now() - lastTry < FIRST_ANSWER_BACKOFF_MS) return;
+      await begin();
+    };
     const startLoop = () => {
       // The ONLY loop. It asks our own database; it never calls Microsoft. Until the first answer has come (or when it failed) the tick asks for that first answer again.
-      if (timer === null && !off && document.visibilityState === "visible") timer = setInterval(() => void (begun ? poll() : begin()), ACTIVITY_POLL_MS);
+      if (timer === null && !off && document.visibilityState === "visible") timer = setInterval(() => void (begun ? poll() : tryBegin()), ACTIVITY_POLL_MS);
     };
     const onVisibility = () => {
       if (document.visibilityState !== "visible") {

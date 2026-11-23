@@ -65,7 +65,7 @@ describe("Messages source rules", () => {
   it("the live Messages code (T-290): exactly one timer, it only asks the portal's own activity route; the re-reads and the dot go to own routes; no storage, no raw HTML, no Microsoft host", () => {
     const live = code("components/messages-live.tsx");
     expect([...live.matchAll(/\bsetInterval\(/g)]).toHaveLength(1);
-    expect(live).toMatch(/timer = setInterval\(\(\) => void \(begun \? poll\(\) : begin\(\)\), ACTIVITY_POLL_MS\)/);
+    expect(live).toMatch(/timer = setInterval\(\(\) => void \(begun \? poll\(\) : tryBegin\(\)\), ACTIVITY_POLL_MS\)/);
     expect(live).not.toMatch(/\bsetTimeout\b|requestAnimationFrame|EventSource|WebSocket|navigator\.sendBeacon|serviceWorker/);
     // `poll` asks the database only: it names getActivity, never a re-read route
     const poll = live.slice(live.indexOf("async function poll()"), live.indexOf("async function begin()"));

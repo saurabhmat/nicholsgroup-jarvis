@@ -276,6 +276,39 @@ describe("the first answer (T-290 review M2, M3)", () => {
     expect(calls.chats).toBe(1);
   });
 
+  it("a first answer that keeps failing is retried every 30 s three times, then at most every 5 minutes (and at once when the tab comes back); the page never calls Microsoft meanwhile", async () => {
+    server.activityStatus = 503;
+    await start(); // failure 1
+    await tick(ACTIVITY_POLL_MS); // 2
+    await tick(ACTIVITY_POLL_MS); // 3
+    expect(calls.activity).toBe(3);
+    await tick(4 * 60_000); // backed off: the 30 s ticks ask nothing
+    expect(calls.activity).toBe(3);
+    await tick(60_000 + ACTIVITY_POLL_MS); // five minutes after the last try
+    expect(calls.activity).toBe(4);
+    await hide();
+    await show(); // the tab coming back asks at once
+    expect(calls.activity).toBe(5);
+    expect(graphCalls()).toBe(0);
+    server.activityStatus = 200;
+    await tick(5 * 60_000 + ACTIVITY_POLL_MS);
+    expect(calls.activity).toBeGreaterThanOrEqual(6);
+    expect(calls.seen).toBe(1); // begun: the chat list was marked seen
+  });
+
+  it("a 401, 403 or 404 on the first answer stops the loop for the page view (no retry, not even when the tab comes back)", async () => {
+    for (const status of [401, 403, 404]) {
+      cleanup();
+      Object.assign(calls, { activity: 0, urls: [] });
+      server.activityStatus = status;
+      await start();
+      await tick(10 * 60_000);
+      await hide();
+      await show();
+      expect(calls.activity, String(status)).toBe(1);
+    }
+  });
+
   it("only an explicit `live: false` stops the loop: after it, nothing more is asked", async () => {
     server.live = false;
     await start();

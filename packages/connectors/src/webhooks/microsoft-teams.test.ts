@@ -5,7 +5,7 @@ import { afterEach, describe, expect, it } from "vitest";
 import { RateLimiter } from "../http/rate-limit";
 import { createConnectorLogger, type LogEntry } from "../log/index";
 import { createSubscriptionStoreTwin } from "../testing/microsoft-subscription-store";
-import { createMemoryWebhookStore } from "../testing/mock-webhook";
+import { createMicrosoftMemoryWebhookStore } from "../testing/mock-webhook";
 import { useMockServer } from "../testing/msw/index";
 import { createFakeTeams } from "../testing/msw/teams/handlers";
 import { createFakeTeamsSubscriptions } from "../testing/msw/teams/subscriptions";
@@ -38,9 +38,9 @@ function setup(opts: { jobs?: boolean } = {}) {
     const r = h.rows.get(id);
     return r && r.lane_id === laneId ? { status: r.status } : undefined;
   });
-  const mem = createMemoryWebhookStore({}, {}, (laneId, id) => {
+  const mem = createMicrosoftMemoryWebhookStore((laneId, id) => {
     const r = h.rows.get(id);
-    return r && r.lane_id === laneId ? r.provider : undefined;
+    return r && r.lane_id === laneId ? { provider: r.provider, status: r.status } : undefined;
   });
   const sent: Sent[] = [];
   const logs: LogEntry[] = [];
@@ -213,6 +213,25 @@ describe("the claim names the connection's provider (the real core.webhook_event
     expect((await s.post(s.body([{ subscriptionId: "sub-teams-pkg", clientState: STATE, lifecycleEvent: "reauthorizationRequired" }]))).status).toBe(202);
     expect([...s.mem.rows.values()].map((r) => `${r.provider}:${r.eventType}:${r.status}`).sort()).toEqual(["microsoft_teams:teams_chats.changed:enqueued", "microsoft_teams:teams_chats.reauthorizationRequired:enqueued"]);
     expect(s.sent.filter((e) => e.name === WEBHOOK_EVENT_NAME).map((e) => e.data.provider)).toEqual(["microsoft"]);
+  });
+
+  it("one delivery with a MAIL item and a TEAMS item: each is claimed and marked under its own connection's provider and queues its own event type", async () => {
+    const s = setup();
+    // a mail connection of the same lane, with a mail subscription (the Teams harness only builds Teams rows: this one is made by hand)
+    const mailId = "00000000-0000-4000-8000-0000000a0289";
+    s.h.rows.set(mailId, { ...(s.h.rows.get(s.a.conn.id) as object), id: mailId, provider: "microsoft", external_account_id: "m@mail.example.test" } as never);
+    s.twin.plant("PKG", mailId, "mail", "sub-mail-own", new Date(T0 + 86_400_000), STATE);
+    const res = await s.post(s.body([{ subscriptionId: "sub-mail-own", clientState: STATE }, { subscriptionId: "sub-teams-pkg", clientState: STATE }]));
+    expect(res.status).toBe(202);
+    expect([...s.mem.rows.values()].map((r) => `${r.provider}:${r.connectionId === mailId ? "mail" : "teams"}:${r.eventType}:${r.status}`).sort()).toEqual(["microsoft:mail:mail.changed:enqueued", "microsoft_teams:teams:teams_chats.changed:enqueued"]);
+    expect(s.sent.map((e) => `${String(e.data.connectionId === mailId ? "mail" : "teams")}:${String(e.data.eventType)}`).sort()).toEqual(["mail:mail.changed", "teams:teams_chats.changed"]);
+  });
+
+  it("the memory store also refuses a claim for a connection that is not connected (disconnected or pending), as the SQL does", async () => {
+    const s = setup();
+    const row = s.h.rows.get(s.a.conn.id);
+    if (row) row.status = "disconnected";
+    await expect(s.mem.store.claim("PKG", s.a.conn.id, "microsoft_teams", { id: "y", type: "teams_chats.changed", payloadHash: "h" })).rejects.toThrow();
   });
 
   it("the memory store mirrors the SQL: a claim naming the wrong provider for a connection fails", async () => {

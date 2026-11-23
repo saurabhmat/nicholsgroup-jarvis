@@ -2094,3 +2094,5 @@ Accepted / for later:
 - A renewal racing a disconnect is mislabelled and retried once (harmless).
 - The Teams notice URL comes from the mail Graph app's settings (`getGraphNotificationUrl` -> `requireConnectorEnv("graph")`): a deployment with Teams but no mail Graph app never subscribes (noted in H-083).
 - Mail deliveries now make two lookups per lane and answer 503 if either fails.
+
+Follow-ups of the T-289/T-290 re-check (Nov 24, 2026): the mixed mail + Teams delivery test is back (each item claimed and marked under its own connection's provider); the memory webhook store for the Microsoft receiver tests (`createMicrosoftMemoryWebhookStore`) REQUIRES the connection lookup and, like `core.webhook_event_claim`, refuses a claim for a connection of another provider or one that is disconnected or pending; while the first activity answer keeps failing the page retries every 30 s three times, then at most every 5 minutes (at once when the tab returns) and stops for the page view on 401, 403 or 404 (still one timer).

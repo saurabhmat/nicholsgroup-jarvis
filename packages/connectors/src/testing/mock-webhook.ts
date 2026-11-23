@@ -54,10 +54,13 @@ export function signMock(body: string, opts: { secret?: string; timestamp?: numb
   return { "content-type": opts.contentType ?? "application/json", "x-mock-timestamp": ts, "x-mock-signature": `sha256=${sig}` };
 }
 
+/** What the memory store needs to know about a connection to mirror `core.webhook_event_claim`'s check. */
+export type ConnectionLookup = (laneId: string, connectionId: string) => { provider: string; status: string } | undefined;
+
 export interface MemoryRow { laneId: LaneId; connectionId: string; provider: string; eventId: string; eventType: string; payloadHash: string; status: "received" | "enqueued" | "failed"; attempts: number }
 
 /** accounts: `provider:lower(account)` -> lane + connection (as core.webhook_resolve_connection would return). */
-export function createMemoryWebhookStore(accounts: Record<string, { laneId: LaneId; connectionId: string }[]>, faults: { resolve?: boolean; claim?: boolean } = {}, providerOf?: (laneId: string, connectionId: string) => string | undefined) {
+export function createMemoryWebhookStore(accounts: Record<string, { laneId: LaneId; connectionId: string }[]>, faults: { resolve?: boolean; claim?: boolean } = {}, connections?: ConnectionLookup) {
   const rows = new Map<string, MemoryRow>();
   const calls: { resolve: { provider: string; account: string }[]; claim: string[] } = { resolve: [], claim: [] };
   const key = (l: string, p: string, e: string) => `${l}|${p}|${e}`;
@@ -72,8 +75,11 @@ export function createMemoryWebhookStore(accounts: Record<string, { laneId: Lane
     async claim(laneId, connectionId, provider, event): Promise<ClaimResult> {
       calls.claim.push(`${laneId}|${provider}|${event.id}`);
       if (faults.claim) throw new Error("db down");
-      // core.webhook_event_claim: the connection must be in this lane AND be of the provider named (42501 otherwise). Only where a test says what each connection's provider is.
-      if (providerOf && providerOf(laneId, connectionId) !== provider) throw new Error("connection not found in this lane");
+      // core.webhook_event_claim: the connection must be in this lane, be of the provider named AND not be disconnected or pending (42501 otherwise). Only where a test says what each connection is.
+      if (connections) {
+        const c = connections(laneId, connectionId);
+        if (!c || c.provider !== provider || c.status === "disconnected" || c.status === "pending") throw new Error("connection not found in this lane");
+      }
       const k = key(laneId, provider, event.id);
       const row = rows.get(k);
       if (!row) {
@@ -97,4 +103,9 @@ export function createMemoryWebhookStore(accounts: Record<string, { laneId: Lane
     },
   };
   return { store, rows, calls };
+}
+
+/** The store for the MICROSOFT receiver's tests: the connection lookup is REQUIRED, so a test cannot get the loose behaviour by leaving it out (the real claim refuses a connection of another provider or one that is not connected). */
+export function createMicrosoftMemoryWebhookStore(connections: ConnectionLookup, faults: { resolve?: boolean; claim?: boolean } = {}) {
+  return createMemoryWebhookStore({}, faults, connections);
 }
