@@ -207,3 +207,43 @@ describe("privacy (rule 6)", () => {
     expect(Object.keys(v).sort()).toEqual(["at", "attachments", "day", "deleted", "edited", "fullTime", "id", "mine", "nodes", "sender", "system", "time", "truncated"]);
   });
 });
+
+describe("T-281 review follow-ups", () => {
+  const policy = { laneListsCalls: true, connectionHasCalls: true };
+  it("C4: events are not drawn (conversation and older pages), but the newest item of any kind is what opening the chat marks as read", async () => {
+    reader.openChat.mockResolvedValue({ chat: chat({ topic: "T", members: [] }), members: [member("Me", { self: true }), member("Pat")], membersMore: false });
+    reader.listMessages.mockResolvedValue({
+      messages: [msg("e2", "2026-11-23T15:00:00.000Z", { system: true, nodes: [] }), msg("m2", "2026-11-23T14:05:00.000Z"), msg("e1", "2026-11-23T14:02:00.000Z", { system: true, nodes: [] }), msg("m1", "2026-11-23T14:00:00.000Z")],
+      nextBefore: null,
+      self,
+    });
+    const v = await loadConversation(person(), CHAT, encodeChatKey(CHAT), policy);
+    expect(v.kind === "ok" && v.messages.map((m) => m.id)).toEqual(["m1", "m2"]);
+    expect(v.kind === "ok" && v.readThrough).toBe("2026-11-23T15:00:00.000Z");
+    const o = await loadOlder({ laneId: "PKG", userId: ME, connectionId: "c" }, CHAT, "2026-11-23T14:00:00.000Z");
+    expect(o.kind === "ok" && o.messages.map((m) => m.id)).toEqual(["m1", "m2"]);
+  });
+
+  it("C6: a chat with more members than Graph returns says 'and others', not a wrong number", () => {
+    const many = [member("Me", { self: true }), ...["A", "B", "C", "D", "E"].map((n) => member(n))];
+    expect(chatTitle({ topic: null, members: many, membersCapped: true })).toBe("A, B, C and others");
+    expect(chatTitle({ topic: null, members: many, membersCapped: false })).toBe("A, B, C +2");
+    expect(chatRow(chat({ topic: null, members: many, membersCapped: true }) as never, null, false, NOW).title).toBe("A, B, C and others");
+  });
+
+  it("C6: a conversation with more members than the first page says so in the title", async () => {
+    reader.openChat.mockResolvedValue({ chat: chat({ topic: null, members: [] }), members: [member("Me", { self: true }), ...["A", "B", "C", "D"].map((n) => member(n))], membersMore: true });
+    reader.listMessages.mockResolvedValue({ messages: [], nextBefore: null, self });
+    const v = await loadConversation(person(), CHAT, encodeChatKey(CHAT), policy);
+    expect(v.kind === "ok" && [v.title, v.subtitle]).toEqual(["A, B, C and others", "5+ people"]);
+  });
+
+  it("C7k: a chat with no messages is an empty, valid conversation; a 400 on the messages read is a fixed state", async () => {
+    reader.openChat.mockResolvedValue({ chat: chat({ topic: "T", members: [] }), members: [member("Me", { self: true }), member("Pat")], membersMore: false });
+    reader.listMessages.mockResolvedValue({ messages: [], nextBefore: null, self });
+    const v = await loadConversation(person(), CHAT, encodeChatKey(CHAT), policy);
+    expect(v.kind === "ok" && [v.messages.length, v.readThrough, v.nextBefore]).toEqual([0, null, null]);
+    reader.listMessages.mockRejectedValue({ info: { kind: "invalid_input", http_status: 400, message: CANARY } });
+    expect(await loadConversation(person(), CHAT, encodeChatKey(CHAT), policy)).toEqual({ kind: "unavailable" });
+  });
+});

@@ -16,7 +16,7 @@ const t = vi.hoisted(() => ({
   config: null as unknown,
   rendered: [] as string[],
   /** The Teams reader (T-283): every call is recorded with the tick it started in, and answers after a pause, so "started together" can be told from "one after the other". */
-  reader: { calls: [] as { fn: string; at: number }[], seq: 0 },
+  reader: { calls: [] as { fn: string; at: number; resolvedBefore: number }[], seq: 0, resolved: 0 },
 }));
 
 // React cache() memoises per render; a test is one render, so this memo is identity-keyed and cleared before every test.
@@ -103,8 +103,9 @@ vi.mock("@/lib/guards", () => ({ guards: async () => guardsObj }));
 vi.mock("@nichols/connectors/teams-reader", () => {
   const self = { tenantId: "t", entraObjectId: "00000000-0000-4000-8000-0000000000a1" };
   const started = async <T,>(fn: string, value: T): Promise<T> => {
-    t.reader.calls.push({ fn, at: performance.now() });
+    t.reader.calls.push({ fn, at: performance.now(), resolvedBefore: t.reader.resolved });
     await new Promise((res) => setTimeout(res, 6));
+    t.reader.resolved += 1;
     return value;
   };
   return {
@@ -119,6 +120,7 @@ vi.mock("@/components/messages-client", () => ({
   ConversationMessages: () => null,
   CallButtons: () => null,
   MarkRead: () => null,
+  FocusConversation: () => null,
 }));
 // T-280: the company's Teams settings come from the lane config through the connectors (a recorded read here; the real reader is tested in packages/connectors).
 vi.mock("@nichols/connectors/teams-settings", () => ({
@@ -175,6 +177,7 @@ beforeEach(() => {
   t.answers = { "from:lane_config_current": OPEN };
   t.reader.calls = [];
   t.reader.seq = 0;
+  t.reader.resolved = 0;
   for (const r of t.roots) r.clear();
   guardsObj = makeGuards();
 });
@@ -274,9 +277,8 @@ describe("Messages (T-280, T-283)", () => {
     await resolve(Page({ params: params(), searchParams: sp({ chat: CHAT_KEY }) } as never) as ReactNode);
     const fns = t.reader.calls.map((c) => c.fn).sort();
     expect(fns).toEqual(["listChats", "listMessages", "openChat"]);
-    // each Graph read takes 6 ms in this stub: three reads that began within 5 ms of each other began together, none waited for another to answer
-    const starts = t.reader.calls.map((c) => c.at);
-    expect(Math.max(...starts) - Math.min(...starts)).toBeLessThan(5);
+    // (no clock: every Graph read had STARTED before any of them had answered)
+    expect(t.reader.calls.map((c) => c.resolvedBefore)).toEqual([0, 0, 0]);
     const markers = t.calls.find((c) => c.name === "rpc:teams_chat_reads_list");
     expect(markers).toBeTruthy();
     // the markers' level equals the level the Graph reads began in: one level, not a chain

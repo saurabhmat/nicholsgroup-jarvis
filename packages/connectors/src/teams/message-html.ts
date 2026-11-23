@@ -5,13 +5,17 @@
 // Everything else is dropped with its content (script, style, iframe, object, embed, form controls, svg, math, template, noscript, ...) or flattened to its text (unknown and table tags).
 // Attributes are read ONLY for: a link's `href` (https only, no credentials, at most 2,048 characters, no control or space character, normalised by the URL parser so what is checked is what is
 // drawn), an emoji's `alt`, and an image's `src` (to tell hosted content from anything else; the address is never kept). Event handlers, styles, classes and `javascript:`/`data:` URLs are never read.
-// Text has bidirectional overrides, zero-width spaces and control characters removed, so a message cannot reorder or hide what the person reads. Bounded: one linear pass, at most MAX_NODES
+// Text has bidirectional overrides, zero-width spaces and control characters removed, so a message cannot reorder or hide what the person reads. Bounded: ONE linear pass (open elements are counted per tag, so no close tag and no link walks the stack; at most MAX_STACK open elements; input read up to MAX_INPUT_CHARS), at most MAX_NODES
 // nodes, nesting capped at MAX_DEPTH, and the text cut at MAX_TEXT_CHARS (the cut is reported, never silent). The converter never throws on input and never builds a message from content.
 
 /** Text kept per message (spec 8.4). */
 export const MAX_TEXT_CHARS = 20_000;
 export const MAX_NODES = 5_000;
 export const MAX_DEPTH = 12;
+/** Open elements kept at once; past it an opening tag is ignored (H1). */
+export const MAX_STACK = 256;
+/** Input read per message: Microsoft's documented post size is about 100 KB (vendor facts A2) plus a margin; the rest is not converted and the cut is reported. */
+export const MAX_INPUT_CHARS = 120_000;
 const MAX_HREF = 2_048;
 
 export type MessageNode =
@@ -28,9 +32,12 @@ export type ConvertedMessage = { nodes: MessageNode[]; truncated: boolean };
 
 // ---- characters
 // Bidirectional controls (embeddings, overrides, isolates, marks), zero-width space/joiner-less invisibles, word joiner, BOM, soft hyphen and C0/C1 controls except tab and newline.
+// Also the characters that draw as blank (hangul fillers U+115F U+1160 U+3164 U+FFA0, braille blank U+2800, Mongolian vowel separator U+180E), so a name cannot look empty (SL6).
 // U+200C/U+200D (joiners) are kept: emoji sequences and several scripts need them.
 const UNWANTED = /[\u0000-\u0008\u000b-\u001f\u007f-\u009f­؜​‎‏‪-‮⁠-⁤⁦-⁯﻿￹-￻]/g;
-export const cleanText = (s: string): string => s.replace(UNWANTED, "");
+// Characters that draw as blank (hangul fillers U+115F U+1160 U+3164 U+FFA0, braille blank U+2800, Mongolian vowel separator U+180E): removed too, so a name or topic cannot look empty (SL6).
+const BLANKS = /[\u115f\u1160\u3164\uffa0\u2800\u180e]/g;
+export const cleanText = (s: string): string => s.replace(UNWANTED, "").replace(BLANKS, "");
 
 const NAMED: Readonly<Record<string, string>> = { amp: "&", lt: "<", gt: ">", quot: '"', apos: "'", nbsp: " ", ndash: "–", mdash: "—", hellip: "…", copy: "©", reg: "®", lsquo: "‘", rsquo: "’", ldquo: "“", rdquo: "”", bull: "•", middot: "·", euro: "€" };
 /** One pass, never re-decoded (`&amp;lt;` stays `&lt;` as text). An unknown or invalid entity stays as written. */
@@ -143,6 +150,8 @@ function closeRe(name: string): RegExp {
   return re;
 }
 
+const tiny = (v: string | undefined): boolean => v !== undefined && /^\s*[0-3]\s*(px)?\s*$/i.test(v);
+
 function* tokens(h: string): Generator<Token> {
   const n = h.length;
   let i = 0;
@@ -209,11 +218,22 @@ class Budget {
 }
 
 /** Converts Teams message HTML. Never throws; the result is bounded (see the header). */
-export function htmlToNodes(html: string): ConvertedMessage {
+export function htmlToNodes(input: string): ConvertedMessage {
   const budget = new Budget();
+  const html = input.length > MAX_INPUT_CHARS ? input.slice(0, MAX_INPUT_CHARS) : input;
+  const cut = html.length < input.length;
   const root: MessageNode[] = [];
   const stack: Frame[] = [{ tag: "#root", node: null, out: root }];
   const top = () => stack[stack.length - 1] as Frame;
+  // How many open frames carry each tag, kept on every push and pop: `inside` is O(1) and a close tag with no open match returns at once. Every frame is pushed once and popped once, so the whole
+  // build is linear in the input (H1: the first version walked the stack on every close tag and every link).
+  const open = new Map<string, number>();
+  const pushFrame = (f: Frame): boolean => {
+    if (stack.length >= MAX_STACK) return false; // past the cap an opening tag is ignored (its close tag then matches nothing)
+    stack.push(f);
+    open.set(f.tag, (open.get(f.tag) ?? 0) + 1);
+    return true;
+  };
   const room = () => !budget.truncated && budget.nodes < MAX_NODES;
   const push = (n: MessageNode) => {
     if (!room()) {
@@ -242,22 +262,24 @@ export function htmlToNodes(html: string): ConvertedMessage {
     }
     if (stack.length >= MAX_DEPTH) {
       // too deep: the element is transparent (its content goes into the current level), and its close is matched to nothing
-      stack.push({ tag, node: null, out: top().out });
+      pushFrame({ tag, node: null, out: top().out });
       return;
     }
+    if (stack.length >= MAX_STACK) return;
     budget.nodes += 1;
     top().out.push(node);
-    stack.push({ tag, node, out: node.c });
+    pushFrame({ tag, node, out: node.c });
   };
   const closeTo = (tag: string) => {
-    for (let k = stack.length - 1; k > 0; k -= 1) {
-      if ((stack[k] as Frame).tag === tag) {
-        stack.length = k;
-        return;
-      }
+    if ((open.get(tag) ?? 0) === 0) return;
+    // the match exists: the frames above it are removed with it (each is popped once in all)
+    while (stack.length > 1) {
+      const f = stack.pop() as Frame;
+      open.set(f.tag, (open.get(f.tag) ?? 1) - 1);
+      if (f.tag === tag) return;
     }
   };
-  const inside = (tag: string) => stack.some((f) => f.tag === tag);
+  const inside = (tag: string) => (open.get(tag) ?? 0) > 0;
   const lineBreak = () => {
     const out = top().out;
     const last = out[out.length - 1];
@@ -323,17 +345,17 @@ export function htmlToNodes(html: string): ConvertedMessage {
       case "img": {
         const alt = cleanText(decodeEntities(tok.attrs.get("alt") ?? "")).trim();
         const itemtype = (tok.attrs.get("itemtype") ?? "").toLowerCase();
-        const src = safeHttpsUrl(decodeEntities(tok.attrs.get("src") ?? ""));
         if (itemtype.includes("emoji") && alt !== "" && alt.length <= 16) push({ t: "emoji", v: alt });
-        // Only a picture in Microsoft's own hosted content becomes a placeholder. Any other image (a tracker, a remote picture) is dropped: it is never loaded and leaves no trace.
-        else if (src && /(^|\.)graph\.microsoft\.com$/i.test(src.host) && /\/hostedcontents\//i.test(src.href)) push({ t: "image" });
+        // Any other picture becomes the same neutral placeholder, so an image-only message is not drawn as empty (C7i). Its address is never kept or loaded (no tracker, no remote picture, no data: URL).
+        // A declared size of 3 pixels or less (a tracking pixel) leaves nothing at all.
+        else if (!tiny(tok.attrs.get("width")) && !tiny(tok.attrs.get("height"))) push({ t: "image" });
         break;
       }
       case "a": {
         if (inside("a")) break; // a link inside a link: the inner one is only its text
         const link = safeHttpsUrl(decodeEntities(tok.attrs.get("href") ?? ""));
         if (link) openNode("a", { t: "link", href: link.href, host: link.host, c: [] });
-        else stack.push({ tag: "a", node: null, out: top().out });
+        else pushFrame({ tag: "a", node: null, out: top().out });
         break;
       }
       case "p":
@@ -372,11 +394,11 @@ export function htmlToNodes(html: string): ConvertedMessage {
           openNode(name, { t: "p", c: [] });
         } else {
           // an unknown or purely presentational tag (span, font, ...): its content stays, its attributes are never read
-          if (!tok.selfClosing && !VOID.has(name)) stack.push({ tag: name, node: null, out: top().out });
+          if (!tok.selfClosing && !VOID.has(name)) pushFrame({ tag: name, node: null, out: top().out });
         }
     }
   }
-  return { nodes: tidy(root), truncated: budget.truncated };
+  return { nodes: tidy(root), truncated: budget.truncated || cut };
 }
 
 /** Cuts at `max` UTF-16 units without leaving half of a surrogate pair. */
@@ -427,7 +449,7 @@ export function textToNodes(text: string): ConvertedMessage {
 export function bodyToNodes(contentType: string | null | undefined, content: string | null | undefined): ConvertedMessage {
   if (typeof content !== "string" || content === "") return { nodes: [], truncated: false };
   // The input itself is bounded before any work (a 50 MB body must not cost 50 MB of tokens): 8x the kept text is more than any real message.
-  const bounded = content.length > MAX_TEXT_CHARS * 8 ? content.slice(0, MAX_TEXT_CHARS * 8) : content;
+  const bounded = content.length > MAX_INPUT_CHARS ? content.slice(0, MAX_INPUT_CHARS) : content;
   const r = contentType?.toLowerCase() === "html" ? htmlToNodes(bounded) : textToNodes(bounded);
   return bounded.length < content.length ? { nodes: r.nodes, truncated: true } : r;
 }

@@ -25,12 +25,16 @@ export const CALL_MAX_OTHERS = 10;
 /** With the fallback (no combined expand) members are read for at most this many chats, in parallel (spec 8 notes). */
 export const FALLBACK_MEMBER_READS = 20;
 const NAME_CHARS = 120;
+/** A name that is empty after cleaning (hangul fillers, braille blank, ...) is drawn as this, never as nothing (SL6). */
+export const NO_NAME = "(no name)";
 const TOPIC_CHARS = 200;
 const ATTACHMENTS_MAX = 20;
 const TEAMS_WEB_HOST = "teams.microsoft.com";
+/** A page read gives up after this long (the shared client's default is 30 s): a slow Graph answer is "could not load", not a long skeleton. */
+export const PAGE_TIMEOUT_MS = 12_000;
 
 // ---- the projections
-export type TeamsMember = { userId: string | null; displayName: string; tenantId: string | null; external: boolean; self: boolean };
+export type TeamsMember = { userId: string | null; displayName: string; tenantId: string | null; /** Outside the person's tenant, or a guest (`roles` has `guest`): labelled, no Call buttons. */ external: boolean; self: boolean };
 export type ChatPreview = { createdAt: string; senderId: string | null; senderName: string | null; mine: boolean; text: string; deleted: boolean; system: boolean };
 export type TeamsChat = {
   chatId: string;
@@ -48,7 +52,14 @@ export type TeamsChat = {
 };
 export type ChatList = { chats: TeamsChat[]; nextCursor: string | null; self: TeamsSelf };
 
-export type AttachmentStub = { kind: "file" | "reply" | "card" | "other"; name: string; /** https only, opens in Microsoft in the person's own session; null when none. Never fetched by the portal. */ href: string | null };
+export type AttachmentStub = {
+  kind: "file" | "reply" | "card" | "other";
+  name: string;
+  /** https on a Microsoft file host only (`MICROSOFT_FILE_HOSTS`), opens in the person's own session; null otherwise. Never fetched by the portal. */
+  href: string | null;
+  /** The link's host, drawn beside it (SM1). */
+  host: string | null;
+};
 export type ChatMessage = {
   id: string;
   createdAt: string;
@@ -88,7 +99,7 @@ const FromSchema = z.looseObject({
   user: Opt(z.looseObject({ id: Opt(z.string().max(64)), displayName: Opt(z.string().max(512)) })),
   application: Opt(z.looseObject({ id: Opt(z.string().max(64)), displayName: Opt(z.string().max(512)) })),
 });
-const MemberSchema = z.looseObject({ userId: Opt(z.string().max(64)), displayName: Opt(z.string().max(512)), tenantId: Opt(z.string().max(64)) });
+const MemberSchema = z.looseObject({ userId: Opt(z.string().max(64)), displayName: Opt(z.string().max(512)), tenantId: Opt(z.string().max(64)), roles: Opt(z.array(z.string().max(64)).max(20)) });
 const ChatSchema = z.looseObject({
   id: z.string().max(256),
   chatType: Opt(z.string().max(32)),
@@ -123,10 +134,10 @@ function memberOf(raw: unknown, self: TeamsSelf): TeamsMember | null {
   const tenant = typeof r.data.tenantId === "string" && r.data.tenantId !== "" ? r.data.tenantId.toLowerCase() : null;
   return {
     userId,
-    displayName: text(r.data.displayName, NAME_CHARS),
+    displayName: text(r.data.displayName, NAME_CHARS) || NO_NAME,
     tenantId: tenant,
-    // another tenant, or no tenant given at all (cannot be shown to be ours): external (no call button; labelled)
-    external: !sameTenant(tenant, self.tenantId),
+    // another tenant, no tenant given at all (cannot be shown to be ours), or the `guest` role: external (no call button; labelled)
+    external: !sameTenant(tenant, self.tenantId) || (r.data.roles ?? []).some((x) => x.toLowerCase() === "guest"),
     self: userId !== null && userId === self.entraObjectId.toLowerCase(),
   };
 }
@@ -147,7 +158,7 @@ function chatOf(raw: unknown, self: TeamsSelf): TeamsChat | null {
     preview = {
       createdAt,
       senderId,
-      senderName: p.from?.user ? text(p.from.user.displayName, NAME_CHARS) || null : p.from?.application ? text(p.from.application.displayName, NAME_CHARS) || null : null,
+      senderName: p.from?.user ? text(p.from.user.displayName, NAME_CHARS) || NO_NAME : p.from?.application ? text(p.from.application.displayName, NAME_CHARS) || NO_NAME : null,
       mine: senderId !== null && senderId === self.entraObjectId.toLowerCase(),
       text: converted ? nodesToPlainText(converted.nodes, PREVIEW_CHARS) : "",
       deleted: p.isDeleted === true,
@@ -174,7 +185,8 @@ function chatOf(raw: unknown, self: TeamsSelf): TeamsChat | null {
  * (the portal's marker is stored at that precision). A hidden chat is never listed, so it is never unread here.
  */
 export function chatIsUnread(chat: Pick<TeamsChat, "preview" | "lastReadAt" | "hidden">, portalReadThrough: string | null): boolean {
-  if (chat.hidden || !chat.preview || chat.preview.mine) return false;
+  // a system event as the newest item cannot be shown or marked read in the conversation (events are not requested), so it must not leave a dot behind
+  if (chat.hidden || !chat.preview || chat.preview.mine || chat.preview.system) return false;
   const newest = Date.parse(chat.preview.createdAt);
   const readTeams = chat.lastReadAt ? Date.parse(chat.lastReadAt) : -Infinity;
   const readHere = portalReadThrough ? Date.parse(portalReadThrough) : -Infinity;
@@ -206,6 +218,13 @@ function skipTokenFrom(cursor: string, path: string): string {
   return r.data.s;
 }
 
+/**
+ * The hosts a file attachment's link may point to (SM1): SharePoint and OneDrive. A suffix match on a dot boundary: `x.sharepoint.com` yes, `sharepoint.com.evil.example`, `evilsharepoint.com`, a trailing-dot
+ * host and a punycode look-alike no. (The fact sheet says only "SharePoint/OneDrive links"; the host names are the public ones, checked live in H-081.) Any other host: no link, "open it in Teams".
+ */
+export const MICROSOFT_FILE_HOSTS: readonly string[] = ["sharepoint.com", "onedrive.live.com", "1drv.ms"];
+export const isMicrosoftFileHost = (host: string): boolean => MICROSOFT_FILE_HOSTS.some((d) => host === d || host.endsWith(`.${d}`));
+
 function attachmentOf(raw: unknown): AttachmentStub | null {
   const r = AttachmentSchema.safeParse(raw);
   if (!r.success) return null;
@@ -218,7 +237,8 @@ function attachmentOf(raw: unknown): AttachmentStub | null {
   else if (type === "reference" || link) kind = "file";
   else kind = "other";
   const name = text(r.data.name, 200);
-  return { kind, name, href: kind === "file" && link ? link.href : null };
+  const ok = kind === "file" && link !== null && isMicrosoftFileHost(link.host);
+  return { kind, name, href: ok && link ? link.href : null, host: ok && link ? link.host : null };
 }
 
 function messageOf(raw: unknown, self: TeamsSelf): ChatMessage | null {
@@ -231,9 +251,9 @@ function messageOf(raw: unknown, self: TeamsSelf): ChatMessage | null {
   const system = (m.messageType ?? "message") !== "message";
   const userId = lowerUuid(m.from?.user?.id);
   const sender: ChatMessage["sender"] = m.from?.user
-    ? { id: userId, name: text(m.from.user.displayName, NAME_CHARS) || null, kind: "user" }
+    ? { id: userId, name: text(m.from.user.displayName, NAME_CHARS) || NO_NAME, kind: "user" }
     : m.from?.application
-      ? { id: null, name: text(m.from.application.displayName, NAME_CHARS) || null, kind: "app" }
+      ? { id: null, name: text(m.from.application.displayName, NAME_CHARS) || NO_NAME, kind: "app" }
       : { id: null, name: null, kind: "unknown" };
   // A deleted message and a system event show no body: the text is not even converted.
   const body = deleted || system ? { nodes: [] as MessageNode[], truncated: false } : bodyToNodes(m.body?.contentType, m.body?.content);
@@ -259,7 +279,7 @@ type Conn = unknown;
 export function createTeamsReader(deps: TeamsReaderDeps) {
   const log = deps.logger ?? connectorLog;
   const get = <T>(laneId: LaneId, conn: Conn, userId: string, req: { path: string; params?: Record<string, string>; query?: Record<string, string | number> }) =>
-    deps.api.get<T>(laneId, conn, { ...req, actor: { kind: "user", userId }, retry: false });
+    deps.api.get<T>(laneId, conn, { ...req, actor: { kind: "user", userId }, retry: false, timeoutMs: PAGE_TIMEOUT_MS });
   const pageOf = (data: unknown) => {
     const p = PageSchema.safeParse(data);
     if (!p.success) throw fixed("provider_error", "Teams returned an answer the portal does not understand");
@@ -301,7 +321,10 @@ export function createTeamsReader(deps: TeamsReaderDeps) {
           return r?.status === "fulfilled" ? { ...c, members: r.value.members, membersCapped: r.value.more } : c;
         });
       }
-      return { chats: chats.filter((c) => !c.hidden), nextCursor: cursorFromNextLink(page["@odata.nextLink"], "/me/chats"), self: res.self };
+      const nextCursor = cursorFromNextLink(page["@odata.nextLink"], "/me/chats");
+      // a next link we cannot turn into a cursor (no `$skiptoken`, another host or path): "More chats" is not offered; a content-free line says so for the live check
+      if (nextCursor === null && typeof page["@odata.nextLink"] === "string") log.warn("teams.chats.no_cursor", { laneId });
+      return { chats: chats.filter((c) => !c.hidden), nextCursor, self: res.self };
     },
 
     /** All members of one chat (the first page Graph returns; `more` is true when there are more than that). */
@@ -332,7 +355,7 @@ export function createTeamsReader(deps: TeamsReaderDeps) {
       const page = pageOf(res.data);
       const messages = page.value.flatMap((m) => messageOf(m, res.self) ?? []);
       const oldest = messages.reduce<string | null>((acc, m) => (acc === null || m.createdAt < acc ? m.createdAt : acc), null);
-      return { messages, nextBefore: since === undefined && page.value.length >= top && oldest !== null ? oldest : null, self: res.self };
+      return { messages, nextBefore: since === undefined && (page.value.length >= top || typeof page["@odata.nextLink"] === "string") && oldest !== null ? oldest : null, self: res.self };
     },
 
     /**
@@ -349,9 +372,14 @@ export function createTeamsReader(deps: TeamsReaderDeps) {
       if (ids.some((i) => i === null) || new Set(ids).size !== ids.length) return { ok: false, reason: "unresolved" };
       const upns = await Promise.all(
         (ids as string[]).map(async (id) => {
-          const r = await get<unknown>(laneId, conn, userId, { path: "/users/{userId}", params: { userId: id }, query: { $select: "userPrincipalName" } });
-          const p = z.looseObject({ userPrincipalName: z.string().max(320) }).safeParse(r.data);
-          return p.success ? upnOf(p.data.userPrincipalName) : null;
+          try {
+            const r = await get<unknown>(laneId, conn, userId, { path: "/users/{userId}", params: { userId: id }, query: { $select: "userPrincipalName" } });
+            const p = z.looseObject({ userPrincipalName: z.string().max(320) }).safeParse(r.data);
+            return p.success ? upnOf(p.data.userPrincipalName) : null;
+          } catch (e) {
+            if (isConnectorError(e) && e.info.kind === "not_found") return null; // a member without an account any more: no call link ("unresolved")
+            throw e;
+          }
         }),
       );
       if (upns.some((u) => u === null)) return { ok: false, reason: "unresolved" };

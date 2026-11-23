@@ -194,3 +194,20 @@ describe("GET older", () => {
     expect([r.status, r.headers.get("retry-after")]).toEqual([429, "4"]);
   });
 });
+
+describe("SL3: the request body is read with a hard cap", () => {
+  it("a declared length over the cap is refused without reading; a stream that passes the cap is cut; a body at the cap is read", async () => {
+    const { routes } = setup();
+    reader.resolveCallTargets.mockResolvedValue({ ok: true, upns: ["pat@teams.example.test"] });
+    const big = new Request("http://localhost:3000/api/lanes/PKG/messages/call-link", { method: "POST", headers: { origin: "http://localhost:3000", "sec-fetch-site": "same-origin", "content-length": "999999" }, body: JSON.stringify({ chat: KEY, video: false }) });
+    expect((await routes.callLink(big, "PKG")).status).toBe(400);
+    let pulled = 0;
+    const chunk = new TextEncoder().encode("x".repeat(1000));
+    const stream = new ReadableStream({ pull(c) { pulled += 1; if (pulled > 50) c.close(); else c.enqueue(chunk); } });
+    const endless = new Request("http://localhost:3000/api/lanes/PKG/messages/call-link", { method: "POST", headers: { origin: "http://localhost:3000", "sec-fetch-site": "same-origin" }, body: stream, duplex: "half" } as RequestInit);
+    expect((await routes.callLink(endless, "PKG")).status).toBe(400);
+    expect(pulled).toBeLessThan(10); // stopped soon after the 2,000-byte cap
+    expect(reader.resolveCallTargets).not.toHaveBeenCalled();
+    expect((await routes.callLink(post("call-link", { chat: KEY, video: false }), "PKG")).status).toBe(200);
+  });
+});

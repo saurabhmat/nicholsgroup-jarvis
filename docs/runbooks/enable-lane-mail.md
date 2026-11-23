@@ -370,6 +370,8 @@ mail: a company whose mail is Google (worked example: **`PKG`**, whose people us
 setting, and a company with Microsoft mail (**`NC`**, H-080) signs in once more, with the same Microsoft account, to get a second, Teams-only connection. Nothing about Google or Microsoft
 mail changes. Nothing is stored from a chat: this step only switches the sign-in on. Chats themselves arrive with T-281 to T-285.
 
+**An extra permission on the Teams app breaks its connections (intended).** If a tenant administrator consents ANY Graph permission on the Teams app that is not on the app's own list (for example a `Mail.*` scope), every Teams connection in that tenant goes to "needs reconnect" at its next token refresh (the refresh is refused and nothing is stored), and Sign in / Reconnect are refused until the extra permission is removed in Entra (Enterprise applications -> the app -> Permissions). This is the T-278 review S9 rule: a Teams token must never carry mail access.
+
 The generic steps, in this order (you run every production step yourself; the agent never touches production):
 
 1. **The code is deployed** with T-278, T-279 and T-280 (Vercel -> Deployments -> the top Production row is a commit on `main` after their merge).

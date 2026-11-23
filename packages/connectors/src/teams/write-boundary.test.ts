@@ -83,8 +83,9 @@ describe("the Teams write path is reachable only from approvals", () => {
       expect(t, name).not.toMatch(/console\./);
     }
     const reader = text(join(root, "packages/connectors/src/teams/reader.ts"));
-    expect(reader.match(/log\.(debug|info|warn|error)\(/g) ?? []).toHaveLength(1);
-    expect(reader).toMatch(/log\.warn\("teams\.chats\.expand_fallback", \{ laneId \}\)/);
+    // exactly two fixed log lines, both content-free: a name and the lane id, nothing taken from a response
+    const lines = [...reader.matchAll(/log\.(debug|info|warn|error)\(([^;]*)\);/g)].map((m) => m[2]);
+    expect(lines).toEqual(['"teams.chats.expand_fallback", { laneId }', '"teams.chats.no_cursor", { laneId }']);
     // every request goes through the guarded read client with an explicit user actor and no retry
     expect(reader).toMatch(/actor: \{ kind: "user", userId \}, retry: false/);
     expect(reader).not.toMatch(/kind: "service"/);

@@ -7,7 +7,7 @@ import { createConnectorLogger, type LogEntry } from "../log/index";
 import { useMockServer } from "../testing/msw/index";
 import { createFakeTeams, TEAMS_ERROR_TEXT_CANARY } from "../testing/msw/teams/handlers";
 import { createTeamsHarness, TEAMS_OTHER_USER, TEAMS_OWNER, TEAMS_TENANT_A, TEAMS_TENANT_B, type TeamsLaneSetup } from "../testing/teams-harness";
-import { callBlockReason, chatIsUnread, createTeamsReader, normalizeTime, upnOf, type ChatMessage, type TeamsChat } from "./reader";
+import { callBlockReason, chatIsUnread, createTeamsReader, isMicrosoftFileHost, normalizeTime, upnOf, type ChatMessage, type TeamsChat } from "./reader";
 
 const server = useMockServer();
 afterEach(() => RateLimiter.resetForTests());
@@ -90,7 +90,7 @@ describe("listChats", () => {
     fake.state.chatPages = [[chat(CHAT, { lastMessagePreview: preview("2026-11-21T09:00:00Z", U1, `<script>x()</script><img src=https://t.example.test/p.gif onerror=x()>${"w".repeat(500)}`, "html") })]];
     const r = await reader.listChats("PKG", conn, asUser);
     const text = r.chats[0]?.preview?.text ?? "";
-    expect(text).toBe("w".repeat(160));
+    expect(text).toBe(("[image]" + "w".repeat(500)).slice(0, 160)); // the image is a placeholder word, the script is gone
   });
 
   it("paging: the next page needs an explicit cursor; the cursor holds no Graph address and a forged one is refused before any request", async () => {
@@ -198,7 +198,7 @@ describe("listMessages", () => {
       msg("m4", "2026-11-21T06:00:00Z", { messageType: "systemEventMessage", body: { contentType: "html", content: `<systemEventMessage/>${CANARY}` } }),
       msg("m5", "2026-11-21T05:00:00Z", {
         attachments: [
-          { contentType: "reference", contentUrl: "https://contoso.sharepoint.example.test/f/a.docx", name: "Plan.docx" },
+          { contentType: "reference", contentUrl: "https://contoso.sharepoint.com/f/a.docx", name: "Plan.docx" },
           { contentType: "reference", contentUrl: "javascript:alert(1)", name: "bad.docx" },
           { contentType: "application/vnd.microsoft.card.adaptive", contentUrl: null, name: "A card" },
           { contentType: "messageReference", contentUrl: null, name: null },
@@ -220,11 +220,11 @@ describe("listMessages", () => {
     expect(JSON.stringify(m3.nodes)).not.toContain("javascript");
     expect(m4).toMatchObject({ system: true, nodes: [] });
     expect(m5.attachments).toEqual([
-      { kind: "file", name: "Plan.docx", href: "https://contoso.sharepoint.example.test/f/a.docx" },
-      { kind: "file", name: "bad.docx", href: null },
-      { kind: "card", name: "A card", href: null },
-      { kind: "reply", name: "", href: null },
-      { kind: "other", name: "n", href: null },
+      { kind: "file", name: "Plan.docx", href: "https://contoso.sharepoint.com/f/a.docx", host: "contoso.sharepoint.com" },
+      { kind: "file", name: "bad.docx", href: null, host: null },
+      { kind: "card", name: "A card", href: null, host: null },
+      { kind: "reply", name: "", href: null, host: null },
+      { kind: "other", name: "n", href: null, host: null },
     ]);
     expect(JSON.stringify(r.messages)).not.toContain(CANARY);
   });
@@ -465,5 +465,85 @@ describe("resolveCallTargets (T-284, spec 13)", () => {
     lane.fake.state.membersByChat.set(CHAT, [member(lane.me, "Me"), member(U1, "A")]);
     await expect(lane.reader.resolveCallTargets("PKG", lane.conn, asUser, CHAT)).rejects.toMatchObject({ info: { kind: "forbidden" } });
     expect(lane.fake.state.graphRequests.filter((q) => q.path.includes("/users/"))).toHaveLength(0);
+  });
+});
+
+describe("T-281 review follow-ups", () => {
+  it("SM1: a file link is kept only on a Microsoft file host (dot-boundary suffix); look-alikes, userinfo, a trailing dot and punycode give no link", async () => {
+    for (const ok of ["contoso.sharepoint.com", "contoso-my.sharepoint.com", "sharepoint.com", "onedrive.live.com", "1drv.ms", "a.1drv.ms"]) expect(isMicrosoftFileHost(ok), ok).toBe(true);
+    for (const bad of ["sharepoint.com.evil.example", "evilsharepoint.com", "sharepoint.com.", "xn--sharepoint-x.com", "live.com", "evil-onedrive.live.com.example", "1drv.ms.example", "xn--1drv-ms.example"]) expect(isMicrosoftFileHost(bad), bad).toBe(false);
+    const { fake, reader, conn } = setup();
+    const urls = ["https://sharepoint.com.evil.example/f", "https://evilsharepoint.com/f", "https://user@contoso.sharepoint.com/f", "https://contoso.sharepoint.com./f", "https://xn--sharepont-q1a.com/f", "https://contoso.sharepoint.com/f"];
+    fake.state.messagesByChat.set(CHAT, [msg("m1", "2026-11-21T09:00:00Z", { attachments: urls.map((contentUrl) => ({ contentType: "reference", contentUrl, name: "f.docx" })) })]);
+    const r = await reader.listMessages("PKG", conn, asUser, CHAT);
+    expect(r.messages[0]?.attachments.map((a) => a.href)).toEqual([null, null, null, null, null, "https://contoso.sharepoint.com/f"]);
+    expect(r.messages[0]?.attachments[5]?.host).toBe("contoso.sharepoint.com");
+  });
+
+  it("C3: a member with the guest role is external even in the person's own tenant", async () => {
+    const { fake, reader, conn, me } = setup();
+    fake.state.membersByChat.set(CHAT, [member(me, "Me"), { ...member(U1, "Guest"), roles: ["guest"] }]);
+    const m = await reader.listMembers("PKG", conn, asUser, CHAT);
+    expect(m.members.map((x) => x.external)).toEqual([false, true]);
+    expect(await reader.resolveCallTargets("PKG", conn, asUser, CHAT)).toEqual({ ok: false, reason: "external" });
+  });
+
+  it("C4: a system event as the newest preview never leaves a chat unread", () => {
+    const base = { hidden: false, lastReadAt: null, preview: { createdAt: "2026-11-21T09:00:00.000Z", senderId: null, senderName: null, mine: false, text: "", deleted: false, system: true } };
+    expect(chatIsUnread(base, null)).toBe(false);
+  });
+
+  it("C7a: a short page that carries a next link still offers older messages", async () => {
+    const { reader, conn } = setup();
+    server.use(http.get("https://graph.microsoft.com/v1.0/chats/:id/messages", () => HttpResponse.json({ value: [msg("a", "2026-11-21T09:00:00Z")], "@odata.nextLink": "https://graph.microsoft.com/v1.0/chats/x/messages?$skiptoken=1" })));
+    expect((await reader.listMessages("PKG", conn, asUser, CHAT)).nextBefore).toBe("2026-11-21T09:00:00.000Z");
+  });
+
+  it("C7b: a chats next link that cannot become a cursor logs one content-free line", async () => {
+    const { reader, conn, lines } = setup();
+    server.use(http.get("https://graph.microsoft.com/v1.0/me/chats", () => HttpResponse.json({ value: [chat(CHAT, { topic: CANARY })], "@odata.nextLink": "https://graph.microsoft.com/v1.0/me/chats?$skip=50" })));
+    await reader.listChats("PKG", conn, asUser);
+    expect(lines.filter((l) => l.event === "teams.chats.no_cursor")).toHaveLength(1);
+    expect(JSON.stringify(lines)).not.toContain(CANARY);
+  });
+
+  it("C7c: a member whose account is gone (404 on the user read) is 'unresolved', not an error", async () => {
+    const { fake, reader, conn, me } = setup();
+    fake.state.membersByChat.set(CHAT, [member(me, "Me"), member(U1, "A")]);
+    server.use(http.get("https://graph.microsoft.com/v1.0/users/:id", () => HttpResponse.json({ error: { code: "Request_ResourceNotFound" } }, { status: 404 })));
+    expect(await reader.resolveCallTargets("PKG", conn, asUser, CHAT)).toEqual({ ok: false, reason: "unresolved" });
+  });
+
+  it("C7d: page reads ask for a 12 second timeout", async () => {
+    const { h, fake, conn } = setup();
+    const seen: (number | undefined)[] = [];
+    const api = { get: async (l: never, c: never, req: { timeoutMs?: number }) => (seen.push(req.timeoutMs), h.api.get(l, c, req as never)) };
+    await createTeamsReader({ api: api as never }).listChats("PKG", conn, asUser);
+    expect(seen).toEqual([12_000]);
+    expect(fake.state.graphRequests).toHaveLength(1);
+  });
+
+  it("C7k: a chat that is gone is not_found, a 400 on messages is invalid_input, an empty chat is an empty page", async () => {
+    const { fake, reader, conn } = setup();
+    await expect(reader.getChat("PKG", conn, asUser, CHAT)).rejects.toMatchObject({ info: { kind: "not_found" } });
+    fake.state.graphFail = { status: 400, code: "BadRequest", times: 1 };
+    await expect(reader.listMessages("PKG", conn, asUser, CHAT)).rejects.toMatchObject({ info: { kind: "invalid_input" } });
+    const r = await reader.listMessages("PKG", conn, asUser, CHAT);
+    expect(r).toMatchObject({ messages: [], nextBefore: null });
+  });
+
+  it("SL6: names that are blank to the eye are '(no name)'", async () => {
+    const { fake, reader, conn, me } = setup();
+    fake.state.membersByChat.set(CHAT, [member(me, "Me"), member(U1, "\u3164\u2800\u115f")]);
+    expect((await reader.listMembers("PKG", conn, asUser, CHAT)).members[1]?.displayName).toBe("(no name)");
+    fake.state.messagesByChat.set(CHAT, [msg("m1", "2026-11-21T09:00:00Z", { from: { user: { id: U1, displayName: "\u180e\u3164" } } })]);
+    expect((await reader.listMessages("PKG", conn, asUser, CHAT)).messages[0]?.sender.name).toBe("(no name)");
+  });
+
+  it("SL2: the per-chat pacing key holds a short hash, not the chat id (it is logged on every request line)", async () => {
+    const { h, reader, conn } = setup();
+    await reader.listMessages("PKG", conn, asUser, CHAT);
+    const text = JSON.stringify(h.logs);
+    expect(text).not.toContain("abc123def456");
   });
 });

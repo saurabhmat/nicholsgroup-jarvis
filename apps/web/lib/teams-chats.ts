@@ -24,7 +24,7 @@ export type ChatRowView = {
 };
 export type ChatListView = { kind: "ok"; rows: ChatRowView[]; moreCursor: string | null } | TeamsFailure;
 
-export type AttachmentView = { kind: "file" | "reply" | "card" | "other"; name: string; href: string | null };
+export type AttachmentView = { kind: "file" | "reply" | "card" | "other"; name: string; href: string | null; /** The link's host, drawn beside it. */ host: string | null };
 export type MessageView = {
   id: string;
   /** ISO time (Microsoft's clock). */
@@ -70,11 +70,13 @@ export type TeamsPerson = { laneId: string; userId: string; connectionId: string
 const OTHER_NAMES = 3;
 
 /** The chat's title: its topic, else the other people's names ("A, B +2"), else "Chat". */
-export function chatTitle(chat: Pick<TeamsChat, "topic" | "members">): string {
+export function chatTitle(chat: Pick<TeamsChat, "topic" | "members"> & { membersCapped?: boolean }): string {
   if (chat.topic) return chat.topic;
   const others = chat.members.filter((m) => !m.self && m.displayName !== "");
   if (others.length === 0) return "Chat";
   const shown = others.slice(0, OTHER_NAMES).map((m) => m.displayName).join(", ");
+  // Graph returns at most 25 members with the list: past that the count is unknown, so say "and others" instead of a wrong number (C6)
+  if (chat.membersCapped) return `${shown} and others`;
   return others.length > OTHER_NAMES ? `${shown} +${String(others.length - OTHER_NAMES)}` : shown;
 }
 
@@ -140,7 +142,7 @@ export function messageView(m: ChatMessage): MessageView {
     system: m.system,
     nodes: m.nodes,
     truncated: m.truncated,
-    attachments: m.attachments.map((a) => ({ kind: a.kind, name: a.name, href: a.href })),
+    attachments: m.attachments.map((a) => ({ kind: a.kind, name: a.name, href: a.href, host: a.host })),
   };
 }
 
@@ -158,11 +160,13 @@ export async function loadConversation(p: TeamsPerson, chatId: string, chatKey: 
     if (blocked !== null) call = blocked;
     else if (!policy.laneListsCalls) call = "off_lane";
     else if (!policy.connectionHasCalls) call = "needs_reconnect";
-    const messages = [...page.messages].reverse().map(messageView);
+    // Events that are not a person's message are not drawn (C4) but still count: the newest item of any kind is what opening the chat marks as read
+    const messages = [...page.messages].filter((m) => !m.system).reverse().map(messageView);
+    const newestAny = page.messages.reduce<string | null>((a, m) => (a === null || m.createdAt > a ? m.createdAt : a), null);
     return {
       kind: "ok",
       chatKey,
-      title: chatTitle({ topic: chat.chat.topic, members }),
+      title: chatTitle({ topic: chat.chat.topic, members, membersCapped: chat.membersMore }),
       subtitle: sub.text,
       external: sub.external,
       group: members.filter((m) => !m.self).length > 1,
@@ -170,7 +174,7 @@ export async function loadConversation(p: TeamsPerson, chatId: string, chatKey: 
       call,
       messages,
       nextBefore: page.nextBefore,
-      readThrough: messages.length > 0 ? (messages[messages.length - 1] as MessageView).at : null,
+      readThrough: newestAny,
     };
   } catch (e) {
     return teamsFailure(e);
@@ -181,7 +185,7 @@ export async function loadConversation(p: TeamsPerson, chatId: string, chatKey: 
 export async function loadOlder(p: Omit<TeamsPerson, "client">, chatId: string, before: string): Promise<{ kind: "ok"; messages: MessageView[]; nextBefore: string | null } | TeamsFailure> {
   try {
     const page = await listMessages(p.laneId as LaneId, p.connectionId, p.userId, chatId, { before });
-    return { kind: "ok", messages: [...page.messages].reverse().map(messageView), nextBefore: page.nextBefore };
+    return { kind: "ok", messages: [...page.messages].filter((m) => !m.system).reverse().map(messageView), nextBefore: page.nextBefore };
   } catch (e) {
     return teamsFailure(e);
   }

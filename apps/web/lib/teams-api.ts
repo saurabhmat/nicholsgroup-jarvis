@@ -41,8 +41,30 @@ function sameSite(request: Request, method: "GET" | "POST"): boolean {
   return method === "GET" ? true : request.headers.get("origin") === url.origin;
 }
 
+/** The JSON body, read with a HARD cap (SL3): a declared length over the cap is refused at once, and the stream is cut as soon as it passes the cap, so a large body is never held in memory. */
 async function body(request: Request): Promise<Record<string, unknown> | null> {
-  const text = await request.text().catch(() => "");
+  const declared = Number(request.headers.get("content-length") ?? "0");
+  if (Number.isFinite(declared) && declared > MAX_BODY) return null;
+  let text = "";
+  try {
+    const reader = request.body?.getReader();
+    if (!reader) return null;
+    const dec = new TextDecoder();
+    let bytes = 0;
+    for (;;) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      bytes += value.byteLength;
+      if (bytes > MAX_BODY) {
+        await reader.cancel().catch(() => undefined);
+        return null;
+      }
+      text += dec.decode(value, { stream: true });
+    }
+    text += dec.decode();
+  } catch {
+    return null;
+  }
   if (text.length === 0 || text.length > MAX_BODY) return null;
   try {
     const v: unknown = JSON.parse(text);

@@ -9,6 +9,9 @@ export type RateLimit = { requests: number; perMs: number };
 type Clock = { now: () => number; sleep: (ms: number) => Promise<void> };
 
 const buckets = new Map<string, RateLimiter>();
+/** Idle buckets are dropped once the map holds this many (SL2): a bucket nobody waits on and nobody touched for a minute behaves exactly like a new one, so dropping it changes no pacing. */
+export const MAX_BUCKETS = 2000;
+const IDLE_MS = 60_000;
 
 /** The abort reason as an error (the caller's own reason when it gave one). */
 export function abortError(signal: AbortSignal): unknown {
@@ -34,6 +37,8 @@ export class RateLimiter {
   readonly #clock: Clock;
   readonly #starts: number[] = [];
   #queue: Promise<void> = Promise.resolve();
+  #pending = 0;
+  #touched = 0;
 
   private constructor(limit: RateLimit, clock: Clock) {
     if (!Number.isInteger(limit.requests) || limit.requests < 1 || !(limit.perMs > 0) || !Number.isFinite(limit.perMs)) {
@@ -46,12 +51,17 @@ export class RateLimiter {
   /** The shared limiter for a bucket key. Asking for the same key with a different limit is a bug and throws. */
   static for(key: string, limit: RateLimit, clock: Clock): RateLimiter {
     let b = buckets.get(key);
+    const now = clock.now();
     if (!b) {
+      if (buckets.size >= MAX_BUCKETS) {
+        for (const [k, v] of buckets) if (v.#pending === 0 && now - v.#touched > Math.max(IDLE_MS, v.#limit.perMs * 2)) buckets.delete(k);
+      }
       b = new RateLimiter(limit, clock);
       buckets.set(key, b);
     } else if (b.#limit.requests !== limit.requests || b.#limit.perMs !== limit.perMs) {
       throw new TypeError(`rate limit for ${key} is already set to a different value`);
     }
+    b.#touched = now;
     return b;
   }
 
@@ -65,6 +75,7 @@ export class RateLimiter {
    * when it comes, is skipped without using a slot.
    */
   take(signal?: AbortSignal): Promise<void> {
+    this.#pending += 1;
     const next = this.#queue.then(async () => {
       for (;;) {
         if (signal?.aborted) throw abortError(signal);
@@ -78,6 +89,10 @@ export class RateLimiter {
       }
     });
     this.#queue = next.catch(() => undefined);
+    void this.#queue.then(() => {
+      this.#pending -= 1;
+      this.#touched = this.#clock.now();
+    });
     return raceAbort(next, signal);
   }
 }

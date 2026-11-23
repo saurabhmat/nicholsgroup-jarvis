@@ -1,6 +1,6 @@
 // Teams message HTML -> safe nodes (T-281, spec 8.4, rule 9): the hostile corpus. The output is data, never HTML; this test walks every node and asserts only the allow-list can appear.
 import { describe, expect, it } from "vitest";
-import { bodyToNodes, cleanText, htmlToNodes, MAX_DEPTH, MAX_NODES, MAX_TEXT_CHARS, nodesToPlainText, safeHttpsUrl, textToNodes, type MessageNode } from "./message-html";
+import { bodyToNodes, cleanText, htmlToNodes, MAX_DEPTH, MAX_INPUT_CHARS, MAX_NODES, MAX_TEXT_CHARS, nodesToPlainText, safeHttpsUrl, textToNodes, type MessageNode } from "./message-html";
 
 const KINDS = new Set(["text", "br", "mention", "emoji", "image", "link", "b", "i", "u", "s", "code", "p", "quote", "codeblock", "ul", "ol", "li"]);
 function walk(nodes: readonly MessageNode[], visit: (n: MessageNode, depth: number) => void, depth = 0): void {
@@ -61,10 +61,10 @@ describe("what survives", () => {
     expect(allText(r.nodes).replace(/\s+/g, "")).toBe("😀👍");
   });
 
-  it("images: only Microsoft's own hosted content becomes a neutral placeholder; any other image is dropped and its address is kept nowhere", () => {
+  it("images: every picture is a neutral placeholder (an image-only message is not empty), a tracking pixel is nothing, and no address is kept anywhere", () => {
     const r = htmlToNodes('<img src="https://graph.microsoft.com/v1.0/chats/19:x@thread.v2/messages/1/hostedContents/aGVsbG8/$value"><img src="https://tracker.example.test/pixel.gif" width="1" height="1"><img src="http://graph.microsoft.com/x/hostedContents/1"><img src="data:image/png;base64,AAAA"><img src="https://evil.example.test/?u=graph.microsoft.com/hostedContents/">');
     assertSafe(r.nodes);
-    expect(r.nodes).toEqual([{ t: "image" }]);
+    expect(r.nodes).toEqual([{ t: "image" }, { t: "image" }, { t: "image" }, { t: "image" }]); // hosted, http hosted, data:, look-alike; the 1x1 tracker is nothing
     expect(JSON.stringify(r.nodes)).not.toMatch(/tracker|evil|data:/);
   });
 
@@ -210,6 +210,7 @@ describe("hostile input", () => {
     expect(allText(htmlToNodes(`<p>${tricks}</p>`).nodes)).toBe("abcdefghijkl");
     expect(allText(textToNodes(tricks).nodes)).toBe("abcdefghijkl");
     // joiners stay: emoji sequences and some scripts need them
+    expect(cleanText("a\u3164b\u2800c\u115fd\u180ee\uffa0")).toBe("abcde");
     expect(cleanText("👨‍👩‍👧")).toBe("👨‍👩‍👧");
     // right-to-left text itself is kept
     expect(allText(htmlToNodes("<p>שלום עולם</p>").nodes)).toBe("שלום עולם");
@@ -256,5 +257,36 @@ describe("plain text bodies and previews", () => {
     const cut = nodesToPlainText(htmlToNodes("😀".repeat(100)).nodes, 5);
     expect(cut.length).toBeLessThanOrEqual(5);
     expect(cut).not.toMatch(/[\ud800-\udbff]$/);
+  });
+});
+
+describe("H1: the converter is linear in its input (time bounds are generous but fail on quadratic work)", () => {
+  const time = (html: string) => {
+    const t0 = performance.now();
+    const r = htmlToNodes(html);
+    assertSafe(r.nodes);
+    return performance.now() - t0;
+  };
+  const N = 20_000; // about 160 KB
+  const cases: [string, string][] = [
+    ["many spans open, many links, all closed", "<span>".repeat(N) + "<a></a>".repeat(N) + "</span>".repeat(N)],
+    ["bold opened, italic closed (unmatched)", "<b>".repeat(26_000) + "</i>".repeat(20_000)],
+    ["mixed unmatched closes", "<span>".repeat(N) + "</b></i></u></p></div>".repeat(8_000)],
+    ["deep nesting of allowed tags", "<div><b><i><u><s>".repeat(N / 5) + "x" + "</s></u></i></b></div>".repeat(N / 5)],
+    ["many links inside deep unknown tags", "<x-a>".repeat(5_000) + '<a href="https://a.example.test/">x</a>'.repeat(3_000)],
+    ["links never closed", '<a href="https://a.example.test/">'.repeat(4_000) + "</span>".repeat(20_000)],
+    ["lists and items", "<ul><li>".repeat(N / 2) + "</ul>".repeat(N / 2)],
+  ];
+  // The test machine has one busy core: the best of three runs, against a bound ~10x what a linear pass needs; the quadratic version took 1.2 - 2.9 s on the same inputs.
+  it.each(cases)("%s: 100+ KB, best of three, under 400 ms", (_n, html) => {
+    expect(html.length).toBeGreaterThan(100_000);
+    const best = Math.min(time(html), time(html), time(html));
+    expect(best).toBeLessThan(400);
+  });
+  it("the open-element stack is capped, and an input over the post limit is cut and reported", () => {
+    const r = htmlToNodes("<span>".repeat(5_000) + "x");
+    expect(allText(r.nodes)).toBe("x");
+    const big = htmlToNodes(`<p>a</p>${"<br>".repeat(5)}${"x".repeat(MAX_INPUT_CHARS)}`);
+    expect(big.truncated).toBe(true);
   });
 });

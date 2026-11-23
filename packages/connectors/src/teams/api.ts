@@ -6,6 +6,7 @@
 //  - every failure leaves through the shared Graph error map and is recorded once, scrubbed, by the T-196 error log (a fixed message, never Microsoft's text).
 // The actor is explicit: `{ kind: "user", userId }` for a page request (the guard checks that the row's owner is this user) or `{ kind: "service" }` for a job or a health check, which
 // may read `/me` only: nothing of a person's chats is ever read without naming the person.
+import { createHash } from "node:crypto";
 import type { LaneId } from "@nichols/core";
 import { ConnectorError, isConnectorError, toConnectorError } from "../contract/errors";
 import { assertLaneBound } from "../contract/lane-bound";
@@ -34,6 +35,8 @@ export type TeamsGetRequest = {
    * and there can never be a retry storm (T-281, vendor facts A2). Default: the shared client's own retry with `Retry-After`.
    */
   retry?: boolean;
+  /** Per attempt, in ms (default: the shared client's 30 s). A page read asks for less so a slow answer becomes "could not load" at once. */
+  timeoutMs?: number;
 };
 
 /** What the guard approved for this call, handed back so a reader can tell the person's own messages and external members without a second read: the account's tenant and Entra object id. */
@@ -69,6 +72,7 @@ function assertRequest(req: TeamsGetRequest): import("@nichols/core/lane-config"
     // Ids are validated before any request: a chat or channel id is `19:...`, a team or user id a UUID; no separator, escape or dot segment can get through the format.
     if (typeof v !== "string" || format === undefined || !format.test(v)) throw refused("A path parameter is not valid");
   }
+  if (req.timeoutMs !== undefined && !(Number.isInteger(req.timeoutMs) && req.timeoutMs >= 1000 && req.timeoutMs <= 30_000)) throw refused("The request timeout is not valid");
   const actor = req.actor;
   if (actor?.kind === "user") {
     if (typeof actor.userId !== "string" || !USER_ID.test(actor.userId)) throw refused("A signed-in user is required");
@@ -86,7 +90,8 @@ function assertRequest(req: TeamsGetRequest): import("@nichols/core/lane-config"
 /** Our own bucket per route (see the header comment). */
 function bucketFor(connectionId: string, req: TeamsGetRequest): { key: string; limit: { requests: number; perMs: number } } {
   if (req.path === "/me/chats") return { key: `${connectionId}:chats`, limit: TEAMS_CHATS_RATE_LIMIT };
-  if (req.path === "/chats/{chatId}/messages") return { key: `${connectionId}:chat:${req.params?.chatId ?? ""}`, limit: TEAMS_CHAT_MESSAGES_RATE_LIMIT };
+  // The key is logged on every request line and kept in a process-wide map: a short one-way hash of the chat id, never the id itself (SL2).
+  if (req.path === "/chats/{chatId}/messages") return { key: `${connectionId}:chat:${createHash("sha256").update(req.params?.chatId ?? "").digest("hex").slice(0, 12)}`, limit: TEAMS_CHAT_MESSAGES_RATE_LIMIT };
   return { key: connectionId, limit: TEAMS_DEFAULT_RATE_LIMIT };
 }
 
@@ -101,7 +106,7 @@ export function createTeamsApi(deps: TeamsApiDeps): TeamsApi {
         const g = await deps.guard(laneId, conn, requirement); // decided inside the slot: after any wait for it
         const bucket = bucketFor(g.conn.id, req);
         const http: HttpClient = createTeamsHttp(
-          { ...deps.httpOptions, baseUrl: TEAMS_GRAPH_BASE, laneId, connectionId: g.conn.id, rateLimitKey: bucket.key, rateLimit: bucket.limit, ...(deps.logger ? { logger: deps.logger } : {}) },
+          { ...deps.httpOptions, baseUrl: TEAMS_GRAPH_BASE, laneId, connectionId: g.conn.id, rateLimitKey: bucket.key, rateLimit: bucket.limit, ...(req.timeoutMs !== undefined ? { timeoutMs: req.timeoutMs } : {}), ...(deps.logger ? { logger: deps.logger } : {}) },
           g.cloud,
           "read",
         );

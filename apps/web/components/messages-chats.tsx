@@ -23,7 +23,7 @@ import {
   messagesBusyText,
 } from "@/lib/teams-wording";
 import type { MessagesState } from "@/lib/teams-messages";
-import { CallButtons, ConversationMessages, MarkRead, MessagesRefresh } from "./messages-client";
+import { CallButtons, ConversationMessages, FocusConversation, MarkRead, MessagesRefresh } from "./messages-client";
 import { ChatListRows, SignIn } from "./messages-view";
 import { SectionBoundary } from "./section-boundary";
 
@@ -122,17 +122,17 @@ async function ChatListSection({ promise, laneId, connectionId, selectedKey, mor
 }
 
 // ---- the conversation
-export function ConversationPane({ view, laneId, connectionId }: { view: ConversationView; laneId: string; connectionId: string }) {
+export function ConversationPane({ view, laneId, connectionId, more = null }: { view: ConversationView; laneId: string; connectionId: string; more?: string | null }) {
   if (view.kind !== "ok") return <TeamsFailureCard failure={view.kind === "not_found" ? { kind: "not_found" } : view} laneId={laneId} connectionId={connectionId} testId="conversation-error" />;
   return (
-    <section aria-label="Conversation" data-testid="conversation" className="flex h-[calc(100dvh-13rem)] min-h-[26rem] min-w-0 flex-col overflow-hidden rounded-card border border-border bg-card">
+    <section aria-label="Conversation" data-testid="conversation" className="flex h-[calc(100dvh-8.5rem)] min-h-[22rem] min-w-0 lg:h-[calc(100dvh-13rem)] lg:min-h-[26rem] flex-col overflow-hidden rounded-card border border-border bg-card">
       <header className="flex flex-col gap-2 border-b border-border px-3 py-3 sm:px-4">
         <div className="flex min-w-0 items-center gap-2">
-          <Link href={laneHref(laneId, "messages")} aria-label="Back to chats" data-testid="back-to-chats" className="inline-flex min-h-11 min-w-11 items-center justify-center rounded-control text-body font-medium text-primary hover:bg-muted lg:hidden">
+          <Link href={hrefFor(laneId, null, more)} aria-label="Back to chats" data-testid="back-to-chats" className="inline-flex min-h-11 min-w-11 items-center justify-center rounded-control text-body font-medium text-primary hover:bg-muted lg:hidden">
             <span aria-hidden>←</span>
           </Link>
           <div className="min-w-0 flex-1">
-            <h2 dir="auto" data-testid="conversation-title" className="truncate text-h3 font-semibold">
+            <h2 id="conversation-title" tabIndex={-1} dir="auto" data-testid="conversation-title" className="truncate text-h3 font-semibold outline-none">
               {view.title}
             </h2>
             <p dir="auto" className="truncate text-small text-muted-foreground">
@@ -143,15 +143,16 @@ export function ConversationPane({ view, laneId, connectionId }: { view: Convers
         </div>
         <CallButtons laneId={laneId} chatKey={view.chatKey} call={view.call} openUrl={view.openUrl} />
       </header>
-      <ConversationMessages laneId={laneId} chatKey={view.chatKey} initial={view.messages} nextBefore={view.nextBefore} group={view.group} />
+      <ConversationMessages key={view.chatKey} laneId={laneId} chatKey={view.chatKey} initial={view.messages} nextBefore={view.nextBefore} group={view.group} />
       <p className="border-t border-border px-4 py-1 text-small text-muted-foreground">{MESSAGES_TIMES_NOTE}</p>
+      <FocusConversation chatKey={view.chatKey} />
       <MarkRead laneId={laneId} chatKey={view.chatKey} readThrough={view.readThrough} />
     </section>
   );
 }
 
-async function ConversationSection({ promise, laneId, connectionId }: { promise: Promise<ConversationView>; laneId: string; connectionId: string }) {
-  return <ConversationPane view={await promise} laneId={laneId} connectionId={connectionId} />;
+async function ConversationSection({ promise, laneId, connectionId, more }: { promise: Promise<ConversationView>; laneId: string; connectionId: string; more: string | null }) {
+  return <ConversationPane view={await promise} laneId={laneId} connectionId={connectionId} more={more} />;
 }
 
 /** The two panes. `selected` hides the list on a phone (and the empty conversation placeholder is for wide screens only). */
@@ -202,7 +203,7 @@ export async function MessagesWorkspace({ laneId, state, searchParams }: { laneI
         conversation ? (
           <SectionBoundary>
             <Suspense fallback={<ConversationSkeleton />}>
-              <ConversationSection promise={conversation} laneId={laneId} connectionId={state.connectionId} />
+              <ConversationSection promise={conversation} laneId={laneId} connectionId={state.connectionId} more={more} />
             </Suspense>
           </SectionBoundary>
         ) : (

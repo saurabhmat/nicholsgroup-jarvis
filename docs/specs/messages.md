@@ -232,7 +232,7 @@ No chat id, message id or sender: the receiver never reads `resource` (section 9
 
 Notes:
 - The combined `$expand=members,lastMessagePreview` is listed as allowed [A1] but whether both can be combined in one request is not shown; H-081 checks it. If Graph refuses it, the reader requests `lastMessagePreview` only and fetches members for the visible chats in parallel (at most 20, at the per-user rate).
-- System events are not requested (no `Prefer: include-unknown-enum-members` [A1]), so they are not shown.
+- System events are not requested (no `Prefer: include-unknown-enum-members` [A1]), so they are not shown. If one arrives anyway (any `messageType` other than `message`), the page does not draw it (T-281 review C4); it still counts for paging and for the read marker, and a system event as the newest preview never makes a chat unread.
 - `lastUpdatedDateTime` of a chat is NOT the last message time [A1]; ordering and unread use `lastMessagePreview.createdDateTime`.
 - Nothing returned by these methods is written to the database, logs, audit, Inngest events, Sentry breadcrumbs or caches outside the one request (a DB-write and logger spy test with a canary, as for Gmail bodies).
 
@@ -257,7 +257,7 @@ Message bodies are mostly HTML. The server converts them into a small typed node
 
 ### 8.5 Inline images (T-285, optional within phase 2)
 
-A server route `/api/[laneId]/messages/image` streams `hostedContents/{id}/$value` [A1] for a (chat, message, hosted id) that the guard and an ownership check allow: content types `image/png|jpeg|gif|webp` only, at most 4 MB (the documented maximum of hosted content [A2]), `Cache-Control: private, no-store`, `Content-Disposition: inline`, `X-Content-Type-Options: nosniff`, `Content-Security-Policy: sandbox`; never stored or logged. Until T-285 ships, images show as "[Image] open in Teams".
+A server route `/api/lanes/<lane>/messages/image` streams `hostedContents/{id}/$value` [A1] for a (chat, message, hosted id) that the guard and an ownership check allow: content types `image/png|jpeg|gif|webp` only, at most 4 MB (the documented maximum of hosted content [A2]), `Cache-Control: private, no-store`, `Content-Disposition: inline`, `X-Content-Type-Options: nosniff`, `Content-Security-Policy: sandbox`; never stored or logged. Until T-285 ships, images show as "[Image] open in Teams".
 
 ## 9. New-message notices without polling (phase 4)
 
@@ -280,7 +280,7 @@ Delegated channel subscriptions are one per channel, and only one per app and ch
 
 ### 9.4 What the person sees
 
-- **Nav dot:** Messages (side menu and the More list on iPhone) shows a dot when `last_notice_at > last_seen_at`. It is fetched **client-side after the shell renders** from `/api/[laneId]/messages/activity` (DB only, no Graph call), so no page gains a sequential level (T-276). A count is not shown: without reading `resource` or each message the count would include the person's own messages sent from Teams (Q-M4).
+- **Nav dot:** Messages (side menu and the More list on iPhone) shows a dot when `last_notice_at > last_seen_at`. It is fetched **client-side after the shell renders** from `/api/lanes/<lane>/messages/activity` (DB only, no Graph call), so no page gains a sequential level (T-276). A count is not shown: without reading `resource` or each message the count would include the person's own messages sent from Teams (Q-M4).
 - **While Messages is open and visible:** the page asks the same DB-only endpoint every 30 seconds (paused when the tab is hidden). When `last_notice_at` moves, it refetches the chat list and the open conversation from Graph, the conversation with the `lastModifiedDateTime` date-range filter (8). Graph is called only because a notification arrived or because the person acted (open, Refresh, focus at most once a minute). Polling our own database is not polling Microsoft [A3].
 - Without a configured `GRAPH_NOTIFICATION_URL` (local, preview), there is no dot, and the page offers Refresh.
 
@@ -311,7 +311,7 @@ The hash is the existing JCS SHA-256 of `{lane_id, action_type, connection_id, t
 
 ### 10.3 One user step (`sendTeamsMessage`, `packages/modules/approvals`)
 
-Route `POST /api/[laneId]/messages/send` with `{ connectionId, target (chat key, or team/channel/post), text, textSha256, clientRequestId, aiDrafted }`:
+Route `POST /api/lanes/<lane>/messages/send` with `{ connectionId, target (chat key, or team/channel/post), text, textSha256, clientRequestId, aiDrafted }`:
 1. Session at AAL2; `requireStepUp(teams max age)`; the lane module visible; the caller owns the connection; `teams.enabled` and the feature; lane policy `teams_send`; `approvals_live` (a refusal names which gate is off).
 2. The server normalises the text and checks `textSha256` (computed by the browser from the exact text shown in the composer) against it, so the bytes approved are the bytes the person typed.
 3. `proposeTeamsAction` (`proposerKind: "user"`, `derivedFromRetrieved: aiDrafted`), then `approveAction` with the hash just computed, in the same request: **pressing Send is the approval** of that exact text, recorded in `act.status_history` and the audit (ids, type, hash; never text).
@@ -386,7 +386,7 @@ Route `/[laneId]/messages` with search params `?chat=<b64url>` or `?team=<id>&ch
 
 The call itself always happens in Teams; the portal only opens Teams with the people selected. Calling inside the portal is not planned (section 2). Graph cannot place a call as a user [D6]. The buttons use deep links [D7]:
 - **Call:** `https://teams.microsoft.com/l/call/0/0?users=<upn>[,<upn>...]`; **Video call:** the same plus `&withVideo=true`. Teams asks for confirmation before it calls [D7].
-- Pressing the button calls `POST /api/[laneId]/messages/call-link` `{chatKey, video}`. The server resolves the chat's members to UPNs (`call_links` feature, `User.ReadBasic.All` [C]) for same-tenant members other than the person, builds the URL and returns it. The browser opens it in a new tab. Nothing is stored or logged; opening a link is navigation, not a write.
+- Pressing the button calls `POST /api/lanes/<lane>/messages/call-link` `{chatKey, video}`. The server resolves the chat's members to UPNs (`call_links` feature, `User.ReadBasic.All` [C]) for same-tenant members other than the person, builds the URL and returns it. The browser opens it in a new tab. Nothing is stored or logged; opening a link is navigation, not a write.
 - Shown only when every other member is in the person's tenant and there are at most 10 of them (our own cap: the maximum users in a deep link is not confirmed). Otherwise only **Open in Teams** is shown: the chat's `webUrl` (host `teams.microsoft.com`) or `https://teams.microsoft.com/l/chat/<chatId>/conversations` [D7].
 - Channels: **Open in Teams** only (the post's `webUrl` or the channel-message deep link [D7]).
 - `https://` links are used (they work with or without the installed client, via the browser page [D7]); `msteams:` is not used. Behaviour from the iPhone home-screen app is not documented [F3] and is part of H-081.

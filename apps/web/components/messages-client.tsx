@@ -17,7 +17,8 @@ const JSON_HEADERS = { "content-type": "application/json" } as const;
 
 type Failure = { text: string };
 async function failureText(res: Response): Promise<string> {
-  const b = (await res.json().catch(() => null)) as { error?: unknown; seconds?: unknown } | null;
+  const b = (await res.json().catch(() => null)) as { error?: unknown; seconds?: unknown; reason?: unknown } | null;
+  if (b?.error === "not_allowed" && b?.reason === "unresolved") return "Someone in this chat no longer has an account. Open the chat in Teams.";
   if (res.status === 429 || b?.error === "busy") return messagesBusyText(typeof b?.seconds === "number" ? b.seconds : null);
   if (b?.error === "reconnect") return "Your Teams sign-in expired. Reconnect Teams in Settings.";
   if (b?.error === "feature_missing") return "Reconnect Teams to add call buttons.";
@@ -36,11 +37,19 @@ export function MessagesRefresh({ label = "Refresh" }: { label?: string }) {
 }
 
 export function ConversationMessages({ laneId, chatKey, initial, nextBefore, group }: { laneId: string; chatKey: string; initial: MessageView[]; nextBefore: string | null; group: boolean }) {
+  // Older pages the person asked for. After a Refresh the server sends a new `initial`; the pages kept here are merged BY MESSAGE ID and the "older than" time is the oldest message shown, so no
+  // hole can appear between what was loaded before and what the refresh returned (C2).
   const [older, setOlder] = useState<MessageView[]>([]);
-  const [before, setBefore] = useState<string | null>(nextBefore);
+  const [noMore, setNoMore] = useState(false);
   const [state, setState] = useState<{ busy: boolean; error: Failure | null }>({ busy: false, error: null });
   const box = useRef<HTMLDivElement>(null);
   const keep = useRef<{ height: number; top: number } | null>(null);
+  const seen = new Set(initial.map((m) => m.id));
+  const kept = older.filter((m) => !seen.has(m.id));
+  const all = [...kept, ...initial];
+  const oldestShown = all.length > 0 ? all[0]?.at ?? null : null;
+  // More to load: nothing once an older page said "start of the chat"; else the oldest message shown when older pages are kept, else the server's own time for its page.
+  const before = noMore ? null : kept.length > 0 ? oldestShown : nextBefore;
 
   // The newest message is what a person opens a chat for: start at the bottom.
   useLayoutEffect(() => {
@@ -68,16 +77,15 @@ export function ConversationMessages({ laneId, chatKey, initial, nextBefore, gro
       const el = box.current;
       keep.current = el ? { height: el.scrollHeight, top: el.scrollTop } : null;
       setOlder((o) => [...b.messages, ...o]);
-      setBefore(b.nextBefore);
+      setNoMore(b.nextBefore === null);
       setState({ busy: false, error: null });
     } catch {
       setState({ busy: false, error: { text: "Teams could not be reached. Try again." } });
     }
   }
 
-  const all = [...older, ...initial];
   return (
-    <div ref={box} data-testid="conversation-scroll" className="flex min-h-0 flex-1 flex-col gap-3 overflow-y-auto overscroll-contain px-3 py-3 sm:px-4">
+    <div ref={box} data-testid="conversation-scroll" tabIndex={0} role="log" aria-label="Messages in this chat" className="flex min-h-0 flex-1 flex-col gap-3 overflow-y-auto overscroll-contain px-3 py-3 sm:px-4">
       <div className="flex flex-col items-center gap-1">
         {before !== null ? (
           <Button type="button" variant="outline" size="sm" disabled={state.busy} onClick={() => void loadOlder()} data-testid="load-older">
@@ -120,7 +128,9 @@ export function CallButtons({ laneId, chatKey, call, openUrl }: { laneId: string
         return;
       }
       // The click is the person's action; Teams itself asks before it calls. If the browser blocks the new tab, the link is shown to click.
-      const w = window.open(url, "_blank", "noopener,noreferrer");
+      // (`noopener` in the feature string would make window.open return null even when the tab opened, so the opener is cut afterwards instead; the fallback link shows only when the browser really refused.)
+      const w = window.open(url, "_blank");
+      if (w !== null) w.opener = null;
       setState({ busy: null, error: null, link: w === null ? url : null });
     } catch {
       setState({ busy: null, error: "Teams could not be reached. Try again.", link: null });
@@ -170,3 +180,11 @@ export function MarkRead({ laneId, chatKey, readThrough }: { laneId: string; cha
   return null;
 }
 
+
+/** Moves the keyboard focus to the conversation's heading when a chat is opened (C7f), so a screen reader announces the chat and a keyboard user starts inside it. */
+export function FocusConversation({ chatKey }: { chatKey: string }) {
+  useEffect(() => {
+    document.getElementById("conversation-title")?.focus();
+  }, [chatKey]);
+  return null;
+}

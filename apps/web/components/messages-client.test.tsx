@@ -17,7 +17,8 @@ const fetchMock = vi.fn();
 
 beforeEach(() => {
   vi.stubGlobal("fetch", fetchMock);
-  vi.spyOn(window, "open").mockImplementation(() => ({}) as Window);
+  // a browser: window.open returns the new window, or null only when the tab was blocked (and returns null for ANY call that asks for noopener, so the code must not)
+  vi.spyOn(window, "open").mockImplementation(((_u: string, _t?: string, features?: string) => (features?.includes("noopener") ? null : ({ opener: "set" } as unknown as Window))) as typeof window.open);
   Element.prototype.scrollIntoView = vi.fn();
 });
 afterEach(() => {
@@ -135,7 +136,10 @@ describe("CallButtons", () => {
     expect(window.open).not.toHaveBeenCalled(); // never opened on its own
     fireEvent.click(screen.getByRole("button", { name: "Call" }));
     await waitFor(() => expect(window.open).toHaveBeenCalledTimes(1));
-    expect(window.open).toHaveBeenCalledWith("https://teams.microsoft.com/l/call/0/0?users=pat@teams.example.test", "_blank", "noopener,noreferrer");
+    expect(window.open).toHaveBeenCalledWith("https://teams.microsoft.com/l/call/0/0?users=pat@teams.example.test", "_blank");
+    expect(screen.queryByTestId("call-link")).toBeNull(); // the tab opened: no fallback link (C1)
+    const opened = (window.open as unknown as { mock: { results: { value: { opener: unknown } }[] } }).mock.results[0]?.value;
+    expect(opened?.opener).toBeNull(); // the new page cannot reach this one
     expect(fetchMock.mock.calls[0]?.[0]).toBe("/api/lanes/PKG/messages/call-link");
     expect(fetchMock.mock.calls[0]?.[1]).toMatchObject({ method: "POST", body: JSON.stringify({ chat: KEY, video: false }) });
     fetchMock.mockImplementationOnce(() => reply(200, { url: "https://teams.microsoft.com/l/call/0/0?users=pat@teams.example.test&withVideo=true" }));
@@ -224,5 +228,37 @@ describe("MarkRead", () => {
     fetchMock.mockImplementation(() => Promise.reject(new Error("offline")));
     render(<MarkRead laneId="PKG" chatKey={KEY} readThrough="2026-11-23T14:05:00.000Z" />);
     await waitFor(() => expect(fetchMock).toHaveBeenCalled());
+  });
+});
+
+describe("C2: Refresh after Load older messages leaves no hole", () => {
+  it("older pages are kept and merged by id with the refreshed first page; the next 'older than' time is the oldest message shown", async () => {
+    const first = [msg("m5", "2026-11-23T14:00:00.000Z"), msg("m6", "2026-11-23T14:05:00.000Z")];
+    fetchMock.mockImplementationOnce(() => reply(200, { messages: [msg("m3", "2026-11-22T14:00:00.000Z"), msg("m4", "2026-11-22T14:05:00.000Z")], nextBefore: "2026-11-22T14:00:00.000Z" }));
+    const { rerender } = render(<ConversationMessages key={KEY} laneId="PKG" chatKey={KEY} initial={first} nextBefore="2026-11-23T14:00:00.000Z" group />);
+    fireEvent.click(screen.getByTestId("load-older"));
+    await waitFor(() => expect(screen.getAllByTestId("message")).toHaveLength(4));
+    // Refresh: the server sends a NEW first page (newer messages, overlapping one)
+    const refreshed = [msg("m6", "2026-11-23T14:05:00.000Z"), msg("m7", "2026-11-23T14:10:00.000Z")];
+    rerender(<ConversationMessages key={KEY} laneId="PKG" chatKey={KEY} initial={refreshed} nextBefore="2026-11-23T14:05:00.000Z" group />);
+    expect(screen.getAllByTestId("message").map((m) => m.textContent?.match(/text m\d/)?.[0])).toEqual(["text m3", "text m4", "text m6", "text m7"]); // m5 fell out of the refreshed page and is not shown again, never duplicated
+    // and the next click asks for older than the OLDEST shown (m3), not for the refreshed page's own time
+    fetchMock.mockImplementationOnce(() => reply(200, { messages: [], nextBefore: null }));
+    fireEvent.click(screen.getByTestId("load-older"));
+    await waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(2));
+    expect(fetchMock.mock.calls[1]?.[0]).toContain(`before=${encodeURIComponent("2026-11-22T14:00:00.000Z")}`);
+  });
+
+  it("the scroll box is a labelled, focusable log", () => {
+    render(<ConversationMessages laneId="PKG" chatKey={KEY} initial={[msg("m1", "2026-11-23T14:00:00.000Z")]} nextBefore={null} group />);
+    const box = screen.getByTestId("conversation-scroll");
+    expect([box.getAttribute("role"), box.getAttribute("tabindex"), box.getAttribute("aria-label")]).toEqual(["log", "0", "Messages in this chat"]);
+  });
+
+  it("an unresolved member is said in words", async () => {
+    fetchMock.mockImplementationOnce(() => reply(409, { error: "not_allowed", reason: "unresolved" }));
+    render(<CallButtons laneId="PKG" chatKey={KEY} call="available" openUrl="https://teams.microsoft.com/l/chat/19:abc123def456@thread.v2/conversations" />);
+    fireEvent.click(screen.getByRole("button", { name: "Call" }));
+    await waitFor(() => expect(screen.getByTestId("call-error").textContent).toBe("Someone in this chat no longer has an account. Open the chat in Teams."));
   });
 });

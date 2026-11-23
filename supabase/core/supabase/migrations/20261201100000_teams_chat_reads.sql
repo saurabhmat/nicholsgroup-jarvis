@@ -4,7 +4,7 @@
 -- not ours), updated_at.
 --   * RLS: select only, for the OWNER of the Teams connection at AAL2 (`core.teams_connection_ids`, T-278: owner = the caller, provider microsoft_teams, the lane in the caller's own_mail
 --     lanes). An admin, another member and another lane see nothing. No write grant to any role: rows are written only by comms.teams_chat_read_mark.
---   * comms.teams_chat_read_mark (security definer): the caller must own the Teams connection of that lane (one answer, P0002, for an unknown id, another lane's and another person's, so nothing is
+--   * comms.teams_chat_read_mark (security definer): the caller must own a USABLE (active or degraded) Teams connection of that lane (one answer, P0002, for an unknown id, another lane's and another person's, so nothing is
 --     revealed); the marker only moves FORWARD; a time more than 5 minutes ahead of now() is refused; at most 1,000 rows per connection (the least recently touched are removed).
 --   * `comms` is not exposed to PostgREST (README): the app reaches the table through two thin SECURITY INVOKER wrappers in `core` (as core.act_* for approvals): core.teams_chat_reads_list
 --     (RLS applies) and core.teams_chat_read_mark.
@@ -74,6 +74,10 @@ begin
   end if;
   -- the caller must own a Teams connection with this id in this lane, at AAL2 with own_mail there (core.teams_connection_ids fails closed otherwise)
   if not (p_connection = any (core.teams_connection_ids(v_uid, p_lane))) then
+    raise exception 'teams read marker: not found' using errcode = 'P0002';
+  end if;
+  -- only a usable connection (the status rule used everywhere: active or degraded): a disconnected, pending or reconnect-required one records nothing (one answer, as above)
+  if not exists (select 1 from core.connections c where c.id = p_connection and c.lane_id = p_lane and c.provider = 'microsoft_teams' and c.status in ('active', 'degraded')) then
     raise exception 'teams read marker: not found' using errcode = 'P0002';
   end if;
   if p_chat is null or p_chat !~ '^19:[A-Za-z0-9._@:-]{1,197}$' then

@@ -3,7 +3,7 @@
 -- one answer for unknown, another lane's and another person's connection), the core wrappers, the provider trigger, deletion on disconnect and retention. Cross-lane AND cross-user denial throughout.
 -- Synthetic data only: example UUIDs, example.test addresses.
 begin;
-select plan(82);
+select plan(86);
 \ir helpers/lane_rls.psql
 
 update core.lanes set enabled = true where code = 'APK';
@@ -15,7 +15,9 @@ insert into core.connections (id, lane_id, provider, external_account_id, status
   ('00000000-0000-4000-8000-000000032903', 'APK', 'microsoft_teams', 'robert-apk@teams.example.test', 'active', '{}', pg_temp.uid('owner@example.test')),
   ('00000000-0000-4000-8000-000000032904', 'PKG', 'microsoft', 'robert@ms.example.test', 'active', '{}', pg_temp.uid('owner@example.test')),
   ('00000000-0000-4000-8000-000000032905', 'PKG', 'google', 'robert@g.example.test', 'active', '{}', pg_temp.uid('owner@example.test')),
-  ('00000000-0000-4000-8000-000000032906', 'PKG', 'microsoft_teams', 'saurabh@teams.example.test', 'active', '{}', pg_temp.uid('admin-technical@example.test'));
+  ('00000000-0000-4000-8000-000000032906', 'PKG', 'microsoft_teams', 'saurabh@teams.example.test', 'active', '{}', pg_temp.uid('admin-technical@example.test')),
+  ('00000000-0000-4000-8000-000000032907', 'PKG', 'microsoft_teams', 'robert-old@teams.example.test', 'disconnected', '{}', pg_temp.uid('owner@example.test')),
+  ('00000000-0000-4000-8000-000000032908', 'PKG', 'microsoft_teams', 'robert-new@teams.example.test', 'pending', '{}', pg_temp.uid('owner@example.test'));
 
 -- ---------------------------------------------------------------- the table: nothing but ids and a time
 select has_table('comms', 'teams_chat_reads', 'the table exists');
@@ -77,6 +79,24 @@ select lives_ok($$select core.teams_chat_read_mark('PKG', '00000000-0000-4000-80
 reset role;
 select ok((select updated_at > now() - interval '1 minute' from comms.teams_chat_reads where chat_id = '19:chat-a@thread.v2'), 'touches updated_at');
 select ok((select read_through > now() - interval '1 hour' from comms.teams_chat_reads where chat_id = '19:chat-a@thread.v2'), 'and the marker did not move back');
+
+-- ---------------------------------------------------------------- only a usable connection records a marker (T-281 review SL1)
+select pg_temp.claims('owner@example.test', 'aal2');
+set local role authenticated;
+select throws_ok($$select core.teams_chat_read_mark('PKG', '00000000-0000-4000-8000-000000032907', '19:chat-a@thread.v2', now())$$, 'P0002', null, 'a disconnected Teams connection records no marker');
+select throws_ok($$select core.teams_chat_read_mark('PKG', '00000000-0000-4000-8000-000000032908', '19:chat-a@thread.v2', now())$$, 'P0002', null, 'a pending Teams connection records no marker');
+reset role;
+update core.connections set status = 'reconnect_required' where id = '00000000-0000-4000-8000-000000032902';
+select pg_temp.claims('owner@example.test', 'aal2');
+set local role authenticated;
+select throws_ok($$select core.teams_chat_read_mark('PKG', '00000000-0000-4000-8000-000000032902', '19:chat-a@thread.v2', now())$$, 'P0002', null, 'a reconnect-required Teams connection records no marker');
+reset role;
+update core.connections set status = 'degraded' where id = '00000000-0000-4000-8000-000000032902';
+select pg_temp.claims('owner@example.test', 'aal2');
+set local role authenticated;
+select lives_ok($$select core.teams_chat_read_mark('PKG', '00000000-0000-4000-8000-000000032902', '19:chat-a@thread.v2', now() - interval '1 hour')$$, 'a degraded connection still records (it is usable)');
+reset role;
+update core.connections set status = 'active' where id = '00000000-0000-4000-8000-000000032902';
 
 -- ---------------------------------------------------------------- reads: owner only (cross-user and cross-lane denial)
 -- the viewer, the admin and the owner each have a marker on their own connection

@@ -12,6 +12,7 @@ import { teamsSectionFor } from "@/lib/teams-connection";
 import { reconnectToAddText, TEAMS_ADMIN_CONSENT_TEXT, TEAMS_CLOUD_UNSUPPORTED_PAGE_TEXT, TEAMS_CONNECTS_TEXT, TEAMS_NOT_SET_UP_TEXT, TEAMS_PAUSED_PAGE_TEXT } from "@/lib/teams-wording";
 import { LaneEyebrow } from "./module-page";
 import { MessagesWorkspace } from "./messages-chats";
+import { decodeChatKey } from "@/lib/teams-chat-key";
 import { SignIn } from "./messages-view";
 import { CardSkeleton } from "./page-skeleton";
 
@@ -42,7 +43,9 @@ export function MessagesPage({ params, searchParams }: { params: Promise<{ laneI
 async function MessagesBody({ params, searchParams }: { params: Promise<{ laneId: string }>; searchParams: Promise<SearchParams> }) {
   const laneId = (await params).laneId;
   const state = await messagesState(laneId);
-  return <MessagesScreen laneId={laneId} state={state} workspace={state.kind === "connected" ? <ConnectedWorkspace laneId={laneId} state={state} searchParams={searchParams} /> : null} />;
+  const chat = (await searchParams)?.chat;
+  const chatOpen = state.kind === "connected" && decodeChatKey(typeof chat === "string" ? chat : null) !== null;
+  return <MessagesScreen laneId={laneId} state={state} chatOpen={chatOpen} workspace={state.kind === "connected" ? <ConnectedWorkspace laneId={laneId} state={state} searchParams={searchParams} /> : null} />;
 }
 
 /** Chats need the company's `chat_read` and the connection's: otherwise the page says so (the "Reconnect Teams to add chats" note is the connected card's), never an empty list. */
@@ -53,7 +56,7 @@ function ConnectedWorkspace({ laneId, state, searchParams }: { laneId: string; s
 }
 
 /** The page below the header, for a given state (the tests render this directly). */
-export function MessagesScreen({ laneId, state, workspace = null }: { laneId: string; state: MessagesState; /** The connected person's chats (streamed sections); null where there are none to draw. */ workspace?: ReactNode }) {
+export function MessagesScreen({ laneId, state, workspace = null, chatOpen = false }: { laneId: string; state: MessagesState; /** A chat is open: on a phone the conversation gets the screen, so the "Connected as" card is hidden there (wide screens keep it). */ chatOpen?: boolean; /** The connected person's chats (streamed sections); null where there are none to draw. */ workspace?: ReactNode }) {
   switch (state.kind) {
     case "no_access":
     case "not_enabled":
@@ -94,7 +97,7 @@ export function MessagesScreen({ laneId, state, workspace = null }: { laneId: st
     case "connected":
       return (
         <div className="flex flex-col gap-4" data-testid="messages-connected">
-          <Card>
+          <Card className={chatOpen ? "hidden lg:block" : undefined}>
             <CardHeader>
               <CardTitle as="h2">Connected as {state.account}</CardTitle>
               <CardDescription>

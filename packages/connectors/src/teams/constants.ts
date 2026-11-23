@@ -71,7 +71,8 @@ export const isTeamsWritePath = (path: string): boolean => Object.hasOwn(TEAMS_W
 
 // ---- path parameter formats (spec 6 "Id formats"; our own bounds where the fact sheet gives none)
 const UUID_LOWER = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
-const THREAD_ID = /^19:[A-Za-z0-9._@:-]{1,200}$/;
+/** One bound everywhere (the page key, the database check, this client): 200 characters in all, `19:` included (SL5). */
+const THREAD_ID = /^19:[A-Za-z0-9._@:-]{1,197}$/;
 const MESSAGE_ID = /^[A-Za-z0-9._:=@-]{1,256}$/;
 export const TEAMS_PARAM_FORMATS: Readonly<Record<string, RegExp>> = Object.freeze({
   chatId: THREAD_ID,

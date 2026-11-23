@@ -183,11 +183,11 @@ describe.each(WIDTHS)("the conversation at %ipx", (width) => {
             nodes,
             truncated: true,
             attachments: [
-              { kind: "file", name: "Plan.docx", href: "https://contoso.sharepoint.example.test/f/a.docx" },
-              { kind: "file", name: "No link.docx", href: null },
-              { kind: "card", name: "A card", href: null },
-              { kind: "reply", name: "", href: null },
-              { kind: "other", name: "thing", href: null },
+              { kind: "file", name: "Plan.docx", href: "https://contoso.sharepoint.com/f/a.docx", host: "contoso.sharepoint.com" },
+              { kind: "file", name: "No link.docx", href: null, host: null },
+              { kind: "card", name: "A card", href: null, host: null },
+              { kind: "reply", name: "", href: null, host: null },
+              { kind: "other", name: "thing", href: null, host: null },
             ],
           }),
         ],
@@ -208,8 +208,8 @@ describe.each(WIDTHS)("the conversation at %ipx", (width) => {
     const atts = screen.getAllByTestId("attachment");
     expect(atts).toHaveLength(5);
     const file = within(atts[0] as HTMLElement).getByRole("link") as HTMLAnchorElement;
-    expect(file.getAttribute("href")).toBe("https://contoso.sharepoint.example.test/f/a.docx");
-    expect(file.textContent).toContain("Opens in Microsoft");
+    expect(file.getAttribute("href")).toBe("https://contoso.sharepoint.com/f/a.docx");
+    expect(file.textContent).toContain("(contoso.sharepoint.com)"); // the host is shown (SM1)
     expect(within(atts[1] as HTMLElement).queryByRole("link")).toBeNull();
     expect(atts[2]?.textContent).toBe("Card: A card: open in Teams");
     expect(atts[3]?.textContent).toBe("Replied to an earlier message");
@@ -316,5 +316,44 @@ describe("the phone layout: the list, then the conversation (never both); deskto
     render(<TeamsFailureCard failure={{ kind: "unavailable" }} laneId="PKG" testId="x" />);
     screen.getByRole("button", { name: "Try again" }).click();
     expect(refresh).toHaveBeenCalled();
+  });
+});
+
+describe("T-281 review follow-ups (view)", () => {
+  it("C7h: the Back link keeps the page of chats the person was on", () => {
+    render(<ConversationPane view={conv()} laneId="PKG" connectionId={CONN} more="cur0" />);
+    expect(screen.getByTestId("back-to-chats").getAttribute("href")).toBe("/PKG/messages?more=cur0");
+  });
+
+  it("C7e: the host is not repeated when the link text already holds it; it is shown when it does not", () => {
+    const nodes = htmlToNodes('<a href="https://docs.example.test/a">see docs.example.test now</a> <a href="https://other.example.test/">click here</a>').nodes;
+    render(<ConversationPane view={conv({ messages: [msg("m1", "2026-11-23T14:00:00.000Z", { nodes })] })} laneId="PKG" connectionId={CONN} />);
+    const body = screen.getByTestId("message-body").textContent ?? "";
+    expect(body).not.toContain("(docs.example.test)");
+    expect(body).toContain("(other.example.test)");
+  });
+
+  it("C7f: the heading can take focus, the day separator is not an li, and C7g: the conversation sizes itself for a phone", () => {
+    render(<ConversationPane view={conv()} laneId="PKG" connectionId={CONN} />);
+    expect(screen.getByTestId("conversation-title").getAttribute("tabindex")).toBe("-1");
+    for (const s of screen.getAllByRole("separator")) expect(s.tagName).not.toBe("LI");
+    expect(screen.getByTestId("conversation").className).toContain("h-[calc(100dvh-8.5rem)]");
+  });
+
+  it("C7i: an image-only message is the placeholder, not '(no text)'", () => {
+    render(<ConversationPane view={conv({ messages: [msg("m1", "2026-11-23T14:00:00.000Z", { nodes: htmlToNodes('<img src="https://eu-api.asm.skype.com/v1/objects/0-x/views/imgo">').nodes })] })} laneId="PKG" connectionId={CONN} />);
+    expect(screen.getByTestId("image-placeholder")).toBeTruthy();
+    expect(screen.queryByText("(no text)")).toBeNull();
+  });
+
+  it("C7k: a chat with no messages shows the start-of-chat note and no list items", () => {
+    render(<ConversationPane view={conv({ messages: [], nextBefore: null })} laneId="PKG" connectionId={CONN} />);
+    expect(screen.getByText("This is the start of the chat.")).toBeTruthy();
+    expect(screen.queryAllByTestId("message")).toHaveLength(0);
+  });
+
+  it("C4: a chat page whose only items are events draws no rows (they are filtered before the page)", () => {
+    render(<ConversationPane view={conv({ messages: [] })} laneId="PKG" connectionId={CONN} />);
+    expect(screen.queryByText("Teams event")).toBeNull();
   });
 });

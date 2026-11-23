@@ -13,6 +13,11 @@ import { MESSAGES_FILE_OPENS_IN_MICROSOFT, MESSAGES_IMAGE_TEXT, MESSAGES_TRUNCAT
 // ---- message bodies: typed nodes -> elements
 const LINK_CLASS = "font-medium text-primary underline underline-offset-2 [overflow-wrap:anywhere]";
 
+/** The text a link shows (C7e: the host is not repeated when the text already holds it). */
+function linkText(nodes: readonly MessageNode[]): string {
+  return nodes.map((n) => (n.t === "text" || n.t === "mention" || n.t === "emoji" ? n.v : "c" in n ? linkText(n.c) : "")).join("").toLowerCase();
+}
+
 export function renderNodes(nodes: readonly MessageNode[]): ReactNode[] {
   return nodes.map((n, i) => {
     switch (n.t) {
@@ -42,7 +47,7 @@ export function renderNodes(nodes: readonly MessageNode[]): ReactNode[] {
             <a href={n.href} target="_blank" rel="noopener noreferrer nofollow" className={LINK_CLASS}>
               {n.c.length > 0 ? renderNodes(n.c) : n.host}
             </a>
-            <span className="text-small text-muted-foreground"> ({n.host})</span>
+            {linkText(n.c).includes(n.host) ? null : <span className="text-small text-muted-foreground"> ({n.host})</span>}
           </span>
         );
       case "b":
@@ -103,7 +108,7 @@ function Attachment({ a }: { a: AttachmentView }) {
         <span className="font-medium [overflow-wrap:anywhere]">{name}</span>
         {a.href ? (
           <a href={a.href} target="_blank" rel="noopener noreferrer nofollow" className={LINK_CLASS}>
-            Open <span className="font-normal text-muted-foreground">({MESSAGES_FILE_OPENS_IN_MICROSOFT})</span>
+            Open <span className="font-normal text-muted-foreground">({a.host ?? MESSAGES_FILE_OPENS_IN_MICROSOFT})</span>
           </a>
         ) : (
           <span className="text-muted-foreground">Open it in Teams</span>
@@ -162,8 +167,10 @@ export function MessageList({ messages, group, after }: { messages: readonly Mes
   for (const m of messages) {
     if (m.day !== day) {
       items.push(
-        <li key={`d-${m.day}-${m.id}`} role="separator" aria-label={dayLabel(m.at)} className="flex justify-center py-1">
-          <span className="rounded-full bg-muted px-3 py-0.5 text-small text-muted-foreground">{dayLabel(m.at)}</span>
+        <li key={`d-${m.day}-${m.id}`} className="flex justify-center py-1">
+          <div role="separator" aria-label={dayLabel(m.at)} className="rounded-full bg-muted px-3 py-0.5 text-small text-muted-foreground">
+            {dayLabel(m.at)}
+          </div>
         </li>,
       );
       day = m.day;
@@ -181,6 +188,7 @@ export function ChatListRows({ rows, selectedKey, hrefFor }: { rows: readonly Ch
         <li key={r.key}>
           <Link
             href={hrefFor(r.key)}
+            scroll={false}
             aria-current={r.key === selectedKey ? "page" : undefined}
             data-testid="chat-row"
             data-unread={r.unread ? "true" : "false"}
