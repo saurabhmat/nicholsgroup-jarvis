@@ -1,7 +1,8 @@
 import { strToU8, zipSync } from "fflate";
 import { describe, expect, it } from "vitest";
-import { readFileSync } from "node:fs";
-import { join } from "node:path";
+import { existsSync, readFileSync } from "node:fs";
+import { createRequire } from "node:module";
+import { dirname, join } from "node:path";
 import { MAX_ZIP_ENTRIES, chatGptMemory, fileKind, memoryFromJsonFile, readBrainZip, safePath } from "./import-files";
 
 const zip = (files: Record<string, string | Uint8Array>, level: 0 | 6 = 6) =>
@@ -43,7 +44,7 @@ describe("brain-folder zip", () => {
     const bomb = zip({ "Context/About-Me.md": new Uint8Array(30 * 1024 * 1024) });
     expect(bomb.length).toBeLessThan(1_000_000); // small on disk
     expect(readBrainZip(bomb)).toEqual({ ok: false, error: "too_large" });
-  });
+  }, 30_000); // building and reading 30 MB of zeros can pass the default 5 s on a one-core machine (seen once, T-273 review)
   it("refuses too many entries (an entry bomb)", () => {
     const files: Record<string, string> = { "Context/About-Me.md": ABOUT };
     for (let i = 0; i < MAX_ZIP_ENTRIES + 5; i++) files[`Projects/p${String(i)}.md`] = "x";
@@ -76,12 +77,27 @@ describe("brain-folder zip", () => {
 // T-273: fflate 0.8.2 looped forever on a local header that carries the ZIP64 size marker (0xFFFFFFFF) without a ZIP64 extra field
 // (GHSA-px8p-9vwx-vf98): the import froze the browser tab before any of our limits ran. Fixed in fflate 0.8.3.
 describe("brain-folder zip: ZIP64 size marker without its extra field (T-273)", () => {
+  const has = (version: string) => {
+    const [major = 0, minor = 0, patch = 0] = version.replace(/^[^0-9]*/, "").split(".").map(Number);
+    return major > 0 || minor > 8 || (minor === 8 && patch >= 3);
+  };
   const pinned = (JSON.parse(readFileSync(join(__dirname, "..", "package.json"), "utf8")) as { dependencies: Record<string, string> }).dependencies.fflate ?? "";
-  const [major = 0, minor = 0, patch = 0] = pinned.replace(/^[^0-9]*/, "").split(".").map(Number);
-  const fixed = major > 0 || minor > 8 || (minor === 8 && patch >= 3);
+  // The INSTALLED copy too: with an out-of-date node_modules the pin can say 0.8.3 while 0.8.2 is what runs.
+  const installed = (() => {
+    let dir = dirname(createRequire(import.meta.url).resolve("fflate"));
+    for (let i = 0; i < 6; i += 1, dir = dirname(dir)) {
+      const file = join(dir, "package.json");
+      if (!existsSync(file)) continue;
+      const pkg = JSON.parse(readFileSync(file, "utf8")) as { name?: string; version?: string };
+      if (pkg.name === "fflate") return pkg.version ?? "";
+    }
+    return "";
+  })();
+  const fixed = has(pinned) && has(installed);
 
-  it("the pinned fflate has the fix (0.8.3 or later)", () => {
-    expect(fixed, `fflate is pinned to ${pinned}`).toBe(true);
+  it("the pinned and the installed fflate have the fix (0.8.3 or later)", () => {
+    expect(has(pinned), `fflate is pinned to ${pinned}`).toBe(true);
+    expect(has(installed), `fflate ${installed || "(unknown)"} is installed: run pnpm install`).toBe(true);
   });
 
   // Skipped on an older fflate: there the call never returns, and a synchronous loop cannot be timed out by the test runner.
