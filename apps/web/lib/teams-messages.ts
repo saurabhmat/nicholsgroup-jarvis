@@ -7,7 +7,7 @@ export type MessagesState =
   | { kind: "no_access" } // the caller cannot connect their own account here (no own_mail): nothing to draw but a plain line
   | { kind: "unavailable" } // settings or rows could not be read: never an empty list, never "not connected"
   | { kind: "not_enabled" }
-  | { kind: "paused" }
+  | { kind: "paused"; unsupportedCloud?: true }
   | { kind: "not_connected" }
   | { kind: "reconnect"; connectionId: string; account: string }
   | { kind: "connected"; connectionId: string; account: string; degraded: boolean; missing: TeamsFeature[]; adminConsent: boolean };
@@ -17,7 +17,7 @@ export function messagesStateOf(view: TeamsSectionView | null): MessagesState {
   if (view.settingsUnknown || view.unavailable) return { kind: "unavailable" };
   const mine = view.connections.filter((c) => c.mine);
   const usable = mine.find((c) => c.state === "connected" || c.state === "degraded");
-  if (view.paused) return usable || mine.some((c) => c.state === "reconnect_required") ? { kind: "paused" } : { kind: "not_enabled" };
+  if (view.paused) return usable || mine.some((c) => c.state === "reconnect_required") || view.unsupportedCloud ? { kind: "paused", ...(view.unsupportedCloud ? { unsupportedCloud: true as const } : {}) } : { kind: "not_enabled" };
   const needs = mine.find((c) => c.state === "reconnect_required");
   if (needs && !usable) return { kind: "reconnect", connectionId: needs.id, account: needs.account };
   if (!usable) return { kind: "not_connected" };

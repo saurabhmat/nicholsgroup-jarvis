@@ -64,6 +64,7 @@ insert into security_definer_ok values
   ('core.mailbox_ids', 'the connection ids a user owns (core.may_resolve: the caller at aal2, or service_role for jobs); reads core.connections without the connections view; ids only (T-247)'),
   ('core.may_brief', 'p_uid holds own_mail in p_lane (allowed_lanes rules); a boolean (T-247)'),
   ('core.teams_connection_ids', 'the Teams connection ids a user owns (core.may_resolve: the caller at aal2, or service_role for jobs); ids only; Teams rows are never in core.mailbox_ids (T-278)'),
+  ('core.teams_assert_one_per_owner', 'raises D0024 when the owner of a Teams connection has another usable Teams connection in the lane; service_role only, lane-checked, changes nothing (T-278)'),
   ('core.connection_set_teams_identity', 'sets a Teams connection''s Entra tenant id, cloud and object id once; service_role only, lane-checked, refuses non-Teams rows, a second set and a second usable Teams connection of the owner (T-278)'),
   ('act.action_rows_visible', 'policy helper: may the caller read an action''s history/claim rows (email: connection owner with own_mail; others: approvals view); a boolean (T-247)'),
   ('brief.briefings_guard', 'insert trigger: reply drafts only with store_outbound_drafts; lane enabled; owner holds the owner role and the briefing view (T-231c)'),

@@ -92,7 +92,8 @@ export async function SettingsPage({
     result: started(
       timed("load.connect_result", async () => {
         const section = await microsoft; // the banner's Microsoft wording follows the same scope list as the section; consent returns show only where Microsoft is enabled
-        return connectResultFor(g, laneId, query, { enabled: Boolean(section && !section.paused && !section.unavailable && !section.settingsUnknown), writes: section?.writes ?? null });
+        const messagesShown = (await gate).visible("messages"); // a limited company that does not list Messages has no page to point to (T-278 review C4)
+        return connectResultFor(g, laneId, query, { enabled: Boolean(section && !section.paused && !section.unavailable && !section.settingsUnknown), writes: section?.writes ?? null }, { messagesShown });
       }),
     ),
     quickbooks: started(timed("load.quickbooks", async () => ((await gate).visible("finance") ? quickbooksSectionFor(g, laneId, undefined, approvalsDeps) : null))),

@@ -437,3 +437,92 @@ describe("callback: consent errors, reconnect, ownership, D-23", () => {
     expect(h.secrets.size).toBe(0);
   });
 });
+
+describe("T-278 review: sub-codes, reconnect beside another account, the token client label", () => {
+  const detailOf = (r: { ok: boolean; detail?: string }) => (r.ok ? undefined : r.detail);
+
+  it("S2: reconnecting a disconnected row while another of the person's rows is usable is refused with the one-account message, before any token is stored", async () => {
+    const { h } = setup();
+    const x = h.connect("PKG", `old@${DOMAIN}`, { owner: TEAMS_CONNECT_USER, status: "disconnected" });
+    h.connect("PKG", PERSON, { owner: TEAMS_CONNECT_USER });
+    const stores = h.stats.stores;
+    const { result } = await h.connectViaCallback("PKG", { upn: `old@${DOMAIN}`, connectionId: x.row.id });
+    expect(result).toMatchObject({ ok: false, reason: "account_refused" });
+    expect(message(result)).toContain(TEAMS_ONE_ACCOUNT_MESSAGE);
+    expect(detailOf(result)).toBe("one_account");
+    expect(h.stats.stores).toBe(stores);
+    expect(x.row.status).toBe("disconnected");
+  });
+
+  it("S2: a database refusal at the moment the token is stored (two connects racing) is the same fixed refusal, not 'unavailable'", async () => {
+    const { h } = setup();
+    h.failStoreOnce(new ConnectorError({ kind: "forbidden", message: TEAMS_ONE_ACCOUNT_MESSAGE }));
+    const { result } = await h.connectViaCallback("PKG", { upn: PERSON });
+    expect(result).toMatchObject({ ok: false, reason: "account_refused" });
+    expect(message(result)).toContain(TEAMS_ONE_ACCOUNT_MESSAGE);
+    expect(detailOf(result)).toBe("one_account");
+    expect(h.secrets.size).toBe(0);
+  });
+
+  it("C1: every refusal carries one coarse fixed sub-code, from the provider's own list", async () => {
+    const cases: [string, (h: Harness) => Promise<{ ok: boolean; detail?: string }>, string][] = [
+      ["domain", async (h) => (await h.connectViaCallback("PKG", { upn: PERSON })).result, "domain"],
+      ["guest", async (h) => (await h.connectViaCallback("PKG", { upn: PERSON, profile: { userType: "Guest" } })).result, "guest"],
+      ["scope_missing", async (h) => (await h.connectViaCallback("PKG", { upn: PERSON, scope: "openid offline_access User.Read" })).result, "scope_missing"],
+      ["scope_extra", async (h) => (await h.connectViaCallback("PKG", { upn: PERSON, extraScopes: "Mail.Read" })).result, "scope_extra"],
+      ["other_person", async (h) => {
+        h.connect("PKG", PERSON, { owner: TEAMS_OWNER });
+        return (await h.connectViaCallback("PKG", { upn: PERSON })).result;
+      }, "other_person"],
+      ["other_company", async (h) => {
+        h.connect("OTH", PERSON, { owner: TEAMS_OWNER });
+        return (await h.connectViaCallback("PKG", { upn: PERSON })).result;
+      }, "other_company"],
+    ];
+    for (const [name, run, want] of cases) {
+      const { h } = setup(name === "domain" ? { teams: { allowedDomains: ["only.example.test"] } } : {}, { OTH: { teams: {} } });
+      expect(detailOf(await run(h)), name).toBe(want);
+    }
+    // an id_token problem has no sub-code (a neutral sentence is shown), and a success has none
+    const { h } = setup();
+    expect(detailOf((await h.connectViaCallback("PKG", { upn: PERSON, idToken: { nonce: "x" } })).result)).toBeUndefined();
+  });
+
+  it("C1: the callback redirect carries the sub-code only in its fixed shape, and nothing else of the failure", async () => {
+    const callbackWith = async (detail: string | undefined) => {
+      const flow = { has: () => true, start: async () => "", callback: async () => ({ ok: false as const, reason: "account_refused" as const, provider: "microsoft_teams" as const, laneId: "PKG", ...(detail === undefined ? {} : { detail }) }) };
+      const res = await createConnectHandlers(flow as never, async () => (async () => ({ userId: "u", client: {} })) as never).callback(new Request("http://localhost:3000/api/connect/teams/callback?state=PKG.x"), "teams");
+      return res.headers.get("location");
+    };
+    expect(await callbackWith("guest")).toBe("/PKG/settings?connect=account_refused&provider=microsoft_teams&detail=guest");
+    expect(await callbackWith(undefined)).toBe("/PKG/settings?connect=account_refused&provider=microsoft_teams");
+    for (const bad of ["Guest", "a b", "x".repeat(40), "<script>", "9lives", ""]) expect(await callbackWith(bad), bad).toBe("/PKG/settings?connect=account_refused&provider=microsoft_teams");
+  });
+
+  it("C6: Microsoft's invalid_scope answer (a feature the Teams app lacks) is a 'not set up' refusal, not a cancelled connect", async () => {
+    const { h } = setup();
+    const url = await h.flow.start("teams", "PKG", h.as(TEAMS_CONNECT_USER));
+    const state = new URL(url).searchParams.get("state") ?? "";
+    const res = await h.flow.callback("teams", new URLSearchParams({ state, error: "invalid_scope", error_description: `AADSTS70011: ${TEAMS_ERROR_TEXT_CANARY}` }), h.as(TEAMS_CONNECT_USER));
+    expect(res).toMatchObject({ ok: false, reason: "exchange_failed", detail: "not_set_up" });
+    expect(JSON.stringify(res)).not.toContain(TEAMS_ERROR_TEXT_CANARY);
+    const url2 = await h.flow.start("teams", "PKG", h.as(TEAMS_CONNECT_USER));
+    const denied = await h.flow.callback("teams", new URLSearchParams({ state: new URL(url2).searchParams.get("state") ?? "", error: "access_denied" }), h.as(TEAMS_CONNECT_USER));
+    expect(denied).toMatchObject({ ok: false, reason: "denied" });
+    expect(denied).not.toHaveProperty("detail");
+  });
+
+  it("C7: token requests to the sign-in host are labelled with the Teams provider, and only the sign-in host is reachable", async () => {
+    const { h, fake } = setup();
+    const { conn } = h.connect("PKG", PERSON, { storedAccessExpired: true });
+    const g = await h.guard("PKG", conn);
+    await h.tokens.accessToken("PKG", g);
+    expect(fake.state.refreshes).toBe(1);
+    const providers = new Set(h.logs.map((l) => (l as { fields?: { provider?: string }; provider?: string }).provider ?? (l as { fields?: { provider?: string } }).fields?.provider).filter(Boolean));
+    expect([...providers]).toContain("microsoft_teams");
+    expect(providers.has("microsoft")).toBe(false);
+    const { createTeamsTokenHttp } = await import("./http");
+    expect(() => createTeamsTokenHttp({ baseUrl: "https://graph.microsoft.com", laneId: "PKG" })).toThrow(/not an allowed Microsoft host/);
+    expect(() => createTeamsTokenHttp({ baseUrl: "https://login.microsoftonline.com", laneId: "PKG" })).not.toThrow();
+  });
+});

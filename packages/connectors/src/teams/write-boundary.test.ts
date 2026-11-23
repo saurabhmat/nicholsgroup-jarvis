@@ -60,4 +60,18 @@ describe("the Teams write path is reachable only from approvals", () => {
       expect(t, rel(f)).not.toMatch(/["'`]\/me\/(messages|mailFolders|events|calendar)/i);
     }
   });
+
+  it("the \"write\" kind of the Teams HTTP wrapper (the one that can POST) is requested only by the write client, across apps and packages; the HTTP wrapper itself is built only where the lint rule allows", () => {
+    const users = production()
+      .filter((f) => /createTeamsHttp\s*\([\s\S]{0,1500}?["']write["']\s*,?\s*\)/.test(text(f)))
+      .map(rel)
+      .filter((f) => f !== "packages/connectors/src/teams/http.ts")
+      .sort();
+    expect(users).toEqual(["packages/connectors/src/teams/write-client.ts"]);
+    const builders = production()
+      .filter((f) => /createTeamsHttp\s*\(/.test(text(f)) && !/function createTeamsHttp/.test(text(f)))
+      .map(rel)
+      .sort();
+    expect(builders).toEqual(["packages/connectors/src/teams/api.ts", "packages/connectors/src/teams/provider.ts", "packages/connectors/src/teams/write-client.ts", "packages/connectors/src/testing/teams-harness.ts"]);
+  });
 });

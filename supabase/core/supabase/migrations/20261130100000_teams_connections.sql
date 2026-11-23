@@ -10,6 +10,9 @@
 --   * one usable Teams connection per person per lane (partial unique index connections_one_teams_per_owner; core.connection_set_teams_identity
 --     checks it first and raises D0024 so the connect can say why). One Teams ACCOUNT in one lane only (D-23) is the existing
 --     connections_one_lane_per_account index, which is keyed on (provider, address) and therefore also covers 'microsoft_teams'.
+--   * one Entra ACCOUNT in one lane only, whatever its sign-in name (partial unique index connections_one_teams_per_entra_object: a renamed UPN cannot make the same account usable in two lanes).
+--     The unique violations of both Teams indexes at the moment the token is stored (core.connection_token_store, which already maps the D-23 index) are raised as D0023 (another lane)
+--     and D0024 (the owner already has a Teams account here), so the connect can say why instead of "unavailable".
 --   * core.teams_connection_ids(uid, lane): the one place "my Teams connections" is written (as core.mailbox_ids for mail). Fails closed.
 --   * core.oauth_state_create / consume: 'microsoft_teams' is connected by any member holding own_mail (their OWN account), like google and
 --     microsoft; every other provider still needs owner or admin_technical.
@@ -89,6 +92,45 @@ revoke all on function core.connections_identity_immutable() from public, anon, 
 create unique index connections_one_teams_per_owner on core.connections (lane_id, owner_user_id)
   where provider = 'microsoft_teams' and status not in ('disconnected', 'pending');
 
+-- one Entra account (object id) in one lane only: the D-23 index is keyed on the sign-in name, which can be renamed; the object id cannot. Same status rule as the D-23 index.
+create unique index connections_one_teams_per_entra_object on core.connections (entra_object_id)
+  where provider = 'microsoft_teams' and status not in ('disconnected', 'pending');
+
+-- ---------------------------------------------------------------- the one-per-owner rule, said before a token is stored
+-- D0024: the owner of this Teams connection already has ANOTHER usable Teams connection in the lane. Called by core.connection_set_teams_identity (a first connect) and by the connector
+-- on a reconnect (which has its identity already), so both refuse with a fixed message before any token is stored. P0002 no such connection in this lane; 23514 not a Teams connection.
+create function core.teams_assert_one_per_owner(p_lane text, p_connection_id uuid) returns void
+language plpgsql
+security definer
+set search_path = ''
+as $$
+declare
+  v_provider text;
+  v_owner uuid;
+begin
+  if p_lane is null or p_connection_id is null then
+    raise exception 'teams one per owner: lane and connection are required' using errcode = '22004';
+  end if;
+  select c.provider, c.owner_user_id into v_provider, v_owner from core.connections c where c.id = p_connection_id and c.lane_id = p_lane;
+  if v_provider is null then
+    raise exception 'teams one per owner: no such connection in this lane' using errcode = 'P0002';
+  elsif v_provider <> 'microsoft_teams' then
+    raise exception 'teams one per owner: not a Teams connection' using errcode = '23514';
+  end if;
+  if exists (
+    select 1 from core.connections o
+    where o.lane_id = p_lane and o.provider = 'microsoft_teams' and o.owner_user_id = v_owner
+      and o.id <> p_connection_id and o.status not in ('disconnected', 'pending')
+  ) then
+    raise exception 'teams one per owner: this person already has a Teams connection in this lane' using errcode = 'D0024';
+  end if;
+end;
+$$;
+comment on function core.teams_assert_one_per_owner(text, uuid) is
+  'T-278: raises D0024 when the owner of this Teams connection has another usable Teams connection in the lane; service_role only; lane-checked.';
+revoke all on function core.teams_assert_one_per_owner(text, uuid) from public, anon, authenticated;
+grant execute on function core.teams_assert_one_per_owner(text, uuid) to service_role;
+
 -- ---------------------------------------------------------------- set the Teams identity once
 -- Errors carry no value: 22004 a required argument is null; 22023 the cloud is not allowed; P0002 no such connection in this lane (the same for
 -- "no such id" and "another lane"); 23514 the connection is not a Teams one; 55000 the identity is already set; D0024 the owner already has
@@ -107,7 +149,6 @@ as $$
 declare
   v_provider text;
   v_set uuid;
-  v_owner uuid;
 begin
   if p_lane is null or p_connection_id is null or p_tenant_id is null or p_cloud is null or p_entra_object_id is null then
     raise exception 'teams identity: lane, connection, tenant, cloud and object id are required' using errcode = '22004';
@@ -115,7 +156,7 @@ begin
   if p_cloud not in ('commercial', 'gcc_high') then
     raise exception 'teams identity: the cloud is not allowed' using errcode = '22023';
   end if;
-  select c.provider, c.tenant_id, c.owner_user_id into v_provider, v_set, v_owner
+  select c.provider, c.tenant_id into v_provider, v_set
   from core.connections c where c.id = p_connection_id and c.lane_id = p_lane for update;
   if v_provider is null then
     raise exception 'teams identity: no such connection in this lane' using errcode = 'P0002';
@@ -125,13 +166,7 @@ begin
     raise exception 'teams identity: already set' using errcode = '55000';
   end if;
   -- One usable Teams connection per person per lane: said here, before any token is stored, so the connect can refuse with a fixed message.
-  if exists (
-    select 1 from core.connections o
-    where o.lane_id = p_lane and o.provider = 'microsoft_teams' and o.owner_user_id = v_owner
-      and o.id <> p_connection_id and o.status not in ('disconnected', 'pending')
-  ) then
-    raise exception 'teams identity: this person already has a Teams connection in this lane' using errcode = 'D0024';
-  end if;
+  perform core.teams_assert_one_per_owner(p_lane, p_connection_id);
   update core.connections c set tenant_id = p_tenant_id, cloud = p_cloud, entra_object_id = p_entra_object_id
    where c.id = p_connection_id and c.lane_id = p_lane and c.provider = 'microsoft_teams' and c.tenant_id is null;
   if not found then
@@ -233,3 +268,67 @@ comment on function core.oauth_state_consume(text, text) is
   'Finishes a connect (T-035, T-219; T-247; T-254; T-278): returns and deletes the caller''s own unexpired state for the lane when they may still connect that provider (google, microsoft, microsoft_teams: own_mail; others: owner/admin_technical); empty otherwise.';
 revoke all on function core.oauth_state_consume(text, text) from public, anon, service_role;
 grant execute on function core.oauth_state_consume(text, text) to authenticated;
+
+-- ---------------------------------------------------------------- core.connection_token_store: name the two Teams indexes when the row is activated
+-- The body is the current one (T-195 / composio review fix M3) with ONE addition in the unique_violation branch: the Teams one-per-owner index is D0024 and the Teams one-per-Entra-account
+-- index is D0023 (the account is in another lane), so a Teams connect that loses a race, or a reconnect of an older row beside a newer one, gets a fixed refusal instead of "unavailable".
+-- Every other provider's path is byte for byte what it was.
+create or replace function core.connection_token_store(
+  p_lane_id text,
+  p_connection_id uuid,
+  p_secret text,
+  p_expires_at timestamptz,
+  p_actor_id uuid default null
+) returns void
+language plpgsql
+security definer
+set search_path = ''
+as $$
+declare
+  v_secret_id uuid;
+  v_constraint text;
+  v_provider text;
+  v_account text;
+begin
+  perform core.connection_for_token(p_lane_id, p_connection_id, true);
+  perform core.connection_token_check_secret(p_secret);
+  select c.provider, pg_catalog.lower(c.external_account_id) into v_provider, v_account
+  from core.connections c where c.id = p_connection_id and c.lane_id = p_lane_id;
+  if v_provider = 'google' then
+    -- Same lock as core.connection_activate_composio; a composio row in another lane holding this address refuses (D-23).
+    perform pg_advisory_xact_lock(pg_catalog.hashtext(v_account));
+    if exists (
+      select 1 from core.connections o
+      where o.transport = 'composio' and o.lane_id <> p_lane_id and o.account_identity = v_account
+        and o.status not in ('disconnected', 'pending')
+    ) then
+      raise exception 'connection token: the provider account is connected to another lane' using errcode = 'D0023';
+    end if;
+  end if;
+  select s.vault_secret_id into v_secret_id from core.connection_secrets s where s.connection_id = p_connection_id;
+  if v_secret_id is null then
+    v_secret_id := vault.create_secret(p_secret, 'connection:' || p_connection_id::text, 'Connector credential (T-032)');
+    insert into core.connection_secrets (connection_id, lane_id, vault_secret_id) values (p_connection_id, p_lane_id, v_secret_id);
+  else
+    perform vault.update_secret(v_secret_id, p_secret);
+    update core.connection_secrets set rotated_at = now() where connection_id = p_connection_id;
+  end if;
+  begin
+    -- T-195: a (re)connect stores working tokens, so the error that made it reconnect_required no longer applies.
+    update core.connections set status = 'active', token_expires_at = p_expires_at, last_error = null where id = p_connection_id;
+  exception when unique_violation then
+    get stacked diagnostics v_constraint = constraint_name;
+    if v_constraint in ('connections_one_lane_per_account', 'connections_one_teams_per_entra_object') then
+      raise exception 'connection token: the provider account is connected to another lane' using errcode = 'D0023';
+    end if;
+    if v_constraint = 'connections_one_teams_per_owner' then
+      raise exception 'connection token: this person already has a Teams connection in this lane' using errcode = 'D0024';
+    end if;
+    raise;
+  end;
+  perform audit.log(p_lane_id, case when p_actor_id is null then 'service' else 'user' end, p_actor_id,
+                    'connection.token_stored', 'connection:' || p_connection_id::text, '{}');
+end;
+$$;
+revoke all on function core.connection_token_store(text, uuid, text, timestamptz, uuid) from public, anon, authenticated;
+grant execute on function core.connection_token_store(text, uuid, text, timestamptz, uuid) to service_role;

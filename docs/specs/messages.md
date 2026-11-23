@@ -45,7 +45,7 @@ Teams is a **separate connection** from mail: a company whose mail is Google (Pu
 - Rule 6: message text, `lastMessagePreview`, chat topics, member names and addresses, channel names and file names are **never stored, logged, audited or put in an event**. They are fetched live and shown. The only Teams data stored is listed in section 7; the composed text of a send exists only while its action is open (section 10.4).
 - Rule 9: everything that comes from Teams is untrusted: rendered as text through an allow-list converter (section 8.4), links https only, never triggers an action, never changes a permission.
 - Rule 10: MSW fakes and synthetic data only. Every live check is a human item.
-- D-23: one Teams account, one lane. D-43 / T-247: a person sees only the Teams data of connections they own; admins (owner, admin_technical) see connection health only, never chats.
+- D-23: one Teams account, one lane. D-43 / T-247: a person sees only the Teams data of connections they own; admins (owner, admin_technical) see the connection row's health columns only (status, UPN, tenant, cloud, features, owner, times, last error: section 7.1 lists them), never chats.
 - Microsoft API terms [A3, E12]: no background polling of Teams (at most once per day; we do none); fetch on page open or refresh; a date range on incremental fetches; notices through subscriptions without resource data; delete the person's data on disconnect; "do not use Teams as a log file" (the portal never posts anything the person did not type and send).
 
 ## 4. Connection model (D-62, decision D-66)
@@ -178,7 +178,7 @@ All in `supabase/core/supabase/migrations`, pgTAP in the same task, production S
 | new partial unique index `connections_one_teams_per_owner` | `(lane_id, owner_user_id) where provider = 'microsoft_teams' and status not in ('disconnected','pending')` |
 | `core.teams_connection_ids(p_uid, p_lane)` | new definer function, the one place "my Teams connections" is written (as `core.mailbox_ids`): owner = p_uid, provider `microsoft_teams`, lane in `allowed_lanes(p_uid, 'own_mail')`, `core.may_resolve(p_uid)` |
 | `core.mailbox_ids` and every mail/calendar reader | **unchanged**: they keep `provider in ('google','microsoft')`, so a Teams row is never a mailbox (pgTAP asserts it) |
-| RLS on `core.connections` | unchanged (own rows through `owner_user_id` + `own_mail`; health through `connections`); pgTAP proves a viewer cannot read another person's Teams row and an admin reads only the health columns |
+| RLS on `core.connections` | unchanged (own rows through `owner_user_id` + `own_mail`; the `connections` view reads the lane's rows through the existing column grants). Enforced and tested (pgTAP 328): an admin (owner, admin_technical) reads these columns of another person's Teams row: `id, lane_id, provider, external_account_id` (the UPN), `status, features, features_checked_at, token_expires_at, last_sync_at, last_error, owner_user_id, tenant_id, cloud, created_at, updated_at, transport, toolkit, account_identity`, as for mail rows; never `entra_object_id`, `created_by`, `reconnect_notified_at`, `last_error_stream`, a token or a chat. A viewer cannot read another person's Teams row at all. |
 
 ### 7.2 `comms.teams_chat_reads` (T-282): the portal's own read marker
 

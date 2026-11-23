@@ -957,6 +957,9 @@ isOneToOne: false
 "sync_now_claim":
 { Args: { "p_lane": string }; Returns: Json
                            },
+"teams_assert_one_per_owner":
+{ Args: { "p_connection_id": string,"p_lane": string }; Returns: undefined
+                           },
 "teams_connection_ids":
 { Args: { "p_lane"?: string,"p_uid": string }; Returns: (string)[]
                            },

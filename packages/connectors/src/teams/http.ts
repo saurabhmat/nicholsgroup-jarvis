@@ -24,3 +24,13 @@ export function createTeamsHttp(options: Omit<HttpClientOptions, "provider" | "e
     },
   };
 }
+
+/**
+ * The HTTP client for the sign-in host's token endpoint (the code exchange and the refresh), labelled `microsoft_teams` in logs and errors (T-278 review C7: it used to carry the mail
+ * label). The allow-list is the commercial sign-in host: a `gcc_high` lane is refused by the guard before any token request. Its rate limiter is keyed by provider, so the Teams
+ * token requests have their own bucket and mail's pacing is unchanged.
+ */
+export function createTeamsTokenHttp(options: Omit<HttpClientOptions, "provider" | "errorCode">): HttpClient {
+  assertGraphHost(options.baseUrl, microsoftHostsFor("commercial", "token"));
+  return createHttpClient({ ...options, provider: TEAMS_PROVIDER, requestIdHeader: GRAPH_REQUEST_ID_HEADER, errorCode: graphErrorCode });
+}

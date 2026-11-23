@@ -79,6 +79,12 @@ describe.each(WIDTHS)("Messages at %ipx", (width) => {
     expect(screen.queryByRole("button")).toBeNull();
   });
 
+  it("C5: a company on a cloud this build does not serve says so, not 'paused'", () => {
+    draw({ kind: "paused", unsupportedCloud: true });
+    expect(screen.getByText("Teams is not available yet on this company's Microsoft cloud.")).toBeTruthy();
+    expect(screen.queryByText("Teams is paused for this company.")).toBeNull();
+  });
+
   it("degraded: a notice, still connected", () => {
     draw(connected({ degraded: true }));
     expect(screen.getByTestId("messages-degraded")).toBeTruthy();

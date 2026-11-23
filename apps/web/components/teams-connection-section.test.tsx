@@ -130,3 +130,22 @@ describe("Disconnect", () => {
     expect(nav.replace).not.toHaveBeenCalled();
   });
 });
+
+describe("T-278 review", () => {
+  it("S2: a disconnected row beside another usable one has no Reconnect (it could only fail) and says why; alone it keeps Reconnect", () => {
+    draw(teams({ connections: [conn({ id: "00000000-0000-4000-8000-0000000000d1", account: "old@teams.example.test", state: "disconnected" }), conn()] }));
+    expect(screen.queryByRole("button", { name: "Reconnect old@teams.example.test" })).toBeNull();
+    expect(screen.getByRole("button", { name: "Reconnect me@teams.example.test" })).toBeTruthy();
+    expect(document.body.textContent).toContain("disconnect that one first to use this one again");
+    cleanup();
+    draw(teams({ connections: [conn({ state: "disconnected" })] }));
+    expect(screen.getByRole("button", { name: "Reconnect me@teams.example.test" })).toBeTruthy();
+    expect(screen.getByRole("button", { name: "Sign in to Teams" })).toBeTruthy();
+  });
+
+  it("C5: a company on a cloud this build does not serve is shown as that, not as 'not enabled'", () => {
+    draw(teams({ paused: true, unsupportedCloud: true }));
+    expect(screen.getByText("Paused: this Microsoft cloud is not supported for Teams yet")).toBeTruthy();
+    expect(screen.queryByText("Paused: Teams is not enabled for this company")).toBeNull();
+  });
+});

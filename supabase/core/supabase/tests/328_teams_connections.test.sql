@@ -4,7 +4,7 @@
 -- gate for the provider, and the proof that a Teams row is never a mailbox. Cross-lane AND cross-user denial throughout.
 -- Synthetic data only: example UUIDs, example.test addresses.
 begin;
-select plan(86);
+select plan(98);
 \ir helpers/lane_rls.psql
 
 update core.lanes set enabled = true where code = 'APK';
@@ -27,7 +27,7 @@ select ok((select pg_get_constraintdef(oid) like '%microsoft_teams%' from pg_con
 select lives_ok($$insert into core.webhook_events (lane_id, connection_id, provider, event_id, event_type, payload_hash) values ('PKG', '00000000-0000-4000-8000-000000032801', 'microsoft_teams', 'evt-teams-1', 'teams_chats.changed', repeat('a', 64))$$, 'a webhook receipt of provider microsoft_teams is accepted');
 select throws_ok($$insert into core.webhook_events (lane_id, connection_id, provider, event_id, event_type, payload_hash) values ('PKG', '00000000-0000-4000-8000-000000032801', 'skype', 'evt-teams-2', 'x', repeat('a', 64))$$, '23514', null, 'an unknown provider is still refused');
 select throws_ok($$insert into core.connections (lane_id, provider, external_account_id, status) values ('PKG', 'skype', 'x@teams.example.test', 'pending')$$, '23514', null, 'core.connections still refuses an unknown provider');
-select lives_ok($$insert into core.push_subscriptions (lane_id, connection_id, provider, resource, subscription_id, resource_path, expires_at, vault_secret_id) select 'PKG', '00000000-0000-4000-8000-000000032801', 'microsoft_teams', 'mail', 'sub-teams-1', 'users/x/chats', now() + interval '1 day', id from vault.secrets limit 1$$, 'a push subscription row of provider microsoft_teams is accepted by its check');
+select lives_ok($$insert into core.push_subscriptions (lane_id, connection_id, provider, resource, subscription_id, resource_path, expires_at, vault_secret_id) values ('PKG', '00000000-0000-4000-8000-000000032801', 'microsoft_teams', 'mail', 'sub-teams-1', 'users/x/chats', now() + interval '1 day', vault.create_secret('known-secret-t278-328', 't278-328-known'))$$, 'a push subscription row of provider microsoft_teams (with a real Vault secret) is accepted by its check');
 
 -- ---------------------------------------------------------------- owner rules
 select throws_ok($$insert into core.connections (lane_id, provider, external_account_id, status) values ('PKG', 'microsoft_teams', 'noowner@teams.example.test', 'pending')$$, '23514', null, 'a Teams row without an owner is refused (it would be invisible to everyone)');
@@ -151,6 +151,40 @@ set local role service_role;
 select is((select count(*)::int from unnest(core.mailbox_ids(pg_temp.uid('viewer@example.test'), 'PKG')) as m(mid) join core.connections c on c.id = m.mid where c.provider = 'microsoft_teams'), 0, 'service_role: no Teams connection is in mailbox_ids');
 select is((select core.mailbox_ids(pg_temp.uid('viewer@example.test'), 'PKG')), array['00000000-0000-4000-8000-000000032804', '00000000-0000-4000-8000-000000032805']::uuid[], 'service_role: the viewer''s mailboxes are the Microsoft and Google rows only');
 reset role;
+
+
+-- ---------------------------------------------------------------- T-278 review: the reconnect check, the Entra-account index, the token store's two new refusals, the readable columns
+set local role service_role;
+select throws_ok($$select core.teams_assert_one_per_owner('PKG', '00000000-0000-4000-8000-000000032801')$$, 'D0024', null, 'a disconnected Teams row cannot be reconnected beside another usable one of the same person (D0024, before any token)');
+select lives_ok($$select core.teams_assert_one_per_owner('PKG', '00000000-0000-4000-8000-000000032807')$$, 'the person''s one usable row passes the check');
+select throws_ok($$select core.teams_assert_one_per_owner('APK', '00000000-0000-4000-8000-000000032807')$$, 'P0002', null, 'cross-lane: a PKG connection named with lane APK is refused');
+select throws_ok($$select core.teams_assert_one_per_owner('PKG', '00000000-0000-4000-8000-000000032804')$$, '23514', null, 'a Microsoft mail connection is refused');
+reset role;
+select ok(has_function_privilege('service_role', 'core.teams_assert_one_per_owner(text, uuid)', 'execute') and not has_function_privilege('authenticated', 'core.teams_assert_one_per_owner(text, uuid)', 'execute') and not has_function_privilege('anon', 'core.teams_assert_one_per_owner(text, uuid)', 'execute'), 'core.teams_assert_one_per_owner: service_role only');
+
+-- one Entra account in one lane only, whatever the sign-in name (the D-23 index is keyed on the name, which can be renamed)
+set local role service_role;
+select lives_ok($$select core.connection_set_teams_identity('APK', '00000000-0000-4000-8000-000000032803', '00000000-0000-4000-8000-0000000000a1', 'commercial', '00000000-0000-4000-8000-0000000000e3')$$, 'setup: the owner''s APK Teams connection gets its identity');
+reset role;
+select throws_ok($$update core.connections set tenant_id = '00000000-0000-4000-8000-0000000000a1', cloud = 'commercial', entra_object_id = '00000000-0000-4000-8000-0000000000e3' where id = '00000000-0000-4000-8000-000000032806'$$, '23505', null,
+                 'the same Entra account cannot be usable in two lanes (index connections_one_teams_per_entra_object)');
+-- a renamed account: another sign-in name, the same Entra object, in PKG, pending until its token is stored
+insert into core.connections (id, lane_id, provider, external_account_id, status, owner_user_id, tenant_id, cloud, entra_object_id) values
+  ('00000000-0000-4000-8000-000000032810', 'PKG', 'microsoft_teams', 'renamed@teams.example.test', 'pending', pg_temp.uid('finance-operator@example.test'), '00000000-0000-4000-8000-0000000000a1', 'commercial', '00000000-0000-4000-8000-0000000000e3');
+-- a second account of a person who already has a usable Teams connection in the lane (admin_technical: 32806), pending until its token is stored
+insert into core.connections (id, lane_id, provider, external_account_id, status, owner_user_id, tenant_id, cloud, entra_object_id) values
+  ('00000000-0000-4000-8000-000000032811', 'PKG', 'microsoft_teams', 'saurabh2@teams.example.test', 'pending', pg_temp.uid('admin-technical@example.test'), '00000000-0000-4000-8000-0000000000a1', 'commercial', '00000000-0000-4000-8000-0000000000e9');
+set local role service_role;
+select throws_ok($$select core.connection_token_store('PKG', '00000000-0000-4000-8000-000000032810', 'synthetic-token-set-328', null)$$, 'D0023', null, 'storing a token for the renamed account of an Entra account that is usable in another lane: D0023 (another company)');
+select throws_ok($$select core.connection_token_store('PKG', '00000000-0000-4000-8000-000000032811', 'synthetic-token-set-328', null)$$, 'D0024', null, 'storing a token for a second Teams account of the same person: D0024 (the person already has one here), not a raw unique violation');
+reset role;
+select is((select status from core.connections where id = '00000000-0000-4000-8000-000000032811'), 'pending', 'the refused activation changed nothing');
+select ok(not exists (select 1 from core.connection_secrets where connection_id in ('00000000-0000-4000-8000-000000032810', '00000000-0000-4000-8000-000000032811')), 'and no secret is left behind');
+
+-- S8: exactly these columns of core.connections can be read by authenticated (so what an admin reads of someone else''s Teams row through the connections view is known and a later change is noticed)
+select is((select array_agg(column_name::text order by column_name) from information_schema.column_privileges where table_schema = 'core' and table_name = 'connections' and grantee = 'authenticated' and privilege_type = 'SELECT'),
+          array['account_identity', 'cloud', 'created_at', 'external_account_id', 'features', 'features_checked_at', 'id', 'lane_id', 'last_error', 'last_sync_at', 'owner_user_id', 'provider', 'status', 'tenant_id', 'token_expires_at', 'toolkit', 'transport', 'updated_at'],
+          'authenticated can read exactly these columns of core.connections (not created_by, reconnect_notified_at, last_error_stream or entra_object_id)');
 
 -- ---------------------------------------------------------------- connect gate: microsoft_teams like google and microsoft
 select pg_temp.claims('viewer@example.test', 'aal2');

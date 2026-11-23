@@ -5,7 +5,7 @@
 import { Alert, AlertDescription, AlertTitle, Badge, buttonVariants } from "@nichols/ui";
 import type { GoogleConnectionState } from "@/lib/google-connection";
 import type { TeamsConnectionView, TeamsSectionView } from "@/lib/teams-connection";
-import { reconnectToAddText, TEAMS_ADMIN_CONSENT_TEXT, TEAMS_CONNECTS_TEXT, TEAMS_PAUSED_TEXT, TEAMS_REMOVE_ACCESS_TEXT } from "@/lib/teams-wording";
+import { reconnectToAddText, TEAMS_ADMIN_CONSENT_TEXT, TEAMS_CLOUD_UNSUPPORTED_TEXT, TEAMS_CONNECTS_TEXT, TEAMS_PAUSED_TEXT, TEAMS_REMOVE_ACCESS_TEXT } from "@/lib/teams-wording";
 import { ConnectionRow } from "./connection-rows";
 import { TeamsDisconnectButton } from "./teams-disconnect-button";
 
@@ -52,7 +52,7 @@ export function TeamsRows({ laneId, view }: { laneId: string; view: TeamsSection
   const mine = view.connections.filter((c) => c.mine);
   const others = view.connections.filter((c) => !c.mine);
   const hasActive = mine.some((c) => c.state !== "disconnected");
-  const status = (c: TeamsConnectionView) => (view.paused ? <Badge variant="muted">{TEAMS_PAUSED_TEXT}</Badge> : <Badge variant={LABEL[c.state].variant}>{LABEL[c.state].text}</Badge>);
+  const status = (c: TeamsConnectionView) => (view.paused ? <Badge variant="muted">{view.unsupportedCloud ? TEAMS_CLOUD_UNSUPPORTED_TEXT : TEAMS_PAUSED_TEXT}</Badge> : <Badge variant={LABEL[c.state].variant}>{LABEL[c.state].text}</Badge>);
   const features = (c: TeamsConnectionView) => <span className="block text-small text-muted-foreground">{c.has.length === 0 ? "No features yet" : `Has: ${c.has.map((f) => f.replace("_", " ")).join(", ")}`}</span>;
   const signIn = locked || hasActive ? null : (
     <form method="post" action={start}>
@@ -61,8 +61,10 @@ export function TeamsRows({ laneId, view }: { laneId: string; view: TeamsSection
       </button>
     </form>
   );
+  // A disconnected row cannot be reconnected beside another usable one of the person's (the database allows one usable Teams connection per person per company): no button that could only fail.
+  const anotherUsable = (c: TeamsConnectionView) => mine.some((o) => o.id !== c.id && o.state !== "disconnected");
   const reconnect = (c: TeamsConnectionView) =>
-    locked ? null : (
+    locked || (c.state === "disconnected" && anotherUsable(c)) ? null : (
       <form method="post" action={`${start}&connection=${encodeURIComponent(c.id)}`}>
         <button type="submit" aria-label={`Reconnect ${c.account}`} className={buttonVariants({ variant: URGENT.has(c.state) ? "default" : "outline" })}>
           Reconnect
@@ -117,6 +119,8 @@ export function TeamsRows({ laneId, view }: { laneId: string; view: TeamsSection
           note={
             view.paused ? (
               <>Nothing was deleted: the connection is kept and Teams is paused. You can still disconnect it.</>
+            ) : c.state === "disconnected" && anotherUsable(c) ? (
+              <>This account is disconnected. You already have another Teams account connected; disconnect that one first to use this one again.</>
             ) : view.settingsUnknown ? (
               <>Sign in and Reconnect are unavailable until the company&apos;s Teams settings can be read. You can still disconnect it.</>
             ) : c.state !== "disconnected" && featureNote(view, c) ? (

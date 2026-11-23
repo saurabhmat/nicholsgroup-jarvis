@@ -5,6 +5,8 @@ import type { TeamsFeature } from "@nichols/core/lane-config";
 export const TEAMS_PROVIDER = "microsoft_teams";
 export const TEAMS_PAUSED_TEXT = "Paused: Teams is not enabled for this company";
 export const TEAMS_NOT_SET_UP_TEXT = "Teams is not set up for this company.";
+export const TEAMS_CLOUD_UNSUPPORTED_TEXT = "Paused: this Microsoft cloud is not supported for Teams yet";
+export const TEAMS_CLOUD_UNSUPPORTED_PAGE_TEXT = "Teams is not available yet on this company's Microsoft cloud.";
 export const TEAMS_PAUSED_PAGE_TEXT = "Teams is paused for this company.";
 export const TEAMS_CONNECTS_TEXT = "This connects your Microsoft Teams account to this company. It is not your portal sign-in. The portal shows your own chats when you open them and stores no message text.";
 export const TEAMS_ADMIN_CONSENT_TEXT = "Your organisation's Microsoft admin must approve the portal's Teams app once (Entra admin centre → Enterprise applications → the app → Permissions → Grant admin consent).";

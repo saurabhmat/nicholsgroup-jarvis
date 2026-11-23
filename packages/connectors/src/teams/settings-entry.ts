@@ -7,10 +7,9 @@ import type { LaneId } from "@nichols/core";
 import type { TeamsFeature } from "@nichols/core/lane-config";
 import { laneConfigReader } from "../vault/index";
 import { isCloudSupported } from "../microsoft/constants";
-import { TEAMS_ADMIN_CONSENT_FEATURES, TEAMS_ADMIN_CONSENT_TEXT } from "./constants";
+import { TEAMS_ADMIN_CONSENT_FEATURES } from "./constants";
 
 export { disconnectTeams } from "./index";
-export { TEAMS_ADMIN_CONSENT_TEXT };
 
 /** What a page draws from: null = the lane has no Teams block; otherwise whether it is on, the cloud is served, and the features (no tenant id or domain leaves this module). */
 export type TeamsLaneView = { enabled: boolean; cloudSupported: boolean; features: TeamsFeature[]; needsAdminConsent: boolean };

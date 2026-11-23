@@ -33,6 +33,8 @@ export type TeamsSectionView = {
   needsAdminConsent: boolean;
   /** Teams is not enabled for this company (any more): rows are kept, no Sign in or Reconnect. */
   paused?: true;
+  /** Teams is enabled in the settings but this Microsoft cloud is not supported yet (GCC High): paused for that reason (T-278 review C5). */
+  unsupportedCloud?: true;
   /** The company's Teams settings could not be read. */
   settingsUnknown?: true;
   /** The connection rows could not be read. */
@@ -49,6 +51,8 @@ export async function loadTeamsRows(client: Db, laneId: string, userId: string):
   const res = await client.schema("core").from("connections").select("id, external_account_id, status, owner_user_id, features").eq("lane_id", laneId).eq("provider", "microsoft_teams").order("created_at", { ascending: true });
   if (res.error) throw new Error("connections unavailable");
   return (res.data ?? []).flatMap((r) => {
+    // A `pending` row is a connect that has not stored a token (the row is made before the account is checked): it is not a connection, so it is neither listed nor does it hide Sign in (T-278 review C2).
+    if (r.status === "pending") return [];
     const state = mapGoogleStatus(r.status);
     return state && typeof r.id === "string" && typeof r.external_account_id === "string"
       ? [{ id: r.id, account: r.external_account_id, state, mine: r.owner_user_id === userId, has: TEAMS_FEATURE_LIST.filter((f) => hasFeature(r.features, f)) }]
@@ -81,6 +85,9 @@ export async function teamsSectionFor(
   if (rows.status === "rejected") return (view?.enabled && view.cloudSupported) || opts.keepEmpty ? { connections: [], ...base, unavailable: true } : null;
   const connections = rows.value;
   if (view === undefined) return connections.length === 0 && !opts.keepEmpty ? null : { connections, ...base, settingsUnknown: true };
-  if (view === null || !view.enabled || !view.cloudSupported) return connections.length === 0 && !opts.keepEmpty ? null : { connections, ...base, paused: true };
+  if (view === null || !view.enabled || !view.cloudSupported) {
+    const unsupportedCloud = view !== null && view.enabled && !view.cloudSupported;
+    return connections.length === 0 && !opts.keepEmpty ? null : { connections, ...base, paused: true, ...(unsupportedCloud ? { unsupportedCloud: true as const } : {}) };
+  }
   return { connections, ...base };
 }

@@ -6,7 +6,7 @@ type Result = { data: unknown; error: unknown };
 const ok = (data: unknown): Result => ({ data, error: null });
 const fakeClient = (conns: unknown[], mail: unknown) => ({
   schema: () => ({
-    from: () => ({ select: () => ({ eq: () => ({ eq: () => Promise.resolve(ok(conns)) }) }) }),
+    from: () => ({ select: () => ({ eq: () => ({ eq: () => Object.assign(Promise.resolve(ok(conns)), { neq: (c: string, v: string) => Promise.resolve(ok(conns.filter((r) => (r as Record<string, unknown>)[c] !== v))) }) }) }) }),
     rpc: (fn: string) => Promise.resolve({ home_meetings: ok([]), home_mail_attention: ok(mail), home_calendar_status: ok("connected") }[fn]),
   }),
 });

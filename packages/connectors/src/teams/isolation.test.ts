@@ -119,6 +119,7 @@ describe("source scan: every production file that names the provider is on this 
     expect(named).toEqual(
       [
         "apps/web/components/teams-disconnect-button.tsx",
+        "apps/web/lib/home.ts",
         "apps/web/lib/teams-connection.ts",
         "apps/web/lib/teams-wording.ts",
         "packages/connectors/src/contract/schemas.ts",
@@ -126,6 +127,7 @@ describe("source scan: every production file that names the provider is on this 
         "packages/connectors/src/oauth/flow.ts",
         "packages/connectors/src/teams/constants.ts",
         "packages/connectors/src/teams/guard.ts",
+        "packages/connectors/src/teams/http.ts",
         "packages/connectors/src/teams/identity.ts",
         "packages/connectors/src/teams/provider.ts",
         "packages/connectors/src/testing/teams-harness.ts",

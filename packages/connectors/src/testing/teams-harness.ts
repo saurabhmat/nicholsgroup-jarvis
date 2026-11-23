@@ -12,14 +12,13 @@ import type { Connection, ConnectorErrorInfo } from "../contract/schemas";
 import { createApiErrorSink, type ScrubbedApiError } from "../error-log/index";
 import { createConnectorLogger, type LogEntry } from "../log/index";
 import { classifyGraphFailure } from "../microsoft/errors";
-import { createGraphHttp } from "../microsoft/http";
 import { createOAuthFlow } from "../oauth/flow";
 import type { StateStore } from "../oauth/state";
 import { createTeamsApi } from "../teams/api";
 import { teamsFeatureKey } from "../teams/constants";
 import { createTeamsGuard, type TeamsIdentity } from "../teams/guard";
 import { createTeamsHealth } from "../teams/health";
-import { createTeamsHttp } from "../teams/http";
+import { createTeamsHttp, createTeamsTokenHttp } from "../teams/http";
 import { createTeamsOAuthProvider } from "../teams/provider";
 import { createTeamsTokenManager } from "../teams/token-manager";
 import type { TeamsSettings } from "../vault/lane-config";
@@ -249,13 +248,20 @@ export function createTeamsHarness(options: TeamsHarnessOptions) {
       writes.push({ store: "features" });
     },
   };
+  const assertOnePerOwner = (laneId: string, connectionId: string) => {
+    const row = rowOf(laneId, { id: connectionId });
+    const other = [...rows.values()].find((r) => r.id !== row.id && r.lane_id === laneId && r.provider === "microsoft_teams" && r.owner_user_id === row.owner_user_id && r.status !== "disconnected" && r.status !== "pending");
+    if (other) throw new ConnectorError({ kind: "forbidden", message: TEAMS_ONE_ACCOUNT_MESSAGE });
+  };
   const identityWriter = {
+    async assertOnePerOwner(laneId: string, connectionId: string) {
+      assertOnePerOwner(laneId, connectionId);
+    },
     async setOnce(laneId: string, connectionId: string, identity: { tenantId: string; cloud: string; entraObjectId: string }) {
       const row = rowOf(laneId, { id: connectionId });
       if (identities.get(row.id)?.tenantId) throw new ConnectorError({ kind: "forbidden", message: "The tenant of this connection is already recorded" });
       // core.connection_set_teams_identity: one usable Teams connection per person per lane (D0024).
-      const other = [...rows.values()].find((r) => r.id !== row.id && r.lane_id === laneId && r.provider === "microsoft_teams" && r.owner_user_id === row.owner_user_id && r.status !== "disconnected" && r.status !== "pending");
-      if (other) throw new ConnectorError({ kind: "forbidden", message: TEAMS_ONE_ACCOUNT_MESSAGE });
+      assertOnePerOwner(laneId, connectionId);
       identities.set(row.id, { tenantId: identity.tenantId, cloud: identity.cloud, entraObjectId: identity.entraObjectId });
       stats.identityWrites += 1;
       writes.push({ store: "identity" });
@@ -282,7 +288,7 @@ export function createTeamsHarness(options: TeamsHarnessOptions) {
     identityWriter,
     logger,
     ...(options.now ? { now: options.now } : {}),
-    tokenHttpFor: (laneId, baseUrl) => createGraphHttp({ baseUrl, laneId, ...fastOptions }, "commercial", "token"),
+    tokenHttpFor: (laneId, baseUrl) => createTeamsTokenHttp({ baseUrl, laneId, ...fastOptions }),
     graphHttpFor: (laneId, baseUrl) => createTeamsHttp({ baseUrl, laneId, ...fastOptions }, "commercial", "read"),
   });
   let storeFailure: unknown = null;

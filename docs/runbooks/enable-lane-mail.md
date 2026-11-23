@@ -383,8 +383,7 @@ The generic steps, in this order (you run every production step yourself; the ag
    *Expect:* every row `true` (the md5 rows may differ only by whitespace). The part refuses to run if the objects it changes are not the ones it expects, or if it was already applied. It adds
    no row and switches nothing on.
 5. **Fill in `enable-lane-teams-T-280.sql`** (same folder; gitignored): the lane code, the tenant id of the Teams accounts (Entra admin centre -> Overview -> Tenant ID; for `PKG` it is the id in
-   decision D-62), the sign-in domains of the Teams accounts (for `PKG`: `pubkgroup.com` and `pub-k.org`), the features (first phase: `chat_read`, `call_links`) and, **only for a company
-   that limits its modules** (like `NC`), `v_add_messages := true` so the Messages page is shown. Keep the quotes. The same values go into `check-enable-lane-teams-T-280.sql`.
+   decision D-62), the sign-in domains of the Teams accounts (for `PKG`: `pubkgroup.com` and `pub-k.org`), the features (first phase: `chat_read`, `call_links`) and `v_add_messages`: **`true` for every company that limits its modules** (like `NC`: its settings have `limit_to_enabled_modules: true`), otherwise the Messages page stays hidden and the Settings notice cannot point to it (the SQL prints a warning when it is missing); `false` for a company that shows every module (like `PKG`). Keep the quotes. The same values go into `check-enable-lane-teams-T-280.sql`.
 6. **Before you run it**, run the check file once and write down the last result (the count of usable mail connections), ignoring the false rows.
 7. **Run `enable-lane-teams-T-280.sql`.** It adds ONE new settings version: the current settings with one extra key, `teams` (the template below). Every other key is carried over unchanged. It
    refuses a company that has no settings, is not enabled, or **already has a `teams` key** (it never edits one), and a placeholder left in the file. *Expect:* a notice naming the new version.

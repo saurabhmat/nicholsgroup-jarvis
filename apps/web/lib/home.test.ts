@@ -91,7 +91,24 @@ describe("loadHome / homeFor", () => {
   const ok = (data: unknown): Result => ({ data, error: null });
   const fakeClient = (r: { conns: Result; meetings: Result; mail: Result; calendar?: Result; upcoming?: Result }, calls: unknown[] = []) => ({
     schema: () => ({
-      from: () => ({ select: () => ({ eq: (_c: string, lane: string) => ({ eq: (col: string, v: string) => (calls.push(["connections", lane]), calls.push(["connections", `${col}=${v}`]), Promise.resolve(r.conns)) }) }) }),
+      // `neq` really filters the rows, so a test with a Teams row passes only when the query excludes it.
+      from: () => ({
+        select: () => ({
+          eq: (_c: string, lane: string) => ({
+            eq: (col: string, v: string) => {
+              calls.push(["connections", lane]);
+              calls.push(["connections", `${col}=${v}`]);
+              return Object.assign(Promise.resolve(r.conns), {
+                neq: (c: string, x: string) => {
+                  calls.push(["connections", `${c}<>${x}`]);
+                  const rows = Array.isArray(r.conns.data) ? (r.conns.data as Record<string, unknown>[]).filter((row) => row[c] !== x) : r.conns.data;
+                  return Promise.resolve({ ...r.conns, data: rows });
+                },
+              });
+            },
+          }),
+        }),
+      }),
       rpc: (fn: string, args: Record<string, unknown>) => {
         calls.push([fn, args]);
         const later = fn === "home_meetings" && args.p_from !== "2026-11-06T05:00:00.000Z";
@@ -114,6 +131,25 @@ describe("loadHome / homeFor", () => {
     expect(calls).toContainEqual(["home_meetings", { p_lane: "PKG", p_from: "2026-11-06T05:00:00.000Z", p_to: "2026-11-07T05:00:00.000Z" }]);
     expect(calls).toContainEqual(["home_mail_attention", { p_lane: "PKG", p_since: "2026-11-05T14:00:00.000Z" }]); // last 24 h
     expect(calls).toContainEqual(["home_meetings", { p_lane: "PKG", p_from: "2026-11-07T05:00:00.000Z", p_to: "2026-11-14T05:00:00.000Z" }]); // coming up
+  });
+
+  it("T-278: a Teams row is never a feed: no attention item about it, it is not in the feeds, and a person with only a Teams row gets no mail count", async () => {
+    const calls: unknown[] = [];
+    const teams = [{ id: "t1", provider: "microsoft_teams", status: "reconnect_required" }, { id: "t2", provider: "microsoft_teams", status: "degraded" }, { id: "t3", provider: "microsoft_teams", status: "active" }];
+    // an owner sees someone else's Teams row (connections view): nothing about it on Home
+    const owner = fakeClient({ conns: ok([...teams, { id: "g", provider: "google", status: "active" }]), meetings: ok([]), mail: ok([{ unread_important: 3, unread_priority: 0, priority_configured: false }]) }, calls);
+    const a = await loadHome(owner as never, "PKG", now);
+    expect(a.feeds).toEqual([{ provider: "google", status: "active" }]);
+    expect(a.attention.filter((i) => i.key.startsWith("conn:"))).toEqual([]); // no "needs reconnecting" / "has problems" about a Teams row
+    expect(JSON.stringify(a)).not.toContain("microsoft_teams");
+    expect(calls).toContainEqual(["connections", "provider<>microsoft_teams"]);
+    // a viewer whose only connection is a Teams row: no feeds, and SQL (their own mailboxes: none) answers no counts, so no unread-important claim
+    const viewer = fakeClient({ conns: ok(teams), meetings: ok([]), mail: ok([]) });
+    const b = await loadHome(viewer as never, "PKG", now);
+    expect(b.feeds).toEqual([]);
+    expect(b.unreadImportant).toBeNull();
+    expect(b.attention).toEqual([]);
+    expect(JSON.stringify(b)).not.toContain("microsoft_teams");
   });
 
   it("the calendar state comes from calendar access, not from the connections view", async () => {

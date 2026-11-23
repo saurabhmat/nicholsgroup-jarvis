@@ -333,7 +333,12 @@ export async function loadHome(client: Db, laneId: string, now: Date): Promise<H
   const { from, to } = businessDay(now);
   const since = new Date(now.getTime() - DAY_MS);
   const [conns, calendar, meetings, mail, later] = await Promise.all([
-    core.from("connections").select("id, provider, status").eq("lane_id", laneId).eq("transport", "native"), // a Composio connection has no sync/index yet (T-219)
+    core
+      .from("connections")
+      .select("id, provider, status")
+      .eq("lane_id", laneId)
+      .eq("transport", "native") // a Composio connection has no sync/index yet (T-219)
+      .neq("provider", "microsoft_teams"), // T-278: a Teams account is not a data feed: no "needs reconnecting" about someone's Teams row, and it is no mail feed
     core.rpc("home_calendar_status", { p_lane: laneId }),
     core.rpc("home_meetings", {
       p_lane: laneId,

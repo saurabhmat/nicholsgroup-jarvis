@@ -27,7 +27,7 @@
 import type { LaneId } from "@nichols/core";
 import type { TeamsFeature } from "@nichols/core/lane-config";
 import { z } from "zod";
-import { ConnectorError } from "../contract/errors";
+import { ACCOUNT_IN_USE_MESSAGE, ACCOUNT_OWNED_BY_OTHER_MESSAGE, ConnectorError, isConnectorError, TEAMS_ONE_ACCOUNT_MESSAGE } from "../contract/errors";
 import type { HttpClient } from "../http/client";
 import type { ConnectorLogger } from "../log/index";
 import { ConnectRefusal, type OAuthProvider, type TokenResponse } from "../oauth/flow";
@@ -36,9 +36,8 @@ import { checkIdToken, IdTokenRefused } from "../microsoft/id-token";
 import { loggableScopes, microsoftCallbackErrorReason } from "../microsoft/provider";
 import type { LaneConfigReader, TeamsSettings } from "../vault/lane-config";
 import { SecretValue } from "../vault/secret";
-import { createGraphHttp } from "../microsoft/http";
 import { TEAMS_CALLBACK_PATH, TEAMS_KNOWN_SCOPES, TEAMS_PROVIDER, TEAMS_SLUG, TEAMS_BASE_SCOPES, teamsFeatureKey, teamsScopesFor, TEAMS_GRAPH_BASE } from "./constants";
-import { createTeamsHttp } from "./http";
+import { createTeamsHttp, createTeamsTokenHttp } from "./http";
 import { TEAMS_CLOUD_UNSUPPORTED_MESSAGE, TEAMS_DOMAIN_NOT_ALLOWED_MESSAGE, TEAMS_NOT_ENABLED_MESSAGE, type TeamsIdentityReader } from "./guard";
 import type { TeamsIdentityWriter } from "./identity";
 
@@ -106,6 +105,21 @@ export function assertTeamsGrantedScopes(scope: string | undefined, requested: r
   }
 }
 
+/** Messages this provider (and the flow) raise, to the coarse sub-code the Settings page words (T-278 review C1). Fixed strings only: nothing here comes from Microsoft. */
+export const TEAMS_FAILURE_DETAILS: Readonly<Record<string, string>> = Object.freeze({
+  [TEAMS_DOMAIN_NOT_ALLOWED_MESSAGE]: "domain",
+  "Only member accounts of the organisation can be connected": "guest",
+  "Microsoft did not grant every required scope": "scope_missing",
+  "Microsoft granted a scope that does not belong to the Teams connection": "scope_extra",
+  [TEAMS_NOT_ENABLED_MESSAGE]: "not_enabled",
+  [TEAMS_CLOUD_UNSUPPORTED_MESSAGE]: "not_enabled",
+  "No Teams tenant is configured for this company": "not_enabled",
+  "No Teams account domain is configured for this company": "not_enabled",
+  [ACCOUNT_IN_USE_MESSAGE]: "other_company",
+  [TEAMS_ONE_ACCOUNT_MESSAGE]: "one_account",
+  [ACCOUNT_OWNED_BY_OTHER_MESSAGE]: "other_person",
+});
+
 const MeSchema = z.looseObject({
   id: z.string().min(1).max(64),
   userPrincipalName: z.string().max(512).nullish(),
@@ -146,12 +160,19 @@ export function createTeamsOAuthProvider(deps: TeamsProviderDeps): OAuthProvider
       const names = teamsRefusedScopeNames(cause);
       return names === undefined ? undefined : { unexpected_scopes: names };
     },
+    failureDetail(cause) {
+      return isConnectorError(cause) ? TEAMS_FAILURE_DETAILS[cause.info.message] : undefined;
+    },
+    // Microsoft's `invalid_scope` (the lane lists a feature the Entra app does not have) is a set-up problem, not a cancelled connect.
+    callbackErrorDetail(query) {
+      return query.get("error") === "invalid_scope" ? "not_set_up" : undefined;
+    },
     omitOnLoginHint: ["prompt"],
     nonce: true,
     scopeCheckedByProvider: true,
-    callbackErrorReason: microsoftCallbackErrorReason,
+    callbackErrorReason: (query) => (query.get("error") === "invalid_scope" ? "exchange_failed" : microsoftCallbackErrorReason(query)),
     tokenHttp(laneId, baseUrl) {
-      return deps.tokenHttpFor ? deps.tokenHttpFor(laneId, baseUrl) : createGraphHttp({ baseUrl, laneId, ...(deps.logger ? { logger: deps.logger } : {}) }, "commercial", "token");
+      return deps.tokenHttpFor ? deps.tokenHttpFor(laneId, baseUrl) : createTeamsTokenHttp({ baseUrl, laneId, ...(deps.logger ? { logger: deps.logger } : {}) });
     },
     // The id_token is not needed after the connect and holds personal claims: it is not stored.
     storedTokens(tokens) {
@@ -217,6 +238,9 @@ export function createTeamsOAuthProvider(deps: TeamsProviderDeps): OAuthProvider
             return;
           }
           if (recorded.tenantId.toLowerCase() !== tenantId || recorded.cloud !== lane.cloud || (recorded.entraObjectId ?? "").toLowerCase() !== entraObjectId) throw new ConnectRefusal("wrong_account");
+          // A reconnect has its identity already, so `setOnce` (which holds the one-account check) is not called: say it here, before any token is stored. A person with a disconnected row
+          // and another usable one gets the fixed refusal, not "unavailable" from the database's unique index.
+          await deps.identityWriter.assertOnePerOwner(laneId, connection.id);
         },
       };
     },

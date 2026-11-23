@@ -1986,3 +1986,11 @@ Both boxes were checked at his request ("close H-068 and H-073 too"), not on evi
 Saurabh: "no to dmarc task". No task is created for the automated DMARC report being ranked as mail from a person; the behaviour stays as built (the sender matches none of `briefing` `automated_senders`; a lane can add a pattern in its lane_config later without code). Later the same day the row was no longer on his Home ("Nothing new needs you in the mail that was read").
 The summary sentence "I could not check whether the payment actually went through" is still unexplained: the saved briefing was not read (he pasted Home's text, not the query result). Known gap, logged, not scheduled: `grounded()` checks figures and dates only, so an unsupported sentence without numbers reaches Home.
 
+## T-278 – T-280 review (Nov 24, 2026)
+
+Teams phase 1 (commit 14c1bd7 and its follow-up). Security: no BLOCKER or HIGH. Code: no BLOCKER or HIGH. Fixed in the follow-up: S1 – S8 and C1 – C8 (see `.agent/pr/T-278.md`, "Review"). Logged here for the later Teams tasks:
+
+- **T-289 (notices):** `core.push_subscriptions.provider` and `resource` are independent checks, so a `teams_chats` resource could be recorded under provider `microsoft`, or a mail resource under `microsoft_teams`. When T-289 adds the resource value, add a check that ties them (`provider = 'microsoft_teams'` iff `resource = 'teams_chats'`) and a pgTAP test.
+- **T-281 (chat reader), S9:** a token refresh does not re-check the granted scopes (`microsoft/token-manager.ts`: the refresh response's `scope` is stored, not compared with the Teams scope set). The Teams HTTP client's fixed path templates and the guard's per-feature checks limit the impact (a token that gained a scope still cannot reach a path outside the allow-list). T-281 should compare a refresh response's scope with `TEAMS_KNOWN_SCOPES` and mark the connection `reconnect_required` when it holds a scope outside the set.
+- **Live checks (H-081) the tests cannot prove:** percent-encoding of `19:...@thread` ids in Graph paths; the `$value` endpoint shape in the error-log endpoint scrub; real consent behaviour of the Teams app; what Microsoft returns for `invalid_scope` (the connect maps the OAuth error string only).
+

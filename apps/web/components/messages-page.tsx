@@ -8,7 +8,7 @@ import { Alert, AlertDescription, AlertTitle, buttonVariants, Card, CardDescript
 import { guards } from "@/lib/guards";
 import { messagesStateOf, type MessagesState } from "@/lib/teams-messages";
 import { teamsSectionFor } from "@/lib/teams-connection";
-import { reconnectToAddText, TEAMS_ADMIN_CONSENT_TEXT, TEAMS_CONNECTS_TEXT, TEAMS_NOT_SET_UP_TEXT, TEAMS_PAUSED_PAGE_TEXT } from "@/lib/teams-wording";
+import { reconnectToAddText, TEAMS_ADMIN_CONSENT_TEXT, TEAMS_CLOUD_UNSUPPORTED_PAGE_TEXT, TEAMS_CONNECTS_TEXT, TEAMS_NOT_SET_UP_TEXT, TEAMS_PAUSED_PAGE_TEXT } from "@/lib/teams-wording";
 import { LaneEyebrow } from "./module-page";
 import { CardSkeleton } from "./page-skeleton";
 
@@ -57,7 +57,7 @@ export function MessagesScreen({ laneId, state }: { laneId: string; state: Messa
     case "not_enabled":
       return <EmptyState title="Messages are not set up" description={TEAMS_NOT_SET_UP_TEXT} />;
     case "paused":
-      return <EmptyState title="Teams is paused" description={TEAMS_PAUSED_PAGE_TEXT} />;
+      return <EmptyState title="Teams is paused" description={state.unsupportedCloud ? TEAMS_CLOUD_UNSUPPORTED_PAGE_TEXT : TEAMS_PAUSED_PAGE_TEXT} />;
     case "unavailable":
       return (
         <Alert variant="alert" data-testid="messages-unavailable">

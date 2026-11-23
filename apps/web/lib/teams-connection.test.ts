@@ -87,3 +87,21 @@ describe("loadTeamsRows", () => {
     await expect(loadTeamsRows(client(null, { message: "x" }).client, "PKG", ME)).rejects.toThrow();
   });
 });
+
+describe("T-278 review", () => {
+  it("C5: enabled but an unserved cloud is paused with that reason; a plain 'not enabled' has none", async () => {
+    expect(await section([row()], { ...enabled, cloudSupported: false })).toMatchObject({ paused: true, unsupportedCloud: true });
+    expect(await section([row()], { ...enabled, enabled: false })).not.toHaveProperty("unsupportedCloud");
+    expect(await section([row()], null)).not.toHaveProperty("unsupportedCloud");
+  });
+
+  it("C2: a pending row (a connect that stored no token, e.g. a refused second account) is not a connection: not listed, so Sign in stays available", async () => {
+    const client = { schema: () => ({ from: () => ({ select: () => ({ eq: () => ({ eq: () => ({ order: async () => ({ data: [
+      { id: "p", external_account_id: "second@x.test", status: "pending", owner_user_id: ME, features: {} },
+      { id: "a", external_account_id: "me@x.test", status: "active", owner_user_id: ME, features: {} },
+    ], error: null }) }) }) }) }) }) } as never;
+    expect((await loadTeamsRows(client, "PKG", ME)).map((r) => r.id)).toEqual(["a"]);
+    const only = { schema: () => ({ from: () => ({ select: () => ({ eq: () => ({ eq: () => ({ order: async () => ({ data: [{ id: "p", external_account_id: "second@x.test", status: "pending", owner_user_id: ME, features: {} }], error: null }) }) }) }) }) }) } as never;
+    expect(await loadTeamsRows(only, "PKG", ME)).toEqual([]);
+  });
+});

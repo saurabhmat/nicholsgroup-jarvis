@@ -4,9 +4,12 @@
 import { createMicrosoftTokenManager, type MicrosoftTokenManager, type MicrosoftTokenManagerDeps } from "../microsoft/token-manager";
 import { isGuardedTeams } from "./guard";
 import { TEAMS_PROVIDER } from "./constants";
+import { createTeamsTokenHttp } from "./http";
 
 export type TeamsTokenManager = MicrosoftTokenManager;
 
 export function createTeamsTokenManager(deps: Omit<MicrosoftTokenManagerDeps, "isApproved" | "logProvider">): TeamsTokenManager {
-  return createMicrosoftTokenManager({ ...deps, isApproved: isGuardedTeams, logProvider: TEAMS_PROVIDER });
+  // The refresh goes to the sign-in host through a client labelled with the Teams provider (default: a test's own client).
+  const httpFor: MicrosoftTokenManagerDeps["httpFor"] = deps.httpFor ?? ((laneId, connectionId, baseUrl) => createTeamsTokenHttp({ baseUrl, laneId, ...(connectionId ? { connectionId } : {}), ...(deps.logger ? { logger: deps.logger } : {}) }));
+  return createMicrosoftTokenManager({ ...deps, httpFor, isApproved: isGuardedTeams, logProvider: TEAMS_PROVIDER });
 }

@@ -34,3 +34,10 @@ describe("messagesStateOf", () => {
     expect(messagesStateOf(v({ laneFeatures: ["chat_read", "channels_read"], needsAdminConsent: true, connections: [c({ has: ["chat_read", "channels_read"] })] }))).toMatchObject({ missing: [], adminConsent: false });
   });
 });
+
+describe("T-278 review", () => {
+  it("C5: an unserved cloud is a paused page with that reason, even with no connection of one's own", () => {
+    expect(messagesStateOf(v({ paused: true, unsupportedCloud: true, connections: [] }))).toEqual({ kind: "paused", unsupportedCloud: true });
+    expect(messagesStateOf(v({ paused: true }))).toEqual({ kind: "paused" });
+  });
+});

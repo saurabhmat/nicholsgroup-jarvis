@@ -50,6 +50,8 @@ export function createTeamsIdentityReader(clientFor: JobClientFor): TeamsIdentit
 
 /** Records the tenant, cloud and Entra object id of a Teams connection ONCE (`core.connection_set_teams_identity`; service_role, lane-checked). */
 export interface TeamsIdentityWriter {
+  /** Refuses (`forbidden`, the one-account message) when the owner of this connection has ANOTHER usable Teams connection in the lane: the check a reconnect needs, because its identity is already set. */
+  assertOnePerOwner(laneId: LaneId, connectionId: string): Promise<void>;
   setOnce(laneId: LaneId, connectionId: string, identity: { tenantId: string; cloud: string; entraObjectId: string }): Promise<void>;
 }
 
@@ -65,7 +67,30 @@ const SET_ERRORS: Record<string, { kind: "not_found" | "invalid_input" | "forbid
 };
 
 export function createTeamsIdentityWriter(clientFor: JobClientFor): TeamsIdentityWriter {
+  type Rpc = (fn: string, args: Record<string, unknown>) => Promise<{ error: { code?: string } | null }>;
   return {
+    async assertOnePerOwner(laneId, connectionId) {
+      if (typeof laneId !== "string" || !LANE_ID.test(laneId) || typeof connectionId !== "string" || !UUID.test(connectionId)) {
+        throw new ConnectorError({ kind: "invalid_input", message: "A lane and a connection id are required" });
+      }
+      let client: Awaited<ReturnType<JobClientFor>>;
+      try {
+        client = await clientFor(laneId);
+      } catch {
+        throw new ConnectorError({ kind: "connection_unavailable", message: "Lane is not available for connection access" });
+      }
+      let result: Awaited<ReturnType<Rpc>>;
+      try {
+        const core = client.schema("core");
+        result = await (core.rpc.bind(core) as unknown as Rpc)("teams_assert_one_per_owner", { p_lane: laneId, p_connection_id: connectionId });
+      } catch {
+        throw new ConnectorError({ kind: "transient", message: "Connection store unavailable" });
+      }
+      if (result.error) {
+        const known = result.error.code ? SET_ERRORS[result.error.code] : undefined;
+        throw new ConnectorError(known ?? { kind: "transient", message: "Connection store unavailable" });
+      }
+    },
     async setOnce(laneId, connectionId, identity) {
       if (
         typeof laneId !== "string" || !LANE_ID.test(laneId) || typeof connectionId !== "string" || !UUID.test(connectionId) ||
@@ -79,7 +104,6 @@ export function createTeamsIdentityWriter(clientFor: JobClientFor): TeamsIdentit
       } catch {
         throw new ConnectorError({ kind: "connection_unavailable", message: "Lane is not available for connection access" });
       }
-      type Rpc = (fn: string, args: Record<string, unknown>) => Promise<{ error: { code?: string } | null }>;
       let result: Awaited<ReturnType<Rpc>>;
       try {
         const core = client.schema("core");

@@ -178,6 +178,13 @@ export const RESTRICTED_NAMES = {
     allowReexport: CONNECTORS,
     hint: "only the approvals package sends Teams messages",
   },
+  // T-278 review S6: the Teams HTTP wrapper takes a "read" or "write" kind; the "write" kind can send a POST. Only the Teams read client, the write client and the OAuth provider (the `/me`
+  // read at connect time) build one; the harness builds the read kind for tests. Anything else goes through those.
+  createTeamsHttp: {
+    allow: ["packages/connectors/src/teams/api.ts", "packages/connectors/src/teams/write-client.ts", "packages/connectors/src/teams/provider.ts", "packages/connectors/src/testing/teams-harness.ts", "packages/connectors/src/teams/write-boundary.test.ts"],
+    allowReexport: [],
+    hint: "build a Teams request through the Teams read client or the write client (write-client.ts, approvals only)",
+  },
   loadGoogleWriteConnection: { allow: [...APPROVALS, "packages/connectors/src/google/index.ts"], allowReexport: CONNECTORS, hint: "only the approvals package loads a write connection" },
   mintApprovedAction: { allow: APPROVALS, hint: "only the approvals package mints approved actions" },
   getSupabaseSecretKey: { allow: [...LANE_ROUTER, ...TOKEN_VAULT, ...CORE_ENV], hint: "lane router and token vault only" },
