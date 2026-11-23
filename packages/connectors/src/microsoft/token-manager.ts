@@ -59,6 +59,11 @@ export type MicrosoftTokenManagerDeps = {
   logger?: ConnectorLogger;
   /** Pauses between re-reads of the Vault after a failed refresh. Test hook. */
   sleep?: (ms: number) => Promise<void>;
+  /**
+   * Checks the `scope` of a refresh response (T-281, T-278 review S9); it throws when the scopes are not acceptable for this connection. The mail manager passes none (unchanged). The Teams manager
+   * refuses a token that has gained a scope outside its own app's list: nothing is stored and the connection becomes `reconnect_required`.
+   */
+  checkRefreshScope?: (scope: string | undefined) => void;
   /** Called once Microsoft refused the refresh token and no other instance holds a newer one (records the status, notifies). Never throws. */
   onReconnectRequired?: OnReconnectRequired;
 };
@@ -162,6 +167,15 @@ export function createMicrosoftTokenManager(deps: MicrosoftTokenManagerDeps): Mi
     const parsed = TokenResponseSchema.safeParse(data);
     if (!parsed.success) throw new ConnectorError({ kind: "provider_error", message: "Token refresh response is not valid" });
     const t = parsed.data;
+    if (deps.checkRefreshScope) {
+      try {
+        deps.checkRefreshScope(t.scope);
+      } catch {
+        const reconnect = new ConnectorError({ kind: "reconnect_required", message: "Microsoft granted a scope that does not belong to this connection; the connection must be reconnected" });
+        await deps.onReconnectRequired?.(laneId, g.conn, reconnect.toJSON());
+        throw reconnect;
+      }
+    }
     // Only known fields are stored. The new refresh token REPLACES the old one (V-8); a response without one keeps the old (still valid).
     const next = {
       access_token: t.access_token,

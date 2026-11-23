@@ -74,4 +74,19 @@ describe("the Teams write path is reachable only from approvals", () => {
       .sort();
     expect(builders).toEqual(["packages/connectors/src/teams/api.ts", "packages/connectors/src/teams/provider.ts", "packages/connectors/src/teams/write-client.ts", "packages/connectors/src/testing/teams-harness.ts"]);
   });
+
+  it("the chat reader (T-281) can only read: it names no write client, no write route, no HTTP method but the read client's GET, no direct fetch, and its one log line holds no content", () => {
+    for (const name of ["reader.ts", "reader-entry.ts", "deep-links.ts", "message-html.ts", "chat-reads-store.ts"]) {
+      const t = text(join(root, "packages/connectors/src/teams", name));
+      expect(t, name).not.toMatch(/write-client|TEAMS_WRITE_ROUTES|createTeamsWriteClient|isTeamsWritePath/);
+      expect(t, name).not.toMatch(/\bfetch\(|XMLHttpRequest|"POST"|"PATCH"|"PUT"|"DELETE"|markChatReadForUser|setReaction|softDelete/);
+      expect(t, name).not.toMatch(/console\./);
+    }
+    const reader = text(join(root, "packages/connectors/src/teams/reader.ts"));
+    expect(reader.match(/log\.(debug|info|warn|error)\(/g) ?? []).toHaveLength(1);
+    expect(reader).toMatch(/log\.warn\("teams\.chats\.expand_fallback", \{ laneId \}\)/);
+    // every request goes through the guarded read client with an explicit user actor and no retry
+    expect(reader).toMatch(/actor: \{ kind: "user", userId \}, retry: false/);
+    expect(reader).not.toMatch(/kind: "service"/);
+  });
 });

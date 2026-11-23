@@ -29,10 +29,19 @@ export type TeamsGetRequest = {
   params?: Record<string, string>;
   query?: TeamsQuery;
   actor: TeamsActor;
+  /**
+   * `false`: no retry of any kind (not on 429, 5xx or a timeout). A page request sets it: the person gets "Teams is busy, try again in N seconds" at once instead of a wait inside the page,
+   * and there can never be a retry storm (T-281, vendor facts A2). Default: the shared client's own retry with `Retry-After`.
+   */
+  retry?: boolean;
 };
 
+/** What the guard approved for this call, handed back so a reader can tell the person's own messages and external members without a second read: the account's tenant and Entra object id. */
+export type TeamsSelf = { readonly tenantId: string; readonly entraObjectId: string };
+export type TeamsResponse<T> = ConnectorResponse<T> & { readonly self: TeamsSelf };
+
 export interface TeamsApi {
-  get<T = unknown>(laneId: LaneId, conn: unknown, req: TeamsGetRequest): Promise<ConnectorResponse<T>>;
+  get<T = unknown>(laneId: LaneId, conn: unknown, req: TeamsGetRequest): Promise<TeamsResponse<T>>;
 }
 
 export type TeamsApiDeps = {
@@ -105,6 +114,7 @@ export function createTeamsApi(deps: TeamsApiDeps): TeamsApi {
             path: req.path,
             ...(req.params ? { params: req.params } : {}),
             ...(req.query ? { query: req.query } : {}),
+            ...(req.retry === false ? { retry: false } : {}),
             auth: {
               scheme: "Bearer",
               secret: async () => {
@@ -121,12 +131,13 @@ export function createTeamsApi(deps: TeamsApiDeps): TeamsApi {
               },
             },
           });
+        const self: TeamsSelf = Object.freeze({ tenantId: g.tenantId, entraObjectId: g.entraObjectId });
         try {
           try {
-            return await request();
+            return { ...(await request()), self };
           } catch (e) {
             // 401 is `forbidden` with that status (HTTP client contract). Refresh once, retry once; a second 401 is final.
-            if (isConnectorError(e) && e.info.kind === "forbidden" && e.info.http_status === 401 && used && credentialError === undefined) return await request(used);
+            if (isConnectorError(e) && e.info.kind === "forbidden" && e.info.http_status === 401 && used && credentialError === undefined) return { ...(await request(used)), self };
             throw e;
           }
         } catch (e) {

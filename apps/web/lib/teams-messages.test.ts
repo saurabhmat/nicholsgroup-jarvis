@@ -27,7 +27,7 @@ describe("messagesStateOf", () => {
     expect(messagesStateOf(v({ connections: [c({ state: "reconnect_required" })] }))).toEqual({ kind: "reconnect", connectionId: "00000000-0000-4000-8000-0000000000c1", account: "me@teams.example.test" });
   });
   it("connected: who, degraded or not, the features the lane lists that the connection lacks, and the admin approval text for channels", () => {
-    expect(messagesStateOf(v())).toEqual({ kind: "connected", connectionId: "00000000-0000-4000-8000-0000000000c1", account: "me@teams.example.test", degraded: false, missing: [], adminConsent: false });
+    expect(messagesStateOf(v())).toEqual({ kind: "connected", connectionId: "00000000-0000-4000-8000-0000000000c1", account: "me@teams.example.test", degraded: false, missing: [], adminConsent: false, laneFeatures: ["chat_read", "call_links"] });
     expect(messagesStateOf(v({ connections: [c({ state: "degraded" })] }))).toMatchObject({ kind: "connected", degraded: true });
     expect(messagesStateOf(v({ laneFeatures: ["chat_read", "call_links", "chat_send"] }))).toMatchObject({ missing: ["chat_send"], adminConsent: false });
     expect(messagesStateOf(v({ laneFeatures: ["chat_read", "channels_read"], needsAdminConsent: true }))).toMatchObject({ missing: ["channels_read"], adminConsent: true });

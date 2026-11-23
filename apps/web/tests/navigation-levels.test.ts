@@ -15,6 +15,8 @@ const t = vi.hoisted(() => ({
   laneError: null as unknown,
   config: null as unknown,
   rendered: [] as string[],
+  /** The Teams reader (T-283): every call is recorded with the tick it started in, and answers after a pause, so "started together" can be told from "one after the other". */
+  reader: { calls: [] as { fn: string; at: number }[], seq: 0 },
 }));
 
 // React cache() memoises per render; a test is one render, so this memo is identity-keyed and cleared before every test.
@@ -97,6 +99,27 @@ function makeGuards() {
 }
 let guardsObj = makeGuards();
 vi.mock("@/lib/guards", () => ({ guards: async () => guardsObj }));
+// T-283: the Teams reader and the browser-only parts are stubs here (their own tests are in packages/connectors and components/messages-client.test.tsx). The reader records WHEN each call started.
+vi.mock("@nichols/connectors/teams-reader", () => {
+  const self = { tenantId: "t", entraObjectId: "00000000-0000-4000-8000-0000000000a1" };
+  const started = async <T,>(fn: string, value: T): Promise<T> => {
+    t.reader.calls.push({ fn, at: performance.now() });
+    await new Promise((res) => setTimeout(res, 6));
+    return value;
+  };
+  return {
+    listChats: () => started("listChats", { chats: [], nextCursor: null, self }),
+    listMessages: () => started("listMessages", { messages: [], nextBefore: null, self }),
+    openChat: () => started("openChat", { chat: { chatId: "19:abc123def456@thread.v2", chatType: "group", topic: "T", webUrl: null, members: [], membersCapped: false, preview: null, lastReadAt: null, hidden: false }, members: [], membersMore: false }),
+    resolveCallTargets: () => started("resolveCallTargets", { ok: false, reason: "no_one" }),
+  };
+});
+vi.mock("@/components/messages-client", () => ({
+  MessagesRefresh: () => null,
+  ConversationMessages: () => null,
+  CallButtons: () => null,
+  MarkRead: () => null,
+}));
 // T-280: the company's Teams settings come from the lane config through the connectors (a recorded read here; the real reader is tested in packages/connectors).
 vi.mock("@nichols/connectors/teams-settings", () => ({
   teamsSettingsOf: async () => {
@@ -116,6 +139,8 @@ async function resolve(node: ReactNode): Promise<ReactNode> {
     t.rendered.push((el.type as { name: string }).name);
     return resolve(await (el.type as (p: unknown) => Promise<ReactNode>)(el.props));
   }
+  // a class component (an error boundary) is not run here: its children are resolved in its place
+  if (typeof el.type === "function" && (el.type as { prototype?: { isReactComponent?: unknown } }).prototype?.isReactComponent) return cloneElement(el, undefined, await resolve(el.props.children));
   if (typeof el.type === "function") {
     t.rendered.push((el.type as { name: string }).name);
     return resolve((el.type as (p: unknown) => ReactNode)(el.props));
@@ -148,6 +173,8 @@ beforeEach(() => {
   t.rendered = [];
   t.laneError = null;
   t.answers = { "from:lane_config_current": OPEN };
+  t.reader.calls = [];
+  t.reader.seq = 0;
   for (const r of t.roots) r.clear();
   guardsObj = makeGuards();
 });
@@ -206,7 +233,10 @@ describe("round trips and sequential levels per menu page (T-276)", () => {
   });
 });
 
-describe("Messages (T-280)", () => {
+const CHAT_KEY = Buffer.from("19:abc123def456@thread.v2").toString("base64url");
+const TEAMS_ROW = { id: "00000000-0000-4000-8000-0000000000c1", external_account_id: "me@teams.example.test", status: "active", owner_user_id: "u1", features: { teams_chat_read: true, teams_call_links: true } };
+
+describe("Messages (T-280, T-283)", () => {
   it("the gate, the lane list and the Teams reads (settings and own rows) start together: no read waits for another beyond the one lane check", async () => {
     t.answers["from:connections"] = { data: [], error: null };
     const { default: Page } = await import("@/app/[laneId]/messages/page");
@@ -223,6 +253,71 @@ describe("Messages (T-280)", () => {
     const { default: Page } = await import("@/app/[laneId]/messages/page");
     await expect(resolve(Page({ params: params() } as never) as ReactNode)).rejects.toThrow("REDIRECT /PKG");
     expect(t.rendered).toEqual(["ModuleGate"]);
+    for (const r of t.roots) r.clear();
+  });
+
+  it("a link prefetch makes no Graph request: the page function is synchronous, starts only the connect-state reads, and the reader is not called until the gate has answered and the workspace renders (T-283)", async () => {
+    t.answers["from:connections"] = { data: [TEAMS_ROW], error: null };
+    t.answers["rpc:teams_chat_reads_list"] = { data: [], error: null };
+    const { default: Page } = await import("@/app/[laneId]/messages/page");
+    const tree = Page({ params: params(), searchParams: sp({ chat: CHAT_KEY }) } as never) as ReactNode;
+    expect(isValidElement(tree)).toBe(true); // synchronous: the shell, its heading and skeleton are what a prefetch gets
+    await new Promise((r) => setTimeout(r, 30)); // let everything started by the page function run to its end
+    expect(t.reader.calls).toEqual([]);
+    expect(t.calls.filter((c) => c.name === "rpc:teams_chat_reads_list")).toEqual([]);
+  });
+
+  it("a connected person: the chat list, the read markers and the open conversation are all STARTED together after the gate (the list and the conversation never wait for each other)", async () => {
+    t.answers["from:connections"] = { data: [TEAMS_ROW], error: null };
+    t.answers["rpc:teams_chat_reads_list"] = { data: [], error: null };
+    const { default: Page } = await import("@/app/[laneId]/messages/page");
+    await resolve(Page({ params: params(), searchParams: sp({ chat: CHAT_KEY }) } as never) as ReactNode);
+    const fns = t.reader.calls.map((c) => c.fn).sort();
+    expect(fns).toEqual(["listChats", "listMessages", "openChat"]);
+    // each Graph read takes 6 ms in this stub: three reads that began within 5 ms of each other began together, none waited for another to answer
+    const starts = t.reader.calls.map((c) => c.at);
+    expect(Math.max(...starts) - Math.min(...starts)).toBeLessThan(5);
+    const markers = t.calls.find((c) => c.name === "rpc:teams_chat_reads_list");
+    expect(markers).toBeTruthy();
+    // the markers' level equals the level the Graph reads began in: one level, not a chain
+    const graphLevel = t.calls.find((c) => c.name === "teams.settings")?.level ?? 0;
+    expect(markers?.level).toBeLessThanOrEqual(graphLevel + 2);
+    expect(count("teams.settings")).toBe(1);
+    expect(count("lane.check")).toBe(1);
+    expect(maxLevel()).toBeLessThanOrEqual(3);
+  });
+
+  it("no chat in the address: only the chat list is read (no conversation read, no Graph read for a chat that was not asked for)", async () => {
+    t.answers["from:connections"] = { data: [TEAMS_ROW], error: null };
+    t.answers["rpc:teams_chat_reads_list"] = { data: [], error: null };
+    const { default: Page } = await import("@/app/[laneId]/messages/page");
+    await resolve(Page({ params: params(), searchParams: sp() } as never) as ReactNode);
+    expect(t.reader.calls.map((c) => c.fn)).toEqual(["listChats"]);
+  });
+
+  it("a made-up chat key is 'no chat selected', not a Graph request", async () => {
+    t.answers["from:connections"] = { data: [TEAMS_ROW], error: null };
+    t.answers["rpc:teams_chat_reads_list"] = { data: [], error: null };
+    const { default: Page } = await import("@/app/[laneId]/messages/page");
+    await resolve(Page({ params: params(), searchParams: sp({ chat: "../../etc/passwd" }) } as never) as ReactNode);
+    expect(t.reader.calls.map((c) => c.fn)).toEqual(["listChats"]);
+  });
+
+  it("privacy: when the only Teams row visible is another person's (an admin sees its health), the person is 'not connected' and nothing is read from Teams", async () => {
+    t.answers["from:connections"] = { data: [{ ...TEAMS_ROW, owner_user_id: "someone-else" }], error: null };
+    const { default: Page } = await import("@/app/[laneId]/messages/page");
+    await resolve(Page({ params: params(), searchParams: sp({ chat: CHAT_KEY }) } as never) as ReactNode);
+    expect(t.reader.calls).toEqual([]);
+    expect(t.rendered).not.toContain("MessagesWorkspace");
+  });
+
+  it("a hidden module redirects before any Graph read, even for a connected person", async () => {
+    t.answers["from:lane_config_current"] = HIDE("comms");
+    t.answers["from:connections"] = { data: [TEAMS_ROW], error: null };
+    const { default: Page } = await import("@/app/[laneId]/messages/page");
+    await expect(resolve(Page({ params: params(), searchParams: sp({ chat: CHAT_KEY }) } as never) as ReactNode)).rejects.toThrow("REDIRECT /PKG");
+    await new Promise((r) => setTimeout(r, 30));
+    expect(t.reader.calls).toEqual([]);
     for (const r of t.roots) r.clear();
   });
 

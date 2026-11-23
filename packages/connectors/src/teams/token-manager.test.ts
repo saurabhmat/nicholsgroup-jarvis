@@ -83,4 +83,29 @@ describe("the Teams token manager", () => {
     await expect(mailManager.accessToken("PKG", g)).rejects.toMatchObject({ info: { kind: "forbidden" } });
     expect(h.stats.tokenReads).toBe(0);
   });
+
+  it("S9 (T-278 review): a refresh response that lists a scope outside the Teams app's list (a mail scope) is not stored and the connection becomes reconnect_required; the app's own scopes are fine", async () => {
+    const { h, fake } = setup();
+    const { conn, row } = h.connect("PKG", PERSON, { storedAccessExpired: true });
+    const g = await h.guard("PKG", conn);
+    fake.state.refreshScope = "User.Read Chat.Read Channel.ReadBasic.All";
+    const before = h.secrets.get(row.id) as string;
+    await h.tokens.accessToken("PKG", g); // on the Teams list: accepted
+    expect(h.secrets.get(row.id)).not.toBe(before);
+
+    const second = setup();
+    const c2 = second.h.connect("PKG", PERSON, { storedAccessExpired: true });
+    const g2 = await second.h.guard("PKG", c2.conn);
+    second.fake.state.refreshScope = "User.Read Chat.Read Mail.Read";
+    const stored = second.h.secrets.get(c2.row.id) as string;
+    await expect(second.h.tokens.accessToken("PKG", g2)).rejects.toMatchObject({ info: { kind: "reconnect_required" } });
+    expect(second.h.secrets.get(c2.row.id)).toBe(stored); // nothing stored
+    expect(second.h.reconnects).toHaveLength(1);
+
+    const third = setup();
+    const c3 = third.h.connect("PKG", PERSON, { storedAccessExpired: true });
+    const g3 = await third.h.guard("PKG", c3.conn);
+    third.fake.state.refreshScope = "https://outlook.office.com/Mail.Read User.Read";
+    await expect(third.h.tokens.accessToken("PKG", g3)).rejects.toMatchObject({ info: { kind: "reconnect_required" } });
+  });
 });

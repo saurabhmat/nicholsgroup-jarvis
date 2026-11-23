@@ -25,6 +25,7 @@ import { createComposioConnectionStore } from "../composio/store";
 import { createMicrosoftIdentityReader, createMicrosoftIdentityWriter } from "../microsoft/identity";
 import { createMicrosoftSubscriptionStore } from "../microsoft/subscription-store";
 import { createTeamsIdentityReader, createTeamsIdentityWriter } from "../teams/identity";
+import { createTeamsChatReadsStore } from "../teams/chat-reads-store";
 
 const vault = createTokenVault(getLaneJobClient);
 
@@ -85,6 +86,8 @@ export const microsoftSubscriptionStore = createMicrosoftSubscriptionStore(getLa
 /** The Teams identity of a connection (T-279): tenant, cloud and the server-only Entra object id, read on every guarded call; set once at connect time. */
 export const teamsIdentityReader = createTeamsIdentityReader(getLaneJobClient);
 export const teamsIdentityWriter = createTeamsIdentityWriter(getLaneJobClient);
+/** Deletes a Teams connection's read markers on disconnect (T-282). */
+export const teamsChatReadsStore = createTeamsChatReadsStore(getLaneJobClient);
 
 /** Writes the QuickBooks edition flags onto core.connections with the lane's job client (T-051). */
 export const qboFeatureStore = createQboFeatureStore(getLaneJobClient);

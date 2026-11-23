@@ -3,20 +3,21 @@ import "server-only";
 // Server-only. Credentials are read from the connector env at call time (`requireConnectorEnv("graph_teams")` fails closed naming missing variables, never printing values) and
 // are the TEAMS app's: a second Entra registration, so the mail app's secret is never used here and a Teams token cannot reach mail.
 //
-// NOT wired here, on purpose (later tasks): the Graph write client (built only by the approvals wiring in T-286; write-boundary.test.ts proves nothing else builds it),
-// the subscription renewer (T-289) and the chat reader (T-281). This task connects an account and keeps it healthy: no chat data is read.
+// NOT wired here, on purpose (later tasks): the Graph write client (built only by the approvals wiring in T-286; write-boundary.test.ts proves nothing else builds it) and the
+// subscription renewer (T-289). The chat reader (T-281) is wired below: GET only, for the signed-in owner.
 import { requireConnectorEnv } from "@nichols/core/env/server";
 import { attentionEventId, connAttentionNeeded, sendLaneEvent } from "@nichols/core/inngest";
 import { createApiErrorSink } from "../error-log/sink";
 import { classifyGraphFailure } from "../microsoft/errors";
 import { createReconnectRecorder } from "../quickbooks/reconnect";
-import { apiErrorStore, connectionLoader, getToken, laneConfigReader, microsoftSubscriptionStore, reconnectStore, revokeToken, rotateToken, teamsIdentityReader, teamsIdentityWriter } from "../vault/index";
+import { apiErrorStore, connectionLoader, getToken, laneConfigReader, microsoftSubscriptionStore, reconnectStore, revokeToken, rotateToken, teamsChatReadsStore, teamsIdentityReader, teamsIdentityWriter } from "../vault/index";
 import { SecretValue } from "../vault/secret";
 import { createTeamsApi } from "./api";
 import { createTeamsDisconnect } from "./disconnect";
 import { createTeamsGuard } from "./guard";
 import { createTeamsHealth, createTeamsHealthSkip } from "./health";
 import { createTeamsOAuthProvider, type TeamsClientConfig } from "./provider";
+import { createTeamsReader } from "./reader";
 import { createTeamsTokenManager } from "./token-manager";
 
 function client() {
@@ -62,4 +63,13 @@ export const teamsOAuthProvider = createTeamsOAuthProvider({
 });
 
 /** Local Disconnect (spec 5): deletes the Vault tokens, marks the row `disconnected`, marks its subscriptions removed. No request to Microsoft. */
-export const disconnectTeams = createTeamsDisconnect({ loader: connectionLoader, vault: { revokeToken }, subscriptions: microsoftSubscriptionStore });
+export const disconnectTeams = createTeamsDisconnect({
+  loader: connectionLoader,
+  vault: { revokeToken },
+  subscriptions: microsoftSubscriptionStore,
+  // T-282: the portal's read markers go with the connection (the retention purge also removes those of any disconnected connection, should this one fail). T-286 and T-289 add theirs here.
+  purgers: [{ name: "chat_reads", purge: (laneId, connectionId) => teamsChatReadsStore.purgeConnection(laneId, connectionId) }],
+});
+
+/** The chat reader (T-281, T-284): read-only, over the guarded Teams client. Used through `@nichols/connectors/teams-reader` only (a narrow, server-only surface). */
+export const teamsReader = createTeamsReader({ api: teamsApi });

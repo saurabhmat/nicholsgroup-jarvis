@@ -10,7 +10,7 @@ export type MessagesState =
   | { kind: "paused"; unsupportedCloud?: true }
   | { kind: "not_connected" }
   | { kind: "reconnect"; connectionId: string; account: string }
-  | { kind: "connected"; connectionId: string; account: string; degraded: boolean; missing: TeamsFeature[]; adminConsent: boolean };
+  | { kind: "connected"; connectionId: string; account: string; degraded: boolean; missing: TeamsFeature[]; adminConsent: boolean; /** The features the company lists (what the page may offer). */ laneFeatures: TeamsFeature[] };
 
 export function messagesStateOf(view: TeamsSectionView | null): MessagesState {
   if (view === null) return { kind: "no_access" };
@@ -23,5 +23,5 @@ export function messagesStateOf(view: TeamsSectionView | null): MessagesState {
   if (!usable) return { kind: "not_connected" };
   const missing = view.laneFeatures.filter((f) => !usable.has.includes(f));
   // Channels need a tenant administrator's approval once: when the company lists them and this connection lacks them, say so (chats keep working).
-  return { kind: "connected", connectionId: usable.id, account: usable.account, degraded: usable.state === "degraded", missing, adminConsent: view.needsAdminConsent && missing.includes("channels_read") };
+  return { kind: "connected", connectionId: usable.id, account: usable.account, degraded: usable.state === "degraded", missing, laneFeatures: [...view.laneFeatures], adminConsent: view.needsAdminConsent && missing.includes("channels_read") };
 }

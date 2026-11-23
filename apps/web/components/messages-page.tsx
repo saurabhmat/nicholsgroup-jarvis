@@ -1,15 +1,18 @@
-// Messages (T-280, spec docs/specs/messages.md 11 "States"): the connect states of the signed-in person's own Teams account in this company. No chat data yet: a connected person sees
-// who they are connected as and a placeholder where the chat list arrives (T-283); no sample data. Every state has a fixed text (rule 9: nothing from Teams, the config or the query is
-// rendered), and none shows an empty list on an error. T-276: the header is fixed text and the lane check streams in the eyebrow; the connect state is read beside the module gate
-// (`startMessages`), and nothing here reads the clock or calls Microsoft (a link prefetch makes no Graph request: there is no Graph read on this page yet).
+// Messages (T-280, T-283; spec docs/specs/messages.md 11 "States"): the connect states of the signed-in person's own Teams account in this company, and, for a connected person, their chat
+// list and conversation (components/messages-chats.tsx). No sample data. Every state has a fixed text (rule 9: nothing from the config or the query is rendered), and none shows an empty
+// list on an error. T-276: the header is fixed text and the lane check streams in the eyebrow; the connect state is read beside the module gate (`startMessages`); the Graph reads (the chat
+// list and the open conversation) start together in the workspace, which renders only after the gate and the connect state, inside Suspense, so a link prefetch makes no Graph request and this
+// file reads no clock and imports no Microsoft client.
 import Link from "next/link";
-import { cache, Suspense } from "react";
-import { Alert, AlertDescription, AlertTitle, buttonVariants, Card, CardDescription, CardHeader, CardTitle, EmptyState, laneHref, PageHeader } from "@nichols/ui";
+import { cache, Suspense, type ReactNode } from "react";
+import { Alert, AlertDescription, AlertTitle, Card, CardDescription, CardHeader, CardTitle, EmptyState, laneHref, PageHeader } from "@nichols/ui";
 import { guards } from "@/lib/guards";
 import { messagesStateOf, type MessagesState } from "@/lib/teams-messages";
 import { teamsSectionFor } from "@/lib/teams-connection";
 import { reconnectToAddText, TEAMS_ADMIN_CONSENT_TEXT, TEAMS_CLOUD_UNSUPPORTED_PAGE_TEXT, TEAMS_CONNECTS_TEXT, TEAMS_NOT_SET_UP_TEXT, TEAMS_PAUSED_PAGE_TEXT } from "@/lib/teams-wording";
 import { LaneEyebrow } from "./module-page";
+import { MessagesWorkspace } from "./messages-chats";
+import { SignIn } from "./messages-view";
 import { CardSkeleton } from "./page-skeleton";
 
 /** One read per request and lane, shared by the gate's early start and the body (React cache). */
@@ -23,35 +26,34 @@ export function startMessages(params: Promise<{ laneId: string }>): void {
   void params.then((p) => messagesState(p.laneId)).catch(() => undefined);
 }
 
-export function MessagesPage({ params }: { params: Promise<{ laneId: string }> }) {
+type SearchParams = Record<string, string | string[] | undefined>;
+
+export function MessagesPage({ params, searchParams }: { params: Promise<{ laneId: string }>; searchParams: Promise<SearchParams> }) {
   return (
-    <div className="flex flex-col gap-6">
+    <div className="flex min-w-0 flex-col gap-6">
       <PageHeader eyebrow={<LaneEyebrow params={params} />} title="Messages" />
       <Suspense fallback={<CardSkeleton />}>
-        <MessagesBody params={params} />
+        <MessagesBody params={params} searchParams={searchParams} />
       </Suspense>
     </div>
   );
 }
 
-async function MessagesBody({ params }: { params: Promise<{ laneId: string }> }) {
+async function MessagesBody({ params, searchParams }: { params: Promise<{ laneId: string }>; searchParams: Promise<SearchParams> }) {
   const laneId = (await params).laneId;
-  return <MessagesScreen laneId={laneId} state={await messagesState(laneId)} />;
+  const state = await messagesState(laneId);
+  return <MessagesScreen laneId={laneId} state={state} workspace={state.kind === "connected" ? <ConnectedWorkspace laneId={laneId} state={state} searchParams={searchParams} /> : null} />;
 }
 
-function SignIn({ laneId, connectionId, label }: { laneId: string; connectionId?: string; label: string }) {
-  const action = `/api/connect/teams/start?lane=${encodeURIComponent(laneId)}${connectionId ? `&connection=${encodeURIComponent(connectionId)}` : ""}`;
-  return (
-    <form method="post" action={action}>
-      <button type="submit" className={buttonVariants({ variant: "default" })}>
-        {label}
-      </button>
-    </form>
-  );
+/** Chats need the company's `chat_read` and the connection's: otherwise the page says so (the "Reconnect Teams to add chats" note is the connected card's), never an empty list. */
+function ConnectedWorkspace({ laneId, state, searchParams }: { laneId: string; state: Extract<MessagesState, { kind: "connected" }>; searchParams: Promise<SearchParams> }) {
+  if (!state.laneFeatures.includes("chat_read")) return <EmptyState title="Chats are not enabled" description="Chats are not turned on for this company's Teams." />;
+  if (state.missing.includes("chat_read")) return null; // the feature-missing note above carries the Reconnect button
+  return <MessagesWorkspace laneId={laneId} state={state} searchParams={searchParams} />;
 }
 
 /** The page below the header, for a given state (the tests render this directly). */
-export function MessagesScreen({ laneId, state }: { laneId: string; state: MessagesState }) {
+export function MessagesScreen({ laneId, state, workspace = null }: { laneId: string; state: MessagesState; /** The connected person's chats (streamed sections); null where there are none to draw. */ workspace?: ReactNode }) {
   switch (state.kind) {
     case "no_access":
     case "not_enabled":
@@ -121,7 +123,7 @@ export function MessagesScreen({ laneId, state }: { laneId: string; state: Messa
               </div>
             </Alert>
           ) : null}
-          <EmptyState title="Chats arrive in the next update" description="Your Teams chats will be listed here. Nothing is stored: chats are read from Teams when you open them." />
+          {workspace}
         </div>
       );
   }

@@ -64,6 +64,18 @@ export interface FakeTeams {
     graphFail: { status: number; code: string; times: number; retryAfter?: number } | null;
     /** The next POST to a message route answers this status instead of 201 (a timeout is a test's own fetch). */
     postStatus: number | null;
+    /** The chat reader's data (T-281), raw Graph shapes, all synthetic. `chatPages[k]` is the answer for `$skiptoken=page-k` (page 0 without a token); a next link is added while pages remain. */
+    chatPages: unknown[][];
+    /** Graph refuses `$expand=members,lastMessagePreview` together (a 400) and accepts `lastMessagePreview` alone. */
+    refuseCombinedExpand: boolean;
+    membersByChat: Map<string, unknown[]>;
+    /** `GET /chats/{id}`: the chat's own fields. */
+    chatById: Map<string, unknown>;
+    messagesByChat: Map<string, Record<string, unknown>[]>;
+    /** `GET /users/{id}`: the sign-in name each synthetic user answers. */
+    upnByUser: Map<string, string>;
+    /** The `scope` a refresh answers with (default: the connection's own two); a test plants a foreign scope here. */
+    refreshScope: string | null;
   };
   accounts: Map<string, FakeTeamsAccount>;
   codes: Map<string, FakeTeamsGrant>;
@@ -80,7 +92,7 @@ export function createFakeTeams(): FakeTeams {
   const byRefresh = new Map<string, FakeTeamsAccount>();
   const codes = new Map<string, FakeTeamsGrant>();
   let counter = 0;
-  const state: FakeTeams["state"] = { tokenRequests: [], graphRequests: [], refreshes: 0, codeGrants: 0, idTokens: [], failRefresh: null, unauthorizedOnce: 0, graphFail: null, postStatus: null };
+  const state: FakeTeams["state"] = { tokenRequests: [], graphRequests: [], refreshes: 0, codeGrants: 0, idTokens: [], failRefresh: null, unauthorizedOnce: 0, graphFail: null, postStatus: null, chatPages: [[]], refuseCombinedExpand: false, membersByChat: new Map(), chatById: new Map(), messagesByChat: new Map(), upnByUser: new Map(), refreshScope: null };
 
   const issueAccess = (a: FakeTeamsAccount): string => {
     const t = `synthetic-teams-access-${String(++counter)}-${randomUUID()}`;
@@ -185,7 +197,7 @@ export function createFakeTeams(): FakeTeams {
       if (account.revoked) return oauthError(400, "invalid_grant", [70008]);
       state.refreshes += 1;
       return HttpResponse.json(
-        { token_type: "Bearer", scope: "User.Read Chat.Read", expires_in: 3599, ext_expires_in: 3599, access_token: issueAccess(account), refresh_token: issueRefresh(account) },
+        { token_type: "Bearer", scope: state.refreshScope ?? "User.Read Chat.Read", expires_in: 3599, ext_expires_in: 3599, access_token: issueAccess(account), refresh_token: issueRefresh(account) },
         { headers: { "request-id": randomUUID() } },
       );
     }),
@@ -206,18 +218,51 @@ export function createFakeTeams(): FakeTeams {
         { headers: { "request-id": randomUUID() } },
       );
     }),
-    // Reads that carry ids only (no chat text): enough to prove which routes are reachable and what a request looks like.
+    // The chat reads (T-281): synthetic data a test plants in `state`; empty by default.
     http.get(`${GRAPH_V1}/me/chats`, async ({ request }) => {
       const r = await graph(request);
-      return "response" in r ? r.response : HttpResponse.json({ value: [] });
+      if ("response" in r) return r.response;
+      const q = new URL(request.url).searchParams;
+      if (state.refuseCombinedExpand && (q.get("$expand") ?? "").includes("members")) return HttpResponse.json({ error: { code: "BadRequest", message: TEAMS_ERROR_TEXT_CANARY } }, { status: 400, headers: { "request-id": randomUUID() } });
+      const token = q.get("$skiptoken");
+      const k = token === null ? 0 : Number(/^page-(\d+)$/.exec(token)?.[1] ?? "-1");
+      const page = state.chatPages[k];
+      if (!page) return HttpResponse.json({ error: { code: "BadRequest", message: TEAMS_ERROR_TEXT_CANARY } }, { status: 400, headers: { "request-id": randomUUID() } });
+      const wantsMembers = (q.get("$expand") ?? "").includes("members");
+      const value = page.map((c) => (wantsMembers ? c : { ...(c as Record<string, unknown>), members: undefined }));
+      return HttpResponse.json({ value, ...(state.chatPages[k + 1] ? { "@odata.nextLink": `${GRAPH_V1}/me/chats?$top=50&$skiptoken=page-${String(k + 1)}` } : {}) }, { headers: { "request-id": randomUUID() } });
     }),
-    http.get(`${GRAPH_V1}/chats/:chatId/messages`, async ({ request }) => {
+    http.get(`${GRAPH_V1}/chats/:chatId`, async ({ request, params }) => {
       const r = await graph(request);
-      return "response" in r ? r.response : HttpResponse.json({ value: [] });
+      if ("response" in r) return r.response;
+      const found = state.chatById.get(decodeURIComponent(String(params.chatId)));
+      if (!found) return HttpResponse.json({ error: { code: "NotFound", message: TEAMS_ERROR_TEXT_CANARY } }, { status: 404, headers: { "request-id": randomUUID() } });
+      return HttpResponse.json(found, { headers: { "request-id": randomUUID() } });
     }),
-    http.get(`${GRAPH_V1}/users/:userId`, async ({ request }) => {
+    http.get(`${GRAPH_V1}/chats/:chatId/members`, async ({ request, params }) => {
       const r = await graph(request);
-      return "response" in r ? r.response : HttpResponse.json({ userPrincipalName: "synthetic.person@teams.example.test" });
+      if ("response" in r) return r.response;
+      return HttpResponse.json({ value: state.membersByChat.get(decodeURIComponent(String(params.chatId))) ?? [] }, { headers: { "request-id": randomUUID() } });
+    }),
+    http.get(`${GRAPH_V1}/chats/:chatId/messages`, async ({ request, params }) => {
+      const r = await graph(request);
+      if ("response" in r) return r.response;
+      const q = new URL(request.url).searchParams;
+      let list = [...(state.messagesByChat.get(decodeURIComponent(String(params.chatId))) ?? [])];
+      const orderBy = q.get("$orderby") ?? "lastModifiedDateTime desc";
+      const prop = orderBy.startsWith("createdDateTime") ? "createdDateTime" : "lastModifiedDateTime";
+      const filter = q.get("$filter");
+      const m = filter ? /^(createdDateTime|lastModifiedDateTime) (lt|gt) (\S+)$/.exec(filter) : null;
+      if (filter && (!m || m[1] !== prop)) return HttpResponse.json({ error: { code: "BadRequest", message: TEAMS_ERROR_TEXT_CANARY } }, { status: 400, headers: { "request-id": randomUUID() } });
+      if (m) list = list.filter((x) => (m[2] === "lt" ? Date.parse(String(x[prop])) < Date.parse(m[3] as string) : Date.parse(String(x[prop])) > Date.parse(m[3] as string)));
+      list.sort((a, b) => Date.parse(String(b[prop])) - Date.parse(String(a[prop])));
+      return HttpResponse.json({ value: list.slice(0, Number(q.get("$top") ?? 20)) }, { headers: { "request-id": randomUUID() } });
+    }),
+    http.get(`${GRAPH_V1}/users/:userId`, async ({ request, params }) => {
+      const r = await graph(request);
+      if ("response" in r) return r.response;
+      const upn = state.upnByUser.get(String(params.userId)) ?? "synthetic.person@teams.example.test";
+      return HttpResponse.json({ userPrincipalName: upn }, { headers: { "request-id": randomUUID() } });
     }),
     http.get(`${GRAPH_V1}/me/joinedTeams`, async ({ request }) => {
       const r = await graph(request);

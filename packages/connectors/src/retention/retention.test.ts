@@ -141,6 +141,7 @@ describe("default tables", () => {
       purgeSourceRecordBodies: vi.fn(async () => 3),
       purgeConnectorApiErrors: vi.fn(async () => 5),
       purgePushSubscriptions: vi.fn(async () => 6),
+      purgeTeamsChatReads: vi.fn(async () => 2),
     };
     const webhooks = { purge: vi.fn(async () => 4) };
     return { store, webhooks, registry: createRetentionRegistry(defaultRetentionTables({ store, webhooks })) };
@@ -155,6 +156,7 @@ describe("default tables", () => {
       "raw.source_records:policy",
       "core.connector_api_errors:policy",
       "core.push_subscriptions:policy",
+      "comms.teams_chat_reads:policy",
     ]);
     const r = await createRetentionPurgeJob({ registry, settings: async () => ({ comms: 90, calendar: 120, conversations: 180, webhooks: 14 }), logger: silent() }).run("PKG");
     expect(store.purgeMessageIndex).toHaveBeenCalledWith("PKG", 90);
@@ -165,6 +167,8 @@ describe("default tables", () => {
     expect(store.purgeConnectorApiErrors).toHaveBeenCalledWith("PKG");
     // T-068: removed change-notification subscriptions have a fixed 30-day window in SQL; the job passes the lane only.
     expect(store.purgePushSubscriptions).toHaveBeenCalledWith("PKG");
+    // T-282: the portal's Teams read markers: a fixed 90 days in SQL; the job passes the lane only.
+    expect(store.purgeTeamsChatReads).toHaveBeenCalledWith("PKG");
     expect(r.ok).toBe(true);
   });
 
@@ -205,6 +209,7 @@ describe("store", () => {
     await store.purgeSourceRecordBodies("PKG");
     await store.purgeConnectorApiErrors("PKG");
     await store.purgePushSubscriptions("PKG");
+    await store.purgeTeamsChatReads("PKG");
     expect(clientFor).toHaveBeenCalledWith("PKG");
     expect(calls).toEqual([
       { schema: "core", fn: "retention_comms_purge", args: { p_lane: "PKG", p_keep: "90 days" } },
@@ -212,6 +217,7 @@ describe("store", () => {
       { schema: "core", fn: "source_records_purge_bodies", args: { p_lane: "PKG" } },
       { schema: "core", fn: "connector_api_errors_purge", args: { p_lane: "PKG" } },
       { schema: "core", fn: "push_subscriptions_purge", args: { p_lane: "PKG" } },
+      { schema: "core", fn: "teams_chat_reads_purge", args: { p_lane: "PKG" } },
     ]);
   });
 

@@ -5,11 +5,16 @@ import { createMicrosoftTokenManager, type MicrosoftTokenManager, type Microsoft
 import { isGuardedTeams } from "./guard";
 import { TEAMS_PROVIDER } from "./constants";
 import { createTeamsTokenHttp } from "./http";
+import { assertTeamsGrantedScopes } from "./provider";
 
 export type TeamsTokenManager = MicrosoftTokenManager;
 
 export function createTeamsTokenManager(deps: Omit<MicrosoftTokenManagerDeps, "isApproved" | "logProvider">): TeamsTokenManager {
   // The refresh goes to the sign-in host through a client labelled with the Teams provider (default: a test's own client).
   const httpFor: MicrosoftTokenManagerDeps["httpFor"] = deps.httpFor ?? ((laneId, connectionId, baseUrl) => createTeamsTokenHttp({ baseUrl, laneId, ...(connectionId ? { connectionId } : {}), ...(deps.logger ? { logger: deps.logger } : {}) }));
-  return createMicrosoftTokenManager({ ...deps, httpFor, isApproved: isGuardedTeams, logProvider: TEAMS_PROVIDER });
+  // T-278 review S9: a refresh response that lists a scope outside the Teams app's own list (a `Mail.*` scope, another resource) is not stored; the connection needs a reconnect.
+  const checkRefreshScope = (scope: string | undefined) => {
+    if (scope !== undefined) assertTeamsGrantedScopes(scope, []);
+  };
+  return createMicrosoftTokenManager({ ...deps, httpFor, isApproved: isGuardedTeams, logProvider: TEAMS_PROVIDER, checkRefreshScope });
 }

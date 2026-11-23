@@ -3,13 +3,14 @@
 // markup is checked to be the same single column of fixed text and plain forms that works at both). Mocks only; nothing from Microsoft.
 import { afterEach, describe, expect, it } from "vitest";
 import { cleanup, render, screen, within } from "@testing-library/react";
+import type { ReactNode } from "react";
 import { MessagesScreen } from "./messages-page";
 import type { MessagesState } from "@/lib/teams-messages";
 
 afterEach(cleanup);
 const ID = "00000000-0000-4000-8000-0000000000c1";
 const ACCOUNT = "me@teams.example.test";
-const connected = (over: Partial<Extract<MessagesState, { kind: "connected" }>> = {}): MessagesState => ({ kind: "connected", connectionId: ID, account: ACCOUNT, degraded: false, missing: [], adminConsent: false, ...over });
+const connected = (over: Partial<Extract<MessagesState, { kind: "connected" }>> = {}): MessagesState => ({ kind: "connected", connectionId: ID, account: ACCOUNT, degraded: false, missing: [], adminConsent: false, laneFeatures: ["chat_read", "call_links"], ...over });
 
 const WIDTHS = [1280, 390];
 const at = (width: number) => {
@@ -18,9 +19,9 @@ const at = (width: number) => {
 };
 
 describe.each(WIDTHS)("Messages at %ipx", (width) => {
-  const draw = (state: MessagesState) => {
+  const draw = (state: MessagesState, workspace?: ReactNode) => {
     at(width);
-    return render(<MessagesScreen laneId="PKG" state={state} />);
+    return render(<MessagesScreen laneId="PKG" state={state} {...(workspace ? { workspace } : {})} />);
   };
 
   it("Teams not set up for the company (or no access): a fixed line and no button", () => {
@@ -49,13 +50,20 @@ describe.each(WIDTHS)("Messages at %ipx", (width) => {
     expect(screen.getByText("Your Teams sign-in expired")).toBeTruthy();
   });
 
-  it("connected: 'Connected as <UPN>', a placeholder for the chat list and no sample data", () => {
-    draw(connected());
+  it("connected: 'Connected as <UPN>' and the chats slot (the chat list and conversation stream into it, T-283); no sample data, no placeholder list", () => {
+    draw(connected(), <p data-testid="workspace-slot">chats go here</p>);
     expect(screen.getByText(`Connected as ${ACCOUNT}`)).toBeTruthy();
-    expect(screen.getByText("Chats arrive in the next update")).toBeTruthy();
+    expect(screen.getByTestId("workspace-slot")).toBeTruthy();
     expect(screen.queryByTestId("messages-feature-missing")).toBeNull();
     expect(screen.queryByTestId("messages-degraded")).toBeNull();
     expect(screen.queryByRole("list")).toBeNull();
+    expect(screen.queryByText("Chats arrive in the next update")).toBeNull();
+  });
+
+  it("connected without a slot (no chats to draw): the card alone, nothing invented", () => {
+    draw(connected());
+    expect(screen.getByText(`Connected as ${ACCOUNT}`)).toBeTruthy();
+    expect(screen.queryByTestId("workspace-slot")).toBeNull();
   });
 
   it("a feature missing on the connection: the fixed 'Reconnect Teams to add …' text with the button; what exists keeps working", () => {

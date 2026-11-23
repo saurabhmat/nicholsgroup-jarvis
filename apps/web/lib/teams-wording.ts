@@ -28,3 +28,38 @@ export function reconnectToAddText(missing: readonly TeamsFeature[]): string {
   if (words.length === 0) return "";
   return `Reconnect Teams to add ${words.length === 1 ? (words[0] as string) : `${words.slice(0, -1).join(", ")} and ${words[words.length - 1] as string}`}. What you already have keeps working.`;
 }
+
+// ---- Messages page: the chat list and conversation (T-283, T-284). Fixed text only; a chat's own words are never part of a sentence here.
+export const MESSAGES_LOAD_ERROR_TITLE = "Teams could not be reached";
+export const MESSAGES_LOAD_ERROR_TEXT = "The portal could not read your chats just now. Nothing was changed. Try again.";
+export const MESSAGES_RECONNECT_TITLE = "Your Teams sign-in expired";
+export const MESSAGES_FORBIDDEN_TEXT = "Teams did not allow the portal to read this. If it keeps happening, reconnect Teams in Settings.";
+export const MESSAGES_EMPTY_LIST_TEXT = "You have no chats in Teams yet, or none the portal can show.";
+export const MESSAGES_NO_CHAT_SELECTED_TEXT = "Choose a chat to read it. Messages are read from Teams when you open them; the portal stores none of them.";
+export const MESSAGES_CHAT_NOT_FOUND_TEXT = "This chat could not be opened. It may have been removed, or it is not one of your chats.";
+export const MESSAGES_TIMES_NOTE = "Times are Eastern Time (ET).";
+export const MESSAGES_FILE_OPENS_IN_MICROSOFT = "Opens in Microsoft";
+export const MESSAGES_IMAGE_TEXT = "Image: open the chat in Teams to see it";
+export const MESSAGES_TRUNCATED_TEXT = "This message is long; open the chat in Teams to read the rest.";
+export const MESSAGES_NO_OLDER_TEXT = "This is the start of the chat.";
+
+/** "Teams is busy, try again in 7 seconds" (Microsoft's Retry-After, shown as is: never retried by the portal on its own). */
+export function messagesBusyText(seconds: number | null): string {
+  if (seconds === null) return "Teams is busy. Try again in a moment.";
+  return `Teams is busy. Try again in ${String(seconds)} ${seconds === 1 ? "second" : "seconds"}.`;
+}
+
+/** Why a chat has no Call buttons, in words (Open in Teams is always there). */
+export function callUnavailableText(reason: "external" | "too_many" | "no_one" | "off_lane" | "needs_reconnect"): string | null {
+  switch (reason) {
+    case "external":
+      return "Calls from here are for chats with people in your own organisation. Use Open in Teams for this chat.";
+    case "too_many":
+      return "Calls from here are limited to ten people. Use Open in Teams for this chat.";
+    case "needs_reconnect":
+      return "Reconnect Teams to add call buttons.";
+    case "no_one":
+    case "off_lane":
+      return null;
+  }
+}

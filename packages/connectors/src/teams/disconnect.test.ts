@@ -64,3 +64,19 @@ describe("disconnectTeams", () => {
     expect(await d("PKG", ROW.id, OWNER)).toBe(true);
   });
 });
+
+describe("the wiring (T-282)", () => {
+  it("the Teams disconnect is wired with the read-marker purger; later tasks add theirs beside it", async () => {
+    const { readFileSync } = await import("node:fs");
+    const src = readFileSync(new URL("./index.ts", import.meta.url), "utf8");
+    expect(src).toMatch(/purgers:\s*\[\{ name: "chat_reads", purge: \(laneId, connectionId\) => teamsChatReadsStore\.purgeConnection\(laneId, connectionId\) \}\]/);
+  });
+
+  it("a purger that fails is logged by class only and the disconnect still completes (the markers are also removed by the retention purge)", async () => {
+    const { d, purge, warn } = setup();
+    purge.mockRejectedValue(new Error("secret"));
+    expect(await d("PKG", ROW.id, OWNER)).toBe(true);
+    expect(warn).toHaveBeenCalledWith("teams.disconnect.purge_unconfirmed", expect.objectContaining({ purger: "reads" }));
+    expect(JSON.stringify(warn.mock.calls)).not.toContain("secret");
+  });
+});

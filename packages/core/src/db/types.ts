@@ -960,6 +960,20 @@ isOneToOne: false
 "teams_assert_one_per_owner":
 { Args: { "p_connection_id": string,"p_lane": string }; Returns: undefined
                            },
+"teams_chat_read_mark":
+{ Args: { "p_chat": string,"p_connection": string,"p_lane": string,"p_read_through": string }; Returns: string
+                           },
+"teams_chat_reads_list":
+{ Args: { "p_connection": string,"p_lane": string }; Returns: {
+              "chat_id": string,"read_through": string
+            }[]
+                           },
+"teams_chat_reads_purge":
+{ Args: { "p_lane": string }; Returns: number
+                           },
+"teams_chat_reads_purge_connection":
+{ Args: { "p_connection": string,"p_lane": string }; Returns: number
+                           },
 "teams_connection_ids":
 { Args: { "p_lane"?: string,"p_uid": string }; Returns: (string)[]
                            },
