@@ -20,7 +20,6 @@ import {
   normalizeTeamsText,
   parseTeamsSend,
   teamsFailureCodeOf,
-  teamsLookupWindow,
   teamsProposalContent,
   type TeamsApprovedAction,
   type TeamsSend,
@@ -177,6 +176,22 @@ async function stateOfAction(job: Rpc, laneId: LaneId, actionId: string): Promis
   throw new ApprovalsError("not_pending"); // proposed, rejected, expired, invalidated: not a send in flight
 }
 
+/**
+ * The claim was refused with "not pending": the action is no longer approved. Say what it is: invalidated (a disconnect closed it between the approval and the claim) is a definite "nothing was sent";
+ * expired likewise; anything else is where that send is (settled, executing, ...).
+ */
+async function notClaimedState(job: Rpc, laneId: LaneId, actionId: string): Promise<ApproveResult> {
+  const { data, error } = await job("act_action_state", { p_lane: laneId, p_id: actionId });
+  const status = !error && Array.isArray(data) ? (data[0] as { status?: unknown } | undefined)?.status : undefined;
+  if (status === "invalidated") return { status: "failed", actionId, failureCode: "connection_disconnected" };
+  if (status === "expired") return { status: "failed", actionId, failureCode: "expired" };
+  try {
+    return await stateOfAction(job, laneId, actionId);
+  } catch {
+    return { status: "already_in_progress", actionId };
+  }
+}
+
 /** A failure before any request left (the stored content, the connection, a credential): nothing was sent, so it is always a definite, retryable failure. */
 function beforeFailureOf(e: unknown): { code: string; outcome: FailureOutcome } {
   if (e instanceof TamperError) return { code: "payload_changed", outcome: "error" };
@@ -262,7 +277,8 @@ export async function executeApprovedTeams(deps: TeamsExecDeps, laneId: LaneId, 
   const claimed = await job("act_claim_execution", { p_lane: laneId, p_id: actionId });
   if (claimed.error) {
     const err = toApprovalsError(claimed.error);
-    if (err.code === "in_progress" || err.code === "not_pending") return { status: "already_in_progress", actionId };
+    if (err.code === "in_progress") return { status: "already_in_progress", actionId };
+    if (err.code === "not_pending") return notClaimedState(job, laneId, actionId);
     const shown = err.code === "not_enabled" ? new ApprovalsError("teams_not_enabled") : err;
     await audit(deps, laneId, { kind: "service" }, "action.gate_blocked", actionId, { reason: shown.code }).catch(() => undefined);
     throw shown;
@@ -294,7 +310,8 @@ export async function executeApprovedTeams(deps: TeamsExecDeps, laneId: LaneId, 
     const sent = await job("act_claim_sent", { p_lane: laneId, p_id: actionId, p_external_id: externalId });
     if (sent.error) throw toApprovalsError(sent.error);
     sentRecorded = true;
-    await deps.writer.verifyWrite(laneId, conn, action, externalId, teamsLookupWindow(row.executingAt));
+    // The id the POST returned is ours by construction: no clock window (sender, place and text are still compared).
+    await deps.writer.verifyWrite(laneId, conn, action, externalId);
     verified = true;
     const done = await job("act_mark_verified", { p_lane: laneId, p_id: actionId, p_external_id: externalId, p_outcome: outcome });
     if (done.error) throw toApprovalsError(done.error);

@@ -573,6 +573,37 @@ describe("recovery (the reconciler's read side)", () => {
   });
 });
 
+describe("the id a POST returned is not clock-checked; a later identical message is not a match (T-286 re-check)", () => {
+  it("a Microsoft timestamp 60 s behind ours still verifies the id the POST returned (no window), but not an id found by the lookup (a window)", async () => {
+    const s = setup();
+    const a = action(s);
+    const res = await s.writer.executeWrite("PKG", s.conn, a);
+    (stored(s)[0] as { createdDateTime: string }).createdDateTime = new Date(Date.now() - 60_000).toISOString();
+    await expect(s.writer.verifyWrite("PKG", s.conn, a, res.external_id as string)).resolves.toBeUndefined();
+    await expect(s.writer.verifyWrite("PKG", s.conn, a, res.external_id as string, { since: new Date(Date.now() - 15_000).toISOString() })).rejects.toSatisfy((e) => code(e) === "verification_mismatch");
+  });
+
+  it("an identical message 5 minutes AFTER the start is not a match (the window is [start - 15 s, start + 2 min]); one inside it is", async () => {
+    const s = setup();
+    const a = action(s);
+    const mk = (id: string, ms: number) => ({ id, messageType: "message", createdDateTime: new Date(ms).toISOString(), lastModifiedDateTime: new Date(ms).toISOString(), from: { user: { id: s.account.objectId } }, body: { contentType: "text", content: CANARY }, chatId: CHAT });
+    const since = new Date(Date.now() - 15_000).toISOString();
+    s.fake.state.messagesByChat.set(CHAT, [mk("later", Date.now() + 5 * 60_000)]);
+    expect(await s.writer.findWrite("PKG", s.conn, a, { since })).toEqual([]);
+    s.fake.state.messagesByChat.set(CHAT, [mk("later", Date.now() + 5 * 60_000), mk("inside", Date.now() + 60_000)]);
+    expect(await s.writer.findWrite("PKG", s.conn, a, { since })).toEqual(["inside"]);
+    await expect(s.writer.verifyWrite("PKG", s.conn, a, "later", { since })).rejects.toSatisfy((e) => code(e) === "verification_mismatch");
+  });
+
+  it("after an unknown outcome the executor's lookup ignores an identical message dated beyond start + 2 min", async () => {
+    const s = setup();
+    const at = new Date(Date.now() + 10 * 60_000).toISOString();
+    s.fake.state.messagesByChat.set(CHAT, [{ id: "typed-later", messageType: "message", createdDateTime: at, lastModifiedDateTime: at, from: { user: { id: s.account.objectId } }, body: { contentType: "text", content: CANARY }, chatId: CHAT }]);
+    plan(s, { answer: 500, store: false });
+    await expect(s.writer.executeWrite("PKG", s.conn, action(s))).rejects.toSatisfy((e) => code(e) === "outcome_pending");
+  });
+});
+
 describe("the lookup window (T-286 review M-B)", () => {
   it("starts 15 seconds before the claim, in one place for the executor and the sweep; empty when the time is unknown", () => {
     expect(TEAMS_LOOKUP_SKEW_MS).toBe(15_000);

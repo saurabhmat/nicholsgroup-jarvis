@@ -52,6 +52,10 @@ export const TEAMS_SEND_FAILURES = Object.freeze({
   outcome_unknown: "Outcome unknown: check the chat in Teams before sending again",
   /** The disconnect purge of an executing action (a code every layer treats as an unknown outcome: `reconcile_` prefix). */
   reconcile_connection_disconnected: "The connection was disconnected while this message was being sent; it may have been delivered. Check the chat in Teams before sending again",
+  /** The action was invalidated by a disconnect before it was claimed: nothing was sent (definite). */
+  connection_disconnected: "The Teams connection was disconnected before this message was sent, so nothing was sent",
+  /** The action expired before it was claimed: nothing was sent (definite). */
+  expired: "This message expired before it was sent, so nothing was sent. Send it again",
   /** Not a final state: the lookup found nothing yet, so the action stays `executing` and the sweep looks again. */
   outcome_pending: "The message may not have reached Teams yet; it is being checked",
   /** The read-back could not run (the message was accepted): stays `executing` for the sweep. */
@@ -63,7 +67,7 @@ const MESSAGE_TO_CODE: ReadonlyMap<string, TeamsSendFailureCode> = new Map((Obje
 export function teamsFailureCodeOf(e: unknown): TeamsSendFailureCode | null {
   return isConnectorError(e) ? (MESSAGE_TO_CODE.get(e.info.message) ?? null) : null;
 }
-const KIND_OF_CODE: Record<TeamsSendFailureCode, "invalid_input" | "forbidden" | "not_found" | "rate_limited" | "reconnect_required" | "provider_error" | "timeout"> = {
+const KIND_OF_CODE: Record<TeamsSendFailureCode, "invalid_input" | "forbidden" | "not_found" | "rate_limited" | "reconnect_required" | "provider_error" | "timeout" | "connection_unavailable"> = {
   send_rejected: "invalid_input",
   not_a_member: "forbidden",
   target_not_found: "not_found",
@@ -77,6 +81,8 @@ const KIND_OF_CODE: Record<TeamsSendFailureCode, "invalid_input" | "forbidden" |
   outcome_pending: "timeout",
   verification_unavailable: "timeout",
   reconcile_connection_disconnected: "provider_error",
+  connection_disconnected: "connection_unavailable",
+  expired: "invalid_input",
 };
 const fail = (code: TeamsSendFailureCode) => new ConnectorError({ kind: KIND_OF_CODE[code], message: TEAMS_SEND_FAILURES[code] });
 const refused = (message: string) => new ConnectorError({ kind: "invalid_input", message });
@@ -124,6 +130,8 @@ const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
  * (the previous send, or one typed in Teams) as this one. The reconciler uses the same bound from the time the claim was taken (which precedes the POST by milliseconds).
  */
 export const TEAMS_LOOKUP_SKEW_MS = 15_000;
+/** How long after the POST started a message still counts as this send (the window is [start - 15 s, start + 2 min]): a LATER identical message is never taken as this one. */
+export const TEAMS_LOOKUP_SPAN_MS = 2 * 60_000;
 /** The lookup and read-back window of an action claimed at `executingAt` (an ISO instant): from a little before it. Empty when the time is unknown. One definition for the executor and the sweep. */
 export function teamsLookupWindow(executingAt: string | null | undefined): TeamsLookupWindow {
   const ms = executingAt ? Date.parse(executingAt) : Number.NaN;
@@ -255,18 +263,21 @@ export function createTeamsMessageWriter(deps: TeamsMessageWriterDeps): TeamsMes
     return t === null ? null : Date.parse(t);
   };
   const sameText = (m: GraphMessage, p: PreparedTeamsWrite): boolean => plain(m.body?.contentType, m.body?.content) === plain("text", p.send.text);
-  const sinceOf = (window: TeamsLookupWindow | undefined, fallbackMs: number): { iso: string; ms: number } => {
+  /** The upper bound of a window that starts at `sinceMs` (start - skew): start + 2 minutes. */
+  const upperOf = (sinceMs: number): number => sinceMs + TEAMS_LOOKUP_SKEW_MS + TEAMS_LOOKUP_SPAN_MS;
+  const sinceOf = (window: TeamsLookupWindow | undefined, fallbackMs: number): { iso: string; ms: number; open: boolean } => {
     const parsed = window?.since !== undefined ? normalizeTime(window.since) : null;
     const ms = parsed !== null ? Date.parse(parsed) : fallbackMs;
-    return { iso: new Date(ms).toISOString(), ms };
+    return { iso: new Date(ms).toISOString(), ms, open: parsed === null };
   };
 
   /** The ids of the person's own messages in the place since `since` whose text equals the approved text, minus any message another action of this connection already recorded as its own. */
-  async function lookup(laneId: LaneId, p: PreparedTeamsWrite, actionId: string, since: { iso: string; ms: number }): Promise<string[]> {
+  async function lookup(laneId: LaneId, p: PreparedTeamsWrite, actionId: string, since: { iso: string; ms: number; open?: boolean }): Promise<string[]> {
     const ids: string[] = [];
+    const until = since.open ? Number.POSITIVE_INFINITY : upperOf(since.ms); // no window given (a manual look): the last 24 hours, no upper bound
     for (const m of await listPlace(laneId, p, since.iso)) {
       const created = createdMs(m);
-      if (created === null || created < since.ms) continue;
+      if (created === null || created < since.ms || created > until) continue;
       if (isOwnInPlace(m, p) && sameText(m, p)) ids.push(m.id);
       if (ids.length >= MAX_FOUND) break;
     }
@@ -372,11 +383,12 @@ export function createTeamsMessageWriter(deps: TeamsMessageWriterDeps): TeamsMes
       if (m === undefined) throw notFound();
       if (m.id !== externalId) throw mismatch();
       if (!isOwnInPlace(m, p)) throw mismatch();
-      // Created after the claim (with the skew allowance), by Microsoft's clock.
+      // Only for an id FOUND by the lookup (a window is given): created within [start - 15 s, start + 2 min] by Microsoft's clock. The id a POST just returned is ours by construction, so no clock
+      // comparison is made for it (a clock more than 15 s apart must not turn a delivered send into a mismatch); sender, place and text are still compared.
       if (window?.since !== undefined) {
         const created = createdMs(m);
         const since = sinceOf(window, 0);
-        if (created === null || created < since.ms) throw mismatch();
+        if (created === null || created < since.ms || created > upperOf(since.ms)) throw mismatch();
       }
       const form = m.body?.contentType === "text" || m.body?.contentType === "html" ? m.body.contentType : "other";
       logFor(laneId, p.g.conn.id).info("teams.send.read_back_form", { laneId, form });

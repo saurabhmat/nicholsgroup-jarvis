@@ -9,7 +9,7 @@ import type { LaneId } from "@nichols/core";
 import { getAudit, getLaneJobClient } from "@nichols/core/lane-router";
 import { createEmailWriteDispatch, type EmailWriteEntry } from "./email-dispatch";
 import { approveAndExecute, executeApproved, proposeEmailAction, type ProposeEmailInput } from "./email";
-import { isQboDisconnectable } from "./capability";
+import { isQboDisconnectable, teamsStepUpFromConfig } from "./capability";
 import { approveAndExecuteQbo, executeApprovedQbo, type QboExecDeps } from "./qbo";
 import { reconcileStuckActions, type ReconcileDeps, type ReconcileSummary } from "./reconcile";
 import { createBriefingReplyGate } from "./briefing-gate";
@@ -68,7 +68,7 @@ async function readFacts(laneId: LaneId, connectionId: string): Promise<Capabili
     approvalsLive: approvals.approvals_live === true,
     stepUpMaxAgeS: typeof age === "number" && Number.isInteger(age) && age >= 30 && age <= 900 ? age : 300,
     // T-286, D-67: the same clamp as act.approve (300..43,200, default 300); a value that is not a whole number is "unset".
-    teamsStepUpMaxAgeS: typeof teamsAge === "number" && Number.isInteger(teamsAge) ? Math.min(Math.max(teamsAge, 300), 43200) : 300,
+    teamsStepUpMaxAgeS: teamsStepUpFromConfig(teamsAge),
     storeOutboundDrafts: (policy.data as { store_outbound_drafts?: unknown } | null)?.store_outbound_drafts === true,
   };
 }

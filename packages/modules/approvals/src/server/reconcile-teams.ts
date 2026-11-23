@@ -52,7 +52,8 @@ export function createTeamsReconciler(deps: TeamsReconcilerDeps): ActionReconcil
       // 1. The claim says the message was accepted and holds its id: read it back directly (no search lag).
       if (claimOutcome === "sent" && claimExternalId !== null) {
         try {
-          await deps.reconciler.verifyWrite(laneId, conn, action, claimExternalId, window);
+          // the claim holds the id the POST returned: ours by construction, so no clock window
+          await deps.reconciler.verifyWrite(laneId, conn, action, claimExternalId);
           return { kind: "verified", externalId: claimExternalId, outcome: "accepted" };
         } catch (e) {
           if (isMismatch(e)) return { kind: "failed", code: "verification_mismatch", outcome: "mismatch" };

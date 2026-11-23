@@ -7,7 +7,7 @@ import { ConnectorError } from "@nichols/connectors";
 import { TEAMS_ACTION_TYPES as CONNECTOR_TEAMS_TYPES, TEAMS_SEND_FAILURES } from "@nichols/connectors/write";
 import type { AuditEntry } from "@nichols/core/audit";
 import { createAudit } from "@nichols/core/audit";
-import { capabilityOf } from "./capability";
+import { capabilityOf, teamsStepUpFromConfig } from "./capability";
 import { rejectAction } from "./email";
 import { createTeamsReconciler } from "./reconcile-teams";
 import { reconcileStuckActions } from "./reconcile";
@@ -322,7 +322,7 @@ describe("approveAndExecuteTeams: the one send", () => {
     expect(w.calls.actions[0]).toMatchObject({ id, lane_id: "PKG", connection_id: CONN, action_type: "teams.chat.send", payload_sha256: hash, approved_by: OWNER });
     expect(w.claims.get(id)).toEqual({ outcome: "sent", external_id: "synthetic-message-1" });
     expect(w.calls.verifies).toBe(1);
-    expect((w.calls.windows[0] as { since: string }).since).toMatch(/^\d{4}-\d{2}-\d{2}T/);
+    expect(w.calls.windows[0]).toBeUndefined(); // the id the POST returned is ours: no clock window on its read-back
     const row = w.rows.get(id)!;
     expect(row).toMatchObject({ status: "verified", result: { external_id: "synthetic-message-1", outcome: "accepted" } });
     expect(row.payload.text).toBeUndefined();
@@ -475,6 +475,28 @@ describe("a concurrent double click and a disconnect during a send (T-286 review
     const { id, hash } = await proposed(w);
     expect(await approveAndExecuteTeams(w.deps, w.ctx(), { actionId: id, hashSeen: hash })).toEqual({ status: "failed", actionId: id, failureCode: "execution_refused" });
     expect(w.rows.get(id)).toMatchObject({ failure_outcome: "error" });
+    expect(w.calls.writes).toBe(0);
+  });
+});
+
+describe("step-up clamp mirrors act.approve and a send closed before its claim (T-286 re-check)", () => {
+  // SQL (20261202100000, act.approve): v_raw := act.lane_setting(p_lane, 'teams_step_up_max_age_s');  -- jsonb ->> text
+  //   v_max := case when v_raw ~ '^[0-9]{1,5}$' then least(greatest(v_raw::integer, 300), 43200) else 300 end;
+  it.each([
+    [undefined, 300], [null, 300], [0, 300], [100, 300], [299, 300], [300, 300], [3600, 3600], [28800, 28800], [43200, 43200], [43201, 43200], [99999, 43200], [100000, 300], [999999, 300],
+    [-1, 300], [-3600, 300], [1.5, 300], [1e21, 300], ["3600", 3600], ["007", 300], ["", 300], ["abc", 300], ["3600.0", 300], [" 3600", 300], [true, 300], [{}, 300], [[3600], 300],
+  ])("%j -> %j", (input, expected) => {
+    expect(teamsStepUpFromConfig(input)).toBe(expected);
+  });
+
+  it("an approved action invalidated by a disconnect before its claim is a definite 'nothing was sent', not 'in progress'", async () => {
+    const w = world();
+    const { id, hash } = await proposed(w);
+    await w.rpc("act_approve", { p_lane: "PKG", p_id: id, p_hash_seen: hash });
+    w.rows.get(id)!.status = "invalidated";
+    expect(await executeApprovedTeams(w.deps, "PKG" as never, id)).toEqual({ status: "failed", actionId: id, failureCode: "connection_disconnected" });
+    w.rows.get(id)!.status = "expired";
+    expect(await executeApprovedTeams(w.deps, "PKG" as never, id)).toEqual({ status: "failed", actionId: id, failureCode: "expired" });
     expect(w.calls.writes).toBe(0);
   });
 });

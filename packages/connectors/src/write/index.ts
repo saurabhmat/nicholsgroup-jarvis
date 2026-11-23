@@ -48,6 +48,7 @@ export { teamsMessageReconciler, teamsMessageWriter } from "../teams/writer-entr
 export {
   TEAMS_ACTION_TYPES,
   TEAMS_LOOKUP_SKEW_MS,
+  TEAMS_LOOKUP_SPAN_MS,
   teamsLookupWindow,
   TEAMS_SEND_FAILURES,
   prepareTeamsWrite,

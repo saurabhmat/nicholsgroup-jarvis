@@ -83,8 +83,9 @@ describe("T-286 review: the Teams step-up window and the stored-text rule are fa
     expect((await read(undefined)).teamsStepUpMaxAgeS).toBe(300);
     expect((await read(100)).teamsStepUpMaxAgeS).toBe(300);
     expect((await read(28800)).teamsStepUpMaxAgeS).toBe(28800);
-    expect((await read(999999)).teamsStepUpMaxAgeS).toBe(43200);
-    expect((await read("3600")).teamsStepUpMaxAgeS).toBe(300);
+    expect((await read(99999)).teamsStepUpMaxAgeS).toBe(43200);
+    expect((await read(100000)).teamsStepUpMaxAgeS).toBe(300); // six digits: the SQL pattern refuses it, so the fallback, not the clamp
+    expect((await read("3600")).teamsStepUpMaxAgeS).toBe(3600); // jsonb ->> gives a string's text as is
     expect((await read(1.5)).teamsStepUpMaxAgeS).toBe(300);
     expect((await read(28800)).stepUpMaxAgeS).toBe(300);
     m.approvals = { approvals_live: true };
