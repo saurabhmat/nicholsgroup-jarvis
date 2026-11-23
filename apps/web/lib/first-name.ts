@@ -1,8 +1,10 @@
 // The signed-in user's first name for the Home heading (T-237 part C). The one reliable server-side source is the user's own
 // profile row, core.users.display_name (RLS: a user reads their own row at AAL2). Nothing is invented: no row, an unreadable
 // row or a blank name gives undefined and Home says just "Good morning".
+import { cache } from "react";
 import type { Guards } from "@nichols/core/auth";
 import type { LaneClient } from "@nichols/core/lane-router";
+import { timed } from "./timed";
 
 /** "Robert Nichols" -> "Robert". A leading title ("Dr.", "Mr.") is skipped; a name that is only an email address is no name. */
 export function firstNameOf(displayName: unknown): string | undefined {
@@ -22,12 +24,16 @@ export async function loadFirstName(client: Db, userId: string): Promise<string 
   return firstNameOf((data as { display_name?: unknown } | null)?.display_name);
 }
 
-/** Never throws: any failure leaves the heading without a name. The profile read is always for the SESSION user that the lane guard verified (never a caller-supplied id). */
-export async function firstNameFor(g: Pick<Guards, "requireLane">, laneId: string, load = loadFirstName): Promise<string | undefined> {
+/**
+ * Never throws: any failure leaves the heading without a name. The profile read is always for the SESSION user that the lane guard verified (never a
+ * caller-supplied id). T-276: once per request (the layout and Home's greeting ask for the same name; the key is the request's guards object and the
+ * lane), and timed as `load.first_name`.
+ */
+export const firstNameFor = cache(async (g: Pick<Guards, "requireLane">, laneId: string, load: typeof loadFirstName = loadFirstName): Promise<string | undefined> => {
   try {
     const { client, session } = await g.requireLane(laneId as Parameters<Guards["requireLane"]>[0]);
-    return await load(client, session.userId);
+    return await timed("load.first_name", () => load(client, session.userId));
   } catch {
     return undefined;
   }
-}
+});

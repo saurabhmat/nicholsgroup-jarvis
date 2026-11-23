@@ -49,6 +49,22 @@ describe("toRows / loadInbox", () => {
     expect(v2.next).toBeNull();
   });
 
+  it("T-276: the labels (Coverage) are asked together with the list, not after it, and are ignored for an empty list", async () => {
+    const calls: unknown[] = [];
+    const cov = [{ stream: "mail", account: "a@example.test", connection_id: "c1", provider: "microsoft", status: "ok", configured: true, last_sync_at: "2026-11-06T12:00:00Z" }];
+    const c = client((fn) => (fn === "briefing_coverage" ? { data: cov, error: null } : { data: [row(1, { connection_id: "c1" })], error: null }), calls);
+    const view = await loadInbox(c as never, "PKG", "all", null);
+    expect((calls as [string][]).map((x) => x[0])).toEqual(["inbox_messages", "briefing_coverage"]); // both asked before either answered
+    expect(view.rows[0]?.source?.provider).toBe("microsoft");
+    const empty = await loadInbox(client((fn) => (fn === "briefing_coverage" ? { data: cov, error: null } : { data: [], error: null })) as never, "PKG", "all", null);
+    expect(empty.rows).toEqual([]);
+    // a failing list is an error even though the label read answered, and a failing label read leaves the rows unlabelled
+    await expect(loadInbox(client((fn) => (fn === "briefing_coverage" ? { data: cov, error: null } : { data: null, error: { message: "x" } })) as never, "PKG", "all", null)).rejects.toThrow("inbox unavailable");
+    const noLabels = await loadInbox(client((fn) => (fn === "briefing_coverage" ? { data: null, error: { message: "x" } } : { data: [row(1)], error: null })) as never, "PKG", "all", null);
+    expect(noLabels.rows).toHaveLength(1);
+    expect(noLabels.rows[0]?.source).toBeUndefined();
+  });
+
   it("an outage is 'unavailable', not an empty inbox", async () => {
     vi.spyOn(console, "error").mockImplementation(() => undefined);
     const g = { requireLane: async () => ({ client: client(() => ({ data: null, error: { message: "x" } })) }) as never };

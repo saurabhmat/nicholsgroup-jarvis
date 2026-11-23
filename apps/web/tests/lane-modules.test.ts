@@ -8,12 +8,18 @@ vi.mock("next/navigation", () => ({ redirect: (to: string) => redirect(to) }));
 let row: unknown = null;
 let failWith: unknown = null;
 const selected: string[] = [];
+// T-276: the gate reads the shared whole-config row (lib/lane-reads.ts) and takes three keys out of it; the tests keep their {modules, limited, news} rows and the fake
+// wraps them as the stored config (the policy read below is a different table and is returned as is).
+const stored = (table: string) => {
+  const r = row as { modules?: unknown; limited?: unknown; news?: unknown } | null;
+  return table === "lane_config_current" && r ? { config: { enabled_modules: r.modules, limit_to_enabled_modules: r.limited, news: r.news, secret_key: "must not leak" } } : row;
+};
 const client = {
   schema: () => ({
-    from: () => ({
+    from: (table: string) => ({
       select: (cols: string) => {
         selected.push(cols);
-        return { eq: () => ({ maybeSingle: async () => ({ data: row, error: failWith }) }) };
+        return { eq: () => ({ maybeSingle: async () => ({ data: stored(table), error: failWith }) }) };
       },
     }),
   }),
@@ -61,10 +67,12 @@ describe("lane gate", () => {
     expect((await loadLaneGate({ schema: () => { throw new Error("boom"); } }, "XX")).limited).toBe(false);
   });
 
-  it("reads only the three keys it needs, for the lane asked", async () => {
+  it("reads the one shared config row and keeps only the three keys it needs (nothing else of the config is carried in the answer)", async () => {
     row = LIMITED;
-    await loadLaneGate(client, "XX");
-    expect(selected).toEqual(["modules:config->enabled_modules, limited:config->limit_to_enabled_modules, news:config->news"]);
+    const gate = await loadLaneGate(client, "XX");
+    expect(selected).toEqual(["config"]);
+    expect(Object.keys(gate).sort()).toEqual(["limited", "newsShown", "visible"]);
+    expect(JSON.stringify(gate)).not.toContain("must not leak");
   });
 
   it("requireModule sends a visitor of a hidden module to the company's Home (the switcher carries the page name across companies)", async () => {

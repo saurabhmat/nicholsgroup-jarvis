@@ -11,7 +11,7 @@ const guardsFor = (lanes: string[]) => ({
   listLanes: async () => lanes.map((laneId) => ({ laneId, name: laneId })),
   requireLane: async (laneId: string) => {
     if (rows[laneId] === "denied") throw new Error("not allowed");
-    return { client: { schema: () => ({ from: () => ({ select: () => ({ eq: () => ({ maybeSingle: async () => ({ data: rows[laneId] ?? null, error: null }) }) }) }) }) } };
+    return { client: { schema: () => ({ from: () => ({ select: () => ({ eq: () => ({ maybeSingle: async () => ({ data: rows[laneId] ? { config: { enabled_modules: (rows[laneId] as { modules?: unknown }).modules, limit_to_enabled_modules: (rows[laneId] as { limited?: unknown }).limited, news: (rows[laneId] as { news?: unknown }).news } } : null, error: null }) }) }) }) }) } };
   },
 });
 const LIMITED = { modules: ["comms"], limited: true, news: null };

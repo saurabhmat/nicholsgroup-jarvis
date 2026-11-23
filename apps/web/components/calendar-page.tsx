@@ -4,7 +4,7 @@
 // States: no calendar connected (link to Settings), no access, "could not load" (never an empty calendar on an error), an account that needs reconnecting (named, linked).
 import Link from "next/link";
 import { headers } from "next/headers";
-import { Suspense, type CSSProperties } from "react";
+import { cache, Suspense, type CSSProperties } from "react";
 import { Alert, AlertDescription, AlertTitle, cn, EmptyState, laneHref, PageHeader } from "@nichols/ui";
 import { guards } from "@/lib/guards";
 import { loadLane } from "@/lib/lane-page";
@@ -56,13 +56,30 @@ export async function CalendarPage({ params, searchParams }: { params: Promise<{
   );
 }
 
-export async function CalendarBody({ laneId, searchParams }: { laneId: string; searchParams: Promise<Record<string, string | string[] | undefined>> }) {
+type SearchParams = Promise<Record<string, string | string[] | undefined>>;
+
+/**
+ * The page's read, once per request (React cache: the key is the lane and the searchParams promise, shared by the route page and the body). T-276: the
+ * route page STARTS it (startCalendar) beside the module gate; the body awaits it and is rendered only after the gate and the lane check have answered.
+ * `calendarFor` calls the guards' lane check before any query. The clock is read only after the request is known (searchParams, headers).
+ */
+const calendarData = cache(async (laneId: string, searchParams: SearchParams) => {
   const sp = await searchParams;
   const ua = (await headers()).get("user-agent");
   const today = ymdOf(new Date().getTime()); // the clock is read only after the request (searchParams, headers) is known
   const query = parseCalendarQuery(sp, today, defaultViewFor(ua));
   const period = periodFor(query.view, query.date);
   const data = await calendarFor(await guards(), laneId, period);
+  return { today, period, data };
+});
+
+/** Called by the route page before it returns the gate: begins the read. A failure is reported where the body awaits it; the no-op catch only prevents an unhandled rejection if the gate redirects first. */
+export function startCalendar(params: Promise<{ laneId: string }>, searchParams: SearchParams): void {
+  void params.then((p) => calendarData(p.laneId, searchParams)).catch(() => undefined);
+}
+
+export async function CalendarBody({ laneId, searchParams }: { laneId: string; searchParams: SearchParams }) {
+  const { today, period, data } = await calendarData(laneId, searchParams);
   return <CalendarScreen laneId={laneId} today={today} period={period} data={data} />;
 }
 

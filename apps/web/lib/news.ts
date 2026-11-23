@@ -3,6 +3,7 @@
 //   - the scheduled job uses the job client the Inngest route injects (briefing-schedule.ts pattern).
 // Home only READS here (loadNewsCard); a page render or an auto-refresh can never start a fetch.
 import type { LaneClient } from "@nichols/core/lane-router";
+import { laneConfigRow } from "./lane-reads";
 import { gateCodeFrom, NewsGateError, type NewsFinish } from "./news-run";
 import { newsConfigFrom, normalizeUrl, plainText, reserveUsd } from "./news-domain";
 import type { NewsCard, NewsItem } from "./news-types";
@@ -65,7 +66,7 @@ export async function loadNewsCard(client: Db, laneId: string, opts: { isOwner: 
     core.rpc("news_enabled", { p_lane: laneId }),
     core.rpc("news_latest", { p_lane: laneId }),
     opts.isAdmin ? core.rpc("news_spend", { p_lane: laneId }) : Promise.resolve(null),
-    opts.isOwner ? core.from("lane_config_current").select("config").eq("lane_id", laneId).maybeSingle() : Promise.resolve(null),
+    opts.isOwner ? laneConfigRow(client, laneId) : Promise.resolve(null),
   ]);
   const configured = !enabled.error && enabled.data === true;
   const row = (!latest.error && Array.isArray(latest.data) ? (latest.data[0] as LatestRow | undefined) : undefined) ?? null;

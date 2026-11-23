@@ -107,12 +107,37 @@ describe("loadCalendar", () => {
     expect(calls.eq).toContainEqual(["transport", "native"]);
     expect(calls.rpc[1]).toEqual(["calendar_events", { p_lane: "PKG", p_from: period.from.toISOString(), p_to: period.to.toISOString() }]);
   });
-  it("does not read events when nothing is connected or the caller has no access", async () => {
+  it("T-276: the three reads start together, and their answers are ignored when nothing is connected or the caller has no access (errors too)", async () => {
     const calls = { rpc: [] as [string, unknown][], eq: [] as [string, unknown][] };
-    expect(await loadCalendar(asDb(fake({ status: { data: "not_connected", error: null } }, calls)), "PKG", "u", period)).toEqual({ state: "not_connected" });
-    expect(await loadCalendar(asDb(fake({ status: { data: "no_access", error: null } }, calls)), "PKG", "u", period)).toEqual({ state: "no_access" });
+    const bad = { data: null, error: { message: "x" } };
+    expect(await loadCalendar(asDb(fake({ status: { data: "not_connected", error: null }, events: bad, conns: bad }, calls)), "PKG", "u", period)).toEqual({ state: "not_connected" });
+    expect(await loadCalendar(asDb(fake({ status: { data: "no_access", error: null }, events: bad }, calls)), "PKG", "u", period)).toEqual({ state: "no_access" });
     expect(await loadCalendar(asDb(fake({ status: { data: "something else", error: null } }, calls)), "PKG", "u", period)).toEqual({ state: "no_access" });
-    expect(calls.rpc.map((c) => c[0])).toEqual(["home_calendar_status", "home_calendar_status", "home_calendar_status"]);
+    expect(calls.rpc.map((c) => c[0])).toEqual(["home_calendar_status", "calendar_events", "home_calendar_status", "calendar_events", "home_calendar_status", "calendar_events"]);
+  });
+  it("T-276: one sequential level (status, accounts and events are asked before any answer is awaited), and a status error still wins", async () => {
+    const order: string[] = [];
+    let release = () => {};
+    const gate = new Promise<void>((r) => (release = r));
+    const db = {
+      schema: () => ({
+        rpc: async (fn: string) => {
+          order.push(`start:${fn}`);
+          await gate;
+          return fn === "home_calendar_status" ? { data: "connected", error: null } : { data: [], error: null };
+        },
+        from: () => {
+          const q = { select: () => q, eq: () => q, in: () => q, then: (res: (v: R) => unknown) => (order.push("start:connections"), gate.then(() => res({ data: [], error: null }))) };
+          return q;
+        },
+      }),
+    };
+    const done = loadCalendar(db as never, "PKG", "u", period);
+    await new Promise((r) => setTimeout(r, 5));
+    expect(order.sort()).toEqual(["start:calendar_events", "start:connections", "start:home_calendar_status"]); // all three under way before the first answer
+    release();
+    expect((await done).state).toBe("connected");
+    await expect(loadCalendar(asDb(fake({ status: { data: null, error: { message: "x" } } })), "PKG", "u", period)).rejects.toThrow();
   });
   it("says there are more events than shown when the function returns one past the cap", async () => {
     const rows = Array.from({ length: EVENT_CAP + 1 }, (_, i) => row({ event_id: `e${String(i)}` }));

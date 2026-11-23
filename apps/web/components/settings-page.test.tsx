@@ -1,6 +1,7 @@
 // @vitest-environment jsdom
 // T-226: Settings drops the "not set up yet" placeholder whenever any real section renders, and the AI brain card is a compact
 // status list (chip + Edit into the wizard at that step) with Continue setup.
+import { cloneElement, isValidElement, Suspense, type ReactElement, type ReactNode } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { cleanup, render, screen, within } from "@testing-library/react";
 import { GROUPS } from "@nichols/brain/interview";
@@ -23,7 +24,13 @@ const m = vi.hoisted(() => ({
   started: [] as string[],
   seenGuards: [] as unknown[],
   gate: null as Promise<void> | null,
-  sharedGuards: {},
+  sharedGuards: {} as unknown,
+  // T-276: the cheap role answers that decide the sub-navigation (owner and admin_technical; owner alone; the roles that see the mail account rows).
+  admin: true,
+  owner: false,
+  mail: true,
+  newsShown: false,
+  roleReads: [] as string[],
   // T-271: modules the company hides. The older tests run with Approvals and Assistant hidden, so they keep testing the other sections alone.
   hidden: [] as string[] | null, // null = the real lane gate (the T-265 tests read lane_config through the guards)
 }));
@@ -40,12 +47,21 @@ vi.mock("@/lib/lane-modules", async (importActual) => {
     ...actual,
     laneGate: async (laneId: string) => {
       const hidden = m.hidden;
-      return hidden === null ? actual.laneGate(laneId) : { limited: hidden.length > 0, visible: (mod: string) => !hidden.includes(mod), newsShown: true };
+      return hidden === null ? actual.laneGate(laneId) : { limited: hidden.length > 0, visible: (mod: string) => !hidden.includes(mod), newsShown: m.newsShown };
     },
   };
 });
 vi.mock("@/lib/lane-page", () => ({ loadLane: async () => ({ laneId: "PKG", name: "Pub K Group", lanes: [] }) }));
 vi.mock("@/lib/guards", () => ({ guards: async () => m.sharedGuards }));
+const roleGuards = (extra: object = {}) => ({
+  requireRole: async (_l: string, roles: string[]) => {
+    m.roleReads.push(roles.join(","));
+    const ok = roles.includes("viewer") ? m.mail : roles.length === 1 ? m.owner : m.admin;
+    if (!ok) throw new Error("not allowed");
+    return { client: {}, session: { userId: "u" } };
+  },
+  ...extra,
+});
 vi.mock("@/lib/connect-result", () => ({ connectResultFor: (g: unknown) => loader("result", () => m.result)(g) }));
 vi.mock("@/lib/quickbooks-connection", () => ({ quickbooksSectionFor: (g: unknown) => loader("quickbooks", () => m.quickbooks)(g) }));
 vi.mock("@/lib/google-connection", () => ({ googleSectionFor: (g: unknown) => loader("google", () => m.google)(g) }));
@@ -65,9 +81,25 @@ vi.mock("./connections-section", () => ({
   ),
 }));
 // The shared module page is async (a server component); here only whether it is asked to draw the placeholder matters.
-vi.mock("./module-page", () => ({ ModulePage: ({ placeholder }: { placeholder?: boolean }) => <div data-testid="module-page" data-placeholder={String(placeholder)} /> }));
+vi.mock("./module-page", () => ({
+  ModulePage: ({ placeholder }: { placeholder?: boolean }) => <div data-testid="module-page" data-placeholder={String(placeholder)} />,
+  ModulePlaceholder: () => <div data-testid="module-placeholder" />,
+}));
 
 import { SettingsPage } from "./settings-page";
+
+
+type El = ReactElement<{ children?: ReactNode; fallback?: ReactNode }>;
+/** Server components are async functions, which a client render cannot run: resolve them (and their Suspense children) up front. */
+async function resolve(node: ReactNode): Promise<ReactNode> {
+  if (Array.isArray(node)) return Promise.all(node.map((n) => resolve(n)));
+  if (!isValidElement(node)) return node;
+  const el = node as El;
+  if (el.type === Suspense) return resolve(el.props.children);
+  if (typeof el.type === "function" && el.type.constructor.name === "AsyncFunction") return resolve(await (el.type as (p: unknown) => Promise<ReactNode>)(el.props));
+  if (el.props.children === undefined) return el;
+  return cloneElement(el, undefined, await resolve(el.props.children));
+}
 
 const props = { params: Promise.resolve({ laneId: "PKG" }), searchParams: Promise.resolve({}) };
 const view = (done: number) => ({
@@ -90,16 +122,27 @@ beforeEach(() => {
   m.seenGuards = [];
   m.gate = null;
   m.hidden = ["approvals", "assistant"];
+  m.admin = true;
+  m.owner = false;
+  m.mail = true;
+  m.newsShown = false;
+  m.roleReads = [];
+  m.sharedGuards = roleGuards();
 });
 afterEach(cleanup);
 
 async function draw() {
-  render(await SettingsPage(props));
-  return screen.getByTestId("module-page").getAttribute("data-placeholder");
+  render(<>{await resolve(await SettingsPage(props))}</>);
+  // The header never draws the card (T-276); the "not set up yet" card is its own element, drawn when no section can exist for this viewer.
+  return screen.queryByTestId("module-placeholder") ? "true" : "false";
 }
+const noRoles = () => {
+  m.admin = m.owner = m.mail = false;
+};
 
 describe("Settings page sections", () => {
-  it("keeps the placeholder only when nothing real renders", async () => {
+  it("keeps the placeholder only when no section can exist for this viewer", async () => {
+    noRoles();
     expect(await draw()).toBe("true");
   });
 
@@ -110,11 +153,13 @@ describe("Settings page sections", () => {
     ["the AI brain card", () => (m.brain = view(3))],
     ["the QuickBooks row", () => (m.quickbooks = { connections: [] })],
   ])("hides the placeholder when %s renders", async (_name, set) => {
+    m.owner = true;
     set();
     expect(await draw()).toBe("false");
   });
 
   it("AI brain is a compact status list: a chip per section, Edit into the wizard at that step, Continue setup", async () => {
+    m.owner = true;
     m.brain = view(3);
     await draw();
     const list = screen.getByTestId("brain-status-list");
@@ -131,6 +176,7 @@ describe("Settings page sections", () => {
   });
 
   it("with an unreadable status the list shows no chips (never a guess)", async () => {
+    m.owner = true;
     m.brain = { ...view(0), done: null };
     await draw();
     expect(screen.queryByText("Not done")).toBeNull();
@@ -157,6 +203,7 @@ describe("Settings page sections", () => {
   });
 
   it("does not look at the origin for users who cannot connect (no Google or Composio section)", async () => {
+    noRoles();
     m.origin = { currentHost: "preview.example.test", appHost: "portal.example.test", appUrl: "https://portal.example.test" };
     await draw();
     expect(screen.queryByTestId("origin-notice")).toBeNull();
@@ -169,6 +216,7 @@ describe("layout (T-230 B)", () => {
   it("two columns: a sub-nav with anchors to exactly the sections drawn", async () => {
     m.google = { connections: [] };
     m.composio = { toolkits: [] };
+    m.owner = true;
     m.brain = view(2);
     await draw();
     expect(navLabels()).toEqual(["Connections|#connections", "AI brain|#ai-brain"]);
@@ -181,6 +229,7 @@ describe("layout (T-230 B)", () => {
   });
 
   it("the nav follows the visibility rules: a viewer with nothing gets no nav and no sections", async () => {
+    noRoles();
     await draw();
     expect(screen.queryByTestId("settings-nav")).toBeNull();
     expect(screen.queryByTestId("connections-section")).toBeNull();
@@ -224,14 +273,17 @@ describe("Coverage (T-234 part 1: moved here from Home)", () => {
 describe("GovCon news status (T-234 part 4)", () => {
   const view = { webAllowed: true, enabled: true, capUsd: 20, monthSpendUsd: 1.5, monthFetches: 3, lastStatus: "ok", lastFailure: null, lastFetchAt: "2026-11-12T11:00:00Z" };
   it("owner / admin_technical: a News section with its own nav entry; nobody else gets one", async () => {
+    m.newsShown = true;
     m.news = view;
     await draw();
     expect(screen.getByTestId("news-section")).toBeTruthy();
     expect(within(screen.getByTestId("settings-nav")).getByRole("link", { name: "GovCon news" }).getAttribute("href")).toBe("#news");
     cleanup();
     m.news = null;
+    m.admin = false;
     await draw();
     expect(screen.queryByTestId("news-section")).toBeNull();
+    expect(screen.queryByRole("link", { name: "GovCon news" })).toBeNull();
   });
 });
 const navLabelsOf = () => within(screen.getByTestId("settings-nav")).getAllByRole("link").map((a) => `${a.textContent ?? ""}|${a.getAttribute("href") ?? ""}`);
@@ -246,15 +298,48 @@ describe("loading (T-230 A)", () => {
     expect(m.started.sort()).toEqual(["brain", "composio", "coverage", "google", "quickbooks", "result"]); // all six under way before any answers
     expect(m.seenGuards.filter((g) => g !== undefined).every((g) => g === m.sharedGuards)).toBe(true);
     release();
-    render(await drawing);
+    render(<>{await resolve(await drawing)}</>);
     expect(screen.getByTestId("connections-section").getAttribute("data-quickbooks")).toBe("true");
   });
 
-  it("an outage in one loader is still an error, never a half-drawn page", async () => {
+  it("an outage in one loader is still an error where its section is drawn, never a silently empty section (and never an unhandled rejection)", async () => {
     vi.spyOn(console, "error").mockImplementation(() => undefined);
     m.gate = Promise.reject(new Error("outage"));
     m.gate.catch(() => undefined);
-    await expect(SettingsPage(props)).rejects.toThrow("outage");
+    await expect(resolve(await SettingsPage(props))).rejects.toThrow("outage");
+  });
+
+  it("T-276: the header is returned before any section has answered (the sections stream behind it)", async () => {
+    let release = () => {};
+    m.gate = new Promise<void>((r) => (release = r));
+    m.google = { connections: [] };
+    const page = await Promise.race([SettingsPage(props), new Promise<"slow">((r) => setTimeout(() => r("slow"), 200))]);
+    expect(page).not.toBe("slow");
+    release();
+    render(<>{await resolve(page as ReactNode)}</>);
+    expect(screen.getByTestId("connections-section")).toBeTruthy();
+  });
+
+  it("T-276: the sub-nav is decided from the module list and the role answers, while every slow loader is still pending", async () => {
+    m.owner = true;
+    m.newsShown = true;
+    m.gate = new Promise<void>(() => undefined); // every loader is held open for good
+    const page = (await SettingsPage(props)) as ReactElement<{ children?: ReactNode }>;
+    // The page's own body (the one child in a Suspense): call it by hand; it must answer although no loader ever does.
+    const children = page.props.children as ReactElement[];
+    const boundary = children.find((c) => isValidElement(c) && c.type === Suspense) as ReactElement<{ children: ReactElement }>;
+    const body = boundary.props.children;
+    const out = await (body.type as (p: unknown) => Promise<ReactNode>)(body.props);
+    const nav: unknown[] = [];
+    const walk = (n: ReactNode): void => {
+      if (Array.isArray(n)) return n.forEach(walk);
+      if (!isValidElement(n)) return;
+      const e = n as ReactElement<{ children?: ReactNode; items?: unknown }>;
+      if (e.props.items !== undefined) nav.push(e.props.items);
+      walk(e.props.children);
+    };
+    walk(out);
+    expect(nav).toEqual([[{ id: "connections", label: "Connections" }, { id: "news", label: "GovCon news" }, { id: "ai-brain", label: "AI brain" }]]);
   });
 });
 
@@ -276,18 +361,21 @@ describe("Microsoft section (T-257)", () => {
 
 
 describe("Settings of a mail-only company (T-265)", () => {
-  const limitedGuards = (row: unknown) => ({ requireLane: async () => ({ client: { schema: () => ({ from: () => ({ select: () => ({ eq: () => ({ maybeSingle: async () => ({ data: row, error: null }) }) }) }) }) } }) });
+  // T-276: the gate reads the shared whole-config row; the {modules, limited, news} rows below are wrapped as the stored config.
+  const limitedGuards = (row: { modules?: unknown; limited?: unknown; news?: unknown }) =>
+    roleGuards({ requireLane: async () => ({ client: { schema: () => ({ from: () => ({ select: () => ({ eq: () => ({ maybeSingle: async () => ({ data: { config: { enabled_modules: row.modules, limit_to_enabled_modules: row.limited, news: row.news } }, error: null }) }) }) }) }) } }) });
   beforeEach(() => {
     m.hidden = null; // the real gate, from the lane_config row the guards return
   });
   afterEach(() => {
-    m.sharedGuards = {};
+    m.sharedGuards = roleGuards();
   });
   const everything = () => {
     m.google = { connections: [] };
     m.microsoft = { connections: [], adminConsentUrl: null };
     m.quickbooks = { connection: null };
     m.composio = { toolkits: [] };
+    m.owner = true;
     m.brain = view(1);
   };
 
@@ -336,6 +424,7 @@ describe("Settings of a mail-only company (T-265)", () => {
 describe("T-271: Approvals and Assistant are opened from Settings", () => {
   it("a company that uses both gets the section first, a sub-nav entry for it, and no placeholder, even with nothing else to show", async () => {
     m.hidden = [];
+    noRoles();
     expect(await draw()).toBe("false");
     expect(navLabelsOf()).toEqual(["Approvals and Assistant|#pages"]);
     const links = within(screen.getByRole("region", { name: "Approvals and Assistant" })).getAllByRole("link");
@@ -344,6 +433,7 @@ describe("T-271: Approvals and Assistant are opened from Settings", () => {
 
   it("it comes before Connections and AI brain in the sub-nav", async () => {
     m.hidden = [];
+    m.owner = true;
     m.google = { connections: [] };
     m.brain = view(3);
     await draw();
@@ -352,6 +442,7 @@ describe("T-271: Approvals and Assistant are opened from Settings", () => {
 
   it("a company that hides one module shows only the other; hiding both shows no section", async () => {
     m.hidden = ["assistant"];
+    noRoles();
     await draw();
     expect(navLabelsOf()).toEqual(["Approvals|#pages"]);
     expect(within(screen.getByRole("region", { name: "Approvals" })).getAllByRole("link").map((l) => l.getAttribute("href"))).toEqual(["/PKG/approvals"]);
@@ -359,5 +450,67 @@ describe("T-271: Approvals and Assistant are opened from Settings", () => {
     m.hidden = ["approvals", "assistant"];
     expect(await draw()).toBe("true");
     expect(screen.queryByTestId("settings-pages")).toBeNull();
+  });
+});
+
+describe("link targets and notices while sections stream (T-276 review)", () => {
+  /** What the page shows before any Suspense boundary has answered: every boundary replaced by its fallback. */
+  function fallbackOf(node: ReactNode): ReactNode {
+    if (Array.isArray(node)) return node.map(fallbackOf);
+    if (!isValidElement(node)) return node;
+    const el = node as ReactElement<{ children?: ReactNode; fallback?: ReactNode }>;
+    if (el.type === Suspense) return el.props.fallback ?? null;
+    if (el.props.children === undefined) return el;
+    return cloneElement(el, undefined, fallbackOf(el.props.children));
+  }
+  const idCount = (id: string) => document.querySelectorAll(`[id="${id}"]`).length;
+  const TARGETS = ["pages", "connections", "news", "ai-brain"];
+
+  it("the hash targets exist from the first paint, and each appears exactly once when the sections have arrived", async () => {
+    m.hidden = [];
+    m.newsShown = true;
+    m.owner = true;
+    m.google = { connections: [] };
+    m.news = { webAllowed: true, enabled: true, capUsd: 20, monthSpendUsd: 1, monthFetches: 1, lastStatus: "ok", lastFailure: null, lastFetchAt: "2026-11-12T11:00:00Z" };
+    m.brain = view(2);
+    const page = await SettingsPage(props);
+    render(<>{fallbackOf(page)}</>);
+    for (const id of TARGETS) expect(idCount(id), `fallback ${id}`).toBe(1);
+    cleanup();
+    render(<>{await resolve(page)}</>);
+    for (const id of TARGETS) expect(idCount(id), `final ${id}`).toBe(1);
+    // the wrappers carry the scroll margin
+    expect(document.getElementById("connections")?.className).toMatch(/scroll-mt-8/);
+    expect(document.getElementById("ai-brain")?.className).toMatch(/scroll-mt-8/);
+  });
+
+  it("a section that turns out empty leaves a hidden (empty) wrapper, not a gap", async () => {
+    m.owner = true; // the AI brain chip and wrapper exist for the owner; the loader returns nothing
+    m.brain = null;
+    render(<>{await resolve(await SettingsPage(props))}</>);
+    const wrapper = document.getElementById("ai-brain");
+    expect(wrapper?.className).toMatch(/empty:hidden/);
+    expect(wrapper?.childNodes.length).toBe(0);
+  });
+
+  it("a connect result or error in the address reserves the banner's slot (no query text); without one nothing is reserved", async () => {
+    const withQuery = { params: props.params, searchParams: Promise.resolve({ connect: "wrong_account", error: "secret-value", provider: "google" }) };
+    render(<>{fallbackOf(await SettingsPage(withQuery))}</>);
+    expect(screen.getByTestId("notice-slot").textContent).toBe("");
+    expect(document.body.innerHTML).not.toContain("secret-value");
+    expect(document.body.innerHTML).not.toContain("wrong_account");
+    cleanup();
+    render(<>{fallbackOf(await SettingsPage(props))}</>);
+    expect(screen.queryByTestId("notice-slot")).toBeNull();
+  });
+
+  it("a connect result with an empty navigation still hides the 'not set up yet' card (the old rule)", async () => {
+    noRoles();
+    m.result = { tone: "alert", title: "Google isn't configured on this server.", description: "x" };
+    expect(await draw()).toBe("false");
+    expect(screen.getByTestId("connect-result")).toBeTruthy();
+    cleanup();
+    m.result = null;
+    expect(await draw()).toBe("true");
   });
 });

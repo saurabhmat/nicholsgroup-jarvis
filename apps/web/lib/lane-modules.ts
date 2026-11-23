@@ -9,6 +9,8 @@ import { redirect } from "next/navigation";
 import { moduleVisible, type LaneModule } from "@nichols/core/lane-config";
 import { laneHref, type NavKey } from "@nichols/ui";
 import { guards } from "./guards";
+import { laneConfigRow } from "./lane-reads";
+import { timed } from "./timed";
 
 export type LaneGate = {
   /** True when the lane lists its modules and hides the rest. */
@@ -21,7 +23,6 @@ export type LaneGate = {
 export const UNLIMITED: LaneGate = { limited: false, visible: () => true, newsShown: true };
 
 type Row = { modules?: unknown; limited?: unknown; news?: unknown } | null;
-type Db = { schema(name: "core"): { from(table: "lane_config_current"): { select(cols: string): { eq(col: string, v: string): { maybeSingle(): PromiseLike<{ data: Row; error: unknown }> } } } } };
 
 /** The gate from the stored row. Unreadable or malformed = unlimited (this only hides screens). */
 export function gateFrom(row: Row): LaneGate {
@@ -33,11 +34,18 @@ export function gateFrom(row: Row): LaneGate {
   return { limited: true, visible: (m) => moduleVisible(config, m), newsShown: newsEnabled };
 }
 
-/** One lane_config read. Only three keys are selected: nothing else of the config reaches this code. */
+/**
+ * One lane_config read, shared with the rest of the render (lib/lane-reads.ts; T-276). Only three keys are taken out of the row (`enabled_modules`,
+ * `limit_to_enabled_modules`, `news`): nothing else of the config is kept or exposed by this module.
+ */
 export async function loadLaneGate(client: unknown, laneId: string): Promise<LaneGate> {
   try {
-    const { data, error } = await (client as Db).schema("core").from("lane_config_current").select("modules:config->enabled_modules, limited:config->limit_to_enabled_modules, news:config->news").eq("lane_id", laneId).maybeSingle();
-    return error ? UNLIMITED : gateFrom(data);
+    const { data, error } = await laneConfigRow(client as Parameters<typeof laneConfigRow>[0], laneId);
+    if (error) return UNLIMITED;
+    const config = data?.config;
+    if (typeof config !== "object" || config === null || Array.isArray(config)) return UNLIMITED;
+    const c = config as { enabled_modules?: unknown; limit_to_enabled_modules?: unknown; news?: unknown };
+    return gateFrom({ modules: c.enabled_modules, limited: c.limit_to_enabled_modules, news: c.news });
   } catch {
     return UNLIMITED;
   }
@@ -47,7 +55,7 @@ export async function loadLaneGate(client: unknown, laneId: string): Promise<Lan
 export const laneGate = cache(async (laneId: string): Promise<LaneGate> => {
   try {
     const { client } = await (await guards()).requireLane(laneId as Parameters<Awaited<ReturnType<typeof guards>>["requireLane"]>[0]);
-    return await loadLaneGate(client, laneId);
+    return await timed("gate.read", () => loadLaneGate(client, laneId));
   } catch {
     return UNLIMITED;
   }

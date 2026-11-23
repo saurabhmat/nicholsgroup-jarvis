@@ -35,7 +35,7 @@ export function SyncBar({ laneId, views }: { laneId: string; views: ReadonlyArra
 
 export function ConnectionsSection({ laneId, google, microsoft = null, quickbooks, composio, coverage = null, jobFailures = null, tz = "America/New_York", now = new Date() }: { laneId: string; google: GoogleSectionView | null; microsoft?: MicrosoftSectionView | null; quickbooks: QuickBooksSectionView | null; composio: ComposioSectionView | null; coverage?: CoverageView | null; jobFailures?: JobFailureItem[] | null; tz?: string; now?: Date }) {
   return (
-    <section id="connections" aria-labelledby="connections-title" className="scroll-mt-8">
+    <section aria-labelledby="connections-title">
       <Card>
         <CardHeader>
           <CardTitle as="h2" id="connections-title">

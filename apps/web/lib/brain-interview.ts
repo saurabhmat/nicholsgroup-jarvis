@@ -25,6 +25,7 @@ import {
   type InterviewEnv,
 } from "@nichols/brain/server";
 import { loadGoogleSection } from "@/lib/google-connection";
+import { laneConfigRow } from "@/lib/lane-reads";
 
 export const MAX_BODY_BYTES = 40_000;
 
@@ -65,7 +66,7 @@ export async function brainLanes(client: Client, userId: string, view: string): 
 export async function readLaneInfo(client: Client, laneId: string, name: string, financeView: boolean, withConnections = true): Promise<LaneInfo | null> {
   const core = client.schema("core");
   const [cfg, pol] = await Promise.all([
-    core.from("lane_config_current").select("config").eq("lane_id", laneId).maybeSingle(),
+    laneConfigRow(client, laneId),
     core.from("lane_policies").select("llm_allowed_categories, store_outbound_drafts, write_actions_allowed").eq("lane_id", laneId).maybeSingle(),
   ]);
   if (cfg.error || pol.error || !cfg.data || !pol.data) return null;

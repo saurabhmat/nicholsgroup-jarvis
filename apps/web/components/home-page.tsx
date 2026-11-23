@@ -9,7 +9,7 @@
 // T-231b: "Needs your attention" shows subject (figures masked), sender and mailbox to callers who may read the lane's mail
 // (comms view, AAL2); never a body.
 import Link from "next/link";
-import { cache, Suspense } from "react";
+import { cache, Suspense, type ComponentProps } from "react";
 import { Alert, AlertDescription, AlertTitle, buttonVariants, homeHeading, laneHref, PageHeader, PageSection } from "@nichols/ui";
 import { eyebrowDate } from "@/lib/format-date";
 import { guards } from "@/lib/guards";
@@ -54,8 +54,12 @@ const HOME_TZ = "America/New_York";
 
 export async function HomePage({ params }: { params: Promise<{ laneId: string }> }) {
   const laneParam = (await params).laneId;
-  // T-265: the company's module list (the layout reads it too; one read per request). A mail-only company has no assistant entry point here.
-  const [lane, gate] = await Promise.all([loadLane(laneParam), laneGate(laneParam)]);
+  // T-276: the Finance reads start as soon as the company's module list says Finance is used (they used to start only after every other Home read had answered).
+  // Each finance read still opens the lane through the guards first; a refused lane is a 404 from loadLane below, whatever this started.
+  startFinance(laneParam);
+  // T-276: the header waits only for the lane check. The module list (T-265; the layout reads it too, one read per request) is read where it is needed:
+  // the Ask Jarvis button and the sections below.
+  const lane = await loadLane(laneParam);
   const now = new Date();
   // The verified user id (from loadLane's lane check) is only a sessionStorage key part for view state (expanded sections, the open drawer).
   const userId = lane.userId;
@@ -82,11 +86,9 @@ export async function HomePage({ params }: { params: Promise<{ laneId: string }>
             <Suspense fallback={null}>
               <HomeCoverageDot laneId={lane.laneId} now={now} />
             </Suspense>
-            {gate.visible("assistant") ? (
-              <Link href={laneHref(lane.laneId, "assistant")} className={buttonVariants()}>
-                Ask Jarvis
-              </Link>
-            ) : null}
+            <Suspense fallback={null}>
+              <AskJarvis laneId={lane.laneId} />
+            </Suspense>
           </>
         }
       />
@@ -110,9 +112,19 @@ export async function HomePage({ params }: { params: Promise<{ laneId: string }>
   );
 }
 
+/** The "Ask Jarvis" button: a mail-only company has no assistant entry point (T-265). Its own boundary: the header never waits for the module list. */
+async function AskJarvis({ laneId }: { laneId: string }) {
+  if (!(await laneGate(laneId)).visible("assistant")) return null;
+  return (
+    <Link href={laneHref(laneId, "assistant")} className={buttonVariants()}>
+      Ask Jarvis
+    </Link>
+  );
+}
+
 /** The greeting text at once ("Good morning", "Good afternoon" or "Good evening" by Eastern time), with the first name once the profile row is read. */
 async function HomeGreeting({ laneId, now }: { laneId: string; now: Date }) {
-  const heading = homeHeading(await timed("load.first_name", async () => firstNameFor(await guards(), laneId)), now);
+  const heading = homeHeading(await firstNameFor(await guards(), laneId), now); // shared with the layout, timed as load.first_name
   return (
     <>
       {heading.lead}
@@ -168,12 +180,19 @@ async function HomeSections({ laneId, now }: { laneId: string; now: Date }) {
   // T-265: a limited company whose policy allows no email write has no Reply (nothing could be saved or sent). Any other company: unchanged.
   const replyAllowed = !gate.limited || !isOwner || (await emailWriteAllowed(await laneClient(), laneId));
   // T-262: the Microsoft connections whose rows may be replied to (write grant + a lane policy that allows an email write); none for anyone who cannot reply anyway.
-  const microsoftReply = isOwner && replyAllowed ? await replyableMicrosoftConnections(approvalsDeps, laneId, brief.mail.access ? brief.mail.sourceOf : undefined).catch(() => new Set<string>()) : new Set<string>();
+  // T-276: the check (one read per Microsoft connection, in a chain of levels) no longer holds the page: it starts now and only the attention rows wait for it, in
+  // their own boundary, behind the same rows drawn without Microsoft Reply (the fail-closed state). A viewer with no Microsoft row has nothing to check.
+  const mailSourceOf = brief.mail.access ? brief.mail.sourceOf : undefined;
+  const replyCheck: Promise<ReadonlySet<string>> | null =
+    isOwner && replyAllowed && Object.values(mailSourceOf ?? {}).some((t) => t.provider === "microsoft")
+      ? timed("load.microsoft_reply", () => replyableMicrosoftConnections(approvalsDeps, laneId, mailSourceOf)).catch((): ReadonlySet<string> => new Set<string>())
+      : null;
   // Why there is no AI summary: the AI setup itself (names only), else the stored code of the newest failed attempt.
   const setup = aiSetupFailure();
   const failure = setup?.code ?? (saved && (saved.status === "failed" || saved.lastFailedAt) ? await lastFailureReason(await laneClient(), laneId) : null);
   // The hint is built here, on the server, and only for admins: non-admins get no hint string at all.
   const failureHint = isAdmin && failure ? adminHint(failure, setup?.names ?? []) : null;
+  const attentionProps = { laneId, mail: withSummaryApplied(brief.mail, saved), now, notes: notesByMessage(saved), replies: repliesByMessage(saved), canReply: isOwner && replyAllowed, tz: brief.viewerTz };
   return (
     <>
       <TimezoneCookie current={tzCookie ?? null} />
@@ -199,7 +218,13 @@ async function HomeSections({ laneId, now }: { laneId: string; now: Date }) {
       <div data-testid="home-attention-slot" className="order-1 flex min-w-0 flex-col gap-5 md:order-none md:col-span-2 md:col-start-1 md:row-span-3 md:row-start-3 md:mb-5">
         <PageSection title="Needs your attention" note={`Top 5 from the last ${freshWindowText(brief.config.attention.fresh_hours)}`}>
           <AiBriefing laneId={laneId} brief={saved} fallbackLines={view.unavailable ? [] : composeBriefing(view, now)} tz={brief.viewerTz} controls={isOwner && brief.mail.access ? <BriefingAuto laneId={laneId} preparedAt={saved && saved.status !== "failed" ? saved.preparedAt : null} initial={runState} tz={brief.viewerTz} /> : null} now={now} failure={failure} failureHint={failureHint} staleLine={brief.unavailable ? null : staleDataLine(brief.coverage, now, saved && saved.status !== "failed" ? saved.preparedAt : null)} />
-          <AttentionSection laneId={laneId} mail={withSummaryApplied(brief.mail, saved)} now={now} notes={notesByMessage(saved)} replies={repliesByMessage(saved)} canReply={isOwner && replyAllowed} microsoftReply={microsoftReply} tz={brief.viewerTz} />
+          {replyCheck ? (
+            <Suspense fallback={<AttentionSection {...attentionProps} microsoftReply={NO_REPLY} />}>
+              <AttentionWithReply reply={replyCheck} {...attentionProps} />
+            </Suspense>
+          ) : (
+            <AttentionSection {...attentionProps} microsoftReply={NO_REPLY} />
+          )}
           {saved && saved.status !== "failed" ? (
             // Folded so the card stays short: reply drafts (with Copy) and deadlines from the briefing.
             <PersistedDetails id="attention-extras" testId="attention-extras" className="border-t border-border pt-3" summaryClassName="cursor-pointer text-small font-medium text-primary" summary="Drafts and deadlines">
@@ -234,6 +259,14 @@ async function HomeSections({ laneId, now }: { laneId: string; now: Date }) {
 
 const GRID_FULL = "md:col-span-3 md:col-start-1";
 
+const NO_REPLY: ReadonlySet<string> = new Set<string>();
+type AttentionProps = Omit<ComponentProps<typeof AttentionSection>, "microsoftReply">;
+
+/** The attention rows once the Microsoft reply check has answered (T-276: streamed behind the same rows without Microsoft Reply). */
+async function AttentionWithReply({ reply, ...props }: AttentionProps & { reply: Promise<ReadonlySet<string>> }) {
+  return <AttentionSection {...props} microsoftReply={await reply} />;
+}
+
 /** Both finance reads, once per request (React `cache`): the KPI row and the Finance section share them. */
 const loadFinance = cache(async (laneId: string) => {
   const g = await guards();
@@ -244,6 +277,13 @@ const loadFinance = cache(async (laneId: string) => {
   }
   return [finance, detail] as const;
 });
+
+/** Starts the Finance reads when the company uses Finance (the shared `loadFinance` memo: the KPI row and the Finance section then find them under way). Never throws or rejects unhandled. */
+function startFinance(laneId: string): void {
+  void laneGate(laneId)
+    .then((gate) => (gate.visible("finance") ? loadFinance(laneId) : undefined))
+    .catch(() => undefined);
+}
 
 async function KpiSection({ laneId, feeds, canConnect }: { laneId: string; feeds: HomeView["feeds"]; canConnect: boolean }) {
   const [finance, detail] = await loadFinance(laneId);

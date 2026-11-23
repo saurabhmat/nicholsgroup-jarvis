@@ -7,12 +7,13 @@ import { guards } from "@/lib/guards";
 import { firstNameFor } from "@/lib/first-name";
 import { loadLane } from "@/lib/lane-page";
 import { hiddenNavKeys, laneGate } from "@/lib/lane-modules";
+import { ShellFallback } from "@/components/shell-fallback";
 import { Shell } from "@/components/shell";
 import { signOut } from "../sign-in/actions";
 
 export default function LaneLayout({ children, params }: LayoutProps<"/[laneId]">) {
   return (
-    <Suspense fallback={null}>
+    <Suspense fallback={<ShellFallback />}>
       <LaneShell params={params}>{children}</LaneShell>
     </Suspense>
   );
