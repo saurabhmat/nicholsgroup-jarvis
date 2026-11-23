@@ -21,6 +21,8 @@ export function defaultRetentionTables(deps: { store: RetentionStore; webhooks: 
     { id: "core.push_subscriptions", class: "policy", purge: (lane) => store.purgePushSubscriptions(lane) },
     // The portal's own Teams read markers (T-282): ids and a time only; a fixed 90 days untouched in SQL, and every marker of a disconnected connection.
     { id: "comms.teams_chat_reads", class: "policy", purge: (lane) => store.purgeTeamsChatReads(lane) },
+    // The Teams new-notice times (T-289): times and a capped counter only; deleted with the connection, and here for every disconnected connection whose purger failed.
+    { id: "comms.teams_activity", class: "policy", purge: (lane) => store.purgeTeamsActivity(lane) },
   ];
 }
 

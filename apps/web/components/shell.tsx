@@ -4,6 +4,7 @@ import Link from "next/link";
 import { usePathname } from "next/navigation";
 import type { ReactNode } from "react";
 import { clearAllDrafts } from "@/lib/reply-draft-store";
+import { MessagesDot } from "./messages-dot";
 import { ThemeToggle } from "./theme-toggle";
 import { AppShell, type NavKey, type ShellBrand, type ShellLane, type ShellLink } from "@nichols/ui";
 
@@ -28,5 +29,8 @@ export function Shell(props: {
     clearAllDrafts();
     await props.signOut(formData);
   };
-  return <AppShell {...props} signOut={signOut} pathname={pathname} Link={NextLink} menuExtra={<ThemeToggle />} />;
+  // T-290: the "new" dot of Messages (side menu, and the iPhone More tab that holds Messages). Only when the company shows Messages; fetched by the dot itself after this renders.
+  const messagesShown = !(props.hiddenKeys ?? []).includes("messages");
+  const navAccessory = (key: NavKey | "more") => (messagesShown && (key === "messages" || key === "more") ? <MessagesDot laneId={props.currentLaneId} /> : null);
+  return <AppShell {...props} signOut={signOut} pathname={pathname} Link={NextLink} menuExtra={<ThemeToggle />} navAccessory={navAccessory} />;
 }

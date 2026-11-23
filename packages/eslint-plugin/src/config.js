@@ -173,6 +173,21 @@ export const RESTRICTED_NAMES = {
   // The instance that can create, renew and stop subscriptions, and the renewer built on it (reached by the T-040 renewal job only).
   microsoftSubscriptions: { allow: ["packages/connectors/src/microsoft/index.ts"], hint: "subscriptions are created, renewed and stopped by the renewal job only" },
   microsoftSubscriptionRenewer: { allow: ["packages/connectors/src/microsoft/index.ts", "packages/connectors/src/health/index.ts"], hint: "only the T-040 renewal registry calls the Microsoft renewer" },
+  // T-289: the Teams subscription client (an exact allow-list of the same three subscription routes) is built only by the Teams wiring; the Teams subscription logic takes it as a parameter and never
+  // names it. It can reach no chat and no message, and is separate from the Teams write client. Test files that build one are listed one by one.
+  createTeamsSubscriptionClient: {
+    allow: [
+      "packages/connectors/src/teams/index.ts",
+      "packages/connectors/src/teams/subscription-client.test.ts",
+      "packages/connectors/src/teams/subscriptions.test.ts",
+      "packages/connectors/src/teams/subscription-boundary.test.ts",
+      "packages/connectors/src/webhooks/microsoft-teams.test.ts",
+    ],
+    hint: "only the Teams wiring builds the Teams subscription client; subscriptions are created, renewed and stopped by jobs",
+  },
+  // The instance that can create, renew and stop a Teams connection's subscription, and the renewer built on it (reached by the T-040 renewal job only).
+  teamsSubscriptions: { allow: ["packages/connectors/src/teams/index.ts"], hint: "Teams subscriptions are created, renewed and stopped by the renewal job only" },
+  teamsSubscriptionRenewer: { allow: ["packages/connectors/src/teams/index.ts", "packages/connectors/src/health/index.ts"], hint: "only the T-040 renewal registry calls the Teams renewer" },
   // T-279, T-286: the Teams Graph write client (an exact allow-list of three POST templates for a message the person pressed Send on) is built in ONE file: the approvals-only writer wiring
   // (teams/writer-entry.ts), which only the write subpath re-exports to the approvals module. The test files below exercise the client itself, the writer over it, and the boundary.
   createTeamsWriteClient: {
@@ -196,11 +211,12 @@ export const RESTRICTED_NAMES = {
   approveAndExecuteTeamsAction: { allow: [...APPROVALS, TEAMS_SEND_ROUTE], allowReexport: [], hint: "only the approvals package and the Messages send route (T-288) carry out a Teams message" },
   executeApprovedTeamsAction: { allow: [...APPROVALS, TEAMS_SEND_ROUTE], allowReexport: [], hint: "only the approvals package and the Messages send route (T-288) carry out a Teams message" },
   // T-278 review S6: the Teams HTTP wrapper takes a "read" or "write" kind; the "write" kind can send a POST. Only the Teams read client, the write client and the OAuth provider (the `/me`
-  // read at connect time) build one; the harness builds the read kind for tests. Anything else goes through those.
+  // read at connect time) build one; the harness builds the read kind for tests. Anything else goes through those. T-289: the Teams subscription client builds the third, `subscriptions` kind
+  // (POST, PATCH and DELETE on `/subscriptions` and `/subscriptions/{id}` only: no chat, no message route).
   createTeamsHttp: {
-    allow: ["packages/connectors/src/teams/api.ts", "packages/connectors/src/teams/write-client.ts", "packages/connectors/src/teams/provider.ts", "packages/connectors/src/testing/teams-harness.ts", "packages/connectors/src/teams/write-boundary.test.ts"],
+    allow: ["packages/connectors/src/teams/api.ts", "packages/connectors/src/teams/write-client.ts", "packages/connectors/src/teams/subscription-client.ts", "packages/connectors/src/teams/provider.ts", "packages/connectors/src/testing/teams-harness.ts", "packages/connectors/src/teams/write-boundary.test.ts"],
     allowReexport: [],
-    hint: "build a Teams request through the Teams read client or the write client (write-client.ts, approvals only)",
+    hint: "build a Teams request through the Teams read client, the subscription client or the write client (write-client.ts, approvals only)",
   },
   loadGoogleWriteConnection: { allow: [...APPROVALS, "packages/connectors/src/google/index.ts"], allowReexport: CONNECTORS, hint: "only the approvals package loads a write connection" },
   mintApprovedAction: { allow: APPROVALS, hint: "only the approvals package mints approved actions" },

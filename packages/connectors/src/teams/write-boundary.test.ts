@@ -22,6 +22,8 @@ function production(): string[] {
 }
 const rel = (f: string) => relative(root, f);
 const text = (f: string) => readFileSync(f, "utf8");
+/** T-289: the files that name the subscription routes (`/subscriptions`, `/subscriptions/{id}`: the notice plumbing of a Teams read connection, NOT a message write), named explicitly as the mail code does in microsoft/subscription-boundary.test.ts. */
+const SUBSCRIPTION_FILES = ["constants.ts", "http.ts", "subscription-client.ts", "subscriptions.ts"].map((f) => `packages/connectors/src/teams/${f}`);
 
 describe("the Teams write path is reachable only from approvals", () => {
   it("only the write client, the writer (a type) and the writer wiring name the factory or the client type (the scan finds them), and exactly one file builds a client", () => {
@@ -69,7 +71,14 @@ describe("the Teams write path is reachable only from approvals", () => {
       .filter((f) => rel(f).startsWith("packages/connectors/src/teams/") && /method:\s*"(POST|PATCH|PUT|DELETE)"/.test(text(f)))
       .map(rel)
       .sort();
-    expect(posters).toEqual(["packages/connectors/src/teams/write-client.ts"]);
+    // the write client, and (T-289) the subscription route table, client and logic: each is checked below for what it can reach
+    expect(posters).toEqual(["packages/connectors/src/teams/constants.ts", "packages/connectors/src/teams/subscription-client.ts", "packages/connectors/src/teams/subscriptions.ts", "packages/connectors/src/teams/write-client.ts"]);
+    // the write client names no subscription route; the subscription files name no message route and no write template
+    expect(text(join(root, "packages/connectors/src/teams/write-client.ts"))).not.toMatch(/["'`]\/subscriptions|TEAMS_SUBSCRIPTION/);
+    for (const f of ["subscription-client.ts", "subscriptions.ts"]) {
+      const t = text(join(root, "packages/connectors/src/teams", f));
+      expect(t, f).not.toMatch(/TEAMS_WRITE_ROUTES|isTeamsWritePath|\/chats\/\{|\/messages|write-client|createTeamsWriteClient|"write"/);
+    }
     const read = text(join(root, "packages/connectors/src/teams/api.ts"));
     expect(read).not.toMatch(/TEAMS_WRITE_ROUTES|"POST"|"write"/);
     const http = text(join(root, "packages/connectors/src/teams/http.ts"));
@@ -105,10 +114,14 @@ describe("the Teams write path is reachable only from approvals", () => {
     for (const f of ["send-schema.ts", "actions-purge-store.ts"]) expect(text(join(root, "packages/connectors/src/teams", f)), f).not.toMatch(/\bfetch\(|"POST"|createTeamsWriteClient/);
   });
 
-  it("the Teams connector never names a subscription route (notices are T-289) or a mail route", () => {
+  it("the Teams connector names a subscription route only in the four listed files (T-289: the route table, the HTTP wrapper's `subscriptions` kind, the subscription client and its logic), and never a mail route", () => {
+    const named = production()
+      .filter((p) => rel(p).startsWith("packages/connectors/src/teams/") && /["'`]\/subscriptions/.test(text(p)))
+      .map(rel)
+      .sort();
+    expect(named).toEqual(SUBSCRIPTION_FILES);
     for (const f of production().filter((p) => rel(p).startsWith("packages/connectors/src/teams/"))) {
       const t = text(f);
-      expect(t, rel(f)).not.toMatch(/["'`]\/subscriptions/);
       expect(t, rel(f)).not.toMatch(/["'`]\/me\/(messages|mailFolders|events|calendar)/i);
     }
   });
@@ -124,7 +137,13 @@ describe("the Teams write path is reachable only from approvals", () => {
       .filter((f) => /createTeamsHttp\s*\(/.test(text(f)) && !/function createTeamsHttp/.test(text(f)))
       .map(rel)
       .sort();
-    expect(builders).toEqual(["packages/connectors/src/teams/api.ts", "packages/connectors/src/teams/provider.ts", "packages/connectors/src/teams/write-client.ts", "packages/connectors/src/testing/teams-harness.ts"]);
+    // T-289: the subscription client builds the `subscriptions` kind (three routes on /subscriptions, no message route)
+    expect(builders).toEqual(["packages/connectors/src/teams/api.ts", "packages/connectors/src/teams/provider.ts", "packages/connectors/src/teams/subscription-client.ts", "packages/connectors/src/teams/write-client.ts", "packages/connectors/src/testing/teams-harness.ts"]);
+    const subscriptionKind = production()
+      .filter((f) => /createTeamsHttp\s*\([\s\S]{0,1500}?["']subscriptions["']\s*,?\s*\)/.test(text(f)))
+      .map(rel)
+      .filter((f) => f !== "packages/connectors/src/teams/http.ts");
+    expect(subscriptionKind).toEqual(["packages/connectors/src/teams/subscription-client.ts"]);
   });
 
   it("the chat reader (T-281) can only read: it names no write client, no write route, no HTTP method but the read client's GET, no direct fetch, and its one log line holds no content", () => {

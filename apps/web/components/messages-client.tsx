@@ -1,16 +1,19 @@
 "use client";
-// Messages: the few things that need the browser (T-283, T-284). Each acts only on the person's own click, or once when a chat is opened; there is NO timer and NO polling here (Microsoft's
-// terms: fetch when the page is opened, refreshed or a chat is opened). Nothing from a chat is stored in the browser (no localStorage, no cookie, no URL): messages live in component
-// state for as long as the page is open. Every request is to this portal's own routes (lib/teams-api.ts); the browser never calls Microsoft.
-//   MessagesRefresh   re-reads the page (a server refresh) on click
+// Messages: the few things that need the browser (T-283, T-284, T-290). Each acts only on the person's own click, once when a chat is opened, or (T-290) when the PORTAL'S OWN database says a
+// Microsoft notification arrived (components/messages-live.tsx: that loop asks our database, never Microsoft: Microsoft's terms allow no polling loop). There is NO timer in this file.
+// Nothing from a chat is stored in the browser (no localStorage, no cookie, no URL): messages live in component state for as long as the page is open. Every request is to this portal's
+// own routes (lib/teams-api.ts); the browser never calls Microsoft.
+//   MessagesRefresh   re-reads the page (a server refresh) on click; in `live` mode asks the live provider to read again (at most once a minute)
 //   ConversationMessages  the conversation's messages, scrolled to the newest, with "Load older messages" (one more page per click)
 //   CallButtons       Call and Video call (ask the server for the link, then open it in a new tab) and Open in Teams
 //   MarkRead          once per opened chat: records the portal's own read marker
 import { useRouter } from "next/navigation";
 import { useEffect, useLayoutEffect, useRef, useState, useTransition } from "react";
 import { Button, buttonVariants, cn } from "@nichols/ui";
+import { NEWER_EPOCH } from "@/lib/messages-live-config";
 import type { CallState, MessageView } from "@/lib/teams-chats";
-import { callUnavailableText, MESSAGES_NO_OLDER_TEXT, messagesBusyText } from "@/lib/teams-wording";
+import { callUnavailableText, MESSAGES_NO_OLDER_TEXT, MESSAGES_REFRESH_FAILED_TEXT, messagesBusyText, messagesRefreshWaitText } from "@/lib/teams-wording";
+import { useMessagesLive, useOnLiveRefetch } from "./messages-live";
 import { MessageList } from "./messages-view";
 
 const JSON_HEADERS = { "content-type": "application/json" } as const;
@@ -26,13 +29,34 @@ async function failureText(res: Response): Promise<string> {
   return "Teams could not be reached. Try again.";
 }
 
-export function MessagesRefresh({ label = "Refresh" }: { label?: string }) {
+/**
+ * Refresh. `page` (default): a server refresh of the whole page, as before (the "Try again" of a failed read). `live` (T-290): asks the live provider to read the chat list and the open
+ * conversation again; allowed at most once a minute, otherwise it says when ("Already up to date...") and reads nothing.
+ */
+export function MessagesRefresh({ label = "Refresh", mode = "page" }: { label?: string; mode?: "page" | "live" }) {
   const router = useRouter();
+  const live = useMessagesLive();
   const [pending, start] = useTransition();
+  const [note, setNote] = useState<string | null>(null);
+  const click = () => {
+    if (mode === "live" && live) {
+      const r = live.requestRefresh("refresh");
+      setNote(r.ok ? null : messagesRefreshWaitText(r.waitSeconds));
+      return;
+    }
+    start(() => router.refresh());
+  };
   return (
-    <Button type="button" variant="outline" size="sm" disabled={pending} onClick={() => start(() => router.refresh())} data-testid="messages-refresh">
-      {pending ? "Refreshing..." : label}
-    </Button>
+    <>
+      <Button type="button" variant="outline" size="sm" disabled={pending} onClick={click} data-testid="messages-refresh">
+        {pending ? "Refreshing..." : label}
+      </Button>
+      {note ? (
+        <span role="status" aria-live="polite" data-testid="messages-refresh-note" className="sr-only">
+          {note}
+        </span>
+      ) : null}
+    </>
   );
 }
 
@@ -40,16 +64,65 @@ export function ConversationMessages({ laneId, chatKey, initial, nextBefore, gro
   // Older pages the person asked for. After a Refresh the server sends a new `initial`; the pages kept here are merged BY MESSAGE ID and the "older than" time is the oldest message shown, so no
   // hole can appear between what was loaded before and what the refresh returned (C2).
   const [older, setOlder] = useState<MessageView[]>([]);
+  // What the live re-read brought (T-290): messages created or changed after the newest one shown (a lastModifiedDateTime date range), merged by id (an edit replaces, a deletion shows as deleted).
+  const [fresh, setFresh] = useState<MessageView[]>([]);
+  const [refreshFailed, setRefreshFailed] = useState(false);
   const [noMore, setNoMore] = useState(false);
   const [state, setState] = useState<{ busy: boolean; error: Failure | null }>({ busy: false, error: null });
   const box = useRef<HTMLDivElement>(null);
   const keep = useRef<{ height: number; top: number } | null>(null);
+  const stick = useRef(false);
   const seen = new Set(initial.map((m) => m.id));
   const kept = older.filter((m) => !seen.has(m.id));
-  const all = [...kept, ...initial];
+  const byId = new Map<string, MessageView>();
+  for (const m of [...kept, ...initial, ...fresh]) byId.set(m.id, m);
+  const all = [...byId.values()].sort((a, b) => (a.at < b.at ? -1 : a.at > b.at ? 1 : 0));
   const oldestShown = all.length > 0 ? all[0]?.at ?? null : null;
+  const newestShown = all.length > 0 ? all[all.length - 1]?.at ?? null : null;
   // More to load: nothing once an older page said "start of the chat"; else the oldest message shown when older pages are kept, else the server's own time for its page.
   const before = noMore ? null : kept.length > 0 ? oldestShown : nextBefore;
+  const latest = useRef({ newestShown });
+  useEffect(() => {
+    latest.current = { newestShown };
+  });
+
+  // A notice arrived (or Refresh was pressed): read what changed in THIS chat since the newest message shown, with a date range; keep what is shown if it fails.
+  useOnLiveRefetch(() => {
+    const ac = new AbortController();
+    void (async () => {
+      try {
+        const since = latest.current.newestShown ?? NEWER_EPOCH;
+        const res = await fetch(`/api/lanes/${encodeURIComponent(laneId)}/messages/newer?chat=${encodeURIComponent(chatKey)}&since=${encodeURIComponent(since)}`, { credentials: "same-origin", cache: "no-store", signal: ac.signal });
+        if (!res.ok) {
+          setRefreshFailed(true);
+          return;
+        }
+        const b = (await res.json()) as { messages?: MessageView[] };
+        if (!Array.isArray(b.messages)) throw new Error("shape");
+        const el = box.current;
+        stick.current = el ? el.scrollHeight - el.scrollTop - el.clientHeight < 96 : false; // only follow the newest message when the person is already at the bottom
+        setRefreshFailed(false);
+        if (b.messages.length === 0) return;
+        const incoming = b.messages;
+        setFresh((prev) => {
+          const m = new Map(prev.map((x) => [x.id, x]));
+          for (const x of incoming) m.set(x.id, x);
+          return [...m.values()];
+        });
+        // what the person now sees is read: the portal's own marker moves (never anything at Microsoft)
+        const newest = incoming.reduce<string | null>((a, x) => (a === null || x.at > a ? x.at : a), null);
+        if (newest !== null) void fetch(`/api/lanes/${encodeURIComponent(laneId)}/messages/read`, { method: "POST", headers: JSON_HEADERS, credentials: "same-origin", cache: "no-store", body: JSON.stringify({ chat: chatKey, readThrough: newest }) }).catch(() => undefined);
+      } catch {
+        if (!ac.signal.aborted) setRefreshFailed(true);
+      }
+    })();
+    return () => ac.abort();
+  });
+  useLayoutEffect(() => {
+    const el = box.current;
+    if (el && stick.current) el.scrollTop = el.scrollHeight;
+    stick.current = false;
+  }, [fresh]);
 
   // The newest message is what a person opens a chat for: start at the bottom.
   useLayoutEffect(() => {
@@ -97,6 +170,11 @@ export function ConversationMessages({ laneId, chatKey, initial, nextBefore, gro
         {state.error ? (
           <p role="alert" data-testid="older-error" className="text-small text-alert-foreground">
             {state.error.text}
+          </p>
+        ) : null}
+        {refreshFailed ? (
+          <p role="alert" data-testid="refresh-failed" className="text-small text-alert-foreground">
+            {MESSAGES_REFRESH_FAILED_TEXT}
           </p>
         ) : null}
       </div>

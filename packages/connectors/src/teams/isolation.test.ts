@@ -124,6 +124,8 @@ describe("source scan: every production file that names the provider is on this 
         "apps/web/lib/teams-wording.ts",
         "packages/connectors/src/contract/schemas.ts",
         "packages/connectors/src/health/index.ts",
+        // T-289: the subscription store records a Teams connection's notice subscription under this provider (and asks the receiver's lookup for it)
+        "packages/connectors/src/microsoft/subscription-store.ts",
         "packages/connectors/src/oauth/flow.ts",
         "packages/connectors/src/teams/constants.ts",
         "packages/connectors/src/teams/guard.ts",

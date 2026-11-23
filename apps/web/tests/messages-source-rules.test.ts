@@ -57,8 +57,36 @@ describe("Messages source rules", () => {
   it("the browser code calls only this portal's own routes", () => {
     const urls = [...code("components/messages-client.tsx").matchAll(/fetch\(\s*`([^`]+)`/g)].map((m) => m[1]);
     expect(urls.length).toBeGreaterThan(0);
-    for (const u of urls) expect(u).toMatch(/^\/api\/lanes\/\$\{encodeURIComponent\(laneId\)\}\/messages\/(older|read|call-link)/);
+    for (const u of urls) expect(u).toMatch(/^\/api\/lanes\/\$\{encodeURIComponent\(laneId\)\}\/messages\/(older|read|call-link|newer)/);
     expect(code("components/messages-client.tsx")).not.toMatch(/fetch\(\s*["'`]https?:/);
+  });
+
+  // T-290: the ONE loop of the Messages page asks the portal's OWN database; it is in one file and pinned here.
+  it("the live Messages code (T-290): exactly one timer, it only asks the portal's own activity route; the re-reads and the dot go to own routes; no storage, no raw HTML, no Microsoft host", () => {
+    const live = code("components/messages-live.tsx");
+    expect([...live.matchAll(/\bsetInterval\(/g)]).toHaveLength(1);
+    expect(live).toMatch(/timer = setInterval\(\(\) => void poll\(\), ACTIVITY_POLL_MS\)/);
+    expect(live).not.toMatch(/\bsetTimeout\b|requestAnimationFrame|EventSource|WebSocket|navigator\.sendBeacon|serviceWorker/);
+    // `poll` asks the database only: it names getActivity, never a re-read route
+    const poll = live.slice(live.indexOf("async function poll()"), live.indexOf("const startLoop"));
+    expect(poll).toMatch(/getActivity\(laneId, ac\.signal\)/);
+    expect(poll).not.toMatch(/\bfetch\(|messages\/(chats|newer|older|read)/);
+    // the loop's comment says what it is
+    expect(read("components/messages-live.tsx")).toMatch(/THE LOOP BELOW DOES\s*\/\/ NOT POLL MICROSOFT/);
+    // the one fetch of the file is the chat-list re-read, to an own route; everything else goes through the activity client
+    const urls = [...live.matchAll(/fetch\(\s*`([^`]+)`/g)].map((m) => m[1]);
+    expect(urls).toHaveLength(1);
+    expect(urls[0]).toMatch(/^\/api\/lanes\/\$\{encodeURIComponent\(laneId\)\}\/messages\/chats/);
+    const client = code("lib/messages-activity-client.ts");
+    expect([...client.matchAll(/fetch\(/g)]).toHaveLength(2);
+    expect([...client.matchAll(/fetch\(\s*`([^`]+)`/g)].map((m) => m[1])).toEqual(["/api/lanes/${encodeURIComponent(laneId)}/messages/activity", "/api/lanes/${encodeURIComponent(laneId)}/messages/activity"]);
+    for (const f of ["components/messages-live.tsx", "components/messages-dot.tsx", "lib/messages-activity-client.ts", "components/teams-live-status.tsx", "lib/messages-live-config.ts"]) {
+      const c = code(f);
+      expect(c, f).not.toMatch(/dangerouslySetInnerHTML|innerHTML|outerHTML|document\.write|\beval\(|localStorage|sessionStorage|indexedDB|document\.cookie|caches\.|graph\.microsoft|teams\.microsoft|@nichols\/connectors/);
+      expect(c, f).not.toMatch(/console\.(log|info|debug)/);
+    }
+    // the dot never draws anything that came from a chat: it takes no text from the answer
+    expect(code("components/messages-dot.tsx")).not.toMatch(/\.title|\.text|preview|sender|chatId/);
   });
 
   it("every link the page draws from Teams content opens in a new tab with noopener, and none is ever opened by code except the person's click on Call / Video call", () => {

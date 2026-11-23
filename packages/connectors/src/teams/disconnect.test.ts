@@ -69,8 +69,10 @@ describe("the wiring (T-282)", () => {
   it("the Teams disconnect is wired with the read-marker purger; later tasks add theirs beside it", async () => {
     const { readFileSync } = await import("node:fs");
     const src = readFileSync(new URL("./index.ts", import.meta.url), "utf8");
-    // T-286: the open Teams send actions of the connection are closed (text purged) beside the read markers
-    expect(src).toMatch(/purgers:\s*\[\s*\{ name: "chat_reads", purge: \(laneId, connectionId\) => teamsChatReadsStore\.purgeConnection\(laneId, connectionId\) \},\s*\{ name: "send_actions", purge: \(laneId, connectionId\) => teamsActionsStore\.purgeConnection\(laneId, connectionId\) \},?\s*\]/);
+    // T-286: the open Teams send actions of the connection are closed (text purged) beside the read markers; T-289: the notice times (comms.teams_activity) go with them
+    expect(src).toMatch(/purgers:\s*\[\s*\{ name: "chat_reads", purge: \(laneId, connectionId\) => teamsChatReadsStore\.purgeConnection\(laneId, connectionId\) \},\s*\{ name: "send_actions", purge: \(laneId, connectionId\) => teamsActionsStore\.purgeConnection\(laneId, connectionId\) \},\s*(\/\/[^\n]*\n\s*)?\{ name: "activity", purge: \(laneId, connectionId\) => teamsNoticesStore\.purgeConnection\(laneId, connectionId\) \},?\s*\]/);
+    // and the subscriptions are marked removed (their Vault secrets deleted) by the same disconnect, before the purgers
+    expect(src).toMatch(/subscriptions: microsoftSubscriptionStore,/);
   });
 
   it("a purger that fails is logged by class only and the disconnect still completes (the markers are also removed by the retention purge)", async () => {

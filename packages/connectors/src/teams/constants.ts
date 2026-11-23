@@ -104,3 +104,32 @@ export const TEAMS_MAX_TEXT_BYTES = 80 * 1024;
 /** The fixed text Settings and Messages show when a tenant administrator must approve the app (spec 5; no link: the v2 admin-consent URL needs a registered redirect URI and no route exists for it). */
 export const TEAMS_ADMIN_CONSENT_TEXT =
   "Your organisation's Microsoft admin must approve the portal's Teams app once (Entra admin centre → Enterprise applications → the app → Permissions → Grant admin consent).";
+
+// ---- change notifications (T-289; spec 9.1; vendor facts A3). One all-chats subscription per Teams connection: delegated, `Chat.Read`, `created` only, NO resource data (ids only; no certificate).
+/** The `core.push_subscriptions.resource` of a Teams connection's one subscription. */
+export const TEAMS_SUBSCRIPTION_RESOURCE = "teams_chats" as const;
+/**
+ * The resource Microsoft is asked to watch, and the path recorded beside the subscription (the same string, no leading slash, as the spec 7.4 and the backlog write it): the person's own chats, all of
+ * them, in ONE subscription (a per-chat subscription would be one per app and chat, so two portal users in the same chat would block each other: no per-chat fallback exists). The Entra object id is
+ * the validated, server-only one of the connection.
+ */
+export const teamsSubscriptionResource = (entraObjectId: string): string => `users/${entraObjectId.toLowerCase()}/chats/getAllMessages`;
+/** `created` only: a reaction or an edit fires `updated` and is not a notice (vendor facts A3). */
+export const TEAMS_SUBSCRIPTION_CHANGE_TYPES = "created";
+/** What we ask for: 4,200 minutes, just under the documented 4,320 (three days) for chat messages. Microsoft's answer is what is recorded. */
+export const TEAMS_SUBSCRIPTION_LIFETIME_MINUTES = 4_200;
+/**
+ * A subscription whose expiry Microsoft gave is useless to us when it is shorter than this: the renewal scan runs every 12 hours and renews within 24 hours of the expiry, so a lifetime under
+ * 26 hours cannot be kept alive (one page of Microsoft's documentation says 60 minutes for chat messages). It is stopped, and the connection stays on "refresh on open".
+ */
+export const TEAMS_SUBSCRIPTION_MIN_LIFETIME_MS = 26 * 3600_000;
+/** The same rule as the mail subscriptions: renewed once it expires within 24 hours. */
+export const TEAMS_SUBSCRIPTION_RENEW_WINDOW_MS = 24 * 3600_000;
+/** The only paths the subscription client can send to (exact strings; a path is never built from data). */
+export const TEAMS_SUBSCRIPTION_ROUTES = Object.freeze([
+  Object.freeze({ method: "POST", path: "/subscriptions" }),
+  Object.freeze({ method: "PATCH", path: "/subscriptions/{id}" }),
+  Object.freeze({ method: "DELETE", path: "/subscriptions/{id}" }),
+] as const);
+/** Whether method + path template is one of the three allowed subscription routes (exact match on both). */
+export const isTeamsSubscriptionRoute = (method: string, path: string): boolean => TEAMS_SUBSCRIPTION_ROUTES.some((r) => r.method === method && r.path === path);

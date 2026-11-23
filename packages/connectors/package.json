@@ -29,7 +29,8 @@
     "./microsoft-settings": "./src/microsoft/settings-entry.ts",
     "./teams-settings": "./src/teams/settings-entry.ts",
     "./teams-reader": "./src/teams/reader-entry.ts",
-    "./teams-pure": "./src/teams/pure.ts"
+    "./teams-pure": "./src/teams/pure.ts",
+    "./teams-notices": "./src/teams/notices-entry.ts"
   },
   "scripts": {
     "typecheck": "tsc -b",

@@ -966,6 +966,23 @@ isOneToOne: false
 "teams_actions_purge_connection":
 { Args: { "p_connection": string,"p_lane": string }; Returns: number
                            },
+"teams_activity_get":
+{ Args: { "p_connection": string,"p_lane": string }; Returns: {
+              "last_notice_at": string,"last_seen_at": string,"live": boolean,"live_until": string
+            }[]
+                           },
+"teams_activity_notice":
+{ Args: { "p_connection": string,"p_lane": string }; Returns: string
+                           },
+"teams_activity_purge":
+{ Args: { "p_lane": string }; Returns: number
+                           },
+"teams_activity_purge_connection":
+{ Args: { "p_connection": string,"p_lane": string }; Returns: number
+                           },
+"teams_activity_seen":
+{ Args: { "p_connection": string,"p_lane": string }; Returns: string
+                           },
 "teams_assert_one_per_owner":
 { Args: { "p_connection_id": string,"p_lane": string }; Returns: undefined
                            },

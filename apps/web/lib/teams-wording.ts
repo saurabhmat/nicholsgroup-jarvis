@@ -86,3 +86,11 @@ export const CHANNELS_REPLIES_ERROR_TEXT = "The replies could not be read just n
 export const CHANNELS_NO_REPLIES_TEXT = "No replies.";
 export const CHANNELS_POSTS_ORDER_TEXT = "Posts with the newest replies come first.";
 export const CHANNELS_SHARED_OPEN_TEXT = "This is a shared channel. The portal does not read shared channels: open it in Teams.";
+
+// ---- live updates (T-290, spec 9.4)
+export const MESSAGES_LIVE_ON_TEXT = "Live updates: on";
+export const MESSAGES_LIVE_OFF_TEXT = "Live updates unavailable";
+export const MESSAGES_NEW_DOT_LABEL = "New messages";
+export const messagesLiveUntilText = (when: string): string => `Live updates until ${when}`;
+export const messagesRefreshWaitText = (seconds: number): string => `Already up to date. You can refresh again in ${String(Math.max(1, Math.ceil(seconds)))} seconds.`;
+export const MESSAGES_REFRESH_FAILED_TEXT = "Could not refresh just now. What you see is as of your last refresh.";

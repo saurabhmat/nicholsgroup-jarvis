@@ -22,6 +22,11 @@ export type AppShellProps = {
   signOut: (formData: FormData) => void | Promise<void>;
   /** Optional control above Sign out in the side menu (the theme toggle). */
   menuExtra?: ReactNode;
+  /**
+   * A small mark the app draws at the end of a menu entry (T-290: the "new messages" dot on Messages), asked for each visible side menu entry and for the iPhone "More" tab (key "more"). The shell stays
+   * presentational and static: it reads nothing and has no timer; what the app returns is a client component that fetches after the shell rendered.
+   */
+  navAccessory?: (key: NavKey | "more") => ReactNode;
   Link?: ShellLink;
   children: ReactNode;
 };
@@ -43,7 +48,7 @@ function Star({ className }: { className?: string }) {
  * selected while one of them is open.
  * Light theme, colours from the T-022 tokens only.
  */
-export function AppShell({ brand, lanes, currentLaneId, pathname, hiddenKeys, firstName, now, signOut, menuExtra, Link = DefaultLink, children }: AppShellProps) {
+export function AppShell({ brand, lanes, currentLaneId, pathname, hiddenKeys, firstName, now, signOut, menuExtra, navAccessory, Link = DefaultLink, children }: AppShellProps) {
   const hidden = new Set<NavKey>((hiddenKeys ?? []).filter((k) => k !== "home" && k !== "settings"));
   const active = activeKey(currentLaneId, pathname);
   const menuActive = menuKeyFor(active);
@@ -85,6 +90,7 @@ export function AppShell({ brand, lanes, currentLaneId, pathname, hiddenKeys, fi
                 )}
               >
                 {item.label}
+                {navAccessory?.(key)}
               </Link>
             );
           })}
@@ -139,6 +145,7 @@ export function AppShell({ brand, lanes, currentLaneId, pathname, hiddenKeys, fi
             >
               <TabIcon name={tab.icon} />
               {tab.label}
+              {tab.key === "more" ? <span className="absolute right-[28%] top-1.5 flex">{navAccessory?.("more")}</span> : null}
             </Link>
           );
         })}

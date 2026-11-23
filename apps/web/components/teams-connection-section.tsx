@@ -7,6 +7,7 @@ import type { GoogleConnectionState } from "@/lib/google-connection";
 import type { TeamsConnectionView, TeamsSectionView } from "@/lib/teams-connection";
 import { reconnectToAddText, TEAMS_ADMIN_CONSENT_TEXT, TEAMS_CLOUD_UNSUPPORTED_TEXT, TEAMS_CONNECTS_TEXT, TEAMS_PAUSED_TEXT, TEAMS_REMOVE_ACCESS_TEXT } from "@/lib/teams-wording";
 import { ConnectionRow } from "./connection-rows";
+import { TeamsLiveStatus } from "./teams-live-status";
 import { TeamsDisconnectButton } from "./teams-disconnect-button";
 
 const LABEL: Record<GoogleConnectionState, { text: string; variant: "success" | "alert" | "muted" }> = {
@@ -108,7 +109,8 @@ export function TeamsRows({ laneId, view }: { laneId: string; view: TeamsSection
             </>
           }
           status={status(c)}
-          lastSync="No sync: chats are read live"
+          // T-289: a usable connection that reads chats also says whether live updates (new-message notices) work; the browser asks after the page rendered
+          lastSync={!view.paused && !view.settingsUnknown && (c.state === "connected" || c.state === "degraded") && c.has.includes("chat_read") ? <TeamsLiveStatus laneId={laneId}>No sync: chats are read live</TeamsLiveStatus> : "No sync: chats are read live"}
           actions={
             <>
               {reconnect(c)}

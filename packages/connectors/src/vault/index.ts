@@ -27,6 +27,7 @@ import { createMicrosoftSubscriptionStore } from "../microsoft/subscription-stor
 import { createTeamsIdentityReader, createTeamsIdentityWriter } from "../teams/identity";
 import { createTeamsChatReadsStore } from "../teams/chat-reads-store";
 import { createTeamsActionsStore } from "../teams/actions-purge-store";
+import { createTeamsNoticesStore } from "../teams/notices-store";
 
 const vault = createTokenVault(getLaneJobClient);
 
@@ -89,6 +90,8 @@ export const teamsIdentityReader = createTeamsIdentityReader(getLaneJobClient);
 export const teamsIdentityWriter = createTeamsIdentityWriter(getLaneJobClient);
 /** Deletes a Teams connection's read markers on disconnect (T-282). */
 export const teamsChatReadsStore = createTeamsChatReadsStore(getLaneJobClient);
+/** The new-message notice writer, the activity purge on disconnect and the owner check of the renewal (T-289). */
+export const teamsNoticesStore = createTeamsNoticesStore(getLaneJobClient);
 /** Closes a Teams connection's open send actions (text purged) on disconnect (T-286). */
 export const teamsActionsStore = createTeamsActionsStore(getLaneJobClient);
 

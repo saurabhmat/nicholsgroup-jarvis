@@ -47,7 +47,9 @@ describe("arguments", () => {
       ["push_subscription_renewed", { p_lane: "PKG", p_connection_id: CONN, p_subscription_id: "sub-1", p_expires_at: at.toISOString() }],
       ["push_subscription_mark", { p_lane: "PKG", p_connection_id: CONN, p_subscription_id: "sub-1", p_status: "removed" }],
       ["push_subscriptions_remove_connection", { p_lane: "PKG", p_connection_id: CONN }],
+      // T-289: a notification does not say which kind of connection it is for: asked for the mail and calendar subscriptions (microsoft) and the Teams ones (microsoft_teams), together
       ["push_subscription_lookup", { p_lane: "PKG", p_provider: "microsoft", p_subscription_ids: ["sub-1", "sub-2"] }],
+      ["push_subscription_lookup", { p_lane: "PKG", p_provider: "microsoft_teams", p_subscription_ids: ["sub-1", "sub-2"] }],
       ["push_subscriptions_purge", { p_lane: "PKG" }],
     ]);
   });
@@ -92,5 +94,49 @@ describe("failures carry fixed text", () => {
     expect(await kind(createMicrosoftSubscriptionStore(fake({ error: { code: "42501", message: dbText } }).clientFor).record("PKG", { connectionId: CONN, resource: "mail", subscriptionId: "s", expiresAt: new Date(), clientState: new SecretValue(STATE) }))).toBe("connection_unavailable");
     expect(await kind(createMicrosoftSubscriptionStore(async () => { throw new Error(dbText); }).list("PKG", CONN))).toBe("transient");
     expect(await kind(createMicrosoftSubscriptionStore(fake(() => { throw new Error(dbText); }).clientFor).list("PKG", CONN))).toBe("transient");
+  });
+});
+
+describe("Teams subscriptions (T-289)", () => {
+  const OID_PATH = "users/00000000-0000-4000-8000-0000000000a1/chats/getAllMessages";
+
+  it("record sends the Teams provider, the teams_chats resource and the person's all-chats path; a mail record is unchanged", async () => {
+    const f = fake({ data: null });
+    const store = createMicrosoftSubscriptionStore(f.clientFor);
+    const at = new Date("2026-11-28T12:00:00.000Z");
+    await store.record("PKG", { connectionId: CONN, resource: "teams_chats", resourcePath: OID_PATH, subscriptionId: "sub-t", expiresAt: at, clientState: new SecretValue(STATE) });
+    await store.record("PKG", { connectionId: CONN, resource: "calendar", subscriptionId: "sub-c", expiresAt: at, clientState: new SecretValue(STATE) });
+    expect(f.calls.map((c) => [c.args.p_provider, c.args.p_resource, c.args.p_resource_path])).toEqual([
+      ["microsoft_teams", "teams_chats", OID_PATH],
+      ["microsoft", "calendar", SUBSCRIPTION_RESOURCES.calendar],
+    ]);
+  });
+
+  it("list reads a teams_chats row", async () => {
+    const row = { resource: "teams_chats", subscription_id: "t1", status: "reauthorization_required", expires_at: "2026-11-28T12:00:00+00:00" };
+    expect(await createMicrosoftSubscriptionStore(fake({ data: [row] }).clientFor).list("PKG", CONN)).toEqual([{ resource: "teams_chats", subscriptionId: "t1", status: "reauthorization_required", expiresAt: new Date("2026-11-28T12:00:00.000Z") }]);
+  });
+
+  it("lookupMany merges the two provider answers: a mail row and a Teams row are both found, each with its own resource; an id in neither is absent; both calls name the lane", async () => {
+    const calls: { fn: string; args: Record<string, unknown> }[] = [];
+    const answers: Record<string, unknown[]> = {
+      microsoft: [{ subscription_id: "m1", connection_id: CONN, resource: "mail", status: "active", client_state: STATE }],
+      microsoft_teams: [{ subscription_id: "t1", connection_id: CONN, resource: "teams_chats", status: "active", client_state: STATE }],
+    };
+    const client = { schema: () => ({ rpc: async (fn: string, args: Record<string, unknown>) => (calls.push({ fn, args }), { data: answers[String(args.p_provider)] ?? [], error: null }) }) };
+    const found = await createMicrosoftSubscriptionStore(vi.fn(async () => client as never)).lookupMany("PKG", ["m1", "t1", "zz"]);
+    expect([...found.keys()].sort()).toEqual(["m1", "t1"]);
+    expect(found.get("t1")).toMatchObject({ laneId: "PKG", connectionId: CONN, resource: "teams_chats" });
+    expect(found.get("m1")?.resource).toBe("mail");
+    expect(calls.every((c) => c.args.p_lane === "PKG")).toBe(true);
+    expect(calls).toHaveLength(2);
+  });
+
+  it("a failure of either provider's lookup is a failure of the lookup (the receiver answers 503 and Graph retries), with a fixed message", async () => {
+    let n = 0;
+    const client = { schema: () => ({ rpc: async () => (++n === 2 ? { data: null, error: { code: "XX000", message: "secret db text" } } : { data: [], error: null }) }) };
+    const e = await createMicrosoftSubscriptionStore(vi.fn(async () => client as never)).lookupMany("PKG", ["a"]).catch((x: unknown) => x);
+    expect(e).toMatchObject({ info: { kind: "transient" } });
+    expect(JSON.stringify(e)).not.toContain("secret db text");
   });
 });

@@ -4,14 +4,14 @@
 import type { LaneId } from "@nichols/core";
 import { ConnectorError } from "../contract/errors";
 import { SecretValue } from "../vault/secret";
-import { SUBSCRIPTION_RESOURCES, type SubscriptionResource } from "../microsoft/constants";
-import type { MicrosoftSubscriptionStore, StoredSubscription, SubscriptionLookup } from "../microsoft/subscription-store";
+import { SUBSCRIPTION_RESOURCES } from "../microsoft/constants";
+import type { MicrosoftSubscriptionStore, StoredResource, StoredSubscription, SubscriptionLookup } from "../microsoft/subscription-store";
 
 export type TwinRow = {
   id: number;
   laneId: LaneId;
   connectionId: string;
-  resource: SubscriptionResource;
+  resource: StoredResource;
   subscriptionId: string;
   resourcePath: string;
   expiresAt: Date;
@@ -50,7 +50,7 @@ export function createSubscriptionStoreTwin(connections: TwinConnections) {
       const c = connections(laneId, input.connectionId);
       if (!c || (c.status !== "active" && c.status !== "degraded")) throw new ConnectorError({ kind: "connection_unavailable", message: "The connection is not available for subscriptions" });
       for (const old of rows) if (old.connectionId === input.connectionId && old.resource === input.resource && live(old)) Object.assign(old, { status: "removed", clientState: null });
-      rows.push({ id: ++seq, laneId, connectionId: input.connectionId, resource: input.resource, subscriptionId: input.subscriptionId, resourcePath: SUBSCRIPTION_RESOURCES[input.resource], expiresAt: input.expiresAt, status: "active", clientState: input.clientState.reveal() });
+      rows.push({ id: ++seq, laneId, connectionId: input.connectionId, resource: input.resource, subscriptionId: input.subscriptionId, resourcePath: "resourcePath" in input ? input.resourcePath : SUBSCRIPTION_RESOURCES[input.resource], expiresAt: input.expiresAt, status: "active", clientState: input.clientState.reveal() });
     },
     async renewed(laneId, connectionId, subscriptionId, expiresAt) {
       calls.renewed += 1;
@@ -109,8 +109,8 @@ export function createSubscriptionStoreTwin(connections: TwinConnections) {
     },
     liveRows: (laneId?: string) => rows.filter((r) => live(r) && (laneId === undefined || r.laneId === laneId)),
     /** A row as a test would plant it (an already recorded subscription), expiring at `expiresAt`. */
-    plant(laneId: LaneId, connectionId: string, resource: SubscriptionResource, subscriptionId: string, expiresAt: Date, clientState: string, status: TwinRow["status"] = "active") {
-      rows.push({ id: ++seq, laneId, connectionId, resource, subscriptionId, resourcePath: SUBSCRIPTION_RESOURCES[resource], expiresAt, status, clientState: status === "removed" ? null : clientState });
+    plant(laneId: LaneId, connectionId: string, resource: StoredResource, subscriptionId: string, expiresAt: Date, clientState: string, status: TwinRow["status"] = "active") {
+      rows.push({ id: ++seq, laneId, connectionId, resource, subscriptionId, resourcePath: resource === "teams_chats" ? "users/00000000-0000-4000-8000-0000000000a1/chats/getAllMessages" : SUBSCRIPTION_RESOURCES[resource], expiresAt, status, clientState: status === "removed" ? null : clientState });
     },
   };
 }

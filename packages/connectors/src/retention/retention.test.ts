@@ -142,6 +142,7 @@ describe("default tables", () => {
       purgeConnectorApiErrors: vi.fn(async () => 5),
       purgePushSubscriptions: vi.fn(async () => 6),
       purgeTeamsChatReads: vi.fn(async () => 2),
+      purgeTeamsActivity: vi.fn(async () => 1),
     };
     const webhooks = { purge: vi.fn(async () => 4) };
     return { store, webhooks, registry: createRetentionRegistry(defaultRetentionTables({ store, webhooks })) };
@@ -157,6 +158,7 @@ describe("default tables", () => {
       "core.connector_api_errors:policy",
       "core.push_subscriptions:policy",
       "comms.teams_chat_reads:policy",
+      "comms.teams_activity:policy",
     ]);
     const r = await createRetentionPurgeJob({ registry, settings: async () => ({ comms: 90, calendar: 120, conversations: 180, webhooks: 14 }), logger: silent() }).run("PKG");
     expect(store.purgeMessageIndex).toHaveBeenCalledWith("PKG", 90);
@@ -169,6 +171,8 @@ describe("default tables", () => {
     expect(store.purgePushSubscriptions).toHaveBeenCalledWith("PKG");
     // T-282: the portal's Teams read markers: a fixed 90 days in SQL; the job passes the lane only.
     expect(store.purgeTeamsChatReads).toHaveBeenCalledWith("PKG");
+    // T-289: the Teams notice times of disconnected connections; the job passes the lane only.
+    expect(store.purgeTeamsActivity).toHaveBeenCalledWith("PKG");
     expect(r.ok).toBe(true);
   });
 
@@ -210,6 +214,7 @@ describe("store", () => {
     await store.purgeConnectorApiErrors("PKG");
     await store.purgePushSubscriptions("PKG");
     await store.purgeTeamsChatReads("PKG");
+    await store.purgeTeamsActivity("PKG");
     expect(clientFor).toHaveBeenCalledWith("PKG");
     expect(calls).toEqual([
       { schema: "core", fn: "retention_comms_purge", args: { p_lane: "PKG", p_keep: "90 days" } },
@@ -218,6 +223,7 @@ describe("store", () => {
       { schema: "core", fn: "connector_api_errors_purge", args: { p_lane: "PKG" } },
       { schema: "core", fn: "push_subscriptions_purge", args: { p_lane: "PKG" } },
       { schema: "core", fn: "teams_chat_reads_purge", args: { p_lane: "PKG" } },
+      { schema: "core", fn: "teams_activity_purge", args: { p_lane: "PKG" } },
     ]);
   });
 

@@ -4,6 +4,10 @@
 //   GET  /api/lanes/<lane>/messages/older?chat=<key>&before=<iso>   "Load older messages": one more page of a chat, by the person's click
 //   POST /api/lanes/<lane>/messages/read      {chat, readThrough}    opening a chat records the portal's own read marker (never a write at Microsoft)
 //   POST /api/lanes/<lane>/messages/call-link {chat, video}          the Call / Video call link for a chat: validated values only, returned, never opened here
+//   GET  /api/lanes/<lane>/messages/activity  (T-290) the notice state of the person's own connection: DATABASE ONLY, never Microsoft; `{ live, liveUntil, dot, lastNoticeAt }`
+//   POST /api/lanes/<lane>/messages/activity  (T-290) the person opened the chat list: `teams_activity_seen`; answers the same state
+//   GET  /api/lanes/<lane>/messages/chats?chat=<key>&more=<cursor>   (T-290) the chat list again, after a notice or a Refresh: the same read the page makes
+//   GET  /api/lanes/<lane>/messages/newer?chat=<key>&since=<iso>      (T-290) what changed in the open chat since a message time (a lastModifiedDateTime date range)
 // Order: same site (Origin / Sec-Fetch-Site) -> lane id shape -> AAL2 session in the lane with own_mail -> the `messages` module is shown for the company -> the person's own usable Teams
 // connection (read under RLS: another person's is never visible) -> the chat key decodes to a valid chat id -> the call. The Teams reader's guard checks the owner again before a token is read, and
 // the lane's Teams settings and the connection's features. Answers are fixed JSON codes; Microsoft's text and anything from a chat never appear in an error, a log line or an audit row.
@@ -15,12 +19,14 @@ import { MAIL_CONNECT_ROLES } from "@nichols/connectors/oauth";
 import { fetchHostedImage, resolveCallTargets } from "@nichols/connectors/teams-reader";
 import { callUrl, normalizeTime } from "@nichols/connectors/teams-pure";
 import type { TeamsFeature } from "@nichols/core/lane-config";
+import { ACTIVITY_LIMIT_MAX, ACTIVITY_LIMIT_WINDOW_MS, READ_LIMIT_MAX, READ_LIMIT_WINDOW_MS } from "./messages-live-config";
 import { loadLaneGate, type LaneGate } from "./lane-modules";
 import { loadTeamsRows, type TeamsConnectionView } from "./teams-connection";
 import { decodeChatKey } from "./teams-chat-key";
 import { isMessageId, isTeamId } from "./teams-channel-key";
 import { teamsFailure, type TeamsFailure } from "./teams-errors";
-import { loadOlder } from "./teams-chats";
+import { loadChatList, loadNewer, loadOlder } from "./teams-chats";
+import { ACTIVITY_OFF, createWindowLimiter, markSeen, readActivity } from "./teams-activity";
 import { markRead } from "./teams-reads";
 
 const NO_STORE = { "cache-control": "no-store" } as const;
@@ -48,7 +54,12 @@ export type TeamsRouteDeps = {
   guards: () => Promise<Pick<Guards, "requireLane" | "requireRole">>;
   gate?: (client: Db, laneId: string) => Promise<LaneGate>;
   rows?: (client: Db, laneId: string, userId: string) => Promise<TeamsConnectionView[]>;
+  /** Test hook: the per-person limiters of the activity route and of the two re-read routes (default: this process's own, in memory). */
+  limiters?: { activity: { take(key: string): number }; reads: { take(key: string): number } };
 };
+
+// One pair per process: a per-person sliding window. The activity route reads one database row; the re-read routes read Microsoft, so they get the smaller allowance.
+const SHARED_LIMITERS = { activity: createWindowLimiter(ACTIVITY_LIMIT_MAX, ACTIVITY_LIMIT_WINDOW_MS), reads: createWindowLimiter(READ_LIMIT_MAX, READ_LIMIT_WINDOW_MS) };
 
 type Who = { client: Db; userId: string; laneId: string; connectionId: string; has: readonly TeamsFeature[] };
 
@@ -95,9 +106,13 @@ async function body(request: Request): Promise<Record<string, unknown> | null> {
 export function createTeamsRoutes(deps: TeamsRouteDeps) {
   const gate = deps.gate ?? loadLaneGate;
   const rows = deps.rows ?? loadTeamsRows;
+  const limiters = deps.limiters ?? SHARED_LIMITERS;
 
-  /** The person, their lane client and their own usable Teams connection; or the Response to send instead. */
-  async function who(laneId: string): Promise<Who | Response> {
+  /**
+   * The person, their lane client and their own usable Teams connection; or the Response to send instead; or `null` for a person without a usable connection. `limit` names the per-person limiter
+   * applied right after the session is known (before the company and connection reads).
+   */
+  async function find(laneId: string, opts: { limit?: "activity" | "reads" } = {}): Promise<Who | Response | null> {
     if (!LANE.test(laneId)) return json({ error: "not_found" }, 404);
     const g = await deps.guards();
     try {
@@ -107,10 +122,18 @@ export function createTeamsRoutes(deps: TeamsRouteDeps) {
       throw e;
     }
     const { session, client } = await g.requireRole(laneId as LaneId, [...MAIL_CONNECT_ROLES]); // own_mail; AAL2 enforced by the guard
+    if (opts.limit) {
+      const wait = limiters[opts.limit].take(`${laneId}:${session.userId}`);
+      if (wait > 0) return json({ error: "rate_limited", seconds: wait }, 429, { "retry-after": String(wait) });
+    }
     if (!(await gate(client, laneId)).visible("messages")) return json({ error: "not_found" }, 404);
     const mine = (await rows(client, laneId, session.userId)).find((r) => r.mine && (r.state === "connected" || r.state === "degraded"));
-    if (!mine) return json({ error: "not_found" }, 404);
+    if (!mine) return null;
     return { client, userId: session.userId, laneId, connectionId: mine.id, has: mine.has };
+  }
+  /** The person's own usable Teams connection, or the 404 / 403 / 429 to send instead (no connection at all is a 404: the same answer as an unknown id). */
+  async function who(laneId: string, opts: { limit?: "activity" | "reads" } = {}): Promise<Who | Response> {
+    return (await find(laneId, opts)) ?? json({ error: "not_found" }, 404);
   }
 
   const failure = (f: TeamsFailure): Response => {
@@ -201,6 +224,64 @@ export function createTeamsRoutes(deps: TeamsRouteDeps) {
         const at = normalizeTime(b?.readThrough);
         if (chatId === null || at === null) return json({ error: "bad_request" }, 400);
         return (await markRead(w.client, laneId, w.connectionId, chatId, at)) ? new Response(null, { status: 204, headers: NO_STORE }) : json({ error: "not_recorded" }, 409);
+      }),
+
+    /**
+     * The notice state of the person's own connection (T-290): DATABASE ONLY. No Teams connection, or notices that are off, is `live: false` with 200 (a missing dot is not an error); every check of
+     * the other Messages routes still applies (same site, AAL2 with own_mail, the `messages` module). Rate limited per person; never cached.
+     */
+    activity: (request: Request, laneId: string): Promise<Response> =>
+      guarded(async () => {
+        if (!sameSite(request, "GET")) return json({ error: "forbidden" }, 403);
+        const w = await find(laneId, { limit: "activity" });
+        if (w instanceof Response) return w;
+        if (w === null) return json(ACTIVITY_OFF, 200);
+        return json(await readActivity(w.client, laneId, w.connectionId), 200);
+      }),
+
+    /** The person opened the chat list (T-290): `teams_activity_seen`, then the state as it is now. */
+    seen: (request: Request, laneId: string): Promise<Response> =>
+      guarded(async () => {
+        if (!sameSite(request, "POST")) return json({ error: "forbidden" }, 403);
+        const w = await find(laneId, { limit: "activity" });
+        if (w instanceof Response) return w;
+        if (w === null) return json(ACTIVITY_OFF, 200);
+        if (!(await markSeen(w.client, laneId, w.connectionId))) return json({ error: "not_recorded" }, 409);
+        return json(await readActivity(w.client, laneId, w.connectionId), 200);
+      }),
+
+    /** The chat list again (T-290), after a notice or a Refresh: the very read the page makes (one page of chats and the person's own markers). */
+    chats: (request: Request, laneId: string): Promise<Response> =>
+      guarded(async () => {
+        if (!sameSite(request, "GET")) return json({ error: "forbidden" }, 403);
+        const w = await who(laneId, { limit: "reads" });
+        if (w instanceof Response) return w;
+        if (!w.has.includes("chat_read")) return json({ error: "feature_missing" }, 409);
+        const q = new URL(request.url).searchParams;
+        for (const k of new Set(q.keys())) if (k !== "chat" && k !== "more") return json({ error: "bad_request" }, 400);
+        const chatParam = q.get("chat");
+        const more = q.get("more");
+        if ((chatParam !== null && decodeChatKey(chatParam) === null) || (more !== null && !/^[A-Za-z0-9_-]{1,3200}$/.test(more))) return json({ error: "bad_request" }, 400);
+        const r = await loadChatList({ laneId, userId: w.userId, connectionId: w.connectionId, client: w.client }, { ...(more ? { cursor: more } : {}), selectedKey: chatParam });
+        if (r.kind !== "ok") return failure(r);
+        return json({ rows: r.rows, moreCursor: r.moreCursor }, 200);
+      }),
+
+    /** What changed in the open chat since a message time (T-290): a `lastModifiedDateTime` date range, one page. */
+    newer: (request: Request, laneId: string): Promise<Response> =>
+      guarded(async () => {
+        if (!sameSite(request, "GET")) return json({ error: "forbidden" }, 403);
+        const w = await who(laneId, { limit: "reads" });
+        if (w instanceof Response) return w;
+        if (!w.has.includes("chat_read")) return json({ error: "feature_missing" }, 409);
+        const q = new URL(request.url).searchParams;
+        for (const k of new Set(q.keys())) if (k !== "chat" && k !== "since") return json({ error: "bad_request" }, 400);
+        const chatId = decodeChatKey(q.get("chat"));
+        const since = normalizeTime(q.get("since"));
+        if (chatId === null || since === null) return json({ error: "bad_request" }, 400);
+        const r = await loadNewer(w, chatId, since);
+        if (r.kind !== "ok") return failure(r);
+        return json({ messages: r.messages }, 200);
       }),
 
     /** Call / Video call. */

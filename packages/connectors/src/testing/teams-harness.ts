@@ -360,7 +360,7 @@ export function createTeamsHarness(options: TeamsHarnessOptions) {
 
   return {
     api, guard, tokens, health, newTokenManager, clock, laneConfig, connect, bind, rows, identities, secrets, lanes, stats, logs, apiErrors, reconnects, storedSet, everyRequest,
-    flow, failStoreOnce, as, states, audits, writes, writeCount, connectViaCallback, oauthProvider, vault, httpOptions, errors,
+    flow, failStoreOnce, as, states, audits, writes, writeCount, connectViaCallback, oauthProvider, vault, httpOptions, errors, logger, identityReader,
     setLane(laneId: string, patch: Partial<TeamsLaneSetup>) {
       lanes[laneId] = { ...(lanes[laneId] as TeamsLaneSetup), ...patch };
     },

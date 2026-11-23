@@ -6,14 +6,13 @@
 // Desktop: list and conversation side by side. Phone: the list, then the conversation full screen with a back link (never both; no horizontal scroll).
 import Link from "next/link";
 import { Suspense, type ReactNode } from "react";
-import { Alert, AlertDescription, AlertTitle, cn, EmptyState, laneHref } from "@nichols/ui";
+import { Alert, AlertDescription, AlertTitle, cn, EmptyState } from "@nichols/ui";
 import { guards } from "@/lib/guards";
 import { decodeChatKey } from "@/lib/teams-chat-key";
 import { loadChatList, loadConversation, type CallPolicy, type ChatListView, type ConversationView, type TeamsPerson } from "@/lib/teams-chats";
 import type { TeamsFailure } from "@/lib/teams-errors";
 import {
   MESSAGES_CHAT_NOT_FOUND_TEXT,
-  MESSAGES_EMPTY_LIST_TEXT,
   MESSAGES_FORBIDDEN_TEXT,
   MESSAGES_LOAD_ERROR_TEXT,
   MESSAGES_LOAD_ERROR_TITLE,
@@ -24,8 +23,10 @@ import {
   messagesBusyText,
 } from "@/lib/teams-wording";
 import type { MessagesState } from "@/lib/teams-messages";
+import { hrefFor } from "@/lib/messages-href";
 import { CallButtons, ConversationMessages, FocusConversation, MarkRead, MessagesRefresh } from "./messages-client";
-import { ChatListRows, SignIn } from "./messages-view";
+import { ChatListLive, MessagesLiveProvider } from "./messages-live";
+import { SignIn } from "./messages-view";
 import { SectionBoundary } from "./section-boundary";
 
 type Connected = Extract<MessagesState, { kind: "connected" }>;
@@ -33,13 +34,7 @@ type SearchParams = Record<string, string | string[] | undefined>;
 const one = (v: string | string[] | undefined) => (typeof v === "string" ? v : undefined);
 const CURSOR = /^[A-Za-z0-9_-]{1,3200}$/;
 
-export const hrefFor = (laneId: string, chatKey: string | null, more: string | null): string => {
-  const q = new URLSearchParams();
-  if (chatKey) q.set("chat", chatKey);
-  if (more) q.set("more", more);
-  const s = q.toString();
-  return `${laneHref(laneId, "messages")}${s ? `?${s}` : ""}`;
-};
+export { hrefFor };
 
 // ---- skeletons: the final shape (rows of a list, a header and bubbles), so nothing jumps
 function Block({ className }: { className?: string }) {
@@ -98,24 +93,8 @@ export function TeamsFailureCard({ failure, laneId, connectionId, testId }: { fa
 // ---- the chat list
 export function ChatListView({ view, laneId, connectionId, selectedKey, more }: { view: ChatListView; laneId: string; connectionId: string; selectedKey: string | null; more: string | null }) {
   if (view.kind !== "ok") return <TeamsFailureCard failure={view} laneId={laneId} connectionId={connectionId} testId="chat-list-error" />;
-  if (view.rows.length === 0) return <EmptyState title="No chats" description={MESSAGES_EMPTY_LIST_TEXT} />;
-  return (
-    <div className="flex min-w-0 flex-col gap-3">
-      <ChatListRows rows={view.rows} selectedKey={selectedKey} hrefFor={(key) => hrefFor(laneId, key, more)} />
-      <div className="flex flex-wrap items-center gap-3 text-small">
-        {more ? (
-          <Link href={hrefFor(laneId, selectedKey, null)} className="font-medium text-primary underline underline-offset-2" data-testid="newest-chats">
-            Back to the newest chats
-          </Link>
-        ) : null}
-        {view.moreCursor ? (
-          <Link href={hrefFor(laneId, selectedKey, view.moreCursor)} className="font-medium text-primary underline underline-offset-2" data-testid="more-chats">
-            More chats
-          </Link>
-        ) : null}
-      </div>
-    </div>
-  );
+  // The rows are drawn by a client component that can read the list again after a notice or a Refresh (T-290); on the server it draws exactly what it always did.
+  return <ChatListLive laneId={laneId} initialRows={view.rows} moreCursor={view.moreCursor} selectedKey={selectedKey} more={more} />;
 }
 
 async function ChatListSection({ promise, laneId, connectionId, selectedKey, more }: { promise: Promise<ChatListView>; laneId: string; connectionId: string; selectedKey: string | null; more: string | null }) {
@@ -140,7 +119,7 @@ export function ConversationPane({ view, laneId, connectionId, more = null }: { 
               {view.subtitle}
             </p>
           </div>
-          <MessagesRefresh />
+          <MessagesRefresh mode="live" />
         </div>
         <CallButtons laneId={laneId} chatKey={view.chatKey} call={view.call} openUrl={view.openUrl} />
       </header>
@@ -191,26 +170,28 @@ export async function MessagesWorkspace({ laneId, state, searchParams }: { laneI
   const list = loadChatList(person, { ...(more ? { cursor: more } : {}), selectedKey: chatId ? chatKey : null });
   const conversation = chatId && chatKey ? loadConversation(person, chatId, chatKey, policy) : null;
   return (
-    <WorkspaceLayout
-      selected={chatId !== null}
-      list={
-        <SectionBoundary>
-          <Suspense fallback={<ChatListSkeleton />}>
-            <ChatListSection promise={list} laneId={laneId} connectionId={state.connectionId} selectedKey={chatId ? chatKey : null} more={more} />
-          </Suspense>
-        </SectionBoundary>
-      }
-      conversation={
-        conversation ? (
+    <MessagesLiveProvider laneId={laneId}>
+      <WorkspaceLayout
+        selected={chatId !== null}
+        list={
           <SectionBoundary>
-            <Suspense fallback={<ConversationSkeleton />}>
-              <ConversationSection promise={conversation} laneId={laneId} connectionId={state.connectionId} more={more} />
+            <Suspense fallback={<ChatListSkeleton />}>
+              <ChatListSection promise={list} laneId={laneId} connectionId={state.connectionId} selectedKey={chatId ? chatKey : null} more={more} />
             </Suspense>
           </SectionBoundary>
-        ) : (
-          <NoChatSelected />
-        )
-      }
-    />
+        }
+        conversation={
+          conversation ? (
+            <SectionBoundary>
+              <Suspense fallback={<ConversationSkeleton />}>
+                <ConversationSection promise={conversation} laneId={laneId} connectionId={state.connectionId} more={more} />
+              </Suspense>
+            </SectionBoundary>
+          ) : (
+            <NoChatSelected />
+          )
+        }
+      />
+    </MessagesLiveProvider>
   );
 }

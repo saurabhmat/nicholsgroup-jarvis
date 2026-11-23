@@ -13,12 +13,14 @@
 //   5. raw body read, capped (256 KiB)            -> 413 / 400
 //   6. strict parse (Zod): `{ value: [...] }`, at most 200 items -> 400. Each item must carry a well-formed `subscriptionId`; a bad item is dropped.
 //   7. the distinct subscription ids of the delivery (at most 200, so no item is dropped for a cap) are looked up with ONE batched call per served lane, lanes in parallel
-//      (core.push_subscription_lookup, service path): at most as many database calls as lanes, whatever the body holds. The lane and the connection come from the STORED row,
+//      (core.push_subscription_lookup, service path; the store asks it once for the mail and calendar subscriptions and once for the Teams ones, T-289): at most as many store calls as lanes, whatever the body holds. The lane and the connection come from the STORED row,
 //      never from the request. Unknown, removed, disconnected or ambiguous -> the item is dropped.
 //   8. per item: `clientState` compared with the stored secret in constant time; a wrong or missing one -> dropped (logged with ids only: the lane and connection of the subscription).
 //   9. per verified item, by kind:
 //        change notification     -> claim (dedupe) -> queue a `webhook/received` event (provider microsoft, `mail.changed` / `calendar.changed`, ids only) that the batching
-//                                   microsoft-webhook-sync job turns into ONE delta sync of that connection's stream
+//                                   microsoft-webhook-sync job turns into ONE delta sync of that connection's stream; for a Teams connection's subscription the event type is
+//                                   `teams_chats.changed` (T-289: the type comes from OUR stored row, the `resource` is never read, so no chat or message is known) and the
+//                                   `teams-activity` job records "a notice arrived"; microsoft-webhook-sync ignores it
 //        missed                  -> the same with `*.missed` (a delta resync)
 //        reauthorizationRequired -> claim -> mark the row `reauthorization_required` -> queue the connection's renewal job (conn/subscription.renew.requested)
 //        subscriptionRemoved     -> claim -> queue the connection's renewal job (which creates a new subscription) -> mark the row `removed`
@@ -130,6 +132,10 @@ export function createMicrosoftNotificationHandler(deps: MicrosoftNotificationDe
 
     // Read each item's id, state and kind; only these three fields are looked at.
     const items: { subscriptionId: string; clientState: string; kind: Kind | "unknown" }[] = [];
+    // T-289: no subscription of ours asks for resource data (a notification then holds ids only). An item that carries ENCRYPTED resource data (`encryptedContent`, the marker of a rich notification) is
+    // not expected: it is handled like any other (its content is never read, decrypted, stored, queued or logged) and ONE content-free line says that it arrived. Only the key's presence is looked at.
+    const richItems = delivery.value.filter((raw) => typeof raw === "object" && raw !== null && Object.hasOwn(raw, "encryptedContent")).length;
+    if (richItems > 0) baseLog.warn("webhook.unexpected_resource_data", { outcome: "resource_data_ignored", request_id: requestId, items: richItems });
     for (const raw of delivery.value) {
       const item = Item.safeParse(raw);
       if (!item.success) {

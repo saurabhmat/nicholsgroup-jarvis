@@ -131,6 +131,18 @@ vi.mock("@/components/messages-client", () => ({
   MarkRead: () => null,
   FocusConversation: () => null,
 }));
+// T-290: the live Messages provider, the live chat list and the navigation dot are CLIENT components (their own tests: components/messages-live.test.tsx, components/messages-dot.test.tsx). Here they are
+// stand-ins that draw their children and read nothing, which is exactly what the server does with them: the dot's fetch is in the browser, after render (asserted below).
+vi.mock("@/components/messages-live", () => ({
+  MessagesLiveProvider: ({ children }: { children: ReactNode }) => children,
+  ChatListLive: () => null,
+  useMessagesLive: () => null,
+  useOnLiveRefetch: () => undefined,
+}));
+vi.mock("@/components/messages-dot", () => ({ MessagesDot: () => null, useMessagesDot: () => false }));
+vi.mock("@/components/theme-toggle", () => ({ ThemeToggle: () => null }));
+vi.mock("@/components/sign-out-form", () => ({ SignOutForm: ({ children }: { children: ReactNode }) => children }));
+vi.mock("../app/sign-in/actions", () => ({ signOut: async () => undefined }));
 // T-280: the company's Teams settings come from the lane config through the connectors (a recorded read here; the real reader is tested in packages/connectors).
 vi.mock("@nichols/connectors/teams-settings", () => ({
   teamsSettingsOf: async () => {
@@ -431,6 +443,63 @@ describe("Messages (T-280, T-283)", () => {
     const { readFileSync } = await import("node:fs");
     const src = readFileSync(new URL("../components/messages-page.tsx", import.meta.url), "utf8") + readFileSync(new URL("../lib/teams-messages.ts", import.meta.url), "utf8");
     expect(src).not.toMatch(/graph\.microsoft|fetch\(|@nichols\/connectors\/(?!teams-settings)/);
+  });
+});
+
+describe("the Messages dot adds no server read and no level (T-290)", () => {
+  const activityCalls = () => t.calls.filter((c) => /teams_activity|activity/i.test(c.name));
+
+  it("no page of the menu reads the notice state while it renders: the database is asked nothing about activity, whatever the person's Teams state, and the levels are the ones of T-276", async () => {
+    t.answers["from:connections"] = { data: [TEAMS_ROW], error: null };
+    t.answers["rpc:teams_chat_reads_list"] = { data: [], error: null };
+    t.answers["rpc:home_calendar_status"] = { data: "connected", error: null };
+    t.answers["rpc:calendar_events"] = { data: [], error: null };
+    t.answers["rpc:inbox_messages"] = { data: [], error: null };
+    t.answers["rpc:briefing_coverage"] = { data: [], error: null };
+    for (const dir of Object.keys(PAGES)) {
+      for (const r of t.roots) r.clear();
+      t.calls = [];
+      t.done = 0;
+      guardsObj = makeGuards();
+      const { default: Page } = await (PAGES[dir] as NonNullable<(typeof PAGES)[string]>)();
+      await resolve(Page({ params: params(), searchParams: sp(dir === "messages" ? { chat: CHAT_KEY } : {}) } as never) as ReactNode);
+      expect(activityCalls(), dir).toEqual([]);
+      expect(maxLevel(), dir).toBeLessThanOrEqual(3);
+    }
+  });
+
+  it("Messages with the live provider in the tree: the levels and the reads are exactly those without it (the provider, the live list and the dot read nothing on the server)", async () => {
+    t.answers["from:connections"] = { data: [TEAMS_ROW], error: null };
+    t.answers["rpc:teams_chat_reads_list"] = { data: [], error: null };
+    const { default: Page } = await import("@/app/[laneId]/messages/page");
+    await resolve(Page({ params: params(), searchParams: sp({ chat: CHAT_KEY }) } as never) as ReactNode);
+    expect(t.calls.map((c) => c.name).sort()).toEqual(["from:connections", "from:lane_config_current", "lane.check", "lane.list", "rpc:teams_chat_reads_list", "teams.settings"]);
+    expect(maxLevel()).toBeLessThanOrEqual(3);
+    expect(t.reader.calls.map((c) => c.fn).sort()).toEqual(["listChats", "listMessages", "openChat"]); // the page's own three reads; nothing for notices
+  });
+
+  it("More: the dot is IN the server tree and reads nothing there (its fetch is in the browser); the page asks what it always asked", async () => {
+    t.answers["from:connections"] = { data: [TEAMS_ROW], error: null };
+    const { default: More } = await import("@/app/[laneId]/more/page");
+    await resolve(More({ params: params() } as never) as ReactNode);
+    expect(t.rendered).toContain("MessagesDot");
+    expect(activityCalls()).toEqual([]);
+    expect(t.calls.map((c) => c.name).sort()).toEqual(["from:lane_config_current", "lane.check", "lane.list"]);
+    expect(maxLevel()).toBeLessThanOrEqual(2);
+  });
+
+  it("the dot's module and the shell stay static: no server import, no clock and no fetch while rendering (the fetch is inside an effect), no timer", async () => {
+    const { readFileSync } = await import("node:fs");
+    const dot = readFileSync(new URL("../components/messages-dot.tsx", import.meta.url), "utf8");
+    const store = readFileSync(new URL("../lib/messages-activity-client.ts", import.meta.url), "utf8");
+    const shell = readFileSync(new URL("../components/shell.tsx", import.meta.url), "utf8");
+    expect(dot.startsWith("\"use client\";")).toBe(true);
+    expect(dot).not.toMatch(/@\/lib\/guards|server-only|@nichols\/connectors|@nichols\/core\/(?!lane-router)|Date\.now|new Date\(|setInterval|setTimeout/);
+    expect(store).not.toMatch(/setInterval|setTimeout|server-only|graph\.microsoft/);
+    expect(shell).not.toMatch(/Date\.now|new Date\(|fetch\(|setInterval/);
+    // the fetch is only reachable from an effect or an event handler in the dot: `refreshDot` is called inside useEffect callbacks
+    expect([...dot.matchAll(/refreshDot\(/g)].length).toBe(2);
+    expect(dot.match(/useEffect\(/g)?.length).toBe(2);
   });
 });
 

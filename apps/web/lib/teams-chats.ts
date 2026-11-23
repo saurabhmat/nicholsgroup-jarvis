@@ -204,3 +204,17 @@ export async function loadOlder(p: Omit<TeamsPerson, "client">, chatId: string, 
   }
 }
 
+
+/**
+ * What changed in an OPEN chat since a time (T-290): a notice arrived, or the person pressed Refresh. Microsoft is asked with a DATE RANGE (`lastModifiedDateTime gt <since>`, the terms ask for
+ * it when reading new messages), one page. Oldest first. `since` is the newest message the person is shown (Microsoft's clock), so no clock of ours or the browser's is involved.
+ */
+export async function loadNewer(p: Omit<TeamsPerson, "client">, chatId: string, since: string): Promise<{ kind: "ok"; messages: MessageView[] } | TeamsFailure> {
+  try {
+    const page = await listMessages(p.laneId as LaneId, p.connectionId, p.userId, chatId, { sinceModified: since });
+    const key = encodeChatKey(chatId);
+    return { kind: "ok", messages: [...page.messages].filter((m) => !m.system).reverse().map((m) => messageView(m, chatImagesBase(p.laneId, key, m.id))) };
+  } catch (e) {
+    return teamsFailure(e);
+  }
+}
