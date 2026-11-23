@@ -166,6 +166,7 @@ insert into authenticated_exec_ok values
   ('core.sync_now_claim', 'Sync now rate limit; definer, checks aal2, the role and the connections view itself (T-238)'),
   ('core.briefing_coverage', 'Home briefing coverage; definer, checks the caller''s views itself (T-231a)'),
   ('core.briefing_events', 'Home calendar; invoker, RLS on cal.event_index applies (T-231a)'),
+  ('core.calendar_events', 'Calendar page; invoker, own calendars only, RLS on cal.event_index applies (T-274)'),
   ('core.briefing_threads', 'Home attention and money threads; invoker, RLS on comms.message_index applies (T-231b)'),
   ('core.briefing_latest', 'Home AI briefing: the caller''s own latest; invoker, RLS on brief.briefings applies (T-231c)'),
   ('core.briefing_last_failure', 'Home briefing failure reason: the caller''s newest failed attempt; invoker, RLS on brief.briefings applies (T-234)'),

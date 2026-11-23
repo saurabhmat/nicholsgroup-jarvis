@@ -959,7 +959,8 @@ T-110, T-111 and T-114 are **track W5**, parallel with the connectors. T-112 nee
 - acceptance: delta updates to `cal.event_index`; retention 180 days.
 
 ### T-131 Unified calendar UI
-- status: proposed
+- status: superseded
+- note: Superseded Nov 23, 2026 by T-274 (the Calendar page for the signed-in person's own Google and Microsoft accounts, one company at a time). A view across companies is not part of T-274.
 - depends: T-130, T-024
 - needs: D-21 (design sign-off batch 2)
 - acceptance: day/week views across lanes the user may see; Playwright.
@@ -1554,7 +1555,14 @@ Standing rules for every task in this phase (not repeated below):
 - acceptance: `next` and `eslint-config-next` in `apps/web` are at a version with no open advisory (`pnpm audit` lists none for `next`); the lockfile holds no older Next; `pnpm typecheck && pnpm lint && pnpm test` pass and `pnpm --filter @nichols/web build` succeeds with no security notice and no prerender error. No app code change unless the upgrade needs one. Other audit findings are listed, not fixed, unless Saurabh approves them.
 
 ### T-273 fflate 0.8.2 to 0.8.3 (AI Brain .zip import could freeze the browser tab)
-- status: approved
+- status: done
 - depends: none
 - note: Approved by Saurabh on Nov 23, 2026 ("yes, do the fflate bump"). Found by `pnpm audit` during T-272 (GHSA-px8p-9vwx-vf98) and traced in the T-272 security review: the AI Brain .zip is read in the person's browser (`apps/web/lib/import-files.ts`, streaming `Unzip`); a crafted file with a ZIP64 size marker and no ZIP64 extra field made fflate 0.8.2 loop forever before any of the import's limits ran. Impact: a frozen tab for the person importing; no server or data impact.
 - acceptance: `fflate` in `apps/web` is pinned to 0.8.3 or later and the lockfile holds no older copy; a test feeds the crafted header to `readBrainZip` and gets "unreadable" at once (guarded so it cannot hang the run on an older fflate); `pnpm audit` lists no `fflate` advisory; `pnpm typecheck && pnpm lint && pnpm test` and the web build pass.
+
+### T-274 Calendar page: the person's own Google and Microsoft calendars together
+- status: approved
+- depends: T-130, T-067, T-247, T-271
+- note: Requested by Saurabh on Nov 23, 2026, as the next interface change after T-271. His words, verbatim: "in the calendar section on the left side...can we have the calendar integrated for the accounts signed in...whether google or microsoft". Read as: the Calendar page (a placeholder until now) shows the events of every Google and Microsoft account the signed-in person has connected in the company. Built on this request (standing instruction: keep building; he tests after). Choices made by the agent, for him to change if he wants: read-only (creating or changing events stays with the approvals work, T-181); Week, Month and Day views; times in Eastern Time as on Home; weeks start on Sunday; the same meeting on two of the person's calendars is shown once (as Home does today; D-58 stays open).
+- today: `/[laneId]/calendar` is the placeholder page (`ModulePage`). Events of both providers are already synced into `cal.event_index` (T-130, T-067), private to the mailbox owner (T-247), and read on Home through `core.home_meetings` (7 days at most, no account label).
+- acceptance: Generic for every company and both providers; no company-specific code. (a) **Data:** a new read-only SQL function returns the caller's own events of one lane for a window long enough for a month grid, from every Google and Microsoft connection the caller owns there, with the provider and the connection(s) each event came from; cancelled events left out; the same meeting on several of the caller's calendars returned once; another person's events, another lane's events and a session without MFA return nothing (pgTAP, including cross-lane and cross-user denial); no event description is read or stored (rule 6). (b) **Page:** Day, Week and Month views with Today / previous / next, the view and date in the URL; timed events placed by time with overlapping events side by side, all-day events in their own row; each event shows its time, title and which account it belongs to (one colour per account, with a legend that names provider and address); opening an event shows time, place, organizer, the account, "Open in Google Calendar" or "Open in Outlook", and "Join" for an https meeting link (never opened automatically). On a phone the default is the Day view and the Week view is a list by day. (c) **States:** no calendar connected (a link to Settings to connect Google or Microsoft), no access, an account that needs reconnecting (named, with a link to Settings), and "could not load" (never an empty calendar on an error). (d) Text from events is shown as plain text; links are https only. (e) Tests: pgTAP for the function; unit tests for the date and layout rules including the two daylight-saving days; server render tests for each view and each state with synthetic events; the directive-exports check passes. Production SQL as a manual part with a check.

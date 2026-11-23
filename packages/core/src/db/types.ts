@@ -329,6 +329,32 @@ isOneToOne: false
       referencedColumns: ["code"]
     }
                   ]
+                },"push_subscriptions": {
+                  Row: {
+                    "connection_id": string,"created_at": string,"expires_at": string,"id": string,"lane_id": string,"provider": string,"removed_at": string | null,"resource": string,"resource_path": string,"status": string,"subscription_id": string,"updated_at": string,"vault_secret_id": string | null
+                  }
+                  ComputedFields: never
+                  Insert: {
+                    "connection_id": string,"created_at"?: string,"expires_at": string,"id"?: string,"lane_id": string,"provider": string,"removed_at"?: string | null,"resource": string,"resource_path": string,"status"?: string,"subscription_id": string,"updated_at"?: string,"vault_secret_id"?: string | null
+                  }
+                  Update: {
+                    "connection_id"?: string,"created_at"?: string,"expires_at"?: string,"id"?: string,"lane_id"?: string,"provider"?: string,"removed_at"?: string | null,"resource"?: string,"resource_path"?: string,"status"?: string,"subscription_id"?: string,"updated_at"?: string,"vault_secret_id"?: string | null
+                  }
+                  Relationships: [
+                    {
+      foreignKeyName: "push_subscriptions_connection_id_lane_id_fkey"
+      columns: ["connection_id","lane_id"]
+isOneToOne: false
+      referencedRelation: "connections"
+      referencedColumns: ["id","lane_id"]
+    },{
+      foreignKeyName: "push_subscriptions_lane_id_fkey"
+      columns: ["lane_id"]
+isOneToOne: false
+      referencedRelation: "lanes"
+      referencedColumns: ["code"]
+    }
+                  ]
                 },"sync_cursors": {
                   Row: {
                     "connection_id": string,"cursor_value": string,"lane_id": string,"stream": string,"updated_at": string
@@ -705,6 +731,11 @@ isOneToOne: false
 "cal_events_apply_page":
 { Args: { "p_complete"?: boolean,"p_connection_id": string,"p_cursor": string,"p_drop_calendars"?: (string)[],"p_expected_cursor": string,"p_lane": string,"p_removals": Json,"p_upserts": Json }; Returns: Json
                            },
+"calendar_events":
+{ Args: { "p_from": string,"p_lane": string,"p_to": string }; Returns: {
+              "all_day": boolean,"calendar_id": string,"connection_id": string,"connection_ids": (string)[],"end_at": string,"end_date": string,"event_id": string,"location": string,"online_meeting_url": string,"organizer_email": string,"organizer_name": string,"provider": string,"source_url": string,"start_at": string,"start_date": string,"status": string,"timezone": string,"title": string
+            }[]
+                           },
 "comms_mail_apply_page":
 { Args: { "p_complete"?: boolean,"p_connection_id": string,"p_cursor": string,"p_expected_cursor": string,"p_lane": string,"p_removals": Json,"p_revive"?: boolean,"p_upserts": Json }; Returns: Json
                            },
@@ -870,6 +901,31 @@ isOneToOne: false
                            },
 "oauth_state_create":
 { Args: { "p_code_verifier": string,"p_lane": string,"p_provider": string,"p_redirect_uri": string,"p_state_hash": string }; Returns: undefined
+                           },
+"push_subscription_list":
+{ Args: { "p_connection_id": string,"p_lane": string }; Returns: {
+              "expires_at": string,"resource": string,"status": string,"subscription_id": string
+            }[]
+                           },
+"push_subscription_lookup":
+{ Args: { "p_lane": string,"p_provider": string,"p_subscription_ids": (string)[] }; Returns: {
+              "client_state": string,"connection_id": string,"resource": string,"status": string,"subscription_id": string
+            }[]
+                           },
+"push_subscription_mark":
+{ Args: { "p_connection_id": string,"p_lane": string,"p_status": string,"p_subscription_id": string }; Returns: boolean
+                           },
+"push_subscription_record":
+{ Args: { "p_client_state": string,"p_connection_id": string,"p_expires_at": string,"p_lane": string,"p_provider": string,"p_resource": string,"p_resource_path": string,"p_subscription_id": string }; Returns: string
+                           },
+"push_subscription_renewed":
+{ Args: { "p_connection_id": string,"p_expires_at": string,"p_lane": string,"p_subscription_id": string }; Returns: boolean
+                           },
+"push_subscriptions_purge":
+{ Args: { "p_lane": string }; Returns: number
+                           },
+"push_subscriptions_remove_connection":
+{ Args: { "p_connection_id": string,"p_lane": string }; Returns: number
                            },
 "retention_cal_purge":
 { Args: { "p_keep": string,"p_lane": string }; Returns: number
