@@ -5,7 +5,8 @@ import { join, relative } from "node:path";
 import { describe, expect, it } from "vitest";
 
 const ROOT = join(__dirname, "..", "app", "[laneId]");
-const ALWAYS_VISIBLE = new Set(["page.tsx" /* Home */, "settings/page.tsx", "more/page.tsx"]);
+// T-271: Claude, ChatGPT, Contacts and Messages belong to no module (one side menu for every company), so every company shows them.
+const ALWAYS_VISIBLE = new Set(["page.tsx" /* Home */, "settings/page.tsx", "more/page.tsx", "claude/page.tsx", "chatgpt/page.tsx", "contacts/page.tsx", "messages/page.tsx"]);
 
 function pages(dir: string): string[] {
   return readdirSync(dir).flatMap((name) => {

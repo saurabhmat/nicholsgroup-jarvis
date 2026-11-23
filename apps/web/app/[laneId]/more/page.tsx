@@ -1,12 +1,11 @@
 // iPhone "More" tab: the menu entries that have no tab of their own, and sign-out. A tab page, so no back link.
+// T-271: Get started / AI brain, Approvals and Assistant are reached from Settings (the last row here), as on the desktop.
 import { SignOutForm } from "@/components/sign-out-form";
 import Link from "next/link";
 import { Button, laneHref, MORE_ITEMS, navItem, PageHeader } from "@nichols/ui";
-import { OnboardingMoreRow } from "@/components/onboarding-entry";
 import { ThemeToggle } from "@/components/theme-toggle";
 import { loadLane } from "@/lib/lane-page";
 import { hiddenNavKeys, laneGate } from "@/lib/lane-modules";
-import { onboardingFor } from "@/lib/onboarding-progress";
 import { signOut } from "../../sign-in/actions";
 
 export default function Page(props: PageProps<"/[laneId]/more">) {
@@ -15,14 +14,12 @@ export default function Page(props: PageProps<"/[laneId]/more">) {
 
 async function More({ params }: { params: Promise<{ laneId: string }> }) {
   const lane = await loadLane((await params).laneId);
-  const [onboarding, gate] = await Promise.all([onboardingFor(lane.laneId), laneGate(lane.laneId)]);
-  const hidden = hiddenNavKeys(gate);
+  const hidden = hiddenNavKeys(await laneGate(lane.laneId));
   return (
     <div className="flex flex-col gap-6">
       <PageHeader eyebrow={lane.name} title="More" />
       <ul className="flex flex-col divide-y divide-divider rounded-card border border-border bg-card">
-        {hidden.includes("onboarding") ? null : <OnboardingMoreRow laneId={lane.laneId} progress={onboarding} />}
-        {MORE_ITEMS.filter((key) => key !== "onboarding" && !hidden.includes(key)).map((key) => {
+        {MORE_ITEMS.filter((key) => key === "settings" || !hidden.includes(key)).map((key) => {
           const item = navItem(key);
           return (
             <li key={key}>

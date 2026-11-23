@@ -1,7 +1,6 @@
 import type { ReactNode } from "react";
 import { cn } from "../lib/utils";
-import { activeKey, laneHref, MOBILE_TABS, NAV_ITEMS, onboardingEntry, pageHeading, type NavKey, type OnboardingProgress } from "../lib/nav";
-import { Badge } from "./badge";
+import { activeKey, laneHref, menuKeyFor, MOBILE_TABS, NAV_ITEMS, navItem, pageHeading, SIDE_MENU, type NavKey } from "../lib/nav";
 import { TabIcon } from "./tab-icon";
 import { LaneSwitcher, type ShellLane, type ShellLink } from "./lane-switcher";
 
@@ -13,12 +12,8 @@ export type AppShellProps = {
   currentLaneId: string;
   /** Current URL path, for the selected menu entry. */
   pathname: string;
-  /** Pending approvals in the SELECTED lane only; the badge is hidden at 0 or when unknown. */
-  approvalsCount?: number;
-  /** Entries the company does not use (T-265: a mail-only company has no Finance, Approvals, Assistant or Projects). Home and Settings cannot be hidden. */
+  /** Entries the company does not use (T-265: a mail-only company has no Finance or Tasks). Home and Settings cannot be hidden. */
   hiddenKeys?: readonly NavKey[];
-  /** Setup progress for the "Get started" entry; omitted (null) for users without the brain view: the entry is not drawn. */
-  onboarding?: OnboardingProgress | null;
   /** First name for the Home title on the iPhone header band; omitted when unknown. */
   firstName?: string;
   /** The server's time, for the Home title's greeting on the phone band (the shell never reads the clock itself). */
@@ -41,31 +36,17 @@ function Star({ className }: { className?: string }) {
   );
 }
 
-function Check() {
-  return (
-    <svg aria-label="Setup complete" role="img" viewBox="0 0 24 24" className="size-4 fill-none stroke-gold stroke-2">
-      <path d="M5 12.5l4.5 4.5L19 7.5" strokeLinecap="round" strokeLinejoin="round" />
-    </svg>
-  );
-}
-
-function CountBadge({ count, className }: { count?: number; className?: string }) {
-  if (!count || count < 1) return null;
-  return (
-    <Badge variant="gold" className={className ?? "ml-auto"} aria-label={`${String(count)} pending`}>
-      {count > 99 ? "99+" : count}
-    </Badge>
-  );
-}
-
 /**
  * The authenticated layout (D-20 batch 1): navy side menu on desktop; navy header band with the company switcher and
  * bottom tabs on iPhone. Presentational only: the app decides what the user may see and passes the lanes in.
+ * T-271: the side menu is SIDE_MENU for every company; Get started, Approvals and Assistant are reached from Settings, which stays
+ * selected while one of them is open.
  * Light theme, colours from the T-022 tokens only.
  */
-export function AppShell({ brand, lanes, currentLaneId, pathname, approvalsCount, hiddenKeys, onboarding, firstName, now, signOut, menuExtra, Link = DefaultLink, children }: AppShellProps) {
+export function AppShell({ brand, lanes, currentLaneId, pathname, hiddenKeys, firstName, now, signOut, menuExtra, Link = DefaultLink, children }: AppShellProps) {
   const hidden = new Set<NavKey>((hiddenKeys ?? []).filter((k) => k !== "home" && k !== "settings"));
   const active = activeKey(currentLaneId, pathname);
+  const menuActive = menuKeyFor(active);
   const heading = pageHeading(active, firstName, now);
   const segment = NAV_ITEMS.find((i) => i.key === active)?.segment ?? "";
   return (
@@ -90,12 +71,12 @@ export function AppShell({ brand, lanes, currentLaneId, pathname, approvalsCount
         </div>
         <LaneSwitcher lanes={lanes} currentLaneId={currentLaneId} segment={segment} Link={Link} />
         <nav aria-label="Main" className="flex flex-1 flex-col gap-1">
-          {NAV_ITEMS.filter((item) => !hidden.has(item.key) && (item.key !== "onboarding" || onboarding)).map((item) => {
-            const selected = item.key === active;
-            const entry = item.key === "onboarding" && onboarding ? onboardingEntry(onboarding) : null;
+          {SIDE_MENU.filter((key) => !hidden.has(key)).map((key) => {
+            const item = navItem(key);
+            const selected = key === menuActive;
             return (
               <Link
-                key={item.key}
+                key={key}
                 href={laneHref(currentLaneId, item.segment)}
                 aria-current={selected ? "page" : undefined}
                 className={cn(
@@ -103,14 +84,7 @@ export function AppShell({ brand, lanes, currentLaneId, pathname, approvalsCount
                   selected ? "border-sidebar-active-edge bg-sidebar-active font-semibold text-sidebar-strong" : "border-transparent",
                 )}
               >
-                {entry ? entry.label : item.label}
-                {entry?.complete ? <Check /> : null}
-                {entry?.badge ? (
-                  <Badge variant="gold" className="ml-auto" data-testid="onboarding-badge">
-                    {entry.badge}
-                  </Badge>
-                ) : null}
-                {item.key === "approvals" ? <CountBadge count={approvalsCount} /> : null}
+                {item.label}
               </Link>
             );
           })}
@@ -165,7 +139,6 @@ export function AppShell({ brand, lanes, currentLaneId, pathname, approvalsCount
             >
               <TabIcon name={tab.icon} />
               {tab.label}
-              {tab.key === "approvals" ? <CountBadge count={approvalsCount} className="absolute right-3 top-1" /> : null}
             </Link>
           );
         })}

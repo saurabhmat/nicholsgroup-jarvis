@@ -98,13 +98,13 @@ describe("News and Projects slots", () => {
     expect(screen.getByRole("region", { name: "GovCon news" })).toBeTruthy();
     expect(screen.getByTestId("news-empty").textContent).toBe("GovCon news is off");
   });
-  it("Projects at a glance is a slim line; 'Connect in Settings' only for admins", () => {
+  it("Tasks at a glance is a slim line; 'Connect in Settings' only for admins", () => {
     const { rerender } = render(<ProjectsGlance laneId="PKG" />);
-    expect(screen.getByRole("region", { name: "Projects at a glance" })).toBeTruthy();
-    expect(screen.getByTestId("projects-notice").textContent).toBe("No project board connected");
+    expect(screen.getByRole("region", { name: "Tasks at a glance" })).toBeTruthy();
+    expect(screen.getByTestId("projects-notice").textContent).toBe("No task board connected");
     expect(screen.queryByRole("link")).toBeNull();
     rerender(<ProjectsGlance laneId="PKG" canConnect />);
-    expect(screen.getByTestId("projects-notice").textContent).toBe("No project board connected\u00b7Connect in Settings");
+    expect(screen.getByTestId("projects-notice").textContent).toBe("No task board connected\u00b7Connect in Settings");
     expect(screen.getByRole("link", { name: "Connect in Settings" }).getAttribute("href")).toBe("/PKG/settings#connections");
   });
 });

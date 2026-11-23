@@ -1,8 +1,8 @@
 // @vitest-environment jsdom
-// T-226: the phone entry points. Home banner: only while incomplete and only with a readable count; More row: first, badge, check.
+// T-226: the phone entry point. Home banner: only while incomplete and only with a readable count. (T-271: the More row is gone.)
 import { afterEach, describe, expect, it } from "vitest";
 import { cleanup, render, screen } from "@testing-library/react";
-import { OnboardingBanner, OnboardingMoreRow } from "./onboarding-entry";
+import { OnboardingBanner } from "./onboarding-entry";
 
 afterEach(cleanup);
 
@@ -20,39 +20,5 @@ describe("Home banner", () => {
       expect(container.textContent).toBe("");
       unmount();
     }
-  });
-});
-
-describe("More row", () => {
-  const row = (progress: Parameters<typeof OnboardingMoreRow>[0]["progress"]) =>
-    render(
-      <ul>
-        <OnboardingMoreRow laneId="PKG" progress={progress} />
-        <li>Finance</li>
-      </ul>,
-    );
-  it("is the first row with the badge while incomplete", () => {
-    row({ done: 3, total: 10 });
-    const first = screen.getAllByRole("listitem")[0] as HTMLElement;
-    expect(first.textContent).toBe("Get started3 of 10");
-    expect(first.querySelector("a")?.getAttribute("href")).toBe("/PKG/onboarding");
-  });
-  it("shows the badge for 0 of 10 and no badge when the count is unreadable", () => {
-    const { unmount } = row({ done: 0, total: 10 });
-    expect((screen.getAllByRole("listitem")[0] as HTMLElement).textContent).toBe("Get started0 of 10");
-    unmount();
-    row({ done: null, total: 10 });
-    expect((screen.getAllByRole("listitem")[0] as HTMLElement).textContent).toBe("Get started");
-  });
-  it("says AI brain with a check when everything is done", () => {
-    row({ done: 10, total: 10 });
-    const first = screen.getAllByRole("listitem")[0] as HTMLElement;
-    expect(first.textContent).toContain("AI brain");
-    expect(screen.getByRole("img", { name: "Setup complete" })).toBeTruthy();
-    expect(first.textContent).not.toContain("of 10");
-  });
-  it("is absent for a user without the brain view", () => {
-    row(null);
-    expect(screen.getAllByRole("listitem")).toHaveLength(1);
   });
 });

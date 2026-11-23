@@ -145,7 +145,7 @@ describe("Home layout (T-234 part 1)", () => {
     expect(within(newsSlot).getByRole("region", { name: "GovCon news" })).toBeTruthy(); // slim "off" card here too
     expect(newsSlot.textContent).toContain("GovCon news is off");
     expect(within(financeSlot).getByRole("region", { name: "Finance" })).toBeTruthy();
-    expect(within(projectsSlot).getByRole("region", { name: "Projects at a glance" })).toBeTruthy();
+    expect(within(projectsSlot).getByRole("region", { name: "Tasks at a glance" })).toBeTruthy();
   });
 
   it("phone order by CSS `order` classes on the one DOM: attention, Today, KPIs, news, projects; Finance is hidden below md", async () => {

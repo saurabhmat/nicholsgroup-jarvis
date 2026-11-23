@@ -7,7 +7,6 @@ import { guards } from "@/lib/guards";
 import { firstNameFor } from "@/lib/first-name";
 import { loadLane } from "@/lib/lane-page";
 import { hiddenNavKeys, laneGate } from "@/lib/lane-modules";
-import { onboardingFor } from "@/lib/onboarding-progress";
 import { Shell } from "@/components/shell";
 import { signOut } from "../sign-in/actions";
 
@@ -21,14 +20,13 @@ export default function LaneLayout({ children, params }: LayoutProps<"/[laneId]"
 
 async function LaneShell({ children, params }: { children: ReactNode; params: Promise<{ laneId: string }> }) {
   const laneId = (await params).laneId;
-  // The badge's setup progress does its own owner/brain checks (null unless the owner has the brain view here), so it
-  // does not wait for the lane check: both run at once. A failed setup lookup is "no entry" (null), so it can never win over the lane check's 404 or redirect. A refused lane still ends in the lane check's 404 or redirect.
+  // T-271: the side menu has no setup entry any more (Get started / AI brain is reached from Settings), so no setup progress is read here.
   // The first name (the user's own profile row, never throws) is read alongside, for the phone header band's "Good morning, {name}".
-  const [lane, onboarding, firstName, gate] = await Promise.all([loadLane(laneId), onboardingFor(laneId).catch(() => null), guards().then((g) => firstNameFor(g, laneId)).catch(() => undefined), laneGate(laneId)]);
+  const [lane, firstName, gate] = await Promise.all([loadLane(laneId), guards().then((g) => firstNameFor(g, laneId)).catch(() => undefined), laneGate(laneId)]);
   // After the lane check (which waits for the request): reading the clock here is never part of a prerendered shell (T-243).
   const now = new Date();
   return (
-    <Shell now={now} brand={BRAND} lanes={lane.lanes} currentLaneId={lane.laneId} hiddenKeys={hiddenNavKeys(gate)} onboarding={onboarding && gate.visible("brain") ? { done: onboarding.done, total: onboarding.total } : null} signOut={signOut} {...(firstName ? { firstName } : {})}>
+    <Shell now={now} brand={BRAND} lanes={lane.lanes} currentLaneId={lane.laneId} hiddenKeys={hiddenNavKeys(gate)} signOut={signOut} {...(firstName ? { firstName } : {})}>
       {children}
     </Shell>
   );

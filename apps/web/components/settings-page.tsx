@@ -26,6 +26,7 @@ import { NewsSection } from "./news-section";
 import { newsSectionFor } from "@/lib/news-settings";
 import { jobFailureBannerFor } from "@/lib/job-failures";
 import { ModulePage } from "./module-page";
+import { SettingsPagesSection, settingsPagesTitle } from "./settings-pages-section";
 
 export async function SettingsPage({
   params,
@@ -72,9 +73,12 @@ export async function SettingsPage({
   const origin = google || microsoft || quickbooks || composio ? await currentOriginNotice() : null;
   // The "not set up yet" card only stands in for a page with nothing real on it.
   const showCoverage = coverage.unavailable || coverage.items.length > 0;
-  const anySection = Boolean(result || google || microsoft || quickbooks || composio || brain || showCoverage || news);
+  // T-271: Approvals and Assistant have no side menu entry; they are opened from here (a company that hides the module shows no link).
+  const pages = (["approvals", "assistant"] as const).filter((m) => gate.visible(m));
+  const anySection = Boolean(result || google || microsoft || quickbooks || composio || brain || showCoverage || news || pages.length > 0);
   // The sub-nav lists exactly the sections that are drawn below (the loaders above decide who sees which).
   const nav: SettingsNavItem[] = [
+    ...(pages.length > 0 ? [{ id: "pages", label: settingsPagesTitle(pages) }] : []),
     ...(google || microsoft || quickbooks || composio || showCoverage ? [{ id: "connections", label: "Connections" }] : []),
     ...(news ? [{ id: "news", label: "GovCon news" }] : []),
     ...(brain ? [{ id: "ai-brain", label: "AI brain" }] : []),
@@ -103,6 +107,7 @@ export async function SettingsPage({
         <div className="grid gap-4 lg:grid-cols-[200px_minmax(0,1fr)] lg:gap-8">
           <SettingsNav items={nav} />
           <div className="flex min-w-0 flex-col gap-4">
+            <SettingsPagesSection laneId={lane.laneId} pages={pages} />
             {google || microsoft || quickbooks || composio || showCoverage ? <ConnectionsSection laneId={lane.laneId} google={google} microsoft={microsoft} quickbooks={quickbooks} composio={composio} coverage={showCoverage ? coverage : null} jobFailures={jobFailures} tz={tz} now={now} /> : null}
             {news ? <NewsSection view={news} tz={tz} now={now} /> : null}
             {brain ? <BrainSection laneId={lane.laneId} view={brain} /> : null}

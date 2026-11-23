@@ -1,26 +1,46 @@
 import { describe, expect, it } from "vitest";
-import { activeKey, greetingFor, homeHeading, laneHref, onboardingEntry, pageHeading, MOBILE_TABS, MORE_ITEMS, NAV_ITEMS, navItem } from "./nav";
+import { activeKey, greetingFor, homeHeading, laneHref, menuKeyFor, onboardingEntry, pageHeading, MOBILE_TABS, MORE_ITEMS, NAV_ITEMS, navItem, SETTINGS_PAGES, SIDE_MENU } from "./nav";
 
 describe("navigation data", () => {
-  it("has the desktop order (Get started first, Projects between Assistant and Settings) and no hidden modules", () => {
-    expect(NAV_ITEMS.map((i) => i.label)).toEqual(["Get started", "Home", "Finance", "Inbox", "Calendar", "Approvals", "Assistant", "Projects", "Settings"]);
+  it("T-271: the side menu order is Home, Inbox, Calendar, Claude, ChatGPT, Finance, Tasks, Contacts, Messages, Settings, with no hidden modules", () => {
+    expect(SIDE_MENU.map((k) => navItem(k).label)).toEqual(["Home", "Inbox", "Calendar", "Claude", "ChatGPT", "Finance", "Tasks", "Contacts", "Messages", "Settings"]);
+    expect(new Set(SIDE_MENU).size).toBe(SIDE_MENU.length);
     const text = JSON.stringify(NAV_ITEMS).toLowerCase();
     for (const hidden of ["search", "commitment", "all companies"]) expect(text).not.toContain(hidden);
   });
 
-  it("has the signed-off iPhone tabs, and every menu entry is reachable from a tab or More", () => {
-    expect(MOBILE_TABS.map((t) => t.label)).toEqual(["Home", "Approvals", "Inbox", "Ask", "More"]);
-    const covered = new Set(MOBILE_TABS.flatMap((t) => t.covers));
-    for (const item of NAV_ITEMS) expect(covered.has(item.key)).toBe(true);
-    expect([...MORE_ITEMS].sort()).toEqual([...(MOBILE_TABS.find((t) => t.key === "more")?.covers ?? [])].sort());
+  it("T-271: Get started, Approvals and Assistant keep their pages, sit under Settings, and are not in the side menu", () => {
+    expect([...SETTINGS_PAGES]).toEqual(["onboarding", "approvals", "assistant"]);
+    for (const key of SETTINGS_PAGES) {
+      expect(SIDE_MENU).not.toContain(key);
+      expect(navItem(key).segment).toBe(key);
+      expect(activeKey("PKG", `/PKG/${key}`)).toBe(key);
+      expect(menuKeyFor(key)).toBe("settings");
+    }
+    expect(menuKeyFor("finance")).toBe("finance");
+    expect(menuKeyFor("more")).toBe("more");
+    expect(menuKeyFor(null)).toBeNull();
+    // every page is either a menu entry or reached from Settings, never both and never neither
+    expect([...SIDE_MENU, ...SETTINGS_PAGES].sort()).toEqual(NAV_ITEMS.map((i) => i.key).sort());
   });
 
-  it("puts Get started first with the onboarding segment, and at the top of More (no new iPhone tab)", () => {
-    expect(NAV_ITEMS[0]).toMatchObject({ key: "onboarding", label: "Get started", segment: "onboarding" });
-    expect(MORE_ITEMS[0]).toBe("onboarding");
+  it("T-271: Tasks is the Projects page renamed (same URL), and the four new pages have their own segments", () => {
+    expect(navItem("projects")).toMatchObject({ label: "Tasks", segment: "projects", heading: { lead: "Tasks" } });
+    for (const key of ["claude", "chatgpt", "contacts", "messages"] as const) {
+      expect(navItem(key).segment).toBe(key);
+      expect(activeKey("PKG", `/PKG/${key}`)).toBe(key);
+    }
+    expect(navItem("messages").placeholder.description).toContain("Teams");
+  });
+
+  it("T-271: the iPhone tabs are the first four menu entries and More; every page is reachable from a tab or More", () => {
+    expect(MOBILE_TABS.map((t) => t.label)).toEqual(["Home", "Inbox", "Calendar", "Claude", "More"]);
+    expect(MOBILE_TABS.slice(0, 4).map((t) => t.key)).toEqual(SIDE_MENU.slice(0, 4));
+    expect([...MORE_ITEMS]).toEqual(SIDE_MENU.slice(4));
+    const covered = new Set(MOBILE_TABS.flatMap((t) => t.covers));
+    for (const item of NAV_ITEMS) expect(covered.has(item.key)).toBe(true);
+    expect(MOBILE_TABS.find((t) => t.key === "more")?.covers).toEqual([...MORE_ITEMS, ...SETTINGS_PAGES]);
     expect(MOBILE_TABS.map((t) => t.key)).not.toContain("onboarding");
-    expect(activeKey("PKG", "/PKG/onboarding")).toBe("onboarding");
-    expect(laneHref("PKG", navItem("onboarding").segment)).toBe("/PKG/onboarding");
     expect(navItem("onboarding").heading).toEqual({ lead: "Set up your", accent: "brain" });
   });
 
@@ -50,8 +70,8 @@ describe("navigation data", () => {
 });
 
 describe("headings and the More tab", () => {
-  it("derives the More tab's covers from MORE_ITEMS (single source)", () => {
-    expect(MOBILE_TABS.find((t) => t.key === "more")?.covers).toBe(MORE_ITEMS);
+  it("the More tab covers the More rows first (single source), then the pages under Settings", () => {
+    expect(MOBILE_TABS.find((t) => t.key === "more")?.covers.slice(0, MORE_ITEMS.length)).toEqual([...MORE_ITEMS]);
   });
 
   it("has the prototype headings with accents", () => {
@@ -111,6 +131,6 @@ describe("headings and the More tab", () => {
   });
 
   it("gives every tab an icon", () => {
-    expect(MOBILE_TABS.map((t) => t.icon)).toEqual(["home", "check", "mail", "chat", "more"]);
+    expect(MOBILE_TABS.map((t) => t.icon)).toEqual(["home", "mail", "calendar", "chat", "more"]);
   });
 });
