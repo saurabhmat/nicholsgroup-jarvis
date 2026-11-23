@@ -5,7 +5,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 const reader = vi.hoisted(() => ({ listTeams: vi.fn(), listChannels: vi.fn(), listChannelPosts: vi.fn(), listReplies: vi.fn() }));
 vi.mock("@nichols/connectors/teams-reader", () => ({ ...reader }));
 
-import { channelRow, loadChannels, loadReplies, loadTeams, loadThread, postImagesBase } from "./teams-channels";
+import { channelRow, gateChannel, loadChannels, loadReplies, loadTeams, loadThread, postImagesBase } from "./teams-channels";
 import { encodeChannelKey } from "./teams-channel-key";
 
 const CANARY = "canary-channel-view-3c7e-not-real";
@@ -27,8 +27,8 @@ beforeEach(() => {
 
 describe("teams and channels", () => {
   it("teams: ids and names only", async () => {
-    reader.listTeams.mockResolvedValue({ teams: [{ teamId: TEAM, name: "Alpha" }], more: true, self });
-    expect(await loadTeams(person)).toEqual({ kind: "ok", teams: [{ teamId: TEAM, name: "Alpha" }], more: true });
+    reader.listTeams.mockResolvedValue({ teams: [{ teamId: TEAM, name: "Alpha", archived: true }], more: true, self });
+    expect(await loadTeams(person)).toEqual({ kind: "ok", teams: [{ teamId: TEAM, name: "Alpha", archived: true }], more: true });
     expect(reader.listTeams).toHaveBeenCalledWith("PKG", person.connectionId, ME);
   });
 
@@ -109,7 +109,7 @@ describe("posts and replies", () => {
 
   it("rule 6: a canary in names, subjects and bodies never reaches a log line", async () => {
     const spies = [vi.spyOn(console, "log"), vi.spyOn(console, "error"), vi.spyOn(console, "warn"), vi.spyOn(console, "info")].map((s) => s.mockImplementation(() => undefined));
-    reader.listTeams.mockResolvedValue({ teams: [{ teamId: TEAM, name: CANARY }], more: false, self });
+    reader.listTeams.mockResolvedValue({ teams: [{ teamId: TEAM, name: CANARY, archived: false }], more: false, self });
     reader.listChannels.mockResolvedValue({ channels: [{ channelId: CH, name: CANARY, kind: "standard", webUrl: null }], self });
     reader.listChannelPosts.mockResolvedValue({ posts: [post("p1", { subject: CANARY, nodes: [{ t: "text", v: CANARY }] })], nextCursor: null, self });
     reader.listReplies.mockResolvedValue({ replies: [post("r1", { nodes: [{ t: "text", v: CANARY }] })], more: false, self });
@@ -126,5 +126,28 @@ describe("posts and replies", () => {
     reader.listReplies.mockImplementation(async () => (order.push("replies"), { replies: [], more: false, self }));
     await Promise.all([loadTeams(person), loadChannels(person, TEAM), loadThread(person, TEAM, CH), loadReplies(person, TEAM, CH, "p1")]);
     expect(order.sort()).toEqual(["channels", "posts", "replies", "teams"]);
+  });
+});
+
+describe("gateChannel (T-291 review L1)", () => {
+  const list = (kind: "standard" | "shared"): Parameters<typeof gateChannel>[0] => ({ kind: "ok", channels: [{ key: KEY, name: "General", kind, readable: kind !== "shared", openUrl: "https://teams.microsoft.com/l/channel/x" }] });
+  it("a readable channel in the list is read; a shared one opens in Teams; one that is not in the list is not found (Microsoft is not asked); a failed list is that failure", () => {
+    expect(gateChannel(list("standard"), KEY)).toEqual({ ok: true });
+    expect(gateChannel(list("shared"), KEY)).toEqual({ ok: false, view: { kind: "shared", openUrl: "https://teams.microsoft.com/l/channel/x" } });
+    expect(gateChannel(list("standard"), encodeChannelKey("19:other@thread.tacv2"))).toEqual({ ok: false, view: { kind: "not_found" } });
+    expect(gateChannel({ kind: "busy", seconds: 4 }, KEY)).toEqual({ ok: false, view: { kind: "busy", seconds: 4 } });
+  });
+
+  it("a refused channel does not touch the others: the list loads while that channel's posts are forbidden", async () => {
+    reader.listChannels.mockResolvedValue({ channels: [{ channelId: CH, name: "General", kind: "standard", webUrl: null }, { channelId: "19:o@thread.tacv2", name: "Other", kind: "standard", webUrl: null }], self });
+    reader.listChannelPosts.mockRejectedValue({ info: { kind: "forbidden" } });
+    const l = await loadChannels(person, TEAM);
+    expect(l.kind === "ok" && l.channels).toHaveLength(2);
+    expect(await loadThread(person, TEAM, CH)).toEqual({ kind: "forbidden" });
+  });
+
+  it("the portal's own refusal is not_enabled, not forbidden", async () => {
+    reader.listTeams.mockRejectedValue({ info: { kind: "connection_unavailable", message: "x" } });
+    expect(await loadTeams(person)).toEqual({ kind: "not_enabled" });
   });
 });

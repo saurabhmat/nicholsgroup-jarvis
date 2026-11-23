@@ -148,7 +148,7 @@ function Attachment({ a }: { a: AttachmentView }) {
   );
 }
 
-export function MessageItem({ m, showSender, subject = null, footer = null }: { m: MessageView; showSender: boolean; /** A channel post's own title (plain text), drawn above the text. */ subject?: string | null; /** Drawn under the time line, inside the same item (a post's reply and Open in Teams links, and its replies). */ footer?: ReactNode }) {
+export function MessageItem({ m, showSender, subject = null, footer = null, showDate = false }: { m: MessageView; showSender: boolean; /** Draw the date with the time (channel posts and replies: Graph orders posts by latest activity, so a bare clock time says nothing). Eastern Time, as everywhere. */ showDate?: boolean; /** A channel post's own title (plain text), drawn above the text. */ subject?: string | null; /** Drawn under the time line, inside the same item (a post's reply and Open in Teams links, and its replies). */ footer?: ReactNode }) {
   return (
     <li data-testid="message" data-mine={m.mine ? "true" : "false"} className={cn("flex flex-col gap-0.5", m.mine ? "items-end" : "items-start")}>
       <div className={cn("max-w-[92%] min-w-0 rounded-card border px-3 py-2 sm:max-w-[80%]", m.mine ? "border-primary/30 bg-primary/10" : "border-border bg-card")}>
@@ -182,7 +182,7 @@ export function MessageItem({ m, showSender, subject = null, footer = null }: { 
       </div>
       <p className="px-1 text-small text-muted-foreground">
         <time dateTime={m.at} title={m.fullTime}>
-          {m.time}
+          {showDate ? m.fullTime : m.time}
         </time>
         {m.edited ? " · Edited" : ""}
       </p>

@@ -67,19 +67,24 @@ describe.each(WIDTHS)("channel states at %ipx", (width) => {
 
   it("failures are fixed states with Try again: busy with seconds, could not load, not a member; a refused team list is the administrator's approval; reconnect names the connection", () => {
     at(width);
-    const cases: [Parameters<typeof ChannelFailureCard>[0]["failure"], "teams" | "channel", string][] = [
+    const cases: [Parameters<typeof ChannelFailureCard>[0]["failure"], "teams" | "channels" | "channel", string][] = [
       [{ kind: "busy", seconds: 7 }, "channel", "Teams is busy. Try again in 7 seconds."],
       [{ kind: "unavailable" }, "teams", "could not read your teams"],
       [{ kind: "forbidden" }, "channel", "A private channel can be read only by its members."],
       [{ kind: "forbidden" }, "teams", "Channels need your Microsoft administrator's approval"],
+      [{ kind: "forbidden" }, "teams", "It can also mean this account cannot use Teams channels right now"],
+      [{ kind: "forbidden" }, "channels", "Teams did not let the portal list the channels of this team"],
       [{ kind: "not_found" }, "channel", "This channel could not be opened"],
+      [{ kind: "not_enabled" }, "teams", "Teams is not switched on for this account or company right now"],
     ];
     for (const [failure, scope, text] of cases) {
       cleanup();
       render(<ChannelFailureCard failure={failure} laneId="PKG" connectionId={CONN} testId="x" scope={scope} />);
       expect(screen.getByTestId("x").textContent).toContain(text);
       const retry = screen.queryByRole("button", { name: "Try again" });
-      expect(Boolean(retry), `${failure.kind} ${scope}`).toBe(failure.kind !== "not_found" && !(failure.kind === "forbidden" && scope === "teams"));
+      expect(Boolean(retry), `${failure.kind} ${scope}`).toBe(failure.kind !== "not_found" && failure.kind !== "not_enabled");
+      // the refused team list also offers Reconnect Teams (the approval may have been given since)
+      expect(Boolean(screen.queryByRole("button", { name: "Reconnect Teams" })), `${failure.kind} ${scope}`).toBe(failure.kind === "forbidden" && scope === "teams");
     }
     cleanup();
     render(<ChannelFailureCard failure={{ kind: "reconnect" }} laneId="PKG" connectionId={CONN} testId="x" scope="teams" />);
@@ -88,7 +93,7 @@ describe.each(WIDTHS)("channel states at %ipx", (width) => {
 });
 
 describe.each(WIDTHS)("teams and channels at %ipx", (width) => {
-  const teams: TeamListView = { kind: "ok", teams: [{ teamId: T1, name: "Alpha" }, { teamId: T2, name: "Zed" }], more: false };
+  const teams: TeamListView = { kind: "ok", teams: [{ teamId: T1, name: "Alpha", archived: false }, { teamId: T2, name: "Zed", archived: true }], more: false };
   const channels: ChannelListView = {
     kind: "ok",
     channels: [
@@ -102,7 +107,7 @@ describe.each(WIDTHS)("teams and channels at %ipx", (width) => {
     at(width);
     render(<TeamsList view={teams} laneId="PKG" connectionId={CONN} teamId={T1} channels={null} selectedKey={null} />);
     const rows = screen.getAllByTestId("team-row");
-    expect(rows.map((r) => r.textContent)).toEqual(["▾Alpha", "▸Zed"]);
+    expect(rows.map((r) => r.textContent)).toEqual(["▾Alpha", "▸ZedArchived"]);
     expect(rows[0]?.getAttribute("href")).toBe(`/PKG/messages?tab=channels&team=${T1}`);
     expect(rows.map((r) => r.getAttribute("aria-expanded"))).toEqual(["true", "false"]);
     expect(screen.queryByTestId("unread-dot")).toBeNull();
@@ -164,7 +169,7 @@ describe.each(WIDTHS)("the posts at %ipx", (width) => {
   const draw = (over: Partial<Parameters<typeof ThreadPane>[0]> = {}) => {
     at(width);
     const thread: ThreadView = { kind: "ok", posts: [post("p1", { subject: "Budget review" }), post("p2", { mine: true })], nextCursor: "cur1" };
-    return render(<ThreadPane thread={thread} replies={null} laneId="PKG" connectionId={CONN} teamId={T1} channelKey={KEY} postId={null} more={null} title="General" teamName="Alpha" openUrl="https://teams.microsoft.com/l/channel/x" {...over} />);
+    return render(<ThreadPane thread={thread} replies={null} laneId="PKG" connectionId={CONN} teamId={T1} channelKey={KEY} postId={null} more={null} title="General" subtitle="Alpha" openUrl="https://teams.microsoft.com/l/channel/x" {...over} />);
   };
 
   it("header: the channel and team names as text, a back link to the team's channels (phone only), Open in Teams, Refresh; no composer, no unread", () => {
@@ -254,6 +259,56 @@ describe.each(WIDTHS)("the posts at %ipx", (width) => {
   });
 });
 
+describe.each(WIDTHS)("dates, order and shared channels at %ipx (T-291 review H1, L1)", (width) => {
+  const draw = (over: Partial<Parameters<typeof ThreadPane>[0]> = {}) => {
+    at(width);
+    const thread: ThreadView = {
+      kind: "ok",
+      posts: [
+        post("p1", { at: "2026-11-02T20:07:00.000Z", time: "3:07 PM", fullTime: "Nov 2, 2026, 3:07 PM ET" }), // three weeks old, but its newest reply is recent: it sits on top
+        post("p2", { at: "2026-11-23T14:00:00.000Z", time: "9:00 AM", fullTime: "Nov 23, 2026, 9:00 AM ET" }),
+      ],
+      nextCursor: null,
+    };
+    return render(<ThreadPane thread={thread} replies={null} laneId="PKG" connectionId={CONN} teamId={T1} channelKey={KEY} postId={null} more={null} title="General" subtitle="Alpha" openUrl="https://teams.microsoft.com" {...over} />);
+  };
+
+  it("every post and reply shows its DATE with the time (a phone has no tooltip), and the pane says the order", () => {
+    draw({ postId: "p1", replies: { kind: "ok", postId: "p1", replies: [post("r1", { fullTime: "Nov 22, 2026, 4:30 PM ET", time: "4:30 PM" })], more: false } });
+    const times = screen.getAllByRole("time", { hidden: true }).map((t) => t.textContent);
+    expect(times).toEqual(["Nov 2, 2026, 3:07 PM ET", "Nov 22, 2026, 4:30 PM ET", "Nov 23, 2026, 9:00 AM ET"]);
+    expect(times.join()).not.toMatch(/^(\d+:\d+ [AP]M),/);
+    expect(screen.getByTestId("posts-order").textContent).toBe("Posts with the newest replies come first.");
+  });
+
+  it("a shared channel is not read: the posts pane says so and offers Open in Teams; no posts, no composer", () => {
+    draw({ thread: { kind: "shared", openUrl: "https://teams.microsoft.com/l/channel/shared" } });
+    const box = screen.getByTestId("shared-channel");
+    expect(box.textContent).toContain("shared channel");
+    expect(within(box).getByRole("link", { name: "Open in Teams" }).getAttribute("href")).toBe("https://teams.microsoft.com/l/channel/shared");
+    expect(screen.queryByTestId("post-list")).toBeNull();
+    expect(screen.queryByTestId("conversation-error")).toBeNull();
+  });
+
+  it("end to end for one refused channel: its pane says 'members only' while the channel list stays", () => {
+    at(width);
+    render(
+      <>
+        <ChannelRows laneId="PKG" teamId={T1} selectedKey={KEY} connectionId={CONN} view={{ kind: "ok", channels: [{ key: KEY, name: "General", kind: "standard", readable: true, openUrl: "https://teams.microsoft.com" }, { key: encodeChannelKey("19:other@thread.tacv2"), name: "Other", kind: "standard", readable: true, openUrl: "https://teams.microsoft.com" }] }} />
+        <ThreadPane thread={{ kind: "forbidden" }} replies={null} laneId="PKG" connectionId={CONN} teamId={T1} channelKey={KEY} postId={null} more={null} title="General" subtitle="Alpha" openUrl="https://teams.microsoft.com" />
+      </>,
+    );
+    expect(screen.getAllByTestId("channel-row")).toHaveLength(2);
+    expect(screen.getByTestId("conversation-error").textContent).toContain("A private channel can be read only by its members.");
+  });
+
+  it("a picture in a channel post is a placeholder with neutral wording (not 'the chat')", () => {
+    at(width);
+    render(<ThreadPane thread={{ kind: "ok", posts: [post("p1", { nodes: [{ t: "image" }] })], nextCursor: null }} replies={null} laneId="PKG" connectionId={CONN} teamId={T1} channelKey={KEY} postId={null} more={null} title="General" subtitle="Alpha" openUrl="https://teams.microsoft.com" />);
+    expect(screen.getByTestId("image-placeholder").textContent).toBe("Image: open in Teams to see it");
+  });
+});
+
 describe.each(WIDTHS)("the tabs and the page around them at %ipx", (width) => {
   it("Chats and Channels are two plain links to stable addresses; the open one is marked; hidden on a phone while a conversation has the screen", () => {
     at(width);
@@ -280,5 +335,26 @@ describe.each(WIDTHS)("the tabs and the page around them at %ipx", (width) => {
     cleanup();
     render(<MessagesScreen laneId="PKG" tab="chats" state={connected({ missing: ["channels_read"], adminConsent: true })} />);
     expect(screen.getByTestId("messages-feature-missing").textContent).toContain("Reconnect Teams to add channels");
+  });
+});
+
+describe("the Chats | Channels bar (T-291 review M1)", () => {
+  it("is drawn only for a company that lists channels_read; a direct Channels address for any other company still gets its neutral state with a way back", async () => {
+    const { ConnectedWorkspace } = await import("./messages-page");
+    const has = (node: unknown, type: unknown): boolean => {
+      if (Array.isArray(node)) return node.some((n) => has(n, type));
+      if (typeof node !== "object" || node === null) return false;
+      const el = node as { type?: unknown; props?: { children?: unknown } };
+      return el.type === type || has(el.props?.children, type);
+    };
+    const sp = Promise.resolve({});
+    const off = connected({ laneFeatures: ["chat_read"] });
+    const on = connected({ laneFeatures: ["chat_read", "channels_read"] });
+    expect(has(ConnectedWorkspace({ laneId: "PKG", state: off, tab: "chats", chatOpen: false, searchParams: sp }), MessagesTabs)).toBe(false);
+    expect(has(ConnectedWorkspace({ laneId: "PKG", state: off, tab: "channels", chatOpen: false, searchParams: sp }), MessagesTabs)).toBe(false);
+    expect(has(ConnectedWorkspace({ laneId: "PKG", state: on, tab: "chats", chatOpen: false, searchParams: sp }), MessagesTabs)).toBe(true);
+    at(1280);
+    render(<ChannelsUnavailable laneId="PKG" state={off} />);
+    expect(screen.getByTestId("back-to-chats-link").getAttribute("href")).toBe("/PKG/messages");
   });
 });

@@ -22,7 +22,7 @@ export const TEAMS_LISTED_MAX = 100;
 const SUBJECT_CHARS = 200;
 const TEAMS_WEB_HOST = "teams.microsoft.com";
 
-export type TeamSummary = { teamId: string; name: string };
+export type TeamSummary = { teamId: string; name: string; /** `isArchived: true` in the answer (only when Graph includes it; no second request is made to find out). */ archived: boolean };
 export type ChannelKind = "standard" | "private" | "shared";
 export type ChannelSummary = {
   channelId: string;
@@ -42,7 +42,7 @@ export type ChannelPost = ChatMessage & {
 export type PostPage = { posts: ChannelPost[]; nextCursor: string | null; self: TeamsSelf };
 export type ReplyPage = { replies: ChatMessage[]; more: boolean; self: TeamsSelf };
 
-const TeamSchema = z.looseObject({ id: z.string().max(64), displayName: z.string().max(512).nullish() });
+const TeamSchema = z.looseObject({ id: z.string().max(64), displayName: z.string().max(512).nullish(), isArchived: z.boolean().nullish() });
 const ChannelSchema = z.looseObject({ id: z.string().max(256), displayName: z.string().max(512).nullish(), membershipType: z.string().max(32).nullish(), webUrl: z.string().max(4096).nullish() });
 const PostExtraSchema = z.looseObject({ subject: z.string().max(2048).nullish(), webUrl: z.string().max(4096).nullish() });
 
@@ -70,7 +70,7 @@ export function createTeamsChannelReader(deps: TeamsChannelReaderDeps) {
       const all = page.value.flatMap((raw) => {
         const r = TeamSchema.safeParse(raw);
         const id = r.success ? lowerUuid(r.data.id) : null;
-        return r.success && id !== null ? [{ teamId: id, name: text(r.data.displayName, NAME_CHARS) || NO_NAME }] : [];
+        return r.success && id !== null ? [{ teamId: id, name: text(r.data.displayName, NAME_CHARS) || NO_NAME, archived: r.data.isArchived === true }] : [];
       });
       const seen = new Set<string>();
       const teams = all.filter((t) => (seen.has(t.teamId) ? false : (seen.add(t.teamId), true))).sort((a, b) => a.name.localeCompare(b.name));
@@ -120,7 +120,8 @@ export function createTeamsChannelReader(deps: TeamsChannelReaderDeps) {
       });
       const page = pageOf(res.data);
       const replies = page.value.flatMap((raw) => messageOf(raw, res.self) ?? []).sort((a, b) => Date.parse(a.createdAt) - Date.parse(b.createdAt));
-      return { replies, more: typeof page["@odata.nextLink"] === "string" || page.value.length >= REPLIES_PAGE, self: res.self };
+      // "more" is Graph's own next link; exactly one full page without one is not "more" (a count over the page size only if Graph ignored `$top`)
+      return { replies, more: typeof page["@odata.nextLink"] === "string" || page.value.length > REPLIES_PAGE, self: res.self };
     },
   };
 }

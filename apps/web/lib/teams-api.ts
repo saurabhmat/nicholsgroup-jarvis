@@ -36,6 +36,8 @@ const IMAGE_HEADERS = {
   "cross-origin-resource-policy": "same-origin",
   "referrer-policy": "no-referrer",
 } as const;
+/** The headers every answer of the image route carries, errors included (an error body is never to be sniffed into anything else or embedded cross-origin). */
+const IMAGE_ALWAYS = { "x-content-type-options": "nosniff", "cross-origin-resource-policy": "same-origin" } as const;
 const IMAGE_PARAMS = new Set(["chat", "team", "channel", "message", "hosted"]);
 const json = (body: unknown, status: number, extra: Record<string, string> = {}) => Response.json(body, { status, headers: { ...NO_STORE, ...extra } });
 const LANE = /^[A-Z]{1,8}$/;
@@ -116,6 +118,7 @@ export function createTeamsRoutes(deps: TeamsRouteDeps) {
     if (f.kind === "reconnect") return json({ error: "reconnect" }, 409);
     if (f.kind === "not_found") return json({ error: "not_found" }, 404);
     if (f.kind === "forbidden") return json({ error: "forbidden" }, 403);
+    if (f.kind === "not_enabled") return json({ error: "not_enabled" }, 409);
     return json({ error: "unavailable" }, 503);
   };
 
@@ -146,25 +149,31 @@ export function createTeamsRoutes(deps: TeamsRouteDeps) {
     return isTeamId(teamId) && channelId !== null ? { kind: "channel", teamId, channelId, messageId: message, hostedId } : null;
   }
 
+  const imageInner = (request: Request, laneId: string): Promise<Response> =>
+    guarded(async () => {
+      if (!sameSite(request, "GET")) return json({ error: "forbidden" }, 403);
+      const w = await who(laneId);
+      if (w instanceof Response) return w;
+      const target = imageTarget(new URL(request.url).searchParams);
+      if (target === null) return json({ error: "bad_request" }, 400);
+      if (!w.has.includes(target.kind === "chat" ? "chat_read" : "channels_read")) return json({ error: "feature_missing" }, 409);
+      try {
+        const r = await fetchHostedImage(laneId as LaneId, w.connectionId, w.userId, target, request.signal); // a closed tab cancels a waiting or running picture read
+        if (!r.ok) return json({ error: r.reason }, r.reason === "too_large" ? 413 : 415);
+        // the reader's one buffer goes out as it is (no second copy)
+        return new Response(r.bytes as unknown as BodyInit, { status: 200, headers: { ...IMAGE_HEADERS, "content-type": r.contentType, "content-length": String(r.bytes.byteLength) } });
+      } catch (e) {
+        return failure(teamsFailure(e));
+      }
+    });
+
   return {
-    /** One inline picture (T-285): the bytes of a hosted content of a message the person's own connection can read. GET only; the server decides the type; nothing is stored. */
-    image: (request: Request, laneId: string): Promise<Response> =>
-      guarded(async () => {
-        if (!sameSite(request, "GET")) return json({ error: "forbidden" }, 403);
-        const w = await who(laneId);
-        if (w instanceof Response) return w;
-        const target = imageTarget(new URL(request.url).searchParams);
-        if (target === null) return json({ error: "bad_request" }, 400);
-        if (!w.has.includes(target.kind === "chat" ? "chat_read" : "channels_read")) return json({ error: "feature_missing" }, 409);
-        try {
-          const r = await fetchHostedImage(laneId as LaneId, w.connectionId, w.userId, target);
-          if (!r.ok) return json({ error: r.reason }, r.reason === "too_large" ? 413 : 415);
-          // a fresh Uint8Array over the same bytes: the Response body is exactly these bytes, nothing else
-          return new Response(new Uint8Array(r.bytes), { status: 200, headers: { ...IMAGE_HEADERS, "content-type": r.contentType, "content-length": String(r.bytes.byteLength) } });
-        } catch (e) {
-          return failure(teamsFailure(e));
-        }
-      }),
+    /** One inline picture (T-285): the bytes of a hosted content of a message the person's own connection can read. GET only (the route file answers HEAD with a 405); the server decides the type; nothing is stored. */
+    image: async (request: Request, laneId: string): Promise<Response> => {
+      const res = await imageInner(request, laneId);
+      for (const [k, v] of Object.entries(IMAGE_ALWAYS)) res.headers.set(k, v);
+      return res;
+    },
 
     /** "Load older messages". */
     older: (request: Request, laneId: string): Promise<Response> =>

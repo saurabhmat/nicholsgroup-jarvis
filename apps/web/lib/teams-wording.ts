@@ -39,7 +39,9 @@ export const MESSAGES_NO_CHAT_SELECTED_TEXT = "Choose a chat to read it. Message
 export const MESSAGES_CHAT_NOT_FOUND_TEXT = "This chat could not be opened. It may have been removed, or it is not one of your chats.";
 export const MESSAGES_TIMES_NOTE = "Times are Eastern Time (ET).";
 export const MESSAGES_FILE_OPENS_IN_MICROSOFT = "Opens in Microsoft";
-export const MESSAGES_IMAGE_TEXT = "Image: open the chat in Teams to see it";
+export const MESSAGES_IMAGE_TEXT = "Image: open in Teams to see it";
+export const MESSAGES_IMAGE_TAP_TEXT = "Image: tap to load";
+export const MESSAGES_NOT_ENABLED_TEXT = "Teams is not switched on for this account or company right now. Check Settings, then Connections.";
 export const MESSAGES_TRUNCATED_TEXT = "This message is long; open the chat in Teams to read the rest.";
 export const MESSAGES_NO_OLDER_TEXT = "This is the start of the chat.";
 
@@ -67,8 +69,9 @@ export function callUnavailableText(reason: "external" | "too_many" | "no_one" |
 // ---- Channels (T-291, spec 11 "States"). Fixed text only; a team's or channel's own words are never part of a sentence here.
 export const CHANNELS_NOT_ON_TEXT = "Channels are not switched on for this company.";
 export const CHANNELS_APPROVAL_TITLE = "Channels need your Microsoft administrator's approval";
-export const CHANNELS_APPROVAL_TEXT = "Channels need your Microsoft administrator's approval. Ask them to approve the portal's Teams app, then reconnect Teams.";
+export const CHANNELS_APPROVAL_TEXT = "Channels need your Microsoft administrator's approval. Ask them to approve the portal's Teams app, then reconnect Teams. It can also mean this account cannot use Teams channels right now: try Reconnect Teams or Try again.";
 export const CHANNELS_LOAD_ERROR_TEXT = "The portal could not read your teams just now. Nothing was changed. Try again.";
+export const CHANNELS_LIST_FORBIDDEN_TEXT = "Teams did not let the portal list the channels of this team. Try again, or reconnect Teams.";
 export const CHANNELS_FORBIDDEN_TEXT = "Teams did not let the portal read this. A private channel can be read only by its members.";
 export const CHANNELS_NO_TEAMS_TEXT = "You have not joined any team, or none the portal can show.";
 export const CHANNELS_NO_CHANNELS_TEXT = "This team has no channels you can see.";
@@ -81,3 +84,5 @@ export const CHANNELS_MORE_TEAMS_TEXT = "More teams exist than are listed here."
 export const CHANNELS_REPLIES_MORE_TEXT = "There are more replies; open the post in Teams to read the rest.";
 export const CHANNELS_REPLIES_ERROR_TEXT = "The replies could not be read just now. Try again.";
 export const CHANNELS_NO_REPLIES_TEXT = "No replies.";
+export const CHANNELS_POSTS_ORDER_TEXT = "Posts with the newest replies come first.";
+export const CHANNELS_SHARED_OPEN_TEXT = "This is a shared channel. The portal does not read shared channels: open it in Teams.";

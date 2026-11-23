@@ -11,7 +11,7 @@ import { teamsFailure, type TeamsFailure } from "./teams-errors";
 import { messageView, type MessageView, type TeamsPerson } from "./teams-chats";
 import { encodeChannelKey, isMessageId } from "./teams-channel-key";
 
-export type TeamRowView = { teamId: string; name: string };
+export type TeamRowView = { teamId: string; name: string; archived: boolean };
 export type TeamListView = { kind: "ok"; teams: TeamRowView[]; more: boolean } | TeamsFailure;
 
 export type ChannelRowView = {
@@ -25,7 +25,8 @@ export type ChannelRowView = {
 export type ChannelListView = { kind: "ok"; channels: ChannelRowView[] } | TeamsFailure;
 
 export type PostView = MessageView & { subject: string | null; openUrl: string };
-export type ThreadView = { kind: "ok"; posts: PostView[]; nextCursor: string | null } | TeamsFailure;
+/** `shared`: the team's channel list marks the channel shared (or it is not in the list): not read, it opens in Teams (T-291). */
+export type ThreadView = { kind: "ok"; posts: PostView[]; nextCursor: string | null } | { kind: "shared"; openUrl: string } | TeamsFailure;
 export type RepliesView = { kind: "ok"; postId: string; replies: MessageView[]; more: boolean } | TeamsFailure;
 
 /** The image route's address for a root post of a channel (T-285). Null when an id is not valid. */
@@ -36,7 +37,7 @@ export function postImagesBase(laneId: string, teamId: string, channelKey: strin
 export async function loadTeams(p: Omit<TeamsPerson, "client">): Promise<TeamListView> {
   try {
     const r = await listTeams(p.laneId as LaneId, p.connectionId, p.userId);
-    return { kind: "ok", teams: r.teams.map((t) => ({ teamId: t.teamId, name: t.name })), more: r.more };
+    return { kind: "ok", teams: r.teams.map((t) => ({ teamId: t.teamId, name: t.name, archived: t.archived })), more: r.more };
   } catch (e) {
     return teamsFailure(e);
   }
@@ -88,4 +89,16 @@ export async function loadReplies(p: Omit<TeamsPerson, "client">, teamId: string
   } catch (e) {
     return teamsFailure(e);
   }
+}
+
+/**
+ * Decides, from the team's channel list, whether a channel's posts may be read at all (L1): a shared channel is never read (it opens in Teams), a channel that is not in the list is "not found"
+ * without asking Microsoft, and a failed list is that failure. `ok` means "read it".
+ */
+export function gateChannel(list: ChannelListView, key: string): { ok: true } | { ok: false; view: ThreadView } {
+  if (list.kind !== "ok") return { ok: false, view: list };
+  const c = list.channels.find((x) => x.key === key);
+  if (!c) return { ok: false, view: { kind: "not_found" } };
+  if (!c.readable) return { ok: false, view: { kind: "shared", openUrl: c.openUrl } };
+  return { ok: true };
 }

@@ -2,14 +2,18 @@
 // T-285: inline pictures as the page draws them. The browser may load ONLY the portal's own image route: an <img> with fixed alt text, lazy, in a fixed-size box, whose click target is the same
 // route; any failure turns it into the neutral placeholder; a node without a hosted id, or a message without an image address, or an id that is not valid, is a placeholder; nothing points at
 // Microsoft or any other host. Synthetic nodes only.
-import { afterEach, describe, expect, it } from "vitest";
-import { cleanup, fireEvent, render, screen } from "@testing-library/react";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import { act, cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { bodyToNodes, type MessageNode } from "@nichols/connectors/teams-pure";
 import { MessageItem, renderNodes } from "./messages-view";
 import { HostedImage } from "./messages-image";
 import type { MessageView } from "@/lib/teams-chats";
 
-afterEach(cleanup);
+afterEach(() => {
+  cleanup();
+  vi.useRealTimers();
+  vi.unstubAllGlobals();
+});
 const BASE = "/api/lanes/PKG/messages/image?chat=MTk6YWJj&message=1700000000001";
 const draw = (nodes: MessageNode[], images: string | null = BASE) => render(<div>{renderNodes(nodes, images)}</div>);
 const srcs = () => screen.queryAllByTestId("hosted-image").map((i) => i.getAttribute("src"));
@@ -53,12 +57,61 @@ describe("the picture", () => {
     }
   });
 
-  it("when the route answers anything but an image (the browser's error event) the picture becomes the placeholder", () => {
+  const answer = (status: number, headers: Record<string, string> = {}) => vi.fn(async () => new Response(status === 200 ? new Uint8Array([1]) : "{}", { status, headers }));
+
+  it("a failed picture becomes the 'tap to load' button; a tap loads the SAME route again (no new parameter), once per tap", async () => {
+    const probe = answer(503);
+    vi.stubGlobal("fetch", probe);
     draw([{ t: "image", hosted: "aWQ9" }]);
-    fireEvent.error(screen.getByTestId("hosted-image"));
+    await act(async () => void fireEvent.error(screen.getByTestId("hosted-image")));
+    const button = screen.getByTestId("image-retry");
+    expect(button.tagName).toBe("BUTTON");
+    expect(button.textContent).toBe("Image: tap to load");
     expect(screen.queryByTestId("hosted-image")).toBeNull();
-    expect(screen.queryByTestId("hosted-image-link")).toBeNull();
-    expect(screen.getByTestId("image-placeholder").textContent).toBe("Image: open the chat in Teams to see it");
+    fireEvent.click(button);
+    const again = screen.getByTestId("hosted-image");
+    expect(again.getAttribute("src")).toBe(`${BASE}&hosted=aWQ9`);
+    // it fails again: the button comes back, and nothing retries by itself (the one automatic retry is spent)
+    const calls = probe.mock.calls.length;
+    await act(async () => void fireEvent.error(again));
+    expect(screen.getByTestId("image-retry")).toBeTruthy();
+    expect(probe.mock.calls.length).toBe(calls);
+  });
+
+  it("after a 429 the page waits the Retry-After (at most 10 s) and loads the picture again ONCE by itself, then leaves the button", async () => {
+    vi.useFakeTimers();
+    const probe = answer(429, { "retry-after": "60" });
+    vi.stubGlobal("fetch", probe);
+    draw([{ t: "image", hosted: "aWQ9" }]);
+    await act(async () => void fireEvent.error(screen.getByTestId("hosted-image")));
+    expect(screen.getByTestId("image-waiting")).toBeTruthy();
+    expect(screen.queryByTestId("hosted-image")).toBeNull();
+    await act(async () => void (await vi.advanceTimersByTimeAsync(9_000)));
+    expect(screen.queryByTestId("hosted-image")).toBeNull(); // 60 s asked, capped at 10 s: not yet
+    await act(async () => void (await vi.advanceTimersByTimeAsync(1_500)));
+    const retried = screen.getByTestId("hosted-image");
+    expect(retried.getAttribute("src")).toBe(`${BASE}&hosted=aWQ9`);
+    expect(probe.mock.calls).toHaveLength(1); // one status probe, no loop
+    await act(async () => void fireEvent.error(retried));
+    await act(async () => void (await vi.advanceTimersByTimeAsync(60_000)));
+    expect(screen.getByTestId("image-retry")).toBeTruthy();
+    expect(probe.mock.calls).toHaveLength(1); // nothing more by itself
+  });
+
+  it("a failed probe (offline) leaves the button at once", async () => {
+    vi.stubGlobal("fetch", vi.fn(async () => Promise.reject(new TypeError("offline"))));
+    draw([{ t: "image", hosted: "aWQ9" }]);
+    await act(async () => void fireEvent.error(screen.getByTestId("hosted-image")));
+    expect(screen.getByTestId("image-retry")).toBeTruthy();
+  });
+
+  it("the picture is shown whole and never scaled up, and its link has an accessible name", () => {
+    draw([{ t: "image", hosted: "aWQ9" }]);
+    const img = screen.getByTestId("hosted-image");
+    expect(img.className).toContain("max-h-full");
+    expect(img.className).toContain("max-w-full");
+    expect(img.className).not.toMatch(/(^| )(h|w)-full/);
+    expect(screen.getByTestId("hosted-image-link").getAttribute("aria-label")).toBe("Image (opens in a new tab)");
   });
 
   it("a picture inside a link is a placeholder (no clickable thing inside another)", () => {

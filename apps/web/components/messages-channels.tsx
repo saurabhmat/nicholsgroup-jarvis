@@ -12,13 +12,17 @@ import { Alert, AlertDescription, AlertTitle, buttonVariants, cn, EmptyState, la
 import { guards } from "@/lib/guards";
 import { channelsAvailability } from "@/lib/teams-messages";
 import { channelsHref, decodeChannelKey, isMessageId, isTeamId } from "@/lib/teams-channel-key";
-import { loadChannels, loadReplies, loadTeams, loadThread, type ChannelListView, type ChannelRowView, type PostView, type RepliesView, type TeamListView, type ThreadView } from "@/lib/teams-channels";
+import { gateChannel, loadChannels, loadReplies, loadTeams, loadThread, type ChannelListView, type ChannelRowView, type PostView, type RepliesView, type TeamListView, type ThreadView } from "@/lib/teams-channels";
 import type { TeamsFailure } from "@/lib/teams-errors";
 import type { MessagesState } from "@/lib/teams-messages";
 import {
   CHANNELS_APPROVAL_TEXT,
   CHANNELS_APPROVAL_TITLE,
   CHANNELS_FORBIDDEN_TEXT,
+  CHANNELS_LIST_FORBIDDEN_TEXT,
+  CHANNELS_POSTS_ORDER_TEXT,
+  CHANNELS_SHARED_OPEN_TEXT,
+  MESSAGES_NOT_ENABLED_TEXT,
   CHANNELS_LOAD_ERROR_TEXT,
   CHANNELS_MORE_TEAMS_TEXT,
   CHANNELS_NO_CHANNEL_SELECTED_TEXT,
@@ -53,7 +57,16 @@ const LINK = "font-medium text-primary underline underline-offset-2";
 /** The Channels tab when channels cannot be read yet: not switched on for the company, or this connection has to be reconnected (and, always for this feature, approved by the administrator). */
 export function ChannelsUnavailable({ laneId, state }: { laneId: string; state: Connected }) {
   const a = channelsAvailability(state);
-  if (a.kind === "off") return <EmptyState title="Channels" description={CHANNELS_NOT_ON_TEXT} />;
+  if (a.kind === "off") {
+    return (
+      <div className="flex flex-col items-start gap-3">
+        <EmptyState title="Channels" description={CHANNELS_NOT_ON_TEXT} />
+        <Link href={laneHref(laneId, "messages")} className={LINK} data-testid="back-to-chats-link">
+          Back to chats
+        </Link>
+      </div>
+    );
+  }
   if (a.kind === "ready") return null;
   return (
     <Alert data-testid="channels-reconnect">
@@ -69,8 +82,12 @@ export function ChannelsUnavailable({ laneId, state }: { laneId: string; state: 
   );
 }
 
-/** A failed read: never an empty list. `scope`: what was being read (a refusal of the team list means the approval is missing; a refusal of one channel means the person is not a member). */
-export function ChannelFailureCard({ failure, laneId, connectionId, testId, scope }: { failure: TeamsFailure; laneId: string; connectionId: string; testId: string; scope: "teams" | "channel" }) {
+/**
+ * A failed read: never an empty list. `scope`: what was being read. A refused TEAM list (403) is the sign that the administrator's approval is missing or was withdrawn (it can also mean the account
+ * cannot use channels right now, said in the same fixed text, with Reconnect and Try again); a refused CHANNEL LIST is its own sentence; a refused channel is "not a member"; the portal's own
+ * refusal (Teams or the feature is off) is never shown as an approval problem.
+ */
+export function ChannelFailureCard({ failure, laneId, connectionId, testId, scope }: { failure: TeamsFailure; laneId: string; connectionId: string; testId: string; scope: "teams" | "channels" | "channel" }) {
   if (failure.kind === "reconnect") {
     return (
       <Alert variant="alert" data-testid={testId}>
@@ -82,16 +99,29 @@ export function ChannelFailureCard({ failure, laneId, connectionId, testId, scop
       </Alert>
     );
   }
-  // Microsoft refusing the team list (403) is the sign that the administrator's approval is missing or was withdrawn; refusing one channel is "not a member".
   const approval = failure.kind === "forbidden" && scope === "teams";
-  const title = failure.kind === "busy" ? "Teams is busy" : approval ? CHANNELS_APPROVAL_TITLE : failure.kind === "not_found" ? "Channel not found" : MESSAGES_LOAD_ERROR_TITLE;
-  const text = failure.kind === "busy" ? messagesBusyText(failure.seconds) : approval ? `${CHANNELS_APPROVAL_TEXT} ${TEAMS_ADMIN_CONSENT_TEXT}` : failure.kind === "not_found" ? CHANNELS_NOT_FOUND_TEXT : failure.kind === "forbidden" ? CHANNELS_FORBIDDEN_TEXT : CHANNELS_LOAD_ERROR_TEXT;
+  const title = failure.kind === "busy" ? "Teams is busy" : approval ? CHANNELS_APPROVAL_TITLE : failure.kind === "not_enabled" ? "Channels are not available" : failure.kind === "not_found" ? "Channel not found" : MESSAGES_LOAD_ERROR_TITLE;
+  const text =
+    failure.kind === "busy"
+      ? messagesBusyText(failure.seconds)
+      : approval
+        ? `${CHANNELS_APPROVAL_TEXT} ${TEAMS_ADMIN_CONSENT_TEXT}`
+        : failure.kind === "not_enabled"
+          ? MESSAGES_NOT_ENABLED_TEXT
+          : failure.kind === "not_found"
+            ? CHANNELS_NOT_FOUND_TEXT
+            : failure.kind === "forbidden"
+              ? scope === "channels"
+                ? CHANNELS_LIST_FORBIDDEN_TEXT
+                : CHANNELS_FORBIDDEN_TEXT
+              : CHANNELS_LOAD_ERROR_TEXT;
   return (
     <Alert variant="alert" data-testid={testId} data-failure={failure.kind}>
       <AlertTitle>{title}</AlertTitle>
       <AlertDescription>{text}</AlertDescription>
-      {failure.kind !== "not_found" && !approval ? (
-        <div className="pt-2">
+      {failure.kind !== "not_found" && failure.kind !== "not_enabled" ? (
+        <div className="flex flex-wrap items-center gap-2 pt-2">
+          {approval ? <SignIn laneId={laneId} connectionId={connectionId} label="Reconnect Teams" /> : null}
           <MessagesRefresh label="Try again" />
         </div>
       ) : null}
@@ -101,7 +131,7 @@ export function ChannelFailureCard({ failure, laneId, connectionId, testId, scop
 
 // ---- teams and their channels
 export function ChannelRows({ laneId, teamId, selectedKey, view, connectionId }: { laneId: string; teamId: string; selectedKey: string | null; view: ChannelListView; connectionId: string }) {
-  if (view.kind !== "ok") return <ChannelFailureCard failure={view} laneId={laneId} connectionId={connectionId} testId="channel-list-error" scope="channel" />;
+  if (view.kind !== "ok") return <ChannelFailureCard failure={view} laneId={laneId} connectionId={connectionId} testId="channel-list-error" scope="channels" />;
   if (view.channels.length === 0) return <p className="px-4 py-2 text-small text-muted-foreground">{CHANNELS_NO_CHANNELS_TEXT}</p>;
   const base = laneHref(laneId, "messages");
   return (
@@ -175,6 +205,7 @@ export function TeamsList({ view, laneId, connectionId, teamId, channels, select
               <span dir="auto" className="min-w-0 flex-1 truncate text-body font-medium">
                 {t.name}
               </span>
+              {t.archived ? <span className="shrink-0 rounded-full border border-border px-2 text-small text-muted-foreground">Archived</span> : null}
             </Link>
             {t.teamId === teamId && channels ? <ChannelsInline promise={channels} laneId={laneId} teamId={t.teamId} selectedKey={selectedKey} connectionId={connectionId} /> : null}
           </li>
@@ -210,7 +241,7 @@ function Replies({ view }: { view: RepliesView }) {
       ) : (
         <ul className="flex flex-col gap-2" data-testid="reply-list">
           {view.replies.map((r) => (
-            <MessageItem key={r.id} m={r} showSender />
+            <MessageItem key={r.id} m={r} showSender showDate />
           ))}
         </ul>
       )}
@@ -245,7 +276,7 @@ export function ThreadPane({
   postId,
   more,
   title,
-  teamName,
+  subtitle,
   openUrl,
 }: {
   thread: ThreadView;
@@ -257,7 +288,8 @@ export function ThreadPane({
   postId: string | null;
   more: string | null;
   title: string;
-  teamName: string | null;
+  /** The team name (text), or a slot that fills in when the team list arrives: the posts never wait for it. */
+  subtitle: ReactNode;
   openUrl: string;
 }) {
   const base = laneHref(laneId, "messages");
@@ -271,11 +303,9 @@ export function ThreadPane({
           <h2 id="conversation-title" tabIndex={-1} dir="auto" data-testid="conversation-title" className="truncate text-h3 font-semibold outline-none">
             {title}
           </h2>
-          {teamName ? (
-            <p dir="auto" className="truncate text-small text-muted-foreground">
-              {teamName}
-            </p>
-          ) : null}
+          <p dir="auto" className="truncate text-small text-muted-foreground">
+            {subtitle}
+          </p>
         </div>
         <MessagesRefresh />
       </div>
@@ -296,10 +326,23 @@ export function ThreadPane({
       <FocusConversation chatKey={channelKey} />
     </section>
   );
+  if (thread.kind === "shared") {
+    return shell(
+      <div data-testid="shared-channel" className="flex flex-col items-start gap-2">
+        <p className="text-body">{CHANNELS_SHARED_OPEN_TEXT}</p>
+        <a href={thread.openUrl} target="_blank" rel="noopener noreferrer" className={cn(buttonVariants({ variant: "default", size: "sm" }))}>
+          Open in Teams
+        </a>
+      </div>,
+    );
+  }
   if (thread.kind !== "ok") return shell(<ChannelFailureCard failure={thread} laneId={laneId} connectionId={connectionId} testId="conversation-error" scope="channel" />);
   const onPage = postId !== null && thread.posts.some((p) => p.id === postId);
   return shell(
     <>
+      <p className="text-small text-muted-foreground" data-testid="posts-order">
+        {CHANNELS_POSTS_ORDER_TEXT}
+      </p>
       {more ? (
         <Link href={channelsHref(base, { team: teamId, channel: channelKey })} scroll={false} data-testid="newest-posts" className={cn(LINK, "text-small")}>
           Back to the newest posts
@@ -329,6 +372,7 @@ export function ThreadPane({
                 key={p.id}
                 m={p}
                 showSender
+                showDate
                 subject={p.subject}
                 footer={<PostFooter post={p} open={open} href={channelsHref(base, { team: teamId, channel: channelKey, post: open ? null : p.id, more })} replies={open ? replies : null} />}
               />
@@ -345,10 +389,16 @@ export function ThreadPane({
   );
 }
 
+/** The team's name, filled in when the team list arrives: the posts never wait for it. */
+async function TeamName({ teams, teamId }: { teams: Promise<TeamListView>; teamId: string }) {
+  const v = await teams;
+  return <>{v.kind === "ok" ? (v.teams.find((t) => t.teamId === teamId)?.name ?? "") : ""}</>;
+}
+
 async function ThreadSection(props: {
   thread: Promise<ThreadView>;
   replies: Promise<RepliesView> | null;
-  channels: Promise<ChannelListView> | null;
+  channels: Promise<ChannelListView>;
   teams: Promise<TeamListView>;
   laneId: string;
   connectionId: string;
@@ -357,10 +407,10 @@ async function ThreadSection(props: {
   postId: string | null;
   more: string | null;
 }) {
-  // every promise was STARTED before any is awaited here: awaiting them together adds no level
-  const [thread, replies, channels, teams] = await Promise.all([props.thread, props.replies, props.channels, props.teams]);
-  const channel = channels?.kind === "ok" ? channels.channels.find((c) => c.key === props.channelKey) : undefined;
-  const teamName = teams.kind === "ok" ? (teams.teams.find((t) => t.teamId === props.teamId)?.name ?? null) : null;
+  // The posts and replies are read only after the team's channel list has answered (it tells whether the channel may be read at all: a shared channel is not), so `channels` is settled by the time
+  // `thread` is. The TEAM list is not waited for: only the subtitle needs it and it fills in on its own.
+  const [thread, replies, channels] = await Promise.all([props.thread, props.replies, props.channels]);
+  const channel = channels.kind === "ok" ? channels.channels.find((c) => c.key === props.channelKey) : undefined;
   return (
     <ThreadPane
       thread={thread}
@@ -372,7 +422,11 @@ async function ThreadSection(props: {
       postId={props.postId}
       more={props.more}
       title={channel?.name ?? "Channel"}
-      teamName={teamName}
+      subtitle={
+        <Suspense fallback={null}>
+          <TeamName teams={props.teams} teamId={props.teamId} />
+        </Suspense>
+      }
       openUrl={channel?.openUrl ?? "https://teams.microsoft.com"}
     />
   );
@@ -398,11 +452,13 @@ export async function ChannelsWorkspace({ laneId, state, searchParams }: { laneI
   const more = channelId !== null && moreRaw !== undefined && CURSOR.test(moreRaw) ? moreRaw : null;
   const { session } = await (await guards()).requireLane(laneId as Parameters<Awaited<ReturnType<typeof guards>>["requireLane"]>[0]);
   const person = { laneId, userId: session.userId, connectionId: state.connectionId };
-  // started together, before any is awaited
+  // started together, before any is awaited: the team list and the open team's channels. The open channel's posts and the open post's replies start as soon as the channel list has answered, because
+  // that list says whether the channel may be read at all (a shared channel is never read); they do not wait for the team list or each other.
   const teams = loadTeams(person);
   const channels = teamId ? loadChannels(person, teamId) : null;
-  const thread = teamId && channelId ? loadThread(person, teamId, channelId, more ? { cursor: more } : {}) : null;
-  const replies = teamId && channelId && postId ? loadReplies(person, teamId, channelId, postId) : null;
+  const gate = channels && channelId && channelKey ? channels.then((list) => gateChannel(list, channelKey)) : null;
+  const thread = gate && teamId && channelId ? gate.then((g): Promise<ThreadView> | ThreadView => (g.ok ? loadThread(person, teamId, channelId, more ? { cursor: more } : {}) : g.view)) : null;
+  const replies = gate && teamId && channelId && postId ? gate.then((g): Promise<RepliesView> | RepliesView => (g.ok ? loadReplies(person, teamId, channelId, postId) : { kind: "unavailable" })) : null;
   const selectedKey = channelId ? channelKey : null;
   return (
     <WorkspaceLayout
@@ -415,7 +471,7 @@ export async function ChannelsWorkspace({ laneId, state, searchParams }: { laneI
         </SectionBoundary>
       }
       conversation={
-        thread && teamId && channelId && channelKey ? (
+        thread && channels && teamId && channelId && channelKey ? (
           <SectionBoundary>
             <Suspense fallback={<ConversationSkeleton />}>
               <ThreadSection thread={thread} replies={replies} channels={channels} teams={teams} laneId={laneId} connectionId={state.connectionId} teamId={teamId} channelKey={channelKey} postId={postId} more={more} />

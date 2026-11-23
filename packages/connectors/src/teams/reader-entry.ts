@@ -52,6 +52,6 @@ export async function listReplies(laneId: LaneId, connectionId: string, userId: 
 }
 
 // ---- T-285: the bytes of one inline image (the portal's own image route only)
-export async function fetchHostedImage(laneId: LaneId, connectionId: string, userId: string, target: HostedTarget): Promise<HostedImage> {
-  return teamsImageReader.fetchHostedImage(laneId, await load(laneId, connectionId), userId, target);
+export async function fetchHostedImage(laneId: LaneId, connectionId: string, userId: string, target: HostedTarget, signal?: AbortSignal): Promise<HostedImage> {
+  return teamsImageReader.fetchHostedImage(laneId, await load(laneId, connectionId), userId, target, signal);
 }

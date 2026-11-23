@@ -19,6 +19,8 @@ const t = vi.hoisted(() => ({
   reader: { calls: [] as { fn: string; at: number; resolvedBefore: number; args?: unknown[] }[], seq: 0, resolved: 0 },
   /** The features the fake company lists for Teams (T-291: a test turns `channels_read` on). */
   teamsFeatures: ["chat_read"] as string[],
+  /** The kind of the one fake channel (T-291 L1: a shared channel is never read). */
+  channelKind: "standard" as string,
 }));
 
 // React cache() memoises per render; a test is one render, so this memo is identity-keyed and cleared before every test.
@@ -117,7 +119,7 @@ vi.mock("@nichols/connectors/teams-reader", () => {
     resolveCallTargets: () => started("resolveCallTargets", { ok: false, reason: "no_one" }),
     // T-291: the channel reads, recorded the same way
     listTeams: () => started("listTeams", { teams: [{ teamId: "aaaaaaaa-aaaa-4aaa-8aaa-0000000000a1", name: "Alpha" }], more: false, self }),
-    listChannels: (...a: unknown[]) => started("listChannels", { channels: [{ channelId: "19:general111@thread.tacv2", name: "General", kind: "standard", webUrl: null }], self }, a),
+    listChannels: (...a: unknown[]) => started("listChannels", { channels: [{ channelId: "19:general111@thread.tacv2", name: "General", kind: t.channelKind, webUrl: null }], self }, a),
     listChannelPosts: (...a: unknown[]) => started("listChannelPosts", { posts: [], nextCursor: null, self }, a),
     listReplies: (...a: unknown[]) => started("listReplies", { replies: [], more: false, self }, a),
   };
@@ -184,6 +186,7 @@ beforeEach(() => {
   t.answers = { "from:lane_config_current": OPEN };
   t.reader.calls = [];
   t.teamsFeatures = ["chat_read"];
+  t.channelKind = "standard";
   t.reader.seq = 0;
   t.reader.resolved = 0;
   for (const r of t.roots) r.clear();
@@ -335,18 +338,36 @@ describe("Messages (T-280, T-283)", () => {
     for (const r of t.roots) r.clear();
   });
 
-  it("T-291: the Channels tab starts the team list, the open team's channels, the open channel's posts and the open post's replies TOGETHER (one request each, no chat read)", async () => {
+  it("T-291: the team list and the open team's channels START together; the posts and replies start as soon as the channel list has answered (it says whether the channel may be read), without waiting for the team list or each other", async () => {
     t.teamsFeatures = ["chat_read", "channels_read"];
     t.answers["from:connections"] = { data: [CHANNELS_ROW], error: null };
     const { default: Page } = await import("@/app/[laneId]/messages/page");
     await resolve(Page({ params: params(), searchParams: sp({ tab: "channels", team: TEAM, channel: CHANNEL_KEY, post: "1700000000001" }) } as never) as ReactNode);
+    const by = (fn: string) => t.reader.calls.find((c) => c.fn === fn);
     expect(t.reader.calls.map((c) => c.fn).sort()).toEqual(["listChannelPosts", "listChannels", "listReplies", "listTeams"]);
-    expect(t.reader.calls.map((c) => c.resolvedBefore)).toEqual([0, 0, 0, 0]); // all four STARTED before any answered
-    expect(t.reader.calls.find((c) => c.fn === "listChannels")?.args).toEqual(["PKG", expect.any(String), "u1", TEAM]);
-    expect(t.reader.calls.find((c) => c.fn === "listReplies")?.args).toEqual(["PKG", expect.any(String), "u1", TEAM, "19:general111@thread.tacv2", "1700000000001"]);
+    expect([by("listTeams")?.resolvedBefore, by("listChannels")?.resolvedBefore]).toEqual([0, 0]); // both STARTED before either answered
+    // the posts and replies start after the channel list answered, and both in the same turn
+    expect(by("listChannelPosts")?.resolvedBefore).toBeGreaterThanOrEqual(1);
+    expect(by("listReplies")?.resolvedBefore).toBe(by("listChannelPosts")?.resolvedBefore);
+    expect(by("listChannels")?.args).toEqual(["PKG", expect.any(String), "u1", TEAM]);
+    expect(by("listReplies")?.args).toEqual(["PKG", expect.any(String), "u1", TEAM, "19:general111@thread.tacv2", "1700000000001"]);
     expect(count("teams.settings")).toBe(1);
     expect(count("lane.check")).toBe(1);
     expect(maxLevel()).toBeLessThanOrEqual(3);
+  });
+
+  it("T-291 L1: a shared channel (or a channel that is not in the team's list) is never read, even by a made-up address: no posts and no replies request", async () => {
+    t.teamsFeatures = ["chat_read", "channels_read"];
+    t.answers["from:connections"] = { data: [CHANNELS_ROW], error: null };
+    const { default: Page } = await import("@/app/[laneId]/messages/page");
+    t.channelKind = "shared";
+    await resolve(Page({ params: params(), searchParams: sp({ tab: "channels", team: TEAM, channel: CHANNEL_KEY, post: "1700000000001" }) } as never) as ReactNode);
+    expect(t.reader.calls.map((c) => c.fn).sort()).toEqual(["listChannels", "listTeams"]);
+    t.reader.calls = [];
+    t.channelKind = "standard";
+    const other = Buffer.from("19:other999@thread.tacv2").toString("base64url");
+    await resolve(Page({ params: params(), searchParams: sp({ tab: "channels", team: TEAM, channel: other }) } as never) as ReactNode);
+    expect(t.reader.calls.map((c) => c.fn).sort()).toEqual(["listChannels", "listTeams"]);
   });
 
   it("T-291: only what the address names is read: no team means only the team list; a team means its channels; a channel means its posts; a post that is not named means no replies", async () => {

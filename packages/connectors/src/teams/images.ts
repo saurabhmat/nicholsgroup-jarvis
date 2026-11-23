@@ -12,13 +12,16 @@ import { HOSTED_IMAGE_MAX_BYTES, sniffImage, type HostedTarget, type ImageType }
 
 export type HostedImage = { ok: true; bytes: Uint8Array; contentType: ImageType } | { ok: false; reason: "too_large" | "not_image" };
 
-/** A picture may take a little longer than a page of text; still bounded. */
+/**
+ * A picture may take a little longer than a page of text; still bounded. This is the HTTP client's per-attempt timeout: it covers sending the request and reading the last byte of the body.
+ * It does NOT include the wait for one of the two picture slots and the 1-per-second bucket (at most TEAMS_IMAGE_MAX_WAIT_MS, then `rate_limited` at once) or the token read before the request.
+ */
 const IMAGE_TIMEOUT_MS = 15_000;
 
 export function createTeamsImageReader(deps: { api: TeamsApi }) {
   return {
-    async fetchHostedImage(laneId: LaneId, conn: unknown, userId: string, target: HostedTarget): Promise<HostedImage> {
-      const base = { actor: { kind: "user" as const, userId }, retry: false, timeoutMs: IMAGE_TIMEOUT_MS, responseType: "bytes" as const, maxBytes: HOSTED_IMAGE_MAX_BYTES };
+    async fetchHostedImage(laneId: LaneId, conn: unknown, userId: string, target: HostedTarget, signal?: AbortSignal): Promise<HostedImage> {
+      const base = { actor: { kind: "user" as const, userId }, retry: false, timeoutMs: IMAGE_TIMEOUT_MS, responseType: "bytes" as const, maxBytes: HOSTED_IMAGE_MAX_BYTES, ...(signal ? { signal } : {}) };
       try {
         const res =
           target.kind === "chat"

@@ -1657,7 +1657,7 @@ Spec: `docs/specs/messages.md`. Decisions D-62 – D-65 (D-63 revised: calls ope
 ### T-285 Messages: inline images through a server proxy
 - status: approved
 - depends: T-283
-- acceptance: Spec §8.5. `/api/[laneId]/messages/image` streams hosted content of a message the guard and owner check allow (chat now; channels with T-291): image/png|jpeg|gif|webp only, 4 MB cap (stream aborted beyond), `Cache-Control: private, no-store`, `Content-Disposition: inline`, `nosniff`, `Content-Security-Policy: sandbox`; never stored or logged; the converter's image placeholders become `<img>` to this route only for hosted content of the same message. Tests: wrong content type, oversize, another person's connection, another lane, an id not in that message.
+- acceptance: Spec §8.5. `/api/lanes/<lane>/messages/image` streams hosted content of a message the guard and owner check allow (chat now; channels with T-291): image/png|jpeg|gif|webp only, 4 MB cap (stream aborted beyond), `Cache-Control: private, no-store`, `Content-Disposition: inline`, `nosniff`, `Content-Security-Policy: sandbox`; never stored or logged; the converter's image placeholders become `<img>` to this route only for hosted content of the same message. Tests: wrong content type, oversize, another person's connection, another lane, an id not in that message.
 
 ### T-286 Approvals: Teams action types in SQL
 - status: approved

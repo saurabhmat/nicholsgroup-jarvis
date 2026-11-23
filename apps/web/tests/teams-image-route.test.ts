@@ -80,7 +80,7 @@ describe("who may ask", () => {
     expect(reader.fetchHostedImage).toHaveBeenCalledTimes(1);
     reader.fetchHostedImage.mockClear();
     await setup({ rows: [row({ id: OTHER_CONN, mine: false }), row()] }).routes.image(get(`${chatQ}`), "PKG");
-    expect(reader.fetchHostedImage).toHaveBeenCalledWith("PKG", CONN, ME, { kind: "chat", chatId: CHAT, messageId: MSG, hostedId: HID });
+    expect(reader.fetchHostedImage).toHaveBeenCalledWith("PKG", CONN, ME, { kind: "chat", chatId: CHAT, messageId: MSG, hostedId: HID }, expect.any(AbortSignal));
     // a connection id passed in the address is not a known parameter at all
     expect((await setup().routes.image(get(`${chatQ}&connection=${OTHER_CONN}`), "PKG")).status).toBe(400);
   });
@@ -88,7 +88,22 @@ describe("who may ask", () => {
   it("a POST, PUT or DELETE style request is not served by this handler: only GET is exported by the route file", async () => {
     const { readFileSync } = await import("node:fs");
     const src = readFileSync(new URL("../app/api/lanes/[laneId]/messages/image/route.ts", import.meta.url), "utf8");
-    expect([...src.matchAll(/export (?:async )?function (\w+)/g)].map((m) => m[1])).toEqual(["GET"]);
+    expect([...src.matchAll(/export (?:async )?function (\w+)/g)].map((m) => m[1])).toEqual(["GET", "HEAD"]);
+  });
+
+  it("HEAD is a fixed 405 with Allow: GET and runs no Graph fetch", async () => {
+    const mod = await import("../app/api/lanes/[laneId]/messages/image/route");
+    const r = mod.HEAD();
+    expect(r.status).toBe(405);
+    expect(r.headers.get("allow")).toBe("GET");
+    expect(reader.fetchHostedImage).not.toHaveBeenCalled();
+  });
+
+  it("the request's own cancellation signal reaches the reader, so a closed tab frees its place", async () => {
+    const ctl = new AbortController();
+    const req = new Request(`http://localhost:3000/api/lanes/PKG/messages/image?${chatQ}`, { headers: SAME, signal: ctl.signal });
+    await setup().routes.image(req, "PKG");
+    expect(reader.fetchHostedImage.mock.calls[0]?.[4]).toBe(req.signal);
   });
 });
 
@@ -96,9 +111,9 @@ describe("the address", () => {
   it("a chat picture and a channel picture name exactly the ids the reader is called with", async () => {
     const { routes } = setup();
     expect((await routes.image(get(chatQ), "PKG")).status).toBe(200);
-    expect(reader.fetchHostedImage).toHaveBeenLastCalledWith("PKG", CONN, ME, { kind: "chat", chatId: CHAT, messageId: MSG, hostedId: HID });
+    expect(reader.fetchHostedImage).toHaveBeenLastCalledWith("PKG", CONN, ME, { kind: "chat", chatId: CHAT, messageId: MSG, hostedId: HID }, expect.any(AbortSignal));
     expect((await routes.image(get(chanQ), "PKG")).status).toBe(200);
-    expect(reader.fetchHostedImage).toHaveBeenLastCalledWith("PKG", CONN, ME, { kind: "channel", teamId: TEAM, channelId: CHANNEL, messageId: MSG, hostedId: HID });
+    expect(reader.fetchHostedImage).toHaveBeenLastCalledWith("PKG", CONN, ME, { kind: "channel", teamId: TEAM, channelId: CHANNEL, messageId: MSG, hostedId: HID }, expect.any(AbortSignal));
   });
 
   it("anything else is a 400 and no reader call: a missing or repeated parameter, an unknown one, a made-up key, an id that is not valid, a path or URL where an id belongs, both a chat and a channel", async () => {
@@ -143,6 +158,29 @@ describe("the answer", () => {
       reader.fetchHostedImage.mockResolvedValueOnce({ ok: true, bytes: PNG, contentType: t });
       expect((await setup().routes.image(get(chatQ), "PKG")).headers.get("content-type")).toBe(t);
     }
+  });
+
+  it("every ERROR answer carries nosniff and same-origin resource policy too, and none carries a content type of an image", async () => {
+    for (const make of [
+      () => setup({ rows: [] }).routes.image(get(chatQ), "PKG"), // 404
+      () => setup().routes.image(get("x=1"), "PKG"), // 400
+      () => setup().routes.image(get(chatQ, { "sec-fetch-site": "cross-site" }), "PKG"), // 403
+      () => setup({ roleError: new AuthError("no_session") }).routes.image(get(chatQ), "PKG"), // 401
+    ]) {
+      const r = await make();
+      expect(r.status).toBeGreaterThanOrEqual(400);
+      expect(r.headers.get("x-content-type-options")).toBe("nosniff");
+      expect(r.headers.get("cross-origin-resource-policy")).toBe("same-origin");
+    }
+    reader.fetchHostedImage.mockResolvedValueOnce({ ok: false, reason: "not_image" });
+    const r = await setup().routes.image(get(chatQ), "PKG");
+    expect(r.headers.get("x-content-type-options")).toBe("nosniff");
+    expect(r.headers.get("content-type")).not.toMatch(/^image\//);
+  });
+
+  it("the bytes go out as the reader's own buffer: one body, no second copy of the picture is built", async () => {
+    const src = (await import("node:fs")).readFileSync(new URL("../lib/teams-api.ts", import.meta.url), "utf8");
+    expect(src).not.toMatch(/new Uint8Array\(r\.bytes\)/);
   });
 
   it("too large is 413 and not an image is 415, both fixed JSON with no store and no bytes", async () => {

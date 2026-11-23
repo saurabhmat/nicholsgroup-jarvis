@@ -19,7 +19,7 @@ import { mapGraphError } from "../microsoft/errors";
 import type { TeamsGuard } from "./guard";
 import { createTeamsHttp } from "./http";
 import type { TeamsTokenManager } from "./token-manager";
-import { TEAMS_CHAT_MESSAGES_RATE_LIMIT, TEAMS_CHATS_RATE_LIMIT, TEAMS_DEFAULT_RATE_LIMIT, TEAMS_GRAPH_BASE, TEAMS_MAX_CONCURRENT, TEAMS_PARAM_FORMATS, TEAMS_READ_ROUTES } from "./constants";
+import { TEAMS_IMAGE_MAX_CONCURRENT, TEAMS_IMAGE_MAX_WAIT_MS, TEAMS_CHAT_MESSAGES_RATE_LIMIT, TEAMS_CHATS_RATE_LIMIT, TEAMS_DEFAULT_RATE_LIMIT, TEAMS_GRAPH_BASE, TEAMS_MAX_CONCURRENT, TEAMS_PARAM_FORMATS, TEAMS_READ_ROUTES } from "./constants";
 
 export type TeamsQuery = Record<string, string | number | boolean | null | undefined | readonly string[]>;
 export type TeamsActor = { kind: "user"; userId: string } | { kind: "service" };
@@ -41,6 +41,8 @@ export type TeamsGetRequest = {
   responseType?: "json" | "bytes";
   /** The largest body accepted (default: the shared client's 20 MB). Required with `"bytes"`. */
   maxBytes?: number;
+  /** The caller's own cancellation (the browser closed the request): a waiting call leaves its place in the queue and the rate limit at once, and a running one stops. */
+  signal?: AbortSignal;
 };
 
 /** What the guard approved for this call, handed back so a reader can tell the person's own messages and external members without a second read: the account's tenant and Entra object id. */
@@ -59,6 +61,8 @@ export type TeamsApiDeps = {
   /** Test hook: extra HTTP client options (fast backoff, injected sleep and clock). It can never replace the base URL. */
   httpOptions?: Partial<HttpClientOptions>;
   maxConcurrent?: number;
+  /** Test hook: the bounded wait of a picture (default TEAMS_IMAGE_MAX_WAIT_MS). */
+  imageMaxWaitMs?: number;
 };
 
 const refused = (message: string) => new ConnectorError({ kind: "invalid_input", message });
@@ -105,9 +109,11 @@ function bucketFor(connectionId: string, req: TeamsGetRequest): { key: string; l
   if (req.path === "/me/chats") return { key: `${connectionId}:chats`, limit: TEAMS_CHATS_RATE_LIMIT };
   // The key is logged on every request line and kept in a process-wide map: a short keyed hash of the chat id, never the id itself (SL2).
   if (req.path === "/chats/{chatId}/messages") return { key: `${connectionId}:chat:${chatPacingToken(req.params?.chatId ?? "")}`, limit: TEAMS_CHAT_MESSAGES_RATE_LIMIT };
-  // T-285: an inline image of a chat message is paced per chat (its own bucket, so a message with several pictures does not delay the next page of messages)
+  // T-285: an inline image is paced per chat or channel in its OWN bucket (a message with several pictures does not delay the next page of messages or posts). This ASSUMES hosted contents are not
+  // counted against the documented 1-per-second GET-messages limit; H-081 / H-084 confirm it (a 429 reaches the route as `rate_limited` and nothing is retried here).
   if (req.path === "/chats/{chatId}/messages/{messageId}/hostedContents/{hostedId}/$value") return { key: `${connectionId}:chatimg:${chatPacingToken(req.params?.chatId ?? "")}`, limit: TEAMS_CHAT_MESSAGES_RATE_LIMIT };
-  // T-291: a channel's posts, replies and pictures are paced per channel (1 request per channel per second, vendor facts A2)
+  if (req.path === "/teams/{teamId}/channels/{channelId}/messages/{messageId}/hostedContents/{hostedId}/$value") return { key: `${connectionId}:chanimg:${chatPacingToken(req.params?.channelId ?? "")}`, limit: TEAMS_CHAT_MESSAGES_RATE_LIMIT };
+  // T-291: a channel's posts and replies are paced per channel (1 request per channel per second, vendor facts A2)
   if (req.path.startsWith("/teams/{teamId}/channels/{channelId}/messages")) return { key: `${connectionId}:chan:${chatPacingToken(req.params?.channelId ?? "")}`, limit: TEAMS_CHAT_MESSAGES_RATE_LIMIT };
   return { key: connectionId, limit: TEAMS_DEFAULT_RATE_LIMIT };
 }
@@ -119,7 +125,13 @@ export function createTeamsApi(deps: TeamsApiDeps): TeamsApi {
       const feature = assertRequest(req);
       assertLaneBound(laneId, conn);
       const requirement = { feature, ...(req.actor.kind === "user" ? { actorUserId: req.actor.userId.toLowerCase() } : {}) };
-      return withMailboxSlot(`${laneId}\u0000teams\u0000${conn.id}`, max, async () => {
+      // Pictures have their OWN small pool (so a page full of them never queues the person's other reads behind them) and a bounded wait for a slot plus the rate limit together: past it the call
+      // ends as `rate_limited` at once. The wait is not part of the request's own timeout (`timeoutMs` covers one attempt, from sending the request to the last byte).
+      const image = req.responseType === "bytes";
+      const waitSignal = image ? AbortSignal.timeout(deps.imageMaxWaitMs ?? TEAMS_IMAGE_MAX_WAIT_MS) : undefined;
+      const slotSignal = waitSignal ? (req.signal ? AbortSignal.any([req.signal, waitSignal]) : waitSignal) : req.signal;
+      const slotKey = `${laneId}\u0000teams${image ? "img" : ""}\u0000${conn.id}`;
+      const run = () => withMailboxSlot(slotKey, image ? TEAMS_IMAGE_MAX_CONCURRENT : max, async () => {
         const g = await deps.guard(laneId, conn, requirement); // decided inside the slot: after any wait for it
         const bucket = bucketFor(g.conn.id, req);
         const http: HttpClient = createTeamsHttp(
@@ -138,6 +150,8 @@ export function createTeamsApi(deps: TeamsApiDeps): TeamsApi {
             ...(req.query ? { query: req.query } : {}),
             ...(req.retry === false ? { retry: false } : {}),
             ...(req.responseType === "bytes" ? { responseType: "bytes" as const } : {}),
+            ...(req.signal ? { signal: req.signal } : {}),
+            ...(waitSignal ? { waitSignal } : {}),
             auth: {
               scheme: "Bearer",
               secret: async () => {
@@ -167,10 +181,19 @@ export function createTeamsApi(deps: TeamsApiDeps): TeamsApi {
           if (!isConnectorError(e)) throw e;
           if (credentialError !== undefined) throw toConnectorError(credentialError);
           const mapped = toConnectorError(mapGraphError(e));
-          if (isProviderApiError(mapped.toJSON())) await deps.errors?.record(laneId, g.conn, mapped.toJSON());
+          // Content written by someone else (a hosted picture that is gone or not allowed) must not be able to add an error row on every view: a 403 or 404 of a picture is not recorded.
+          const pictureGone = image && (mapped.info.http_status === 403 || mapped.info.http_status === 404);
+          if (!pictureGone && isProviderApiError(mapped.toJSON())) await deps.errors?.record(laneId, g.conn, mapped.toJSON());
           throw mapped;
         }
-      });
+      }, slotSignal);
+      try {
+        return await run();
+      } catch (e) {
+        // the wait for a slot ran out (the caller did not cancel): the same answer as a rate limit that ran out
+        if (waitSignal?.aborted && !req.signal?.aborted && !isConnectorError(e)) throw new ConnectorError({ kind: "rate_limited", message: "Pictures are busy; try again in a moment", retry_after_seconds: 2 });
+        throw e;
+      }
     },
   };
 }

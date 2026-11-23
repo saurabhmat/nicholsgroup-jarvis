@@ -94,6 +94,9 @@ export const TEAMS_DEFAULT_RATE_LIMIT = { requests: 4, perMs: 1000 } as const;
 export const TEAMS_SEND_RATE_LIMIT = { requests: 1, perMs: 1000 } as const;
 /** Our own cap on requests in flight per Teams connection. */
 export const TEAMS_MAX_CONCURRENT = 4;
+/** Pictures (T-285) have their own pool per connection, apart from the shared four, and wait at most this long for a slot plus the rate limit together before answering `rate_limited`. */
+export const TEAMS_IMAGE_MAX_CONCURRENT = 2;
+export const TEAMS_IMAGE_MAX_WAIT_MS = 5_000;
 
 /** Largest text of a send (Microsoft recommends a message under 80 KB, vendor facts A2). */
 export const TEAMS_MAX_TEXT_BYTES = 80 * 1024;

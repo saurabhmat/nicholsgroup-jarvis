@@ -36,9 +36,9 @@ const decode = (search: string) => Object.fromEntries(new URLSearchParams(search
 describe("teams and channels", () => {
   it("lists the joined teams (names cut and sorted, a made-up id dropped, duplicates once) with one request and no option", async () => {
     const { fake, reader, conn } = setup();
-    fake.state.joinedTeams = [{ id: T2, displayName: "Zed" }, { id: T1, displayName: "Alpha" }, { id: "not-a-guid", displayName: "x" }, { id: T1, displayName: "Alpha again" }, { nope: 1 }, "x", { id: "AAAAAAAA-AAAA-4AAA-8AAA-0000000000A3", displayName: "ㅤ" }];
+    fake.state.joinedTeams = [{ id: T2, displayName: "Zed", isArchived: true }, { id: T1, displayName: "Alpha" }, { id: "not-a-guid", displayName: "x" }, { id: T1, displayName: "Alpha again" }, { nope: 1 }, "x", { id: "AAAAAAAA-AAAA-4AAA-8AAA-0000000000A3", displayName: "ㅤ" }];
     const r = await reader.listTeams("PKG", conn, TEAMS_OWNER);
-    expect(r.teams.map((t) => [t.teamId, t.name])).toEqual([["aaaaaaaa-aaaa-4aaa-8aaa-0000000000a3", "(no name)"], [T1, "Alpha"], [T2, "Zed"]]);
+    expect(r.teams.map((t) => [t.teamId, t.name, t.archived])).toEqual([["aaaaaaaa-aaaa-4aaa-8aaa-0000000000a3", "(no name)", false], [T1, "Alpha", false], [T2, "Zed", true]]); // archived only when the answer says so
     expect(r.more).toBe(false);
     expect(fake.state.graphRequests.map((q) => [q.method, q.path, q.search])).toEqual([["GET", "/v1.0/me/joinedTeams", ""]]);
   });
@@ -126,6 +126,18 @@ describe("posts and replies", () => {
     expect(r.replies[2]).toMatchObject({ system: true, nodes: [] });
     expect(JSON.stringify(r)).not.toContain(CANARY);
     expect(r.more).toBe(false);
+  });
+
+  it("replies: exactly one full page with no next link is NOT 'more'; a next link, or more than a page, is", async () => {
+    const { fake, reader, conn } = setup();
+    fake.state.replies.set(`${T1}/${C1}/p1`, Array.from({ length: 50 }, (_, i) => post(`r${String(i).padStart(2, "0")}`, `2026-11-21T10:${String(i).padStart(2, "0")}:00Z`)));
+    const exact = await reader.listReplies("PKG", conn, TEAMS_OWNER, T1, C1, "p1");
+    expect(exact.replies).toHaveLength(50);
+    expect(exact.more).toBe(false);
+    server.use(http.get("https://graph.microsoft.com/v1.0/teams/:t/channels/:c/messages/:m/replies", () => HttpResponse.json({ value: [post("r1", "2026-11-21T10:00:00Z")], "@odata.nextLink": "https://graph.microsoft.com/v1.0/teams/x/channels/y/messages/z/replies?$skiptoken=1" })));
+    expect((await reader.listReplies("PKG", conn, TEAMS_OWNER, T1, C1, "p1")).more).toBe(true);
+    server.use(http.get("https://graph.microsoft.com/v1.0/teams/:t/channels/:c/messages/:m/replies", () => HttpResponse.json({ value: Array.from({ length: 51 }, (_, i) => post(`q${String(i)}`, "2026-11-21T10:00:00Z")) })));
+    expect((await reader.listReplies("PKG", conn, TEAMS_OWNER, T1, C1, "p1")).more).toBe(true);
   });
 
   it("hostile HTML in a post goes through the converter: no script, event handler, external image or javascript link; a picture of THIS post gets its hosted id", async () => {

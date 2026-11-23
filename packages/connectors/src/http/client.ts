@@ -79,6 +79,11 @@ export type HttpRequest = {
    */
   retry?: boolean;
   signal?: AbortSignal;
+  /**
+   * T-285: a bound on the time spent WAITING for this client's rate limit before the request is sent (not on the request itself). When it aborts while the caller's own `signal` has not,
+   * the call ends at once with `rate_limited` (retry after 2 s) instead of sleeping on. Without it (every mail and QuickBooks call) the wait is unbounded, as before.
+   */
+  waitSignal?: AbortSignal;
 };
 
 export type ConnectorResponse<T = unknown> = {
@@ -342,7 +347,16 @@ export function createHttpClient(options: HttpClientOptions): HttpClient {
       let attempt = 0;
       for (;;) {
         throwIfCancelled();
-        if (limiter) await limiter.take(req.signal);
+        if (limiter) {
+          if (req.waitSignal) {
+            try {
+              await limiter.take(req.signal ? AbortSignal.any([req.signal, req.waitSignal]) : req.waitSignal);
+            } catch (e) {
+              if (req.waitSignal.aborted && !req.signal?.aborted) throw fail({ kind: "rate_limited", message: `${label} waited too long for its turn`, retry_after_seconds: 2 });
+              throw e;
+            }
+          } else await limiter.take(req.signal);
+        }
         const started = now();
         const result = await attemptOnce(attempt);
         const retrying = !result.ok && result.retry && attempt < maxRetries;

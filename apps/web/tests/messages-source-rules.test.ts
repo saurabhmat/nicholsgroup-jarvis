@@ -37,8 +37,11 @@ describe("Messages source rules", () => {
     expect(importers).toEqual(["lib/teams-api.ts", "lib/teams-channels.ts", "lib/teams-chats.ts"]); // T-291 added lib/teams-channels.ts (the channel loaders, same server-only rule); // the reader is server-only; components get types and the pure rules from teams-pure
     expect(read("components/messages-view.tsx")).toMatch(/import type \{ MessageNode \} from "@nichols\/connectors\/teams-pure"/);
     for (const f of ["components/messages-view.tsx", "components/messages-client.tsx", "components/messages-chats.tsx", "components/messages-channels.tsx", "components/messages-image.tsx"]) expect(read(f), f).not.toMatch(/connectors\/teams-reader/);
-    // the picture component loads nothing itself: the browser's <img> reads the portal's own route and the component makes no request of its own
-    expect(read("components/messages-image.tsx")).not.toMatch(/\bfetch\(|XMLHttpRequest|https?:\/\//);
+    // the picture component's only request is ONE status probe of the portal's own route (a static relative address); no other host, no XMLHttpRequest
+    const img = read("components/messages-image.tsx");
+    expect([...img.matchAll(/\bfetch\(\s*`([^`]*)`/g)].map((m) => m[1]?.split("$")[0])).toEqual(["/api/lanes/"]);
+    expect([...img.matchAll(/\bfetch\(/g)]).toHaveLength(1);
+    expect(img).not.toMatch(/XMLHttpRequest|https?:\/\//);
     for (const f of files) {
       const t = readFileSync(f, "utf8");
       expect(t, relative(web, f)).not.toMatch(/graph\.microsoft\.(com|us)|login\.microsoftonline|markChatReadForUser|\/chats\/[^"'`\s]*\/messages["'`]\s*,\s*\{\s*method/);

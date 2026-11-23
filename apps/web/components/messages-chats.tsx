@@ -18,6 +18,7 @@ import {
   MESSAGES_LOAD_ERROR_TEXT,
   MESSAGES_LOAD_ERROR_TITLE,
   MESSAGES_NO_CHAT_SELECTED_TEXT,
+  MESSAGES_NOT_ENABLED_TEXT,
   MESSAGES_RECONNECT_TITLE,
   MESSAGES_TIMES_NOTE,
   messagesBusyText,
@@ -80,7 +81,7 @@ export function TeamsFailureCard({ failure, laneId, connectionId, testId }: { fa
     );
   }
   const title = failure.kind === "busy" ? "Teams is busy" : failure.kind === "not_found" ? "Chat not found" : MESSAGES_LOAD_ERROR_TITLE;
-  const text = failure.kind === "busy" ? messagesBusyText(failure.seconds) : failure.kind === "not_found" ? MESSAGES_CHAT_NOT_FOUND_TEXT : failure.kind === "forbidden" ? MESSAGES_FORBIDDEN_TEXT : MESSAGES_LOAD_ERROR_TEXT;
+  const text = failure.kind === "busy" ? messagesBusyText(failure.seconds) : failure.kind === "not_found" ? MESSAGES_CHAT_NOT_FOUND_TEXT : failure.kind === "forbidden" ? MESSAGES_FORBIDDEN_TEXT : failure.kind === "not_enabled" ? MESSAGES_NOT_ENABLED_TEXT : MESSAGES_LOAD_ERROR_TEXT;
   return (
     <Alert variant="alert" data-testid={testId} data-failure={failure.kind}>
       <AlertTitle>{title}</AlertTitle>

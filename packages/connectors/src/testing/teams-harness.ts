@@ -48,6 +48,8 @@ export type TeamsHarnessOptions = {
   fake: FakeTeams;
   lanes: Record<string, TeamsLaneSetup>;
   maxConcurrent?: number;
+  /** Test hook: how long a picture may wait for a slot plus its rate limit (default: the production 5 s). */
+  imageMaxWaitMs?: number;
   vault?: Pick<TokenVault, "getToken" | "rotateToken" | "storeToken">;
   now?: () => number;
   /** The redirect URI the Teams provider is configured with (default: the local callback). A wrong one is a configuration error at start. */
@@ -189,7 +191,7 @@ export function createTeamsHarness(options: TeamsHarnessOptions) {
     });
   const tokens = newTokenManager();
   const httpOptions = { sleep, now: clock.now, retryBaseMs: 1, retryMaxMs: 30_000, random: () => 0.5 };
-  const api = createTeamsApi({ guard, tokens, logger, errors, ...(options.maxConcurrent ? { maxConcurrent: options.maxConcurrent } : {}), httpOptions });
+  const api = createTeamsApi({ guard, tokens, logger, errors, ...(options.maxConcurrent ? { maxConcurrent: options.maxConcurrent } : {}), ...(options.imageMaxWaitMs ? { imageMaxWaitMs: options.imageMaxWaitMs } : {}), httpOptions });
   const health = createTeamsHealth({ api, ...(options.now ? { now: options.now } : {}) });
 
   const bind = (row: Row): LaneBoundConnection<"microsoft_teams"> => mintLaneBoundConnection<"microsoft_teams">({ ...row, features: { ...row.features } });

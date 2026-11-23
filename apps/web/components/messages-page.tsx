@@ -82,8 +82,9 @@ export function MessagesTabs({ laneId, tab, hideOnPhone }: { laneId: string; tab
 }
 
 /** Chats need the company's `chat_read` and the connection's: otherwise the page says so (the "Reconnect Teams to add chats" note is the connected card's), never an empty list. */
-function ConnectedWorkspace({ laneId, state, tab, chatOpen, searchParams }: { laneId: string; state: Extract<MessagesState, { kind: "connected" }>; tab: MessagesTab; chatOpen: boolean; searchParams: Promise<SearchParams> }) {
-  const tabs = <MessagesTabs laneId={laneId} tab={tab} hideOnPhone={chatOpen} />;
+export function ConnectedWorkspace({ laneId, state, tab, chatOpen, searchParams }: { laneId: string; state: Extract<MessagesState, { kind: "connected" }>; tab: MessagesTab; chatOpen: boolean; searchParams: Promise<SearchParams> }) {
+  // the Chats | Channels bar only for a company that lists channels (spec 11); a direct address to Channels still gets its neutral state
+  const tabs = state.laneFeatures.includes("channels_read") ? <MessagesTabs laneId={laneId} tab={tab} hideOnPhone={chatOpen} /> : null;
   // T-291: Channels is a second tab. Microsoft is asked about teams and channels only here, only for a company that lists `channels_read` and a connection that has it; otherwise a short neutral state.
   if (tab === "channels") {
     return (

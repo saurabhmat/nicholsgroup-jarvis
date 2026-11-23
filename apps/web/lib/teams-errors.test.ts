@@ -15,7 +15,9 @@ describe("teamsFailure", () => {
   it("the other kinds", () => {
     expect(teamsFailure(e("reconnect_required"))).toEqual({ kind: "reconnect" });
     expect(teamsFailure(e("not_found"))).toEqual({ kind: "not_found" });
-    for (const k of ["forbidden", "connection_unavailable", "unsupported_op"]) expect(teamsFailure(e(k))).toEqual({ kind: "forbidden" });
+    expect(teamsFailure(e("forbidden"))).toEqual({ kind: "forbidden" });
+    // the portal's own refusal (Teams off, feature off, unsupported cloud) is not "Microsoft said no": it is never shown as the administrator's approval
+    for (const k of ["connection_unavailable", "unsupported_op"]) expect(teamsFailure(e(k))).toEqual({ kind: "not_enabled" });
     for (const k of ["timeout", "transient", "provider_error", "invalid_input", "weird"]) expect(teamsFailure(e(k))).toEqual({ kind: "unavailable" });
   });
   it("anything that is not a connector error is unavailable, and no text of the error is in the result", () => {
