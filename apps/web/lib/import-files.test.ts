@@ -1,5 +1,7 @@
 import { strToU8, zipSync } from "fflate";
 import { describe, expect, it } from "vitest";
+import { readFileSync } from "node:fs";
+import { join } from "node:path";
 import { MAX_ZIP_ENTRIES, chatGptMemory, fileKind, memoryFromJsonFile, readBrainZip, safePath } from "./import-files";
 
 const zip = (files: Record<string, string | Uint8Array>, level: 0 | 6 = 6) =>
@@ -68,6 +70,35 @@ describe("brain-folder zip", () => {
     expect(safePath("a/b/Context/Work.md")).toBe("a/b/Context/Work.md");
     expect(safePath("a/../b")).toBeNull();
     expect(safePath("x\u0000.md")).toBeNull();
+  });
+});
+
+// T-273: fflate 0.8.2 looped forever on a local header that carries the ZIP64 size marker (0xFFFFFFFF) without a ZIP64 extra field
+// (GHSA-px8p-9vwx-vf98): the import froze the browser tab before any of our limits ran. Fixed in fflate 0.8.3.
+describe("brain-folder zip: ZIP64 size marker without its extra field (T-273)", () => {
+  const pinned = (JSON.parse(readFileSync(join(__dirname, "..", "package.json"), "utf8")) as { dependencies: Record<string, string> }).dependencies.fflate ?? "";
+  const [major = 0, minor = 0, patch = 0] = pinned.replace(/^[^0-9]*/, "").split(".").map(Number);
+  const fixed = major > 0 || minor > 8 || (minor === 8 && patch >= 3);
+
+  it("the pinned fflate has the fix (0.8.3 or later)", () => {
+    expect(fixed, `fflate is pinned to ${pinned}`).toBe(true);
+  });
+
+  // Skipped on an older fflate: there the call never returns, and a synchronous loop cannot be timed out by the test runner.
+  it.skipIf(!fixed)("is refused as unreadable at once instead of looping", () => {
+    const name = strToU8("Context/About-Me.md");
+    const header = new Uint8Array(30 + name.length + 8);
+    const view = new DataView(header.buffer);
+    view.setUint32(0, 0x04034b50, true); // local file header
+    view.setUint16(4, 45, true);
+    view.setUint32(18, 0xffffffff, true); // compressed size: "see the ZIP64 extra field"
+    view.setUint32(22, 0xffffffff, true); // uncompressed size: the same
+    view.setUint16(26, name.length, true);
+    view.setUint16(28, 0, true); // ...but there is no extra field
+    header.set(name, 30);
+    const started = Date.now();
+    expect(readBrainZip(header)).toEqual({ ok: false, error: "unreadable" });
+    expect(Date.now() - started).toBeLessThan(2_000);
   });
 });
 

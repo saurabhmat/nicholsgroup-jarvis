@@ -1548,7 +1548,13 @@ Standing rules for every task in this phase (not repeated below):
 - after the merge (Saurabh, Nov 23, 2026; PR #65 merged): "for point 2..keep it like this and for point 3...just put the new tab links". So: Approvals and Assistant stay under Settings (decided, not a stopgap any more), and Claude and ChatGPT stay as links that open in a new tab (no embed is looked for).
 
 ### T-272 Next.js security upgrade (16.4.2 to 16.4.6)
-- status: approved
+- status: done
 - depends: none
 - note: Approved by Saurabh on Nov 23, 2026 ("yes, do the Next.js upgrade as its own task"). Found when the T-271 production build stopped once with Next's notice that the installed version is affected by a known security vulnerability.
 - acceptance: `next` and `eslint-config-next` in `apps/web` are at a version with no open advisory (`pnpm audit` lists none for `next`); the lockfile holds no older Next; `pnpm typecheck && pnpm lint && pnpm test` pass and `pnpm --filter @nichols/web build` succeeds with no security notice and no prerender error. No app code change unless the upgrade needs one. Other audit findings are listed, not fixed, unless Saurabh approves them.
+
+### T-273 fflate 0.8.2 to 0.8.3 (AI Brain .zip import could freeze the browser tab)
+- status: approved
+- depends: none
+- note: Approved by Saurabh on Nov 23, 2026 ("yes, do the fflate bump"). Found by `pnpm audit` during T-272 (GHSA-px8p-9vwx-vf98) and traced in the T-272 security review: the AI Brain .zip is read in the person's browser (`apps/web/lib/import-files.ts`, streaming `Unzip`); a crafted file with a ZIP64 size marker and no ZIP64 extra field made fflate 0.8.2 loop forever before any of the import's limits ran. Impact: a frozen tab for the person importing; no server or data impact.
+- acceptance: `fflate` in `apps/web` is pinned to 0.8.3 or later and the lockfile holds no older copy; a test feeds the crafted header to `readBrainZip` and gets "unreadable" at once (guarded so it cannot hang the run on an older fflate); `pnpm audit` lists no `fflate` advisory; `pnpm typecheck && pnpm lint && pnpm test` and the web build pass.
