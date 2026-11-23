@@ -11,7 +11,7 @@ export const InstantSchema = z.iso.datetime({ offset: true });
 export const LaneIdSchema = z.string().min(1).max(64);
 
 /** Real providers only. The test-only `mock` provider lives in `@nichols/connectors/testing` (never in data). */
-export const PROVIDERS = ["quickbooks", "stripe", "gohighlevel", "google", "microsoft", "monday", "notion", "timesolv"] as const;
+export const PROVIDERS = ["quickbooks", "stripe", "gohighlevel", "google", "microsoft", "microsoft_teams", "monday", "notion", "timesolv"] as const;
 export const ProviderSchema = z.enum(PROVIDERS);
 export type Provider = z.infer<typeof ProviderSchema>;
 

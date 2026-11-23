@@ -62,7 +62,7 @@ export const laneGate = cache(async (laneId: string): Promise<LaneGate> => {
 });
 
 /** The navigation entry each module owns. Home and Settings belong to no module and are always shown. */
-const NAV_OF: Partial<Record<LaneModule, NavKey>> = { finance: "finance", approvals: "approvals", assistant: "assistant", projects: "projects", comms: "inbox", calendar: "calendar", brain: "onboarding" };
+const NAV_OF: Partial<Record<LaneModule, NavKey>> = { finance: "finance", approvals: "approvals", assistant: "assistant", projects: "projects", comms: "inbox", calendar: "calendar", brain: "onboarding", messages: "messages" };
 
 /** The navigation keys a lane hides. Empty for an unlimited lane. */
 export function hiddenNavKeys(gate: LaneGate): NavKey[] {

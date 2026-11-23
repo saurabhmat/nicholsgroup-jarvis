@@ -3,7 +3,7 @@
 // job client (`lane_config_current` is service_role-readable) and takes only the one field it needs; nothing else of
 // the config reaches connector code. A lane without `qbo` has no configured realm; a malformed one fails closed.
 import type { LaneId } from "@nichols/core";
-import { laneConfigSchema, mailProviderViewSchema, qboSyncSchema, type MicrosoftConfig } from "@nichols/core/lane-config";
+import { laneConfigSchema, mailProviderViewSchema, qboSyncSchema, teamsViewSchema, type MicrosoftConfig, type TeamsFeature } from "@nichols/core/lane-config";
 import { ConnectorError } from "../contract/errors";
 import type { JobClientFor } from "./tokens";
 
@@ -22,6 +22,12 @@ export interface LaneConfigReader {
    * list of the next. Microsoft is enabled for a lane only when it is in `providers` AND `microsoft` is not null. Fails closed like them.
    */
   mailProviderSettings(laneId: LaneId): Promise<{ providers: MailProvider[]; microsoft: MicrosoftSettings | null }>;
+  /**
+   * `lane_config.teams` (T-278, docs/specs/messages.md 4.3), defaults applied, or null when the lane has no `teams` block (Teams is not set up: treated as not enabled). INDEPENDENT of
+   * `mail.providers` and of the `microsoft` block: a Google-mail lane can have Teams. Read on every connect, every Graph call and every page render; throws when the config is
+   * unreadable or the block is malformed (fail closed: a bad block never reads as "enabled" or as "absent").
+   */
+  teamsSettings(laneId: LaneId): Promise<TeamsSettings | null>;
   /** The realm id configured for the lane's QuickBooks file, or null when none is set. */
   qboRealmId(laneId: LaneId): Promise<string | null>;
   /** The mailboxes (lower-cased) the lane's mail connection may be, from `lane_config.mailboxes`; empty when none is set (T-063). */
@@ -43,6 +49,8 @@ export interface LaneConfigReader {
 }
 
 export type MailProvider = "google" | "microsoft";
+/** The lane's Teams settings (T-278). `enabled` false = the lane has the block but Teams is switched off. */
+export type TeamsSettings = { enabled: boolean; cloud: MicrosoftConfig["cloud"]; tenantIds: string[]; allowedDomains: string[]; features: TeamsFeature[] };
 export type MicrosoftSettings = {
   cloud: MicrosoftConfig["cloud"]; tenantIds: string[]; allowGcc: boolean; mailFolders: MicrosoftConfig["mail_folders"];
   /** Explicit raw Graph calendar ids for Microsoft connections (replaces the default selection), or null = the default selection (T-269). */
@@ -89,6 +97,13 @@ function readProviderView(config: unknown): { providers: MailProvider[]; microso
       ? { cloud: m.cloud, tenantIds: [...m.tenant_ids], allowGcc: m.allow_gcc, mailFolders: [...m.mail_folders], calendarIds: m.calendar_ids ? [...m.calendar_ids] : null }
       : null,
   };
+}
+
+function readTeamsView(config: unknown): TeamsSettings | null {
+  const parsed = teamsViewSchema.safeParse(config === undefined || config === null ? {} : config);
+  if (!parsed.success) throw new ConnectorError({ kind: "provider_error", message: "The lane's Teams settings are not valid" });
+  const t = parsed.data.teams;
+  return t ? { enabled: t.enabled, cloud: t.cloud, tenantIds: [...t.tenant_ids], allowedDomains: [...t.allowed_domains], features: [...t.features] } : null;
 }
 
 export function createLaneConfigReader(clientFor: JobClientFor): LaneConfigReader {
@@ -178,6 +193,9 @@ export function createLaneConfigReader(clientFor: JobClientFor): LaneConfigReade
     },
     async mailProviderSettings(laneId) {
       return readProviderView(await readConfig(laneId));
+    },
+    async teamsSettings(laneId) {
+      return readTeamsView(await readConfig(laneId));
     },
     async mailboxes(laneId) {
       const config = await readConfig(laneId);

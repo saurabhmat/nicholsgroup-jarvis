@@ -5,6 +5,7 @@ import { Card, CardDescription, CardHeader, CardTitle } from "@nichols/ui";
 import type { ComposioSectionView } from "@/lib/composio-connection";
 import type { GoogleSectionView } from "@/lib/google-connection";
 import type { MicrosoftSectionView } from "@/lib/microsoft-connection";
+import type { TeamsSectionView } from "@/lib/teams-connection";
 import type { QuickBooksSectionView } from "@/lib/quickbooks-connection";
 import type { CoverageView } from "@/lib/coverage";
 import { CoverageList } from "./coverage-list";
@@ -15,6 +16,7 @@ import { SyncNowButton } from "./sync-now-button";
 import { ConnectionsHeader } from "./connection-rows";
 import { GoogleNotes, GoogleNotices, GoogleRows } from "./google-connection-section";
 import { MicrosoftNotes, MicrosoftNotices, MicrosoftRows } from "./microsoft-connection-section";
+import { TeamsNotes, TeamsNotices, TeamsRows } from "./teams-connection-section";
 import { QuickBooksNotes, QuickBooksNotices, QuickBooksRows } from "./quickbooks-connection-section";
 
 /**
@@ -33,7 +35,7 @@ export function SyncBar({ laneId, views }: { laneId: string; views: ReadonlyArra
   );
 }
 
-export function ConnectionsSection({ laneId, google, microsoft = null, quickbooks, composio, coverage = null, jobFailures = null, tz = "America/New_York", now = new Date() }: { laneId: string; google: GoogleSectionView | null; microsoft?: MicrosoftSectionView | null; quickbooks: QuickBooksSectionView | null; composio: ComposioSectionView | null; coverage?: CoverageView | null; jobFailures?: JobFailureItem[] | null; tz?: string; now?: Date }) {
+export function ConnectionsSection({ laneId, google, microsoft = null, teams = null, quickbooks, composio, coverage = null, jobFailures = null, tz = "America/New_York", now = new Date() }: { laneId: string; google: GoogleSectionView | null; microsoft?: MicrosoftSectionView | null; teams?: TeamsSectionView | null; quickbooks: QuickBooksSectionView | null; composio: ComposioSectionView | null; coverage?: CoverageView | null; jobFailures?: JobFailureItem[] | null; tz?: string; now?: Date }) {
   return (
     <section aria-labelledby="connections-title">
       <Card>
@@ -47,17 +49,20 @@ export function ConnectionsSection({ laneId, google, microsoft = null, quickbook
         {google ? <GoogleNotices view={google} /> : null}
         <SyncBar laneId={laneId} views={[google, microsoft]} />
         {microsoft ? <MicrosoftNotices view={microsoft} /> : null}
+        {teams ? <TeamsNotices view={teams} /> : null}
         {quickbooks ? <QuickBooksNotices view={quickbooks} /> : null}
         {composio ? <ComposioNotices view={composio} /> : null}
         <ul data-testid="connections-list" className="flex flex-col divide-y divide-border">
           <ConnectionsHeader />
           {google ? <GoogleRows laneId={laneId} view={google} /> : null}
           {microsoft ? <MicrosoftRows laneId={laneId} view={microsoft} /> : null}
+          {teams ? <TeamsRows laneId={laneId} view={teams} /> : null}
           {quickbooks ? <QuickBooksRows laneId={laneId} view={quickbooks} /> : null}
           {composio ? <ComposioRows laneId={laneId} view={composio} /> : null}
         </ul>
         {google ? <GoogleNotes /> : null}
         {microsoft ? <MicrosoftNotes view={microsoft} /> : null}
+        {teams ? <TeamsNotes view={teams} /> : null}
         {quickbooks ? <QuickBooksNotes laneId={laneId} now={now} /> : null}
         {composio ? <ComposioNotes view={composio} /> : null}
         {coverage ? <CoverageList view={coverage} tz={tz} now={now} /> : null}

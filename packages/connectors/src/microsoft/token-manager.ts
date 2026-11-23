@@ -24,8 +24,9 @@ import { connectorLog, type ConnectorLogger } from "../log/index";
 import { TokenResponseSchema } from "../oauth/flow";
 import { SecretValue } from "../vault/secret";
 import type { TokenVault } from "../vault/tokens";
-import { isCloudSupported, loginOriginFor, REFRESH_SKEW_MS, TOKEN_PATH } from "./constants";
-import { isGuarded, type GuardedMicrosoftConnection } from "./guard";
+import type { LaneBoundConnection } from "../contract/lane-bound";
+import { isCloudSupported, loginOriginFor, REFRESH_SKEW_MS, TOKEN_PATH, type MicrosoftCloud } from "./constants";
+import { isGuarded } from "./guard";
 import { createGraphHttp, type GraphHttpFor } from "./http";
 import type { OnReconnectRequired } from "../quickbooks/reconnect";
 
@@ -39,7 +40,17 @@ const StoredSchema = z.looseObject({
 /** A token set as stored, parsed. `raw` is the exact stored text (the compare-and-swap names it). */
 export type StoredTokens = { raw: SecretValue; access: SecretValue; refresh: SecretValue; accessExpiresAt: number };
 
+/**
+ * What the token manager needs of a guarded connection: the authoritative row, its tenant and its cloud. The Microsoft mail guard's `GuardedMicrosoftConnection` and the
+ * Teams guard's `GuardedTeamsConnection` (T-279) both have this shape; each manager accepts only the connections ITS guard approved (`isApproved`).
+ */
+export type TokenSubject = { readonly conn: LaneBoundConnection<string>; readonly tenantId: string; readonly cloud: MicrosoftCloud };
+
 export type MicrosoftTokenManagerDeps = {
+  /** Whether a connection was approved by the guard that belongs to this manager. Default: the Microsoft mail guard. The Teams manager passes the Teams guard's check (T-279). */
+  isApproved?: (value: unknown) => boolean;
+  /** The provider name in log lines. Default `microsoft`. */
+  logProvider?: string;
   vault: Pick<TokenVault, "getToken" | "rotateToken">;
   client: () => { clientId: string; clientSecret: SecretValue };
   /** Test hook: the HTTP client for the token host. The default is `createGraphHttp(.., "token")`, which enforces the host allow-list. */
@@ -54,7 +65,7 @@ export type MicrosoftTokenManagerDeps = {
 
 export interface MicrosoftTokenManager {
   /** A usable access token. With `rejected` (the token Graph just answered 401 for) it refreshes unless already replaced. */
-  accessToken(laneId: LaneId, guarded: GuardedMicrosoftConnection, options?: { rejected?: SecretValue }): Promise<SecretValue>;
+  accessToken(laneId: LaneId, guarded: TokenSubject, options?: { rejected?: SecretValue }): Promise<SecretValue>;
 }
 
 /** OAuth `error` strings that mean the grant needs a person (V-7). */
@@ -87,10 +98,10 @@ export function createMicrosoftTokenManager(deps: MicrosoftTokenManagerDeps): Mi
   const sleep = deps.sleep ?? ((ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms)));
   const inflight = new Map<string, Promise<StoredTokens>>();
 
-  const readStored = async (laneId: LaneId, g: GuardedMicrosoftConnection) => parseStored(await deps.vault.getToken(laneId, g.conn));
+  const readStored = async (laneId: LaneId, g: TokenSubject) => parseStored(await deps.vault.getToken(laneId, g.conn));
 
   /** The stored set when it is not `stored` any more (re-read a few times: the winner stores just after Microsoft answers). */
-  async function newerStored(laneId: LaneId, g: GuardedMicrosoftConnection, stored: StoredTokens): Promise<StoredTokens | null> {
+  async function newerStored(laneId: LaneId, g: TokenSubject, stored: StoredTokens): Promise<StoredTokens | null> {
     for (const delay of REREAD_DELAYS_MS) {
       if (delay > 0) await sleep(delay);
       let current: StoredTokens;
@@ -105,12 +116,12 @@ export function createMicrosoftTokenManager(deps: MicrosoftTokenManagerDeps): Mi
     return null;
   }
 
-  async function refresh(laneId: LaneId, g: GuardedMicrosoftConnection, stored: StoredTokens): Promise<StoredTokens> {
+  async function refresh(laneId: LaneId, g: TokenSubject, stored: StoredTokens): Promise<StoredTokens> {
     if (!isCloudSupported(g.cloud)) throw new ConnectorError({ kind: "unsupported_op", message: "This Microsoft cloud is not supported yet" });
     const { clientId, clientSecret } = deps.client();
     const baseUrl = loginOriginFor(g.cloud);
     const http: HttpClient = deps.httpFor ? deps.httpFor(laneId, g.conn.id, baseUrl) : createGraphHttp({ baseUrl, laneId, connectionId: g.conn.id, ...(deps.logger ? { logger: deps.logger } : {}) }, g.cloud, "token");
-    const child = log.child({ laneId, provider: "microsoft", connectionId: g.conn.id });
+    const child = log.child({ laneId, provider: deps.logProvider ?? "microsoft", connectionId: g.conn.id });
     let data: unknown;
     try {
       const res = await http.request({
@@ -173,7 +184,7 @@ export function createMicrosoftTokenManager(deps: MicrosoftTokenManagerDeps): Mi
   }
 
   /** One read-decide-refresh, shared by every concurrent caller for the connection. */
-  function flight(laneId: LaneId, g: GuardedMicrosoftConnection, rejected: string | undefined): Promise<StoredTokens> {
+  function flight(laneId: LaneId, g: TokenSubject, rejected: string | undefined): Promise<StoredTokens> {
     const key = `${laneId}\u0000${g.conn.id}`;
     const existing = inflight.get(key);
     if (existing) return existing;
@@ -188,7 +199,7 @@ export function createMicrosoftTokenManager(deps: MicrosoftTokenManagerDeps): Mi
 
   return {
     async accessToken(laneId, guarded, options) {
-      if (!isGuarded(guarded)) throw new ConnectorError({ kind: "forbidden", message: "The connection was not approved by the Microsoft guard" });
+      if (!(deps.isApproved ?? isGuarded)(guarded)) throw new ConnectorError({ kind: "forbidden", message: "The connection was not approved by the Microsoft guard" });
       assertLaneBound(laneId, guarded.conn);
       const rejected = options?.rejected?.reveal();
       let tokens = await flight(laneId, guarded, rejected);

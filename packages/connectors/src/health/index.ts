@@ -1,22 +1,24 @@
 // conn.token_health and conn.subscriptions_renew wired over the real stores (T-040). Server-only; the Inngest route
 // imports from "@nichols/connectors/health".
-//   - Health checkers: QuickBooks (read-only CompanyInfo call), Microsoft (read-only `GET /me`, T-256). Google has no `health` yet (the mail/calendar
+//   - Health checkers: QuickBooks (read-only CompanyInfo call), Microsoft (read-only `GET /me`, T-256), Teams (read-only `GET /me` through the Teams app, T-279). Google has no `health` yet (the mail/calendar
 //     connectors are provider interfaces), so its connections get the expiry rule only. Add checkers as providers land.
 //   - Renewers: Microsoft (T-068, T-264): ensures the connection's change-notification subscriptions (create when missing, renew within 24 hours of expiry, recreate when gone;
 //     stops them when the provider is paused). Google has none (Gmail watch is T-065, not built).
 import { connectionLoader, tokenHealthStore as store } from "../vault/index";
 import { microsoftHealth, microsoftHealthSkip, microsoftSubscriptionRenewer } from "../microsoft/index";
 import { quickbooksConnector } from "../quickbooks/index";
+import { teamsHealth, teamsHealthSkip } from "../teams/index";
 import { createSubscriptionRenewJob, createTokenHealthJob } from "./job";
 import type { HealthChecker, SubscriptionRenewer } from "./types";
 
 const checkers: Record<string, HealthChecker> = {
   microsoft: microsoftHealth,
+  microsoft_teams: teamsHealth,
   quickbooks: (laneId, conn) => quickbooksConnector.health(laneId, conn as Parameters<typeof quickbooksConnector.health>[1]),
 };
 const renewers: Record<string, SubscriptionRenewer> = { microsoft: microsoftSubscriptionRenewer };
 
-export const tokenHealthJob = createTokenHealthJob({ loader: connectionLoader, store, checkers, skips: { microsoft: microsoftHealthSkip } });
+export const tokenHealthJob = createTokenHealthJob({ loader: connectionLoader, store, checkers, skips: { microsoft: microsoftHealthSkip, microsoft_teams: teamsHealthSkip } });
 export const subscriptionRenewJob = createSubscriptionRenewJob({ loader: connectionLoader, store, renewers });
 
 /** Marks a reconnect_required connection's admin notice as sent, after the scan's event went out (T-195). */

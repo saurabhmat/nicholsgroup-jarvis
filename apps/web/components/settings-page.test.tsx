@@ -10,6 +10,7 @@ const m = vi.hoisted(() => ({
   result: null as unknown,
   google: null as unknown,
   microsoft: null as unknown,
+  teams: null as unknown,
   providerReads: 0,
   newsCalls: 0,
   providersView: null as unknown,
@@ -68,6 +69,8 @@ vi.mock("@/lib/google-connection", () => ({ googleSectionFor: (g: unknown) => lo
 // T-257: not recorded in `m.started` (the loader-list test below is unchanged); the providers read is counted on its own.
 vi.mock("@/lib/mail-providers", () => ({ mailProvidersFor: async () => { m.providerReads += 1; return m.providersView ?? { state: "known", google: true, microsoft: null }; } }));
 vi.mock("@/lib/microsoft-connection", () => ({ microsoftSectionFor: async (_g: unknown, _l: string, providers: unknown) => { m.providersSeen.push(providers); return m.microsoft; } }));
+// T-280: the Teams section loader (its own tests are in lib/teams-connection.test.ts); not recorded in `m.started`, so the loader-list test below is unchanged.
+vi.mock("@/lib/teams-connection", () => ({ teamsSectionFor: async () => m.teams }));
 vi.mock("@/lib/composio-availability", () => ({ availability: () => ({}), missingSettings: () => ({}) }));
 vi.mock("@/lib/composio-connection", () => ({ composioSectionFor: (g: unknown) => loader("composio", () => m.composio)(g) }));
 vi.mock("@/lib/news-settings", () => ({ newsSectionFor: async () => { m.newsCalls += 1; return m.news; } }));
@@ -111,6 +114,7 @@ const view = (done: number) => ({
 
 beforeEach(() => {
   m.microsoft = null;
+  m.teams = null;
   m.providerReads = 0;
   m.providersSeen = [];
   m.result = m.google = m.composio = m.brain = m.origin = m.news = null;

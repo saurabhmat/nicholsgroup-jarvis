@@ -13,7 +13,7 @@ import type { LaneId } from "@nichols/core";
 import { withAudit, type Audit } from "@nichols/core/audit";
 import type { LaneClient } from "@nichols/core/lane-router";
 import { z } from "zod";
-import { ACCOUNT_IN_USE_MESSAGE, ACCOUNT_OWNED_BY_OTHER_MESSAGE, ConnectorError, isConnectorError } from "../contract/errors";
+import { ACCOUNT_IN_USE_MESSAGE, ACCOUNT_OWNED_BY_OTHER_MESSAGE, ConnectorError, isConnectorError, TEAMS_ONE_ACCOUNT_MESSAGE } from "../contract/errors";
 import type { LaneBoundConnection } from "../contract/lane-bound";
 import type { Provider } from "../contract/schemas";
 import { createHttpClient, basicCredentials, type HttpClient } from "../http/client";
@@ -34,11 +34,15 @@ export const MAIL_CONNECT_ROLES = ["owner", "admin_technical", "viewer"] as cons
 
 /** The roles that may start or finish a connect of this provider. */
 export function connectRolesFor(provider: string): readonly ("owner" | "admin_technical" | "viewer")[] {
-  return provider === "google" || provider === "microsoft" ? MAIL_CONNECT_ROLES : CONNECT_ROLES;
+  // T-278: a person's own Teams account (provider `microsoft_teams`) is connected by the person, like their own mailbox (the database checks own_mail again).
+  return provider === "google" || provider === "microsoft" || provider === "microsoft_teams" ? MAIL_CONNECT_ROLES : CONNECT_ROLES;
 }
 
-/** Providers whose connections are a person's mailbox or calendar: they carry an owner (core.connections.owner_user_id). */
-const MAIL_PROVIDERS: ReadonlySet<string> = new Set(["google", "microsoft"]);
+/**
+ * Providers whose connections belong to one person (core.connections.owner_user_id): a person's mailbox or calendar (T-247) and, since T-278, their own Teams
+ * account. NOT a statement that the row is a mailbox: no mail or calendar reader reads this set (a `microsoft_teams` row is never a mailbox).
+ */
+const MAIL_PROVIDERS: ReadonlySet<string> = new Set(["google", "microsoft", "microsoft_teams"]);
 
 /** The provider's token response; extra fields (x_refresh_token_expires_in, id_token, ...) are kept for `identify`. */
 export const TokenResponseSchema = z
@@ -379,7 +383,10 @@ export function createOAuthFlow(deps: OAuthFlowDeps) {
             .catch(() => undefined);
           const inUse = isConnectorError(cause) && cause.info.message === ACCOUNT_IN_USE_MESSAGE;
           const ownedByOther = isConnectorError(cause) && cause.info.message === ACCOUNT_OWNED_BY_OTHER_MESSAGE;
-          const message = inUse
+          const oneTeams = isConnectorError(cause) && cause.info.message === TEAMS_ONE_ACCOUNT_MESSAGE;
+          const message = oneTeams
+            ? `${TEAMS_ONE_ACCOUNT_MESSAGE}. Disconnect it first to use another one. ${GRANT_NOT_STORED_MESSAGE}`
+            : inUse
             ? `This ${p.accountLabel ?? "account"} is already connected to another company in Jarvis. ${GRANT_NOT_STORED_MESSAGE}`
             : ownedByOther
               ? `This ${p.accountLabel ?? "account"} is already connected by another person in Jarvis. ${GRANT_NOT_STORED_MESSAGE}`

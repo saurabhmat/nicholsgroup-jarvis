@@ -24,6 +24,7 @@ import { createApiErrorStore } from "../error-log/store";
 import { createComposioConnectionStore } from "../composio/store";
 import { createMicrosoftIdentityReader, createMicrosoftIdentityWriter } from "../microsoft/identity";
 import { createMicrosoftSubscriptionStore } from "../microsoft/subscription-store";
+import { createTeamsIdentityReader, createTeamsIdentityWriter } from "../teams/identity";
 
 const vault = createTokenVault(getLaneJobClient);
 
@@ -80,6 +81,10 @@ export const microsoftIdentityWriter = createMicrosoftIdentityWriter(getLaneJobC
 
 /** Records Microsoft change-notification subscriptions (core.push_subscriptions) and finds a notification's subscription by its id, with the lane's job client (T-068). */
 export const microsoftSubscriptionStore = createMicrosoftSubscriptionStore(getLaneJobClient);
+
+/** The Teams identity of a connection (T-279): tenant, cloud and the server-only Entra object id, read on every guarded call; set once at connect time. */
+export const teamsIdentityReader = createTeamsIdentityReader(getLaneJobClient);
+export const teamsIdentityWriter = createTeamsIdentityWriter(getLaneJobClient);
 
 /** Writes the QuickBooks edition flags onto core.connections with the lane's job client (T-051). */
 export const qboFeatureStore = createQboFeatureStore(getLaneJobClient);

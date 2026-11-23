@@ -46,11 +46,11 @@ describe("lane gate", () => {
     }
   });
 
-  it("a limited company shows exactly its list: finance, approvals, assistant, projects and the setup entry are hidden", () => {
+  it("a limited company shows exactly its list: finance, approvals, assistant, projects, Messages (T-278) and the setup entry are hidden", () => {
     const g = gateFrom(LIMITED);
     expect(g.limited).toBe(true);
     expect([g.visible("comms"), g.visible("calendar"), g.visible("briefing")]).toEqual([true, true, true]);
-    expect(hiddenNavKeys(g).sort()).toEqual(["approvals", "assistant", "finance", "onboarding", "projects"]);
+    expect(hiddenNavKeys(g).sort()).toEqual(["approvals", "assistant", "finance", "messages", "onboarding", "projects"]);
     expect(g.newsShown).toBe(false);
   });
 
@@ -101,5 +101,21 @@ describe("emailWriteAllowed and hiddenModuleResponse (T-265)", () => {
     expect(await hiddenModuleResponse("../x", "finance")).toBeNull();
     expect(await hiddenModuleResponse(null, "finance")).toBeNull();
     expect(selected).toEqual([]);
+  });
+});
+
+describe("T-278: the messages module", () => {
+  it("a limited company hides the Messages entry unless it lists `messages`; an unlimited one always shows it", () => {
+    expect(hiddenNavKeys(gateFrom(LIMITED))).toContain("messages");
+    expect(hiddenNavKeys(gateFrom({ modules: ["comms", "messages"], limited: true, news: null }))).not.toContain("messages");
+    expect(hiddenNavKeys(gateFrom({ modules: [], limited: false, news: null }))).toEqual([]);
+    expect(gateFrom(LIMITED).visible("messages")).toBe(false);
+  });
+
+  it("requireModule sends a limited company that does not list messages to its Home, and lets one that lists it through", async () => {
+    row = LIMITED;
+    await expect(requireModule("NC", "messages")).rejects.toThrow("redirect:");
+    row = { modules: ["comms", "messages"], limited: true, news: null };
+    await expect(requireModule("NC", "messages")).resolves.toBeUndefined();
   });
 });

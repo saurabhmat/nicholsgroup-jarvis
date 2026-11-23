@@ -26,7 +26,8 @@
     "./normalize": "./src/normalize/index.ts",
     "./error-log": "./src/error-log/index.ts",
     "./facade": "./src/facade/index.ts",
-    "./microsoft-settings": "./src/microsoft/settings-entry.ts"
+    "./microsoft-settings": "./src/microsoft/settings-entry.ts",
+    "./teams-settings": "./src/teams/settings-entry.ts"
   },
   "scripts": {
     "typecheck": "tsc -b",

@@ -246,6 +246,13 @@ export const connectorEnvShapes = {
     // Any string passes here on purpose; `graphNotificationUrl` checks it, so a typo cannot stop Microsoft connect, sync or health.
     GRAPH_NOTIFICATION_URL: nonEmpty.max(2048).optional(),
   },
+  // Microsoft Teams (T-279, docs/specs/messages.md 5; decision D-66): a SECOND Entra app registration used only for Teams chats, so the mail app above is never
+  // touched and a Teams token cannot reach mail. Same multi-tenant shape and the same redirect rules as `graph`; its callback ends with /api/connect/teams/callback.
+  graph_teams: {
+    GRAPH_TEAMS_CLIENT_ID: nonEmpty,
+    GRAPH_TEAMS_CLIENT_SECRET: nonEmpty,
+    GRAPH_TEAMS_REDIRECT_URI: httpUrl().optional(),
+  },
   // A separate app registered inside the GCC High cloud. Defined only; nothing reads it until T-267.
   graph_usgov: {
     GRAPH_USGOV_CLIENT_ID: nonEmpty,
@@ -301,6 +308,7 @@ export const runtimeFlags = (env: EnvRecord): RuntimeFlags => ({
 });
 
 const MICROSOFT_LOCAL_REDIRECT = "http://localhost:3000/api/connect/microsoft/callback";
+const TEAMS_LOCAL_REDIRECT = "http://localhost:3000/api/connect/teams/callback";
 
 /** Redirect rules shared by the Microsoft groups (same as GOOGLE_REDIRECT_URI): optional locally; elsewhere required, https, own origin. */
 function checkRedirect(value: string | undefined, name: string, flags: RuntimeFlags, ctx: z.RefinementCtx): void {
@@ -357,6 +365,11 @@ export const connectorSchemaFactories = {
       .object(connectorEnvShapes.graph)
       .superRefine((v, ctx) => checkRedirect(v.GRAPH_REDIRECT_URI, "GRAPH_REDIRECT_URI", flags, ctx))
       .transform((v) => ({ ...v, GRAPH_REDIRECT_URI: v.GRAPH_REDIRECT_URI ?? MICROSOFT_LOCAL_REDIRECT })),
+  graph_teams: (flags: RuntimeFlags) =>
+    z
+      .object(connectorEnvShapes.graph_teams)
+      .superRefine((v, ctx) => checkRedirect(v.GRAPH_TEAMS_REDIRECT_URI, "GRAPH_TEAMS_REDIRECT_URI", flags, ctx))
+      .transform((v) => ({ ...v, GRAPH_TEAMS_REDIRECT_URI: v.GRAPH_TEAMS_REDIRECT_URI ?? TEAMS_LOCAL_REDIRECT })),
   graph_usgov: (flags: RuntimeFlags) =>
     z
       .object(connectorEnvShapes.graph_usgov)

@@ -363,6 +363,56 @@ commit;
 (Set `provider` to `'google'` in that one place to turn Google off.) *Expect:* one row, the providers without the one you removed. If the version
 did not change, the provider was not in the list, or it was the only one.
 
+## Enable Teams for a company (T-278 to T-280; decision D-66; live checks H-078, H-079, H-081, H-080)
+
+Gives the people of one company a **Sign in to Teams** button (Settings -> Connections -> **Your Teams account**, and the Messages page). Teams is a **separate connection** from
+mail: a company whose mail is Google (worked example: **`PKG`**, whose people use their `pubkgroup.com` and `pub-k.org` Microsoft accounts for Teams) needs **no** Microsoft mail
+setting, and a company with Microsoft mail (**`NC`**, H-080) signs in once more, with the same Microsoft account, to get a second, Teams-only connection. Nothing about Google or Microsoft
+mail changes. Nothing is stored from a chat: this step only switches the sign-in on. Chats themselves arrive with T-281 to T-285.
+
+The generic steps, in this order (you run every production step yourself; the agent never touches production):
+
+1. **The code is deployed** with T-278, T-279 and T-280 (Vercel -> Deployments -> the top Production row is a commit on `main` after their merge).
+2. **H-078 is done:** the second Entra app "Nichols Executive Portal - Teams" exists (multi-tenant; redirect URIs `http://localhost:3000/api/connect/teams/callback` and
+   `https://<the production app domain>/api/connect/teams/callback`; delegated permissions `openid`, `offline_access`, `User.Read`, `Chat.Read`, `User.ReadBasic.All` and nothing else), and
+   Vercel **Production only** has `GRAPH_TEAMS_CLIENT_ID`, `GRAPH_TEAMS_CLIENT_SECRET` and `GRAPH_TEAMS_REDIRECT_URI` (exactly the production `NEXT_PUBLIC_APP_URL` plus `/api/connect/teams/callback`;
+   a wrong value shows "This connection isn't configured on this server" on Settings, not a broken page). Never Preview.
+3. **H-079 is done:** the tenant admin granted consent for the Teams app (Entra admin centre -> Enterprise applications -> the app -> Permissions -> Grant admin consent). Users of another
+   tenant cannot consent to an unverified multi-tenant app beyond sign-in scopes, so this is needed.
+4. **Run the database part** once: `supabase/core/bootstrap/manual-migrations/part-33-T-278.sql` in the Supabase SQL Editor of the production project, then `part-33-T-278-check.sql`.
+   *Expect:* every row `true` (the md5 rows may differ only by whitespace). The part refuses to run if the objects it changes are not the ones it expects, or if it was already applied. It adds
+   no row and switches nothing on.
+5. **Fill in `enable-lane-teams-T-280.sql`** (same folder; gitignored): the lane code, the tenant id of the Teams accounts (Entra admin centre -> Overview -> Tenant ID; for `PKG` it is the id in
+   decision D-62), the sign-in domains of the Teams accounts (for `PKG`: `pubkgroup.com` and `pub-k.org`), the features (first phase: `chat_read`, `call_links`) and, **only for a company
+   that limits its modules** (like `NC`), `v_add_messages := true` so the Messages page is shown. Keep the quotes. The same values go into `check-enable-lane-teams-T-280.sql`.
+6. **Before you run it**, run the check file once and write down the last result (the count of usable mail connections), ignoring the false rows.
+7. **Run `enable-lane-teams-T-280.sql`.** It adds ONE new settings version: the current settings with one extra key, `teams` (the template below). Every other key is carried over unchanged. It
+   refuses a company that has no settings, is not enabled, or **already has a `teams` key** (it never edits one), and a placeholder left in the file. *Expect:* a notice naming the new version.
+8. **Run `check-enable-lane-teams-T-280.sql`.** *Expect:* every row `true`, and the count of usable mail connections **equal to the number you wrote down**. If a row is false, stop and tell the agent.
+9. **Each person signs in to Teams** (Settings -> Connections -> Your Teams account -> Sign in to Teams) with their own Microsoft work account. *Expect:* "Teams connected" on Settings and "Connected as <their address>"
+   on Messages. A person's Google rows (or Microsoft mail rows) must look exactly as before.
+
+What the lane's `teams` block looks like (the file inserts it; the app refuses a block it cannot read and treats it as Teams off):
+
+<!-- teams-config-template -->
+```json
+{
+  "teams": {
+    "enabled": true,
+    "cloud": "commercial",
+    "tenant_ids": ["__TEAMS_TENANT_ID__"],
+    "allowed_domains": ["__TEAMS_DOMAIN__"],
+    "features": ["chat_read", "call_links"]
+  }
+}
+```
+
+**Switch Teams off again** (a new settings version, never an edit): the same file's pattern with `"enabled": false`, or without the block. People then see "Teams is paused for this company";
+their connections and Vault tokens are kept until they press Disconnect. **Roll back:** a new version without the `teams` block. Neither touches mail.
+
+**What the agent checked:** the schema and the template parse with the app's own settings schema (tests in `packages/core/src/lane-config`); the SQL refuses what is listed above (run against a copy of the
+production shape in a transaction that was rolled back); Teams reads only the `teams` settings, never the mail provider list.
+
 ## Roll back this run
 
 Pick the smallest step that fixes the problem. Nothing below deletes mail metadata, a token or an audit row.

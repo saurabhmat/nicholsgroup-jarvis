@@ -6,16 +6,18 @@
 import { AuthError, type Guards } from "@nichols/core/auth";
 import { MAIL_CONNECT_ROLES } from "@nichols/connectors/oauth";
 import { microsoftConnects, type MicrosoftWrites } from "./microsoft-wording";
+import { TEAMS_ADMIN_CONSENT_TEXT, TEAMS_PROVIDER, TEAMS_REMOVE_AT_MICROSOFT_TEXT } from "./teams-wording";
 
 export type ConnectResultMessage = { tone: "success" | "alert"; title: string; description: string };
 
-const PROVIDERS: Record<string, string | undefined> = { google: "Google", quickbooks: "QuickBooks", composio: "Composio", microsoft: "Microsoft" };
+const PROVIDERS: Record<string, string | undefined> = { google: "Google", quickbooks: "QuickBooks", composio: "Composio", microsoft: "Microsoft", [TEAMS_PROVIDER]: "Teams" };
 const TOOLKITS: Record<string, string | undefined> = { gmail: "Gmail", googlecalendar: "Google Calendar" };
 
 const REMOVE_ACCESS: Record<string, string> = {
   Google: "Google still lists the portal as having access: remove it at Google Account → Security → Third-party connections, then try again.",
   Composio: "The account may still exist in the Composio project: remove it in the Composio dashboard (Connected accounts), and, if you want, the app's access in your Google Account → Security → Third-party connections, then try again.",
   Microsoft: "Microsoft may still list the portal as having access: remove it in your Microsoft account's app permissions page (My Account → Apps and services, or ask your administrator), then try again.",
+  Teams: `Microsoft may still list the portal as having access: ${TEAMS_REMOVE_AT_MICROSOFT_TEXT} Then try again.`,
   QuickBooks: "QuickBooks still lists the portal as having access: remove it under the company's connected apps in QuickBooks, then try again.",
 };
 
@@ -61,6 +63,11 @@ export function connectResultMessage(params: SearchParams, microsoft: MicrosoftC
     case "consent_ok":
     case "consent_failed":
     case "disconnected":
+      if (baseName === "Teams") {
+        // Neutral, driven by the URL: it does not assert that anything was deleted. (A crafted link can show it; it grants nothing.)
+        if (code !== "disconnected") return null;
+        return { tone: "success", title: "Teams disconnect", description: `If you disconnected a Teams account, the access the portal stored for it was deleted here. Nothing is sent to Microsoft, so Microsoft may still list the app: ${TEAMS_REMOVE_AT_MICROSOFT_TEXT}` };
+      }
       if (baseName !== "Microsoft") return null;
       // The consent return is shown only where Microsoft is enabled: a crafted link cannot put it on a lane that does not use Microsoft.
       if (code !== "disconnected" && !microsoft.enabled) return null;
@@ -74,6 +81,7 @@ export function connectResultMessage(params: SearchParams, microsoft: MicrosoftC
           "If you disconnected a Microsoft account, the access the portal stored for it was deleted here. Nothing is sent to Microsoft, so Microsoft may still list the app: you or your Microsoft 365 administrator can remove the app's access in your Microsoft account or in the Entra admin center (Enterprise apps → the app → Permissions).",
       };
     case "ok":
+      if (baseName === "Teams") return { tone: "success", title: "Teams connected", description: "Your Teams account is connected. Open Messages to use it. The portal stores no message text." };
       if (baseName === "Composio") return { tone: "success", title: `${name} connected`, description: "The account was checked and saved. If it replaced an earlier account, the earlier one stays in Composio until it is removed by hand. Mail and calendar keep syncing through the Google connection until this company is switched to Composio." };
       return { tone: "success", title: `${name} connected`, description: "Data syncs in the background. The sync times below update after the first sync." };
     case "account_refused":
@@ -83,6 +91,8 @@ export function connectResultMessage(params: SearchParams, microsoft: MicrosoftC
         description:
           (baseName === "Composio"
             ? `The ${toolkit ?? "account"} you chose is not in this company's mailbox list, is for a different service, or is already connected to another company. Nothing was saved in Jarvis. Ask your administrator to add the address to the mailbox list.`
+            : name === "Teams"
+            ? "The Teams account you chose is not on a domain this company allows, is a guest account, grants more than the Teams connection may hold, is already connected to another company or by another person, or you already have a Teams account connected for this company. Nothing was saved."
             : name === "Google"
             ? "The Google account you chose is not on a domain this company allows, or is already connected to another company or to another person. Nothing was saved. Ask your administrator if you think it should be allowed."
             : `The ${name} account you chose is not the one set up for this company, or is already connected to another company. Nothing was saved.`) + ms + removeAccess,
@@ -100,6 +110,7 @@ export function connectResultMessage(params: SearchParams, microsoft: MicrosoftC
         description: `The ${name} account you chose belongs to an organisation that is not set up for this company. Nothing was saved. Sign in with your work account for this company, or ask your administrator.${ms}${removeAccess}`,
       };
     case "admin_consent_required":
+      if (baseName === "Teams") return { tone: "alert", title: "Teams needs administrator approval", description: `Nothing was saved. ${TEAMS_ADMIN_CONSENT_TEXT} Then sign in to Teams again.` };
       return {
         tone: "alert",
         title: `${name} needs administrator approval`,

@@ -171,6 +171,13 @@ export const RESTRICTED_NAMES = {
   // The instance that can create, renew and stop subscriptions, and the renewer built on it (reached by the T-040 renewal job only).
   microsoftSubscriptions: { allow: ["packages/connectors/src/microsoft/index.ts"], hint: "subscriptions are created, renewed and stopped by the renewal job only" },
   microsoftSubscriptionRenewer: { allow: ["packages/connectors/src/microsoft/index.ts", "packages/connectors/src/health/index.ts"], hint: "only the T-040 renewal registry calls the Microsoft renewer" },
+  // T-279: the Teams Graph write client (an exact allow-list of three POST templates for a message the person pressed Send on) is built only by the approvals wiring (T-286). Nothing
+  // builds one in this build: the two test files below exercise the client itself and the boundary.
+  createTeamsWriteClient: {
+    allow: [...APPROVALS, "packages/connectors/src/teams/write-client.test.ts", "packages/connectors/src/teams/write-boundary.test.ts"],
+    allowReexport: CONNECTORS,
+    hint: "only the approvals package sends Teams messages",
+  },
   loadGoogleWriteConnection: { allow: [...APPROVALS, "packages/connectors/src/google/index.ts"], allowReexport: CONNECTORS, hint: "only the approvals package loads a write connection" },
   mintApprovedAction: { allow: APPROVALS, hint: "only the approvals package mints approved actions" },
   getSupabaseSecretKey: { allow: [...LANE_ROUTER, ...TOKEN_VAULT, ...CORE_ENV], hint: "lane router and token vault only" },

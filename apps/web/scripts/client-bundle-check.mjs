@@ -23,6 +23,8 @@ export const CANARIES = {
   // T-251: the Microsoft app secrets are server-only.
   GRAPH_CLIENT_SECRET: "canary-graph-client-secret-2f7a96c1",
   GRAPH_USGOV_CLIENT_SECRET: "canary-graph-usgov-client-secret-8d04b5e3",
+  // T-279: the Teams app (a second Entra registration) has its own secret; server-only as well.
+  GRAPH_TEAMS_CLIENT_SECRET: "canary-graph-teams-client-secret-4b17c9e0",
 };
 
 /**

@@ -63,7 +63,7 @@ const answer = (name: string, fallback: unknown = { data: null, error: null }) =
 
 function builder(table: string) {
   const q: Record<string, unknown> = {};
-  for (const m of ["select", "eq", "in", "maybeSingle"]) q[m] = () => q;
+  for (const m of ["select", "eq", "in", "order", "maybeSingle"]) q[m] = () => q;
   q.then = (res: (v: unknown) => unknown, rej?: (e: unknown) => unknown) => hit(`from:${table}`).then(() => res(answer(`from:${table}`)), rej);
   return q;
 }
@@ -97,6 +97,13 @@ function makeGuards() {
 }
 let guardsObj = makeGuards();
 vi.mock("@/lib/guards", () => ({ guards: async () => guardsObj }));
+// T-280: the company's Teams settings come from the lane config through the connectors (a recorded read here; the real reader is tested in packages/connectors).
+vi.mock("@nichols/connectors/teams-settings", () => ({
+  teamsSettingsOf: async () => {
+    await hit("teams.settings");
+    return { enabled: true, cloudSupported: true, features: ["chat_read"], needsAdminConsent: false };
+  },
+}));
 
 type El = ReactElement<{ children?: ReactNode }>;
 /** Resolves a server component tree the way a render does: a parent before its children, siblings together, Suspense children included. Records each async component it runs. */
@@ -187,7 +194,6 @@ describe("round trips and sequential levels per menu page (T-276)", () => {
     ["claude", "claude"],
     ["chatgpt", "chatgpt"],
     ["contacts", "contacts"],
-    ["messages", "messages"],
   ])("%s: no gate, the lane check and the list in one level (audit: 2 reads in 1 level; unchanged), and the heading is drawn without any read", async (_n, dir) => {
     const { default: Page } = await (PAGES[dir] as NonNullable<(typeof PAGES)[string]>)();
     const tree = Page({ params: params() } as never) as ReactNode;
@@ -197,6 +203,33 @@ describe("round trips and sequential levels per menu page (T-276)", () => {
     await resolve(tree);
     expect(t.calls.map((c) => c.name).sort()).toEqual(["lane.check", "lane.list"]);
     expect(maxLevel()).toBe(1);
+  });
+});
+
+describe("Messages (T-280)", () => {
+  it("the gate, the lane list and the Teams reads (settings and own rows) start together: no read waits for another beyond the one lane check", async () => {
+    t.answers["from:connections"] = { data: [], error: null };
+    const { default: Page } = await import("@/app/[laneId]/messages/page");
+    await resolve(Page({ params: params() } as never) as ReactNode);
+    expect(t.calls.map((c) => c.name).sort()).toEqual(["from:connections", "from:lane_config_current", "lane.check", "lane.list", "teams.settings"]);
+    expect(maxLevel()).toBe(2);
+    expect(count("lane.check")).toBe(1);
+    expect(count("teams.settings")).toBe(1); // read once for the page (spec 11: no repeated lane_config read)
+  });
+
+  it("a limited company that does not list `messages` is sent Home before the page draws anything", async () => {
+    t.answers["from:lane_config_current"] = HIDE("comms");
+    t.rendered = [];
+    const { default: Page } = await import("@/app/[laneId]/messages/page");
+    await expect(resolve(Page({ params: params() } as never) as ReactNode)).rejects.toThrow("REDIRECT /PKG");
+    expect(t.rendered).toEqual(["ModuleGate"]);
+    for (const r of t.roots) r.clear();
+  });
+
+  it("the page reads no Microsoft and makes no external call: its imports hold no Graph client", async () => {
+    const { readFileSync } = await import("node:fs");
+    const src = readFileSync(new URL("../components/messages-page.tsx", import.meta.url), "utf8") + readFileSync(new URL("../lib/teams-messages.ts", import.meta.url), "utf8");
+    expect(src).not.toMatch(/graph\.microsoft|fetch\(|@nichols\/connectors\/(?!teams-settings)/);
   });
 });
 
