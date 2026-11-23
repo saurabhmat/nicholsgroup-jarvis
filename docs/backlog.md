@@ -1541,4 +1541,5 @@ Standing rules for every task in this phase (not repeated below):
   4. Contacts and Messages: placeholder pages for now? Where does Messages go in the order?
   5. Pub K Group only, or the same sidebar for every company (Nichols Capital too)?
   6. iPhone bottom tabs: change them too, or leave them?
+- answers so far (Saurabh, Nov 23, 2026): questions 1 and 2: "For ChatGPT and Claude, we will be embedding the Claude and the ChatGPT interface there. Maybe some use a third-party tool to embed. We are just embedding it. We are not doing anything more around that." So Claude and ChatGPT are two new pages that embed the vendors' own chat interfaces; no portal chat is built for them. Not yet said: what happens to today's Assistant page. To check before building: claude.ai and chatgpt.com normally refuse to load inside another site's frame, so the embed method (a third-party tool, or a link that opens the site) has to be found first. Questions 3 to 6 are still open.
 - acceptance: to be written once the questions are answered.
