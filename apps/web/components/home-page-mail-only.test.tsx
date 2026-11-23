@@ -14,7 +14,12 @@ const m = vi.hoisted(() => ({
   financeCalls: 0,
 }));
 vi.mock("@/lib/lane-page", () => ({ loadLane: async () => ({ laneId: "XX", name: "Synthetic Co", lanes: [], userId: "u1" }) }));
-const client = () => ({ schema: () => ({ from: () => ({ select: () => ({ eq: () => ({ maybeSingle: async () => ({ data: m.row, error: null }) }) }) }) }) });
+// T-276: the gate reads the shared whole-config row; the {modules, limited, news} rows of these tests are wrapped as the stored config.
+const stored = () => {
+  const r = m.row as { modules?: unknown; limited?: unknown; news?: unknown } | null;
+  return r ? { config: { enabled_modules: r.modules, limit_to_enabled_modules: r.limited, news: r.news } } : null;
+};
+const client = () => ({ schema: () => ({ from: () => ({ select: () => ({ eq: () => ({ maybeSingle: async () => ({ data: stored(), error: null }) }) }) }) }) });
 vi.mock("@/lib/guards", () => ({ guards: async () => ({ requireLane: async () => ({ client: client(), session: { userId: "u1" } }), requireRole: async () => ({ client: client(), session: { userId: "u1" } }) }) }));
 vi.mock("@/app/[laneId]/briefing-actions", () => ({ ensureFreshBriefing: async () => ({ started: false, gate: "not_stale" }), regenerateBriefing: async () => ({ started: false, gate: "not_stale" }), briefingRunState: async () => null }));
 vi.mock("@/lib/briefing-setup", () => ({ aiSetupFailure: () => null }));

@@ -2,11 +2,11 @@
 // opens the message, whose text is read live from its own provider (message-page.tsx). Nothing is changed in the mailbox (read-only).
 // T-260: a viewer with a Microsoft mailbox sees Google and Microsoft mail together, each row with its provider and account and "Open in Gmail" / "Open in Outlook".
 import Link from "next/link";
-import { Suspense } from "react";
+import { cache, Suspense } from "react";
 import { Alert, AlertDescription, AlertTitle, Badge, cn, EmptyState, laneHref, PageHeader } from "@nichols/ui";
 import { senderLabel } from "@nichols/briefing/domain";
 import { guards } from "@/lib/guards";
-import { inboxFor, INBOX_FILTERS, isWaitingView, waitingFor, type InboxFilter, type InboxRow } from "@/lib/inbox";
+import { inboxFor, INBOX_FILTERS, isWaitingView, waitingFor, type InboxFilter, type InboxRow, type InboxView, type WaitingView } from "@/lib/inbox";
 import { loadLane } from "@/lib/lane-page";
 import { freshWindowText } from "@/lib/fresh-window";
 import { CardSkeleton } from "./page-skeleton";
@@ -24,6 +24,29 @@ function when(iso: string, now: Date): string {
   return YMD.format(d) === YMD.format(now) ? TIME.format(d) : DATE.format(d);
 }
 
+type SearchParams = Promise<Record<string, string | string[] | undefined>>;
+type InboxData = { now: Date; waiting: WaitingView | null; view: InboxView | null };
+
+/**
+ * The page's reads, once per request (React cache: the key is the lane and the searchParams promise, which the route page and the list share). T-276: the
+ * route page STARTS this (startInbox) beside the module gate, so the mail query no longer waits for the gate's two reads; the list below awaits it, and it
+ * is rendered only after the gate and the lane check have answered. Every read still goes through the guards' lane check first (`inboxFor` / `waitingFor`
+ * call requireLane), and the clock is read only after the request is known (guards() waits for it).
+ */
+const inboxData = cache(async (laneId: string, searchParams: SearchParams): Promise<InboxData> => {
+  const params = await searchParams;
+  const g = await guards();
+  const now = new Date();
+  // T-240: ?view=waiting lists the older threads Home counts as "Still waiting" (same ranking, metadata only).
+  if (isWaitingView(params)) return { now, view: null, waiting: await timed("load.inbox_waiting", async () => waitingFor(g, laneId, now)) };
+  return { now, waiting: null, view: await timed("load.inbox", async () => inboxFor(g, laneId, params)) };
+});
+
+/** Called by the route page before it returns the gate: begins the reads. A failure is not reported here (the list awaits the same promise and reports it); the no-op catch only prevents an unhandled rejection if the gate redirects first. */
+export function startInbox(params: Promise<{ laneId: string }>, searchParams: SearchParams): void {
+  void params.then((p) => inboxData(p.laneId, searchParams)).catch(() => undefined);
+}
+
 export async function InboxPage({ params, searchParams }: { params: Promise<{ laneId: string }>; searchParams: Promise<Record<string, string | string[] | undefined>> }) {
   const lane = await loadLane((await params).laneId);
   // T-230 A: the header shows as soon as the lane is verified; the mail list streams in behind it.
@@ -37,13 +60,10 @@ export async function InboxPage({ params, searchParams }: { params: Promise<{ la
   );
 }
 
-async function InboxList({ laneId, searchParams }: { laneId: string; searchParams: Promise<Record<string, string | string[] | undefined>> }) {
-  const params = await searchParams;
-  const now = new Date();
+async function InboxList({ laneId, searchParams }: { laneId: string; searchParams: SearchParams }) {
+  const { now, waiting, view } = await inboxData(laneId, searchParams);
   const base = laneHref(laneId, "inbox");
-  // T-240: ?view=waiting lists the older threads Home counts as "Still waiting" (same ranking, metadata only).
-  if (isWaitingView(params)) {
-    const waiting = await timed("load.inbox_waiting", async () => waitingFor(await guards(), laneId, now));
+  if (waiting) {
     return (
       <>
         <nav aria-label="Filter mail" className="flex flex-wrap gap-2">
@@ -70,7 +90,7 @@ async function InboxList({ laneId, searchParams }: { laneId: string; searchParam
       </>
     );
   }
-  const view = await timed("load.inbox", async () => inboxFor(await guards(), laneId, params));
+  if (!view) return null;
   return (
     <>
       <nav aria-label="Filter mail" className="flex flex-wrap gap-2">

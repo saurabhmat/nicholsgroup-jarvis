@@ -3,7 +3,12 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 let row: unknown = null;
-const client = () => ({ schema: () => ({ from: () => ({ select: () => ({ eq: () => ({ maybeSingle: async () => ({ data: row, error: null }) }) }) }) }) });
+// T-276: the gate reads the shared whole-config row; this fake wraps the {modules, limited, news} rows as the stored config.
+const stored = () => {
+  const r = row as { modules?: unknown; limited?: unknown; news?: unknown } | null;
+  return r ? { config: { enabled_modules: r.modules, limit_to_enabled_modules: r.limited, news: r.news } } : null;
+};
+const client = () => ({ schema: () => ({ from: () => ({ select: () => ({ eq: () => ({ maybeSingle: async () => ({ data: stored(), error: null }) }) }) }) }) });
 vi.mock("@/lib/guards", () => ({ guards: async () => ({ requireLane: async () => ({ client: client(), session: { userId: "u" } }) }), renewSessionFor: async () => undefined }));
 const handled: string[] = [];
 const handler = (name: string) => async () => (handled.push(name), new Response("handled", { status: 200 }));

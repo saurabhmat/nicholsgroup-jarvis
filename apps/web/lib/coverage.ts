@@ -6,6 +6,7 @@ import type { Guards } from "@nichols/core/auth";
 import type { LaneClient } from "@nichols/core/lane-router";
 import { parseCoverageRows, toCoverage, type CoverageItem } from "@nichols/briefing/domain";
 import { briefingConfigFrom } from "./briefing";
+import { coverageRows, laneConfigRow } from "./lane-reads";
 
 export type CoverageView = { items: CoverageItem[]; unavailable: boolean };
 
@@ -15,8 +16,8 @@ type Db = Pick<LaneClient, "schema">;
 export const needsAttention = (items: CoverageItem[]): boolean => items.some((c) => c.state === "stale" || c.state === "error");
 
 export async function loadCoverage(client: Db, laneId: string, now: Date): Promise<CoverageView> {
-  const core = client.schema("core");
-  const [cfg, cov] = await Promise.all([core.from("lane_config_current").select("config").eq("lane_id", laneId).maybeSingle(), core.rpc("briefing_coverage", { p_lane: laneId })]);
+  // T-276: both reads are shared with the rest of the render (Home asks for the same two).
+  const [cfg, cov] = await Promise.all([laneConfigRow(client, laneId), coverageRows(client, laneId)]);
   if (cov.error) throw new Error("coverage unavailable");
   // A role that may not read the config still gets the default stale threshold.
   const { briefing } = briefingConfigFrom(cfg.error ? null : cfg.data?.config);

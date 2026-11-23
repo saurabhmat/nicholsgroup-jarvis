@@ -1,16 +1,18 @@
 // Claude and ChatGPT (T-271, Saurabh Nov 23, 2026): the vendor's own chat, nothing built around it. The lane check runs as on every
 // page; then one card with a button that opens the vendor's site in a new tab (`noopener noreferrer`: the site gets no handle on this
 // window and no referrer). No portal data is passed. If an embed method is found later, it replaces the card on this page.
+import type { ReactNode } from "react";
 import { buttonVariants, Card, CardContent, CardDescription, CardHeader, CardTitle, cn, navItem, PageHeader } from "@nichols/ui";
 import { EXTERNAL_CHATS, type ExternalChatKey } from "@/lib/external-chat";
-import { loadLane } from "@/lib/lane-page";
+import { LaneEyebrow } from "@/components/module-page";
 
-export async function ExternalChatPage({ chat, params }: { chat: ExternalChatKey; params: Promise<{ laneId: string }> }) {
-  const lane = await loadLane((await params).laneId);
-  return <ExternalChatView chat={chat} laneName={lane.name} />;
+// T-276: the heading and the card are fixed text and are drawn outside Suspense (part of the prefetched shell). The company name in the eyebrow, and with it
+// the page's lane check (notFound / redirect, on every navigation), comes from a small async child (module-page.tsx `LaneName`).
+export function ExternalChatPage({ chat, params }: { chat: ExternalChatKey; params: Promise<{ laneId: string }> }) {
+  return <ExternalChatView chat={chat} laneName={<LaneEyebrow params={params} />} />;
 }
 
-export function ExternalChatView({ chat, laneName }: { chat: ExternalChatKey; laneName: string }) {
+export function ExternalChatView({ chat, laneName }: { chat: ExternalChatKey; laneName: ReactNode }) {
   const c = EXTERNAL_CHATS[chat];
   const item = navItem(chat);
   return (

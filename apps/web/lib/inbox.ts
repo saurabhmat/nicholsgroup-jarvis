@@ -8,6 +8,7 @@ import type { LaneClient } from "@nichols/core/lane-router";
 import { gmailThreadUrl } from "@nichols/connectors/comms";
 import { httpsUrl, needsSourceLabels, openInText, parseCoverageRows, sourceLabel, sourceTags, type SourceTag } from "@nichols/briefing/domain";
 import { briefingFor } from "./briefing";
+import { coverageRows } from "./lane-reads";
 
 export const INBOX_FILTERS = ["all", "unread", "important"] as const;
 export type InboxFilter = (typeof INBOX_FILTERS)[number];
@@ -93,11 +94,12 @@ type Db = Pick<LaneClient, "schema">;
 /**
  * T-260: provider and account per mail connection from Coverage (core.briefing_coverage answers only for the caller's own accounts), but only when the
  * viewer has a non-Google connection; otherwise undefined and rows carry no label. A Coverage failure also gives undefined: the rows still show, unlabelled.
+ * T-276: this does not need the message ids, only whether any row came back, so the list loader STARTS it together with the list and ignores it when the list is
+ * empty. It never throws (every failure is undefined), so a list that fails first leaves no unhandled rejection behind.
  */
-async function labelTags(client: Db, laneId: string, rows: unknown): Promise<Record<string, SourceTag> | undefined> {
-  if (!Array.isArray(rows) || rows.length === 0) return undefined;
+async function labelTags(client: Db, laneId: string): Promise<Record<string, SourceTag> | undefined> {
   try {
-    const { data, error } = await client.schema("core").rpc("briefing_coverage", { p_lane: laneId });
+    const { data, error } = await coverageRows(client, laneId);
     if (error) return undefined;
     const items = parseCoverageRows(data).map((c) => ({ stream: c.stream, connectionId: c.connectionId, provider: c.provider, account: c.account }));
     return needsSourceLabels(items.map((c) => c.provider)) ? sourceTags(items, "mail") : undefined;
@@ -107,14 +109,18 @@ async function labelTags(client: Db, laneId: string, rows: unknown): Promise<Rec
 }
 
 export async function loadInbox(client: Db, laneId: string, filter: InboxFilter, cursor: InboxCursor | null): Promise<InboxView> {
-  const { data, error } = await client.schema("core").rpc("inbox_messages", {
-    p_lane: laneId,
-    p_filter: filter,
-    p_limit: PAGE_SIZE,
-    ...(cursor ? { p_before: cursor.before, p_before_id: cursor.id } : {}),
-  });
+  const listP = Promise.resolve(
+    client.schema("core").rpc("inbox_messages", {
+      p_lane: laneId,
+      p_filter: filter,
+      p_limit: PAGE_SIZE,
+      ...(cursor ? { p_before: cursor.before, p_before_id: cursor.id } : {}),
+    }),
+  );
+  const tagsP = labelTags(client, laneId);
+  const { data, error } = await listP;
   if (error) throw new Error("inbox unavailable");
-  const rows = toRows(data, await labelTags(client, laneId, data));
+  const rows = toRows(data, Array.isArray(data) && data.length > 0 ? await tagsP : undefined);
   const last = rows[rows.length - 1];
   return { filter, rows, next: rows.length === PAGE_SIZE && last ? { before: last.receivedAt, id: last.messageId } : null };
 }

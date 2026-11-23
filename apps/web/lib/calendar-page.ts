@@ -6,6 +6,7 @@ import type { Guards } from "@nichols/core/auth";
 import type { LaneClient } from "@nichols/core/lane-router";
 import { httpsUrl, openInText, sourceLabel } from "@nichols/briefing/domain";
 import { isYmd, type Period, type Span } from "./calendar-time";
+import { timed } from "./timed";
 
 /** The page shows at most this many events (the function returns one more, to say "more than shown"). */
 export const EVENT_CAP = 500;
@@ -140,11 +141,10 @@ type Db = Pick<LaneClient, "schema">;
 /** The page's data for one lane and window. Throws CalendarLoadError on any database error. */
 export async function loadCalendar(client: Db, laneId: string, userId: string, period: Pick<Period, "from" | "to">): Promise<CalendarData> {
   const core = client.schema("core");
-  const status = await core.rpc("home_calendar_status", { p_lane: laneId });
-  if (status.error) throw new CalendarLoadError("calendar_status");
-  if (status.data === "not_connected") return { state: "not_connected" };
-  if (status.data !== "connected") return { state: "no_access" };
-  const [conns, events] = await Promise.all([
+  // T-276: the three reads are independent, so they run together (the status used to go first, then the other two). When the status is not "connected"
+  // the other two answers are ignored (their errors too): a person without a calendar, or without access, gets the same state as before.
+  const [status, conns, events] = await Promise.all([
+    core.rpc("home_calendar_status", { p_lane: laneId }),
     // The caller's OWN accounts (an owner or admin can read every connection's health; the legend is the person's calendars only). A Composio connection has no synced index.
     core
       .from("connections")
@@ -155,6 +155,9 @@ export async function loadCalendar(client: Db, laneId: string, userId: string, p
       .in("provider", [...PROVIDERS]),
     core.rpc("calendar_events", { p_lane: laneId, p_from: period.from.toISOString(), p_to: period.to.toISOString() }),
   ]);
+  if (status.error) throw new CalendarLoadError("calendar_status");
+  if (status.data === "not_connected") return { state: "not_connected" };
+  if (status.data !== "connected") return { state: "no_access" };
   const failed = [conns.error && "connections", events.error && "events"].filter(Boolean);
   if (failed.length > 0) throw new CalendarLoadError(failed.join(","));
   const all = toEvents(events.data);
@@ -167,7 +170,7 @@ export async function loadCalendar(client: Db, laneId: string, userId: string, p
 export async function calendarFor(g: Pick<Guards, "requireLane">, laneId: string, period: Period, load = loadCalendar): Promise<CalendarData> {
   const { client, session } = await g.requireLane(laneId as Parameters<Guards["requireLane"]>[0]);
   try {
-    return await load(client, laneId, session.userId, period);
+    return await timed("load.calendar", () => load(client, laneId, session.userId, period));
   } catch (e) {
     console.error("[calendar] unavailable", { laneId, view: period.view, parts: e instanceof CalendarLoadError ? e.parts : e instanceof Error ? e.name : typeof e });
     return { state: "unavailable" };

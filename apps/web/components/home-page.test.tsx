@@ -7,7 +7,27 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { cleanup, render, screen, within } from "@testing-library/react";
 import type { HomeView } from "@/lib/home";
 
-const m = vi.hoisted(() => ({ jobFailures: null as unknown, briefCoverage: [] as unknown[], financeView: false, owner: false, mail: { access: false } as { access: boolean; attention?: unknown[]; more?: number; money?: unknown[]; mailboxOf?: Record<string, string> }, coverage: { items: [], unavailable: false } as unknown, view: null as unknown, progress: null as unknown, detail: { state: "no_access" } as unknown, userName: undefined as string | undefined, cookieTz: undefined as string | undefined, briefingTz: [] as string[], freshHours: 48, finance: { state: "not_connected", asOf: null, lastSyncAt: null, connectionStatus: null, cash: { reason: null, total: null, asOf: null, accounts: [], unmapped: 0 }, ar: { reason: null, over30: null, invoices: 0, unmapped: 0 }, pnl: { reason: null, income: null, expenses: null, net: null, start: null, end: null, method: null, partial: false, asOf: null } } as unknown }));
+const m = vi.hoisted(() => ({ jobFailures: null as unknown, briefCoverage: [] as unknown[], financeView: false, owner: false, mail: { access: false } as { access: boolean; attention?: unknown[]; more?: number; money?: unknown[]; mailboxOf?: Record<string, string>; sourceOf?: Record<string, { provider: string }> }, gateHold: null as Promise<void> | null, spans: [] as string[], financeReads: 0, replyChecks: [] as unknown[], replyFails: false, coverage: { items: [], unavailable: false } as unknown, view: null as unknown, progress: null as unknown, detail: { state: "no_access" } as unknown, userName: undefined as string | undefined, cookieTz: undefined as string | undefined, briefingTz: [] as string[], freshHours: 48, finance: { state: "not_connected", asOf: null, lastSyncAt: null, connectionStatus: null, cash: { reason: null, total: null, asOf: null, accounts: [], unmapped: 0 }, ar: { reason: null, over30: null, invoices: 0, unmapped: 0 }, pnl: { reason: null, income: null, expenses: null, net: null, start: null, end: null, method: null, partial: false, asOf: null } } as unknown }));
+// T-276: React cache() memoises per render; a test is one render, so it is memoised here by argument identity and cleared before every test.
+const memo = vi.hoisted(() => ({ roots: [] as Map<unknown, unknown>[] }));
+vi.mock("react", async (orig) => ({
+  ...(await orig<typeof import("react")>()),
+  cache: <A extends unknown[], R>(fn: (...a: A) => R) => {
+    const root = new Map<unknown, unknown>();
+    memo.roots.push(root);
+    const RES = Symbol("r");
+    return (...a: A): R => {
+      let node = root;
+      for (const x of a) {
+        let next = node.get(x) as Map<unknown, unknown> | undefined;
+        if (!next) node.set(x, (next = new Map()));
+        node = next;
+      }
+      if (!node.has(RES)) node.set(RES, fn(...a));
+      return node.get(RES) as R;
+    };
+  },
+}));
 vi.mock("@/lib/lane-page", () => ({ loadLane: async () => ({ laneId: "PKG", name: "Pub K Group", lanes: [], userId: "u1" }) }));
 vi.mock("@/lib/guards", () => ({ guards: async () => ({ requireLane: async () => ({ client: {}, session: { userId: "u1" } }), requireRole: async (_l: string, roles: string[]) => { if (m.owner && roles.includes("owner")) return { client: {}, session: { userId: "u1" } }; throw new Error("not admin"); } }) }));
 vi.mock("@/app/[laneId]/briefing-actions", () => ({ ensureFreshBriefing: async () => ({ started: false, gate: "not_stale" }), regenerateBriefing: async () => ({ started: false, gate: "not_stale" }), briefingRunState: async () => null }));
@@ -16,16 +36,27 @@ vi.mock("next/headers", () => ({ cookies: async () => ({ get: (n: string) => (n 
 vi.mock("next/navigation", () => ({ useRouter: () => ({ refresh: () => undefined }) }));
 vi.mock("@/lib/briefing", async (orig) => ({
   ...(await orig<typeof import("@/lib/briefing")>()),
-  briefingFor: async (_c: unknown, _l: string, _n: Date, tz: string) => (m.briefingTz.push(tz), { viewerTz: "America/New_York", coverage: m.briefCoverage, coverageLine: "Coverage: test.", calendar: { access: false }, mail: m.mail.access ? { access: true, attention: [], more: 0, stillWaiting: [], money: [], mailboxOf: {} } : { access: false }, config: { attention: { fresh_hours: m.freshHours } }, mailboxes: [] }),
+  briefingFor: async (_c: unknown, _l: string, _n: Date, tz: string) => (m.briefingTz.push(tz), { viewerTz: "America/New_York", coverage: m.briefCoverage, coverageLine: "Coverage: test.", calendar: { access: false }, mail: m.mail.access ? { access: true, attention: [], more: 0, stillWaiting: [], money: [], mailboxOf: {}, ...(m.mail.sourceOf ? { sourceOf: m.mail.sourceOf } : {}) } : { access: false }, config: { attention: { fresh_hours: m.freshHours } }, mailboxes: [] }),
 }));
 vi.mock("@/lib/coverage", async (orig) => ({ ...(await orig<typeof import("@/lib/coverage")>()), coverageFor: async () => m.coverage }));
 vi.mock("@/lib/job-failures", async (orig) => ({ ...(await orig<typeof import("@/lib/job-failures")>()), jobFailureBannerFor: async () => m.jobFailures }));
-vi.mock("@/lib/timed", () => ({ timed: async <T,>(_n: string, f: () => Promise<T>) => f() }));
+vi.mock("@/lib/timed", () => ({ timed: async <T,>(n: string, f: () => Promise<T>) => (m.spans.push(n), f()) }));
 vi.mock("@/lib/onboarding-progress", () => ({
   onboardingFor: async () => m.progress,
 }));
 vi.mock("@/lib/first-name", async (orig) => ({ ...(await orig<typeof import("@/lib/first-name")>()), firstNameFor: async () => m.userName }));
-vi.mock("@/lib/home-finance", async (orig) => ({ ...(await orig<typeof import("@/lib/home-finance")>()), homeFinanceFor: async () => m.finance, hasFinanceView: async () => m.financeView }));
+vi.mock("@/lib/lane-modules", async (orig) => {
+  const actual = await orig<typeof import("@/lib/lane-modules")>();
+  return { ...actual, laneGate: async (laneId: string) => (await m.gateHold, actual.laneGate(laneId)) };
+});
+vi.mock("@/lib/reply-microsoft-rows", () => ({
+  replyableMicrosoftConnections: async (_d: unknown, _l: string, sourceOf: unknown) => {
+    m.replyChecks.push(sourceOf);
+    if (m.replyFails) throw new Error("down");
+    return new Set<string>(["c-ms"]);
+  },
+}));
+vi.mock("@/lib/home-finance", async (orig) => ({ ...(await orig<typeof import("@/lib/home-finance")>()), homeFinanceFor: async () => (m.financeReads++, m.finance), hasFinanceView: async () => m.financeView }));
 vi.mock("@/lib/home-finance-detail", async (orig) => ({ ...(await orig<typeof import("@/lib/home-finance-detail")>()), homeFinanceDetailFor: async () => m.detail }));
 vi.mock("@/lib/home", async (orig) => ({ ...(await orig<typeof import("@/lib/home")>()), homeFor: async () => m.view }));
 
@@ -65,6 +96,7 @@ async function resolve(node: ReactNode, fallbacks: ReactNode[]): Promise<ReactNo
 }
 
 async function draw() {
+  for (const r of memo.roots) r.clear(); // each draw is one render (one request): nothing is shared between two draws in a test
   const fallbacks: ReactNode[] = [];
   render(<>{await resolve(await HomePage({ params: Promise.resolve({ laneId: "PKG" }) }), fallbacks)}</>);
   return fallbacks;
@@ -73,6 +105,7 @@ const defaultFinance = m.finance;
 const defaultDetail = m.detail;
 // The greeting follows the clock (T-240): fix it at 9:00 AM Eastern so the tests do not depend on when they run.
 beforeEach(() => {
+  for (const r of memo.roots) r.clear();
   vi.useFakeTimers({ toFake: ["Date"] });
   vi.setSystemTime(new Date("2026-11-11T14:00:00Z"));
 });
@@ -92,6 +125,10 @@ afterEach(() => {
   m.coverage = { items: [], unavailable: false };
   m.briefCoverage = [];
   m.jobFailures = null;
+  m.gateHold = null;
+  m.financeReads = 0;
+  m.replyChecks = [];
+  m.replyFails = false;
 });
 
 describe("Home display zone (T-237 polish)", () => {
@@ -354,5 +391,49 @@ describe("the automatic summary controls (T-235 part 1)", () => {
     m.mail = { access: true };
     await draw();
     expect(screen.queryByTestId("briefing-menu-button")).toBeNull();
+  });
+});
+
+describe("faster navigation (T-276)", () => {
+  it("the header is returned once the lane check has answered: the module list is not awaited there", async () => {
+    m.view = view();
+    m.gateHold = new Promise<void>(() => undefined); // the module list never answers
+    const page = await Promise.race([HomePage({ params: Promise.resolve({ laneId: "PKG" }) }), new Promise<"slow">((r) => setTimeout(() => r("slow"), 300))]);
+    expect(page).not.toBe("slow");
+  });
+
+  it("the Finance reads start with the page, not after every other Home read, and are read once for the KPI row and the Finance section together", async () => {
+    m.view = view({ feeds: allFeeds as HomeView["feeds"] });
+    m.finance = toHomeFinance([okRow]);
+    const page = HomePage({ params: Promise.resolve({ laneId: "PKG" }) });
+    await page;
+    await new Promise((r) => setTimeout(r, 20));
+    expect(m.financeReads).toBe(1); // under way although none of the sections has been rendered yet
+    await resolve(await page, []);
+    expect(m.financeReads).toBe(1);
+  });
+
+  it("the Microsoft reply check starts for an owner with a Microsoft row, never for Google-only rows, and a failed check leaves the rows drawn without Microsoft Reply", async () => {
+    m.view = view();
+    m.owner = true;
+    m.mail = { access: true, sourceOf: { "c-g": { provider: "google" } } };
+    await draw();
+    expect(m.replyChecks).toEqual([]);
+    cleanup();
+    m.mail = { access: true, sourceOf: { "c-ms": { provider: "microsoft" }, "c-g": { provider: "google" } } };
+    await draw();
+    expect(m.replyChecks).toHaveLength(1);
+    expect(m.spans).toContain("load.microsoft_reply"); // T-276: a timing span, so a hosted measurement shows it
+    cleanup();
+    m.replyChecks = [];
+    m.replyFails = true;
+    await draw();
+    expect(m.replyChecks).toHaveLength(1);
+    expect(screen.getByRole("region", { name: "Needs your attention" })).toBeTruthy();
+    cleanup();
+    m.replyChecks = [];
+    m.owner = false; // a viewer who cannot reply has nothing to check
+    await draw();
+    expect(m.replyChecks).toEqual([]);
   });
 });

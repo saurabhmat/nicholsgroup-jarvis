@@ -3,6 +3,7 @@
 // The period toggle is a set of links (`?period=week|mtd|ytd`): the page renders per request on the server. Subscriptions
 // (Stripe, GoHighLevel) stay empty until those sources are connected. A role without the finance view sees no figures.
 import Link from "next/link";
+import { cache } from "react";
 import { EmptyState, KpiCard, PageHeader, PageSection, PERIODS, laneHref } from "@nichols/ui";
 import { guards } from "@/lib/guards";
 import { loadLane } from "@/lib/lane-page";
@@ -337,9 +338,25 @@ export function FinanceView({ laneId, laneName, period, data }: { laneId: string
   );
 }
 
-export async function FinancePage({ params, searchParams }: { params: Promise<{ laneId: string }>; searchParams?: Promise<Record<string, string | string[] | undefined>> }) {
-  const lane = await loadLane((await params).laneId);
+type SearchParams = Promise<Record<string, string | string[] | undefined>>;
+
+/**
+ * The page's reads, once per request (React cache: the key is the lane and the searchParams promise, shared by the route page and the page). T-276: the route
+ * page STARTS this (startFinance) beside the module gate; the page awaits it after its own lane check, and renders only after the gate has answered. Every
+ * loader calls the guards' lane check before any query; the figures are drawn only by FinancePage, after the gate and `loadLane`.
+ */
+const financeData = cache(async (laneId: string, searchParams: SearchParams | undefined) => {
   const period = parsePeriod(searchParams ? (await searchParams).period : undefined);
-  const data = await loadData(lane.laneId, period);
+  return { period, data: await loadData(laneId, period) };
+});
+
+/** Called by the route page before it returns the gate: begins the reads. A failure is reported where the page awaits it; the no-op catch only prevents an unhandled rejection if the gate redirects first. */
+export function startFinance(params: Promise<{ laneId: string }>, searchParams: SearchParams | undefined): void {
+  void params.then((p) => financeData(p.laneId, searchParams)).catch(() => undefined);
+}
+
+export async function FinancePage({ params, searchParams }: { params: Promise<{ laneId: string }>; searchParams?: SearchParams }) {
+  const lane = await loadLane((await params).laneId);
+  const { period, data } = await financeData(lane.laneId, searchParams);
   return <FinanceView laneId={lane.laneId} laneName={lane.name} period={period} data={data} />;
 }
