@@ -25,7 +25,7 @@
     "@nichols/ui": "workspace:*",
     "fflate": "0.8.2",
     "zod": "4.6.7",
-    "next": "16.4.2",
+    "next": "16.4.6",
     "react": "19.3.0",
     "react-dom": "19.3.0"
   },
@@ -40,7 +40,7 @@
     "@types/react-dom": "^19",
     "axe-core": "4.14.0",
     "eslint": "^9",
-    "eslint-config-next": "16.4.2",
+    "eslint-config-next": "16.4.6",
     "jsdom": "30.1.1",
     "tailwindcss": "^4",
     "typescript": "^5",
