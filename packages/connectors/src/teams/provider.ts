@@ -161,7 +161,7 @@ export function createTeamsOAuthProvider(deps: TeamsProviderDeps): OAuthProvider
       return names === undefined ? undefined : { unexpected_scopes: names };
     },
     failureDetail(cause) {
-      return isConnectorError(cause) ? TEAMS_FAILURE_DETAILS[cause.info.message] : undefined;
+      return isConnectorError(cause) && Object.hasOwn(TEAMS_FAILURE_DETAILS, cause.info.message) ? TEAMS_FAILURE_DETAILS[cause.info.message] : undefined;
     },
     // Microsoft's `invalid_scope` (the lane lists a feature the Entra app does not have) is a set-up problem, not a cancelled connect.
     callbackErrorDetail(query) {

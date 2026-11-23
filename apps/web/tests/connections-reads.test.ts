@@ -25,36 +25,38 @@ function production(): string[] {
 }
 
 type Kind = "filtered" | "by-id" | "all" | "excluded";
-const READS: Record<string, Kind> = {
-  "apps/web/lib/calendar-page.ts": "filtered", // .in("provider", google, microsoft), the caller's own
-  "apps/web/lib/composio-connection.ts": "filtered", // transport composio rows of a toolkit
-  "apps/web/lib/google-connection.ts": "filtered", // .eq("provider", provider) for google / microsoft
-  "apps/web/lib/home.ts": "excluded", // .neq("provider", "microsoft_teams"): Home's feeds and attention list
-  "apps/web/lib/quickbooks-connection.ts": "filtered", // provider quickbooks
-  "apps/web/lib/teams-connection.ts": "filtered", // provider microsoft_teams, on purpose (the Teams section)
-  "packages/connectors/src/composio/store.ts": "filtered", // transport composio
-  "packages/connectors/src/health/store.ts": "all", // token health: every usable native connection, Teams has its own checker and skip
-  "packages/connectors/src/microsoft/identity.ts": "by-id",
-  "packages/connectors/src/quickbooks/features.ts": "by-id",
-  "packages/connectors/src/quickbooks/reconnect.ts": "by-id",
-  "packages/connectors/src/sync/store.ts": "by-id",
-  "packages/connectors/src/sync/targets.ts": "filtered", // .in("provider", mail / calendar providers)
-  "packages/connectors/src/teams/identity.ts": "by-id",
-  "packages/connectors/src/vault/connections.ts": "filtered", // ensure/find by provider and account, listMailAccounts .in(google, microsoft)
-  "packages/connectors/src/vault/loader.ts": "by-id",
-  "packages/modules/approvals/src/server/wire.ts": "by-id",
-  "packages/modules/briefing/src/jobs/index.ts": "filtered", // .in("provider", google, microsoft): who owns a mailbox
+/** [kind, how many `.from("connections")` queries the file has]: a second query in a listed file changes the count and must be re-reviewed. */
+const READS: Record<string, [Kind, number]> = {
+  "apps/web/lib/calendar-page.ts": ["filtered", 1], // .in("provider", google, microsoft), the caller's own
+  "apps/web/lib/composio-connection.ts": ["filtered", 1], // transport composio rows of a toolkit
+  "apps/web/lib/google-connection.ts": ["filtered", 1], // .eq("provider", provider) for google / microsoft
+  "apps/web/lib/home.ts": ["excluded", 1], // .neq("provider", "microsoft_teams"): Home's feeds and attention list
+  "apps/web/lib/quickbooks-connection.ts": ["filtered", 1], // provider quickbooks
+  "apps/web/lib/teams-connection.ts": ["filtered", 1], // provider microsoft_teams, on purpose (the Teams section)
+  "packages/connectors/src/composio/store.ts": ["filtered", 4], // transport composio
+  "packages/connectors/src/health/store.ts": ["all", 5], // token health: every usable native connection, Teams has its own checker and skip
+  "packages/connectors/src/microsoft/identity.ts": ["by-id", 1],
+  "packages/connectors/src/quickbooks/features.ts": ["by-id", 1],
+  "packages/connectors/src/quickbooks/reconnect.ts": ["by-id", 2],
+  "packages/connectors/src/sync/store.ts": ["by-id", 1],
+  "packages/connectors/src/sync/targets.ts": ["filtered", 1], // .in("provider", mail / calendar providers)
+  "packages/connectors/src/teams/identity.ts": ["by-id", 1],
+  "packages/connectors/src/vault/connections.ts": ["filtered", 5], // ensure/find by provider and account, listMailAccounts .in(google, microsoft)
+  "packages/connectors/src/vault/loader.ts": ["by-id", 1],
+  "packages/modules/approvals/src/server/wire.ts": ["by-id", 1],
+  "packages/modules/briefing/src/jobs/index.ts": ["filtered", 1], // .in("provider", google, microsoft): who owns a mailbox
 };
 const rel = (f: string) => relative(root, f);
 
 describe("every read of core.connections is classified", () => {
   const readers = production().filter((f) => /\.from\(\s*["']connections["']\s*\)/.test(readFileSync(f, "utf8")));
 
-  it("the list of reading files is exactly the classified one", () => {
+  it("the list of reading files is exactly the classified one, with exactly the classified number of queries each", () => {
     expect(readers.map(rel).sort()).toEqual(Object.keys(READS).sort());
+    for (const f of readers) expect((readFileSync(f, "utf8").match(/\.from\(\s*["']connections["']\s*\)/g) ?? []).length, rel(f)).toBe(READS[rel(f)]?.[1]);
   });
 
-  it.each(Object.entries(READS))("%s (%s) is what it says it is", (file, kind) => {
+  it.each(Object.entries(READS).map(([file, [kind]]) => [file, kind] as const))("%s (%s) is what it says it is", (file, kind) => {
     const src = readFileSync(join(root, file), "utf8");
     if (kind === "filtered") expect(src, file).toMatch(/provider|transport/);
     if (kind === "by-id") expect(src, file).toMatch(/\.eq\(\s*["']id["']/);

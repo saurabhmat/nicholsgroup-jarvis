@@ -33,7 +33,7 @@ describe("Teams connect results", () => {
       scope_missing: /did not grant a permission that Teams needs/,
       scope_extra: /permission that the Teams connection may not hold/,
       not_enabled: /Teams is not enabled for this company/,
-      other_company: /already connected to another company/,
+      other_company: /already connected elsewhere in Jarvis/,
       one_account: /You already have a Teams account connected for this company/,
       other_person: /already connected by another person/,
     };

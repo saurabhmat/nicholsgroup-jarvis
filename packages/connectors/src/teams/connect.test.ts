@@ -525,4 +525,12 @@ describe("T-278 review: sub-codes, reconnect beside another account, the token c
     expect(() => createTeamsTokenHttp({ baseUrl: "https://graph.microsoft.com", laneId: "PKG" })).toThrow(/not an allowed Microsoft host/);
     expect(() => createTeamsTokenHttp({ baseUrl: "https://login.microsoftonline.com", laneId: "PKG" })).not.toThrow();
   });
+
+  it("L3: a failure whose fixed message is an Object.prototype name gets no sub-code (own keys only)", () => {
+    const e = (message: string) => new ConnectorError({ kind: "forbidden", message });
+    const { h } = setup();
+    for (const message of ["constructor", "toString", "__proto__", "hasOwnProperty", "valueOf"]) expect(h.oauthProvider.failureDetail?.(e(message)), message).toBeUndefined();
+    expect(h.oauthProvider.failureDetail?.(e("Only member accounts of the organisation can be connected"))).toBe("guest");
+    expect(h.oauthProvider.failureDetail?.(new Error("constructor"))).toBeUndefined();
+  });
 });

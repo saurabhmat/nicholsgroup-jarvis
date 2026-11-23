@@ -58,7 +58,7 @@ export const TEAMS_REFUSALS: Readonly<Record<string, string>> = Object.freeze({
   scope_missing: "Microsoft did not grant a permission that Teams needs. Ask your Microsoft administrator to approve the portal's Teams app, with all of its permissions, then try again.",
   scope_extra: "Microsoft listed a permission that the Teams connection may not hold. Ask your Microsoft administrator to remove it from the portal's Teams app, then try again.",
   not_enabled: "Teams is not enabled for this company. Ask your administrator.",
-  other_company: "This Teams account is already connected to another company. Each Teams account belongs to one company.",
+  other_company: "This Teams account is already connected elsewhere in Jarvis: in another company, or under another sign-in name. Each Teams account belongs to one company.",
   one_account: "You already have a Teams account connected for this company. Disconnect it in Settings first if you want to use another one.",
   other_person: "This Teams account is already connected by another person. Each Teams account belongs to the person who connected it.",
   not_set_up: "Teams isn't fully set up for this company: the Teams app lacks a permission the company asked for. Ask your administrator.",
