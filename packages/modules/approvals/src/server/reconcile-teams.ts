@@ -7,7 +7,7 @@
 //                                              sending again"). NOT FOUND NEVER MEANS "NOT SENT": there is no marker on a chat message, so the sweep never resends.
 // The action's text is still held while it is `executing`, which is what the lookup compares with; it is purged with the terminal transition.
 import { isConnectorError } from "@nichols/connectors";
-import { TEAMS_CLAIM_SKEW_MS, teamsFailureCodeOf, type TeamsApprovedAction } from "@nichols/connectors/write";
+import { teamsFailureCodeOf, teamsLookupWindow, type TeamsApprovedAction } from "@nichols/connectors/write";
 import type { LaneId } from "@nichols/core";
 import type { ActionReconciler, ReconcileDecision } from "./reconcile";
 import { teamsActionOf } from "./teams";
@@ -39,13 +39,13 @@ export function createTeamsReconciler(deps: TeamsReconcilerDeps): ActionReconcil
     async decide({ laneId, row, claimOutcome, claimExternalId }): Promise<ReconcileDecision> {
       if (typeof row.approvedBy !== "string" || !UUID.test(row.approvedBy)) return { kind: "failed", code: "reconcile_payload_changed", outcome: "outcome_unknown" };
       const action: TeamsApprovedAction = teamsActionOf(laneId, row, row.approvedBy);
-      const ms = row.executingAt ? Date.parse(row.executingAt) : NaN;
-      const window = Number.isNaN(ms) ? {} : { since: new Date(ms - TEAMS_CLAIM_SKEW_MS).toISOString() };
+      const window = teamsLookupWindow(row.executingAt);
       let conn: TeamsConn;
       try {
         conn = await deps.loadWriteConnection(laneId, row.connectionId);
       } catch (e) {
-        const u = undecidedOf(e);
+        // A connection row that is gone is not "the message is gone": its own code.
+        const u = isConnectorError(e) && e.info.kind === "not_found" ? { kind: "undecided" as const, code: "reconcile_connection_missing" } : undecidedOf(e);
         return claimOutcome === "sent" && claimExternalId !== null ? { ...u, sentUnverified: true } : u;
       }
 

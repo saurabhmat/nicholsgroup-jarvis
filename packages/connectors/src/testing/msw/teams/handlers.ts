@@ -52,7 +52,7 @@ export function encodeFakeIdToken(claims: Record<string, unknown>): string {
  *   answer  a status code (a Graph error body unless 201), "network_error" (the connection drops), or "timeout" (the answer comes after the client gave up; the message is kept).
  *   form    the content type the stored message comes back with: "text" or "html" (the text escaped and wrapped in a paragraph, as a chat client would show it).
  */
-export type FakePostStep = { store?: boolean; answer?: number | "network_error" | "timeout"; form?: "text" | "html"; /** After this POST, answer the next N requests (the lookup) with a 429. */ thenThrottle?: number };
+export type FakePostStep = { store?: boolean; answer?: number | "network_error" | "timeout"; form?: "text" | "html"; /** After this POST, answer the next N requests (the lookup) with a 429. */ thenThrottle?: number; /** Answer 201 with a body that has no message id (the message is kept as accepted). */ noId?: boolean };
 
 export type TeamsGraphRequest = { method: string; path: string; search: string; authorization: string | null; body: unknown };
 export type TeamsTokenRequest = { tenant: string; fields: Record<string, string> };
@@ -198,6 +198,7 @@ export function createFakeTeams(): FakeTeams {
       }
     }
     if (answer === "network_error") return HttpResponse.error();
+    if (step.noId) return HttpResponse.json({}, { status: 201 });
     if (answer === "timeout") {
       await delay(1500);
       return HttpResponse.json({ id }, { status: 201 });

@@ -86,6 +86,16 @@ describe("the Teams write path is reachable only from approvals", () => {
     expect(text(join(root, "packages/connectors/src/teams/wiring.ts"))).not.toMatch(/write-client|createTeamsWriteClient|writer-entry|teamsMessageWriter|createTeamsMessageWriter/);
   });
 
+  it("the Teams send entries (propose, approve-and-execute, execute) are named only inside the approvals module: no route, page, job or tool calls them yet (T-286 review L3)", () => {
+    const named = production()
+      .filter((f) => /\b(proposeTeamsAction|approveAndExecuteTeamsAction|executeApprovedTeamsAction|approveAndExecuteTeams|executeApprovedTeams)\b/.test(text(f)))
+      .map(rel)
+      .filter((f) => !f.startsWith("packages/eslint-plugin/src/"))
+      .sort();
+    expect(named.filter((f) => !f.startsWith("packages/modules/approvals/src/"))).toEqual([]);
+    expect(named).toEqual(["packages/modules/approvals/src/server/index.ts", "packages/modules/approvals/src/server/teams.ts", "packages/modules/approvals/src/server/wire.ts"]);
+  });
+
   it("the message writer reaches Microsoft only through the guarded read client and the write client: no fetch, no HTTP method, no token read, no other write route", () => {
     const t = text(join(root, "packages/connectors/src/teams/writer.ts"));
     expect(t).not.toMatch(/\bfetch\(|XMLHttpRequest|method:\s*"|createTeamsHttp|getToken|tokens\.|accessToken|markChatReadForUser|setReaction|softDelete|console\./);

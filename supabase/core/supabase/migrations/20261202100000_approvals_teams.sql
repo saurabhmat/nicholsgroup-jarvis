@@ -13,11 +13,11 @@
 --   * One send per composed message: unique (connection_id, target->>'client_request_id') for teams.* types; a repeated request with the same id and the same content returns the existing action.
 --   * Step-up: act.approve reads approvals.teams_step_up_max_age_s (300 to 43,200, default 300 until D-67 is decided) for teams.* and step_up_max_age_s for every other type, unchanged.
 --   * Expiry: teams.* default to 1 hour (act.expiry_hours; a lane may set approvals.expire_after_hours.<type>), since a Teams action is approved at once.
---   * Disconnect: core.teams_actions_purge_connection (service_role) invalidates the open teams.* actions of a disconnected connection (text purged) and ends an executing one failed / outcome_unknown.
+--   * Disconnect: core.teams_actions_purge_connection (service_role, lane-checked) invalidates the open teams.* actions of a disconnected connection (text purged) and ends an executing one failed / reconcile_connection_disconnected (an UNKNOWN-outcome code: the message may have been delivered).
 -- Every other action type behaves exactly as before: each replaced function keeps its old behaviour for email.*, qbo.disconnect (the diff of each body is listed in .agent/pr/T-286.md).
--- Replaced: act.is_allowed_type, act.type_allowed, act.write_roles, act.expiry_hours, act.connection_ok, act.proposed_actions_guard, act.insert_proposal, act.approve, act.reject, act.claim_execution,
+-- Replaced: core.act_pending_count (the Approvals page and Home count email and disconnect proposals only: a Teams send is approved at once and has no waiting card), act.is_allowed_type, act.type_allowed, act.write_roles, act.expiry_hours, act.connection_ok, act.proposed_actions_guard, act.insert_proposal, act.approve, act.reject, act.claim_execution,
 -- act.action_rows_visible, policy proposed_actions_select, the lane_policies and proposed_actions provider checks. Added: act.is_teams_type, act.teams_connection_ok, act.teams_shape_ok,
--- the unique index proposed_actions_teams_request_uidx, core.teams_actions_purge_connection. No new table: act.* tables keep lane_id and their RLS; the Teams rows are covered by the same policies.
+-- the unique index proposed_actions_teams_request_uidx, core.teams_actions_purge_connection, core.act_claimed_external_ids, core.act_claim_outcome. No new table: act.* tables keep lane_id and their RLS; the Teams rows are covered by the same policies.
 -- Tests: 330_approvals_teams.test.sql (incl. cross-lane and cross-user denial); 290, 291, 302, 304, 306, 308, 319, 325 unchanged and passing.
 
 -- ---------------------------------------------------------------- lane policy class and provider
@@ -127,6 +127,7 @@ as $$
     and (p_payload ->> 'text') is nfc normalized
     and (p_payload ->> 'text') !~ '[\u0001-\u0008\u000b-\u001f\u007f-\u009f]'
     and pg_catalog.btrim(p_payload ->> 'text', E' \t\n') <> ''
+    and (p_payload ->> 'text') = pg_catalog.btrim(p_payload ->> 'text', E' \t\n')
     and pg_catalog.jsonb_typeof(p_target -> 'client_request_id') = 'string'
     and p_target ->> 'client_request_id' ~ '^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$'
     and case p_type
@@ -488,7 +489,10 @@ begin
     raise exception 'act: the owner role in this lane is required' using errcode = '42501';
   end if;
   -- T-286: the step-up window depends on the action's type, so the type is read first (no row is revealed: an unknown id gets the standard window and then not_found as before).
-  select a.action_type into v_type from act.proposed_actions a where a.id = p_id and a.lane_id = p_lane;
+  -- L1 (T-286 review): the read carries the same visibility rule as the lookup below, so a Teams action the caller does not own behaves exactly like an unknown id (no existence oracle through the window).
+  select a.action_type into v_type from act.proposed_actions a
+  where a.id = p_id and a.lane_id = p_lane
+    and (not act.is_teams_type(a.action_type) or a.connection_id = any (core.teams_connection_ids(v_uid, p_lane)));
   if act.is_teams_type(v_type) then
     -- D-67 (open): approvals.teams_step_up_max_age_s, 300 to 43,200 seconds, default 300 (the same as email) until the owner decides.
     v_raw := act.lane_setting(p_lane, 'teams_step_up_max_age_s');
@@ -661,8 +665,10 @@ revoke all on function act.claim_execution(text, uuid) from public, anon, authen
 grant execute on function act.claim_execution(text, uuid) to service_role;
 
 -- ---------------------------------------------------------------- disconnect: the open Teams actions of a removed connection
--- Called by the Teams disconnect (a purger, service_role). Open actions (proposed, approved) become invalidated with their text purged (the guard); an action that is executing may already
--- have been sent, so it ends failed / connection_disconnected with an unknown outcome (its text is purged too; a person checks the chat). Returns the number of actions closed. Lane-checked.
+-- Called by the Teams disconnect (a purger, service_role). Open actions (proposed, approved) were never claimed, so nothing was sent: they become invalidated with their text purged (the guard). An action that is
+-- EXECUTING may already have been delivered (the POST may be in flight or accepted), so it ends failed with `reconcile_connection_disconnected`, a code every layer treats as an UNKNOWN outcome (act.is_unknown_failure:
+-- reconcile_%; the person is told to check the chat in Teams before sending again); its text is purged too and its claim keeps `sent` or becomes `outcome_unknown`. Lane-checked: the connection must be a Teams
+-- connection of p_lane. Returns the number of actions closed.
 create or replace function core.teams_actions_purge_connection(p_lane text, p_connection uuid) returns integer
 language plpgsql
 security definer
@@ -675,12 +681,15 @@ begin
   if p_lane is null or p_connection is null then
     raise exception 'teams actions purge: lane and connection are required' using errcode = '22004';
   end if;
+  if not exists (select 1 from core.connections c where c.id = p_connection and c.lane_id = p_lane and c.provider = 'microsoft_teams') then
+    raise exception 'teams actions purge: no such Teams connection in this lane' using errcode = 'P0002';
+  end if;
   perform set_config('act.reason', 'the Teams connection was disconnected', true);
   update act.proposed_actions set status = 'invalidated'
   where lane_id = p_lane and connection_id = p_connection and action_type like 'teams.%' and status in ('proposed', 'approved');
   get diagnostics v_open = row_count;
   with ended as (
-    update act.proposed_actions set status = 'failed', failure_code = 'connection_disconnected'
+    update act.proposed_actions set status = 'failed', failure_code = 'reconcile_connection_disconnected'
     where lane_id = p_lane and connection_id = p_connection and action_type like 'teams.%' and status = 'executing'
     returning id
   )
@@ -690,6 +699,45 @@ begin
   return v_open + v_exec;
 end;
 $$;
-comment on function core.teams_actions_purge_connection(text, uuid) is 'T-286: closes the open teams.* actions of a disconnected Teams connection (text purged); an executing one ends failed / connection_disconnected. service_role only.';
+comment on function core.teams_actions_purge_connection(text, uuid) is 'T-286: closes the open teams.* actions of a disconnected Teams connection of the lane (text purged); an executing one ends failed / reconcile_connection_disconnected (unknown outcome). service_role only, lane-checked.';
 revoke all on function core.teams_actions_purge_connection(text, uuid) from public, anon, authenticated;
 grant execute on function core.teams_actions_purge_connection(text, uuid) to service_role;
+
+-- ---------------------------------------------------------------- writer support: ids only (service_role)
+-- Which of these message ids are already the recorded message id of ANOTHER action's claim on the same connection (the lookup after an unknown outcome must never take an earlier send as this one). Ids only.
+create function core.act_claimed_external_ids(p_lane text, p_connection uuid, p_except uuid, p_ids text[]) returns text[]
+language sql
+stable
+security definer
+set search_path = ''
+as $$
+  select coalesce(pg_catalog.array_agg(distinct c.external_id), '{}'::text[])
+  from act.execution_claims c
+  join act.proposed_actions a on a.id = c.action_id and a.lane_id = c.lane_id
+  where c.lane_id = p_lane and a.connection_id = p_connection and a.id is distinct from p_except
+    and c.external_id = any (p_ids);
+$$;
+comment on function core.act_claimed_external_ids(text, uuid, uuid, text[]) is 'T-286 review: the given message ids that another action of the connection has recorded as its own (ids only; service_role only, lane-scoped).';
+revoke all on function core.act_claimed_external_ids(text, uuid, uuid, text[]) from public, anon, authenticated;
+grant execute on function core.act_claimed_external_ids(text, uuid, uuid, text[]) to service_role;
+
+-- The outcome the claim of one action holds (null: claimed, nothing sent yet or nothing recorded; 'sent': the provider accepted it; or the final outcome). Lets a second request for the same send say "Sending", "Sent, checking" or "Outcome unknown".
+create function core.act_claim_outcome(p_lane text, p_id uuid) returns text
+language sql
+stable
+security definer
+set search_path = ''
+as $$
+  select c.outcome from act.execution_claims c where c.lane_id = p_lane and c.action_id = p_id;
+$$;
+comment on function core.act_claim_outcome(text, uuid) is 'T-286 review: the outcome recorded on one action''s execution claim (null when none or not set); service_role only, lane-scoped.';
+revoke all on function core.act_claim_outcome(text, uuid) from public, anon, authenticated;
+grant execute on function core.act_claim_outcome(text, uuid) to service_role;
+
+-- ---------------------------------------------------------------- the waiting count excludes Teams sends
+-- Home and the Approvals page count what waits for the person's approval card (email drafts, a QuickBooks disconnect). A Teams send is proposed and approved in one step and has no card; counting it would show a
+-- waiting item nobody can open. Invoker: RLS still decides what the caller sees.
+create or replace function core.act_pending_count(p_lane text) returns integer
+language sql stable security invoker set search_path = '' as $$
+  select count(*)::integer from act.proposed_actions a where a.lane_id = p_lane and a.status = 'proposed' and a.expires_at > pg_catalog.now() and a.action_type not like 'teams.%';
+$$;

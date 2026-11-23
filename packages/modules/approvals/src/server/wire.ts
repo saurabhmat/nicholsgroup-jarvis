@@ -37,7 +37,7 @@ async function readFacts(laneId: LaneId, connectionId: string): Promise<Capabili
   const core = client.schema("core");
   const [conn, policy, config] = await Promise.all([
     core.from("connections").select("provider, external_account_id, status, features, owner_user_id").eq("lane_id", laneId).eq("id", connectionId).maybeSingle(),
-    core.from("lane_policies").select("write_actions_allowed").eq("lane_id", laneId).maybeSingle(),
+    core.from("lane_policies").select("write_actions_allowed, store_outbound_drafts").eq("lane_id", laneId).maybeSingle(),
     core.from("lane_config_current").select("config").eq("lane_id", laneId).maybeSingle(),
   ]);
   if (conn.error || policy.error || config.error) throw new Error("capability facts unavailable");
@@ -57,6 +57,7 @@ async function readFacts(laneId: LaneId, connectionId: string): Promise<Capabili
   const teamsLane = (feature: string): boolean => teamsCfg?.enabled === true && Array.isArray(teamsCfg.features) && teamsCfg.features.includes(feature);
   const teamsUsable = c !== null && c.provider === "microsoft_teams" && (c.status === "active" || c.status === "degraded");
   const age = approvals.step_up_max_age_s;
+  const teamsAge = approvals.teams_step_up_max_age_s;
   return {
     mailbox: usable ? c.external_account_id.toLowerCase() : null,
     provider: usable ? emailProvider : null,
@@ -66,6 +67,9 @@ async function readFacts(laneId: LaneId, connectionId: string): Promise<Capabili
     writeActionsAllowed: ((policy.data?.write_actions_allowed as string[] | undefined) ?? []).filter((x) => typeof x === "string"),
     approvalsLive: approvals.approvals_live === true,
     stepUpMaxAgeS: typeof age === "number" && Number.isInteger(age) && age >= 30 && age <= 900 ? age : 300,
+    // T-286, D-67: the same clamp as act.approve (300..43,200, default 300); a value that is not a whole number is "unset".
+    teamsStepUpMaxAgeS: typeof teamsAge === "number" && Number.isInteger(teamsAge) ? Math.min(Math.max(teamsAge, 300), 43200) : 300,
+    storeOutboundDrafts: (policy.data as { store_outbound_drafts?: unknown } | null)?.store_outbound_drafts === true,
   };
 }
 

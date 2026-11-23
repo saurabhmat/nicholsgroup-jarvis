@@ -50,6 +50,8 @@ export const TEAMS_SEND_FAILURES = Object.freeze({
   verification_mismatch: "Sent, but Teams shows different text; check the chat",
   ambiguous_match: "More than one matching message was found in Teams; check the chat",
   outcome_unknown: "Outcome unknown: check the chat in Teams before sending again",
+  /** The disconnect purge of an executing action (a code every layer treats as an unknown outcome: `reconcile_` prefix). */
+  reconcile_connection_disconnected: "The connection was disconnected while this message was being sent; it may have been delivered. Check the chat in Teams before sending again",
   /** Not a final state: the lookup found nothing yet, so the action stays `executing` and the sweep looks again. */
   outcome_pending: "The message may not have reached Teams yet; it is being checked",
   /** The read-back could not run (the message was accepted): stays `executing` for the sweep. */
@@ -74,6 +76,7 @@ const KIND_OF_CODE: Record<TeamsSendFailureCode, "invalid_input" | "forbidden" |
   outcome_unknown: "provider_error",
   outcome_pending: "timeout",
   verification_unavailable: "timeout",
+  reconcile_connection_disconnected: "provider_error",
 };
 const fail = (code: TeamsSendFailureCode) => new ConnectorError({ kind: KIND_OF_CODE[code], message: TEAMS_SEND_FAILURES[code] });
 const refused = (message: string) => new ConnectorError({ kind: "invalid_input", message });
@@ -93,6 +96,8 @@ export type TeamsMessageWriterDeps = {
   write: TeamsWriteClient;
   /** The approvals database's check that this action is executing with an open claim. */
   claims: Pick<ActionClaimReader, "claimOpen">;
+  /** Which of these message ids another action of the connection already recorded as its own (ids only): the lookup never takes an earlier send as this one. */
+  claimed: { claimedExternalIds(laneId: LaneId, connectionId: string, exceptActionId: string, ids: readonly string[]): Promise<string[]> };
   logger?: ConnectorLogger;
   sleep?: (ms: number) => Promise<void>;
   now?: () => number;
@@ -114,8 +119,16 @@ export interface TeamsMessageWriter extends ConnectorWriter<TeamsApprovedAction,
 export type TeamsMessageReconciler = Pick<TeamsMessageWriter, "findWrite" | "verifyWrite">;
 
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
-/** Messages are looked for from this long before the claim (Microsoft's clock and ours may differ). */
-export const TEAMS_CLAIM_SKEW_MS = 2 * 60_000;
+/**
+ * Messages are looked for from this long before the POST started (Microsoft's clock and ours may differ). Small on purpose: a wide window would take an EARLIER message with the same text
+ * (the previous send, or one typed in Teams) as this one. The reconciler uses the same bound from the time the claim was taken (which precedes the POST by milliseconds).
+ */
+export const TEAMS_LOOKUP_SKEW_MS = 15_000;
+/** The lookup and read-back window of an action claimed at `executingAt` (an ISO instant): from a little before it. Empty when the time is unknown. One definition for the executor and the sweep. */
+export function teamsLookupWindow(executingAt: string | null | undefined): TeamsLookupWindow {
+  const ms = executingAt ? Date.parse(executingAt) : Number.NaN;
+  return Number.isNaN(ms) ? {} : { since: new Date(ms - TEAMS_LOOKUP_SKEW_MS).toISOString() };
+}
 const LOOKUP_PAGE = 50;
 const LOOKUP_DEFAULT_MS = 24 * 3600_000;
 const MAX_FOUND = 5;
@@ -248,8 +261,8 @@ export function createTeamsMessageWriter(deps: TeamsMessageWriterDeps): TeamsMes
     return { iso: new Date(ms).toISOString(), ms };
   };
 
-  /** The ids of the person's own messages in the place since `since` whose text equals the approved text. */
-  async function lookup(laneId: LaneId, p: PreparedTeamsWrite, since: { iso: string; ms: number }): Promise<string[]> {
+  /** The ids of the person's own messages in the place since `since` whose text equals the approved text, minus any message another action of this connection already recorded as its own. */
+  async function lookup(laneId: LaneId, p: PreparedTeamsWrite, actionId: string, since: { iso: string; ms: number }): Promise<string[]> {
     const ids: string[] = [];
     for (const m of await listPlace(laneId, p, since.iso)) {
       const created = createdMs(m);
@@ -257,7 +270,9 @@ export function createTeamsMessageWriter(deps: TeamsMessageWriterDeps): TeamsMes
       if (isOwnInPlace(m, p) && sameText(m, p)) ids.push(m.id);
       if (ids.length >= MAX_FOUND) break;
     }
-    return ids;
+    if (ids.length === 0) return ids;
+    const taken = new Set(await deps.claimed.claimedExternalIds(laneId, p.g.conn.id, actionId, ids));
+    return ids.filter((id) => !taken.has(id));
   }
 
   /** The failure code when the POST certainly did not create a message, else null (its outcome is unknown). Decided by the HTTP status, never by a message text. */
@@ -267,12 +282,12 @@ export function createTeamsMessageWriter(deps: TeamsMessageWriterDeps): TeamsMes
     const s = i.http_status;
     if (s === 429 || i.kind === "rate_limited") return "throttled";
     if (typeof s === "number") {
-      if (s === 400) return "send_rejected";
-      if (s === 401) return "connection_unhealthy";
+      if (s === 400) return "send_rejected"; // only these six statuses are definite
+      if (s === 401) return "connection_unhealthy"; // after the client's one refresh: Microsoft did not process it
       if (s === 403) return "not_a_member";
       if (s === 404) return "target_not_found";
       if (s === 413) return "message_too_large";
-      return s >= 400 && s < 500 ? "send_rejected" : null; // 5xx, a redirect or an odd 2xx: the outcome is unknown
+      return null; // 408, 409, 423, any other status, a 5xx, a redirect or an odd 2xx: the outcome is unknown, so it is looked up (never posted again)
     }
     // No HTTP status: refused before a request left (a guard or template refusal), or a transport failure.
     if (i.kind === "reconnect_required" || i.kind === "connection_unavailable") return "connection_unhealthy";
@@ -281,13 +296,17 @@ export function createTeamsMessageWriter(deps: TeamsMessageWriterDeps): TeamsMes
   }
 
   const executeWrite: TeamsMessageWriter["executeWrite"] = async (laneId, conn, action) => {
-    const p = await prepareTeamsWrite(deps, laneId, conn, action);
+    // Everything before the POST is "nothing was sent": a refusal keeps its kind; an infrastructure failure (a database read of the guard) is reported as not sent too, never as an unknown outcome.
+    const p = await prepareTeamsWrite(deps, laneId, conn, action).catch((e: unknown) => {
+      throw isConnectorError(e) && definiteCode(e) !== null ? e : fail("execution_refused");
+    });
     // Defence in depth: whoever holds this writer, nothing is posted unless the approvals database has this exact action approved (same hash, same approver) and claimed with nothing sent yet.
     if (!(await deps.claims.claimOpen(laneId, action.id, action.payload_sha256, action.approved_by))) {
       throw new ConnectorError({ kind: "forbidden", message: "This action is not approved and claimed for execution" });
     }
     // At most one POST per action in this process, whatever the claim says (a faulty caller that executes twice is refused here).
-    if (attempted.has(action.id)) throw new ConnectorError({ kind: "forbidden", message: "This action was already sent to Teams by this process" });
+    // (Whether the earlier attempt delivered is not known here, so this is an unknown-outcome answer, never "nothing was sent".)
+    if (attempted.has(action.id)) throw fail("outcome_pending");
     attempted.add(action.id);
     if (attempted.size > 5000) attempted.delete(attempted.values().next().value as string);
 
@@ -304,8 +323,8 @@ export function createTeamsMessageWriter(deps: TeamsMessageWriterDeps): TeamsMes
       await sleep(deps.lookupPauseMs ?? 1000);
       let ids: string[];
       try {
-        const from = started - TEAMS_CLAIM_SKEW_MS;
-        ids = await lookup(laneId, p, { iso: new Date(from).toISOString(), ms: from });
+        const from = started - TEAMS_LOOKUP_SKEW_MS;
+        ids = await lookup(laneId, p, action.id, { iso: new Date(from).toISOString(), ms: from });
       } catch {
         throw fail("outcome_pending"); // the lookup itself failed: the action stays executing and the sweep looks again
       }
@@ -334,7 +353,7 @@ export function createTeamsMessageWriter(deps: TeamsMessageWriterDeps): TeamsMes
     executeWrite,
     async findWrite(laneId, conn, action, window) {
       const p = await prepareTeamsWrite(deps, laneId, conn, action);
-      return lookup(laneId, p, sinceOf(window, nowMs() - LOOKUP_DEFAULT_MS));
+      return lookup(laneId, p, action.id, sinceOf(window, nowMs() - LOOKUP_DEFAULT_MS));
     },
     async verifyWrite(laneId, conn, action, externalId, window) {
       const p = await prepareTeamsWrite(deps, laneId, conn, action);

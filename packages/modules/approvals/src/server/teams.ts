@@ -15,12 +15,12 @@
 // Retrieved content never approves or executes anything: a proposal exists only because a person pressed Send; `aiDrafted` is stored as `derived_from_retrieved` and changes nothing else.
 import { isConnectorError } from "@nichols/connectors";
 import {
-  TEAMS_CLAIM_SKEW_MS,
   TEAMS_PAYLOAD_VERSION,
   isTeamsActionType,
   normalizeTeamsText,
   parseTeamsSend,
   teamsFailureCodeOf,
+  teamsLookupWindow,
   teamsProposalContent,
   type TeamsApprovedAction,
   type TeamsSend,
@@ -159,10 +159,30 @@ function sendFailureOf(e: unknown): { code: string; outcome: FailureOutcome } | 
   return null; // a timeout, a transport error, anything unclassified after the request may have left: look it up, do not guess
 }
 
-const sinceOf = (row: Pick<ActionRow, "executingAt">): { since?: string } => {
-  const ms = row.executingAt ? Date.parse(row.executingAt) : NaN;
-  return Number.isNaN(ms) ? {} : { since: new Date(ms - TEAMS_CLAIM_SKEW_MS).toISOString() };
-};
+/**
+ * Where a second request for the same send finds it: the settled state, or for an action still executing the claim's: "Sent, checking" (`sent_unverified`: the claim holds the message id) or `outcome_pending`
+ * (nothing recorded yet: still sending, or the outcome is unknown), so the caller can tell "Sending", "Sent, checking" and "Outcome unknown" apart. An approved action not yet claimed is `already_in_progress`.
+ */
+async function stateOfAction(job: Rpc, laneId: LaneId, actionId: string): Promise<ApproveResult> {
+  const { data, error } = await job("act_action_state", { p_lane: laneId, p_id: actionId });
+  const row = !error && Array.isArray(data) ? (data[0] as { status?: unknown; failure_code?: unknown } | undefined) : undefined;
+  if (!row) throw new ApprovalsError("unavailable");
+  if (row.status === "verified") return { status: "verified", actionId };
+  if (row.status === "failed") return { status: "failed", actionId, failureCode: typeof row.failure_code === "string" ? row.failure_code : "outcome_unknown" };
+  if (row.status === "executing") {
+    const c = await job("act_claim_outcome", { p_lane: laneId, p_id: actionId });
+    return !c.error && c.data === "sent" ? { status: "sent_unverified", actionId } : { status: "outcome_pending", actionId };
+  }
+  if (row.status === "approved") return { status: "already_in_progress", actionId };
+  throw new ApprovalsError("not_pending"); // proposed, rejected, expired, invalidated: not a send in flight
+}
+
+/** A failure before any request left (the stored content, the connection, a credential): nothing was sent, so it is always a definite, retryable failure. */
+function beforeFailureOf(e: unknown): { code: string; outcome: FailureOutcome } {
+  if (e instanceof TamperError) return { code: "payload_changed", outcome: "error" };
+  if (isConnectorError(e) && (e.info.kind === "reconnect_required" || e.info.kind === "connection_unavailable")) return { code: "connection_unhealthy", outcome: "error" };
+  return { code: "execution_refused", outcome: "error" };
+}
 
 /** The approved action as the writer takes it, from the claimed (locked) row: the hash and the approver are the ones the database recorded. */
 export function teamsActionOf(laneId: LaneId, row: ActionRow, approvedBy: string): TeamsApprovedAction {
@@ -196,7 +216,7 @@ export async function approveAndExecuteTeams(deps: TeamsExecDeps, ctx: UserCtx, 
   const row = await getRow(ctx.rpc, ctx.laneId, input.actionId);
   if (!isTeamsType(row.actionType)) throw new ApprovalsError("invalid");
   await requireRole(ctx, row.actionType);
-  if (row.status === "executing") return { status: "already_in_progress", actionId: row.id };
+  if (row.status === "executing") return stateOfAction(await deps.jobRpc(ctx.laneId), ctx.laneId, row.id);
   if (row.status === "verified") return { status: "verified", actionId: row.id };
   if (row.status === "failed") return { status: "failed", actionId: row.id, failureCode: row.failureCode ?? "outcome_unknown" };
 
@@ -222,6 +242,8 @@ export async function approveAndExecuteTeams(deps: TeamsExecDeps, ctx: UserCtx, 
   const approved = await ctx.rpc("act_approve", { p_lane: ctx.laneId, p_id: row.id, p_hash_seen: input.hashSeen });
   if (approved.error) {
     const e = toApprovalsError(approved.error);
+    // A concurrent request for the same send got there first (a double click): report where it is instead of failing.
+    if (e.code === "already_approved" || e.code === "not_pending") return stateOfAction(await deps.jobRpc(ctx.laneId), ctx.laneId, row.id);
     const err = e.code === "not_enabled" ? new ApprovalsError("teams_not_enabled") : e;
     await audit(deps, ctx.laneId, actor, "action.gate_blocked", row.id, { reason: err.code }).catch(() => undefined);
     throw err;
@@ -272,14 +294,18 @@ export async function executeApprovedTeams(deps: TeamsExecDeps, laneId: LaneId, 
     const sent = await job("act_claim_sent", { p_lane: laneId, p_id: actionId, p_external_id: externalId });
     if (sent.error) throw toApprovalsError(sent.error);
     sentRecorded = true;
-    await deps.writer.verifyWrite(laneId, conn, action, externalId, sinceOf(row));
+    await deps.writer.verifyWrite(laneId, conn, action, externalId, teamsLookupWindow(row.executingAt));
     verified = true;
     const done = await job("act_mark_verified", { p_lane: laneId, p_id: actionId, p_external_id: externalId, p_outcome: outcome });
     if (done.error) throw toApprovalsError(done.error);
   } catch (e) {
     // An execute that lost a race to the reconciler or the disconnect purge: the row is already finished. Report what the database says.
     const settled = await settledState(job, laneId, actionId);
-    if (settled) return settled;
+    if (settled) {
+      // The POST returned a message id but the action was closed under us (a disconnect, the sweep): record the id (ids only) so the message can be found, and report the settled state.
+      if (externalId !== null && settled.status === "failed") await audit(deps, laneId, { kind: "service" }, "action.record_failed", actionId, { external_id: externalId, failure: settled.failureCode }).catch(() => undefined);
+      return settled;
+    }
     if (verified) {
       // Posted and read back; only recording it failed. Never turn a sent message into "failed": the row stays executing with its claim at "sent" and the sweep finishes it.
       console.error("[approvals] verified Teams message could not be recorded", { laneId, actionId });
@@ -287,7 +313,8 @@ export async function executeApprovedTeams(deps: TeamsExecDeps, laneId: LaneId, 
       return { status: "verified", actionId };
     }
     let f: { code: string; outcome: FailureOutcome } | null;
-    if (stage === "verify") {
+    if (stage === "before") f = beforeFailureOf(e);
+    else if (stage === "verify") {
       // The message was accepted. Different text in the chat is a failure of the read-back; anything else (not there yet, a timeout, a limit, the claim not recorded) leaves the action
       // `executing` for the sweep, which reads it back by id. Never "failed", never a second post.
       if (teamsFailureCodeOf(e) === "verification_mismatch") f = { code: "verification_mismatch", outcome: "mismatch" };

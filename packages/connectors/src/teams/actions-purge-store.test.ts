@@ -22,4 +22,14 @@ describe("the Teams send-action store", () => {
       expect(JSON.stringify(e)).not.toContain("secret detail");
     }
   });
+  it("asks which message ids another action recorded (ids only) and refuses a malformed answer with fixed text", async () => {
+    const { calls, clientFor } = mk({ data: ["m1"] });
+    expect(await createTeamsActionsStore(clientFor).claimedExternalIds("PKG", "00000000-0000-4000-8000-000000000c01", "00000000-0000-4000-8000-000000000a01", ["m1", "m2"])).toEqual(["m1"]);
+    expect(calls).toEqual([{ schema: "core", fn: "act_claimed_external_ids", args: { p_lane: "PKG", p_connection: "00000000-0000-4000-8000-000000000c01", p_except: "00000000-0000-4000-8000-000000000a01", p_ids: ["m1", "m2"] } }]);
+    for (const r of [{ error: { message: "secret detail" } }, { data: "m1" }, { data: [1] }, () => { throw new Error("secret detail"); }] as const) {
+      const e = await createTeamsActionsStore(mk(r as never).clientFor).claimedExternalIds("PKG", "c", "a", ["m1"]).then(() => null, (x: unknown) => x as { info: { kind: string } });
+      expect(e?.info.kind).toBe("transient");
+      expect(JSON.stringify(e)).not.toContain("secret detail");
+    }
+  });
 });

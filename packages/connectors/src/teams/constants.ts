@@ -90,6 +90,8 @@ export const TEAMS_GRAPH_BASE = "https://graph.microsoft.com/v1.0";
 export const TEAMS_CHATS_RATE_LIMIT = { requests: 1, perMs: 1000 } as const;
 export const TEAMS_CHAT_MESSAGES_RATE_LIMIT = { requests: 1, perMs: 1000 } as const;
 export const TEAMS_DEFAULT_RATE_LIMIT = { requests: 4, perMs: 1000 } as const;
+/** A send: Microsoft allows 1 POST per second per user and per chat (vendor facts A2). Pacing only: a POST is still never retried. */
+export const TEAMS_SEND_RATE_LIMIT = { requests: 1, perMs: 1000 } as const;
 /** Our own cap on requests in flight per Teams connection. */
 export const TEAMS_MAX_CONCURRENT = 4;
 

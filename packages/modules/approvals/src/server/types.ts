@@ -83,6 +83,13 @@ export type CapabilityFacts = {
   /** `lane_config.approvals.step_up_max_age_s` */
   stepUpMaxAgeS: number;
   /**
+   * `lane_config.approvals.teams_step_up_max_age_s` (D-67), clamped 300..43,200 exactly like `act.approve`; 300 when unset. The Teams send route (T-288) must use THIS for `requireStepUp`, never `stepUpMaxAgeS`.
+   * Optional only so older fakes still compile; `readFacts` always sets it.
+   */
+  teamsStepUpMaxAgeS?: number;
+  /** `core.lane_policies.store_outbound_drafts`: a Teams send stores its text while the action is open, so the composer is disabled with a reason when this is off (T-288). Absent: not known. */
+  storeOutboundDrafts?: boolean;
+  /**
    * The connection as a QuickBooks connection of the lane that is not disconnected (T-195): its realm. Null (or absent) when it is
    * not a QuickBooks connection of the lane, or is disconnected.
    */

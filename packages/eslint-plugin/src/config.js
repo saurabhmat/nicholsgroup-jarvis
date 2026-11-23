@@ -55,6 +55,8 @@ export const plugin = {
 export const CONNECTORS = ["packages/connectors"];
 export const AI = ["packages/ai"];
 export const APPROVALS = ["packages/modules/approvals"];
+/** The one route file T-288 adds for "Send = your approval" (spec 10.3: POST /api/lanes/<lane>/messages/send). Listed now so nothing else can name the Teams send entries. */
+export const TEAMS_SEND_ROUTE = "apps/web/app/api/lanes/[laneId]/messages/send/route.ts";
 export const LANE_ROUTER = ["packages/core/src/lane-router"];
 export const CORE_ENV = ["packages/core/src/env"];
 export const TOKEN_VAULT = ["packages/connectors/src/vault"];
@@ -189,6 +191,10 @@ export const RESTRICTED_NAMES = {
     allowReexport: CONNECTORS,
     hint: "only the approvals package reconciles Teams messages",
   },
+  // T-286 review L3: the entries that propose and carry out a Teams send are called by the approvals package and, from T-288, by ONE route: the Messages send route. No other route, page, job or tool may name them.
+  proposeTeamsAction: { allow: [...APPROVALS, TEAMS_SEND_ROUTE], allowReexport: [], hint: "only the approvals package and the Messages send route (T-288) propose a Teams message" },
+  approveAndExecuteTeamsAction: { allow: [...APPROVALS, TEAMS_SEND_ROUTE], allowReexport: [], hint: "only the approvals package and the Messages send route (T-288) carry out a Teams message" },
+  executeApprovedTeamsAction: { allow: [...APPROVALS, TEAMS_SEND_ROUTE], allowReexport: [], hint: "only the approvals package and the Messages send route (T-288) carry out a Teams message" },
   // T-278 review S6: the Teams HTTP wrapper takes a "read" or "write" kind; the "write" kind can send a POST. Only the Teams read client, the write client and the OAuth provider (the `/me`
   // read at connect time) build one; the harness builds the read kind for tests. Anything else goes through those.
   createTeamsHttp: {

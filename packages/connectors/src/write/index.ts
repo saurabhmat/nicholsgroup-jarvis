@@ -47,7 +47,8 @@ export const loadEmailWriteConnection = (laneId: Parameters<typeof writeConnecti
 export { teamsMessageReconciler, teamsMessageWriter } from "../teams/writer-entry";
 export {
   TEAMS_ACTION_TYPES,
-  TEAMS_CLAIM_SKEW_MS,
+  TEAMS_LOOKUP_SKEW_MS,
+  teamsLookupWindow,
   TEAMS_SEND_FAILURES,
   prepareTeamsWrite,
   teamsFailureCodeOf,

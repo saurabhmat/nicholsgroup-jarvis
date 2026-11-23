@@ -4,7 +4,7 @@
 -- block); store_outbound_drafts; the shape of target and payload; the unique client request id; the step-up window per type (email unchanged); expiry; the text purged at EVERY terminal state;
 -- the disconnect purge; grants; and regressions for email and qbo.disconnect (their behaviour is the one of the earlier tests 290, 308, 319, 325, which also run).
 begin;
-select plan(122);
+select plan(136);
 \ir helpers/lane_rls.psql
 
 create function pg_temp.claims_amr(p_email text, p_aal text, p_at bigint) returns text language sql as $$
@@ -99,6 +99,7 @@ select throws_ok($$select pg_temp.propose('PKG', 'teams.chat.send', '00000000-00
 select throws_ok($$select pg_temp.propose('PKG', 'teams.chat.send', '00000000-0000-4000-8000-000000033001', pg_temp.t_chat(21) || '{"extra": "x"}', pg_temp.t_payload(), pg_temp.hash('p'), 'owner@example.test')$$, '22023', null, 'shape: an extra target key is refused');
 select throws_ok($$select pg_temp.propose('PKG', 'teams.chat.send', '00000000-0000-4000-8000-000000033001', pg_temp.t_chat(22), pg_temp.t_payload('') , pg_temp.hash('p'), 'owner@example.test')$$, '22023', null, 'shape: empty text is refused');
 select throws_ok($$select pg_temp.propose('PKG', 'teams.chat.send', '00000000-0000-4000-8000-000000033001', pg_temp.t_chat(23), pg_temp.t_payload(E' \n\t '), pg_temp.hash('p'), 'owner@example.test')$$, '22023', null, 'shape: whitespace-only text is refused');
+select throws_ok($$select pg_temp.propose('PKG', 'teams.chat.send', '00000000-0000-4000-8000-000000033001', pg_temp.t_chat(231), pg_temp.t_payload(' padded'), pg_temp.hash('p'), 'owner@example.test')$$, '22023', null, 'shape: text with spaces at its ends is refused (the app trims, as its Zod schema requires)');
 select throws_ok($$select pg_temp.propose('PKG', 'teams.chat.send', '00000000-0000-4000-8000-000000033001', pg_temp.t_chat(24), pg_temp.t_payload(repeat('a', 10001)), pg_temp.hash('p'), 'owner@example.test')$$, '22023', null, 'shape: more than 10,000 characters is refused');
 select lives_ok($$select pg_temp.propose('PKG', 'teams.chat.send', '00000000-0000-4000-8000-000000033001', pg_temp.t_chat(25), pg_temp.t_payload(repeat('a', 10000)), pg_temp.hash('p25'), 'owner@example.test')$$, 'shape: exactly 10,000 characters is accepted');
 select throws_ok($$select pg_temp.propose('PKG', 'teams.chat.send', '00000000-0000-4000-8000-000000033001', pg_temp.t_chat(26), pg_temp.t_payload('bell' || chr(7)), pg_temp.hash('p'), 'owner@example.test')$$, '22023', null, 'shape: a control character is refused');
@@ -161,7 +162,7 @@ set local role authenticated;
 select is((select count(*)::int from act.proposed_actions where action_type like 'teams.%'), 1, 'the admin_technical sees only their own Teams action');
 select is((select count(*)::int from act.proposed_actions where id = (select id from ids where k = 'o1')), 0, 'cross-user: an admin cannot see the owner''s Teams action, although admin_technical holds the approvals view');
 select is((select count(*)::int from core.act_list('PKG') where action_type like 'teams.%'), 1, 'core.act_list shows the admin only their own Teams action');
-select is((select core.act_pending_count('PKG')), 1, 'the pending count of Home counts only what the caller may see');
+select is((select core.act_pending_count('PKG')), 0, 'the waiting count (Home, Approvals page) does not count Teams sends: they have no waiting card (the admin''s own pending Teams action is not counted)');
 reset role;
 select pg_temp.claims_amr('viewer@example.test', 'aal2', pg_temp.now_s());
 set local role authenticated;
@@ -191,6 +192,12 @@ set local role authenticated;
 select throws_ok(format($$select core.act_approve('PKG', %L, %L)$$, (select id from ids where k = 'o1'), pg_temp.hash('o1')), '42501', 'act: step_up_required', 'a code 1000 seconds old is refused for a Teams action by default (300 s, as email)');
 reset role;
 select pg_temp.cfg('PKG', 'approvals', '{"teams_step_up_max_age_s": 3600}');
+-- L1: with different windows per type, an id the caller cannot see must answer exactly like an unknown id (no existence oracle)
+select pg_temp.claims_amr('admin-technical@example.test', 'aal2', pg_temp.now_s(1000));
+set local role authenticated;
+select throws_ok(format($$select core.act_approve('PKG', %L, %L)$$, (select id from ids where k = 'o1'), pg_temp.hash('o1')), '42501', 'act: step_up_required', 'L1: an admin with an old code approving the owner''s Teams id gets step_up_required, the same as for an unknown id');
+select throws_ok(format($$select core.act_approve('PKG', %L, %L)$$, '00000000-0000-4000-8000-0000000000ee', pg_temp.hash('o1')), '42501', 'act: step_up_required', 'L1: ...which is what an unknown id answers');
+reset role;
 select pg_temp.claims_amr('owner@example.test', 'aal2', pg_temp.now_s(1000));
 set local role authenticated;
 select throws_ok(format($$select core.act_approve('PKG', %L, %L)$$, (select id from ids where k = 'o1'), repeat('0', 64)), 'P0001', 'act: hash_mismatch', 'with a 3600 s Teams window the step-up passes and a wrong hash is refused');
@@ -332,10 +339,26 @@ select lives_ok(format($$select core.act_claim_execution('PKG', %L)$$, (select i
 select cmp_ok((select core.teams_actions_purge_connection('PKG', '00000000-0000-4000-8000-000000033001')), '>=', 2, 'the disconnect purge closes the open actions of the connection');
 reset role;
 select is((select string_agg(status || ':' || (payload ? 'text')::text, ',' order by id::text) from act.proposed_actions where id = (select id from ids where k = 'd1')), 'invalidated:false', 'a proposed action of a disconnected connection is invalidated and its text purged');
-select is((select status || ':' || failure_code || ':' || (payload ? 'text')::text from act.proposed_actions where id = (select id from ids where k = 'd2')), 'failed:connection_disconnected:false', 'an executing action ends failed / connection_disconnected with its text purged');
+select is((select status || ':' || failure_code || ':' || (payload ? 'text')::text from act.proposed_actions where id = (select id from ids where k = 'd2')), 'failed:reconcile_connection_disconnected:false', 'an executing action ends failed / reconcile_connection_disconnected with its text purged');
+select is((select act.is_unknown_failure(failure_code) from act.proposed_actions where id = (select id from ids where k = 'd2')), true, 'H1: that code is an UNKNOWN-outcome code (the message may have been delivered: the person is told to check Teams)');
+select is((select status || ':' || coalesce(failure_code, '-') from act.proposed_actions where id = (select id from ids where k = 'd1')), 'invalidated:-', 'H1: a proposed action that was never claimed is invalidated with no failure code (nothing was sent)');
+select throws_ok($$select core.teams_actions_purge_connection('APK', '00000000-0000-4000-8000-000000033001')$$, 'P0002', null, 'the purge is lane-checked: another lane''s name for the connection is refused');
+select throws_ok($$select core.teams_actions_purge_connection('PKG', '00000000-0000-4000-8000-000000033005')$$, 'P0002', null, '...and a connection that is not a Teams connection is refused');
+select is((select core.act_claim_outcome('PKG', (select id from ids where k = 'd2'))), 'outcome_unknown', 'the claim outcome function reports the recorded outcome');
+select is((select core.act_claim_outcome('PKG', (select id from ids where k = 'x1'))), null, '...null when the action has no claim, and nothing from another lane (x1 is APK''s)');
 select is((select outcome from act.execution_claims where action_id = (select id from ids where k = 'd2')), 'outcome_unknown', '...and its claim says the outcome is unknown (it may have been sent)');
 select is((select count(*)::int from act.proposed_actions where action_type like 'teams.%' and connection_id = '00000000-0000-4000-8000-000000033004' and status = 'proposed'), 1, 'CROSS-LANE: the purge of one connection leaves another lane''s connection alone');
 select throws_ok($$select core.teams_actions_purge_connection('PKG', null)$$, '22004', null, 'the purge needs a lane and a connection');
+set local role service_role;
+select is((select core.act_claimed_external_ids('PKG', '00000000-0000-4000-8000-000000033001', null, array['synthetic-message-1', 'synthetic-message-2'])), array['synthetic-message-1'], 'M-B: the message id another action recorded is reported (ids only), and an unknown one is not');
+select is((select core.act_claimed_external_ids('PKG', '00000000-0000-4000-8000-000000033001', (select id from ids where k = 'o1'), array['synthetic-message-1'])), '{}'::text[], 'M-B: ...but not for the action that owns it (the except argument)');
+select is((select core.act_claimed_external_ids('APK', '00000000-0000-4000-8000-000000033001', null, array['synthetic-message-1'])), '{}'::text[], 'M-B: CROSS-LANE: the same connection named under another lane yields nothing');
+reset role;
+select is((select has_function_privilege('authenticated', 'core.act_claimed_external_ids(text, uuid, uuid, text[])', 'execute') or has_function_privilege('authenticated', 'core.act_claim_outcome(text, uuid)', 'execute') or has_function_privilege('anon', 'core.act_claim_outcome(text, uuid)', 'execute')), false, 'the two claim readers are service_role only');
+select pg_temp.claims_amr('owner@example.test', 'aal1', pg_temp.now_s());
+set local role authenticated;
+select is(core.has_lane_role(pg_temp.uid('owner@example.test'), 'PKG', array['owner']), false, 'L5: at AAL1 even the owner holds no role, so the module''s role check (made before any text is stored) refuses an AAL1 session');
+reset role;
 
 -- ---------------------------------------------------------------- reconcile reads (service role): a Teams action stays findable while executing
 update core.connections set features = '{"teams_chat_send": true, "teams_channels_send": true}' where id = '00000000-0000-4000-8000-000000033002';

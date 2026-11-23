@@ -5,6 +5,8 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 const m = vi.hoisted(() => ({
   conn: { provider: "google", external_account_id: "Robert@Pubk.Example.Test", status: "active", features: { gmail_compose: true } } as Record<string, unknown> | null,
   gate: vi.fn<(lane: string, provider: string) => Promise<boolean>>(),
+  approvals: { approvals_live: true } as Record<string, unknown>,
+  storeDrafts: true,
 }));
 vi.mock("@nichols/connectors/facade", () => ({ prepareEmailWrite: vi.fn(), laneMailboxes: vi.fn(), mailboxAllowed: vi.fn(), providerGate: { enabled: m.gate } }));
 vi.mock("@nichols/connectors/write", () => ({
@@ -19,7 +21,7 @@ vi.mock("@nichols/core/lane-router", () => ({
         select: () => ({
           eq: () => ({
             eq: () => ({ maybeSingle: async () => ({ data: m.conn, error: null }) }),
-            maybeSingle: async () => ({ data: table === "lane_policies" ? { write_actions_allowed: ["email_send", "email_draft"] } : { config: { approvals: { approvals_live: true } } }, error: null }),
+            maybeSingle: async () => ({ data: table === "lane_policies" ? { write_actions_allowed: ["email_send", "email_draft"], store_outbound_drafts: m.storeDrafts } : { config: { approvals: m.approvals } }, error: null }),
           }),
         }),
       }),
@@ -68,6 +70,31 @@ describe("readFacts and the provider gate", () => {
     expect(await approvalsDeps.readFacts("PKG" as never, "00000000-0000-4000-8000-0000000c2602")).toMatchObject({ mailbox: null, composeGranted: false });
     m.conn = { provider: "quickbooks", external_account_id: "123", status: "active", features: { graph_mail_write: true, gmail_compose: true } };
     expect(await approvalsDeps.readFacts("PKG" as never, "00000000-0000-4000-8000-0000000c2603")).toMatchObject({ mailbox: null, composeGranted: false });
+  });
+});
+
+describe("T-286 review: the Teams step-up window and the stored-text rule are facts", () => {
+  it("teamsStepUpMaxAgeS is clamped 300..43,200 exactly like act.approve, and 300 when unset or not a whole number; the email window is untouched", async () => {
+    m.gate.mockResolvedValue(true);
+    const read = async (v: unknown) => {
+      m.approvals = { approvals_live: true, ...(v === undefined ? {} : { teams_step_up_max_age_s: v }) };
+      return approvalsDeps.readFacts("PKG" as never, "00000000-0000-4000-8000-0000000c2601");
+    };
+    expect((await read(undefined)).teamsStepUpMaxAgeS).toBe(300);
+    expect((await read(100)).teamsStepUpMaxAgeS).toBe(300);
+    expect((await read(28800)).teamsStepUpMaxAgeS).toBe(28800);
+    expect((await read(999999)).teamsStepUpMaxAgeS).toBe(43200);
+    expect((await read("3600")).teamsStepUpMaxAgeS).toBe(300);
+    expect((await read(1.5)).teamsStepUpMaxAgeS).toBe(300);
+    expect((await read(28800)).stepUpMaxAgeS).toBe(300);
+    m.approvals = { approvals_live: true };
+  });
+  it("storeOutboundDrafts is the lane policy's flag", async () => {
+    m.gate.mockResolvedValue(true);
+    m.storeDrafts = false;
+    expect((await approvalsDeps.readFacts("PKG" as never, "00000000-0000-4000-8000-0000000c2601")).storeOutboundDrafts).toBe(false);
+    m.storeDrafts = true;
+    expect((await approvalsDeps.readFacts("PKG" as never, "00000000-0000-4000-8000-0000000c2601")).storeOutboundDrafts).toBe(true);
   });
 });
 

@@ -4,7 +4,7 @@
 import { randomUUID } from "node:crypto";
 import { describe, expect, it } from "vitest";
 import { ConnectorError } from "@nichols/connectors";
-import { TEAMS_SEND_FAILURES } from "@nichols/connectors/write";
+import { TEAMS_ACTION_TYPES as CONNECTOR_TEAMS_TYPES, TEAMS_SEND_FAILURES } from "@nichols/connectors/write";
 import type { AuditEntry } from "@nichols/core/audit";
 import { createAudit } from "@nichols/core/audit";
 import { capabilityOf } from "./capability";
@@ -13,7 +13,7 @@ import { createTeamsReconciler } from "./reconcile-teams";
 import { reconcileStuckActions } from "./reconcile";
 import { hashOfRow } from "./rows";
 import { approveAndExecuteTeams, buildTeamsSend, executeApprovedTeams, proposeTeamsAction, type ProposeTeamsInput, type TeamsExecDeps } from "./teams";
-import type { CapabilityFacts, Rpc } from "./types";
+import { TEAMS_ACTION_TYPES, type CapabilityFacts, type Rpc } from "./types";
 
 const OWNER = "00000000-0000-4000-8000-0000000000a1";
 const OTHER = "00000000-0000-4000-8000-0000000000a2";
@@ -33,7 +33,7 @@ type VerifyMode = "ok" | "mismatch" | "not_found" | "timeout" | "claim_sent_fail
 
 const fixed = (code: keyof typeof TEAMS_SEND_FAILURES, kind: ConstructorParameters<typeof ConnectorError>[0]["kind"]) => new ConnectorError({ kind, message: TEAMS_SEND_FAILURES[code] });
 
-function world(over: { facts?: Partial<CapabilityFacts> | null; writer?: WriterMode; verify?: VerifyMode; markVerifiedThrows?: boolean; executeDelayMs?: number } = {}) {
+function world(over: { facts?: Partial<CapabilityFacts> | null; writer?: WriterMode; verify?: VerifyMode; markVerifiedThrows?: boolean; executeDelayMs?: number; loadThrows?: boolean; whileWriting?: (rows: Map<string, Row>, claims: Map<string, { outcome: string | null; external_id: string | null }>) => void; giveUp?: boolean } = {}) {
   const rows = new Map<string, Row>();
   const claims = new Map<string, { outcome: string | null; external_id: string | null }>();
   const audits: AuditEntry[] = [];
@@ -93,6 +93,8 @@ function world(over: { facts?: Partial<CapabilityFacts> | null; writer?: WriterM
         r.executing_at = new Date().toISOString();
         return { data: structuredClone(r), error: null };
       }
+      case "act_claim_outcome":
+        return { data: claims.get(a.p_id as string)?.outcome ?? null, error: null };
       case "act_claim_sent": {
         if (over.verify === "claim_sent_fails") return err("act: no open claim");
         const c = claims.get(a.p_id as string);
@@ -133,7 +135,7 @@ function world(over: { facts?: Partial<CapabilityFacts> | null; writer?: WriterM
         return { data: null, error: null };
       }
       case "act_stuck_actions":
-        return { data: [...rows.values()].filter((r) => r.status === "executing").map((r) => ({ action: structuredClone(r), claim_outcome: claims.get(r.id)?.outcome ?? null, claim_external_id: claims.get(r.id)?.external_id ?? null, give_up: false })), error: null };
+        return { data: [...rows.values()].filter((r) => r.status === "executing").map((r) => ({ action: structuredClone(r), claim_outcome: claims.get(r.id)?.outcome ?? null, claim_external_id: claims.get(r.id)?.external_id ?? null, give_up: over.giveUp === true })), error: null };
       case "act_reconcile_verified": {
         const r = get(a.p_id);
         if (!r || r.status !== "executing") return { data: false, error: null };
@@ -185,13 +187,17 @@ function world(over: { facts?: Partial<CapabilityFacts> | null; writer?: WriterM
     mailboxAllowed: async () => false,
     readFacts: async () => (over.facts === null ? { ...facts, teams: null } : facts),
     audit,
-    loadWriteConnection: async () => ({ id: CONN }) as never,
+    loadWriteConnection: async () => {
+      if (over.loadThrows) throw new ConnectorError({ kind: "transient", message: "The Teams credential store is unavailable" });
+      return { id: CONN } as never;
+    },
     writer: {
       async executeWrite(_l, _c, action) {
         calls.writes += 1;
         calls.actions.push({ ...action });
         if (over.executeDelayMs) await new Promise((r) => setTimeout(r, over.executeDelayMs));
         const mode = over.writer ?? "ok";
+        over.whileWriting?.(rows, claims);
         if (mode === "ok" || mode === "already_applied") return { outcome: mode === "ok" ? "accepted" : "already_applied", external_id: "synthetic-message-1", executed_at: new Date().toISOString(), provider_tid: null };
         if (mode === "no_id") return { outcome: "accepted", external_id: null, executed_at: new Date().toISOString(), provider_tid: null };
         return throwFor(mode);
@@ -384,7 +390,10 @@ describe("approveAndExecuteTeams: the one send", () => {
     const w = world();
     const a = await proposed(w);
     w.rows.get(a.id)!.status = "executing";
-    expect(await approveAndExecuteTeams(w.deps, w.ctx(), { actionId: a.id, hashSeen: a.hash })).toEqual({ status: "already_in_progress", actionId: a.id });
+    // claimed, nothing recorded yet: "Sending" / unknown (the caller tells them apart by the claim: sent_unverified once the id is recorded)
+    expect(await approveAndExecuteTeams(w.deps, w.ctx(), { actionId: a.id, hashSeen: a.hash })).toEqual({ status: "outcome_pending", actionId: a.id });
+    w.claims.set(a.id, { outcome: "sent", external_id: "synthetic-message-1" });
+    expect(await approveAndExecuteTeams(w.deps, w.ctx(), { actionId: a.id, hashSeen: a.hash })).toEqual({ status: "sent_unverified", actionId: a.id });
     expect(w.calls.writes).toBe(0);
   });
 
@@ -407,6 +416,84 @@ describe("approveAndExecuteTeams: the one send", () => {
     expect(r).toEqual({ status: "failed", actionId: id, failureCode: "payload_changed" });
     expect(w.calls.writes).toBe(0);
     expect(w.rows.get(id)!.payload.text).toBeUndefined();
+  });
+});
+
+describe("a concurrent double click and a disconnect during a send (T-286 review M-D, H1, L4)", () => {
+  it("two approve-and-execute calls started TOGETHER for the same action: one write, both answers are states (never an error), and a late one tells where the send is", async () => {
+    const w = world({ executeDelayMs: 25 });
+    const { id, hash } = await proposed(w);
+    const [a, b] = await Promise.all([approveAndExecuteTeams(w.deps, w.ctx(), { actionId: id, hashSeen: hash }), approveAndExecuteTeams(w.deps, w.ctx(), { actionId: id, hashSeen: hash })]);
+    expect(w.calls.writes).toBe(1);
+    expect([a.status, b.status].filter((x) => x === "verified")).toHaveLength(1);
+    expect(["already_in_progress", "outcome_pending", "sent_unverified", "verified"]).toContain([a.status, b.status].find((x) => x !== "verified") ?? "verified");
+    expect(w.rows.get(id)!.status).toBe("verified");
+  });
+
+  it("the same client request id proposed and sent twice together is one action and one write", async () => {
+    const w = world({ executeDelayMs: 25 });
+    const go = async () => {
+      const p = await proposed(w);
+      return approveAndExecuteTeams(w.deps, w.ctx(), { actionId: p.id, hashSeen: p.hash });
+    };
+    const results = await Promise.all([go(), go()]);
+    expect(w.rows.size).toBe(1);
+    expect(w.calls.writes).toBe(1);
+    expect(results.some((r) => r.status === "verified")).toBe(true);
+  });
+
+  it("a request that finds the action executing says 'Sent, checking' when the claim holds the message id, else 'pending'", async () => {
+    const w = world({ writer: "timeout" });
+    const { id, hash } = await proposed(w);
+    expect(await approveAndExecuteTeams(w.deps, w.ctx(), { actionId: id, hashSeen: hash })).toEqual({ status: "outcome_pending", actionId: id });
+    expect(await approveAndExecuteTeams(w.deps, w.ctx(), { actionId: id, hashSeen: hash })).toEqual({ status: "outcome_pending", actionId: id });
+    w.claims.set(id, { outcome: "sent", external_id: "synthetic-message-1" });
+    expect(await approveAndExecuteTeams(w.deps, w.ctx(), { actionId: id, hashSeen: hash })).toEqual({ status: "sent_unverified", actionId: id });
+  });
+
+  it("the disconnect closes the action AFTER the POST returned an id and before it was recorded: the id is audited (ids only) and the answer is the unknown-outcome failure, not 'nothing sent'", async () => {
+    const w = world({
+      whileWriting: (rows) => {
+        // what core.teams_actions_purge_connection does to an executing action
+        const r = [...rows.values()][0]!;
+        r.status = "failed";
+        r.failure_code = "reconcile_connection_disconnected";
+        delete r.payload.text;
+      },
+    });
+    const { id, hash } = await proposed(w);
+    const r = await approveAndExecuteTeams(w.deps, w.ctx(), { actionId: id, hashSeen: hash });
+    expect(r).toEqual({ status: "failed", actionId: id, failureCode: "reconcile_connection_disconnected" });
+    const rec = w.audits.find((a) => a.action === "action.record_failed");
+    expect(rec).toMatchObject({ target: `action:${id}`, metadata: { external_id: "synthetic-message-1", failure: "reconcile_connection_disconnected" } });
+    noText(w);
+    expect(w.calls.writes).toBe(1);
+  });
+
+  it("a failure BEFORE any request (the connection or credential cannot be loaded) is a definite failure: nothing was sent, the person may send again", async () => {
+    const w = world({ loadThrows: true });
+    const { id, hash } = await proposed(w);
+    expect(await approveAndExecuteTeams(w.deps, w.ctx(), { actionId: id, hashSeen: hash })).toEqual({ status: "failed", actionId: id, failureCode: "execution_refused" });
+    expect(w.rows.get(id)).toMatchObject({ failure_outcome: "error" });
+    expect(w.calls.writes).toBe(0);
+  });
+});
+
+describe("module facts and wiring rules (T-286 review M-C, L5, L7)", () => {
+  it("the Teams type lists of the connector and the approvals module are the same", () => {
+    expect([...TEAMS_ACTION_TYPES]).toEqual([...CONNECTOR_TEAMS_TYPES]);
+  });
+  it("a session that holds no role (an AAL1 session sees no membership) cannot propose: nothing is stored, nothing is asked of the database", async () => {
+    const w = world();
+    await expect(proposed(w, {}, "00000000-0000-4000-8000-0000000000ff")).rejects.toMatchObject({ code: "forbidden" });
+    expect(w.rows.size).toBe(0);
+    expect(w.audits).toHaveLength(0);
+  });
+  it("capabilityOf: a lane that stores no outbound text disables Teams with its own reason (the composer shows it instead of failing at Send); unknown is not off", () => {
+    const base: CapabilityFacts = { mailbox: null, composeGranted: false, writeActionsAllowed: ["teams_send"], approvalsLive: true, stepUpMaxAgeS: 300, teams: { ownerUserId: OWNER, chatSend: true, channelsSend: true } };
+    expect(capabilityOf("PKG" as never, { ...base, storeOutboundDrafts: false }, "teams.chat.send")).toMatchObject({ enabled: false, reason: "not_enabled", message: expect.stringContaining("does not store outbound drafts") });
+    expect(capabilityOf("PKG" as never, { ...base, storeOutboundDrafts: true }, "teams.chat.send")).toMatchObject({ enabled: true });
+    expect(capabilityOf("PKG" as never, base, "teams.chat.send")).toMatchObject({ enabled: true });
   });
 });
 
@@ -587,6 +674,28 @@ describe("the reconcile sweep for Teams", () => {
     expect(await s.sweep()).toMatchObject({ failed: 1 });
     expect(s.w.rows.get(id)).toMatchObject({ failure_code: "reconcile_payload_changed" });
     expect(s.finds).toHaveLength(0);
+  });
+
+  it("GIVE-UP: an undecided action past the give-up time ends failed: outcome_unknown when nothing was found; reconcile_sent_unverified when the claim holds the message id (it must end, never wait forever)", async () => {
+    const none = sweepWorld({ writer: "timeout", found: [], giveUp: true });
+    const id = await stuck(none.w, "timeout");
+    expect(await none.sweep()).toMatchObject({ failed: 1, undecided: 0 });
+    expect(none.w.rows.get(id)).toMatchObject({ status: "failed", failure_code: "outcome_unknown" });
+    expect(none.w.rows.get(id)!.payload.text).toBeUndefined();
+    const sent = sweepWorld({ verify: "not_found", verifyThrows: new ConnectorError({ kind: "timeout", message: "timed out" }), giveUp: true });
+    const id2 = await stuck(sent.w, "timeout" as never);
+    expect(await sent.sweep()).toMatchObject({ failed: 1 });
+    expect(sent.w.rows.get(id2)).toMatchObject({ status: "failed", failure_code: "reconcile_sent_unverified" });
+    expect(sent.w.rows.get(id2)!.payload.text).toBeUndefined();
+  });
+
+  it("a connection row that is gone is its own undecided code, not 'the message is gone'", async () => {
+    const w = world({ writer: "timeout" });
+    const id = await stuck(w, "timeout");
+    const r = createTeamsReconciler({ loadWriteConnection: async () => { throw new ConnectorError({ kind: "not_found", message: "Connection not found" }); }, reconciler: { findWrite: async () => [], verifyWrite: async () => undefined } });
+    const r0 = w.rows.get(id)!;
+    const decision = await r.decide({ laneId: "PKG" as never, row: { id, laneId: "PKG", actionType: "teams.chat.send", connectionId: CONN, target: r0.target, payload: r0.payload, payloadSchemaVersion: 1, payloadSha256: r0.payload_sha256, approvedBy: OWNER, executingAt: new Date().toISOString() } as never, claimOutcome: null, claimExternalId: null });
+    expect(decision).toEqual({ kind: "undecided", code: "reconcile_connection_missing" });
   });
 
   it("the reconciler holds find and verify only: it has no way to execute", () => {

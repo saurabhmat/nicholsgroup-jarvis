@@ -518,8 +518,14 @@ isOneToOne: false
 "act_claim_open":
 { Args: { "p_approver": string,"p_hash": string,"p_id": string,"p_lane": string }; Returns: boolean
                            },
+"act_claim_outcome":
+{ Args: { "p_id": string,"p_lane": string }; Returns: string
+                           },
 "act_claim_sent":
 { Args: { "p_external_id": string,"p_id": string,"p_lane": string }; Returns: undefined
+                           },
+"act_claimed_external_ids":
+{ Args: { "p_connection": string,"p_except": string,"p_ids": (string)[],"p_lane": string }; Returns: (string)[]
                            },
 "act_expire_stale":
 { Args: { "p_lane": string }; Returns: number

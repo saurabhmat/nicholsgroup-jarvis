@@ -41,6 +41,8 @@ export const NOT_LIVE_MESSAGE = "Approvals are not live for this company yet.";
 export const QBO_NOT_ENABLED_MESSAGE = "Disconnecting QuickBooks isn't enabled for this company yet. Ask your administrator to allow it.";
 
 /** Shown when a Teams message cannot be sent: the lane policy, the lane's Teams settings or the connection's send permission is off (T-286). */
+/** The lane keeps no outbound text, so a Teams send cannot be stored for approval (T-286: shown as the reason the composer is off). */
+export const TEAMS_NO_DRAFTS_MESSAGE = "This company does not store outbound drafts, so sending in Teams is off.";
 export const TEAMS_NOT_ENABLED_MESSAGE = "Sending in Teams isn't enabled for this company yet. Reconnect Teams in Settings, or ask your administrator to allow it.";
 
 /** An email whose text still holds a placeholder (T-237): never sent; the approver edits it first. */

@@ -7,7 +7,7 @@ import { createConnectorLogger, type LogEntry } from "../log/index";
 import { useMockServer } from "../testing/msw/index";
 import { createFakeTeams, type FakePostStep } from "../testing/msw/teams/handlers";
 import { createTeamsHarness, TEAMS_OTHER_USER, TEAMS_OWNER } from "../testing/teams-harness";
-import { TEAMS_SEND_FAILURES, createTeamsMessageWriter, prepareTeamsWrite, teamsFailureCodeOf, type TeamsApprovedAction } from "./writer";
+import { TEAMS_SEND_FAILURES, TEAMS_LOOKUP_SKEW_MS, createTeamsMessageWriter, prepareTeamsWrite, teamsFailureCodeOf, teamsLookupWindow, type TeamsApprovedAction } from "./writer";
 import { createTeamsWriteClient } from "./write-client";
 
 const server = useMockServer();
@@ -23,11 +23,11 @@ const REQ = "5e11d0c0-0000-4000-8000-000000000001";
 const ALL = ["chat_read", "chat_send", "channels_read", "channels_send"] as const;
 let counter = 0;
 
-function setup(opts: { features?: readonly ("chat_read" | "chat_send" | "channels_read" | "channels_send")[]; connFeatures?: readonly ("chat_read" | "chat_send" | "channels_read" | "channels_send")[]; timeoutMs?: number; claimOpen?: boolean } = {}) {
+function setup(opts: { features?: readonly ("chat_read" | "chat_send" | "channels_read" | "channels_send")[]; connFeatures?: readonly ("chat_read" | "chat_send" | "channels_read" | "channels_send")[]; timeoutMs?: number; claimOpen?: boolean; storedAccessExpired?: boolean } = {}) {
   const fake = createFakeTeams();
   server.use(...fake.handlers);
   const h = createTeamsHarness({ fake, lanes: { PKG: { teams: { features: [...(opts.features ?? ALL)] }, mailProviders: ["google"] } } });
-  const { row, account, conn } = h.connect("PKG", PERSON, { features: [...(opts.connFeatures ?? ALL)] });
+  const { row, account, conn } = h.connect("PKG", PERSON, { features: [...(opts.connFeatures ?? ALL)], ...(opts.storedAccessExpired ? { storedAccessExpired: true } : {}) });
   const logs: LogEntry[] = [];
   const logger = createConnectorLogger({ sink: (e) => logs.push(e) });
   const claimCalls: string[] = [];
@@ -37,9 +37,16 @@ function setup(opts: { features?: readonly ("chat_read" | "chat_send" | "channel
       return opts.claimOpen !== false && hash.length === 64;
     },
   };
+  // the twin of core.act_claimed_external_ids: message id -> the action that recorded it on its claim
+  const claimedBy = new Map<string, string>();
+  const claimed = {
+    async claimedExternalIds(_lane: string, _conn: string, except: string, ids: readonly string[]) {
+      return ids.filter((id) => claimedBy.has(id) && claimedBy.get(id) !== except);
+    },
+  };
   const write = createTeamsWriteClient({ guard: h.guard, tokens: h.tokens, errors: h.errors, httpOptions: { ...h.httpOptions, ...(opts.timeoutMs ? { timeoutMs: opts.timeoutMs } : {}) } });
-  const writer = createTeamsMessageWriter({ guard: h.guard, api: h.api, write, claims, logger, sleep: async () => undefined, lookupPauseMs: 0 });
-  return { fake, h, row, account, conn, writer, logs, claimCalls, write };
+  const writer = createTeamsMessageWriter({ guard: h.guard, api: h.api, write, claims, claimed, logger, sleep: async () => undefined, lookupPauseMs: 0 });
+  return { fake, h, row, account, conn, writer, logs, claimCalls, write, claimedBy };
 }
 type S = ReturnType<typeof setup>;
 
@@ -251,7 +258,7 @@ describe("the outcome table of the POST", () => {
 
   it("TWO own messages with the approved text in the window: ambiguous_match (no guess, no resend)", async () => {
     const s = setup();
-    const earlier = new Date(Date.now() - 30_000).toISOString();
+    const earlier = new Date(Date.now() - 5_000).toISOString(); // inside the lookup window (15 s before the POST)
     s.fake.state.messagesByChat.set(CHAT, [
       { id: "typed-in-teams-1", messageType: "message", createdDateTime: earlier, lastModifiedDateTime: earlier, from: { user: { id: s.account.objectId } }, body: { contentType: "text", content: CANARY }, chatId: CHAT },
     ]);
@@ -292,6 +299,116 @@ describe("the outcome table of the POST", () => {
 
 });
 
+describe("the lookup never takes an earlier message as this one (T-286 review M-B)", () => {
+  it("an earlier send of the same text from another action (within the window) is not taken: the second send whose POST timed out undelivered stays pending", async () => {
+    const s = setup();
+    const first = await s.writer.executeWrite("PKG", s.conn, action(s, { text: "same words" }));
+    s.claimedBy.set(first.external_id as string, "00000000-0000-4000-8000-0000000000f1"); // the executor recorded it on the first action's claim
+    plan(s, { answer: 500, store: false });
+    const e = await s.writer.executeWrite("PKG", s.conn, action(s, { text: "same words" })).then(() => null, (x: unknown) => x);
+    expect(code(e)).toBe("outcome_pending");
+    expect(posts(s)).toHaveLength(2);
+  });
+
+  it("a message with the same text typed in Teams BEFORE the POST started (older than the 15 s skew) is not taken either", async () => {
+    const s = setup();
+    const older = new Date(Date.now() - 60_000).toISOString();
+    s.fake.state.messagesByChat.set(CHAT, [{ id: "typed-earlier", messageType: "message", createdDateTime: older, lastModifiedDateTime: new Date().toISOString(), from: { user: { id: s.account.objectId } }, body: { contentType: "text", content: CANARY }, chatId: CHAT }]);
+    plan(s, { answer: 500, store: false });
+    const e = await s.writer.executeWrite("PKG", s.conn, action(s)).then(() => null, (x: unknown) => x);
+    expect(code(e)).toBe("outcome_pending");
+    expect(await s.writer.findWrite("PKG", s.conn, action(s), { since: new Date(Date.now() - 15_000).toISOString() })).toEqual([]);
+  });
+
+  it("the genuine case still verifies: the POST timed out after Graph accepted it, and nobody else recorded that message", async () => {
+    const s = setup();
+    const first = await s.writer.executeWrite("PKG", s.conn, action(s, { text: "same words" }));
+    s.claimedBy.set(first.external_id as string, "00000000-0000-4000-8000-0000000000f1");
+    plan(s, { answer: 500, store: true });
+    const res = await s.writer.executeWrite("PKG", s.conn, action(s, { text: "same words" }));
+    expect(res.outcome).toBe("already_applied");
+    expect(res.external_id).not.toBe(first.external_id);
+  });
+
+  it("the reconciler's findWrite applies the same rule: a message claimed by another action is not returned", async () => {
+    const s = setup();
+    const first = await s.writer.executeWrite("PKG", s.conn, action(s));
+    const a = action(s);
+    expect(await s.writer.findWrite("PKG", s.conn, a, { since: new Date(Date.now() - 15_000).toISOString() })).toEqual([first.external_id]);
+    s.claimedBy.set(first.external_id as string, "00000000-0000-4000-8000-0000000000f1");
+    expect(await s.writer.findWrite("PKG", s.conn, a, { since: new Date(Date.now() - 15_000).toISOString() })).toEqual([]);
+  });
+
+  it("a failing check of the claimed ids is a failed lookup: pending, never a guess", async () => {
+    const s = setup();
+    plan(s, { answer: 500, store: true });
+    const claimed = { async claimedExternalIds() { throw new Error("database down"); } };
+    const w = createTeamsMessageWriter({ guard: s.h.guard, api: s.h.api, write: s.write, claims: { async claimOpen() { return true; } }, claimed, sleep: async () => undefined, lookupPauseMs: 0 });
+    const e = await w.executeWrite("PKG", s.conn, action(s)).then(() => null, (x: unknown) => x);
+    expect(code(e)).toBe("outcome_pending");
+  });
+});
+
+describe("odd statuses, an unreadable 201, a 401 after refresh and a credential failure (T-286 review M-E, L2, L4)", () => {
+  for (const status of [408, 409, 423, 422, 502]) {
+    it(`${String(status)} is NOT a definite refusal: it is looked up (found: already_applied; not found: pending), never posted again`, async () => {
+      const found = setup();
+      plan(found, { answer: status, store: true });
+      expect((await found.writer.executeWrite("PKG", found.conn, action(found))).outcome).toBe("already_applied");
+      expect(posts(found)).toHaveLength(1);
+      const none = setup();
+      plan(none, { answer: status, store: false });
+      await expect(none.writer.executeWrite("PKG", none.conn, action(none))).rejects.toSatisfy((e) => code(e) === "outcome_pending");
+      expect(posts(none)).toHaveLength(1);
+    });
+  }
+
+  it("a 201 without a readable message id is an unknown outcome: looked up, never posted again", async () => {
+    const found = setup();
+    plan(found, { noId: true });
+    expect((await found.writer.executeWrite("PKG", found.conn, action(found))).outcome).toBe("already_applied");
+    expect(posts(found)).toHaveLength(1);
+    const none = setup();
+    plan(none, { noId: true, store: false });
+    await expect(none.writer.executeWrite("PKG", none.conn, action(none))).rejects.toSatisfy((e) => code(e) === "outcome_pending");
+    expect(posts(none)).toHaveLength(1);
+  });
+
+  it("a 401 that survives the one refresh is definite (connection_unhealthy): no lookup, nothing stored", async () => {
+    const s = setup();
+    s.fake.state.unauthorizedOnce = 6;
+    const e = await s.writer.executeWrite("PKG", s.conn, action(s)).then(() => null, (x: unknown) => x);
+    expect(code(e)).toBe("connection_unhealthy");
+    expect(gets(s)).toHaveLength(0);
+    expect(stored(s)).toHaveLength(0);
+  });
+
+  it("a credential failure BEFORE any request (the refresh fails) is definite, not an unknown outcome: nothing was sent, no lookup", async () => {
+    const s = setup({ storedAccessExpired: true });
+    s.fake.state.failRefresh = { status: 500, error: "server_error", times: 10 };
+    const e = await s.writer.executeWrite("PKG", s.conn, action(s)).then(() => null, (x: unknown) => x);
+    expect(code(e)).toBe("connection_unhealthy");
+    expect(posts(s)).toHaveLength(0);
+    expect(gets(s)).toHaveLength(0);
+  });
+
+  it("an infrastructure failure of the guard before the POST is 'not sent' too (execution_refused), not pending", async () => {
+    const s = setup();
+    const w = createTeamsMessageWriter({ guard: async () => { throw new Error("database down"); }, api: s.h.api, write: s.write, claims: { async claimOpen() { return true; } }, claimed: { async claimedExternalIds() { return []; } }, sleep: async () => undefined, lookupPauseMs: 0 });
+    const e = await w.executeWrite("PKG", s.conn, action(s)).then(() => null, (x: unknown) => x);
+    expect(code(e)).toBe("execution_refused");
+    expect(posts(s)).toHaveLength(0);
+  });
+
+  it("the write pacing is one POST per second per connection (pacing only: the POST is still never retried)", async () => {
+    const s = setup();
+    await s.writer.executeWrite("PKG", s.conn, action(s, { text: "one" }));
+    await s.writer.executeWrite("PKG", s.conn, action(s, { text: "two" }));
+    expect(s.h.clock.waits.some((w) => w >= 900)).toBe(true);
+    expect(posts(s)).toHaveLength(2);
+  });
+});
+
 describe("exactly one POST per action", () => {
   it("two concurrent executions of the same action make ONE POST (the second is refused)", async () => {
     const s = setup();
@@ -308,7 +425,8 @@ describe("exactly one POST per action", () => {
     plan(s, { answer: 403 });
     await expect(s.writer.executeWrite("PKG", s.conn, a)).rejects.toSatisfy((e) => code(e) === "not_a_member");
     const before = s.fake.state.graphRequests.length;
-    await expect(s.writer.executeWrite("PKG", s.conn, a)).rejects.toMatchObject({ info: { kind: "forbidden" } });
+    // not "nothing was sent": whether the first attempt delivered is not known here
+    await expect(s.writer.executeWrite("PKG", s.conn, a)).rejects.toSatisfy((e) => code(e) === "outcome_pending");
     expect(s.fake.state.graphRequests.length).toBe(before);
     expect(posts(s)).toHaveLength(1);
   });
@@ -452,5 +570,15 @@ describe("recovery (the reconciler's read side)", () => {
     const s = setup();
     const readSide = Object.freeze({ findWrite: s.writer.findWrite, verifyWrite: s.writer.verifyWrite });
     expect(Object.keys(readSide)).toEqual(["findWrite", "verifyWrite"]);
+  });
+});
+
+describe("the lookup window (T-286 review M-B)", () => {
+  it("starts 15 seconds before the claim, in one place for the executor and the sweep; empty when the time is unknown", () => {
+    expect(TEAMS_LOOKUP_SKEW_MS).toBe(15_000);
+    expect(teamsLookupWindow("2026-11-24T12:00:30.000Z")).toEqual({ since: "2026-11-24T12:00:15.000Z" });
+    expect(teamsLookupWindow(null)).toEqual({});
+    expect(teamsLookupWindow("not a time")).toEqual({});
+    expect(TEAMS_SEND_FAILURES.reconcile_connection_disconnected).toMatch(/may have been delivered/);
   });
 });

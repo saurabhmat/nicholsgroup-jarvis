@@ -10,6 +10,8 @@ type Rpc = (fn: string, args: Record<string, unknown>) => Promise<{ data: unknow
 export interface TeamsActionsStore {
   /** Closes the open Teams send actions of one connection of the lane; how many. */
   purgeConnection(laneId: LaneId, connectionId: string): Promise<number>;
+  /** Of these message ids, the ones another action of the connection recorded on its claim (T-286 review; ids only). */
+  claimedExternalIds(laneId: LaneId, connectionId: string, exceptActionId: string, ids: readonly string[]): Promise<string[]>;
 }
 
 export function createTeamsActionsStore(clientFor: JobClientFor): TeamsActionsStore {
@@ -23,6 +25,17 @@ export function createTeamsActionsStore(clientFor: JobClientFor): TeamsActionsSt
         return data;
       } catch {
         throw new ConnectorError({ kind: "transient", message: "The open Teams messages could not be closed" });
+      }
+    },
+    async claimedExternalIds(laneId, connectionId, exceptActionId, ids) {
+      try {
+        const client = await clientFor(laneId);
+        const core = client.schema("core");
+        const { data, error } = await (core.rpc.bind(core) as unknown as Rpc)("act_claimed_external_ids", { p_lane: laneId, p_connection: connectionId, p_except: exceptActionId, p_ids: [...ids] });
+        if (error || !Array.isArray(data) || !data.every((x) => typeof x === "string")) throw new Error("unavailable");
+        return data as string[];
+      } catch {
+        throw new ConnectorError({ kind: "transient", message: "The earlier Teams messages could not be checked" });
       }
     },
   };
