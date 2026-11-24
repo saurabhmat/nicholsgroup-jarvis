@@ -40,6 +40,8 @@ const READS: Record<string, [Kind, number]> = {
   "packages/connectors/src/quickbooks/reconnect.ts": ["by-id", 2],
   "packages/connectors/src/sync/store.ts": ["by-id", 1],
   "packages/connectors/src/sync/targets.ts": ["filtered", 1], // .in("provider", mail / calendar providers)
+  // T-294: counts the person's own counted Teams rows through the person's own client under RLS (the start of a connect refuses at the company's limit)
+  "packages/connectors/src/teams/accounts.ts": ["filtered", 1],
   "packages/connectors/src/teams/identity.ts": ["by-id", 1],
   "packages/connectors/src/vault/connections.ts": ["filtered", 5], // ensure/find by provider and account, listMailAccounts .in(google, microsoft)
   "packages/connectors/src/vault/loader.ts": ["by-id", 1],
@@ -68,6 +70,6 @@ describe("every read of core.connections is classified", () => {
 
   it("the files that read connections AND name the Teams provider are the reviewed ones (Home excludes it, the Teams section and identity read it, the store sets its owner, the approvals facts read the owner and send features of a Teams connection: T-286)", () => {
     const named = production().filter((f) => /["']microsoft_teams["']/.test(readFileSync(f, "utf8")) && /\.from\(\s*["']connections["']\s*\)/.test(readFileSync(f, "utf8"))).map(rel).sort();
-    expect(named).toEqual(["apps/web/lib/home.ts", "apps/web/lib/teams-connection.ts", "packages/connectors/src/teams/identity.ts", "packages/connectors/src/vault/connections.ts", "packages/modules/approvals/src/server/wire.ts"]);
+    expect(named).toEqual(["apps/web/lib/home.ts", "apps/web/lib/teams-connection.ts", "packages/connectors/src/teams/accounts.ts", "packages/connectors/src/teams/identity.ts", "packages/connectors/src/vault/connections.ts", "packages/modules/approvals/src/server/wire.ts"]);
   });
 });
