@@ -9,6 +9,16 @@ import { createContext, useContext, useLayoutEffect, useRef, type ReactNode } fr
 import { laneHref } from "@nichols/ui";
 import { viewOf, type MessagesTab, type MessagesView } from "@/lib/messages-view-state";
 
+/** The visual viewport must be shorter than the window by more than this (px) to count as "the keyboard is up" (a collapsing address bar is about 50 px; a keyboard is 250 or more). */
+export const KEYBOARD_MIN_PX = 120;
+/** A field a keyboard opens for: a text-like input, a textarea, a select or an editable region. */
+function isTextEntry(t: EventTarget | null): boolean {
+  if (!(t instanceof HTMLElement)) return false;
+  if (t instanceof HTMLTextAreaElement || t instanceof HTMLSelectElement) return true;
+  if (t instanceof HTMLInputElement) return !["button", "submit", "reset", "checkbox", "radio", "range", "file", "image", "color"].includes(t.type);
+  return t.isContentEditable;
+}
+
 const Ctx = createContext<MessagesView | null>(null);
 /** The screen state, or null outside a Messages scope (a test, a failure card). */
 export const useMessagesView = (): MessagesView | null => useContext(Ctx);
@@ -23,9 +33,15 @@ export function MessagesScope({ chatConns, className, children }: { chatConns: r
   // messages scrolling inside it. The chrome above it (the navy header band, the main area's padding, the page header, the notice lines) has no fixed size, so the pane's height is measured here
   // (after layout, never while rendering): window height - the tab bar's height - the pane column's distance from the top of the page. It is handed down as the CSS variable `--pane-h`, which
   // the pane's classes read (their fallback is the old calc). From `lg` the panes are sized by the flex chain and the variable is unused.
+  // THE ON-SCREEN KEYBOARD (T-288, carried from the T-296 re-check). On iOS the keyboard shrinks only the VISUAL viewport (`window.innerHeight` keeps its full value) and covers the fixed tab bar. While a text
+  // input INSIDE this scope has the focus and the visual viewport is clearly shorter than the window (more than KEYBOARD_MIN_PX), the pane ends at the bottom of the visual viewport instead:
+  //   h = visualViewport.height + visualViewport.offsetTop - (the column's top in the window)      (the tab bar is left out of the sum: the keyboard is over it)
+  // so the Send box sits just above the keyboard. On blur (or when the keyboard goes) the sum above, with the tab bar, applies again. The visual viewport's `scroll` event is listened to as well: iOS moves
+  // `offsetTop` when it scrolls the focused field into view.
   useLayoutEffect(() => {
     const el = box.current;
     if (!el) return undefined;
+    let editing = false; // a text input inside the scope has the focus
     const measure = () => {
       const col = el.querySelector<HTMLElement>('[data-testid="messages-right"]');
       const bar = document.querySelector<HTMLElement>('[data-slot="tab-bar"]');
@@ -33,19 +49,37 @@ export function MessagesScope({ chatConns, className, children }: { chatConns: r
         el.style.removeProperty("--pane-h");
         return;
       }
-      const top = col.getBoundingClientRect().top + window.scrollY;
-      const h = Math.floor(window.innerHeight - (bar?.getBoundingClientRect().height ?? 0) - top);
+      const rect = col.getBoundingClientRect();
+      const vv = window.visualViewport;
+      let h: number;
+      if (editing && vv && window.innerHeight - vv.height > KEYBOARD_MIN_PX) h = Math.floor(vv.height + vv.offsetTop - rect.top);
+      else h = Math.floor(window.innerHeight - (bar?.getBoundingClientRect().height ?? 0) - (rect.top + window.scrollY));
       el.style.setProperty("--pane-h", `${Math.max(h, 256)}px`);
     };
+    const focusIn = (e: FocusEvent) => {
+      editing = isTextEntry(e.target);
+      measure();
+    };
+    const focusOut = (e: FocusEvent) => {
+      // moving from one field of the pane to another keeps the keyboard up; anything else ends the editing
+      editing = isTextEntry(e.relatedTarget) && el.contains(e.relatedTarget as Node);
+      measure();
+    };
     measure();
+    el.addEventListener("focusin", focusIn);
+    el.addEventListener("focusout", focusOut);
     window.addEventListener("resize", measure);
     const vv = window.visualViewport;
     vv?.addEventListener("resize", measure);
+    vv?.addEventListener("scroll", measure);
     const ro = typeof ResizeObserver === "undefined" ? null : new ResizeObserver(measure);
     ro?.observe(document.body);
     return () => {
+      el.removeEventListener("focusin", focusIn);
+      el.removeEventListener("focusout", focusOut);
       window.removeEventListener("resize", measure);
       vv?.removeEventListener("resize", measure);
+      vv?.removeEventListener("scroll", measure);
       ro?.disconnect();
     };
   }, [v.view, v.open, v.chatKey]);

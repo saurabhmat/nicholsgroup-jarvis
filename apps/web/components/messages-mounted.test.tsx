@@ -262,6 +262,125 @@ describe("the phone pane's height is measured from the real chrome (T-297 review
       HTMLElement.prototype.getBoundingClientRect = orig;
     }
   });
+  describe("the on-screen keyboard (T-288; the visual viewport shrinks, the window does not)", () => {
+    const origRect = HTMLElement.prototype.getBoundingClientRect;
+    const vvFake = (height: number, offsetTop: number) => {
+      const listeners = new Map<string, Set<() => void>>();
+      const vv = {
+        height,
+        offsetTop,
+        addEventListener: (t: string, f: () => void) => void (listeners.get(t) ?? listeners.set(t, new Set()).get(t))?.add(f),
+        removeEventListener: (t: string, f: () => void) => void listeners.get(t)?.delete(f),
+        fire: (t: string) => listeners.get(t)?.forEach((f) => f()),
+      };
+      Object.defineProperty(window, "visualViewport", { configurable: true, value: vv });
+      return vv;
+    };
+    const setup = (opts: { top?: number } = {}) => {
+      nav.search = `conn=${A}&chat=${K1}`;
+      const bar = document.createElement("nav");
+      bar.setAttribute("data-slot", "tab-bar");
+      bar.getBoundingClientRect = () => rect(0, 64);
+      document.body.appendChild(bar);
+      vi.stubGlobal("matchMedia", () => ({ matches: false }));
+      Object.defineProperty(window, "innerHeight", { configurable: true, value: 800 });
+      Object.defineProperty(window, "scrollY", { configurable: true, value: 0 });
+      HTMLElement.prototype.getBoundingClientRect = function () {
+        return this.getAttribute("data-testid") === "messages-right" ? rect(opts.top ?? 210, 500) : origRect.call(this);
+      };
+      render(
+        <MessagesScope chatConns={[A]}>
+          <div data-testid="messages-right">
+            <textarea data-testid="box" />
+            <button type="button" data-testid="btn" />
+            <input data-testid="check" type="checkbox" />
+            <input data-testid="line" type="text" />
+          </div>
+        </MessagesScope>,
+      );
+    };
+    const pane = () => screen.getByTestId("messages-scope").style.getPropertyValue("--pane-h");
+    afterEach(() => {
+      HTMLElement.prototype.getBoundingClientRect = origRect;
+      Object.defineProperty(window, "visualViewport", { configurable: true, value: undefined });
+    });
+
+    it("with a field focused and the keyboard up the pane ends at the bottom of the VISUAL viewport (height + offsetTop - column top), the tab bar left out: 440 + 0 - 210 = 230, floored at 256", () => {
+      const vv = vvFake(800, 0);
+      setup();
+      expect(pane()).toBe("526px"); // no keyboard: the old sum (800 - 64 - 210)
+      vv.height = 480; // an iPhone keyboard: 320 px
+      act(() => void screen.getByTestId("box").focus());
+      // 480 + 0 - 210 = 270
+      expect(pane()).toBe("270px");
+    });
+
+    it("offsetTop is part of the sum: when iOS has scrolled the view 40 px, the pane reaches 40 px further down the window", () => {
+      const vv = vvFake(800, 0);
+      setup();
+      vv.height = 480;
+      vv.offsetTop = 40;
+      act(() => void screen.getByTestId("box").focus());
+      expect(pane()).toBe("310px"); // 480 + 40 - 210
+      vv.offsetTop = 80;
+      act(() => vv.fire("scroll")); // iOS moved the visual viewport: measured again
+      expect(pane()).toBe("350px");
+    });
+
+    it("blur puts the sum back (with the tab bar); a button, a checkbox or a click elsewhere is not a keyboard; focus moving to another field keeps the keyboard sizing", () => {
+      const vv = vvFake(800, 0);
+      setup();
+      vv.height = 480;
+      act(() => void screen.getByTestId("btn").focus());
+      expect(pane()).toBe("526px"); // a button opens no keyboard
+      act(() => void screen.getByTestId("check").focus());
+      expect(pane()).toBe("526px");
+      act(() => void screen.getByTestId("box").focus());
+      expect(pane()).toBe("270px");
+      act(() => void screen.getByTestId("line").focus());
+      expect(pane()).toBe("270px"); // field to field: still up
+      act(() => void screen.getByTestId("line").blur());
+      expect(pane()).toBe("526px"); // restored
+    });
+
+    it("a visual viewport only a little shorter than the window (a collapsing address bar, under 120 px) is not the keyboard", () => {
+      const vv = vvFake(800, 0);
+      setup();
+      vv.height = 720;
+      act(() => void screen.getByTestId("box").focus());
+      expect(pane()).toBe("526px");
+      vv.height = 680; // exactly 120 short: still not more than 120
+      act(() => vv.fire("resize"));
+      expect(pane()).toBe("526px");
+      vv.height = 679;
+      act(() => vv.fire("resize"));
+      expect(pane()).toBe("469px"); // 679 + 0 - 210
+    });
+
+    it("the keyboard shrinking the window itself (Android: innerHeight follows) changes nothing: the old sum applies and the field's focus is not a second correction", () => {
+      vvFake(600, 0);
+      setup();
+      Object.defineProperty(window, "innerHeight", { configurable: true, value: 600 });
+      act(() => void screen.getByTestId("box").focus());
+      expect(pane()).toBe("326px"); // 600 - 64 - 210
+    });
+
+    it("the minimum pane height (256 px) is kept when the visual viewport is very short", () => {
+      const vv = vvFake(800, 0);
+      setup({ top: 150 });
+      vv.height = 300;
+      act(() => void screen.getByTestId("box").focus());
+      expect(pane()).toBe("256px"); // 300 - 150 = 150, floored
+    });
+
+    it("the listeners are removed when the scope unmounts", () => {
+      const vv = vvFake(800, 0);
+      setup();
+      cleanup();
+      vv.height = 100;
+      expect(() => vv.fire("resize")).not.toThrow();
+    });
+  });
   it("on a wide window the variable is not set (the panes are sized by the flex chain)", () => {
     vi.stubGlobal("matchMedia", () => ({ matches: true }));
     render(

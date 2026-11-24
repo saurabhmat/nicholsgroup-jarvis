@@ -1,7 +1,7 @@
 "use client";
 // Messages: the Send box (T-288; spec docs/specs/messages.md 10.3, 10.5, 22.8; decision D-67). The composer belongs to the conversation opened through `conn` (one account) and sends through THAT connection only; the line
 // under it names the account. Pressing Send is the person's approval of the exact text: the browser hashes the text it shows and the route proposes, approves and sends it in one request (one POST at Microsoft).
-// What is kept where: the typed text lives in this component's state; a copy is kept in THIS TAB's sessionStorage (components never reach the server with it except in the send request) only so a stale authenticator
+// What is kept where: the typed text lives in this component's state; a copy is kept in THIS TAB's session storage (it never reaches the server except in the send request itself) only so a stale authenticator
 // code does not cost it (lib/reply-draft-store.ts, `teamsDrafts`: only for a company that stores outbound drafts, which a Teams composer requires). Nothing is stored after a send leaves the person's hands.
 //   SendScope       the bubbles of this conversation's sends (state), shared by the composer and the message list
 //   PendingBubbles  those bubbles, drawn at the end of the message list, each with its state as TEXT (never colour alone), announced by a live region; a Sent bubble is hidden once the conversation shows that message
