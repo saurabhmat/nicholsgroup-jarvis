@@ -6,6 +6,7 @@ const m = vi.hoisted(() => ({
   conn: { provider: "google", external_account_id: "Robert@Pubk.Example.Test", status: "active", features: { gmail_compose: true } } as Record<string, unknown> | null,
   gate: vi.fn<(lane: string, provider: string) => Promise<boolean>>(),
   approvals: { approvals_live: true } as Record<string, unknown>,
+  teams: undefined as Record<string, unknown> | undefined,
   storeDrafts: true,
 }));
 vi.mock("@nichols/connectors/facade", () => ({ prepareEmailWrite: vi.fn(), laneMailboxes: vi.fn(), mailboxAllowed: vi.fn(), providerGate: { enabled: m.gate } }));
@@ -21,7 +22,7 @@ vi.mock("@nichols/core/lane-router", () => ({
         select: () => ({
           eq: () => ({
             eq: () => ({ maybeSingle: async () => ({ data: m.conn, error: null }) }),
-            maybeSingle: async () => ({ data: table === "lane_policies" ? { write_actions_allowed: ["email_send", "email_draft"], store_outbound_drafts: m.storeDrafts } : { config: { approvals: m.approvals } }, error: null }),
+            maybeSingle: async () => ({ data: table === "lane_policies" ? { write_actions_allowed: ["email_send", "email_draft"], store_outbound_drafts: m.storeDrafts } : { config: { approvals: m.approvals, teams: m.teams } }, error: null }),
           }),
         }),
       }),
@@ -107,7 +108,20 @@ describe("T-286: Teams facts", () => {
     const f = await approvalsDeps.readFacts("PKG" as never, TEAMS_CONN);
     expect(f).toMatchObject({ mailbox: null, provider: null, composeGranted: false, qbo: null });
     // the mocked lane config has no teams block: both are off
-    expect(f.teams).toEqual({ ownerUserId: "00000000-0000-4000-8000-0000000000a1", chatSend: false, channelsSend: false });
+    expect(f.teams).toEqual({ ownerUserId: "00000000-0000-4000-8000-0000000000a1", chatSend: false, channelsSend: false, laneChatSend: false, connChatSend: true });
+  });
+  it("T-288: the two halves of chatSend are reported apart, so a refusal can name the gate (the company's settings, or this connection's own grant)", async () => {
+    m.gate.mockResolvedValue(true);
+    m.teams = { enabled: true, features: ["chat_read", "chat_send"] };
+    const f = (features: Record<string, unknown>) => {
+      m.conn = { provider: "microsoft_teams", external_account_id: "robert@teams.example.test", status: "active", features, owner_user_id: "00000000-0000-4000-8000-0000000000a1" };
+      return approvalsDeps.readFacts("PKG" as never, TEAMS_CONN);
+    };
+    expect((await f({ teams_chat_send: true })).teams).toMatchObject({ chatSend: true, laneChatSend: true, connChatSend: true });
+    expect((await f({ teams_chat_read: true })).teams).toMatchObject({ chatSend: false, laneChatSend: true, connChatSend: false }); // connected before sending was switched on: Reconnect
+    m.teams = { enabled: false, features: ["chat_send"] };
+    expect((await f({ teams_chat_send: true })).teams).toMatchObject({ chatSend: false, laneChatSend: false, connChatSend: true });
+    m.teams = undefined;
   });
   it("a Teams connection that needs a reconnect, or a mail connection, has no Teams facts", async () => {
     m.gate.mockResolvedValue(true);

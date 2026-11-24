@@ -102,7 +102,8 @@ describe("the Teams write path is reachable only from approvals", () => {
       .filter((f) => !f.startsWith("packages/eslint-plugin/src/"))
       .sort();
     expect(named.filter((f) => !f.startsWith("packages/modules/approvals/src/"))).toEqual([]);
-    expect(named).toEqual(["packages/modules/approvals/src/server/index.ts", "packages/modules/approvals/src/server/teams.ts", "packages/modules/approvals/src/server/wire.ts"]);
+    // T-288: `teams-send.ts` (the one-step send over these entries) joins the three
+    expect(named).toEqual(["packages/modules/approvals/src/server/index.ts", "packages/modules/approvals/src/server/teams-send.ts", "packages/modules/approvals/src/server/teams.ts", "packages/modules/approvals/src/server/wire.ts"]);
   });
 
   it("`sendTeamsMessage` (T-288, Send = your approval) is named only inside the approvals module and by the ONE Messages send route (added deliberately to the allowed files); that route names no propose, approve or execute entry itself", () => {
@@ -112,7 +113,8 @@ describe("the Teams write path is reachable only from approvals", () => {
       .filter((f) => !f.startsWith("packages/eslint-plugin/src/"))
       .sort();
     expect(named.filter((f) => !f.startsWith("packages/modules/approvals/src/"))).toEqual(["apps/web/app/api/lanes/[laneId]/messages/send/route.ts"]);
-    expect(named.filter((f) => f.startsWith("packages/modules/approvals/src/"))).toEqual(["packages/modules/approvals/src/server/teams-send.ts", "packages/modules/approvals/src/server/wire.ts"]);
+    // inside approvals: the definition, its wiring, and the files whose comments name it (index and teams.ts); nothing else
+    expect(named.filter((f) => f.startsWith("packages/modules/approvals/src/"))).toEqual(["packages/modules/approvals/src/server/index.ts", "packages/modules/approvals/src/server/teams-send.ts", "packages/modules/approvals/src/server/teams.ts", "packages/modules/approvals/src/server/wire.ts"]);
     const route = text(join(root, "apps/web/app/api/lanes/[laneId]/messages/send/route.ts"));
     expect(route).not.toMatch(/\b(proposeTeamsAction|approveAndExecuteTeamsAction|executeApprovedTeamsAction|approveAndExecuteTeams|executeApprovedTeams|teamsMessageWriter|@nichols\/connectors\/write)\b/);
   });
