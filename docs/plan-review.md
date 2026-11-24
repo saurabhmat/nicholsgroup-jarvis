@@ -2096,3 +2096,13 @@ Accepted / for later:
 - Mail deliveries now make two lookups per lane and answer 503 if either fails.
 
 Follow-ups of the T-289/T-290 re-check (Nov 24, 2026): the mixed mail + Teams delivery test is back (each item claimed and marked under its own connection's provider); the memory webhook store for the Microsoft receiver tests (`createMicrosoftMemoryWebhookStore`) REQUIRES the connection lookup and, like `core.webhook_event_claim`, refuses a claim for a connection of another provider or one that is disconnected or pending; while the first activity answer keeps failing the page retries every 30 s three times, then at most every 5 minutes (at once when the tab returns) and stops for the page view on 401, 403 or 404 (still one timer).
+
+## Several Teams accounts per person (planner, Nov 24, 2026)
+
+Saurabh's request of Nov 24 (second Teams account, pub-k.org beside pubkgroup.com, chats combined) is planned in `docs/specs/messages.md` §22 and Phase B12 (T-294 – T-296, all `proposed`). Points for reviewers and later tasks:
+
+- **Where "one per person" lived in the code:** the index `connections_one_teams_per_owner` and `core.teams_assert_one_per_owner` (SQL); `TEAMS_ONE_ACCOUNT_MESSAGE` and the harness's D0024 (connector); `find()` in `apps/web/lib/teams-api.ts` ("the person's own usable Teams connection", every Messages route); `messagesStateOf` (`lib/teams-messages.ts`, `find` of the first usable row); `TeamsRows` in `components/teams-connection-section.tsx` (`hasActive` hides Sign in, `anotherUsable` hides Reconnect); `MessagesWorkspace` (one `connectionId`). Every SQL reader and policy after T-278 was already per connection (`= any (core.teams_connection_ids(...))`), so no policy changes.
+- **The limit is enforced by a trigger, not an index**, because a count from `lane_config` cannot be a unique index; an advisory lock per (lane, owner) makes concurrent connects of one person wait for each other. `core.connection_token_store` is deliberately not replaced (it serves every provider); its branch for the dropped index becomes dead code.
+- **C5 of the T-281 review** (keep the chat list mounted across `?chat=` changes) moves into T-296: with two accounts every chat click would otherwise re-read two lists.
+- **Accepted limit of the combined paging:** the first page is ordered across accounts, later pages only within themselves (nothing may be buffered on the server, rule 6).
+- **Live checks (H-085):** A-1 the account picker with one account signed in; A-2 `login_hint` with two signed in; A-3 the same chat id in both lists (no longer affects the design: D-70's default, chosen Nov 24, shows such a chat as two rows); A-4 whether the per-chat read limit is shared by two users of the app.
