@@ -141,13 +141,14 @@ const PROOF: Record<string, string[]> = {
   "api/webhooks/microsoft/route.ts": [`${W}/tests/microsoft-webhook-route.test.ts`, `${CONN}/webhooks/spoofing-catalog.test.ts`],
   "auth/confirm/route.ts": ["packages/core/src/auth/actions.test.ts", `${W}/tests/proxy.test.ts`],
 };
+// Each claimed guard needs a test whose TITLE names that guard specifically (a title that merely says "403" or "forbidden" proves nothing about which guard).
 const TITLE: Record<"session" | "aal2" | "lane" | "role" | "stepUp" | "origin", RegExp> = {
-  session: /no session|signed.?out|unauthor|401|session/i,
-  aal2: /aal1|aal2|mfa|second factor|two.?factor/i,
-  lane: /lane|404|member|not.?found|forbidden|company/i,
-  role: /role|owner|viewer|admin|finance_operator|403/i,
-  stepUp: /step.?up|authenticator|totp/i,
-  origin: /cross.?site|origin|same.?site|csrf|forged/i,
+  session: /\b401\b|no session|without a (valid )?session|no valid session|signed.?out/i,
+  aal2: /\baal1\b|mfa_required|\bmfa\b|second factor|two.?factor|without the second|session\/role \(aal2\)/i,
+  lane: /bad lane|a lane that is not|forbidden lane|lane membership|lane is not (in|listed)|another lane|other lane|a lane (the person )?may not|lane id shape|cross.?lane|non.?member|not a member|unknown lane|refuses the lane|not (a )?member of|company that does not|lane the person/i,
+  role: /session\/role|no own_mail|own_mail roles?|role without own_mail|\b(viewer|finance_operator|non-owner|not an owner|wrong role|may not (propose|approve|connect)|role (is )?(refused|check|list)|requires (the )?owner|owner only|only the owner|owner role)\b/i,
+  stepUp: /step.?up|stale authenticator|fresh TOTP|authenticator code/i,
+  origin: /cross.?site|same.?site|\borigin\b|forged/i,
 };
 const titlesOf = (file: string): string[] => [...src(file).matchAll(/^\s*(?:it|test)(?:\.each\([^)]*\))?\(\s*(?:`([^`]*)`|"([^"]*)"|'([^']*)')/gm)].map((m) => m[1] ?? m[2] ?? m[3] ?? "");
 
@@ -207,6 +208,12 @@ describe("route.ts inventory", () => {
     });
     expect(titles.length, "the proof files hold tests").toBeGreaterThan(0);
     for (const [guard, needed] of GUARDS) if (needed(n)) expect(titles.some((t) => TITLE[guard].test(t)), `${file}: no test titled for ${guard} in ${proofFiles.join(", ")}`).toBe(true);
+  });
+  it("every behaviour test file this inventory cites is part of the security command (scripts/security-suite.json), so `pnpm test:security` runs the proof it points to", () => {
+    const manifest = JSON.parse(src("scripts/security-suite.json")) as { vitest: Record<string, string[]> };
+    const listed = new Set(Object.entries(manifest.vitest).flatMap(([pkg, files]) => files.map((f) => `${pkg}/${f}`)));
+    const cited = new Set(Object.values(PROOF).flat());
+    expect([...cited].filter((f) => !listed.has(f)).sort()).toEqual([]);
   });
   it("the Inngest endpoint is signed in production: signing key set, unauthenticated sync off", () => {
     const t = strip(src("packages/core/src/inngest/index.ts"));

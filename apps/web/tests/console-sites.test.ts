@@ -130,6 +130,16 @@ function expressions(call: string): string {
 const SECRET_NAME = /\b(accessToken|refreshToken|idToken|clientSecret|apiKey|api_key|access_token|refresh_token|token|secret|password|authorization|cookie|cookies|bearer|credentials?)\b/i;
 const MESSAGE = /\.message\b|\.stack\b|\.cause\b|\.body\b|\.headers\b/;
 
+const code = (t: string) => t.replace(/\/\*[\s\S]*?\*\//g, "").replace(/(^|[^:"'`])\/\/.*$/gm, "$1");
+/** Files that legitimately pass `console.info` as a default logger parameter (a reviewed injection point), listed with the reason. */
+const ALIAS_OK = new Set<string>([
+  "apps/web/lib/server-timing.ts", // `(line) => console.info(line)` default sink of the timing helper: names and durations only
+  "packages/core/src/env/startup.ts", // `log = console.warn` default of warnUnconfiguredFeatures: the names of unconfigured features only
+]);
+
+/** The only reviewed JSON.stringify in a console call: a typed log entry of ids, model, token counts and latency (LLMCallLog has no content field). */
+const STRINGIFY_OK = new Map<string, RegExp>([["packages/ai/src/anthropic.ts", /JSON\.stringify\(\{ event: "llm\.call", \.\.\.entry \}\)/]]);
+
 describe("console call sites", () => {
   it("finds the sites (the scan is not empty)", () => {
     expect(withCalls.length).toBeGreaterThanOrEqual(30);
@@ -150,7 +160,16 @@ describe("console call sites", () => {
       }
     }
   });
+  it("no call serialises anything with JSON.stringify (a serialised object hides what is in it), and no file aliases, destructures or indexes `console`", () => {
+    for (const { f, calls: cs } of withCalls) for (const c of cs) if (!STRINGIFY_OK.get(f)?.test(c)) expect(/JSON\.stringify\s*\(/.test(expressions(c)), `${f}: ${c.slice(0, 120)}`).toBe(false);
+    const alias = /(?:=|\(|,|\breturn)\s*console\s*(?:[;,)]|$)|=\s*console\.(?:log|warn|error|info|debug|dir|table|trace)\s*(?:[;,)]|$)|\bconsole\s*\[|\{[^}]*\}\s*=\s*console\b|\bconsole\.(?:log|warn|error|info|debug)\.(?:bind|call|apply)\b/m;
+    const aliased = sources.filter((f) => alias.test(code(readFileSync(join(REPO, f), "utf8")))).filter((f) => !ALIAS_OK.has(f));
+    expect(aliased).toEqual([]);
+  });
   it("the scanner itself catches the shapes it claims to (a self-test)", () => {
+    const aliasSelf = /(?:=|\(|,|\breturn)\s*console\s*(?:[;,)]|$)|=\s*console\.(?:log|warn|error|info|debug|dir|table|trace)\s*(?:[;,)]|$)/m;
+    for (const bad of ["const say = console.error;", "const { error } = console;", "run(console)"]) expect(aliasSelf.test(bad) || /\{[^}]*\}\s*=\s*console\b/.test(bad), bad).toBe(true);
+    expect(/JSON\.stringify\s*\(/.test(expressions("\"x\", JSON.stringify(r)"))).toBe(true);
     const bad = ["x", "(e as Error).message", "e?.message", "accessToken", "`t ${refreshToken}`", "{ token }", "res.headers", "err.stack", "obj.cause"];
     for (const b of bad.slice(1)) expect(MESSAGE.test(expressions(b)) || SECRET_NAME.test(expressions(b)), b).toBe(true);
     expect(SECRET_NAME.test(expressions('"fixed text about a token", { laneId, count: 3 }'))).toBe(false);

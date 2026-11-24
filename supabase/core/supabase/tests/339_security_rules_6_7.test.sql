@@ -5,7 +5,7 @@
 -- Rule 7: AI output never writes financial tables. Catalog: the functions that write any `fin` table are found from their source; none is executable by
 --   authenticated, none is called by any code that handles model output, and a signed-in owner cannot write a fin table directly or through them.
 begin;
-select plan(11);
+select plan(13);
 \ir helpers/lane_rls.psql
 
 -- ------------------------------------------------------------------ rule 6: catalog of body-capable columns
@@ -34,6 +34,25 @@ select is((select coalesce(array_agg(col order by col), '{}') from body_policy w
 select is((select coalesce(array_agg(n.nspname || '.' || c.relname || '.' || a.attname order by 1), '{}') from pg_attribute a join pg_class c on c.oid = a.attrelid join pg_namespace n on n.oid = c.relnamespace
            where n.nspname in ('comms','cal') and c.relkind = 'r' and a.attnum > 0 and not a.attisdropped and a.attname ~* '(body|html|snippet|preview|raw|content|transcript|full_text)'), '{}'::text[],
   'the mail, chat and calendar tables have no body-shaped column at all (subject, sender, times and flags only)');
+
+-- Wider net for the mail, chat and calendar tables: EVERY text, json, jsonb and text[] column there is classified (whatever its name), so a new column such as `notes`
+-- cannot appear unnoticed. (337 also covers free-text columns anywhere by name.)
+create temp table mail_cols_ok (col text primary key, why text not null) on commit drop;
+insert into mail_cols_ok
+select c, 'message or event metadata: ids, addresses, names, subject, folder, labels, flags or times as text; no body' from unnest(array[
+  'cal.event_index.attendees','cal.event_index.calendar_id','cal.event_index.event_id','cal.event_index.ical_uid','cal.event_index.lane_id','cal.event_index.location',
+  'cal.event_index.online_meeting_url','cal.event_index.organizer_email','cal.event_index.organizer_name','cal.event_index.provider','cal.event_index.recurring_event_id',
+  'cal.event_index.source_url','cal.event_index.status','cal.event_index.timezone','cal.event_index.title',
+  'comms.message_index.category','comms.message_index.cc_recipients','comms.message_index.classifier_model','comms.message_index.classifier_version','comms.message_index.folder',
+  'comms.message_index.from_address','comms.message_index.from_name','comms.message_index.labels','comms.message_index.lane_id','comms.message_index.message_id',
+  'comms.message_index.provider','comms.message_index.source_url','comms.message_index.subject','comms.message_index.summary','comms.message_index.thread_id','comms.message_index.to_recipients',
+  'comms.teams_activity.lane_id','comms.teams_chat_reads.chat_id','comms.teams_chat_reads.lane_id']) c;
+select is((select coalesce(array_agg(n.nspname || '.' || c.relname || '.' || a.attname order by 1), '{}') from pg_attribute a join pg_class c on c.oid = a.attrelid join pg_namespace n on n.oid = c.relnamespace
+           where n.nspname in ('comms','cal') and c.relkind = 'r' and a.attnum > 0 and not a.attisdropped and a.atttypid in ('text'::regtype, 'jsonb'::regtype, 'json'::regtype, 'text[]'::regtype)
+             and n.nspname || '.' || c.relname || '.' || a.attname not in (select col from mail_cols_ok)), '{}'::text[],
+  'every text, json, jsonb or array column of the mail, chat and calendar tables is classified as metadata (a new column, whatever its name, fails until reviewed)');
+select is((select coalesce(array_agg(col order by col), '{}') from mail_cols_ok where col not in (select n.nspname || '.' || c.relname || '.' || a.attname from pg_attribute a join pg_class c on c.oid = a.attrelid join pg_namespace n on n.oid = c.relnamespace where n.nspname in ('comms','cal') and a.attnum > 0 and not a.attisdropped)), '{}'::text[],
+  'no stale entry in the mail, chat and calendar column list');
 
 -- ------------------------------------------------------------------ rule 6: outbound drafts only when the lane policy allows, and purged
 update core.lane_policies set write_actions_allowed = array['email_send', 'email_draft', 'teams_send'] where lane_id = 'PKG';

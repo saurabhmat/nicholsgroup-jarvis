@@ -43,7 +43,9 @@ test("every vitest file carrying the suite marker is in the manifest, and every 
   assert.ok(marked.length >= 9, "the scan finds the suite files");
   assert.deepEqual(marked.filter((f) => !listed.has(f)), []);
   const OLDER = new Set(["packages/connectors/src/vault/canary.test.ts", "packages/ai/src/injection/injection.test.ts"]); // earlier tests the suite runs too
-  for (const f of listed) assert.ok(marked.includes(f) || OLDER.has(f), `${f} is neither marked nor a reviewed older test`);
+  // behaviour tests cited as proof by the route inventory are part of the command too
+  const inventory = readFileSync(join(ROOT, "apps/web/tests/route-inventory.test.ts"), "utf8");
+  for (const f of listed) assert.ok(marked.includes(f) || OLDER.has(f) || inventory.includes(f.split("/").slice(-2).join("/")), `${f} is neither marked, cited by the route inventory, nor a reviewed older test`);
 });
 test("every pgTAP file that says it is part of the suite is listed, and the SQL helper it includes exists", () => {
   for (const f of readdirSync(TESTS).filter((n) => n.endsWith(".test.sql") && readFileSync(join(TESTS, n), "utf8").slice(0, 300).includes(MARKER))) assert.ok(manifest.pgtap.includes(f), `${f} is not in the manifest`);

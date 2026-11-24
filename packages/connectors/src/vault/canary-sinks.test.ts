@@ -154,6 +154,14 @@ describe("each redaction layer on its own", () => {
       ["x-api-key: k9", "k9"],
     ] as const) expect(redactText(input), input).not.toContain(secret);
   });
+  it("layer 2, the bare `Bearer <value>` rule on its own: a short, low-entropy value outside any header or key", () => {
+    const out = redactText("the gateway rejected Bearer aaaaaaaabb11 for this call");
+    expect(out).not.toContain("aaaaaaaabb11");
+    expect(out).toContain("Bearer");
+  });
+  it("layer 2, the JWT/JWE rule on its own: short, low-entropy JWT-shaped values (including an Intuit-style empty second segment)", () => {
+    for (const jwt of ["eyJaaaaa..bbbb", "eyJaaaaaa.bbbbbbb.ccccccc", "eyJ11111.222.3", "eyJabcde.eyJabcde."]) expect(redactText(`see ${jwt} in the log`), jwt).not.toContain("eyJ");
+  });
   it("layer 3, word shapes: a credential-looking word with no credential context is removed", () => {
     for (const w of ["sk_live_abcdefghijklmnop1234", "ghp_abcdefghijklmnopqrstuvwxyz0123", "eyJhbGciOiJIUzI1NiJ9abc.eyJzdWIiOiJ4In0.sig12345678"]) expect(redactText(`the value ${w} was rejected`), w).not.toContain(w);
   });

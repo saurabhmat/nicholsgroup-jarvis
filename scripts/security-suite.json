@@ -2,16 +2,40 @@
   "note": "T-170: the files that make up the pilot security suite (docs/security/pilot-test.md). `pnpm test:security` runs the vitest files; the pgTAP files run with `pnpm test:db` (and `node scripts/test-db.mjs --no-reset`).",
   "vitest": {
     "apps/web": [
+      "lib/approvals.test.ts",
+      "lib/assistant.test.ts",
+      "lib/brain-import.test.ts",
+      "lib/brain-interview.test.ts",
       "tests/assistant-registry.test.ts",
+      "tests/connect-authorizer.test.ts",
+      "tests/connection-test.test.ts",
+      "tests/connector-error-export.test.ts",
       "tests/console-sites.test.ts",
+      "tests/disconnect-teams-route.test.ts",
+      "tests/guards.test.ts",
+      "tests/lane-page.test.ts",
+      "tests/microsoft-disconnect.test.ts",
+      "tests/microsoft-webhook-route.test.ts",
+      "tests/proxy.test.ts",
       "tests/route-inventory.test.ts",
       "tests/rule-7-fin-writers.test.ts",
-      "tests/security-headers.test.ts"
+      "tests/security-headers.test.ts",
+      "tests/sync-now.test.ts",
+      "tests/teams-activity-routes.test.ts",
+      "tests/teams-image-route.test.ts",
+      "tests/teams-messages-routes.test.ts",
+      "tests/teams-send-route.test.ts",
+      "tests/webhook-route.test.ts"
     ],
     "packages/connectors": [
-      "src/webhooks/spoofing-catalog.test.ts",
+      "src/composio/handlers.test.ts",
+      "src/oauth/connect-roles.test.ts",
+      "src/oauth/flow.test.ts",
+      "src/oauth/handlers-consent.test.ts",
+      "src/oauth/handlers-env.test.ts",
       "src/vault/canary-sinks.test.ts",
-      "src/vault/canary.test.ts"
+      "src/vault/canary.test.ts",
+      "src/webhooks/spoofing-catalog.test.ts"
     ],
     "packages/modules/approvals": [
       "src/server/action-catalog.test.ts"
@@ -19,6 +43,11 @@
     "packages/ai": [
       "src/injection/real-registry.test.ts",
       "src/injection/injection.test.ts"
+    ],
+    "packages/core": [
+      "src/auth/actions.test.ts",
+      "src/auth/auth.test.ts",
+      "src/inngest/route.test.ts"
     ]
   },
   "pgtap": [
@@ -28,5 +57,6 @@
     "337_security_secret_sinks.test.sql",
     "338_security_approval_gate_matrix.test.sql",
     "339_security_rules_6_7.test.sql"
-  ]
+  ],
+  "older_proof_files_note": "The files cited by apps/web/tests/route-inventory.test.ts as proof of each route's guards are part of this command, so the suite runs the proof it points to."
 }

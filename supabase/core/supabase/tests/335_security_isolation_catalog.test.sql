@@ -12,7 +12,7 @@
 -- Tables that cannot be read at all by `authenticated` (private tables) are probed for refusal as authenticated and anon. A table that is neither
 -- pinned, nor customised, nor private fails; seeded + private = catalog count.
 begin;
-select plan(15);
+select plan(17);
 \ir helpers/lane_rls.psql
 
 update core.lanes set enabled = true where code = 'APK';
@@ -21,6 +21,21 @@ delete from core.memberships where user_id = pg_temp.uid('viewer@example.test');
 insert into core.memberships (lane_id, user_id, role, views) values ('APK', pg_temp.uid('viewer@example.test'), 'owner', '{}');
 
 -- ---------------------------------------------------------------- catalog and pins
+-- The role to view facts, written down here as LITERALS (the oracle uses these, not core.role_views). The catalog must equal them.
+create temp table role_views_pin (role text primary key, views text[] not null) on commit drop;
+insert into role_views_pin values
+  ('owner', '{action_index,approvals,assistant,audit,brain,briefing,calendar,commitments,comms,config,connections,documents,finance,health,jobs,lane_policies,lanes,memberships,memory,own_mail,projects}'),
+  ('admin_technical', '{action_index,config,connections,health,jobs,lane_policies,lanes,memberships,own_mail}'),
+  ('finance_operator', '{action_index,assistant,finance,lanes}'),
+  ('viewer', '{action_index,lanes,own_mail}');
+grant all on role_views_pin to public;
+select is((select coalesce(array_agg(p.role order by p.role), '{}') from role_views_pin p
+           where (select array_agg(x order by x) from unnest(core.role_views(p.role)) x) is distinct from (select array_agg(x order by x) from unnest(p.views) x)), '{}'::text[],
+  'the role to view mapping equals the pinned literals for every role (owner, admin_technical, finance_operator, viewer); no view is silently added to a role');
+create temp table role_check on commit drop as select pg_get_constraintdef(oid) as def from pg_constraint where conname = 'memberships_role_check';
+grant all on role_check to public;
+select is((select def from role_check) ~ '^CHECK \(\(role = ANY \(ARRAY\[''owner''::text, ''finance_operator''::text, ''viewer''::text, ''admin_technical''::text\]\)\)\)$', true,
+  'there are exactly four roles (a new role must be pinned here)');
 \ir helpers/seed_rows.psql
 
 -- the view each standard table's policy is pinned to (what a person needs to read the table), written down independently of the policies
@@ -58,7 +73,7 @@ select is((select count(*) filter (where readable) || '+' || count(*) filter (wh
 -- ---------------------------------------------------------------- the oracle
 create function pg_temp.lanes_with(p_uid uuid, p_view text) returns text[] language sql as $$
   select coalesce(array_agg(m.lane_id), '{}'::text[]) from core.memberships m join core.lanes l on l.code = m.lane_id
-  where m.user_id = p_uid and l.enabled and p_view = any (core.role_views(m.role) || m.views);
+  where m.user_id = p_uid and l.enabled and p_view = any ((select views from role_views_pin where role = m.role) || m.views);
 $$;
 create function pg_temp.mail_conns(p_uid uuid, p_providers text[]) returns uuid[] language sql as $$
   select coalesce(array_agg(c.id), '{}'::uuid[]) from core.connections c

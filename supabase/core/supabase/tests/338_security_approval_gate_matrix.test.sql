@@ -5,7 +5,7 @@
 --   payload or hash tampered after approval | live off / class removed / connection disconnected / approver demoted AFTER approval (claim re-checks).
 -- Real database, real roles and JWT claims; only the provider call is absent (the executors are tested per package with fakes).
 begin;
-select plan(27);
+select plan(33);
 \ir helpers/lane_rls.psql
 
 create function pg_temp.claims_amr(p_email text, p_aal text, p_at bigint) returns text language sql as $$
@@ -106,12 +106,39 @@ begin
   return case when pg_temp.approve(v_id, 'PKG', null, 'owner@example.test', 'aal2', p_age) = 'ok' then 'ok' else 'refused' end;
 end $$;
 create function pg_temp.live(p_on boolean) returns void language sql as $$ select pg_temp.cfg('PKG', 'approvals', jsonb_build_object('approvals_live', p_on)); $$;
+-- A new lane_config version whose approvals_live is broken in the named way (the rest of the config unchanged).
+create function pg_temp.live_variant(p_v text) returns void language sql as $$
+  insert into core.lane_config (lane_id, version, config)
+  select lane_id, version + 1, case p_v
+      when 'missing_key' then config #- '{approvals,approvals_live}'
+      when 'missing_block' then config - 'approvals'
+      when 'yes' then jsonb_set(config, '{approvals,approvals_live}', '"yes"')
+      when 'one' then jsonb_set(config, '{approvals,approvals_live}', '1')
+      when 'null' then jsonb_set(config, '{approvals,approvals_live}', 'null')
+      when 'string_true' then jsonb_set(config, '{approvals,approvals_live}', '"true"')
+    end
+  from core.lane_config where lane_id = 'PKG' order by version desc limit 1;
+$$;
 create function pg_temp.classes(p_all boolean) returns void language sql as $$
   update core.lane_policies set write_actions_allowed = case when p_all then array['teams_send', 'email_send', 'email_draft', 'qbo_disconnect'] else '{}'::text[] end where lane_id = 'PKG';
 $$;
 create function pg_temp.conn_of(p_id uuid) returns uuid language sql as $$ select connection_id from act.proposed_actions where id = p_id; $$;
 create function pg_temp.status_of(p_id uuid) returns text language sql as $$ select status from act.proposed_actions where id = p_id; $$;
 create function pg_temp.wrong_person(p_type text) returns text language sql as $$ select case when pg_temp.family(p_type) = 'qbo' then 'finance-operator@example.test' else 'admin-technical@example.test' end; $$;
+
+-- approvals_live that is missing, or anything but the JSON boolean true: propose (Teams refuses; email and QuickBooks proposals may exist while not live),
+-- approve of an action proposed earlier, and claim of an action approved earlier must all answer the not-live refusal.
+create function pg_temp.live_cell(p_type text, p_variant text) returns text language plpgsql as $$
+declare a1 uuid := pg_temp.build(p_type); a2 uuid := pg_temp.build(p_type); r_prop text; r_appr text; r_claim text; r_pre text;
+begin
+  r_pre := pg_temp.approve(a2);
+  perform pg_temp.live_variant(p_variant);
+  r_appr := pg_temp.approve(a1);
+  r_claim := pg_temp.claim(a2);
+  begin perform pg_temp.build(p_type); r_prop := 'accepted'; exception when others then r_prop := sqlstate || ' ' || sqlerrm; end;
+  perform pg_temp.live(true);
+  return r_pre || '|' || r_prop || '|' || r_appr || '|' || r_claim;
+end $$;
 
 -- One cell. Every scenario ends with the world restored (live on, all classes, connections active, owner role owner).
 create function pg_temp.cell(p_type text, p_scn text) returns text language plpgsql as $$
@@ -168,6 +195,11 @@ begin
       alter table act.proposed_actions enable trigger proposed_actions_guard;
       r2 := pg_temp.claim(aid);
       return r || '|' || r2 || '|' || pg_temp.status_of(aid);
+    when 'live_missing_key' then return pg_temp.live_cell(p_type, 'missing_key');
+    when 'live_missing_block' then return pg_temp.live_cell(p_type, 'missing_block');
+    when 'live_yes' then return pg_temp.live_cell(p_type, 'yes');
+    when 'live_one' then return pg_temp.live_cell(p_type, 'one');
+    when 'live_null' then return pg_temp.live_cell(p_type, 'null');
     -- step-up window bounds: Teams has its own setting (300 default and floor, 43,200 cap); email and QuickBooks use step_up_max_age_s (300 default, 30 floor, 900 cap)
     when 'window_teams' then
       if pg_temp.family(p_type) <> 'teams' then return 'n/a'; end if;
@@ -225,6 +257,21 @@ insert into expected values
   ('claim_expired', '*', 'ok|22000 act: expired|approved'),
   ('claim_other_lane', '*', 'ok|42704 act: not_found|approved|ok'),
   ('claim_hash_recheck', '*', 'ok|22000 act: hash_mismatch|approved'),
+  ('live_missing_key', 'email', 'ok|accepted|22000 act: not_live|22000 act: not_live'),
+  ('live_missing_key', 'qbo', 'ok|accepted|22000 act: not_live|22000 act: not_live'),
+  ('live_missing_key', 'teams', 'ok|22000 act: not_live|22000 act: not_live|22000 act: not_live'),
+  ('live_missing_block', 'email', 'ok|accepted|22000 act: not_live|22000 act: not_live'),
+  ('live_missing_block', 'qbo', 'ok|accepted|22000 act: not_live|22000 act: not_live'),
+  ('live_missing_block', 'teams', 'ok|22000 act: not_live|22000 act: not_live|22000 act: not_live'),
+  ('live_yes', 'email', 'ok|accepted|22000 act: not_live|22000 act: not_live'),
+  ('live_yes', 'qbo', 'ok|accepted|22000 act: not_live|22000 act: not_live'),
+  ('live_yes', 'teams', 'ok|22000 act: not_live|22000 act: not_live|22000 act: not_live'),
+  ('live_one', 'email', 'ok|accepted|22000 act: not_live|22000 act: not_live'),
+  ('live_one', 'qbo', 'ok|accepted|22000 act: not_live|22000 act: not_live'),
+  ('live_one', 'teams', 'ok|22000 act: not_live|22000 act: not_live|22000 act: not_live'),
+  ('live_null', 'email', 'ok|accepted|22000 act: not_live|22000 act: not_live'),
+  ('live_null', 'qbo', 'ok|accepted|22000 act: not_live|22000 act: not_live'),
+  ('live_null', 'teams', 'ok|22000 act: not_live|22000 act: not_live|22000 act: not_live'),
   ('window_teams', 'teams', 'ok,refused|ok,refused|ok,refused|ok,refused|ok,refused'),
   ('window_teams', 'email', 'n/a'), ('window_teams', 'qbo', 'n/a'),
   ('window_email', 'teams', 'n/a'),
@@ -274,12 +321,22 @@ select is(pg_temp.scenario_violations('claim_live_off'), '{}'::text[], 'MATRIX t
 select is(pg_temp.scenario_violations('claim_class_removed'), '{}'::text[], 'MATRIX the claim re-checks the policy class (every type)');
 select is(pg_temp.scenario_violations('claim_conn_disconnected'), '{}'::text[], 'MATRIX the claim re-checks the connection (every type)');
 select is(pg_temp.scenario_violations('claim_approver_demoted'), '{}'::text[], 'MATRIX the claim refuses when the approver no longer holds the role (every type)');
+select is(pg_temp.scenario_violations('live_missing_key'), '{}'::text[], 'MATRIX NOT LIVE with the approvals_live key removed from the lane config: approve and claim answer not_live, a Teams proposal is refused (every type)');
+select is(pg_temp.scenario_violations('live_missing_block'), '{}'::text[], 'MATRIX NOT LIVE with the whole approvals block removed: approve and claim answer not_live, a Teams proposal is refused (every type)');
+select is(pg_temp.scenario_violations('live_yes'), '{}'::text[], 'MATRIX NOT LIVE with approvals_live set to the string "yes": approve and claim answer not_live, a Teams proposal is refused (every type)');
+select is(pg_temp.scenario_violations('live_one'), '{}'::text[], 'MATRIX NOT LIVE with approvals_live set to the number 1: approve and claim answer not_live, a Teams proposal is refused (every type)');
+select is(pg_temp.scenario_violations('live_null'), '{}'::text[], 'MATRIX NOT LIVE with approvals_live set to JSON null: approve and claim answer not_live, a Teams proposal is refused (every type)');
 select is(pg_temp.scenario_violations('claim_expired'), '{}'::text[], 'MATRIX the claim refuses an action that expired after approval (every type)');
 select is(pg_temp.scenario_violations('claim_other_lane'), '{}'::text[], 'MATRIX a claim through another lane finds nothing (not_found) and the real claim still works (every type)');
 select is(pg_temp.scenario_violations('claim_hash_recheck'), '{}'::text[], 'MATRIX if the stored hash were changed behind the trigger, the claim re-checks it and refuses (hash_mismatch) (every type)');
 select is(pg_temp.scenario_violations('window_teams'), '{}'::text[], 'MATRIX Teams step-up window: default 300 s, set 3,600, capped at 43,200, floor 300, nonsense falls back to 300 (Teams types)');
 select is(pg_temp.scenario_violations('window_email'), '{}'::text[], 'MATRIX email and QuickBooks step-up window: default 300 s, the Teams window does not widen it, capped at 900, floor 30 (email and qbo types)');
-select is((select coalesce(array_agg(scn), '{}') from (select distinct scn from expected) x where scn not in ('claim_expired','claim_other_lane','claim_hash_recheck','window_teams','window_email','happy','bad_hash','no_step_up','aal1','live_off','class_removed','conn_disconnected','expired','wrong_person','other_lane_member','other_lane_nonmember','replay_approve','replay_claim','claim_unapproved','tamper_after_approval','claim_live_off','claim_class_removed','claim_conn_disconnected','claim_approver_demoted')), '{}'::text[], 'every expectation has a scenario run above');
+select is((select coalesce(array_agg(scn), '{}') from (select distinct scn from expected) x where scn not in ('live_missing_key','live_missing_block','live_yes','live_one','live_null','claim_expired','claim_other_lane','claim_hash_recheck','window_teams','window_email','happy','bad_hash','no_step_up','aal1','live_off','class_removed','conn_disconnected','expired','wrong_person','other_lane_member','other_lane_nonmember','replay_approve','replay_claim','claim_unapproved','tamper_after_approval','claim_live_off','claim_class_removed','claim_conn_disconnected','claim_approver_demoted')), '{}'::text[], 'every expectation has a scenario run above');
 
+-- F-10 (LOW, pinned with todo): the database reads the setting as TEXT (`->>`), so the JSON STRING "true" switches approvals on exactly as the boolean does. The app's own
+-- check is strict (`=== true`). The wanted behaviour is "only the JSON boolean true is live"; this todo turns into an unexpected pass the day it is fixed.
+select todo_start('F-10: act.lane_setting reads approvals_live as text, so the string "true" counts as live');
+select is(pg_temp.live_cell('email.send', 'string_true'), 'ok|accepted|22000 act: not_live|22000 act: not_live', 'only the JSON boolean true is live (string "true" is refused)');
+select todo_end();
 select * from finish();
 rollback;
