@@ -10,6 +10,7 @@ vi.mock("@nichols/connectors/teams-reader", () => ({ ...reader }));
 import { createTeamsRoutes, type TeamsRouteDeps } from "@/lib/teams-api";
 import { createWindowLimiter } from "@/lib/teams-activity";
 import { encodeChatKey } from "@/lib/teams-chat-key";
+import { decodeCursor } from "@/lib/teams-cursor";
 
 const ME = "00000000-0000-4000-8000-0000000000aa";
 const CONN = "00000000-0000-4000-8000-0000000000c1";
@@ -19,7 +20,7 @@ const KEY = encodeChatKey(CHAT);
 const row = (over: Record<string, unknown> = {}) => ({ id: CONN, account: "me@teams.example.test", state: "connected", mine: true, has: ["chat_read", "call_links"], ...over });
 /** The answer without the server's clock (which must be there, as a time). */
 const noClock = (b: unknown) => {
-  const { serverNow, ...rest } = b as Record<string, unknown>;
+  const { serverNow, accounts: _accounts, ...rest } = b as Record<string, unknown>; // `accounts` (one entry per usable connection) has its own tests
   expect(Number.isNaN(Date.parse(String(serverNow)))).toBe(false);
   return rest;
 };
@@ -35,7 +36,7 @@ function setup(opts: { rows?: unknown[]; gateVisible?: boolean; get?: unknown; s
         rpc.push({ fn: `${s}.${fn}`, args });
         if (fn === "teams_activity_get") return { data: opts.get ?? [{ live: true, live_until: T(50), last_notice_at: T(10), last_seen_at: T(5) }], error: opts.getError ?? null };
         if (fn === "teams_activity_seen") return { data: T(11), error: opts.seenError ?? null };
-        if (fn === "teams_chat_reads_list") return { data: [], error: null };
+        if (fn === "teams_chat_reads_list" || fn === "teams_chat_reads_list_many") return { data: [], error: null };
         return { data: null, error: null };
       },
     }),
@@ -76,8 +77,10 @@ describe("GET /messages/activity", () => {
     expect(res.headers.get("cache-control")).toBe("no-store");
     const body = (await res.json()) as Record<string, unknown>;
     expect(noClock(body)).toEqual({ live: true, liveUntil: T(50), dot: true, lastNoticeAt: T(10) });
-    expect(Object.keys(body).sort()).toEqual(["dot", "lastNoticeAt", "live", "liveUntil", "serverNow"]);
-    expect(JSON.stringify(body)).not.toContain(CONN);
+    expect(Object.keys(body).sort()).toEqual(["accounts", "dot", "lastNoticeAt", "live", "liveUntil", "serverNow"]);
+    // the connection id appears only as the NAME of the person's own account entry (T-295), nowhere else
+    expect(body.accounts).toEqual([{ conn: CONN, live: true, liveUntil: T(50), dot: true, lastNoticeAt: T(10) }]);
+    expect(JSON.stringify({ ...body, accounts: undefined })).not.toContain(CONN);
     // exactly one database call, with the lane and the person's own connection; Microsoft is never touched
     expect(s.rpc).toEqual([{ fn: "core.teams_activity_get", args: { p_lane: "PKG", p_connection: CONN } }]);
     nothingFromMicrosoft();
@@ -181,17 +184,20 @@ describe("GET /messages/chats and /messages/newer (the re-reads)", () => {
   it("the chat list again: the page's own read for the person's connection with the selected chat and cursor passed through; one answer, rows and the next cursor only", async () => {
     reader.listChats.mockResolvedValue({ chats: [], nextCursor: "abc" });
     const s = setup();
-    const res = await s.routes.chats(req(`chats?chat=${KEY}&more=cur_1-x`), "PKG");
+    const res = await s.routes.chats(req(`chats?conn=${CONN}&chat=${KEY}&more=cur_1-x`), "PKG");
     expect(res.status).toBe(200);
     expect(res.headers.get("cache-control")).toBe("no-store");
-    expect(await res.json()).toEqual({ rows: [], moreCursor: "abc" });
-    expect(reader.listChats).toHaveBeenCalledWith("PKG", CONN, ME, { cursor: "cur_1-x" });
+    // one account: the old single skip token in the address still works; the answer holds rows, the combined cursor of that one source, and notes (none)
+    const b = (await res.json()) as { rows: unknown[]; moreCursor: string; notes: unknown[]; listed: string[]; dropped: boolean };
+    expect(b).toMatchObject({ rows: [], notes: [], listed: [CONN], dropped: false });
+    expect(decodeCursor(b.moreCursor)).toEqual([{ conn: CONN, token: "abc" }]);
+    expect(reader.listChats).toHaveBeenCalledWith("PKG", CONN, ME, { cursor: "cur_1-x", memberReads: 20 });
   });
 
   it("newer messages: a lastModifiedDateTime date range for the open chat (the time is validated and rebuilt), the person's own connection, messages only", async () => {
     reader.listMessages.mockResolvedValue({ messages: [], nextBefore: null });
     const s = setup();
-    const res = await s.routes.newer(req(`newer?chat=${KEY}&since=${encodeURIComponent("2026-11-23T14:05:00Z")}`), "PKG");
+    const res = await s.routes.newer(req(`newer?conn=${CONN}&chat=${KEY}&since=${encodeURIComponent("2026-11-23T14:05:00Z")}`), "PKG");
     expect(res.status).toBe(200);
     expect(await res.json()).toEqual({ messages: [], truncated: false });
     expect(reader.listMessages).toHaveBeenCalledWith("PKG", CONN, ME, CHAT, { sinceModified: "2026-11-23T14:05:00.000Z" });
@@ -200,32 +206,32 @@ describe("GET /messages/chats and /messages/newer (the re-reads)", () => {
 
   it("a bad chat key, a missing or bad time, a stray parameter, a bad cursor: 400 and no Microsoft call; no feature chat_read: 409", async () => {
     const s = setup();
-    for (const q of [`newer?chat=${KEY}`, `newer?since=${encodeURIComponent(T(1))}`, `newer?chat=../x&since=${encodeURIComponent(T(1))}`, `newer?chat=${KEY}&since=yesterday`, `newer?chat=${KEY}&since=${encodeURIComponent(T(1))}&before=${encodeURIComponent(T(0))}`]) {
+    for (const q of [`newer?chat=${KEY}`, `newer?since=${encodeURIComponent(T(1))}`, `newer?chat=../x&since=${encodeURIComponent(T(1))}`, `newer?conn=${CONN}&chat=${KEY}&since=yesterday`, `newer?conn=${CONN}&chat=${KEY}&since=${encodeURIComponent(T(1))}&before=${encodeURIComponent(T(0))}`]) {
       expect((await s.routes.newer(req(q), "PKG")).status, q).toBe(400);
     }
     for (const q of ["chats?chat=../x", `chats?chat=${KEY}&more=a b`, `chats?x=1`]) expect((await s.routes.chats(req(q), "PKG")).status, q).toBe(400);
     nothingFromMicrosoft();
     const noFeature = setup({ rows: [row({ has: ["call_links"] })] });
     expect((await noFeature.routes.chats(req("chats"), "PKG")).status).toBe(409);
-    expect((await noFeature.routes.newer(req(`newer?chat=${KEY}&since=${encodeURIComponent(T(1))}`), "PKG")).status).toBe(409);
+    expect((await noFeature.routes.newer(req(`newer?conn=${CONN}&chat=${KEY}&since=${encodeURIComponent(T(1))}`), "PKG")).status).toBe(409);
     nothingFromMicrosoft();
   });
 
   it("only the person's own connection, with the same checks: another person's row, none, cross-site, a hidden module: 404 / 403, and no Microsoft call", async () => {
-    for (const rows of [[], [row({ id: OTHER_CONN, mine: false })], [row({ state: "reconnect_required" })]]) {
+    for (const rows of [[], [row({ id: OTHER_CONN, mine: false })]]) {
       const s = setup({ rows });
       expect((await s.routes.chats(req("chats"), "PKG")).status).toBe(404);
-      expect((await s.routes.newer(req(`newer?chat=${KEY}&since=${encodeURIComponent(T(1))}`), "PKG")).status).toBe(404);
+      expect((await s.routes.newer(req(`newer?conn=${CONN}&chat=${KEY}&since=${encodeURIComponent(T(1))}`), "PKG")).status).toBe(404);
     }
     expect((await setup().routes.chats(req("chats", "GET", { "sec-fetch-site": "cross-site" }), "PKG")).status).toBe(403);
-    expect((await setup({ gateVisible: false }).routes.newer(req(`newer?chat=${KEY}&since=${encodeURIComponent(T(1))}`), "PKG")).status).toBe(404);
+    expect((await setup({ gateVisible: false }).routes.newer(req(`newer?conn=${CONN}&chat=${KEY}&since=${encodeURIComponent(T(1))}`), "PKG")).status).toBe(404);
     nothingFromMicrosoft();
   });
 
   it("their own per-person allowance bounds what a runaway client can make Microsoft do: the 13th re-read in a minute is a 429 and reaches nobody", async () => {
     reader.listMessages.mockResolvedValue({ messages: [], nextBefore: null });
     const s = setup({ defaultLimiters: false });
-    const q = `newer?chat=${KEY}&since=${encodeURIComponent(T(1))}`;
+    const q = `newer?conn=${CONN}&chat=${KEY}&since=${encodeURIComponent(T(1))}`;
     let ok = 0;
     for (let i = 0; i < 14; i++) if ((await s.routes.newer(req(q), "PKG")).status === 200) ok += 1;
     expect(ok).toBe(12);

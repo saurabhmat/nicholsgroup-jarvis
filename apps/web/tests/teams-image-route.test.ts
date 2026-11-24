@@ -45,8 +45,8 @@ function setup(opts: { rows?: unknown[]; gateVisible?: boolean; laneError?: unkn
 }
 const SAME = { "sec-fetch-site": "same-origin" };
 const get = (qs: string, headers: Record<string, string> = SAME, method = "GET") => new Request(`http://localhost:3000/api/lanes/PKG/messages/image?${qs}`, { method, headers });
-const chatQ = `chat=${KEY}&message=${MSG}&hosted=${HID}`;
-const chanQ = `team=${TEAM}&channel=${CKEY}&message=${MSG}&hosted=${HID}`;
+const chatQ = `conn=${CONN}&chat=${KEY}&message=${MSG}&hosted=${HID}`;
+const chanQ = `conn=${CONN}&team=${TEAM}&channel=${CKEY}&message=${MSG}&hosted=${HID}`;
 
 beforeEach(() => {
   reader.fetchHostedImage.mockReset();
@@ -74,14 +74,16 @@ describe("who may ask", () => {
     const a = setup();
     await a.routes.image(get(chatQ), "PKG");
     expect(a.roles).toEqual([["owner", "admin_technical", "viewer"]]);
-    for (const rows of [[], [row({ id: OTHER_CONN, mine: false })], [row({ state: "reconnect_required" })], [row({ state: "paused" })]]) {
+    for (const rows of [[], [row({ id: OTHER_CONN, mine: false })], [row({ state: "paused" })]]) {
       expect((await setup({ rows }).routes.image(get(chatQ), "PKG")).status).toBe(404);
     }
+    expect((await setup({ rows: [row({ state: "reconnect_required" })] }).routes.image(get(chatQ), "PKG")).status).toBe(409); // the person's own expired sign-in is said, nothing else
+    expect((await setup().routes.image(get(chatQ.replace(/conn=[^&]*&/, "")), "PKG")).status).toBe(400); // conn is required
     expect(reader.fetchHostedImage).toHaveBeenCalledTimes(1);
     reader.fetchHostedImage.mockClear();
     await setup({ rows: [row({ id: OTHER_CONN, mine: false }), row()] }).routes.image(get(`${chatQ}`), "PKG");
     expect(reader.fetchHostedImage).toHaveBeenCalledWith("PKG", CONN, ME, { kind: "chat", chatId: CHAT, messageId: MSG, hostedId: HID }, expect.any(AbortSignal));
-    // a connection id passed in the address is not a known parameter at all
+    // any other connection parameter is not a known parameter at all
     expect((await setup().routes.image(get(`${chatQ}&connection=${OTHER_CONN}`), "PKG")).status).toBe(400);
   });
 

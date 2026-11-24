@@ -40,7 +40,8 @@ export type MessagesState =
  * `usable`: connected or degraded. `ord` (the index) is the merge's last tie-break.
  */
 export function ownAccounts(connections: readonly TeamsSectionView["connections"][number][], laneFeatures: readonly TeamsFeature[]): MessagesAccount[] {
-  const counted = connections.filter((c) => c.mine && c.state !== "disconnected");
+  // only the states that mean "an account the person has": anything else (disconnected, a connect in progress) is not one, so no route and no page ever names it
+  const counted = connections.filter((c) => c.mine && (c.state === "connected" || c.state === "degraded" || c.state === "reconnect_required"));
   const labels = accountLabels(counted.map((c) => c.account));
   return counted.map((c, i) => ({
     connectionId: c.id,
