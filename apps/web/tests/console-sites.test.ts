@@ -25,12 +25,12 @@ function calls(text: string): string[] {
   let m: RegExpExecArray | null;
   while ((m = re.exec(text))) {
     const lineStart = text.lastIndexOf("\n", m.index) + 1;
-    if (/^\s*(\/\/|\*)/.test(text.slice(lineStart, m.index + m[1]!.length + 7))) continue; // a comment
+    if (/^\s*(\/\/|\*)/.test(text.slice(lineStart, m.index + (m[1] ?? "").length + 7))) continue; // a comment
     let depth = 1;
     let i = re.lastIndex;
     let quote = "";
     for (; i < text.length && depth > 0; i++) {
-      const c = text[i]!;
+      const c = text.charAt(i);
       if (quote) {
         if (c === "\\") i++;
         else if (c === quote) quote = "";

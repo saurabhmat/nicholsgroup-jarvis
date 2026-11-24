@@ -194,7 +194,7 @@ describe("Microsoft Graph notifications (mail, calendar and Teams share one endp
           for (const id of ids) if (subs[id]?.lane === laneId) out.set(id, subs[id] as SubscriptionLookup);
           return out;
         },
-        async mark() {},
+        async mark() { return true; },
       },
       store: mem.store,
       lanes: () => lanes,
