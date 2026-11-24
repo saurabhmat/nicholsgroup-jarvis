@@ -28,6 +28,11 @@ export interface ConnectionStore {
 const ONE_LANE_INDEX = "connections_one_lane_per_account";
 /** Providers whose connections are a person's mailbox or calendar and carry an owner (T-247). */
 export const MAIL_PROVIDERS: readonly string[] = ["google", "microsoft"];
+/**
+ * Providers whose rows have an OWNER (T-247 mail, T-278 Teams). Used only to set `owner_user_id` at connect time. `MAIL_PROVIDERS` above stays the list of
+ * mail/calendar providers (listMailAccounts and every mail reader): a Teams row is never in it.
+ */
+const OWNED_PROVIDERS: readonly string[] = [...MAIL_PROVIDERS, "microsoft_teams"];
 const LANE_ID = /^[A-Z]{1,8}$/;
 
 export function createConnectionStore(clientFor: JobClientFor): ConnectionStore {
@@ -53,7 +58,7 @@ export function createConnectionStore(clientFor: JobClientFor): ConnectionStore 
             status: "pending",
             ...(createdBy ? { created_by: createdBy } : {}),
             // T-247: a mail/calendar connection belongs to the signed-in user who connected it, and never changes owner.
-            ...(createdBy && MAIL_PROVIDERS.includes(provider) ? { owner_user_id: createdBy } : {}),
+            ...(createdBy && OWNED_PROVIDERS.includes(provider) ? { owner_user_id: createdBy } : {}),
           },
           { onConflict: "lane_id,provider,external_account_id", ignoreDuplicates: true },
         );
@@ -66,7 +71,7 @@ export function createConnectionStore(clientFor: JobClientFor): ConnectionStore 
         if (inserted.error) throw inserted.error;
         // A row without an owner (made before T-247) is claimed only by the user who started it (created_by) and just proved control of the account; a row that has an
         // owner is never touched (the callback refuses a different user: one mailbox, one owner).
-        if (createdBy && MAIL_PROVIDERS.includes(provider)) {
+        if (createdBy && OWNED_PROVIDERS.includes(provider)) {
           const claimed = await table()
             .update({ owner_user_id: createdBy })
             .eq("lane_id", laneId)

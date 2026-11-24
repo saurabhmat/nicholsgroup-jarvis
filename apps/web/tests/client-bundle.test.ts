@@ -38,8 +38,8 @@ describe("canary scanner", () => {
 });
 
 describe("canary set (T-251)", () => {
-  it("covers both Microsoft client secrets as server-only canaries", () => {
-    for (const name of ["GRAPH_CLIENT_SECRET", "GRAPH_USGOV_CLIENT_SECRET"]) {
+  it("covers the Microsoft client secrets (mail, GCC High, Teams) as server-only canaries", () => {
+    for (const name of ["GRAPH_CLIENT_SECRET", "GRAPH_USGOV_CLIENT_SECRET", "GRAPH_TEAMS_CLIENT_SECRET"]) {
       expect(((CANARIES as Record<string, string>)[name] ?? "").length, name).toBeGreaterThan(24);
     }
   });

@@ -15,3 +15,10 @@ describe("connectRolesFor (T-254)", () => {
     expect([...CONNECT_ROLES]).toEqual(["owner", "admin_technical"]);
   });
 });
+
+describe("T-278: a person's own Teams account", () => {
+  it("is connected by any own_mail member, like their own mailbox", async () => {
+    const { connectRolesFor, MAIL_CONNECT_ROLES } = await import("./flow");
+    expect(connectRolesFor("microsoft_teams")).toBe(MAIL_CONNECT_ROLES);
+  });
+});

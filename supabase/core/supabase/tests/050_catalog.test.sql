@@ -47,6 +47,7 @@ insert into custom_policy_ok values
   ('core.connections', 'standard expression for the connections view (health of the lane) OR (owner_user_id = auth.uid() AND own_mail view): a member''s own mailbox rows (T-247)'),
   ('comms.message_index', 'AAL2 + own_mail view + connection_id in the caller''s own mailboxes (core.mailbox_ids): mail is readable only through mailbox ownership (T-247)'),
   ('cal.event_index', 'AAL2 + own_mail view + connection_id in the caller''s own mailboxes (core.mailbox_ids): events are readable only through mailbox ownership (T-247)'),
+  ('comms.teams_chat_reads', 'AAL2 + connection_id in the caller''s own Teams connections (core.teams_connection_ids): a read marker is its connection owner''s alone; no admin, no other member (T-282)'),
   ('act.status_history', 'AAL2 + act.action_rows_visible: an email action''s history only to its mailbox owner, other actions through the approvals view (T-247)'),
   ('act.execution_claims', 'AAL2 + act.action_rows_visible: an email action''s claim only to its mailbox owner, other actions through the approvals view (T-247)'),
   ('act.proposed_actions', 'standard expression for the approvals view (owner) OR (proposer_user_id = auth.uid() AND lane member): a proposer sees their own proposals (T-232, approvals spec §4)');
@@ -63,6 +64,13 @@ create temp table security_definer_ok (name text primary key, why text not null)
 insert into security_definer_ok values
   ('core.mailbox_ids', 'the connection ids a user owns (core.may_resolve: the caller at aal2, or service_role for jobs); reads core.connections without the connections view; ids only (T-247)'),
   ('core.may_brief', 'p_uid holds own_mail in p_lane (allowed_lanes rules); a boolean (T-247)'),
+  ('core.teams_connection_ids', 'the Teams connection ids a user owns (core.may_resolve: the caller at aal2, or service_role for jobs); ids only; Teams rows are never in core.mailbox_ids (T-278)'),
+  ('comms.teams_chat_read_mark', 'the one writer of the portal''s Teams read markers: the caller must own the Teams connection (core.teams_connection_ids, AAL2), forward only, at most 1000 rows per connection; an id and a time (T-282)'),
+  ('comms.teams_chat_reads_provider_guard', 'trigger: a marker belongs to a microsoft_teams connection of its own lane; reads core.connections, writes nothing (T-282)'),
+  ('core.teams_chat_reads_purge_connection', 'deletes one Teams connection''s read markers on disconnect; service_role only, enabled lanes only (T-282)'),
+  ('core.teams_chat_reads_purge', 'retention: markers untouched for a fixed 90 days and those of disconnected connections; service_role only, enabled lanes only (T-282)'),
+  ('core.teams_assert_one_per_owner', 'raises D0024 when the owner of a Teams connection has another usable Teams connection in the lane; service_role only, lane-checked, changes nothing (T-278)'),
+  ('core.connection_set_teams_identity', 'sets a Teams connection''s Entra tenant id, cloud and object id once; service_role only, lane-checked, refuses non-Teams rows, a second set and a second usable Teams connection of the owner (T-278)'),
   ('act.action_rows_visible', 'policy helper: may the caller read an action''s history/claim rows (email: connection owner with own_mail; others: approvals view); a boolean (T-247)'),
   ('brief.briefings_guard', 'insert trigger: reply drafts only with store_outbound_drafts; lane enabled; owner holds the owner role and the briefing view (T-231c)'),
   ('core.briefing_coverage', 'Home coverage strip: answers only the caller''s comms/calendar views at aal2; connection facts, no tokens (T-231a)'),
@@ -160,6 +168,10 @@ create temp table authenticated_exec_ok (name text primary key, why text not nul
 insert into authenticated_exec_ok values
   ('core.mailbox_ids', 'RLS and reader helper; answers only for the caller''s own uid at aal2 (T-247)'),
   ('core.may_brief', 'gate helper; same resolution rules as allowed_lanes (T-247)'),
+  ('core.teams_connection_ids', 'RLS and reader helper; answers only for the caller''s own uid at aal2 (T-278)'),
+  ('comms.teams_chat_read_mark', 'the Teams read-marker writer (definer): the caller must own the Teams connection at aal2 (T-282)'),
+  ('core.teams_chat_read_mark', 'invoker wrapper of comms.teams_chat_read_mark (comms is not exposed to the API) (T-282)'),
+  ('core.teams_chat_reads_list', 'the caller''s own Teams read markers of one connection; invoker, RLS on comms.teams_chat_reads applies (T-282)'),
   ('core.mail_reader', 'whose mailboxes a read covers: auth.uid(), or the named owner for service_role only (T-247)'),
   ('act.action_rows_visible', 'RLS helper of act.status_history / act.execution_claims (T-247)'),
   ('act.is_email_type', 'pure: p_type is an email.* action type (T-247)'),

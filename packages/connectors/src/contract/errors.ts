@@ -31,6 +31,9 @@ export const ACCOUNT_IN_USE_MESSAGE = "This provider account is already connecte
 /** T-247: the account is already connected here by another person (a mailbox has one owner; nobody connects it for someone else). */
 export const ACCOUNT_OWNED_BY_OTHER_MESSAGE = "This provider account is already connected by another person";
 
+/** T-278: a person has one Teams connection per company; a second Teams account is refused until the first is disconnected (raised by core.connection_set_teams_identity, D0024). */
+export const TEAMS_ONE_ACCOUNT_MESSAGE = "You already have a Teams account connected for this company";
+
 export function dispositionFor(kind: ConnectorErrorKind): ErrorDisposition {
   return DISPOSITION[kind];
 }

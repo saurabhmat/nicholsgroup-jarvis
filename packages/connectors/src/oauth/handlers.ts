@@ -120,6 +120,8 @@ export function createConnectHandlers(flow: Pick<ReturnType<typeof createOAuthFl
         const home = new URL(result.laneId ? `/${encodeURIComponent(result.laneId)}/settings` : "/", url.origin);
         home.searchParams.set("connect", result.ok ? "ok" : result.reason);
         if (result.provider) home.searchParams.set("provider", result.provider);
+        // T-278 review C1: a fixed sub-code from the provider's own list (already checked against a fixed shape in the flow); nothing from a provider response.
+        if (!result.ok && result.detail && /^[a-z][a-z_]{0,23}$/.test(result.detail)) home.searchParams.set("detail", result.detail);
         // The code was exchanged but nothing was stored: the owner is told to remove the app's access at the provider (D-24).
         if (!result.ok && result.message) home.searchParams.set("notice", "remove_app_access");
         return new Response(null, { status: 303, headers: { ...NO_STORE, location: home.pathname + home.search, "referrer-policy": "no-referrer" } });

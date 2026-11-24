@@ -3,6 +3,7 @@
 import { googleOAuthProvider } from "../google/index";
 import { microsoftOAuthProvider } from "../microsoft/index";
 import { quickbooksOAuthProvider } from "../quickbooks/index";
+import { teamsOAuthProvider } from "../teams/index";
 import type { OAuthProvider } from "./flow";
 
-export const OAUTH_PROVIDERS: readonly OAuthProvider[] = [quickbooksOAuthProvider, googleOAuthProvider, microsoftOAuthProvider];
+export const OAUTH_PROVIDERS: readonly OAuthProvider[] = [quickbooksOAuthProvider, googleOAuthProvider, microsoftOAuthProvider, teamsOAuthProvider];

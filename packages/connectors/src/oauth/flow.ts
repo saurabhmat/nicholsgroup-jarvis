@@ -13,7 +13,7 @@ import type { LaneId } from "@nichols/core";
 import { withAudit, type Audit } from "@nichols/core/audit";
 import type { LaneClient } from "@nichols/core/lane-router";
 import { z } from "zod";
-import { ACCOUNT_IN_USE_MESSAGE, ACCOUNT_OWNED_BY_OTHER_MESSAGE, ConnectorError, isConnectorError } from "../contract/errors";
+import { ACCOUNT_IN_USE_MESSAGE, ACCOUNT_OWNED_BY_OTHER_MESSAGE, ConnectorError, isConnectorError, TEAMS_ONE_ACCOUNT_MESSAGE } from "../contract/errors";
 import type { LaneBoundConnection } from "../contract/lane-bound";
 import type { Provider } from "../contract/schemas";
 import { createHttpClient, basicCredentials, type HttpClient } from "../http/client";
@@ -34,11 +34,15 @@ export const MAIL_CONNECT_ROLES = ["owner", "admin_technical", "viewer"] as cons
 
 /** The roles that may start or finish a connect of this provider. */
 export function connectRolesFor(provider: string): readonly ("owner" | "admin_technical" | "viewer")[] {
-  return provider === "google" || provider === "microsoft" ? MAIL_CONNECT_ROLES : CONNECT_ROLES;
+  // T-278: a person's own Teams account (provider `microsoft_teams`) is connected by the person, like their own mailbox (the database checks own_mail again).
+  return provider === "google" || provider === "microsoft" || provider === "microsoft_teams" ? MAIL_CONNECT_ROLES : CONNECT_ROLES;
 }
 
-/** Providers whose connections are a person's mailbox or calendar: they carry an owner (core.connections.owner_user_id). */
-const MAIL_PROVIDERS: ReadonlySet<string> = new Set(["google", "microsoft"]);
+/**
+ * Providers whose connections belong to one person (core.connections.owner_user_id): a person's mailbox or calendar (T-247) and, since T-278, their own Teams
+ * account. NOT a statement that the row is a mailbox: no mail or calendar reader reads this set (a `microsoft_teams` row is never a mailbox).
+ */
+const MAIL_PROVIDERS: ReadonlySet<string> = new Set(["google", "microsoft", "microsoft_teams"]);
 
 /** The provider's token response; extra fields (x_refresh_token_expires_in, id_token, ...) are kept for `identify`. */
 export const TokenResponseSchema = z
@@ -109,6 +113,13 @@ export interface OAuthProvider {
    * values the provider has already bounded (never a token, code or address). Never in the user message, the redirect or the audit row.
    */
   logFields?(cause: unknown): Record<string, unknown> | undefined;
+  /**
+   * A coarse, FIXED sub-code (`/^[a-z_]{1,24}$/`, chosen from a list the provider owns) for a refusal this provider threw, so the Settings page can say which of several causes it was (T-278 review C1).
+   * It is derived only from the provider's own fixed messages, never from a provider response. Undefined = no detail.
+   */
+  failureDetail?(cause: unknown): string | undefined;
+  /** The same for a callback that came back with `error=` (a fixed code decided from the error string only; nothing of the query is copied). */
+  callbackErrorDetail?(query: URLSearchParams): string | undefined;
   identify(input: { laneId: LaneId; tokens: TokenResponse; callback: URLSearchParams; http: HttpClient; nonce?: string }): Promise<{
     externalAccountId: string;
     expiresAt: Date | null;
@@ -166,7 +177,7 @@ export class ConnectRefusal extends Error {
 
 export type CallbackResult =
   | { ok: true; provider: Provider; laneId: LaneId; connectionId: string }
-  | { ok: false; reason: ConnectFailure; provider?: Provider; laneId?: LaneId; message?: string };
+  | { ok: false; reason: ConnectFailure; provider?: Provider; laneId?: LaneId; message?: string; detail?: string };
 
 /** Thrown by `authorize` callbacks; the route maps it to 401/403. Anything else is an outage. The provider is passed so the roles can differ (a person's own Google account: any own_mail member, T-247). */
 export type AuthorizeFn = (laneId: LaneId, provider?: Provider) => Promise<Authorized>;
@@ -182,6 +193,10 @@ const SLUG = /^[a-z][a-z0-9-]{1,31}$/;
  */
 export const GRANT_NOT_STORED_MESSAGE =
   "Nothing was connected and no access was stored. If the provider still lists this app as authorised, remove its access in your provider account.";
+
+/** A provider's sub-code is passed on only when it has the fixed shape (a typo or a copied provider text can never reach the redirect). */
+const DETAIL = /^[a-z][a-z_]{0,23}$/;
+const safeDetail = (d: string | undefined): string | undefined => (typeof d === "string" && DETAIL.test(d) ? d : undefined);
 
 /** The HTTP client for a provider's token endpoint: OAuth error codes (`error`) and the provider's request id are captured. */
 export function defaultOAuthHttp(p: OAuthProvider, laneId: LaneId, baseUrl: string, logger?: ConnectorLogger): HttpClient {
@@ -283,7 +298,8 @@ export function createOAuthFlow(deps: OAuthFlowDeps) {
       if (query.get("error") !== null || !query.get("code")) {
         const reason: ConnectFailure = (query.get("error") !== null ? p.callbackErrorReason?.(query) : null) ?? "denied";
         await deps.audit.log({ ...entry, action: "connection.connect.failed", metadata: { reason } }).catch(() => undefined);
-        return { ok: false, reason, provider: p.provider, laneId };
+        const detail = query.get("error") !== null ? safeDetail(p.callbackErrorDetail?.(query)) : undefined;
+        return { ok: false, reason, provider: p.provider, laneId, ...(detail ? { detail } : {}) };
       }
       const code = query.get("code") as string;
       let exchanged = false; // a grant exists at the provider (see GRANT_NOT_STORED_MESSAGE)
@@ -326,7 +342,7 @@ export function createOAuthFlow(deps: OAuthFlowDeps) {
             try {
               return await call();
             } catch (e) {
-              if (isConnectorError(e) && e.info.kind === "forbidden" && e.info.message === ACCOUNT_IN_USE_MESSAGE) throw new RefusedAccount(e);
+              if (isConnectorError(e) && e.info.kind === "forbidden" && (e.info.message === ACCOUNT_IN_USE_MESSAGE || e.info.message === TEAMS_ONE_ACCOUNT_MESSAGE)) throw new RefusedAccount(e);
               throw e;
             }
           };
@@ -368,6 +384,7 @@ export function createOAuthFlow(deps: OAuthFlowDeps) {
                 ? "exchange_failed"
                 : "unavailable";
         const cause = e instanceof RefusedAccount || e instanceof ExchangeFailed ? e.cause : e;
+        const detail = safeDetail(p.failureDetail?.(cause));
         (deps.logger ?? connectorLog).child({ laneId, provider: p.provider }).warn("connector.oauth_callback_failed", {
           reason,
           error: isConnectorError(cause) ? cause : { error_name: cause instanceof Error ? cause.name : typeof cause },
@@ -379,14 +396,17 @@ export function createOAuthFlow(deps: OAuthFlowDeps) {
             .catch(() => undefined);
           const inUse = isConnectorError(cause) && cause.info.message === ACCOUNT_IN_USE_MESSAGE;
           const ownedByOther = isConnectorError(cause) && cause.info.message === ACCOUNT_OWNED_BY_OTHER_MESSAGE;
-          const message = inUse
+          const oneTeams = isConnectorError(cause) && cause.info.message === TEAMS_ONE_ACCOUNT_MESSAGE;
+          const message = oneTeams
+            ? `${TEAMS_ONE_ACCOUNT_MESSAGE}. Disconnect it first to use another one. ${GRANT_NOT_STORED_MESSAGE}`
+            : inUse
             ? `This ${p.accountLabel ?? "account"} is already connected to another company in Jarvis. ${GRANT_NOT_STORED_MESSAGE}`
             : ownedByOther
               ? `This ${p.accountLabel ?? "account"} is already connected by another person in Jarvis. ${GRANT_NOT_STORED_MESSAGE}`
               : GRANT_NOT_STORED_MESSAGE;
-          return { ok: false, reason, provider: p.provider, laneId, message };
+          return { ok: false, reason, provider: p.provider, laneId, message, ...(detail ? { detail } : {}) };
         }
-        return { ok: false, reason, provider: p.provider, laneId };
+        return { ok: false, reason, provider: p.provider, laneId, ...(detail ? { detail } : {}) };
       }
     },
   };

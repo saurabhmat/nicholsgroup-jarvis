@@ -8,7 +8,7 @@ import { createHash } from "node:crypto";
 import type { LaneId } from "@nichols/core";
 import type { LaneClient } from "@nichols/core/lane-router";
 import { assertLaneBound, type LaneBoundConnection } from "../contract/lane-bound";
-import { ACCOUNT_IN_USE_MESSAGE, ConnectorError } from "../contract/errors";
+import { ACCOUNT_IN_USE_MESSAGE, ConnectorError, TEAMS_ONE_ACCOUNT_MESSAGE } from "../contract/errors";
 import type { ConnectorErrorKind } from "../contract/schemas";
 import { SecretValue } from "./secret";
 
@@ -56,6 +56,8 @@ const ERRORS: Record<string, { kind: ConnectorErrorKind; message: string }> = {
   // the index connections_one_lane_per_account. Any other 23505 (connection_secrets key, Vault secret name) is a real
   // fault and stays a generic "Token store unavailable".
   D0023: { kind: "forbidden", message: ACCOUNT_IN_USE_MESSAGE },
+  // T-278: raised only for a violation of the Teams one-connection-per-owner index (the person already has another usable Teams connection in the lane).
+  D0024: { kind: "forbidden", message: TEAMS_ONE_ACCOUNT_MESSAGE },
   "42883": { kind: "provider_error", message: "Token functions are not installed" },
 };
 

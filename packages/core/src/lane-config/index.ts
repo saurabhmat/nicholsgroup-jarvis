@@ -53,6 +53,8 @@ export const MODULES = [
   "memory",
   "notifications",
   "brain",
+  // T-278: the Messages page (Microsoft Teams). A limited lane shows it only when it lists `messages`; whether Teams works is `teams.enabled`.
+  "messages",
 ] as const;
 
 /** `email.draft` is an alias of `email.save_draft` (D-34), kept until callers move. */
@@ -195,6 +197,41 @@ export const microsoftSchema = z.strictObject({
 });
 export type MicrosoftConfig = z.infer<typeof microsoftSchema>;
 
+/**
+ * Microsoft Teams settings of a lane (T-278, docs/specs/messages.md 4.3; decision D-66). Independent of `mail.providers` and of the `microsoft` block (D-62): a lane with
+ * Google mail only can have Teams, and so can one with Microsoft mail or none. Same strictness as `microsoft`: lower-case tenant ids (never the personal-account or nil
+ * tenant), unique lists, no unknown key. `enabled` defaults to false: Teams is off for every lane until a human version of the config sets it. `cloud` accepts `gcc_high`
+ * so the value can be stored, but the guard refuses it until a GCC High Teams task exists (spec section 15). `allowed_domains` must be listed (empty refuses: fail closed).
+ * `chat_send` needs `chat_read`, `channels_send` needs `channels_read` (a person cannot send where they cannot read).
+ */
+export const TEAMS_FEATURES = ["chat_read", "chat_send", "call_links", "channels_read", "channels_send"] as const;
+export type TeamsFeature = (typeof TEAMS_FEATURES)[number];
+export const teamsSchema = z.strictObject({
+  enabled: z.boolean().default(false),
+  cloud: z.enum(MICROSOFT_CLOUDS).default("commercial"),
+  tenant_ids: z
+    .array(lowerUuid.refine((id) => !NON_ORGANIZATION_TENANT_IDS.includes(id), "must be an organisation's tenant id"))
+    .min(1)
+    .max(10)
+    .refine((a) => new Set(a).size === a.length, "tenant_ids must be unique"),
+  allowed_domains: z
+    .array(mailDomain)
+    .min(1)
+    .max(20)
+    .refine((a) => new Set(a).size === a.length, "allowed_domains must be unique"),
+  features: z
+    .array(z.enum(TEAMS_FEATURES))
+    .min(1)
+    .max(TEAMS_FEATURES.length)
+    .refine((a) => new Set(a).size === a.length, "features must be unique")
+    .refine((a) => !a.includes("chat_send") || a.includes("chat_read"), "chat_send needs chat_read")
+    .refine((a) => !a.includes("channels_send") || a.includes("channels_read"), "channels_send needs channels_read")
+    .default(["chat_read"]),
+});
+export type TeamsConfig = z.infer<typeof teamsSchema>;
+/** Only the `teams` key of a config, for the reader that must not depend on unrelated settings (other root keys are ignored). */
+export const teamsViewSchema = z.object({ teams: teamsSchema.optional() });
+
 /** The cross-field rules of the provider settings; used by the whole config and by the reader's narrow view (one definition). */
 export function refineMailProviders(c: { mail?: { providers: (typeof MAIL_PROVIDERS)[number][] }; mail_transport?: string; microsoft?: unknown }, ctx: z.RefinementCtx): void {
   const providers = c.mail?.providers ?? ["google"];
@@ -286,6 +323,8 @@ export const laneConfigSchema = z.strictObject({
   mail_transport: z.enum(["native", "composio"]).default("native"),
   // Microsoft 365 settings (T-250); required when "microsoft" is in mail.providers (refine at the end of this schema).
   microsoft: microsoftSchema.optional(),
+  // Microsoft Teams (T-278, spec messages.md 4.3): its own tenants, domains and features; independent of the mail providers above.
+  teams: teamsSchema.optional(),
   // Google Calendar sync (T-064). Unset = primary plus owned/writable selected calendars, 365 days ahead.
   // `calendar_ids` are raw GOOGLE calendar ids (D-26); an explicit list replaces the default selection for Google connections.
   // Microsoft calendar ids are `microsoft.calendar_ids` (T-269). `include_read_only` and `forward_days` apply to both providers.

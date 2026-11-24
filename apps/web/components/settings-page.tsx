@@ -12,6 +12,7 @@ import { quickbooksSectionFor } from "@/lib/quickbooks-connection";
 import { googleSectionFor } from "@/lib/google-connection";
 import { mailProvidersFor } from "@/lib/mail-providers";
 import { microsoftSectionFor } from "@/lib/microsoft-connection";
+import { teamsSectionFor } from "@/lib/teams-connection";
 import { availability, missingSettings } from "@/lib/composio-availability";
 import { composioSectionFor } from "@/lib/composio-connection";
 import { ConnectionsSection } from "./connections-section";
@@ -48,6 +49,7 @@ type Sections = {
   quickbooks: Promise<Awaited<ReturnType<typeof quickbooksSectionFor>> | null>;
   google: Promise<Awaited<ReturnType<typeof googleSectionFor>>>;
   microsoft: Promise<Awaited<ReturnType<typeof microsoftSectionFor>>>;
+  teams: Promise<Awaited<ReturnType<typeof teamsSectionFor>>>;
   composio: Promise<Awaited<ReturnType<typeof composioSectionFor>> | null>;
   brain: Promise<Awaited<ReturnType<typeof onboardingFor>> | null>;
   coverage: Promise<Awaited<ReturnType<typeof coverageFor>>>;
@@ -90,12 +92,15 @@ export async function SettingsPage({
     result: started(
       timed("load.connect_result", async () => {
         const section = await microsoft; // the banner's Microsoft wording follows the same scope list as the section; consent returns show only where Microsoft is enabled
-        return connectResultFor(g, laneId, query, { enabled: Boolean(section && !section.paused && !section.unavailable && !section.settingsUnknown), writes: section?.writes ?? null });
+        const messagesShown = (await gate).visible("messages"); // a limited company that does not list Messages has no page to point to (T-278 review C4)
+        return connectResultFor(g, laneId, query, { enabled: Boolean(section && !section.paused && !section.unavailable && !section.settingsUnknown), writes: section?.writes ?? null }, { messagesShown });
       }),
     ),
     quickbooks: started(timed("load.quickbooks", async () => ((await gate).visible("finance") ? quickbooksSectionFor(g, laneId, undefined, approvalsDeps) : null))),
     google: started(timed("load.google", async () => googleSectionFor(g, laneId, undefined, await providers))),
     microsoft,
+    // T-280: the company's Teams settings and the caller's own Teams rows, read beside the other sections (never behind the mail provider read: Teams does not depend on it).
+    teams: started(timed("load.teams", () => teamsSectionFor(g, laneId))),
     composio: started(
       timed("load.composio", async () => {
         const view = await composioSectionFor(g, laneId, availability, undefined, missingSettings);
@@ -225,9 +230,9 @@ async function PlaceholderUnlessResult({ sections }: { sections: Sections }) {
 
 /** The connect result and the origin notice (hosts only; only for users who can connect). */
 async function Notices({ sections }: { sections: Sections }) {
-  const [result, google, microsoft, quickbooks, composio] = await Promise.all([sections.result, sections.google, sections.microsoft, sections.quickbooks, sections.composio]);
+  const [result, google, microsoft, teams, quickbooks, composio] = await Promise.all([sections.result, sections.google, sections.microsoft, sections.teams, sections.quickbooks, sections.composio]);
   // On another host than NEXT_PUBLIC_APP_URL a connect cannot finish (hosts only in the notice); only users who can connect see it.
-  const origin = google || microsoft || quickbooks || composio ? await currentOriginNotice() : null;
+  const origin = google || microsoft || teams || quickbooks || composio ? await currentOriginNotice() : null;
   return (
     <>
       {result ? (
@@ -252,11 +257,11 @@ async function Notices({ sections }: { sections: Sections }) {
 }
 
 async function ConnectionsSlot({ laneId, sections, tz, now }: { laneId: string; sections: Sections; tz: string; now: Date }) {
-  const [google, microsoft, quickbooks, composio, coverage, jobFailures] = await Promise.all([sections.google, sections.microsoft, sections.quickbooks, sections.composio, sections.coverage, sections.jobFailures]);
+  const [google, microsoft, teams, quickbooks, composio, coverage, jobFailures] = await Promise.all([sections.google, sections.microsoft, sections.teams, sections.quickbooks, sections.composio, sections.coverage, sections.jobFailures]);
   // The "not set up yet" card is not for this slot: a viewer with no provider row and no coverage row simply has no Connections section.
   const showCoverage = coverage.unavailable || coverage.items.length > 0;
-  if (!(google || microsoft || quickbooks || composio || showCoverage)) return null;
-  return <ConnectionsSection laneId={laneId} google={google} microsoft={microsoft} quickbooks={quickbooks} composio={composio} coverage={showCoverage ? coverage : null} jobFailures={jobFailures} tz={tz} now={now} />;
+  if (!(google || microsoft || teams || quickbooks || composio || showCoverage)) return null;
+  return <ConnectionsSection laneId={laneId} google={google} microsoft={microsoft} teams={teams} quickbooks={quickbooks} composio={composio} coverage={showCoverage ? coverage : null} jobFailures={jobFailures} tz={tz} now={now} />;
 }
 
 async function NewsSlot({ sections, tz, now }: { sections: Sections; tz: string; now: Date }) {
