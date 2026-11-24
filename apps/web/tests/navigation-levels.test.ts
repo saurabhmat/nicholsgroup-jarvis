@@ -288,25 +288,25 @@ describe("Messages (T-280, T-283)", () => {
 
   it("a link prefetch makes no Graph request: the page function is synchronous, starts only the connect-state reads, and the reader is not called until the gate has answered and the workspace renders (T-283)", async () => {
     t.answers["from:connections"] = { data: [TEAMS_ROW], error: null };
-    t.answers["rpc:teams_chat_reads_list"] = { data: [], error: null };
+    t.answers["rpc:teams_chat_reads_list_many"] = { data: [], error: null };
     const { default: Page } = await import("@/app/[laneId]/messages/page");
     const tree = Page({ params: params(), searchParams: sp({ chat: CHAT_KEY }) } as never) as ReactNode;
     expect(isValidElement(tree)).toBe(true); // synchronous: the shell, its heading and skeleton are what a prefetch gets
     await new Promise((r) => setTimeout(r, 30)); // let everything started by the page function run to its end
     expect(t.reader.calls).toEqual([]);
-    expect(t.calls.filter((c) => c.name === "rpc:teams_chat_reads_list")).toEqual([]);
+    expect(t.calls.filter((c) => c.name === "rpc:teams_chat_reads_list_many")).toEqual([]);
   });
 
   it("a connected person: the chat list, the read markers and the open conversation are all STARTED together after the gate (the list and the conversation never wait for each other)", async () => {
     t.answers["from:connections"] = { data: [TEAMS_ROW], error: null };
-    t.answers["rpc:teams_chat_reads_list"] = { data: [], error: null };
+    t.answers["rpc:teams_chat_reads_list_many"] = { data: [], error: null };
     const { default: Page } = await import("@/app/[laneId]/messages/page");
     await resolve(Page({ params: params(), searchParams: sp({ chat: CHAT_KEY }) } as never) as ReactNode);
     const fns = t.reader.calls.map((c) => c.fn).sort();
     expect(fns).toEqual(["listChats", "listMessages", "openChat"]);
     // (no clock: every Graph read had STARTED before any of them had answered)
     expect(t.reader.calls.map((c) => c.resolvedBefore)).toEqual([0, 0, 0]);
-    const markers = t.calls.find((c) => c.name === "rpc:teams_chat_reads_list");
+    const markers = t.calls.find((c) => c.name === "rpc:teams_chat_reads_list_many");
     expect(markers).toBeTruthy();
     // the markers' level equals the level the Graph reads began in: one level, not a chain
     const graphLevel = t.calls.find((c) => c.name === "teams.settings")?.level ?? 0;
@@ -318,7 +318,7 @@ describe("Messages (T-280, T-283)", () => {
 
   it("no chat in the address: only the chat list is read (no conversation read, no Graph read for a chat that was not asked for)", async () => {
     t.answers["from:connections"] = { data: [TEAMS_ROW], error: null };
-    t.answers["rpc:teams_chat_reads_list"] = { data: [], error: null };
+    t.answers["rpc:teams_chat_reads_list_many"] = { data: [], error: null };
     const { default: Page } = await import("@/app/[laneId]/messages/page");
     await resolve(Page({ params: params(), searchParams: sp() } as never) as ReactNode);
     expect(t.reader.calls.map((c) => c.fn)).toEqual(["listChats"]);
@@ -326,7 +326,7 @@ describe("Messages (T-280, T-283)", () => {
 
   it("a made-up chat key is 'no chat selected', not a Graph request", async () => {
     t.answers["from:connections"] = { data: [TEAMS_ROW], error: null };
-    t.answers["rpc:teams_chat_reads_list"] = { data: [], error: null };
+    t.answers["rpc:teams_chat_reads_list_many"] = { data: [], error: null };
     const { default: Page } = await import("@/app/[laneId]/messages/page");
     await resolve(Page({ params: params(), searchParams: sp({ chat: "../../etc/passwd" }) } as never) as ReactNode);
     expect(t.reader.calls.map((c) => c.fn)).toEqual(["listChats"]);
@@ -404,7 +404,7 @@ describe("Messages (T-280, T-283)", () => {
   it("T-291: a plain chat view makes no team or channel request, even for a company that lists channels", async () => {
     t.teamsFeatures = ["chat_read", "channels_read"];
     t.answers["from:connections"] = { data: [CHANNELS_ROW], error: null };
-    t.answers["rpc:teams_chat_reads_list"] = { data: [], error: null };
+    t.answers["rpc:teams_chat_reads_list_many"] = { data: [], error: null };
     const { default: Page } = await import("@/app/[laneId]/messages/page");
     await resolve(Page({ params: params(), searchParams: sp({ chat: CHAT_KEY, team: TEAM, channel: CHANNEL_KEY }) } as never) as ReactNode);
     expect(t.reader.calls.map((c) => c.fn).sort()).toEqual(["listChats", "listMessages", "openChat"]);
@@ -451,7 +451,7 @@ describe("the Messages dot adds no server read and no level (T-290)", () => {
 
   it("no page of the menu reads the notice state while it renders: the database is asked nothing about activity, whatever the person's Teams state, and the levels are the ones of T-276", async () => {
     t.answers["from:connections"] = { data: [TEAMS_ROW], error: null };
-    t.answers["rpc:teams_chat_reads_list"] = { data: [], error: null };
+    t.answers["rpc:teams_chat_reads_list_many"] = { data: [], error: null };
     t.answers["rpc:home_calendar_status"] = { data: "connected", error: null };
     t.answers["rpc:calendar_events"] = { data: [], error: null };
     t.answers["rpc:inbox_messages"] = { data: [], error: null };
@@ -470,10 +470,10 @@ describe("the Messages dot adds no server read and no level (T-290)", () => {
 
   it("Messages with the live provider in the tree: the levels and the reads are exactly those without it (the provider, the live list and the dot read nothing on the server)", async () => {
     t.answers["from:connections"] = { data: [TEAMS_ROW], error: null };
-    t.answers["rpc:teams_chat_reads_list"] = { data: [], error: null };
+    t.answers["rpc:teams_chat_reads_list_many"] = { data: [], error: null };
     const { default: Page } = await import("@/app/[laneId]/messages/page");
     await resolve(Page({ params: params(), searchParams: sp({ chat: CHAT_KEY }) } as never) as ReactNode);
-    expect(t.calls.map((c) => c.name).sort()).toEqual(["from:connections", "from:lane_config_current", "lane.check", "lane.list", "rpc:teams_chat_reads_list", "teams.settings"]);
+    expect(t.calls.map((c) => c.name).sort()).toEqual(["from:connections", "from:lane_config_current", "lane.check", "lane.list", "rpc:teams_chat_reads_list_many", "teams.settings"]);
     expect(maxLevel()).toBeLessThanOrEqual(3);
     expect(t.reader.calls.map((c) => c.fn).sort()).toEqual(["listChats", "listMessages", "openChat"]); // the page's own three reads; nothing for notices
   });
