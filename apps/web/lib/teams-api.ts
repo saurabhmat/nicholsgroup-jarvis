@@ -8,6 +8,11 @@
 //   POST /api/lanes/<lane>/messages/activity  (T-290) the person opened the chat list: `teams_activity_seen`; answers the same state
 //   GET  /api/lanes/<lane>/messages/chats?chat=<key>&more=<cursor>   (T-290) the chat list again, after a notice or a Refresh: the same read the page makes
 //   GET  /api/lanes/<lane>/messages/newer?chat=<key>&since=<iso>      (T-290) what changed in the open chat since a message time (a lastModifiedDateTime date range)
+//   POST /api/lanes/<lane>/messages/send      (T-288) "Send = your approval": {conn, chat, text, textSha256, clientRequestId}. Order, each refusal a fixed code (none an oracle about another person's account):
+//        same site + Origin (403) -> lane id shape (404) -> session at AAL2 with own_mail (401/403/404) -> step-up within the lane's TEAMS window, read on the server, never from the request (403 step_up_required)
+//        -> module visible (404) -> body read, at most 100 KB (400) -> `conn` is the caller's own usable Teams row in this lane (400 / 404 / 409 reconnect; nothing proposed) -> one request per second per connection (429)
+//        -> chat key (400) -> the approvals entry: role, gates by name (409 gate_*), text by the Zod schema (400 invalid_message), `textSha256` = the server's hash of the text (400 text_mismatch)
+//        -> propose + approve that hash + claim + ONE POST + read back, inline. The answer is `{ state: sent | checking | not_sent | unknown, ... }` with fixed words; the text is never in an answer, a log or an error.
 // T-295 (spec 22.4): the browser names the connection by `conn`, the person's OWN connection id. It is a name, never a permission: every request re-checks it.
 // Order: same site (Origin / Sec-Fetch-Site) -> lane id shape -> AAL2 session in the lane with own_mail -> the `messages` module is shown for the company -> `conn` is a lower-case uuid (else 400) ->
 // `conn` is one of the caller's OWN Teams rows in THIS lane (read under RLS, `mine`; else 404: another person's, another lane's, an unknown id, a disconnected and a pending one all give the SAME
@@ -18,6 +23,8 @@ import { AuthError, authErrorResponse, type Guards } from "@nichols/core/auth";
 import type { LaneId } from "@nichols/core";
 import type { LaneClient } from "@nichols/core/lane-router";
 import { MAIL_CONNECT_ROLES } from "@nichols/connectors/oauth";
+import { ApprovalsError, type SendTeamsInput, type TeamsSendOutcome, type UserCtx } from "@nichols/approvals/server";
+import { isOutcomeUnknown } from "./outcome";
 import { fetchHostedImage, resolveCallTargets } from "@nichols/connectors/teams-reader";
 import { callUrl, normalizeTime } from "@nichols/connectors/teams-pure";
 import type { TeamsFeature } from "@nichols/core/lane-config";
@@ -53,15 +60,32 @@ const IMAGE_PARAMS = new Set(["chat", "team", "channel", "conn", "message", "hos
 const json = (body: unknown, status: number, extra: Record<string, string> = {}) => Response.json(body, { status, headers: { ...NO_STORE, ...extra } });
 const LANE = /^[A-Z]{1,8}$/;
 const MAX_BODY = 2_000;
+/** The send body: 10,000 characters is at most 40,000 bytes of UTF-8 (the schema's own 80 KB bound is checked by the approvals entry); JSON escapes of newlines and quotes need room too. */
+const MAX_SEND_BODY = 100_000;
 
 type Db = Pick<LaneClient, "schema">;
+/**
+ * The send (T-288): what the ONE route file passes in. `window` is the lane's Teams step-up window (D-67), read on the server; `run` is the approvals module's one-step send (`@nichols/approvals/wire`; only the route file may
+ * name it, rule 5); `failureText` is the approvals module's fixed sentence for a failure code. Without it the route answers 503 (it fails closed).
+ */
+export type TeamsSendDeps = {
+  window: (laneId: LaneId) => Promise<number>;
+  run: (ctx: UserCtx, input: SendTeamsInput) => Promise<TeamsSendOutcome>;
+  failureText: (code: string) => string | null;
+  /** Test hook: the limiter of one request per second per connection (default: this process's own). */
+  limiter?: { take(key: string): number };
+};
 export type TeamsRouteDeps = {
-  guards: () => Promise<Pick<Guards, "requireLane" | "requireRole">>;
+  guards: () => Promise<Pick<Guards, "requireLane" | "requireRole"> & Partial<Pick<Guards, "requireStepUp">>>;
+  send?: TeamsSendDeps;
   gate?: (client: Db, laneId: string) => Promise<LaneGate>;
   rows?: (client: Db, laneId: string, userId: string) => Promise<TeamsConnectionView[]>;
   /** Test hook: the per-person limiters of the activity route and of the two re-read routes (default: this process's own, in memory). */
   limiters?: { activity: { take(key: string): number }; reads: { take(key: string): number } };
 };
+
+/** T-288: one send per second per connection (Microsoft allows one POST per second per user and chat; the writer paces too). Per process, like the other limiters. */
+const SEND_LIMITER = createWindowLimiter(1, 1000);
 
 // One pair per process: a per-person sliding window. The activity route reads one database row; the re-read routes read Microsoft, so they get the smaller allowance.
 const SHARED_LIMITERS = { activity: createWindowLimiter(ACTIVITY_LIMIT_MAX, ACTIVITY_LIMIT_WINDOW_MS), reads: createWindowLimiter(READ_LIMIT_MAX, READ_LIMIT_WINDOW_MS) };
@@ -77,9 +101,9 @@ function sameSite(request: Request, method: "GET" | "POST"): boolean {
 }
 
 /** The request body as text, read with a HARD cap (SL3): a declared length over the cap is refused at once, and the stream is cut as soon as it passes the cap, so a large body is never held in memory. `null` = too large or unreadable; "" = none. */
-async function bodyText(request: Request): Promise<string | null> {
+async function bodyText(request: Request, max: number = MAX_BODY): Promise<string | null> {
   const declared = Number(request.headers.get("content-length") ?? "0");
-  if (Number.isFinite(declared) && declared > MAX_BODY) return null;
+  if (Number.isFinite(declared) && declared > max) return null;
   let text = "";
   try {
     const reader = request.body?.getReader();
@@ -90,7 +114,7 @@ async function bodyText(request: Request): Promise<string | null> {
       const { done, value } = await reader.read();
       if (done) break;
       bytes += value.byteLength;
-      if (bytes > MAX_BODY) {
+      if (bytes > max) {
         await reader.cancel().catch(() => undefined);
         return null;
       }
@@ -100,7 +124,7 @@ async function bodyText(request: Request): Promise<string | null> {
   } catch {
     return null;
   }
-  return text.length > MAX_BODY ? null : text;
+  return text.length > max ? null : text;
 }
 
 const asObject = (text: string): Record<string, unknown> | null => {
@@ -114,9 +138,40 @@ const asObject = (text: string): Record<string, unknown> | null => {
 };
 
 /** The JSON body as an object, or null for anything else (none, too large, not JSON, not an object). */
-async function body(request: Request): Promise<Record<string, unknown> | null> {
-  const text = await bodyText(request);
+async function body(request: Request, max: number = MAX_BODY): Promise<Record<string, unknown> | null> {
+  const text = await bodyText(request, max);
   return text === null ? null : asObject(text);
+}
+
+/** The user's own (RLS) `core` rpc of a lane client, as the approvals module takes it. */
+function coreRpcOf(client: Db): UserCtx["rpc"] {
+  const core = (client as unknown as { schema(s: "core"): { rpc: unknown } }).schema("core");
+  return (core.rpc as UserCtx["rpc"]).bind(core);
+}
+
+/** A refusal of the approvals entry as a fixed answer: the code only, never a message that could carry content. */
+function sendRefusal(code: string): Response {
+  switch (code) {
+    case "invalid":
+      return json({ error: "invalid_message" }, 400);
+    case "forbidden":
+      return json({ error: "forbidden" }, 403);
+    case "not_found":
+      return json({ error: "not_found" }, 404);
+    case "request_reused":
+      return json({ error: "request_reused" }, 409);
+    case "not_live":
+      return json({ error: "gate_not_live" }, 409);
+    case "drafts_not_allowed":
+      return json({ error: "gate_drafts_off" }, 409);
+    case "not_enabled":
+    case "teams_not_enabled":
+      return json({ error: "gate_not_enabled" }, 409);
+    case "step_up_required":
+      return json({ error: "step_up_required" }, 403);
+    default:
+      return json({ error: "unknown_outcome" }, 502);
+  }
 }
 
 export function createTeamsRoutes(deps: TeamsRouteDeps) {
@@ -125,7 +180,7 @@ export function createTeamsRoutes(deps: TeamsRouteDeps) {
   const limiters = deps.limiters ?? SHARED_LIMITERS;
 
   /** The session and the lane's gates, in the spec's order; or the Response to send instead. No connection is named yet. */
-  async function begin(laneId: string, opts: { limit?: "activity" | "reads" } = {}): Promise<Ctx | Response> {
+  async function begin(laneId: string, opts: { limit?: "activity" | "reads"; stepUp?: boolean } = {}): Promise<Ctx | Response> {
     if (!LANE.test(laneId)) return json({ error: "not_found" }, 404);
     const g = await deps.guards();
     try {
@@ -138,6 +193,12 @@ export function createTeamsRoutes(deps: TeamsRouteDeps) {
     if (opts.limit) {
       const wait = limiters[opts.limit].take(`${laneId}:${session.userId}`);
       if (wait > 0) return json({ error: "rate_limited", seconds: wait }, 429, { "retry-after": String(wait) });
+    }
+    // T-288 (D-67): a Teams send needs the authenticator code within the LANE's Teams window (`approvals.teams_step_up_max_age_s`, read here on the server: the request cannot name it). Before the module check and
+    // before any connection is looked at, so a stale code is the same answer whatever `conn` is. The guard's Teams bound (300 - 43,200) is chosen by this code, never by the request.
+    if (opts.stepUp) {
+      if (!deps.send || !g.requireStepUp) return json({ error: "unavailable" }, 503);
+      await g.requireStepUp(await deps.send.window(laneId as LaneId), { window: "teams" }); // throws AuthError step_up_required -> 403 {error: "step_up_required"}
     }
     if (!(await gate(client, laneId)).visible("messages")) return json({ error: "not_found" }, 404);
     return { client, userId: session.userId, laneId };
@@ -365,6 +426,48 @@ export function createTeamsRoutes(deps: TeamsRouteDeps) {
         const r = await loadNewer(w, chatId, since);
         if (r.kind !== "ok") return failure(r);
         return json({ messages: r.messages, truncated: r.truncated }, 200);
+      }),
+
+    /**
+     * "Send = your approval" (T-288; spec 10.3, 22.8): one POST from the composer. Every refusal before the approvals entry proposes nothing. See the header for the order. The text is only in the request
+     * body and the call into `send.run`: it is never logged, echoed or put in an error.
+     */
+    send: (request: Request, laneId: string): Promise<Response> =>
+      guarded(async () => {
+        if (!sameSite(request, "POST")) return json({ error: "forbidden" }, 403);
+        const sender = deps.send;
+        if (!sender) return json({ error: "unavailable" }, 503);
+        const ctx = await begin(laneId, { stepUp: true });
+        if (ctx instanceof Response) return ctx;
+        const b = await body(request, MAX_SEND_BODY);
+        if (b === null) return json({ error: "bad_request" }, 400);
+        const w = await pick(ctx, b.conn);
+        if (w instanceof Response) return w;
+        const wait = (sender.limiter ?? SEND_LIMITER).take(`${laneId}:${w.connectionId}`);
+        if (wait > 0) return json({ error: "rate_limited", seconds: wait }, 429, { "retry-after": String(wait) });
+        const keys = Object.keys(b);
+        const chatId = decodeChatKey(b.chat);
+        const id = b.clientRequestId;
+        if (keys.length !== 5 || !["conn", "chat", "text", "textSha256", "clientRequestId"].every((k) => keys.includes(k))) return json({ error: "bad_request" }, 400);
+        if (chatId === null || typeof b.text !== "string" || typeof b.textSha256 !== "string" || typeof id !== "string") return json({ error: "bad_request" }, 400);
+        let out: TeamsSendOutcome;
+        try {
+          out = await sender.run({ laneId: laneId as LaneId, userId: ctx.userId, rpc: coreRpcOf(ctx.client) }, { connectionId: w.connectionId, chatId, text: b.text, textSha256: b.textSha256, clientRequestId: id });
+        } catch (e) {
+          // Once the approvals entry has been called a Teams POST may have left, so anything that is not a definite, early refusal is an UNKNOWN outcome (the person checks Teams; nothing is retried here).
+          console.error("[api/teams-messages] send ended unknown:", e instanceof Error ? e.name : typeof e); // the class only, never a message (it could carry the text)
+          return e instanceof ApprovalsError ? sendRefusal(e.code) : json({ error: "unknown_outcome" }, 502);
+        }
+        if (out.kind === "gate") return json({ error: `gate_${out.gate}` }, 409);
+        if (out.kind === "text_mismatch") return json({ error: "text_mismatch" }, 400);
+        const r = out.result;
+        if (r.status === "verified") return json({ ok: true, state: "sent" }, 200);
+        if (r.status === "sent_unverified" || r.status === "already_in_progress") return json({ ok: true, state: "checking" }, 200);
+        if (r.status === "failed") {
+          const unknown = isOutcomeUnknown(r.failureCode);
+          return json({ ok: true, state: unknown ? "unknown" : "not_sent", code: r.failureCode, message: sender.failureText(r.failureCode) }, 200);
+        }
+        return json({ ok: true, state: "unknown" }, 200); // outcome_pending: the sweep looks again; the person checks Teams, never a blind resend
       }),
 
     /** Call / Video call for a chat of the connection named in the body. */

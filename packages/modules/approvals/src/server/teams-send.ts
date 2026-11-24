@@ -11,6 +11,7 @@
 // The text lives only in the one proposal (until a terminal state, when the database empties it) and the one POST body: never in a log, an audit row, an error or an event.
 import { createHash, timingSafeEqual } from "node:crypto";
 import type { LaneId } from "@nichols/core";
+import { TEAMS_SEND_FAILURES } from "@nichols/connectors/write";
 import { teamsChatSendGate, type TeamsSendGate } from "./capability";
 import type { ApproveResult } from "./email";
 import { checkId, checkLane } from "./email";
@@ -67,4 +68,9 @@ export async function sendTeamsMessage(deps: TeamsExecDeps, ctx: UserCtx, input:
   const proposed = await proposeTeamsAction(deps, ctx, { connectionId: input.connectionId, place, text: input.text, clientRequestId: input.clientRequestId, aiDrafted: false });
   const result = await approveAndExecuteTeams(deps, ctx, { actionId: proposed.id, hashSeen: proposed.hash });
   return { kind: "result", result };
+}
+
+/** The fixed sentence for a Teams send failure code (never text from the message or from Microsoft), or null for a code that is not one of them. */
+export function teamsSendFailureText(code: string): string | null {
+  return Object.prototype.hasOwnProperty.call(TEAMS_SEND_FAILURES, code) ? (TEAMS_SEND_FAILURES as Record<string, string>)[code] ?? null : null;
 }

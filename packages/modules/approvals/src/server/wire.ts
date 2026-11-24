@@ -176,7 +176,7 @@ export function sendTeamsMessage(ctx: UserCtx, input: SendTeamsInput) {
 }
 
 /**
- * The Teams step-up window of a lane (D-67), for the route's `requireStepUp(window, { window: "teams" })`: `lane_config.approvals.teams_step_up_max_age_s` clamped 300..43,200 exactly like
+ * The Teams step-up window of a lane (D-67), for the route's step-up check with the Teams option: `lane_config.approvals.teams_step_up_max_age_s` clamped 300..43,200 exactly like
  * `act.approve` (default 300). Read for the LANE (not a connection: it runs before the route has looked at any connection) from the service-role client, scoped by the lane id; it is never a request value.
  * An unreadable config fails closed to the strictest window (300).
  */
