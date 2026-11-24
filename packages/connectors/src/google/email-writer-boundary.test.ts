@@ -19,16 +19,12 @@ describe("the Gmail write path is reachable only from approvals", () => {
     walk(join(root, "apps"));
     walk(join(root, "packages"));
     const offenders = files
-      .filter((f) => /googleEmailWriter|createGoogleEmailWriter|google\/email-writer|@nichols\/connectors\/write\b|\/messages\/send|\/gmail\/v1\/users\/me\/drafts/.test(readFileSync(f, "utf8")))
+      .filter((f) => /googleEmailWriter|createGoogleEmailWriter|google\/email-writer|@nichols\/connectors\/write\b|gmail\/v1\/users\/[^\"'`\s]*messages\/send|\/gmail\/v1\/users\/me\/drafts/.test(readFileSync(f, "utf8")))
       .map((f) => relative(root, f))
       .filter((f) => !f.startsWith("packages/modules/approvals/") && !f.startsWith("packages/eslint-plugin/src/"))
       .sort();
-    // T-288: the three web files below name the PORTAL's own Teams route `/api/lanes/<lane>/messages/send` (its path text matches the Gmail endpoint's `/messages/send`); they build no Gmail request and
-    // import neither writer. Added deliberately, one by one: the route file, the Messages API logic and the composer that calls the route.
+    // T-288 review D3: the pattern names the Gmail endpoint itself (`gmail/v1/users/.../messages/send`), not any `/messages/send`, so the portal's own Teams route path is not a hit and nothing is exempted.
     expect(offenders).toEqual([
-      "apps/web/app/api/lanes/[laneId]/messages/send/route.ts",
-      "apps/web/components/messages-send.tsx",
-      "apps/web/lib/teams-api.ts",
       "packages/connectors/src/google/email-writer.ts",
       "packages/connectors/src/google/index.ts",
       "packages/connectors/src/quickbooks/writer.ts",
