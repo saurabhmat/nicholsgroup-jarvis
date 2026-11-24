@@ -3,59 +3,90 @@
 import { readdirSync, readFileSync, statSync } from "node:fs";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
+import { buildCustomRoute } from "next/dist/lib/build-custom-route";
 import nextConfig from "../next.config";
 
-async function headerNames(): Promise<string[]> {
-  const rules = (await nextConfig.headers?.()) ?? [];
-  return rules.flatMap((r) => r.headers.map((h) => `${h.key.toLowerCase()}`));
+type Rule = { source: string; headers: { key: string; value: string }[] };
+const rulesOf = async (): Promise<Rule[]> => ((await nextConfig.headers?.()) ?? []) as Rule[];
+/** What the config sends for a path: every matching rule in order, a later rule replacing an earlier one for the same header name (Next's resolve-routes). Each rule is compiled by Next's OWN function (the one the build uses for `headers()`), so the match is the framework's, not this test's idea of it. */
+async function configHeaders(path: string): Promise<Record<string, string>> {
+  const out: Record<string, string> = {};
+  for (const rule of await rulesOf()) {
+    if (!new RegExp(buildCustomRoute("header", rule).regex).test(path)) continue;
+    for (const h of rule.headers) out[h.key.toLowerCase()] = h.value;
+  }
+  return out;
 }
-async function headerValue(key: string): Promise<string> {
-  const rules = (await nextConfig.headers?.()) ?? [];
-  return rules.flatMap((r) => r.headers).find((h) => h.key.toLowerCase() === key)?.value ?? "";
+const directives = (policy: string | undefined) => (policy ?? "").split(";").map((d) => d.trim()).filter(Boolean);
+const BASE = { "referrer-policy": "strict-origin-when-cross-origin", "x-frame-options": "DENY", "content-security-policy": "frame-ancestors 'none'", "x-content-type-options": "nosniff" };
+const IMAGE_PATH = "/api/lanes/PKG/messages/image";
+/** The headers a source file gives a response itself, read from an object literal by name (the image route's IMAGE_HEADERS). */
+function ownHeaders(file: string, name: string): Record<string, string> {
+  const text = readFileSync(join(__dirname, file), "utf8");
+  const body = new RegExp(`const ${name} = \\{([\\s\\S]*?)\\} as const;`).exec(text)?.[1] ?? "";
+  return Object.fromEntries([...body.matchAll(/"([a-z-]+)":\s*(?:"([^"]*)"|'([^']*)')/g)].map((m) => [m[1] ?? "", m[2] ?? m[3] ?? ""]));
+}
+function sourceFiles(): string[] {
+  const roots = ["../app", "../lib", "../components", "../proxy.ts", "../../../packages/core/src/auth"].map((r) => join(__dirname, r));
+  const files: string[] = [];
+  const walk = (p: string) => {
+    if (statSync(p).isDirectory()) for (const e of readdirSync(p)) walk(join(p, e));
+    else if (/\.(ts|tsx|js|mjs)$/.test(p) && !/\.test\.[a-z]+$/.test(p)) files.push(p);
+  };
+  for (const r of roots) walk(r);
+  return files;
 }
 
 describe("response headers set by the app", () => {
-  // F-01 (was MEDIUM, closed by T-299): the app sent no clickjacking or sniffing header. An Approve or a Teams Send is one click for a signed-in person (a Teams send IS the
-  // approval, and its authenticator window can be up to 12 hours), and the session cookie is SameSite=Lax, which is per SITE: a page on the same registrable domain could
-  // have framed the portal with the session. Now every response forbids framing and sniffing. Production check: report, step 2.
-  it("one rule covers every path (pages, API routes, static files)", async () => {
-    const rules = (await nextConfig.headers?.()) ?? [];
-    expect(rules.map((r) => r.source)).toEqual(["/:path*"]);
-    expect(rules.every((r) => !("has" in r) && !("missing" in r))).toBe(true);
+  // F-01 (was MEDIUM, closed in code by T-299): the app sent no clickjacking or sniffing header. An Approve or a Teams Send is one click for a signed-in person (a Teams send
+  // IS the approval, and its authenticator window can be up to 12 hours), and the session cookie is SameSite=Lax, which is per SITE: a page on the same registrable domain
+  // could have framed the portal with the session. These tests read the CONFIG the framework applies, with the framework's own path matcher; nobody has seen the headers in
+  // a browser here: that is the production check (report, step 2).
+  it("the rules: one for every path, then one for the Teams image route, with no conditions", async () => {
+    const rules = await rulesOf();
+    expect(rules.map((r) => r.source)).toEqual(["/:path*", "/api/lanes/:laneId/messages/image"]);
+    expect(rules.every((r) => !("has" in r) && !("missing" in r) && !("basePath" in r) && !("locale" in r))).toBe(true);
+    for (const r of rules) expect(new Set(r.headers.map((h) => h.key.toLowerCase())).size).toBe(r.headers.length);
   });
-  it("keeps Referrer-Policy", async () => {
-    expect(await headerValue("referrer-policy")).toBe("strict-origin-when-cross-origin");
+  it.each(["/", "/PKG", "/PKG/messages", "/PKG/messages/", "/sign-in", "/mfa", "/api/lanes/PKG/messages/send", "/api/inngest", "/api/webhooks/microsoft", "/_next/static/chunks/x.js", "/favicon.ico", "/a/b/c/d/e.json"])(
+    "F-01: %s gets exactly the four headers: no framing by any site (both headers), no sniffing, and no script or style policy",
+    async (path) => {
+      expect(await configHeaders(path)).toEqual(BASE);
+    },
+  );
+  it("the Teams image route keeps the general headers and gets its own stricter policy and referrer rule from the config too", async () => {
+    const h = await configHeaders(IMAGE_PATH);
+    expect(h["x-frame-options"]).toBe("DENY");
+    expect(h["x-content-type-options"]).toBe("nosniff");
+    expect(directives(h["content-security-policy"])).toEqual(["default-src 'none'", "sandbox", "frame-ancestors 'none'"]);
+    expect(h["referrer-policy"]).toBe("no-referrer");
+    // The route below it is not affected.
+    expect(await configHeaders("/api/lanes/PKG/messages/image/x")).toEqual(BASE);
   });
-  it("F-01: forbids framing by any site, with both headers (frame-ancestors for current browsers, X-Frame-Options for older ones)", async () => {
-    expect(await headerValue("x-frame-options")).toBe("DENY");
-    const directives = (await headerValue("content-security-policy")).split(";").map((d) => d.trim());
-    expect(directives).toContain("frame-ancestors 'none'");
+  it("whichever side wins (the framework's server keeps the config's value and drops a handler's header of the same name; a host may do the reverse), the image route's browser gets the same value", async () => {
+    const config = await configHeaders(IMAGE_PATH);
+    const own = ownHeaders("../lib/teams-api.ts", "IMAGE_HEADERS");
+    expect(Object.keys(own)).toEqual(expect.arrayContaining(["content-security-policy", "referrer-policy", "x-content-type-options"]));
+    const shared = Object.keys(own).filter((k) => k in config);
+    expect(shared.sort()).toEqual(["content-security-policy", "referrer-policy", "x-content-type-options"]);
+    for (const k of shared) expect(own[k]).toBe(config[k]);
   });
-  it("F-01: forbids content sniffing", async () => {
-    expect(await headerValue("x-content-type-options")).toBe("nosniff");
+  it("every Content-Security-Policy the config can send forbids framing", async () => {
+    for (const r of await rulesOf()) for (const h of r.headers) if (h.key.toLowerCase() === "content-security-policy") expect(directives(h.value)).toContain("frame-ancestors 'none'");
   });
-  it("sets no header twice and no script or style policy (a full Content-Security-Policy is a separate decision)", async () => {
-    const names = await headerNames();
-    expect(new Set(names).size).toBe(names.length);
-    expect(await headerValue("content-security-policy")).toBe("frame-ancestors 'none'");
+  it("no other file names a framing or policy header: a handler's copy would be dropped by the framework and the proxy's copy would REPLACE the config's (so neither may exist)", () => {
+    // By name, whatever the value or the quoting (a literal, a variable, a template, set / append / delete): the only places are the config and the image route's own headers.
+    const files = sourceFiles();
+    expect(files.length).toBeGreaterThan(100);
+    const named = (re: RegExp) => files.filter((f) => re.test(readFileSync(f, "utf8"))).map((f) => f.slice(f.indexOf("/apps/web/") >= 0 ? f.indexOf("/apps/web/") + 10 : f.indexOf("/packages/") + 1));
+    expect(named(/x-frame-options/i)).toEqual([]);
+    expect(named(/frame-ancestors/i)).toEqual(["lib/teams-api.ts"]);
+    expect(named(/content-security-policy/i)).toEqual(["lib/teams-api.ts"]);
+    expect(named(/referrer-policy/i)).toEqual(["lib/teams-api.ts"]);
   });
-  it("a route that sends its own Content-Security-Policy still forbids framing in it (the Teams image route)", () => {
-    const text = readFileSync(join(__dirname, "../lib/teams-api.ts"), "utf8");
-    const own = [...text.matchAll(/"content-security-policy":\s*"([^"]*)"/g)].map((m) => m[1] ?? "");
-    expect(own.length).toBeGreaterThan(0);
-    for (const policy of own) expect(policy.split(";").map((d) => d.trim())).toContain("frame-ancestors 'none'");
-  });
-  it("no route handler or page sets a framing header of its own that could loosen the rule", () => {
-    const loose = /x-frame-options["']?\s*[:,]\s*["'](?!DENY)|frame-ancestors\s+(?!'none')/i;
-    const roots = [join(__dirname, "../app"), join(__dirname, "../lib"), join(__dirname, "../components"), join(__dirname, "../proxy.ts")];
-    const files: string[] = [];
-    const walk = (p: string) => {
-      if (statSync(p).isDirectory()) for (const e of readdirSync(p)) walk(join(p, e));
-      else if (/\.(ts|tsx)$/.test(p) && !/\.test\.tsx?$/.test(p)) files.push(p);
-    };
-    for (const r of roots) walk(r);
-    expect(files.length).toBeGreaterThan(50);
-    expect(files.filter((f) => loose.test(readFileSync(f, "utf8")))).toEqual([]);
+  it("the proxy sets no header of these kinds (its headers replace the config's)", () => {
+    const text = readFileSync(join(__dirname, "../proxy.ts"), "utf8");
+    expect(/x-frame-options|content-security-policy|frame-ancestors|referrer-policy|x-content-type-options/i.test(text)).toBe(false);
   });
 });
 
