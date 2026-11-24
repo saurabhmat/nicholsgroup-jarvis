@@ -21,7 +21,7 @@ const sources = [...walk(join(REPO, "apps")), ...walk(join(REPO, "packages"))]
 /** The statement of each console call: from `console.x(` to the balanced closing parenthesis (strings skipped). */
 function calls(text: string): string[] {
   const out: string[] = [];
-  const re = /(^|[^\w.])console\.(log|warn|error|info|debug)\(/g;
+  const re = /(^|[^\w.])console\.(log|warn|error|info|debug|dir|table|trace)\(/g;
   let m: RegExpExecArray | null;
   while ((m = re.exec(text))) {
     const lineStart = text.lastIndexOf("\n", m.index) + 1;
@@ -93,6 +93,43 @@ const REVIEWED = new Set([
 
 const BARE = /(?:^|,\s*|\{\s*|:\s*)(e|err|error|cause|res|response|request|req|headers|body|token|session|cookies?|secret|payload|data)\s*(?=[,)}]|$)/;
 
+/** The call's arguments with string literals emptied; for template strings only the `${...}` expressions are kept. */
+function expressions(call: string): string {
+  let out = "";
+  let i = 0;
+  while (i < call.length) {
+    const c = call.charAt(i);
+    if (c === "'" || c === '"') {
+      i++;
+      while (i < call.length && call.charAt(i) !== c) i += call.charAt(i) === "\\" ? 2 : 1;
+      i++;
+    } else if (c === "`") {
+      i++;
+      while (i < call.length && call.charAt(i) !== "`") {
+        if (call.charAt(i) === "$" && call.charAt(i + 1) === "{") {
+          let depth = 1;
+          let j = i + 2;
+          while (j < call.length && depth > 0) {
+            depth += call.charAt(j) === "{" ? 1 : call.charAt(j) === "}" ? -1 : 0;
+            j++;
+          }
+          out += ` ${call.slice(i + 2, j - 1)} `;
+          i = j;
+        } else i += call.charAt(i) === "\\" ? 2 : 1;
+      }
+      i++;
+    } else {
+      out += c;
+      i++;
+    }
+  }
+  return out;
+}
+// Names that carry a credential, a provider message or a request object. A `.message` of ANY caught value is refused too (`e.message`, `(e as Error).message`,
+// `error?.message`): provider text can hold a token; use the error's name, a fixed code, or the redacting connector logger.
+const SECRET_NAME = /\b(accessToken|refreshToken|idToken|clientSecret|apiKey|api_key|access_token|refresh_token|token|secret|password|authorization|cookie|cookies|bearer|credentials?)\b/i;
+const MESSAGE = /\.message\b|\.stack\b|\.cause\b|\.body\b|\.headers\b/;
+
 describe("console call sites", () => {
   it("finds the sites (the scan is not empty)", () => {
     expect(withCalls.length).toBeGreaterThanOrEqual(30);
@@ -102,6 +139,22 @@ describe("console call sites", () => {
   });
   it.each(withCalls.map((x) => [x.f, x.calls] as const))("%s passes no bare error, request, response, header, body or token to the console", (_f, cs) => {
     for (const c of cs) expect(BARE.test(c), c.slice(0, 160)).toBe(false);
+  });
+  it("no log call passes an error message, stack, cause, body or headers, or any identifier that names a credential, as an argument or inside a template string", () => {
+    for (const { f, calls: cs } of withCalls) {
+      for (const c of cs) {
+        // The one reviewed exception: a ConnectorError's `info.message` is redacted by the connector layer when the error is built (canary-sinks.test.ts proves it).
+        const e = expressions(c).replace(/\b[a-z]\.info\.message\b/g, "info");
+        expect(MESSAGE.test(e), `${f}: ${c.slice(0, 120)}`).toBe(false);
+        expect(SECRET_NAME.test(e), `${f}: ${c.slice(0, 120)}`).toBe(false);
+      }
+    }
+  });
+  it("the scanner itself catches the shapes it claims to (a self-test)", () => {
+    const bad = ["x", "(e as Error).message", "e?.message", "accessToken", "`t ${refreshToken}`", "{ token }", "res.headers", "err.stack", "obj.cause"];
+    for (const b of bad.slice(1)) expect(MESSAGE.test(expressions(b)) || SECRET_NAME.test(expressions(b)), b).toBe(true);
+    expect(SECRET_NAME.test(expressions('"fixed text about a token", { laneId, count: 3 }'))).toBe(false);
+    expect(calls("console.dir(accessToken)").length + calls("console.error(`x ${token}`)").length).toBe(2);
   });
   it("no log call interpolates an env or secret accessor, a header object or a token variable", () => {
     for (const { f, calls: cs } of withCalls) for (const c of cs) expect(/\$\{[^}]*(token|secret|authorization|cookie|password|apiKey|api_key)[^}]*\}/i.test(c), `${f}: ${c.slice(0, 120)}`).toBe(false);

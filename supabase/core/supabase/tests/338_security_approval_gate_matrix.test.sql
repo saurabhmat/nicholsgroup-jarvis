@@ -5,7 +5,7 @@
 --   payload or hash tampered after approval | live off / class removed / connection disconnected / approver demoted AFTER approval (claim re-checks).
 -- Real database, real roles and JWT claims; only the provider call is absent (the executors are tested per package with fakes).
 begin;
-select plan(22);
+select plan(27);
 \ir helpers/lane_rls.psql
 
 create function pg_temp.claims_amr(p_email text, p_aal text, p_at bigint) returns text language sql as $$
@@ -54,7 +54,7 @@ begin
         when 'teams.channel.reply' then jsonb_build_object('team_id', 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb', 'channel_id', '19:matrix@thread.tacv2', 'reply_to_id', '1700000000000', 'client_request_id', pg_temp.rid(n))
       end;
     when 'qbo' then
-      v_conn := ('00000000-0000-4000-8000-0000003389' || lpad(n::text, 2, '0'))::uuid;
+      v_conn := ('00000000-0000-4000-8000-000338' || lpad(n::text, 6, '0'))::uuid;
       v_ext := 'realm-matrix-' || n::text;
       insert into core.connections (id, lane_id, provider, external_account_id, status, features, owner_user_id) values (v_conn, 'PKG', 'quickbooks', v_ext, 'active', '{}', null);
       v_target := jsonb_build_object('realm_id', v_ext); v_payload := '{}'::jsonb;
@@ -98,6 +98,13 @@ begin
   return pg_temp.as_user(p_email, p_aal, p_age, format('select core.act_approve(%L, %L, %L)', p_lane, p_id, coalesce(p_hash, (select payload_sha256 from act.proposed_actions where id = p_id))));
 end $$;
 create function pg_temp.claim(p_id uuid) returns text language sql as $$ select pg_temp.as_service(format('select core.act_claim_execution(%L, %L)', 'PKG', p_id)); $$;
+create function pg_temp.claim_in(p_lane text, p_id uuid) returns text language sql as $$ select pg_temp.as_service(format('select core.act_claim_execution(%L, %L)', p_lane, p_id)); $$;
+-- one approve attempt with the TOTP code p_age seconds old, on a fresh proposal of the type
+create function pg_temp.attempt(p_type text, p_age integer) returns text language plpgsql as $$
+declare v_id uuid := pg_temp.build(p_type);
+begin
+  return case when pg_temp.approve(v_id, 'PKG', null, 'owner@example.test', 'aal2', p_age) = 'ok' then 'ok' else 'refused' end;
+end $$;
 create function pg_temp.live(p_on boolean) returns void language sql as $$ select pg_temp.cfg('PKG', 'approvals', jsonb_build_object('approvals_live', p_on)); $$;
 create function pg_temp.classes(p_all boolean) returns void language sql as $$
   update core.lane_policies set write_actions_allowed = case when p_all then array['teams_send', 'email_send', 'email_draft', 'qbo_disconnect'] else '{}'::text[] end where lane_id = 'PKG';
@@ -146,12 +153,50 @@ begin
       r2 := pg_temp.claim(aid);
       update core.memberships set role = 'owner' where lane_id = 'PKG' and user_id = pg_temp.uid('owner@example.test');
       return r2 || '|' || pg_temp.status_of(aid);
+    when 'claim_expired' then
+      r := pg_temp.approve(aid);
+      alter table act.proposed_actions disable trigger proposed_actions_guard; -- test-only: age the approved action
+      update act.proposed_actions set expires_at = now() - interval '1 minute' where act.proposed_actions.id = aid;
+      alter table act.proposed_actions enable trigger proposed_actions_guard;
+      r2 := pg_temp.claim(aid);
+      return r || '|' || r2 || '|' || pg_temp.status_of(aid);
+    when 'claim_other_lane' then r := pg_temp.approve(aid); r2 := pg_temp.claim_in('APK', aid); return r || '|' || r2 || '|' || pg_temp.status_of(aid) || '|' || pg_temp.claim(aid);
+    when 'claim_hash_recheck' then
+      r := pg_temp.approve(aid);
+      alter table act.proposed_actions disable trigger proposed_actions_guard; -- second layer: even if the trigger were bypassed, the claim re-checks the hash
+      update act.proposed_actions set payload_sha256 = repeat('c', 64) where act.proposed_actions.id = aid;
+      alter table act.proposed_actions enable trigger proposed_actions_guard;
+      r2 := pg_temp.claim(aid);
+      return r || '|' || r2 || '|' || pg_temp.status_of(aid);
+    -- step-up window bounds: Teams has its own setting (300 default and floor, 43,200 cap); email and QuickBooks use step_up_max_age_s (300 default, 30 floor, 900 cap)
+    when 'window_teams' then
+      if pg_temp.family(p_type) <> 'teams' then return 'n/a'; end if;
+      r := pg_temp.attempt(p_type, 200) || ',' || pg_temp.attempt(p_type, 400);
+      perform pg_temp.cfg('PKG', 'approvals', '{"teams_step_up_max_age_s": "3600"}'); r := r || '|' || pg_temp.attempt(p_type, 3000) || ',' || pg_temp.attempt(p_type, 3700);
+      perform pg_temp.cfg('PKG', 'approvals', '{"teams_step_up_max_age_s": "99999"}'); r := r || '|' || pg_temp.attempt(p_type, 43000) || ',' || pg_temp.attempt(p_type, 44000);
+      perform pg_temp.cfg('PKG', 'approvals', '{"teams_step_up_max_age_s": "10"}'); r := r || '|' || pg_temp.attempt(p_type, 200) || ',' || pg_temp.attempt(p_type, 400);
+      perform pg_temp.cfg('PKG', 'approvals', '{"teams_step_up_max_age_s": "abc"}'); r := r || '|' || pg_temp.attempt(p_type, 200) || ',' || pg_temp.attempt(p_type, 400);
+      perform pg_temp.cfg('PKG', 'approvals', '{"teams_step_up_max_age_s": "300"}');
+      return r;
+    when 'window_email' then
+      if pg_temp.family(p_type) = 'teams' then return 'n/a'; end if;
+      r := pg_temp.attempt(p_type, 200) || ',' || pg_temp.attempt(p_type, 400);
+      perform pg_temp.cfg('PKG', 'approvals', '{"teams_step_up_max_age_s": "43200"}'); r := r || '|' || pg_temp.attempt(p_type, 400); -- the Teams window does not widen email or QuickBooks
+      perform pg_temp.cfg('PKG', 'approvals', '{"teams_step_up_max_age_s": "300"}');
+      perform pg_temp.cfg('PKG', 'approvals', '{"step_up_max_age_s": "9999"}'); r := r || '|' || pg_temp.attempt(p_type, 800) || ',' || pg_temp.attempt(p_type, 1000);
+      perform pg_temp.cfg('PKG', 'approvals', '{"step_up_max_age_s": "5"}'); r := r || '|' || pg_temp.attempt(p_type, 20) || ',' || pg_temp.attempt(p_type, 100);
+      perform pg_temp.cfg('PKG', 'approvals', '{"step_up_max_age_s": "300"}');
+      return r;
     else raise exception 'unknown scenario %', p_scn;
   end case;
 end $$;
 
+-- Types as the database defines them: act.is_allowed_type is CALLED over every `<prefix>.<verb>` a pattern could admit (see 334), so a type added by a
+-- list, a `like` pattern or a regex enters the matrix and fails below until it has a builder.
 create temp table db_types on commit drop as
-  select m[1] as t from regexp_matches(pg_get_functiondef('act.is_allowed_type(text)'::regprocedure), '''([a-z_.]+)''', 'g') m;
+select t from (select p || '.' || v as t from unnest(array['email','qbo','teams','calendar','monday','notion','google','microsoft','quickbooks','stripe','gohighlevel','payment','transfer','file','doc','slack','task','project','contact','memory','brain','lane','user','approval','audit','secret','teams_send','email_send','email_draft','qbo_disconnect']) p
+  cross join unnest(array['send','save_draft','create','update','delete','post','reply','set_status','disconnect','revoke_grant','chat.send','channel.post','channel.reply','item.create','item.update','item.set_status','event.create','event.update','page.update','page.create','edit','forward','archive','draft','approve','execute','read','write','move','share','invite','remove','grant']) v) c
+where act.is_allowed_type(t);
 grant all on db_types to public;
 -- expected[scenario, family] -> outcome; '*' means every family
 create temp table expected (scn text, fam text, outcome text, primary key (scn, fam));
@@ -176,7 +221,15 @@ insert into expected values
   ('claim_live_off', '*', '22000 act: not_live|approved'),
   ('claim_class_removed', '*', '22000 act: type_not_allowed|approved'),
   ('claim_conn_disconnected', '*', '22000 act: connection_not_enabled|approved'),
-  ('claim_approver_demoted', '*', '22000 act: approver_revoked|approved');
+  ('claim_approver_demoted', '*', '22000 act: approver_revoked|approved'),
+  ('claim_expired', '*', 'ok|22000 act: expired|approved'),
+  ('claim_other_lane', '*', 'ok|42704 act: not_found|approved|ok'),
+  ('claim_hash_recheck', '*', 'ok|22000 act: hash_mismatch|approved'),
+  ('window_teams', 'teams', 'ok,refused|ok,refused|ok,refused|ok,refused|ok,refused'),
+  ('window_teams', 'email', 'n/a'), ('window_teams', 'qbo', 'n/a'),
+  ('window_email', 'teams', 'n/a'),
+  ('window_email', 'email', 'ok,refused|refused|ok,refused|ok,refused'),
+  ('window_email', 'qbo', 'ok,refused|refused|ok,refused|ok,refused');
 grant all on expected to public;
 
 select is((select coalesce(array_agg(t order by t), '{}') from db_types where pg_temp.family(t) is null), '{}'::text[], 'every allowed action type belongs to a family with a builder (a new type must be added to this matrix first)');
@@ -221,7 +274,12 @@ select is(pg_temp.scenario_violations('claim_live_off'), '{}'::text[], 'MATRIX t
 select is(pg_temp.scenario_violations('claim_class_removed'), '{}'::text[], 'MATRIX the claim re-checks the policy class (every type)');
 select is(pg_temp.scenario_violations('claim_conn_disconnected'), '{}'::text[], 'MATRIX the claim re-checks the connection (every type)');
 select is(pg_temp.scenario_violations('claim_approver_demoted'), '{}'::text[], 'MATRIX the claim refuses when the approver no longer holds the role (every type)');
-select is((select coalesce(array_agg(scn), '{}') from (select distinct scn from expected) x where scn not in ('happy','bad_hash','no_step_up','aal1','live_off','class_removed','conn_disconnected','expired','wrong_person','other_lane_member','other_lane_nonmember','replay_approve','replay_claim','claim_unapproved','tamper_after_approval','claim_live_off','claim_class_removed','claim_conn_disconnected','claim_approver_demoted')), '{}'::text[], 'every expectation has a scenario run above');
+select is(pg_temp.scenario_violations('claim_expired'), '{}'::text[], 'MATRIX the claim refuses an action that expired after approval (every type)');
+select is(pg_temp.scenario_violations('claim_other_lane'), '{}'::text[], 'MATRIX a claim through another lane finds nothing (not_found) and the real claim still works (every type)');
+select is(pg_temp.scenario_violations('claim_hash_recheck'), '{}'::text[], 'MATRIX if the stored hash were changed behind the trigger, the claim re-checks it and refuses (hash_mismatch) (every type)');
+select is(pg_temp.scenario_violations('window_teams'), '{}'::text[], 'MATRIX Teams step-up window: default 300 s, set 3,600, capped at 43,200, floor 300, nonsense falls back to 300 (Teams types)');
+select is(pg_temp.scenario_violations('window_email'), '{}'::text[], 'MATRIX email and QuickBooks step-up window: default 300 s, the Teams window does not widen it, capped at 900, floor 30 (email and qbo types)');
+select is((select coalesce(array_agg(scn), '{}') from (select distinct scn from expected) x where scn not in ('claim_expired','claim_other_lane','claim_hash_recheck','window_teams','window_email','happy','bad_hash','no_step_up','aal1','live_off','class_removed','conn_disconnected','expired','wrong_person','other_lane_member','other_lane_nonmember','replay_approve','replay_claim','claim_unapproved','tamper_after_approval','claim_live_off','claim_class_removed','claim_conn_disconnected','claim_approver_demoted')), '{}'::text[], 'every expectation has a scenario run above');
 
 select * from finish();
 rollback;

@@ -2,8 +2,10 @@
   "note": "T-170: the files that make up the pilot security suite (docs/security/pilot-test.md). `pnpm test:security` runs the vitest files; the pgTAP files run with `pnpm test:db` (and `node scripts/test-db.mjs --no-reset`).",
   "vitest": {
     "apps/web": [
-      "tests/route-inventory.test.ts",
+      "tests/assistant-registry.test.ts",
       "tests/console-sites.test.ts",
+      "tests/route-inventory.test.ts",
+      "tests/rule-7-fin-writers.test.ts",
       "tests/security-headers.test.ts"
     ],
     "packages/connectors": [
@@ -24,6 +26,7 @@
     "335_security_isolation_catalog.test.sql",
     "336_security_function_isolation.test.sql",
     "337_security_secret_sinks.test.sql",
-    "338_security_approval_gate_matrix.test.sql"
+    "338_security_approval_gate_matrix.test.sql",
+    "339_security_rules_6_7.test.sql"
   ]
 }

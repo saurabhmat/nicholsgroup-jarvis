@@ -5,7 +5,7 @@
 --   * the policy classes `calendar`, `monday`, `notion` (accepted by the lane policy but backed by no type or executor) enable nothing;
 --   * for each type, act.type_allowed is true only for its own class: no class enables another type.
 begin;
-select plan(10);
+select plan(12);
 \ir helpers/lane_rls.psql
 
 create temp table reviewed_types (t text primary key, class text not null, roles text[] not null, family text not null) on commit drop;
@@ -23,9 +23,13 @@ insert into inert_classes values
   ('monday', 'no monday.item.* action type or executor'),
   ('notion', 'no notion action type or executor');
 
--- Types as the database defines them (parsed from the function body).
-create temp table db_types on commit drop as
-  select m[1] as t from regexp_matches(pg_get_functiondef('act.is_allowed_type(text)'::regprocedure), '''([a-z_.]+)''', 'g') m;
+-- Types as the database defines them: the function is CALLED over every `<prefix>.<verb>` a pattern could admit (prefixes: every class and its words, every
+-- known provider and area; verbs: every action word), so an `in (...)` list, a `like 'calendar.%'` pattern or a regex is all found by behaviour.
+create temp table cand on commit drop as
+select p || '.' || v as t from unnest(array['email','qbo','teams','calendar','monday','notion','google','microsoft','quickbooks','stripe','gohighlevel','payment','transfer','file','doc','slack','task','project','contact','memory','brain','lane','user','approval','audit','secret']
+  || array(select distinct unnest(string_to_array(m[1], '_')) from regexp_matches((select pg_get_constraintdef(oid) from pg_constraint where conname = 'lane_policies_write_actions_allowed_check'), '''([a-z_]+)''', 'g') m)) p
+cross join unnest(array['send','save_draft','create','update','delete','post','reply','set_status','disconnect','revoke_grant','chat.send','channel.post','channel.reply','item.create','item.update','item.set_status','event.create','event.update','page.update','page.create','edit','forward','archive','draft','approve','execute','read','write','move','share','invite','remove','grant']) v;
+create temp table db_types on commit drop as select t from cand where act.is_allowed_type(t);
 create temp table db_classes on commit drop as
   select m[1] as c from regexp_matches(
     (select pg_get_constraintdef(oid) from pg_constraint where conname = 'lane_policies_write_actions_allowed_check'), '''([a-z_]+)''', 'g') m;
@@ -68,29 +72,39 @@ begin
 end $$;
 select is(pg_temp.matrix_violations(), '{}'::text[], 'class x type matrix: a class enables only its own types; the inert classes (calendar, monday, notion) enable no type');
 
--- Names an unbuilt executor would have: not allowed, and refused by propose even for the service role.
-create function pg_temp.refused(p_type text) returns boolean language plpgsql as $$
+-- Names an unbuilt executor would have: not allowed, and refused by propose for the service role with THE SPECIFIC refusal, on a REAL connection of the lane.
+insert into core.connections (id, lane_id, provider, external_account_id, status, features, owner_user_id)
+values ('00000000-0000-4000-8000-000000033400', 'PKG', 'google', 'types-owner@g.example.test', 'active', '{"gmail_compose": true}', pg_temp.uid('owner@example.test'));
+create function pg_temp.refusal(p_type text) returns text language plpgsql as $$
 begin
-  perform core.act_propose('PKG', p_type, '00000000-0000-4000-8000-0000000000ff', '{}'::jsonb, '{}'::jsonb, 1, repeat('a', 64), null, '[]'::jsonb, 'user', null, false);
-  return false;
-exception when others then return true;
+  perform core.act_propose('PKG', p_type, '00000000-0000-4000-8000-000000033400', '{"mailbox":"types-owner@g.example.test"}'::jsonb, '{"fromMailbox":"types-owner@g.example.test"}'::jsonb, 1, repeat('a', 64), null, '[]'::jsonb, 'user', pg_temp.uid('owner@example.test'), false);
+  return 'accepted';
+exception when others then return sqlstate || ' ' || sqlerrm;
 end $$;
+-- the control: an allowed type on the same connection is accepted (so the refusals below are about the TYPE)
 set local role service_role;
-select is((select coalesce(array_agg(t order by t), '{}') from unnest(array[
+select is(pg_temp.refusal('email.save_draft'), 'accepted', 'control: an allowed type on this real connection is accepted');
+select is((select coalesce(array_agg(t || ' => ' || pg_temp.refusal(t) order by t), '{}') from unnest(array[
     'monday.item.create', 'monday.item.update', 'monday.item.set_status', 'notion.page.update', 'calendar.event.create', 'calendar.event.update',
     'google.revoke_grant', 'qbo.post', 'qbo.delete', 'email.delete', 'email.forward', 'teams.chat.delete', 'teams.message.edit', 'payment.create', 'transfer.create']) t
-  where not pg_temp.refused(t)), '{}'::text[],
-  'types of unbuilt or forbidden writes (monday, notion, calendar, google revoke, deletes, payments) cannot be proposed and are not allowed');
+  where pg_temp.refusal(t) is distinct from '42501 act: this action type is not allowed'), '{}'::text[],
+  'types of unbuilt or forbidden writes are refused with exactly 42501 "act: this action type is not allowed" on a real connection (not by a later or unrelated error)');
 reset role;
-select is((select coalesce(array_agg(t order by t), '{}') from unnest(array['monday.item.create','monday.item.update','monday.item.set_status','notion.page.update','calendar.event.create','calendar.event.update','google.revoke_grant','qbo.post','qbo.delete','email.delete','email.forward','teams.chat.delete','teams.message.edit','payment.create','transfer.create']) t where act.is_allowed_type(t)), '{}'::text[], 'none of those names is an allowed type');
+select is((select coalesce(array_agg(t order by t), '{}') from cand where act.is_allowed_type(t) and t not in (select t from reviewed_types)), '{}'::text[], 'none of the candidate names outside the reviewed list is an allowed type (calendar.*, monday.*, notion.*, google.revoke_grant ... all refused)');
 
 -- The deny list stays in force over every allowed type.
 select is((select coalesce(array_agg(t), '{}') from db_types where act.is_denied_type(t)), '{}'::text[], 'no allowed type matches the deny list');
--- Authenticated users reach no executor-side function.
-select is((select coalesce(array_agg(p.proname::text order by p.proname), '{}') from pg_proc p join pg_namespace n on n.oid = p.pronamespace
-           where n.nspname = 'act' and p.proname in ('propose','supersede','claim_execution','claim_sent','mark_verified','mark_failed','reconcile_verified','reconcile_failed','expire_stale','insert_proposal')
+-- Authenticated users reach no executor-side function: found from the catalog by what a function's SOURCE writes, across every app schema.
+select is((select coalesce(array_agg(n.nspname || '.' || p.proname order by 1), '{}') from pg_proc p join pg_namespace n on n.oid = p.pronamespace
+           where n.nspname in ('act','audit','brain','brief','cal','comms','core','fin','raw') and p.prokind = 'f'
+             and p.prosrc ~* '(update|insert into|delete from)\s+act\.(proposed_actions|execution_claims|status_history)'
+             and has_function_privilege('authenticated', p.oid, 'execute') and n.nspname || '.' || p.proname not in ('act.approve', 'act.reject')), '{}'::text[],
+  'the only functions that write the approval tables and are executable by authenticated are act.approve and act.reject (human approval and rejection)');
+select is((select coalesce(array_agg(n.nspname || '.' || p.proname order by 1), '{}') from pg_proc p join pg_namespace n on n.oid = p.pronamespace
+           where n.nspname in ('act','audit','brain','brief','cal','comms','core','fin','raw') and p.prokind = 'f'
+             and p.prosrc ~* 'act\.(claim_execution|claim_sent|mark_verified|mark_failed|reconcile_verified|reconcile_failed|expire_stale|insert_proposal|propose|supersede|withdraw_proposed)\('
              and has_function_privilege('authenticated', p.oid, 'execute')), '{}'::text[],
-  'authenticated cannot execute propose, claim, mark, reconcile or expire (executor side is service-only)');
+  'no function executable by authenticated calls an executor-side function (propose, claim, mark, reconcile, expire, supersede, withdraw)');
 
 select * from finish();
 rollback;

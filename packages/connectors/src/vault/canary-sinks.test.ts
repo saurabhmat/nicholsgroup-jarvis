@@ -7,6 +7,9 @@ import { readdirSync } from "node:fs";
 import { resolve } from "node:path";
 import { inspect } from "node:util";
 import { afterEach, describe, expect, it } from "vitest";
+import { createHttpClient } from "../http/client";
+import { RateLimiter } from "../http/rate-limit";
+import { http, HttpResponse, useMockServer } from "../testing/msw/index";
 import { ConnectorError } from "../contract/errors";
 import { PROVIDERS } from "../contract/schemas";
 import { scrubApiError, safeFixedMessage } from "../error-log/scrub";
@@ -30,7 +33,11 @@ const ECHO: Record<string, { token: string; echo: (t: string) => string[] }> = {
   microsoft_teams: { token: jwt("CANARYteams"), echo: (t) => [`Authorization: Bearer ${t}`, `{"id_token":"${t}"}`, `https://graph.example.test/v1.0/chats/19:x@thread.v2/messages?code=${t}`] },
 };
 
-afterEach(() => forgetSecretsForTests());
+const server = useMockServer();
+afterEach(() => {
+  forgetSecretsForTests();
+  RateLimiter.resetForTests();
+});
 
 describe("coverage", () => {
   it("every provider with a connector folder has an echo entry; providers without a folder really have none; no stale entry", () => {
@@ -85,5 +92,76 @@ describe.each(Object.entries(ECHO))("%s: a credential echoed by the provider", (
     const logs: LogEntry[] = [];
     createConnectorLogger({ sink: (e) => logs.push(e) }).error("x", { error: new Error(`boom ${token}`) } as never);
     expect(JSON.stringify(logs)).not.toContain(token);
+  });
+});
+
+// ---------------------------------------------------------------- the connector's REAL error path
+// The shared HTTP client (every connector's only door to its provider) maps a failing response to a ConnectorError and logs it. For each connector family the
+// provider answers a failing request with a body and headers that echo the credential it was sent; the thrown error, its JSON, inspect output and the log
+// entries must not hold it, whether or not the Vault ever registered it.
+describe.each(Object.entries(ECHO))("%s: the HTTP client's real error mapping with a provider that echoes the credential", (provider, { token }) => {
+  const BASE = `https://api.${provider.replace("_", "-")}.example.test`;
+  const run = async (registered: boolean, status: number) => {
+    const secret = new SecretValue(token); // the Vault hands the client a SecretValue; registration is the vault's side effect
+    if (!registered) forgetSecretsForTests();
+    server.use(
+      http.post(`${BASE}/v1/things`, () =>
+        HttpResponse.json(
+          { error: { code: "invalid_token", message: `The access token ${token} is invalid`, detail: `Authorization: Bearer ${token}`, url: `${BASE}/v1/things?access_token=${token}` } },
+          { status, headers: { "x-request-id": "tid-1", "www-authenticate": `Bearer error="invalid_token", error_description="${token}"` } },
+        ),
+      ),
+    );
+    const logs: LogEntry[] = [];
+    const c = createHttpClient({ provider, baseUrl: BASE, laneId: "PKG", requestIdHeader: "x-request-id", sleep: async () => undefined, random: () => 0.5, maxRetries: 0, logger: createConnectorLogger({ sink: (e) => logs.push(e) }),
+      errorCode: (b) => ((b as { error?: { code?: string } }).error?.code ?? null) });
+    let thrown: unknown;
+    try {
+      await c.request({ method: "POST", path: "/v1/things", body: { x: 1 }, auth: { scheme: "Bearer", secret } });
+    } catch (e) {
+      thrown = e;
+    }
+    expect(thrown).toBeInstanceOf(ConnectorError);
+    const e = thrown as ConnectorError;
+    return [e.message, JSON.stringify(e.info), inspect(e, { depth: 8 }), String(e), JSON.stringify(logs)].join("\n");
+  };
+  it.each([401, 400, 500])("status %i, credential unknown to the vault: not in the error, its JSON, inspect output or the log", async (status) => {
+    const text = await run(false, status);
+    expect(text).not.toContain(token);
+    expect(text.length).toBeGreaterThan(50);
+  });
+  it("status 401, credential registered: same", async () => {
+    expect(await run(true, 401)).not.toContain(token);
+  });
+});
+
+// ---------------------------------------------------------------- one test per redaction layer, with inputs ONLY that layer catches
+// (a layer that is removed makes its test fail; see the mutation table in docs/security/pilot-test.md)
+describe("each redaction layer on its own", () => {
+  it("layer 1, exact match: a credential with no recognisable shape is removed only because the Vault registered it", () => {
+    const plain = "plainvaultvalue9f3b7c1e";
+    expect(redactText(`provider echoed ${plain} back`)).toContain(plain); // no shape layer can know it
+    new SecretValue(plain);
+    expect(redactText(`provider echoed ${plain} back`)).not.toContain(plain);
+    expect(redactText(`provider echoed ${encodeURIComponent(plain + "+/=")} back`)).toBeDefined();
+  });
+  it("layer 2, embedded shapes: short or odd values in a credential position are removed without registration (header, query, JSON field, unquoted field)", () => {
+    for (const [input, secret] of [
+      ["Authorization: Token abc12", "abc12"],
+      ["GET /x?code=ab12&state=1", "ab12"],
+      ['{"refresh_token":"q1"}', "q1"],
+      ["client_secret=zz9 other", "zz9"],
+      ["x-api-key: k9", "k9"],
+    ] as const) expect(redactText(input), input).not.toContain(secret);
+  });
+  it("layer 3, word shapes: a credential-looking word with no credential context is removed", () => {
+    for (const w of ["sk_live_abcdefghijklmnop1234", "ghp_abcdefghijklmnopqrstuvwxyz0123", "eyJhbGciOiJIUzI1NiJ9abc.eyJzdWIiOiJ4In0.sig12345678"]) expect(redactText(`the value ${w} was rejected`), w).not.toContain(w);
+  });
+  it("layer 4, field names: a credential-named or content-named field is dropped whatever its value looks like", () => {
+    const out = JSON.stringify(redactFields({ clientSecret: "plain-value", accessToken: "x", emailBody: "hello", snippet: "hi", nested: { password: "p", ok: "kept" } }));
+    for (const gone of ["plain-value", "hello", "hi\"", "\"p\""]) expect(out).not.toContain(gone);
+    expect(out).toContain("kept");
+    // and the value-only layers would NOT have caught these: the plain values pass through redactText untouched
+    expect(redactText("plain-value")).toBe("plain-value");
   });
 });

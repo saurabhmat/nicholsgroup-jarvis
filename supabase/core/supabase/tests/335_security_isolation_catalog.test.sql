@@ -150,7 +150,7 @@ select is(pg_temp.compare('owner@example.test', 'aal1'), '{}'::text[], 'PKG owne
 select is(pg_temp.compare('viewer@example.test', 'aal1'), '{}'::text[], 'member of APK at AAL1: sees nothing on any table or view');
 select cmp_ok(pg_temp.sees_seeded('owner@example.test'), '>=', 30, 'non-vacuity: the PKG owner is expected to see seeded rows on at least 30 tables');
 select cmp_ok(pg_temp.sees_seeded('viewer@example.test'), '>=', 15, 'non-vacuity: the APK member is expected to see seeded rows on at least 15 tables');
-select is((select count(distinct name)::int from seeded) - (select count(*)::int from subject where readable and name in ('core.lanes','core.users','core.memberships','core.lane_policies','core.lane_config','core.lane_config_current') and name in (select name from seeded)),
+select is((select count(distinct s.name)::int from seeded s join subject j on j.name = s.name where j.readable),
           (select count(*)::int from subject where readable) - 6, 'every readable table except the six fixture tables (lanes, users, memberships, policies, config, the view) was seeded with real rows: seeded + fixture = readable');
 
 -- ---------------------------------------------------------------- private tables
