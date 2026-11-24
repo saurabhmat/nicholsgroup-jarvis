@@ -10,7 +10,7 @@ import { laneHref } from "@nichols/ui";
 import { viewOf, type MessagesTab, type MessagesView } from "@/lib/messages-view-state";
 
 /** The visual viewport must be shorter than the window by more than this (px) to count as "the keyboard is up" (a collapsing address bar is about 50 px; a keyboard is 250 or more). */
-export const KEYBOARD_MIN_PX = 120;
+const KEYBOARD_MIN_PX = 120;
 /** A field a keyboard opens for: a text-like input, a textarea, a select or an editable region. */
 function isTextEntry(t: EventTarget | null): boolean {
   if (!(t instanceof HTMLElement)) return false;

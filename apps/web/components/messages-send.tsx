@@ -92,7 +92,7 @@ export function PendingBubbles({ shown }: { shown: readonly MessageView[] }) {
           </p>
         </li>
       ))}
-      <li ref={end} aria-hidden className="h-0" />
+      {items.length > 0 ? <li ref={end} aria-hidden className="h-0" /> : null}
     </>
   );
 }

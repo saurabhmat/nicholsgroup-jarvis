@@ -147,6 +147,8 @@ vi.mock("@/components/messages-scope", async (orig) => ({
   ByTab: ({ chats }: { chats: ReactNode }) => chats,
   LiveTabs: () => null,
 }));
+// T-288: the Send box (state scope, bubbles, composer) is client-only too; the server draws its children
+vi.mock("@/components/messages-send", () => ({ SendScope: ({ children }: { children: ReactNode }) => children, Composer: () => null, PendingBubbles: () => null }));
 vi.mock("@/components/messages-dot", () => ({ MessagesDot: () => null, useMessagesDot: () => false }));
 vi.mock("@/components/theme-toggle", () => ({ ThemeToggle: () => null }));
 vi.mock("@/components/sign-out-form", () => ({ SignOutForm: ({ children }: { children: ReactNode }) => children }));
