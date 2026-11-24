@@ -11,6 +11,7 @@ import { viewOf, type MessagesTab, type MessagesView } from "@/lib/messages-view
 
 /** The visual viewport must be shorter than the window by more than this (px) to count as "the keyboard is up" (a collapsing address bar is about 50 px; a keyboard is 250 or more). */
 const KEYBOARD_MIN_PX = 120;
+const KEYBOARD_PANE_MIN_PX = 200;
 /** A field a keyboard opens for: a text-like input, a textarea, a select or an editable region. */
 function isTextEntry(t: EventTarget | null): boolean {
   if (!(t instanceof HTMLElement)) return false;
@@ -52,9 +53,13 @@ export function MessagesScope({ chatConns, className, children }: { chatConns: r
       const rect = col.getBoundingClientRect();
       const vv = window.visualViewport;
       let h: number;
-      if (editing && vv && window.innerHeight - vv.height > KEYBOARD_MIN_PX) h = Math.floor(vv.height + vv.offsetTop - rect.top);
+      const keyboard = editing && !!vv && window.innerHeight - vv.height > KEYBOARD_MIN_PX;
+      if (keyboard && vv) h = Math.floor(vv.height + vv.offsetTop - rect.top);
       else h = Math.floor(window.innerHeight - (bar?.getBoundingClientRect().height ?? 0) - (rect.top + window.scrollY));
-      el.style.setProperty("--pane-h", `${Math.max(h, 256)}px`);
+      // With the keyboard up the 256 px minimum is dropped (it would push the Send box under the keyboard): the pane keeps 200 px so the messages do not collapse to nothing, and the pane's own CSS minimum goes too.
+      el.style.setProperty("--pane-h", `${Math.max(h, keyboard ? KEYBOARD_PANE_MIN_PX : 256)}px`);
+      if (keyboard) el.style.setProperty("--pane-min", "0px");
+      else el.style.removeProperty("--pane-min");
     };
     const focusIn = (e: FocusEvent) => {
       editing = isTextEntry(e.target);

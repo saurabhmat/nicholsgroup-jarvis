@@ -331,9 +331,12 @@ export function ChatListLive({
   const [state, setState] = useState<ListState>({ rows: initialRows, moreCursor, notes: initialNotes, dropped: initialDropped, failed: false });
   // a new page of rows from the server (a server refresh) replaces what was re-read here (state adjusted during render, as React documents for a changed prop)
   const [seed, setSeed] = useState({ initialRows, moreCursor, initialNotes, initialDropped });
+  // T-288 review D2: the one reload is re-armed only when the SET OF ACCOUNTS the server drew changes (ids and states: which lists were read, which notes), not on every server render
+  // (a render makes a new `initialRows` array even when nothing about the accounts changed, which would let a permanently expired account refresh again and again).
+  const accountSig = `${[...(initialListed ?? [])].sort().join(",")}|${initialNotes.map((n) => `${n.conn}:${n.kind}`).sort().join(",")}`;
   useEffect(() => {
-    reloaded.current = false; // a fresh server render re-arms the one reload
-  }, [initialRows]);
+    reloaded.current = false;
+  }, [accountSig]);
   // `later`: the cursor of the page shown in place of the newest (null: the newest chats); `kept`: what the newest page looked like, for "Back to the newest chats"
   const [paging, setPaging] = useState<{ later: string | null; kept: Kept | null; busy: boolean }>({ later: null, kept: null, busy: false });
   if (seed.initialRows !== initialRows || seed.moreCursor !== moreCursor || seed.initialNotes !== initialNotes || seed.initialDropped !== initialDropped) {

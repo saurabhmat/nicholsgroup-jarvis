@@ -153,7 +153,9 @@ export const SEND_STATE_TEXT: Readonly<Record<SendState, string>> = Object.freez
 /** What each refusal of the send route says (the route's `error` code). The text typed stays in the composer for every one of them. */
 export const SEND_ERROR_TEXT: Readonly<Record<string, string>> = Object.freeze({
   rate_limited: "Wait a second, then press Send again.",
-  text_mismatch: "The message changed while it was being sent. Press Send again.",
+  text_mismatch: "The message changed on its way, so nothing was sent. Check the text and try again.",
+  no_session: "Your sign-in ended, so nothing was sent.",
+  mfa_required: "Finish signing in with your authenticator code first, so nothing was sent.",
   invalid_message: "This message cannot be sent. Check its length and remove any unusual characters.",
   bad_request: "This message cannot be sent. Reload the page and try again.",
   forbidden: SEND_OFF_TEXT.role,
@@ -171,9 +173,14 @@ export const SEND_ERROR_TEXT: Readonly<Record<string, string>> = Object.freeze({
 });
 export const SEND_STEP_UP_TEXT = "Enter your authenticator code to send. Your message is kept and you will come back to this chat.";
 export const SEND_NETWORK_TEXT = "The portal could not tell whether Teams received this message. Check the chat in Teams before sending again.";
-export const SEND_TEXT_PROBLEM: Readonly<Record<"empty" | "too_long" | "too_big" | "control", string>> = Object.freeze({
+export const SEND_TEXT_PROBLEM: Readonly<Record<"empty" | "too_long" | "too_big" | "control" | "malformed", string>> = Object.freeze({
+  malformed: "The message holds an invalid character", // the server's own sentence (teams-pure TEAMS_TEXT_PROBLEMS.malformed)
   empty: "Type a message to send.",
   too_long: "This message is longer than 10,000 characters.",
   too_big: "This message is larger than 80 KB.",
   control: "This message has a character Teams cannot take. Remove it to send.",
 });
+export const SEND_MAYBE_SENT_TEXT = "This message may have been sent. Check the chat in Teams before sending again.";
+export const SEND_CHECK_AGAIN = "Check again";
+export const SEND_DISCARD = "Discard";
+export const SEND_DISCARDED_TEXT = "Not checked. The text above stays here to copy.";

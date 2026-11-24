@@ -10,8 +10,9 @@ export function MessageBubble({ mine, fullTime, children }: { mine: boolean; ful
   return (
     <div
       data-testid="bubble"
-      title={fullTime}
+      title={fullTime === "" ? undefined : fullTime}
       onClick={(e) => {
+        if (fullTime === "") return; // a bubble with no time (a message still being sent) has nothing to show
         if ((e.target as Element).closest("a, button")) return; // a link keeps being a link
         if ((window.getSelection()?.toString() ?? "") !== "") return; // selecting text is not a tap
         setShown((s) => !s);

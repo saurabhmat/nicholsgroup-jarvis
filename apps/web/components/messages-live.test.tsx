@@ -365,6 +365,28 @@ describe("a sign-in that expires while its chat is open (T-288, carried from the
   });
 });
 
+describe("the one-refresh guard is re-armed by a change of the accounts, not by a new array (T-288 review D2)", () => {
+  it("a server render with a NEW initialRows array for the same accounts does not re-arm it: a second 409 reconnect does not refresh again", async () => {
+    const tree = (rows: ChatRowView[]) => (
+      <MessagesLiveProvider laneId="PKG">
+        <ChatList laneId="PKG" initialRows={rows} moreCursor={null} selectedKey={KEY} initialListed={[CONN]} />
+      </MessagesLiveProvider>
+    );
+    const view = render(tree([row(KEY, "Pat")]));
+    await tick(0);
+    server.chatsStatus = 409;
+    server.chatsError = "reconnect";
+    server.lastNoticeAt = "2026-11-23T15:00:10.000Z";
+    await tick(ACTIVITY_POLL_MS);
+    expect(refresh).toHaveBeenCalledTimes(1);
+    view.rerender(tree([row(KEY, "Pat")])); // the refresh's own server render: a new array, the same accounts
+    await tick(0);
+    server.lastNoticeAt = "2026-11-23T15:05:00.000Z";
+    await tick(ACTIVITY_POLL_MS);
+    expect(refresh).toHaveBeenCalledTimes(1);
+  });
+});
+
 describe("a truncated newer-messages page (T-290 review M4)", () => {
   it("is not merged (it could leave a hole that never closes): the conversation is read again from the server instead", async () => {
     await start();

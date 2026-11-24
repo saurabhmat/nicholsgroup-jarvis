@@ -9,7 +9,7 @@
 //     only when the lane stores drafts (the drawer does it after its context loads).
 //   * `noteSignedInUser()` clears every namespace when this tab sees a different user than last time (a sign-out that did not run).
 //   * `clearAllDrafts()` runs at sign-out and removes every namespace listed in DRAFT_NAMESPACES.
-export const DRAFT_NAMESPACES = ["reply-draft", "reply-ai", "reply-origin", "home-open", "drawer-open", "teams-draft"] as const;
+export const DRAFT_NAMESPACES = ["reply-draft", "reply-ai", "reply-origin", "home-open", "drawer-open", "teams-draft", "teams-send"] as const;
 export type DraftNamespaceName = (typeof DRAFT_NAMESPACES)[number];
 
 const ROOT = "nichols:";

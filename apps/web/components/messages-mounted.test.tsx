@@ -370,7 +370,10 @@ describe("the phone pane's height is measured from the real chrome (T-297 review
       setup({ top: 150 });
       vv.height = 300;
       act(() => void screen.getByTestId("box").focus());
-      expect(pane()).toBe("256px"); // 300 - 150 = 150, floored
+      expect(pane()).toBe("200px"); // 300 - 150 = 150, floored at 200 with the keyboard up (the 256 px minimum is dropped; the pane's own CSS minimum goes too)
+      expect(screen.getByTestId("messages-scope").style.getPropertyValue("--pane-min")).toBe("0px");
+      act(() => void screen.getByTestId("box").blur());
+      expect(screen.getByTestId("messages-scope").style.getPropertyValue("--pane-min")).toBe("");
     });
 
     it("the listeners are removed when the scope unmounts", () => {
