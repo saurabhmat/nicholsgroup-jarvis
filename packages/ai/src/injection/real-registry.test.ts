@@ -68,21 +68,14 @@ describe("the real registry", () => {
       expect(t.args.safeParse({ filter: "all", range: "today", extra: 1 }).success, `${t.name} refuses unknown fields`).toBe(false);
     }
   });
-  it("no other production file registers a tool (the registry has one door: packages/ai/src/tools/catalog.ts)", () => {
-    const root = resolve(__dirname, "../../../..");
-    const walk = (d: string): string[] =>
-      readdirSync(d).flatMap((n) => {
-        if (["node_modules", "dist", ".next", ".next-e2e", ".turbo", "test-stubs"].includes(n)) return [];
-        const f = join(d, n);
-        return statSync(f).isDirectory() ? walk(f) : [f];
-      });
-    const hits = [...walk(join(root, "apps")), ...walk(join(root, "packages"))]
-      .filter((f) => /\.(ts|tsx)$/.test(f) && !/\.test\./.test(f) && !f.includes("/testing"))
-      .filter((f) => /\bcreateToolRegistry\(|registerAssistantTools\(|\.register\(\s*\{\s*name:|effect:\s*"propose"/.test(readFileSync(f, "utf8")))
-      .map((f) => relative(root, f))
-      .sort();
-    expect(hits).toEqual(["apps/web/lib/assistant.ts", "packages/ai/src/tools/catalog.ts", "packages/ai/src/tools/registry.ts"].sort());
+  it("the registry enumerated at run time: every tool's effect, view, store, strict args, and no propose tool exists (the assistant offers reads only)", () => {
+    const { reg } = world("x");
+    const rows = reg.list().map((t) => `${t.name}:${t.effect}:${t.requiredView}:${t.resultStore}`);
+    expect(rows.sort()).toEqual(["list_meetings:read:own_mail:refs_only", "list_recent_mail:read:own_mail:refs_only"]);
+    // what the model is actually told about (the real tool definitions for all categories) names no lane argument anywhere
+    for (const t of reg.llmTools(["email", "calendar", "docs", "finance", "finance_summary", "tasks"])) expect(JSON.stringify(t.inputSchema), t.name).not.toMatch(/lane/i);
   });
+  // The tools the assistant route REALLY offers are enumerated at run time by apps/web/tests/assistant-registry.test.ts (real handleChat).
   it("categories the registry can expose are exactly the lane policy's categories (a new category needs gate, SQL and tests)", () => {
     expect([...TOOL_CATEGORIES].sort()).toEqual(["calendar", "docs", "email", "finance", "finance_summary", "tasks"]);
   });
@@ -152,40 +145,65 @@ describe("compliant model against the real registry", () => {
 });
 
 describe("every place retrieved content can reach a model", () => {
-  // Each file that calls a model, with what it sends and the control that makes it safe. A new call site fails until it is listed.
-  const SITES: Record<string, string> = {
-    "apps/web/lib/reply.ts": "reply draft: the thread text is read live and sent as untrusted data; the output is a PROPOSAL the person edits and approves (exact payload, hash, step-up)",
-    "apps/web/lib/news-run.ts": "news: web search results (untrusted) summarised; output is read-only digest rows, no tool calls, no write",
-    "apps/web/lib/briefing-run.ts": "briefing: mail and calendar metadata; output is a structured briefing row for the owner; no tools",
-    "apps/web/lib/brain-import-model.ts": "brain import: an uploaded document is read; output is candidate rows the owner decides on; no tools",
-    "packages/ai/src/tools/loop.ts": "assistant: tool loop through the policy gate (two read tools only; proposals disabled)",
+  // Enumerated by the provider interface, not by the shape of a call: every non-test file outside this package that imports the AI package is listed with
+  // its role. `caller` files hold a provider and send content to a model; `wiring` files build or pass one and call nothing; `types` files only import types
+  // or text helpers. A new importer fails until it is classified (and, if it is a caller, reviewed for its controls below).
+  const CLASS: Record<string, { role: "caller" | "wiring" | "types"; controls: string }> = {
+    "apps/web/lib/reply.ts": { role: "caller", controls: "reply draft: thread text is read live and sent as untrusted data; output is a PROPOSAL the person edits and approves (exact payload, hash, step-up)" },
+    "apps/web/lib/news-run.ts": { role: "caller", controls: "news: web search results (untrusted) summarised; output is digest rows, no tools, no write" },
+    "apps/web/lib/briefing-run.ts": { role: "caller", controls: "briefing: mail and calendar metadata; output is a structured briefing row for the owner; no tools" },
+    "apps/web/lib/brain-import-model.ts": { role: "caller", controls: "brain import: an uploaded document is read; output is candidate rows the owner decides on; no tools" },
+    "apps/web/lib/assistant.ts": { role: "caller", controls: "assistant: tool loop through the policy gate (two read tools only; proposals disabled); offered tools enumerated by assistant-registry.test.ts" },
+    "apps/web/lib/news-domain.ts": { role: "types", controls: "cost and evidence helpers over a model result" },
+    "apps/web/lib/briefing-output.ts": { role: "types", controls: "output schema helpers" },
+    "apps/web/lib/brain-import.ts": { role: "wiring", controls: "request handler; passes the provider to brain-import-model" },
+    "apps/web/lib/briefing-setup.ts": { role: "wiring", controls: "builds the provider for the briefing" },
+    "apps/web/lib/briefing-schedule.ts": { role: "wiring", controls: "builds the provider for scheduled briefings" },
+    "apps/web/lib/news-schedule.ts": { role: "wiring", controls: "builds the provider for scheduled news" },
+    "apps/web/app/[laneId]/briefing-actions.ts": { role: "wiring", controls: "server action; builds the provider" },
+    "apps/web/app/[laneId]/news-actions.ts": { role: "wiring", controls: "server action; builds the provider" },
+    "apps/web/app/api/lanes/[laneId]/approvals/route.ts": { role: "wiring", controls: "builds the provider for the reply drafter" },
+    "apps/web/app/api/lanes/[laneId]/assistant/route.ts": { role: "wiring", controls: "builds the provider for the assistant" },
+    "apps/web/app/api/lanes/[laneId]/brain/import/route.ts": { role: "wiring", controls: "builds the provider for the brain import" },
+    "apps/web/components/assistant-page.tsx": { role: "wiring", controls: "asks whether AI is configured" },
+    "apps/web/components/onboarding-import-page.tsx": { role: "wiring", controls: "asks whether AI is configured" },
   };
-  it("the files that call provider.complete are exactly the reviewed list", () => {
-    const root = resolve(__dirname, "../../../..");
-    const walk = (d: string): string[] =>
-      readdirSync(d).flatMap((n) => {
-        if (["node_modules", "dist", ".next", ".next-e2e", ".turbo", "test-stubs"].includes(n)) return [];
-        const f = join(d, n);
-        return statSync(f).isDirectory() ? walk(f) : [f];
-      });
-    const hits = [...walk(join(root, "apps")), ...walk(join(root, "packages"))]
-      .filter((f) => /\.(ts|tsx)$/.test(f) && !/\.test\.|\/testing|mock\.ts|\/e2e\//.test(f))
-      .filter((f) => /\.complete\(\s*\{/.test(readFileSync(f, "utf8")) || /\.complete\(\n/.test(readFileSync(f, "utf8")))
-      .map((f) => relative(root, f))
-      .sort();
-    expect(hits).toEqual(Object.keys(SITES).sort());
+  const root = resolve(__dirname, "../../../..");
+  const walk = (d: string): string[] =>
+    readdirSync(d).flatMap((n) => {
+      if (["node_modules", "dist", ".next", ".next-e2e", ".turbo", "test-stubs", "e2e"].includes(n)) return [];
+      const f = join(d, n);
+      return statSync(f).isDirectory() ? walk(f) : [f];
+    });
+  const importers = [...walk(join(root, "apps")), ...walk(join(root, "packages"))]
+    .filter((f) => /\.(ts|tsx)$/.test(f) && !/\.test\.|\.d\.ts$/.test(f) && !f.startsWith(join(root, "packages/ai/")))
+    .filter((f) => /from "@nichols\/ai(\/[a-z]+)?"/.test(readFileSync(f, "utf8")))
+    .map((f) => relative(root, f))
+    .sort();
+  it("the files that import the AI package are exactly the classified list (found from imports, not from call shapes)", () => {
+    expect(importers).toEqual(Object.keys(CLASS).sort());
   });
-  it("none of those model callers can reach an approval, a write client or the service client (static: no import of the write, approvals or job-client entries)", () => {
-    const root = resolve(__dirname, "../../../..");
-    for (const f of Object.keys(SITES)) {
+  it("only the five `caller` files send content to a model, and none of the callers can reach an approval, a write client or the service client", () => {
+    expect(Object.entries(CLASS).filter(([, c]) => c.role === "caller").map(([f]) => f).sort()).toEqual(
+      ["apps/web/lib/assistant.ts", "apps/web/lib/brain-import-model.ts", "apps/web/lib/briefing-run.ts", "apps/web/lib/news-run.ts", "apps/web/lib/reply.ts"],
+    );
+    for (const f of Object.entries(CLASS).filter(([, c]) => c.role === "caller").map(([k]) => k)) {
       const text = readFileSync(join(root, f), "utf8");
       // reply.ts may PROPOSE (a draft the person must approve); nothing here may approve, execute, send or hold the service client.
       expect(text, f).not.toMatch(/@nichols\/connectors\/write|approveAndExecute|executeApproved|sendTeamsMessage|getLaneJobClient|getSupabaseSecretKey/);
       if (f !== "apps/web/lib/reply.ts") expect(text, f).not.toMatch(/proposeEmailAction|proposeTeamsAction/);
     }
   });
+  it("a file that calls the model through the provider is a `caller`: any file naming `.complete(` or the tool loop outside the package is in that role", () => {
+    const callers = new Set(Object.entries(CLASS).filter(([, c]) => c.role === "caller").map(([f]) => f));
+    for (const f of [...walk(join(root, "apps")), ...walk(join(root, "packages"))]) {
+      if (!/\.(ts|tsx)$/.test(f) || /\.test\.|\/testing|e2e|node_modules|packages\/ai\//.test(f)) continue;
+      const rel = relative(root, f);
+      const text = readFileSync(f, "utf8");
+      if (/\b[A-Za-z_.]*\.complete\(|\brunToolLoop\(|\brunChat\(/.test(text)) expect(callers.has(rel), `${rel} calls a model but is not a classified caller`).toBe(true);
+    }
+  });
   it("the reply drafter (the one place a model's text becomes an outbound email body) only proposes: it never calls approve or execute", () => {
-    const root = resolve(__dirname, "../../../..");
     const text = readFileSync(join(root, "apps/web/lib/reply.ts"), "utf8");
     expect(text).not.toMatch(/approve\(|execute\(|claim_execution|act_approve/);
   });

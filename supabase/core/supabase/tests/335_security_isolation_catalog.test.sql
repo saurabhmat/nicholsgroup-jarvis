@@ -1,184 +1,173 @@
--- T-170 (security suite), area 1: behavioural lane and user isolation, driven by the catalog.
--- Subjects are enumerated from pg_class / pg_policy / pg_proc, never listed by hand, so a NEW table, view or API-callable function is probed
--- automatically; the only hand-written part is the registry of CUSTOM (non-standard) policies and of function exceptions, each with a reason.
--- A custom policy or an uncallable function with no registry entry fails, and so does a stale entry.
---   Tables: the policy's own USING expression is evaluated, as the real role with real JWT claims, against a synthetic row, so the
---   proof does not depend on data being present: AAL1 is refused, a member of another lane is refused, "another user's" row is refused
---   for owner-only data, and a positive control shows the probe can say yes. Real rows are probed too (counts as other personas).
---   Functions: every function `authenticated` can execute that takes a lane (p_lane), a user (p_uid / p_owner) is called as a persona that
---   must not get the data; the answer must be an error or exactly the answer for a lane that does not exist (no data, no existence oracle).
+-- T-170 (security suite), area 1 (tables and views), behavioural and catalog-driven.
+-- Every table in an app schema (and the one view) is found from pg_class. Inside this rolled-back transaction the test:
+--   1. drops the CHECK constraints of those tables and sets session_replication_role = replica (foreign keys and guard triggers off), only so
+--      that REAL rows can be inserted for every table without building each parent chain. Row-level security, grants and policies are untouched;
+--      rolled back at the end, so nothing persists;
+--   2. inserts real rows for lane PKG and lane APK, for two people (the owner and the admin) per lane, per table, with the owner / connection
+--      columns pointing at that person (documents of both kinds, email and Teams actions, old and new import candidates ...);
+--   3. reads each table (and the view) through RLS as the real `authenticated` role with real JWT claims, as six personas: the PKG owner at AAL2
+--      and AAL1, the PKG admin_technical, the PKG finance_operator, and a member of APK only (at AAL2 and AAL1);
+--   4. compares what each persona SEES with what an independent, pinned oracle says they MAY see (lane membership with the pinned view of the
+--      table, the role's views from core.role_views, and ownership for owner-only data). Any row seen that should not be, or any row missing, is a failure.
+-- Tables that cannot be read at all by `authenticated` (private tables) are probed for refusal as authenticated and anon. A table that is neither
+-- pinned, nor customised, nor private fails; seeded + private = catalog count.
 begin;
-select plan(16);
+select plan(15);
 \ir helpers/lane_rls.psql
 
--- ------------------------------------------------------------------ fixtures (rolled back)
 update core.lanes set enabled = true where code = 'APK';
-delete from core.memberships where lane_id = 'APK' and user_id = pg_temp.uid('owner@example.test'); -- the owner is a PKG-only member here
-insert into core.memberships (lane_id, user_id, role, views) values ('APK', pg_temp.uid('viewer@example.test'), 'viewer', '{}') on conflict do nothing;
-delete from core.memberships where lane_id = 'APK' and user_id = pg_temp.uid('viewer@example.test'); -- keep every persona PKG-only
-insert into core.connections (id, lane_id, provider, external_account_id, status, features, owner_user_id) values
-  ('00000000-0000-4000-8000-000000033501', 'PKG', 'google', 'iso-owner@g.example.test', 'active', '{"gmail_compose": true}', pg_temp.uid('owner@example.test')),
-  ('00000000-0000-4000-8000-000000033502', 'PKG', 'google', 'iso-admin@g.example.test', 'active', '{"gmail_compose": true}', pg_temp.uid('admin-technical@example.test')),
-  ('00000000-0000-4000-8000-000000033503', 'PKG', 'microsoft_teams', 'iso-owner@teams.example.test', 'active', '{}', pg_temp.uid('owner@example.test')),
-  ('00000000-0000-4000-8000-000000033504', 'PKG', 'microsoft_teams', 'iso-admin@teams.example.test', 'active', '{}', pg_temp.uid('admin-technical@example.test')),
-  ('00000000-0000-4000-8000-000000033505', 'APK', 'google', 'iso-apk@g.example.test', 'active', '{"gmail_compose": true}', pg_temp.uid('owner@example.test'));
-insert into comms.message_index (lane_id, connection_id, provider, message_id, thread_id, from_address, subject, received_at)
-values ('PKG', '00000000-0000-4000-8000-000000033501', 'google', 'iso-m-1', 'iso-t-1', 'sender@example.test', 'Synthetic owner subject', now());
-insert into comms.teams_chat_reads (lane_id, connection_id, chat_id, read_through) values ('PKG', '00000000-0000-4000-8000-000000033503', '19:iso-chat-1@thread.v2', now());
+delete from core.memberships where lane_id = 'APK' and user_id = pg_temp.uid('owner@example.test');
+delete from core.memberships where user_id = pg_temp.uid('viewer@example.test');
+insert into core.memberships (lane_id, user_id, role, views) values ('APK', pg_temp.uid('viewer@example.test'), 'owner', '{}');
 
--- ------------------------------------------------------------------ registry of custom policies (everything else must be the standard policy)
--- key = table (optional '#variant'); mine / other are jsonb column overrides with tokens: $me, $other, $my_mail, $other_mail, $my_teams, $other_teams.
--- owner_only: a row of $other must be refused to a member of the same lane. positive: the probe can say yes for $me (false: negative-only, with the reason).
-create temp table custom_policy (k text primary key, tbl text not null, mine jsonb, other jsonb, owner_only boolean not null, positive boolean not null, why text not null, self_ok boolean not null default false) on commit drop;
-insert into custom_policy (k, tbl, mine, other, owner_only, positive, why, self_ok) values
-  ('core.connections', 'core.connections', '{"owner_user_id":"$me"}', '{"owner_user_id":"$other"}', false, true, 'lane view (connections) OR own mailbox; admins may list lane connections by design', false),
-  ('core.users', 'core.users', '{"id":"$me"}', '{"id":"00000000-0000-4000-8000-0000000000bb"}', false, true, 'a person plus people who share a lane (no lane_id column; a person nobody shares a lane with is refused)', true),
-  ('core.memberships', 'core.memberships', '{"user_id":"$me"}', '{"user_id":"00000000-0000-4000-8000-0000000000bb"}', false, true, 'own row OR the lane roster (memberships view)', true),
-  ('comms.message_index', 'comms.message_index', '{"connection_id":"$my_mail"}', '{"connection_id":"$other_mail"}', true, true, 'mail is readable only through mailbox ownership', false),
-  ('cal.event_index', 'cal.event_index', '{"connection_id":"$my_mail"}', '{"connection_id":"$other_mail"}', true, true, 'calendar is readable only through mailbox ownership', false),
-  ('comms.teams_chat_reads', 'comms.teams_chat_reads', '{"connection_id":"$my_teams"}', '{"connection_id":"$other_teams"}', true, true, 'Teams read markers belong to the connection owner', false),
-  ('comms.teams_activity', 'comms.teams_activity', '{"connection_id":"$my_teams"}', '{"connection_id":"$other_teams"}', true, true, 'Teams activity belongs to the connection owner', false),
-  ('act.proposed_actions#email', 'act.proposed_actions', '{"action_type":"email.send","connection_id":"$my_mail"}', '{"action_type":"email.send","connection_id":"$other_mail"}', true, true, 'email actions: the mailbox owner only', false),
-  ('act.proposed_actions#teams', 'act.proposed_actions', '{"action_type":"teams.chat.send","connection_id":"$my_teams"}', '{"action_type":"teams.chat.send","connection_id":"$other_teams"}', true, true, 'Teams actions: the connection owner only', false),
-  ('act.status_history', 'act.status_history', '{}', '{"action_id":"00000000-0000-4000-8000-0000000000aa"}', true, false, 'visible through its action row (act.action_rows_visible); negative-only, positive proven in 290/330', false),
-  ('act.execution_claims', 'act.execution_claims', '{}', '{"action_id":"00000000-0000-4000-8000-0000000000aa"}', true, false, 'visible through its action row; negative-only, positive proven in 290', false),
-  ('brain.documents', 'brain.documents', '{"kind":"about_me","owner_user_id":"$me"}', '{"kind":"about_me","owner_user_id":"$other"}', true, true, 'personal documents (about_me, preferences) belong to their owner', false),
-  ('brain.document_versions', 'brain.document_versions', '{"kind":"about_me","owner_user_id":"$me"}', '{"kind":"about_me","owner_user_id":"$other"}', true, true, 'versions of personal documents', false),
-  ('brain.imports', 'brain.imports', '{"user_id":"$me"}', '{"user_id":"$other"}', true, true, 'an import belongs to the person who started it', false),
-  ('brain.section_completions', 'brain.section_completions', '{"user_id":"$me"}', '{"user_id":"$other"}', true, true, 'progress belongs to the person', false),
-  ('brain.import_candidates', 'brain.import_candidates', '{"user_id":"$me","created_at":"now"}', '{"user_id":"$other","created_at":"now"}', true, true, 'candidates belong to the person, 24 h', false),
-  ('brief.briefings', 'brief.briefings', '{"owner_user_id":"$me"}', '{"owner_user_id":"$other"}', true, true, 'a briefing belongs to its owner', false),
-  ('brief.briefing_runs', 'brief.briefing_runs', '{"owner_user_id":"$me"}', '{"owner_user_id":"$other"}', true, true, 'a run belongs to its owner', false);
+-- ---------------------------------------------------------------- catalog and pins
+\ir helpers/seed_rows.psql
 
-insert into custom_policy (k, tbl, mine, other, owner_only, positive, why) values
-  ('core.lanes', 'core.lanes', '{"code":"$lane"}', '{"code":"$lane"}', false, true, 'the lane registry: keyed by code, visible to its members');
-grant all on custom_policy to public;
+-- the view each standard table's policy is pinned to (what a person needs to read the table), written down independently of the policies
+create temp table pin (name text primary key, view text not null) on commit drop;
+insert into pin values
+  ('audit.events','audit'), ('brain.document_versions','brain'), ('brain.documents','brain'), ('brain.employees','brain'), ('brain.import_candidates','brain'),
+  ('brain.imports','brain'), ('brain.section_completions','brain'), ('brain.skills','brain'), ('brief.briefing_runs','own_mail'), ('brief.briefings','own_mail'),
+  ('brief.news_digests','briefing'), ('cal.event_index','own_mail'), ('comms.message_index','own_mail'), ('core.connections','connections'),
+  ('core.connector_api_errors','health'), ('core.job_failures','health'), ('core.lane_config','config'), ('core.lane_policies','lane_policies'),
+  ('core.lanes','lanes'), ('core.memberships','memberships'), ('core.push_subscriptions','health'), ('core.sync_cursors','health'),
+  ('core.sync_now_requests','health'), ('core.sync_runs','health'), ('core.users','memberships'), ('core.webhook_events','health'),
+  ('fin.accounts','finance'), ('fin.bills','finance'), ('fin.invoices','finance'), ('fin.normalize_runs','health'), ('fin.payments','finance'),
+  ('fin.report_cache','finance'), ('fin.transactions','finance'), ('act.proposed_actions','own_mail'),
+  ('act.status_history','action'), ('act.execution_claims','action'), ('comms.teams_activity','own_mail'), ('comms.teams_chat_reads','own_mail'),
+  ('core.lane_config_current','config');
+grant all on pin to public;
+-- private tables: no column of them is readable by authenticated (reached only by definer code or the service role)
+create temp table private_ok (name text primary key, why text not null) on commit drop;
+insert into private_ok values
+  ('core.ai_chat_rate', 'rate counter, definer code only'), ('core.ai_tool_rate', 'rate counter, definer code only'),
+  ('core.connection_secrets', 'Vault references'), ('core.mfa_enrolment_state', 'MFA guard'), ('core.mfa_verification_attempts', 'MFA guard'),
+  ('core.oauth_states', 'one-time OAuth state'), ('raw.source_records', 'provider payloads, service role only');
+grant all on private_ok to public;
 
--- Tables the catalog finds, with the shape of their policy.
-create temp table subject on commit drop as
-select c.oid::regclass as tbl, n.nspname || '.' || c.relname as name, c.relkind,
-       exists (select 1 from pg_attribute a where a.attrelid = c.oid and a.attname = 'lane_id' and not a.attisdropped) as has_lane,
-       (select p.oid from pg_policy p where p.polrelid = c.oid and p.polcmd = 'r') as pol,
-       has_table_privilege('authenticated', c.oid, 'select') as auth_select,
-       (select pg_get_expr(p.polqual, p.polrelid) from pg_policy p where p.polrelid = c.oid and p.polcmd = 'r') as qual
-from pg_class c join pg_namespace n on n.oid = c.relnamespace
-where c.relkind in ('r', 'v', 'p') and n.nspname not in ('_realtime','auth','extensions','graphql','graphql_public','information_schema','pg_catalog','pg_toast','pgbouncer','realtime','storage','supabase_functions','supabase_migrations','vault','net','cron','pgsodium','pgsodium_masks','pg_temp','public')
-  and n.nspname !~ '^pg_';
-grant all on subject to public;
-alter table subject add column standard boolean;
-update subject set standard = qual ~ '^\(\(\( SELECT \(auth\.jwt\(\) ->> ''aal''::text\)\) = ''aal2''::text\) AND \(lane_id = ANY \(\( SELECT core\.allowed_lanes\(\( SELECT auth\.uid\(\) AS uid\), ''[a-z_]+''::text\) AS allowed_lanes\)::text\[\]\)\)\)$';
+select is((select coalesce(array_agg(name order by name), '{}') from subject where not readable and name not in (select name from private_ok)), '{}'::text[],
+  'every table or view that is not readable by authenticated is on the reviewed private list (checked with column-level grants too)');
+select is((select coalesce(array_agg(name order by name), '{}') from subject where readable and name not in (select name from pin)), '{}'::text[],
+  'every readable table or view has a pinned view in this test (a new one must be classified)');
+select is((select coalesce(array_agg(name order by name), '{}') from ((select name from pin) union all (select name from private_ok)) x where name not in (select name from subject))
+          || (select coalesce(array_agg(name order by name), '{}') from private_ok where name in (select name from subject where readable)), '{}'::text[],
+  'no stale pin or private entry, and no private entry became readable');
+select is((select count(*) filter (where readable) || '+' || count(*) filter (where not readable) || '=' || count(*) from subject), '39+7=46',
+  'catalog count: 39 readable (38 tables and the view) + 7 private = 46 relations in the app schemas (a change must be classified on purpose)');
 
--- ------------------------------------------------------------------ probe helpers
-create function pg_temp.tok(p_json jsonb, p_persona text) returns jsonb language sql as $$
-  select replace(replace(replace(replace(replace(replace(replace(p_json::text,
-    '$my_mail', case when p_persona = 'owner' then '00000000-0000-4000-8000-000000033501' else '00000000-0000-4000-8000-000000033502' end),
-    '$other_mail', case when p_persona = 'owner' then '00000000-0000-4000-8000-000000033502' else '00000000-0000-4000-8000-000000033501' end),
-    '$my_teams', case when p_persona = 'owner' then '00000000-0000-4000-8000-000000033503' else '00000000-0000-4000-8000-000000033504' end),
-    '$other_teams', case when p_persona = 'owner' then '00000000-0000-4000-8000-000000033504' else '00000000-0000-4000-8000-000000033503' end),
-    '$me', case when p_persona = 'owner' then pg_temp.uid('owner@example.test')::text else pg_temp.uid('admin-technical@example.test')::text end),
-    '$other', case when p_persona = 'owner' then pg_temp.uid('admin-technical@example.test')::text else pg_temp.uid('owner@example.test')::text end),
-    '$zz', '')::jsonb;
+-- ---------------------------------------------------------------- the oracle
+create function pg_temp.lanes_with(p_uid uuid, p_view text) returns text[] language sql as $$
+  select coalesce(array_agg(m.lane_id), '{}'::text[]) from core.memberships m join core.lanes l on l.code = m.lane_id
+  where m.user_id = p_uid and l.enabled and p_view = any (core.role_views(m.role) || m.views);
+$$;
+create function pg_temp.mail_conns(p_uid uuid, p_providers text[]) returns uuid[] language sql as $$
+  select coalesce(array_agg(c.id), '{}'::uuid[]) from core.connections c
+  where c.owner_user_id = p_uid and c.provider = any (p_providers) and c.lane_id = any (pg_temp.lanes_with(p_uid, 'own_mail'));
+$$;
+-- The where-clause a person MAY see, per table (aal2). Standard tables: lane in the lanes where the person holds the pinned view.
+create function pg_temp.oracle(p_name text, p_uid uuid) returns text language plpgsql as $$
+declare v text := (select view from pin where name = p_name); u text := quote_literal(p_uid) || '::uuid';
+begin
+  return case p_name
+    when 'core.lanes' then format('code = any (pg_temp.lanes_with(%s, ''lanes''))', u)
+    when 'core.users' then format('id = %1$s or exists (select 1 from core.memberships m where m.user_id = users.id and m.lane_id = any (pg_temp.lanes_with(%1$s, ''memberships'')))', u)
+    when 'core.memberships' then format('user_id = %1$s or lane_id = any (pg_temp.lanes_with(%1$s, ''memberships''))', u)
+    when 'core.connections' then format('lane_id = any (pg_temp.lanes_with(%1$s, ''connections'')) or (owner_user_id = %1$s and lane_id = any (pg_temp.lanes_with(%1$s, ''own_mail'')))', u)
+    when 'comms.message_index' then format('lane_id = any (pg_temp.lanes_with(%1$s, ''own_mail'')) and connection_id = any (pg_temp.mail_conns(%1$s, array[''google'', ''microsoft'']))', u)
+    when 'cal.event_index' then format('lane_id = any (pg_temp.lanes_with(%1$s, ''own_mail'')) and connection_id = any (pg_temp.mail_conns(%1$s, array[''google'', ''microsoft'']))', u)
+    when 'comms.teams_chat_reads' then format('connection_id = any (pg_temp.mail_conns(%s, array[''microsoft_teams'']))', u)
+    when 'comms.teams_activity' then format('connection_id = any (pg_temp.mail_conns(%s, array[''microsoft_teams'']))', u)
+    when 'act.proposed_actions' then format($f$(action_type like 'email.%%' and lane_id = any (pg_temp.lanes_with(%1$s, 'own_mail')) and connection_id = any (pg_temp.mail_conns(%1$s, array['google','microsoft'])))
+       or (action_type like 'teams.%%' and lane_id = any (pg_temp.lanes_with(%1$s, 'own_mail')) and connection_id = any (pg_temp.mail_conns(%1$s, array['microsoft_teams'])))
+       or (action_type not like 'email.%%' and action_type not like 'teams.%%' and (lane_id = any (pg_temp.lanes_with(%1$s, 'approvals'))
+            or (proposer_user_id = %1$s and lane_id = any (pg_temp.lanes_with(%1$s, 'lanes')))
+            or (action_type = 'qbo.disconnect' and lane_id = any (pg_temp.lanes_with(%1$s, 'connections')))))$f$, u)
+    -- history and claims follow act.action_rows_visible: email and Teams like the action row, every other type only through the approvals view
+    -- (stricter than the action row itself, which also admits the proposer and the connections view: noted as F-09, not a leak)
+    when 'act.status_history' then pg_temp.oracle('act.history', p_uid)
+    when 'act.execution_claims' then pg_temp.oracle('act.history', p_uid)
+    when 'act.history' then format($f$action_id in (select id from act.proposed_actions where
+         (action_type like 'email.%%' and lane_id = any (pg_temp.lanes_with(%1$s, 'own_mail')) and connection_id = any (pg_temp.mail_conns(%1$s, array['google','microsoft'])))
+         or (action_type like 'teams.%%' and lane_id = any (pg_temp.lanes_with(%1$s, 'own_mail')) and connection_id = any (pg_temp.mail_conns(%1$s, array['microsoft_teams'])))
+         or (action_type not like 'email.%%' and action_type not like 'teams.%%' and lane_id = any (pg_temp.lanes_with(%1$s, 'approvals'))))$f$, u)
+    when 'brain.documents' then format('lane_id = any (pg_temp.lanes_with(%1$s, ''brain'')) and (kind not in (''about_me'', ''preferences'') or owner_user_id = %1$s)', u)
+    when 'brain.document_versions' then format('lane_id = any (pg_temp.lanes_with(%1$s, ''brain'')) and (kind not in (''about_me'', ''preferences'') or owner_user_id = %1$s)', u)
+    when 'brain.imports' then format('lane_id = any (pg_temp.lanes_with(%1$s, ''brain'')) and user_id = %1$s', u)
+    when 'brain.section_completions' then format('lane_id = any (pg_temp.lanes_with(%1$s, ''brain'')) and user_id = %1$s', u)
+    when 'brain.import_candidates' then format('lane_id = any (pg_temp.lanes_with(%1$s, ''brain'')) and user_id = %1$s and created_at > now() - interval ''24 hours''', u)
+    when 'brief.briefings' then format('lane_id = any (pg_temp.lanes_with(%1$s, ''own_mail'')) and owner_user_id = %1$s', u)
+    when 'brief.briefing_runs' then format('lane_id = any (pg_temp.lanes_with(%1$s, ''own_mail'')) and owner_user_id = %1$s', u)
+    when 'core.lane_config_current' then format('lane_id = any (pg_temp.lanes_with(%s, ''config''))', u)
+    else format('lane_id = any (pg_temp.lanes_with(%s, %L))', u, v)
+  end;
+end $$;
+-- an expression that identifies a row using only the columns authenticated may read
+create function pg_temp.ident(p_tbl regclass) returns text language sql as $$
+  select 'md5(row(' || string_agg(quote_ident(a.attname), ', ' order by a.attnum) || ')::text)'
+  from pg_attribute a where a.attrelid = p_tbl and a.attnum > 0 and not a.attisdropped and has_column_privilege('authenticated', p_tbl, a.attnum, 'select');
 $$;
 
--- Evaluates the table's SELECT policy for one synthetic row: lane_id = p_lane, the given column values, every other column NULL.
-create function pg_temp.row_allows(p_tbl regclass, p_lane text, p_over jsonb) returns boolean language plpgsql as $$
-declare v_cols text; v_qual text; v_alias text; v_res boolean;
+-- ---------------------------------------------------------------- probes
+create function pg_temp.sig(p_tbl regclass, p_where text) returns text language plpgsql as $$
+declare v text;
 begin
-  p_over := replace(p_over::text, '$lane', p_lane)::jsonb;
-  select string_agg(format('%s::%s as %I',
-           case when p_over ? a.attname then quote_nullable(p_over ->> a.attname) when a.attname = 'lane_id' then quote_nullable(p_lane) else 'null' end,
-           format_type(a.atttypid, a.atttypmod), a.attname), ', ' order by a.attnum)
-    into v_cols from pg_attribute a where a.attrelid = p_tbl and a.attnum > 0 and not a.attisdropped;
-  select pg_get_expr(polqual, polrelid) into v_qual from pg_policy where polrelid = p_tbl and polcmd = 'r' limit 1;
-  select relname into v_alias from pg_class where oid = p_tbl;
-  execute format('select exists (select 1 from (select %s) as %I where %s)', v_cols, v_alias, v_qual) into v_res;
-  return coalesce(v_res, false);
-end $$;
-
--- Runs the whole table probe as one persona at one AAL. Returns violation labels. p_mode: 'deny' (nothing may be allowed for the lane) or 'allow' (positive controls).
-create function pg_temp.table_probe(p_email text, p_persona text, p_aal text, p_lane text, p_mode text, p_cross_user boolean default false, p_mode2 text default null) returns text[] language plpgsql as $$
-declare v text[] := '{}'; s record; cp record; ok boolean; mine jsonb; other jsonb;
-begin
-  perform pg_temp.claims(p_email, p_aal);
-  set local role authenticated;
-  for s in select * from subject where pol is not null and auth_select order by name loop
-    if s.standard then
-      if p_cross_user then continue; end if;
-      ok := pg_temp.row_allows(s.tbl, p_lane, '{}');
-      if p_mode = 'deny' and ok then v := v || (s.name || ': allowed'); end if;
-      if p_mode = 'allow' and not ok and p_mode2 is null then v := v || (s.name || ': positive control refused'); end if;
-    else
-      for cp in select * from custom_policy where tbl = s.name order by k loop
-        mine := pg_temp.tok(cp.mine, p_persona);
-        other := pg_temp.tok(cp.other, p_persona);
-        if p_cross_user then
-          if cp.owner_only and pg_temp.row_allows(s.tbl, p_lane, other) then v := v || (cp.k || ': another user''s row allowed'); end if;
-        else
-          ok := pg_temp.row_allows(s.tbl, p_lane, case when cp.self_ok and p_mode = 'deny' then other else mine end);
-          if p_mode = 'deny' and ok then v := v || (cp.k || ': allowed'); end if;
-          if p_mode = 'allow' and cp.positive and not ok and (p_mode2 is null or cp.k ~ p_mode2) then v := v || (cp.k || ': positive control refused'); end if;
-        end if;
-      end loop;
-    end if;
-  end loop;
-  reset role;
+  execute format('select count(*) || '':'' || md5(coalesce(string_agg(h, '','' order by h), '''')) from (select %s as h from %s %s) x', pg_temp.ident(p_tbl), p_tbl, case when p_where is null then '' else 'where ' || p_where end) into v;
   return v;
 end $$;
-
--- ------------------------------------------------------------------ 1. the catalog is classified
-select is((select coalesce(array_agg(name order by name), '{}') from subject where pol is not null and auth_select and not standard
-           and name not in (select tbl from custom_policy)), '{}'::text[],
-  'every table with a non-standard SELECT policy has a reviewed registry entry (owner-only or lane-or-owner)');
-select is((select coalesce(array_agg(k order by k), '{}') from custom_policy where tbl not in (select name from subject where pol is not null and not standard)), '{}'::text[],
-  'no stale custom-policy entry');
-select is((select count(*)::int from subject where relkind in ('r','p')), 45, 'the catalog holds 45 app tables (a new table changes this number: it is then probed automatically; update the figure on purpose)');
-
--- ------------------------------------------------------------------ 2. positive controls: the probe can say yes
-select is(pg_temp.table_probe('owner@example.test', 'owner', 'aal2', 'PKG', 'allow'), '{}'::text[], 'positive control: the PKG owner at AAL2 is allowed a PKG row on every probed table (standard and custom)');
-select is(pg_temp.table_probe('admin-technical@example.test', 'admin', 'aal2', 'PKG', 'allow', false, '^(comms|cal|act\.proposed|brief)'), '{}'::text[], 'positive control: admin_technical sees its OWN mail, calendar, Teams, approvals and briefing rows (own_mail view)');
-
--- ------------------------------------------------------------------ 3. AAL1 and cross-lane denial on every table
-select is(pg_temp.table_probe('owner@example.test', 'owner', 'aal1', 'PKG', 'deny'), '{}'::text[], 'AAL1 (e-mail code only) reads nothing: no table lets a PKG owner at AAL1 see a PKG row, whatever the owner column says');
-select is(pg_temp.table_probe('owner@example.test', 'owner', 'aal2', 'APK', 'deny'), '{}'::text[], 'CROSS-LANE: a PKG-only owner at AAL2 is refused an APK row on every table, even when the row names them as owner');
-select is(pg_temp.table_probe('admin-technical@example.test', 'admin', 'aal2', 'APK', 'deny'), '{}'::text[], 'CROSS-LANE: PKG-only admin_technical is refused an APK row on every table');
-select is(pg_temp.table_probe('viewer@example.test', 'admin', 'aal2', 'APK', 'deny'), '{}'::text[], 'CROSS-LANE: a PKG-only viewer is refused an APK row on every table');
-select is(pg_temp.table_probe('owner@example.test', 'owner', 'aal2', 'ZZ', 'deny'), '{}'::text[], 'a lane that does not exist is refused on every table');
-
--- ------------------------------------------------------------------ 4. cross-user denial for owner-only data (same lane, row of another person)
-select is(pg_temp.table_probe('owner@example.test', 'owner', 'aal2', 'PKG', 'deny', true), '{}'::text[], 'CROSS-USER: the PKG owner cannot read the admin''s mail, calendar, Teams, approvals, briefings, imports or personal brain documents');
-select is(pg_temp.table_probe('admin-technical@example.test', 'admin', 'aal2', 'PKG', 'deny', true), '{}'::text[], 'CROSS-USER: admin_technical cannot read the owner''s mail, calendar, Teams, approvals, briefings, imports or personal brain documents');
-
--- ------------------------------------------------------------------ 5. real rows, real policies
-create function pg_temp.real_counts(p_email text, p_aal text, p_lane_filter text) returns text[] language plpgsql as $$
-declare v text[] := '{}'; s record; n bigint;
+-- What the persona sees through RLS, versus what the oracle allows (computed as the superuser role with the same identity expression).
+create function pg_temp.compare(p_email text, p_aal text) returns text[] language plpgsql as $$
+declare v text[] := '{}'; s record; want text; got text; uid uuid := pg_temp.uid(p_email);
 begin
-  perform pg_temp.claims(p_email, p_aal);
-  set local role authenticated;
-  for s in select * from subject where auth_select and relkind in ('r','p','v') order by name loop
+  for s in select * from subject where readable order by name loop
+    want := case when p_aal = 'aal2' then pg_temp.sig(s.tbl, pg_temp.oracle(s.name, uid)) else pg_temp.sig(s.tbl, 'false') end;
+    perform pg_temp.claims(p_email, p_aal);
+    set local role authenticated;
     begin
-      if p_lane_filter is null then
-        execute format('select count(*) from %s', s.tbl) into n;
-      else
-        execute format('select count(*) from %s where lane_id %s', s.tbl, p_lane_filter) into n;
-      end if;
-      if n > 0 then v := v || (s.name || '=' || n); end if;
-    exception when others then null; -- an error is a refusal
+      got := pg_temp.sig(s.tbl, null);
+    exception when others then got := 'error ' || sqlstate;
     end;
+    reset role;
+    if got is distinct from want then v := v || (s.name || ' got ' || got || ' want ' || want); end if;
   end loop;
-  reset role;
   return v;
 end $$;
-select is(pg_temp.real_counts('owner@example.test', 'aal1', null), '{}'::text[], 'REAL ROWS: at AAL1 every readable table and view returns zero rows (including the synthetic mail and Teams rows seeded for this test)');
-select is(pg_temp.real_counts('admin-technical@example.test', 'aal2', '<> ''PKG'''), '{}'::text[], 'REAL ROWS: a PKG-only user reads no row of any other lane from any table or view');
-select cmp_ok((select count(*) from comms.message_index where message_id = 'iso-m-1'), '=', 1::bigint, 'the seeded message row exists (so the denials above are not empty because of missing data)');
--- Negative control: the probe does say "allowed" for a deliberately open policy (so a clean result above is not vacuous).
-create temp table iso_sentinel (lane_id text);
-alter table iso_sentinel enable row level security;
-create policy iso_open on iso_sentinel for select to authenticated using (true);
-grant select on iso_sentinel to authenticated;
-select pg_temp.claims('admin-technical@example.test', 'aal1');
-set local role authenticated;
-select is(pg_temp.row_allows('iso_sentinel'::regclass, 'APK', '{}'), true, 'negative control: the probe reports an open policy as allowed (AAL1, other lane)');
-reset role;
+-- Seeded rows a persona is expected to see (positive control: the comparison above is not vacuously empty).
+create function pg_temp.sees_seeded(p_email text) returns int language plpgsql as $$
+declare n int := 0; s record; c bigint; uid uuid := pg_temp.uid(p_email);
+begin
+  for s in select * from subject where readable and name in (select name from seeded) loop
+    execute format('select count(*) from %s where %s', s.tbl, pg_temp.oracle(s.name, uid)) into c;
+    n := n + (c > 0)::int;
+  end loop;
+  return n;
+end $$;
+
+select is(pg_temp.compare('owner@example.test', 'aal2'), '{}'::text[], 'PKG owner at AAL2: sees exactly what the oracle allows on every table and view (rows of lane APK and of the admin are not visible, own rows are)');
+select is(pg_temp.compare('admin-technical@example.test', 'aal2'), '{}'::text[], 'PKG admin_technical: sees exactly what the oracle allows (no finance or brain rows, none of the owner''s mail, Teams, approvals, briefings, imports or personal documents)');
+select is(pg_temp.compare('finance-operator@example.test', 'aal2'), '{}'::text[], 'PKG finance_operator: sees exactly what the oracle allows (finance, not connections, mail or brain)');
+select is(pg_temp.compare('viewer@example.test', 'aal2'), '{}'::text[], 'member of APK only: sees exactly what the oracle allows (APK rows only, nothing of PKG)');
+select is(pg_temp.compare('owner@example.test', 'aal1'), '{}'::text[], 'PKG owner at AAL1 (e-mail code only): sees nothing on any table or view');
+select is(pg_temp.compare('viewer@example.test', 'aal1'), '{}'::text[], 'member of APK at AAL1: sees nothing on any table or view');
+select cmp_ok(pg_temp.sees_seeded('owner@example.test'), '>=', 30, 'non-vacuity: the PKG owner is expected to see seeded rows on at least 30 tables');
+select cmp_ok(pg_temp.sees_seeded('viewer@example.test'), '>=', 15, 'non-vacuity: the APK member is expected to see seeded rows on at least 15 tables');
+select is((select count(distinct name)::int from seeded) - (select count(*)::int from subject where readable and name in ('core.lanes','core.users','core.memberships','core.lane_policies','core.lane_config','core.lane_config_current') and name in (select name from seeded)),
+          (select count(*)::int from subject where readable) - 6, 'every readable table except the six fixture tables (lanes, users, memberships, policies, config, the view) was seeded with real rows: seeded + fixture = readable');
+
+-- ---------------------------------------------------------------- private tables
+create function pg_temp.denied(p_tbl regclass, p_role text) returns boolean language plpgsql as $$
+declare n bigint;
+begin
+  execute 'set local role ' || p_role;
+  begin
+    execute format('select count(*) from %s', p_tbl) into n;
+    reset role;
+    return false;
+  exception when insufficient_privilege then reset role; return true;
+  end;
+end $$;
+select pg_temp.claims('owner@example.test', 'aal2');
+select is((select coalesce(array_agg(name order by name), '{}') from subject where name in (select name from private_ok) and not (pg_temp.denied(tbl, 'authenticated') and pg_temp.denied(tbl, 'anon'))), '{}'::text[],
+  'every private table refuses authenticated and anon (select count(*) raises insufficient_privilege)');
+select is((select coalesce(array_agg(name order by name), '{}') from subject where anon_any), '{}'::text[], 'anon holds no privilege on any table or view');
 select * from finish();
 rollback;
