@@ -2135,3 +2135,11 @@ Fixed in the review commit: M1 (`?open=` names the account of the open chat, val
 - A chat click re-reads every account's list until T-296.
 - A Messages tab left open from before the deploy gets 400 on older / newer / read / call-link / image (they now need `conn`) until the page is reloaded.
 - The spec says ties sort by chat id; the code sorts by chat key (the encoded id); the spec line now says so.
+
+### Security re-check of the T-294 / T-295 review fixes (lead agent, Nov 24, 2026; commit b178c27)
+No BLOCKER, HIGH or MEDIUM. The new `open` parameter of the `chats` route is validated by the same `pick()` as `conn` (same answers, one connections read in every case, zero reader calls on a denial). Accepted, not built:
+- **Busy wait only in the browser.** After a 429 from Microsoft for one account, the server keeps no "not before" time across requests, so a client that ignores the wait can still cause up to 12 list reads a minute for that account (the per-person limiter and the 1-per-second pacing bound it; Microsoft answers 429 again). Later: remember a per-connection "not before" on the server and answer `busy` without calling Graph.
+- **Retry request not cancelled on unmount.** `retry()` in `apps/web/components/messages-live.tsx` passes a signal that is never aborted; a retry in flight when the list unmounts finishes and sets state. Cosmetic.
+- **Canary tests mock the Teams reader**, so the connector's own log path is not exercised by them (the connector's own canary tests of T-281 cover that path); nothing in the two-account paths writes audit rows or Inngest events.
+- **`teams-runbook.test.ts` still reads a gitignored operator file into memory** to see whether it is a template; it asserts on and prints nothing from a filled copy.
+Checks on b178c27: the stop hook's typecheck, lint and tests raised nothing at two stops after the commit; `pnpm --filter @nichols/web build` run by the lead agent, exit 0; no SQL changed in the fix commit (pgTAP last run by the builder on 34139ec: 72 files, 4319 tests). The builder's own report for the fix commit was not delivered to the lead (a harness limit), so its per-item account comes from the commit, its notes and the re-check.
