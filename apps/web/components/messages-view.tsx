@@ -274,11 +274,11 @@ export function ChatListRows({ rows, selectedKey, selectedConn = null, hrefFor }
 }
 
 /** "Sign in to Teams" / "Reconnect Teams": a plain form that posts to the Teams connect route of this lane (the same one Settings uses). */
-export function SignIn({ laneId, connectionId, label }: { laneId: string; connectionId?: string; label: string }) {
+export function SignIn({ laneId, connectionId, label, size }: { laneId: string; connectionId?: string; label: string; size?: "sm" }) {
   const action = `/api/connect/teams/start?lane=${encodeURIComponent(laneId)}${connectionId ? `&connection=${encodeURIComponent(connectionId)}` : ""}`;
   return (
     <form method="post" action={action}>
-      <button type="submit" className={buttonVariants({ variant: "default" })}>
+      <button type="submit" className={buttonVariants({ variant: "default", ...(size ? { size } : {}) })}>
         {label}
       </button>
     </form>

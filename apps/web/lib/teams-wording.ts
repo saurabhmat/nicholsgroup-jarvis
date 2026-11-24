@@ -122,3 +122,7 @@ export const MESSAGES_ACCOUNT_STATE_DEGRADED = "Connected, with problems";
 export const MESSAGES_ACCOUNT_STATE_RECONNECT = "Sign-in expired";
 export const messagesRefreshWaitSecondsText = (seconds: number): string => `Teams asked to wait. You can try again in ${String(Math.max(1, Math.ceil(seconds)))} seconds.`;
 export const MESSAGES_PICK_ACCOUNT_TEXT = "This link does not say which Teams account the chat belongs to. Pick the chat from the list.";
+/** T-296: the same for a team in the address that no account of the person opens. */
+export const CHANNELS_PICK_ACCOUNT_TEXT = "This link does not say which Teams account the team belongs to. Pick the channel from the list.";
+/** T-296: the heading of one account's teams when the person has two or more accounts that can read channels. */
+export const channelsGroupLabel = (upn: string): string => `Teams of ${upn}`;

@@ -16,9 +16,13 @@ export const isTeamId = (v: unknown): v is string => typeof v === "string" && TE
 /** A post, message or hosted-content id (the connector's own bound). */
 export const isMessageId = (v: unknown): v is string => typeof v === "string" && MESSAGE_ID.test(v) && v !== "." && v !== ".."; // a dot segment is no id (the connector refuses it too)
 
-/** `?tab=channels...` for the Messages page; `team`, `channel`, `post` and `more` only when given and valid. */
-export function channelsHref(base: string, p: { team?: string | null; channel?: string | null; post?: string | null; more?: string | null }): string {
+/**
+ * `?tab=channels...` for the Messages page; `team`, `channel`, `post` and `more` only when given and valid. T-296: `conn` names the account the team is listed under (the person's own connection id; a
+ * name, never a permission: the page re-checks it). It is put in the address only when the person has two or more accounts that can read channels (the address of a one-account page is what it was).
+ */
+export function channelsHref(base: string, p: { conn?: string | null; team?: string | null; channel?: string | null; post?: string | null; more?: string | null }): string {
   const q = new URLSearchParams({ tab: "channels" });
+  if (p.team && p.conn) q.set("conn", p.conn);
   if (p.team) q.set("team", p.team);
   if (p.team && p.channel) q.set("channel", p.channel);
   if (p.team && p.channel && p.post) q.set("post", p.post);

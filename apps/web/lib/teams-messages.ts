@@ -25,6 +25,8 @@ export type MessagesState =
       degraded: boolean;
       missing: TeamsFeature[];
       adminConsent: boolean;
+      /** T-296: the company's channels need a tenant administrator's approval (the lane-level fact; `adminConsent` is the first account's). Each account's "Reconnect Teams to add channels" line uses it. */
+      needsAdminConsent?: boolean;
       /** The features the company lists (what the page may offer). */
       laneFeatures: TeamsFeature[];
       /** Every own account that is not disconnected, in the order they were connected (T-295). */
@@ -74,6 +76,7 @@ export function messagesStateOf(view: TeamsSectionView | null): MessagesState {
     missing,
     laneFeatures: [...view.laneFeatures],
     adminConsent: view.needsAdminConsent && missing.includes("channels_read"),
+    needsAdminConsent: view.needsAdminConsent,
     accounts,
     multi: accounts.filter((a) => a.usable).length >= 2,
     canAddAnother: accounts.length < view.maxAccounts,
@@ -87,12 +90,33 @@ export function messagesStateOf(view: TeamsSectionView | null): MessagesState {
  *              "Reconnect Teams to add channels" (and, since `ChannelMessage.Read.All` always needs a tenant administrator, the administrator's approval text)
  *   ready      channels may be read (a read can still be refused by Microsoft: that is the tab's own "needs approval" / "could not load" state)
  */
-export type ChannelsAvailability = { kind: "off" } | { kind: "reconnect"; adminConsent: boolean } | { kind: "ready" };
+export type ChannelsAvailability = { kind: "off" } | { kind: "reconnect"; adminConsent: boolean; /** T-296: the usable accounts that lack channels (each gets its own Reconnect). */ accounts: MessagesAccount[] } | { kind: "ready" };
 
-export function channelsAvailability(state: Extract<MessagesState, { kind: "connected" }>): ChannelsAvailability {
+type Connected = Extract<MessagesState, { kind: "connected" }>;
+
+/** T-296: the person's usable accounts that can read channels (the connection has `channels_read`), in the order they were connected. Teams and channels are read for each of them, and only them. */
+export const channelAccountsOf = (state: Connected): MessagesAccount[] => state.accounts.filter((a) => a.usable && a.has.includes("channels_read"));
+
+/** Whether an account lacking channels needs the tenant administrator's approval text (T-296: per account; the lane-level fact when the state carries it). */
+export const accountNeedsAdminConsent = (state: Connected): boolean => state.needsAdminConsent ?? state.adminConsent;
+
+export function channelsAvailability(state: Connected): ChannelsAvailability {
   if (!state.laneFeatures.includes("channels_read")) return { kind: "off" };
-  if (state.missing.includes("channels_read")) return { kind: "reconnect", adminConsent: state.adminConsent };
-  return { kind: "ready" };
+  if (channelAccountsOf(state).length > 0) return { kind: "ready" };
+  return { kind: "reconnect", adminConsent: accountNeedsAdminConsent(state) || state.adminConsent, accounts: state.accounts.filter((a) => a.usable) };
+}
+
+/**
+ * The account the address opens a team (and its channels, posts and replies) as (T-296; spec 22.4, 22.9): `?tab=channels&conn=<id>&team=...`. The same rule as for a chat: the id must be a
+ * lower-case uuid of one of the person's own usable accounts THAT CAN READ CHANNELS (read under RLS: another person's, another lane's, an unknown, a disconnected or an expired account's id, and one that
+ * lacks channels, are all simply not here: the same "nothing opens"). With no `conn` it opens only when exactly one account can read channels (old links); a `conn` that fails never falls back.
+ */
+export function openChannelAccountOf(state: Connected, query: Record<string, string | string[] | undefined>): MessagesAccount | undefined {
+  const ready = channelAccountsOf(state);
+  const conn = query.conn;
+  if (conn === undefined) return ready.length === 1 ? ready[0] : undefined;
+  if (!isConnId(conn)) return undefined;
+  return ready.find((a) => a.connectionId === conn);
 }
 
 /**

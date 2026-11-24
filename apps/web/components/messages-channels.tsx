@@ -10,11 +10,11 @@ import Link from "next/link";
 import { Suspense, type ReactNode } from "react";
 import { Alert, AlertDescription, AlertTitle, buttonVariants, cn, EmptyState, laneHref } from "@nichols/ui";
 import { guards } from "@/lib/guards";
-import { channelsAvailability } from "@/lib/teams-messages";
+import { accountNeedsAdminConsent, channelAccountsOf, channelsAvailability, openChannelAccountOf } from "@/lib/teams-messages";
 import { channelsHref, decodeChannelKey, isMessageId, isTeamId } from "@/lib/teams-channel-key";
 import { gateChannel, loadChannels, loadReplies, loadTeams, loadThread, type ChannelListView, type ChannelRowView, type PostView, type RepliesView, type TeamListView, type ThreadView } from "@/lib/teams-channels";
 import type { TeamsFailure } from "@/lib/teams-errors";
-import type { MessagesState } from "@/lib/teams-messages";
+import type { MessagesAccount, MessagesState } from "@/lib/teams-messages";
 import {
   CHANNELS_APPROVAL_TEXT,
   CHANNELS_APPROVAL_TITLE,
@@ -32,6 +32,10 @@ import {
   CHANNELS_NO_TEAM_SELECTED_TEXT,
   CHANNELS_NO_TEAMS_TEXT,
   CHANNELS_NOT_FOUND_TEXT,
+  CHANNELS_PICK_ACCOUNT_TEXT,
+  channelsGroupLabel,
+  messagesAccountFeatureText,
+  messagesReconnectAccountLabel,
   CHANNELS_NOT_ON_TEXT,
   CHANNELS_REPLIES_ERROR_TEXT,
   CHANNELS_REPLIES_MORE_TEXT,
@@ -45,7 +49,7 @@ import {
 } from "@/lib/teams-wording";
 import { FocusConversation, MessagesRefresh } from "./messages-client";
 import { ConversationSkeleton, ChatListSkeleton, WorkspaceLayout } from "./messages-chats";
-import { MessageItem, SignIn } from "./messages-view";
+import { AccountBadge, MessageItem, SignIn } from "./messages-view";
 import { SectionBoundary } from "./section-boundary";
 
 type Connected = Extract<MessagesState, { kind: "connected" }>;
@@ -75,10 +79,35 @@ export function ChannelsUnavailable({ laneId, state }: { laneId: string; state: 
         {reconnectToAddText(["channels_read"])}
         {a.adminConsent ? ` ${TEAMS_ADMIN_CONSENT_TEXT}` : ""}
       </AlertDescription>
-      <div className="pt-2">
-        <SignIn laneId={laneId} connectionId={state.connectionId} label="Reconnect Teams" />
+      <div className="flex flex-wrap gap-2 pt-2">
+        {a.accounts.length > 1 ? (
+          a.accounts.map((x) => <SignIn key={x.connectionId} laneId={laneId} connectionId={x.connectionId} label={messagesReconnectAccountLabel(x.label)} />)
+        ) : (
+          <SignIn laneId={laneId} connectionId={a.accounts[0]?.connectionId ?? state.connectionId} label="Reconnect Teams" />
+        )}
       </div>
     </Alert>
+  );
+}
+
+/**
+ * T-296: with channels working on some accounts, an account that cannot read them is said plainly, for that account only, with its own Reconnect (the other accounts' teams are still listed).
+ * Several accounts only; with one the tab's own state says it.
+ */
+export function ChannelAccountNotes({ laneId, state }: { laneId: string; state: Connected }) {
+  const lacking = state.accounts.filter((a) => a.usable && !a.has.includes("channels_read"));
+  if (lacking.length === 0 || channelAccountsOf(state).length === 0) return null;
+  return (
+    <div className="flex flex-col gap-2" data-testid="channel-account-notes">
+      {lacking.map((a) => (
+        <Alert key={a.connectionId} data-testid="channel-account-note">
+          <AlertDescription>{messagesAccountFeatureText(a.label, `${reconnectToAddText(["channels_read"])}${accountNeedsAdminConsent(state) ? ` ${TEAMS_ADMIN_CONSENT_TEXT}` : ""}`)}</AlertDescription>
+          <div className="pt-2">
+            <SignIn laneId={laneId} connectionId={a.connectionId} label={messagesReconnectAccountLabel(a.label)} />
+          </div>
+        </Alert>
+      ))}
+    </div>
   );
 }
 
@@ -130,7 +159,7 @@ export function ChannelFailureCard({ failure, laneId, connectionId, testId, scop
 }
 
 // ---- teams and their channels
-export function ChannelRows({ laneId, teamId, selectedKey, view, connectionId }: { laneId: string; teamId: string; selectedKey: string | null; view: ChannelListView; connectionId: string }) {
+export function ChannelRows({ laneId, teamId, selectedKey, view, connectionId, conn = null }: { laneId: string; teamId: string; selectedKey: string | null; view: ChannelListView; connectionId: string; /** The account named in the address (two or more channel accounts only). */ conn?: string | null }) {
   if (view.kind !== "ok") return <ChannelFailureCard failure={view} laneId={laneId} connectionId={connectionId} testId="channel-list-error" scope="channels" />;
   if (view.channels.length === 0) return <p className="px-4 py-2 text-small text-muted-foreground">{CHANNELS_NO_CHANNELS_TEXT}</p>;
   const base = laneHref(laneId, "messages");
@@ -140,7 +169,7 @@ export function ChannelRows({ laneId, teamId, selectedKey, view, connectionId }:
         c.readable ? (
           <li key={c.key}>
             <Link
-              href={channelsHref(base, { team: teamId, channel: c.key })}
+              href={channelsHref(base, { conn, team: teamId, channel: c.key })}
               scroll={false}
               aria-current={c.key === selectedKey ? "page" : undefined}
               data-testid="channel-row"
@@ -169,21 +198,21 @@ export function ChannelRows({ laneId, teamId, selectedKey, view, connectionId }:
   );
 }
 
-async function ChannelRowsSection({ promise, laneId, teamId, selectedKey, connectionId }: { promise: Promise<ChannelListView>; laneId: string; teamId: string; selectedKey: string | null; connectionId: string }) {
-  return <ChannelRows view={await promise} laneId={laneId} teamId={teamId} selectedKey={selectedKey} connectionId={connectionId} />;
+async function ChannelRowsSection({ promise, laneId, teamId, selectedKey, connectionId, conn }: { promise: Promise<ChannelListView>; laneId: string; teamId: string; selectedKey: string | null; connectionId: string; conn: string | null }) {
+  return <ChannelRows view={await promise} laneId={laneId} teamId={teamId} selectedKey={selectedKey} connectionId={connectionId} conn={conn} />;
 }
 
-function ChannelsInline({ promise, laneId, teamId, selectedKey, connectionId }: { promise: Promise<ChannelListView>; laneId: string; teamId: string; selectedKey: string | null; connectionId: string }) {
+function ChannelsInline({ promise, laneId, teamId, selectedKey, connectionId, conn }: { promise: Promise<ChannelListView>; laneId: string; teamId: string; selectedKey: string | null; connectionId: string; conn: string | null }) {
   return (
     <SectionBoundary>
       <Suspense fallback={<div role="status" aria-busy="true" data-testid="channel-list-skeleton" className="px-4 py-2 text-small text-muted-foreground">Loading channels</div>}>
-        <ChannelRowsSection promise={promise} laneId={laneId} teamId={teamId} selectedKey={selectedKey} connectionId={connectionId} />
+        <ChannelRowsSection promise={promise} laneId={laneId} teamId={teamId} selectedKey={selectedKey} connectionId={connectionId} conn={conn} />
       </Suspense>
     </SectionBoundary>
   );
 }
 
-export function TeamsList({ view, laneId, connectionId, teamId, channels, selectedKey }: { view: TeamListView; laneId: string; connectionId: string; teamId: string | null; channels: Promise<ChannelListView> | null; selectedKey: string | null }) {
+export function TeamsList({ view, laneId, connectionId, teamId, channels, selectedKey, conn = null }: { view: TeamListView; laneId: string; connectionId: string; teamId: string | null; channels: Promise<ChannelListView> | null; selectedKey: string | null; /** The account named in the address (two or more channel accounts only): every link of this group carries it. */ conn?: string | null }) {
   if (view.kind !== "ok") return <ChannelFailureCard failure={view} laneId={laneId} connectionId={connectionId} testId="team-list-error" scope="teams" />;
   const base = laneHref(laneId, "messages");
   const known = view.teams.some((t) => t.teamId === teamId);
@@ -194,7 +223,7 @@ export function TeamsList({ view, laneId, connectionId, teamId, channels, select
         {view.teams.map((t) => (
           <li key={t.teamId}>
             <Link
-              href={channelsHref(base, { team: t.teamId })}
+              href={channelsHref(base, { conn, team: t.teamId })}
               scroll={false}
               aria-current={t.teamId === teamId && selectedKey === null ? "page" : undefined}
               aria-expanded={t.teamId === teamId}
@@ -207,13 +236,13 @@ export function TeamsList({ view, laneId, connectionId, teamId, channels, select
               </span>
               {t.archived ? <span className="shrink-0 rounded-full border border-border px-2 text-small text-muted-foreground">Archived</span> : null}
             </Link>
-            {t.teamId === teamId && channels ? <ChannelsInline promise={channels} laneId={laneId} teamId={t.teamId} selectedKey={selectedKey} connectionId={connectionId} /> : null}
+            {t.teamId === teamId && channels ? <ChannelsInline promise={channels} laneId={laneId} teamId={t.teamId} selectedKey={selectedKey} connectionId={connectionId} conn={conn} /> : null}
           </li>
         ))}
       </ul>
       {teamId && channels && !known ? (
         <div className="rounded-card border border-border bg-card">
-          <ChannelsInline promise={channels} laneId={laneId} teamId={teamId} selectedKey={selectedKey} connectionId={connectionId} />
+          <ChannelsInline promise={channels} laneId={laneId} teamId={teamId} selectedKey={selectedKey} connectionId={connectionId} conn={conn} />
         </div>
       ) : null}
       {view.more ? <p className="text-small text-muted-foreground">{CHANNELS_MORE_TEAMS_TEXT}</p> : null}
@@ -221,8 +250,8 @@ export function TeamsList({ view, laneId, connectionId, teamId, channels, select
   );
 }
 
-async function TeamsSection({ promise, channels, laneId, connectionId, teamId, selectedKey }: { promise: Promise<TeamListView>; channels: Promise<ChannelListView> | null; laneId: string; connectionId: string; teamId: string | null; selectedKey: string | null }) {
-  return <TeamsList view={await promise} laneId={laneId} connectionId={connectionId} teamId={teamId} channels={channels} selectedKey={selectedKey} />;
+async function TeamsSection({ promise, channels, laneId, connectionId, teamId, selectedKey, conn }: { promise: Promise<TeamListView>; channels: Promise<ChannelListView> | null; laneId: string; connectionId: string; teamId: string | null; selectedKey: string | null; conn: string | null }) {
+  return <TeamsList view={await promise} laneId={laneId} connectionId={connectionId} teamId={teamId} channels={channels} selectedKey={selectedKey} conn={conn} />;
 }
 
 // ---- posts and replies
@@ -271,6 +300,8 @@ export function ThreadPane({
   replies,
   laneId,
   connectionId,
+  conn = null,
+  account = null,
   teamId,
   channelKey,
   postId,
@@ -283,6 +314,10 @@ export function ThreadPane({
   replies: RepliesView | null;
   laneId: string;
   connectionId: string;
+  /** The account named in the address (two or more channel accounts only): every link of the pane carries it. */
+  conn?: string | null;
+  /** The account the posts are read and posted as, shown beside the team name (two or more accounts only). */
+  account?: { label: string; name: string } | null;
   teamId: string;
   channelKey: string;
   postId: string | null;
@@ -296,15 +331,16 @@ export function ThreadPane({
   const header = (
     <header className="flex flex-col gap-2 border-b border-border px-3 py-3 sm:px-4">
       <div className="flex min-w-0 items-center gap-2">
-        <Link href={channelsHref(base, { team: teamId })} aria-label="Back to channels" data-testid="back-to-channels" className="inline-flex min-h-11 min-w-11 items-center justify-center rounded-control text-body font-medium text-primary hover:bg-muted lg:hidden">
+        <Link href={channelsHref(base, { conn, team: teamId })} aria-label="Back to channels" data-testid="back-to-channels" className="inline-flex min-h-11 min-w-11 items-center justify-center rounded-control text-body font-medium text-primary hover:bg-muted lg:hidden">
           <span aria-hidden>←</span>
         </Link>
         <div className="min-w-0 flex-1">
           <h2 id="conversation-title" tabIndex={-1} dir="auto" data-testid="conversation-title" className="truncate text-h3 font-semibold outline-none">
             {title}
           </h2>
-          <p dir="auto" className="truncate text-small text-muted-foreground">
-            {subtitle}
+          <p dir="auto" className="flex min-w-0 items-center gap-2 text-small text-muted-foreground">
+            <span className="min-w-0 truncate">{subtitle}</span>
+            {account ? <AccountBadge label={account.label} name={account.name} /> : null}
           </p>
         </div>
         <MessagesRefresh />
@@ -344,7 +380,7 @@ export function ThreadPane({
         {CHANNELS_POSTS_ORDER_TEXT}
       </p>
       {more ? (
-        <Link href={channelsHref(base, { team: teamId, channel: channelKey })} scroll={false} data-testid="newest-posts" className={cn(LINK, "text-small")}>
+        <Link href={channelsHref(base, { conn, team: teamId, channel: channelKey })} scroll={false} data-testid="newest-posts" className={cn(LINK, "text-small")}>
           Back to the newest posts
         </Link>
       ) : null}
@@ -352,7 +388,7 @@ export function ThreadPane({
         <div className="rounded-card border border-border p-3" data-testid="replies-elsewhere">
           <p className="mb-2 flex items-center gap-3 text-small">
             <span className="font-medium">Replies</span>
-            <Link href={channelsHref(base, { team: teamId, channel: channelKey, more })} scroll={false} className={LINK}>
+            <Link href={channelsHref(base, { conn, team: teamId, channel: channelKey, more })} scroll={false} className={LINK}>
               Close
             </Link>
           </p>
@@ -374,14 +410,14 @@ export function ThreadPane({
                 showSender
                 showDate
                 subject={p.subject}
-                footer={<PostFooter post={p} open={open} href={channelsHref(base, { team: teamId, channel: channelKey, post: open ? null : p.id, more })} replies={open ? replies : null} />}
+                footer={<PostFooter post={p} open={open} href={channelsHref(base, { conn, team: teamId, channel: channelKey, post: open ? null : p.id, more })} replies={open ? replies : null} />}
               />
             );
           })}
         </ul>
       )}
       {thread.nextCursor ? (
-        <Link href={channelsHref(base, { team: teamId, channel: channelKey, more: thread.nextCursor })} scroll={false} data-testid="more-posts" className={cn(LINK, "self-center text-small")}>
+        <Link href={channelsHref(base, { conn, team: teamId, channel: channelKey, more: thread.nextCursor })} scroll={false} data-testid="more-posts" className={cn(LINK, "self-center text-small")}>
           More posts
         </Link>
       ) : null}
@@ -402,6 +438,8 @@ async function ThreadSection(props: {
   teams: Promise<TeamListView>;
   laneId: string;
   connectionId: string;
+  conn: string | null;
+  account: { label: string; name: string } | null;
   teamId: string;
   channelKey: string;
   postId: string | null;
@@ -417,6 +455,8 @@ async function ThreadSection(props: {
       replies={replies}
       laneId={props.laneId}
       connectionId={props.connectionId}
+      conn={props.conn}
+      account={props.account}
       teamId={props.teamId}
       channelKey={props.channelKey}
       postId={props.postId}
@@ -442,8 +482,14 @@ export function NoChannelSelected({ team }: { team: boolean }) {
  */
 export async function ChannelsWorkspace({ laneId, state, searchParams }: { laneId: string; state: Connected; searchParams: Promise<SearchParams> }) {
   const sp = await searchParams;
+  // T-296 (spec 22.9): one team list per account that can read channels, all started together; the address names the account of the open team (`conn`, re-checked against the person's own usable
+  // accounts that have channels: another person's, an unknown, an expired or a feature-less account's id opens nothing and falls back to nothing).
+  const accounts = channelAccountsOf(state);
+  const grouped = accounts.length >= 2;
+  const open: MessagesAccount | undefined = openChannelAccountOf(state, sp);
   const teamRaw = one(sp.team);
-  const teamId = isTeamId(teamRaw) ? teamRaw : null;
+  const teamAsked = isTeamId(teamRaw) ? teamRaw : null;
+  const teamId = open ? teamAsked : null;
   const channelKey = teamId ? (one(sp.channel) ?? null) : null;
   const channelId = decodeChannelKey(channelKey);
   const postRaw = one(sp.post);
@@ -451,36 +497,69 @@ export async function ChannelsWorkspace({ laneId, state, searchParams }: { laneI
   const moreRaw = one(sp.more);
   const more = channelId !== null && moreRaw !== undefined && CURSOR.test(moreRaw) ? moreRaw : null;
   const { session } = await (await guards()).requireLane(laneId as Parameters<Awaited<ReturnType<typeof guards>>["requireLane"]>[0]);
-  const person = { laneId, userId: session.userId, connectionId: state.connectionId };
-  // started together, before any is awaited: the team list and the open team's channels. The open channel's posts and the open post's replies start as soon as the channel list has answered, because
-  // that list says whether the channel may be read at all (a shared channel is never read); they do not wait for the team list or each other.
-  const teams = loadTeams(person);
-  const channels = teamId ? loadChannels(person, teamId) : null;
+  const personOf = (a: MessagesAccount) => ({ laneId, userId: session.userId, connectionId: a.connectionId });
+  // started together, before any is awaited: every account's team list and the open team's channels. The open channel's posts and the open post's replies start as soon as the channel list has answered,
+  // because that list says whether the channel may be read at all (a shared channel is never read); they do not wait for the team lists or each other. Only the open account reads channels, posts and replies.
+  const lists = accounts.map((a) => ({ account: a, teams: loadTeams(personOf(a)) }));
+  const person = open ? personOf(open) : null;
+  const openTeams = lists.find((l) => l.account.connectionId === open?.connectionId)?.teams ?? null;
+  const channels = teamId && person ? loadChannels(person, teamId) : null;
   const gate = channels && channelId && channelKey ? channels.then((list) => gateChannel(list, channelKey)) : null;
-  const thread = gate && teamId && channelId ? gate.then((g): Promise<ThreadView> | ThreadView => (g.ok ? loadThread(person, teamId, channelId, more ? { cursor: more } : {}) : g.view)) : null;
-  const replies = gate && teamId && channelId && postId ? gate.then((g): Promise<RepliesView> | RepliesView => (g.ok ? loadReplies(person, teamId, channelId, postId) : { kind: "unavailable" })) : null;
+  const thread = gate && person && teamId && channelId ? gate.then((g): Promise<ThreadView> | ThreadView => (g.ok ? loadThread(person, teamId, channelId, more ? { cursor: more } : {}) : g.view)) : null;
+  const replies = gate && person && teamId && channelId && postId ? gate.then((g): Promise<RepliesView> | RepliesView => (g.ok ? loadReplies(person, teamId, channelId, postId) : { kind: "unavailable" })) : null;
   const selectedKey = channelId ? channelKey : null;
+  const connOf = (a: MessagesAccount): string | null => (grouped ? a.connectionId : null);
+  const section = (l: (typeof lists)[number]) => {
+    const isOpen = open !== undefined && l.account.connectionId === open.connectionId;
+    return (
+      <SectionBoundary>
+        <Suspense fallback={<ChatListSkeleton />}>
+          <TeamsSection promise={l.teams} channels={isOpen ? channels : null} laneId={laneId} connectionId={l.account.connectionId} teamId={isOpen ? teamId : null} selectedKey={isOpen ? selectedKey : null} conn={connOf(l.account)} />
+        </Suspense>
+      </SectionBoundary>
+    );
+  };
   return (
-    <WorkspaceLayout
-      selected={channelId !== null}
-      list={
-        <SectionBoundary>
-          <Suspense fallback={<ChatListSkeleton />}>
-            <TeamsSection promise={teams} channels={channels} laneId={laneId} connectionId={state.connectionId} teamId={teamId} selectedKey={selectedKey} />
-          </Suspense>
-        </SectionBoundary>
-      }
-      conversation={
-        thread && channels && teamId && channelId && channelKey ? (
-          <SectionBoundary>
-            <Suspense fallback={<ConversationSkeleton />}>
-              <ThreadSection thread={thread} replies={replies} channels={channels} teams={teams} laneId={laneId} connectionId={state.connectionId} teamId={teamId} channelKey={channelKey} postId={postId} more={more} />
-            </Suspense>
-          </SectionBoundary>
-        ) : (
-          <NoChannelSelected team={teamId !== null} />
-        )
-      }
-    />
+    <div className="flex min-w-0 flex-col gap-4">
+      <ChannelAccountNotes laneId={laneId} state={state} />
+      <WorkspaceLayout
+        selected={channelId !== null && open !== undefined}
+        list={
+          grouped ? (
+            <div className="flex flex-col gap-4" data-testid="team-groups">
+              {lists.map((l) => (
+                <section key={l.account.connectionId} aria-label={channelsGroupLabel(l.account.account)} data-testid="team-group" data-conn={l.account.connectionId} className="flex min-w-0 flex-col gap-2">
+                  <h3 className="flex min-w-0 items-center gap-2 text-small font-medium text-muted-foreground">
+                    <AccountBadge label={l.account.label} name={l.account.account} />
+                    <span className="min-w-0 truncate" dir="auto">
+                      {l.account.account}
+                    </span>
+                  </h3>
+                  {section(l)}
+                </section>
+              ))}
+            </div>
+          ) : (
+            lists[0] ? section(lists[0]) : null
+          )
+        }
+        conversation={
+          thread && channels && teamId && channelId && channelKey && open && openTeams ? (
+            <SectionBoundary>
+              <Suspense fallback={<ConversationSkeleton />}>
+                <ThreadSection thread={thread} replies={replies} channels={channels} teams={openTeams} laneId={laneId} connectionId={open.connectionId} conn={connOf(open)} account={grouped ? { label: open.label, name: open.account } : null} teamId={teamId} channelKey={channelKey} postId={postId} more={more} />
+              </Suspense>
+            </SectionBoundary>
+          ) : teamAsked !== null && !open ? (
+            // a team is in the address but no account of the person's opens it (several accounts and no `conn`, or a `conn` that is not one of their usable channel accounts): said plainly, nothing is guessed or read
+            <p data-testid="pick-account" className="rounded-card border border-border p-4 text-body text-muted-foreground">
+              {CHANNELS_PICK_ACCOUNT_TEXT}
+            </p>
+          ) : (
+            <NoChannelSelected team={teamId !== null} />
+          )
+        }
+      />
+    </div>
   );
 }

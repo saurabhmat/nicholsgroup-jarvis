@@ -18,6 +18,7 @@ import { replaceAccountRows } from "@/lib/teams-row-order";
 import { MESSAGES_ACCOUNT_CHANGED_TEXT, MESSAGES_EMPTY_LIST_TEXT, MESSAGES_REFRESH_FAILED_TEXT, messagesAccountBusyText, messagesAccountExpiredText, messagesAccountUnreachableText, messagesReconnectAccountLabel, messagesRefreshWaitSecondsText, messagesRefreshWaitText } from "@/lib/teams-wording";
 import { Button, EmptyState } from "@nichols/ui";
 import { ChatListRows, SignIn } from "./messages-view";
+import { useMessagesView } from "./messages-scope";
 import Link from "next/link";
 
 export type LiveReason = "notice" | "refresh" | "focus";
@@ -285,18 +286,25 @@ export function AccountNotes({ laneId, notes, dropped, onRetry, retryNote }: { l
 
 const NO_NOTES: AccountNote[] = []; // a stable default: a new array on every render would look like a new page of rows
 
+/** The part of the list a later page ("More chats") replaces and "Back to the newest chats" brings back: kept in memory only, never stored. */
+type Kept = { rows: ChatRowView[]; moreCursor: string | null; notes: TimedNote[]; dropped: boolean };
+
 /**
  * The rows of the chat list, the same as the page drew them, plus a Refresh and the re-read: after a notice or an allowed Refresh the list is fetched again from `/messages/chats` (the same read the
  * page makes), keeping what is shown if it fails. T-295: after a notice of ONE account only that account's list is read again (`?conn=`) and its rows are replaced; Refresh and the window coming back
  * read every account (one request to our server). A failed account is a line, never an empty list.
+ *
+ * T-296: this list is drawn once by the Messages layout and STAYS MOUNTED while the address changes (`?chat=`, `?conn=`, `?tab=`): a chat click re-reads no list. What the address says (the open chat for
+ * the highlight, the tab) comes from `useMessagesView()`; the dot of a chat that was opened is cleared here (the portal's own marker was posted when it was opened); "More chats" reads the next page
+ * through the same route and shows it in place of the first (the cursor lives in this component, not in the address, so a page change never re-reads the open conversation). On the Channels tab the
+ * list is hidden: a notice then only sets a flag (no read, nothing marked seen) and one read follows when the Chats tab comes back.
  */
 export function ChatListLive({
   laneId,
   initialRows,
   moreCursor,
-  selectedKey,
-  more,
-  selectedConn = null,
+  selectedKey: selectedKeyProp = null,
+  selectedConn: selectedConnProp = null,
   initialNotes = NO_NOTES,
   initialDropped = false,
   initialListed,
@@ -304,9 +312,8 @@ export function ChatListLive({
   laneId: string;
   initialRows: ChatRowView[];
   moreCursor: string | null;
-  selectedKey: string | null;
-  more: string | null;
-  /** The account of the open chat (null: any, with one account). */
+  /** Only where there is no Messages scope (a test): the open chat. With a scope the address says it. */
+  selectedKey?: string | null;
   selectedConn?: string | null;
   initialNotes?: AccountNote[];
   initialDropped?: boolean;
@@ -314,27 +321,37 @@ export function ChatListLive({
   initialListed?: string[];
 }) {
   const live = useMessagesLive();
+  const view = useMessagesView();
+  const selectedKey = view ? view.chatKey : selectedKeyProp;
+  const selectedConn = view ? view.conn : selectedConnProp;
+  const visible = view ? view.tab === "chats" : true;
   const [state, setState] = useState<ListState>({ rows: initialRows, moreCursor, notes: initialNotes, dropped: initialDropped, failed: false });
-  // a new page of rows from the server (a navigation, a server refresh) replaces what was re-read here (state adjusted during render, as React documents for a changed prop)
+  // a new page of rows from the server (a server refresh) replaces what was re-read here (state adjusted during render, as React documents for a changed prop)
   const [seed, setSeed] = useState({ initialRows, moreCursor, initialNotes, initialDropped });
+  // `later`: the cursor of the page shown in place of the newest (null: the newest chats); `kept`: what the newest page looked like, for "Back to the newest chats"
+  const [paging, setPaging] = useState<{ later: string | null; kept: Kept | null; busy: boolean }>({ later: null, kept: null, busy: false });
   if (seed.initialRows !== initialRows || seed.moreCursor !== moreCursor || seed.initialNotes !== initialNotes || seed.initialDropped !== initialDropped) {
     setSeed({ initialRows, moreCursor, initialNotes, initialDropped });
     setState({ rows: initialRows, moreCursor, notes: initialNotes, dropped: initialDropped, failed: false });
+    setPaging({ later: null, kept: null, busy: false });
   }
+  // Chats opened in this page view: their dot is gone at once (opening records the portal's own marker). A re-read of an account's list (it carries the markers) replaces this for that account.
+  const [opened, setOpened] = useState<readonly { key: string; conn: string | null }[]>([]);
+  if (selectedKey !== null && !opened.some((o) => o.key === selectedKey && o.conn === selectedConn)) setOpened([...opened, { key: selectedKey, conn: selectedConn }]);
   const [note, setNote] = useState<string | null>(null);
-  const latest = useRef({ selectedKey, selectedConn, more, listRefreshed: live?.listRefreshed });
+  const latest = useRef({ selectedKey, selectedConn, more: paging.later, listRefreshed: live?.listRefreshed, visible });
   useEffect(() => {
-    latest.current = { selectedKey, selectedConn, more, listRefreshed: live?.listRefreshed };
+    latest.current = { selectedKey, selectedConn, more: paging.later, listRefreshed: live?.listRefreshed, visible };
   });
-  // The page drew these lists: tell the live provider which accounts' lists were read, so exactly those are marked seen (an account that failed keeps its dot).
+  // The page drew these lists: tell the live provider which accounts' lists were read, so exactly those are marked seen (an account that failed keeps its dot). A hidden list (the Channels tab) was not seen.
   const reported = useRef<string | null>(null);
   useEffect(() => {
-    if (initialListed === undefined) return;
+    if (initialListed === undefined || !visible) return;
     const k = initialListed.join(",");
     if (reported.current === k) return;
     reported.current = k;
     latest.current.listRefreshed?.(initialListed);
-  }, [initialListed]);
+  }, [initialListed, visible]);
   // the Refresh button is never "up to date" while an account's list is missing
   const incomplete = state.notes.length > 0;
   useEffect(() => {
@@ -384,18 +401,33 @@ export function ChatListLive({
         }
         return failed ? { ...next, failed: true } : next;
       });
+      // the rows just read carry the portal's markers: what was opened before is in them now
+      setOpened((o) => o.filter((x) => !answers.some((a) => a.answer !== null && (a.conn === null || a.conn === x.conn || x.conn === null))));
       // an answer that names no accounts (an older server) is a list read for every usable one
       if (anyOk) latest.current.listRefreshed?.(listed.length > 0 ? listed : undefined);
     },
     [laneId],
   );
+  // A notice, Refresh or the window coming back while the Channels tab hides this list: nothing is read and nothing is marked seen; one read follows when the Chats tab is back.
+  const missed = useRef(false);
   useOnLiveRefetch((reason, conns) => {
+    if (!latest.current.visible) {
+      missed.current = true;
+      return undefined;
+    }
     const ac = new AbortController();
     // a notice of some accounts: only those are read; anything else (Refresh, focus, an older server): every account in one request
     const targets: (string | null)[] = reason === "notice" && conns !== null && conns.length > 0 ? [...conns] : [null];
     void readAgain(targets, ac.signal);
     return () => ac.abort();
   });
+  useEffect(() => {
+    if (!visible || !missed.current) return undefined;
+    missed.current = false;
+    const ac = new AbortController();
+    void readAgain([null], ac.signal);
+    return () => ac.abort();
+  }, [visible, readAgain]);
   // "Try again" on an account's line: read just that account (counted by the same per-person limit as any re-read). A busy account is not asked before the seconds Microsoft gave.
   const [waits, setWaits] = useState<Record<string, string>>({});
   // when the notes of the server's own page arrived (set after render, in an effect); notes from a re-read carry their own `retryAt`
@@ -418,9 +450,39 @@ export function ChatListLive({
     const r = live.requestRefresh("refresh");
     setNote(r.ok ? null : messagesRefreshWaitText(r.waitSeconds));
   };
-  const hrefOf = (key: string, conn: string | null): string => hrefFor(laneId, key, more, conn);
+
+  // "More chats": the next page of every account that has more, through the same route (the cursor is the server's opaque one), shown IN PLACE OF the newest page. A person's click, one request to our server.
+  const showMore = async (cursor: string): Promise<void> => {
+    if (paging.busy) return;
+    setPaging((p) => ({ ...p, busy: true }));
+    const keptNow: Kept = paging.kept ?? { rows: state.rows, moreCursor: state.moreCursor, notes: state.notes, dropped: state.dropped };
+    try {
+      const q = new URLSearchParams({ more: cursor });
+      if (selectedKey) q.set("chat", selectedKey);
+      if (selectedKey && selectedConn) q.set("open", selectedConn);
+      const res = await fetch(`/api/lanes/${encodeURIComponent(laneId)}/messages/chats?${q.toString()}`, { credentials: "same-origin", cache: "no-store" });
+      const b = res.ok ? ((await res.json()) as ChatsAnswer) : null;
+      if (b === null || !Array.isArray(b.rows)) throw new Error("shape");
+      const received = Date.now();
+      const timed: TimedNote[] = (b.notes ?? []).map((n) => (n.kind === "busy" && n.seconds !== null ? { ...n, retryAt: received + n.seconds * 1000 } : n));
+      setState({ rows: b.rows, moreCursor: typeof b.moreCursor === "string" ? b.moreCursor : null, notes: timed, dropped: b.dropped === true, failed: false });
+      setPaging({ later: cursor, kept: keptNow, busy: false });
+    } catch {
+      setState((s) => ({ ...s, failed: true }));
+      setPaging((p) => ({ ...p, busy: false }));
+    }
+  };
+  const backToNewest = () => {
+    const k = paging.kept;
+    if (k === null) return;
+    setState({ rows: k.rows, moreCursor: k.moreCursor, notes: k.notes, dropped: k.dropped, failed: false });
+    setPaging({ later: null, kept: null, busy: false });
+  };
+
+  const hrefOf = (key: string, conn: string | null): string => hrefFor(laneId, key, null, conn);
+  const rows = state.rows.map((r) => (r.unread && opened.some((o) => o.key === r.key && (o.conn === null || o.conn === r.conn)) ? { ...r, unread: false } : r));
   return (
-    <div className="flex min-w-0 flex-col gap-3">
+    <div className="flex min-w-0 flex-col gap-3" data-testid="chat-list-live">
       {live ? (
         <div className="flex flex-wrap items-center gap-2">
           <Button type="button" variant="outline" size="sm" onClick={refresh} data-testid="chat-list-refresh">
@@ -437,17 +499,17 @@ export function ChatListLive({
           {MESSAGES_REFRESH_FAILED_TEXT}
         </p>
       ) : null}
-      {state.rows.length === 0 ? <EmptyState title="No chats" description={MESSAGES_EMPTY_LIST_TEXT} /> : <ChatListRows rows={state.rows} selectedKey={selectedKey} selectedConn={selectedConn} hrefFor={hrefOf} />}
+      {rows.length === 0 ? <EmptyState title="No chats" description={MESSAGES_EMPTY_LIST_TEXT} /> : <ChatListRows rows={rows} selectedKey={selectedKey} selectedConn={selectedConn} hrefFor={hrefOf} />}
       <div className="flex flex-wrap items-center gap-3 text-small">
-        {more ? (
-          <Link href={hrefFor(laneId, selectedKey, null, selectedConn)} className="font-medium text-primary underline underline-offset-2" data-testid="newest-chats">
+        {paging.later !== null ? (
+          <Button type="button" variant="outline" size="sm" onClick={backToNewest} data-testid="newest-chats">
             Back to the newest chats
-          </Link>
+          </Button>
         ) : null}
         {state.moreCursor ? (
-          <Link href={hrefFor(laneId, selectedKey, state.moreCursor, selectedConn)} className="font-medium text-primary underline underline-offset-2" data-testid="more-chats">
-            More chats
-          </Link>
+          <Button type="button" variant="outline" size="sm" disabled={paging.busy} onClick={() => void showMore(state.moreCursor as string)} data-testid="more-chats">
+            {paging.busy ? "Loading..." : "More chats"}
+          </Button>
         ) : null}
       </div>
     </div>
