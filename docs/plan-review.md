@@ -2106,3 +2106,20 @@ Saurabh's request of Nov 24 (second Teams account, pub-k.org beside pubkgroup.co
 - **C5 of the T-281 review** (keep the chat list mounted across `?chat=` changes) moves into T-296: with two accounts every chat click would otherwise re-read two lists.
 - **Accepted limit of the combined paging:** the first page is ordered across accounts, later pages only within themselves (nothing may be buffered on the server, rule 6).
 - **Live checks (H-085):** A-1 the account picker with one account signed in; A-2 `login_hint` with two signed in; A-3 the same chat id in both lists (no longer affects the design: D-70's default, chosen Nov 24, shows such a chat as two rows); A-4 whether the per-chat read limit is shared by two users of the app.
+
+## T-294 and T-295 built (builder, Nov 24, 2026): what was done differently, accepted limits, follow-ups
+
+Done as the spec says, except the points below. Not reviewed yet by the security and code reviewers (the lead runs them).
+
+- **A third SQL object (T-295): `core.teams_chat_reads_list_many(text, uuid[])`.** Spec 22.5 asks for the markers of all accounts "in ONE database query under the existing RLS", and `comms` is not exposed to PostgREST, so a thin SECURITY INVOKER wrapper (the same shape as `core.teams_chat_reads_list`, at most 5 ids, at most 1,000 rows per connection) was added in migration 20261205100000 with pgTAP 333 (cross-lane and cross-user denial). **Production: it is part of part 37** (one part per deploy step: the migration is applied together with 20261204100000 and recorded as its own version), no part 38.
+- **The combined cursor is used also with one account** (`{"v":1,"s":[{c,k}]}`); an old single skip token in `?more=` still works for a person with exactly one account (the old links). With several accounts an old single token is "not a cursor" (400 on the route, the newest chats on the page).
+- **A cursor whose encoding would pass 6,400 characters offers no "More chats"** (fail closed). Two sources with 3,200-character tokens cannot both fit in 6,400 characters of base64url; real skip tokens are far shorter. Follow-up if the live test shows long tokens.
+- **A source that failed on a later page is left out of the next cursor** (its next page is unknown); "Try again" reads it from its first page.
+- **`?more=` on the page** accepts up to 6,400 characters (it was 3,200).
+- **Channels tab (T-296 not started):** it keeps using the FIRST usable account; its image addresses now carry that account's `conn` because the image route requires it in both forms. T-296 gives each team its own account.
+- **Chat clicks still re-read both lists** until T-296 (the open follow-up C5 of the T-281 review): with two accounts that is two list reads per click.
+- **Seen/dot:** the page posts "seen" only for the accounts whose list was read (`expectLists`); a provider without `expectLists` (tests, other callers) still marks every usable account as before.
+- **The Settings banner for a refused reconnect** names the row's address read from the database via `?conn=<id>` (only for that result, only the caller's own row), never text from the address bar.
+- **Local test helpers:** `teams-runbook.test.ts` skipped its T-280 SQL checks on this machine because the operator's FILLED copy holds a real tenant id; the test now checks only the template (placeholder) copy and accepts a filled copy for the new pair.
+- **Assumptions only the live test settles (H-085):** A-1 (the account picker with one account signed in), A-2 (`login_hint` with two signed in; if ignored, `loginHint: false` for the Teams provider), A-4 (the per-chat read limit shared by two users of the app: "Teams is busy" with seconds, no retry). A-3 no longer matters (D-70).
+- **Not built (out of scope):** T-296 (channels per account, list kept mounted), T-297, T-288 (send; the "posts as <UPN>" line), the approvals-history account label. Spec 17 test 8 (the canary) is covered by the existing canary tests plus assertions in the new tests that no provider text reaches a result; a two-account run of the full canary harness is not added.
