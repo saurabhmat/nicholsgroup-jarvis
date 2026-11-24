@@ -25,6 +25,7 @@
 // set, the structured log field `unexpected_scopes` names it (a name is copied only when it looks like a permission name, at most 10; anything else is "other"). Tokens, the id_token, the
 // code, the verifier and the client secret are SecretValues or are never held past the call. A grant refused after the exchange is dropped.
 import type { LaneId } from "@nichols/core";
+import type { LaneClient } from "@nichols/core/lane-router";
 import type { TeamsFeature } from "@nichols/core/lane-config";
 import { z } from "zod";
 import { ACCOUNT_IN_USE_MESSAGE, ACCOUNT_OWNED_BY_OTHER_MESSAGE, ConnectorError, isConnectorError, TEAMS_ONE_ACCOUNT_MESSAGE } from "../contract/errors";
@@ -50,6 +51,11 @@ export type TeamsProviderDeps = {
   identity: TeamsIdentityReader;
   /** Records the tenant, cloud and object id once. */
   identityWriter: TeamsIdentityWriter;
+  /**
+   * T-294: how many Teams connections the person already has in the lane that count against the company's limit (`active`, `degraded`, `reconnect_required`), read through the
+   * person's own client (RLS). Used only to refuse at the START, before any redirect; the callback's function and the database trigger enforce the limit again.
+   */
+  countAccounts: (input: { laneId: LaneId; userId: string; client: LaneClient }) => Promise<number>;
   logger?: ConnectorLogger;
   now?: () => number;
   /** Test hooks: the HTTP clients for the sign-in host and for Graph (defaults enforce the host allow-lists). */
@@ -63,6 +69,8 @@ export function assertTeamsRedirectUri(redirectUri: string): void {
   if (!ok) throw new ConnectorError({ kind: "connection_unavailable", message: `GRAPH_TEAMS_REDIRECT_URI must end with ${TEAMS_CALLBACK_PATH}` });
 }
 
+/** The statuses that count against `teams.max_accounts_per_person` (the same rule as core.teams_account_limit's callers: everything but `disconnected` and `pending`). */
+const COUNTED_STATUSES: ReadonlySet<string> = new Set(["active", "degraded", "reconnect_required"]);
 const OIDC_EXTRAS: ReadonlySet<string> = new Set(["openid", "profile", "email", "offline_access"]);
 const GRAPH_PREFIX = "https://graph.microsoft.com/";
 
@@ -194,6 +202,18 @@ export function createTeamsOAuthProvider(deps: TeamsProviderDeps): OAuthProvider
     },
     async precheck({ laneId }) {
       await enabledSettings(laneId);
+    },
+    // T-294 (spec 22.3): a first connect, or a reconnect of a row that does not count (disconnected), is refused at once when the person already has as many accounts as the company allows. A reconnect of a
+    // row that already counts (reconnect_required, degraded, active) is never refused by the limit. The callback enforces it again (the SQL function, then the trigger).
+    async accountCheck({ laneId, userId, client, reconnect }) {
+      if (reconnect !== null && COUNTED_STATUSES.has(reconnect.status)) return;
+      const settings = await enabledSettings(laneId);
+      const have = await deps.countAccounts({ laneId, userId, client });
+      if (have >= settings.maxAccountsPerPerson) throw new ConnectorError({ kind: "forbidden", message: TEAMS_ONE_ACCOUNT_MESSAGE });
+    },
+    // T-294 (spec 22.3): a first connect that lands on a row the person already has (they chose the same account again): the tokens are refreshed on it and no second row exists. Said, so Settings can explain.
+    connectedDetail({ connection, reconnect }) {
+      return !reconnect && COUNTED_STATUSES.has(connection.status) ? "already_connected" : undefined;
     },
     async identify({ laneId, tokens, nonce }) {
       const lane = await enabledSettings(laneId); // read again: the exchange took time; this one read decides the scopes, the tenant and the domains below

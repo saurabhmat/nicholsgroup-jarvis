@@ -375,6 +375,42 @@ describe("errors", () => {
     expect(await failure(c.request({ method: "GET", path: "/html" }))).toMatchObject({ kind: "provider_error", endpoint: "/html" });
     expect((await c.request({ method: "GET", path: "/html", responseType: "text" })).data).toBe("<html>maintenance</html>");
   });
+
+  it("bytes (T-285): the raw bytes come back unchanged, an empty body is null, and the cap still applies while streaming", async () => {
+    const png = Uint8Array.from([0x89, 0x50, 0x4e, 0x47, 0xff, 0x00, 0xfe, 0x80]);
+    server.use(
+      http.get(`${BASE}/bin`, () => new HttpResponse(png, { headers: { "content-type": "image/png" } })),
+      http.get(`${BASE}/empty`, () => new HttpResponse(null, { headers: { "content-type": "image/png" } })),
+      http.get(`${BASE}/huge`, () => new HttpResponse(new Uint8Array(4096), { headers: { "content-type": "image/png" } })),
+    );
+    const { c } = client({ maxResponseBytes: 1024 });
+    const r = await c.request<Buffer>({ method: "GET", path: "/bin", responseType: "bytes" });
+    expect([...(r.data as Uint8Array)]).toEqual([...png]);
+    expect((await c.request({ method: "GET", path: "/empty", responseType: "bytes" })).data).toBeNull();
+    expect(await failure(c.request({ method: "GET", path: "/huge", responseType: "bytes" }))).toMatchObject({ kind: "provider_error", endpoint: "/huge" });
+    let pulled = 0;
+    const endless = client({ maxResponseBytes: 1024, fetch: async () => new Response(new ReadableStream({ pull: (ctl) => (pulled++, ctl.enqueue(new Uint8Array(512))) })) }).c;
+    expect(await failure(endless.request({ method: "GET", path: "/chunked", responseType: "bytes" }))).toMatchObject({ kind: "provider_error" });
+    expect(pulled).toBeLessThan(10);
+  });
+});
+
+describe("waitSignal (T-285 review)", () => {
+  it("is refused for any method but GET, and bounds only the wait before the FIRST attempt", async () => {
+    let n = 0;
+    server.use(http.get(`${BASE}/g`, () => (++n === 1 ? new HttpResponse(null, { status: 503 }) : HttpResponse.json({ ok: true }))), http.post(`${BASE}/p`, () => HttpResponse.json({})));
+    const { c } = client({ rateLimit: { requests: 1, perMs: 50 } });
+    for (const method of ["POST", "PUT", "PATCH", "DELETE"] as const) await expect(Promise.resolve().then(() => c.request({ method, path: "/p", waitSignal: new AbortController().signal }))).rejects.toMatchObject({ info: { kind: "invalid_input" } });
+    // the cap has already expired when the retry's own wait starts: the retry still goes out (only the first wait is bounded)
+    const ctl = new AbortController();
+    const done = c.request({ method: "GET", path: "/g", waitSignal: ctl.signal });
+    setTimeout(() => ctl.abort(), 10);
+    expect((await done).data).toEqual({ ok: true });
+    expect(n).toBe(2);
+    // before the first attempt an expired cap is rate_limited
+    const gone = AbortSignal.abort();
+    await expect(c.request({ method: "GET", path: "/g", waitSignal: gone })).rejects.toMatchObject({ info: { kind: "rate_limited" } });
+  });
 });
 
 describe("logging", () => {

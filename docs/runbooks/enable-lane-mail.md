@@ -286,6 +286,8 @@ Without this, Microsoft mail and calendar arrive by the 15-minute poll. With it,
 6. **What to look for in the logs** (Vercel -> Logs, filter `webhook` or `microsoft.subscription`): `microsoft.subscription.ensured` (counts of created and renewed), `webhook.enqueued` (outcome `enqueued`) for each accepted notification, `webhook.skipped` with `outcome` `duplicate` (a replay, normal), `bad_client_state` (someone sent a notification that is not Microsoft's, or a subscription was recreated meanwhile: one or two are fine, a stream of them is worth telling the agent) and `unknown_account`-style drops. Ids and counts only: no address, subject or secret is ever logged. A failed create or renewal shows as `microsoft.subscription.failed` with a kind and, once permanent, an attention alert (`subscription_renewal_failed`); the connection keeps polling.
 7. **Live check (H-073).** Send yourself a mail from another account: it should be on Home within a minute. Record in the backlog what Microsoft did.
 
+**Teams uses the same variable (T-289).** The Teams notice subscription takes its address from `GRAPH_NOTIFICATION_URL` through the mail Graph app's settings (`requireConnectorEnv("graph")`): a deployment that has Teams but not the mail Graph app's variables never subscribes (logged `microsoft.subscription.config_unreadable`-style, nothing fails).
+
 **Turn it off.** Vercel -> Environment Variables -> **delete** `GRAPH_NOTIFICATION_URL` (Production) -> Redeploy. The next renewal scan (within 12 hours, or invoke it as in step 4) stops the subscriptions it created and marks them removed; polling carries on unchanged. Nothing is deleted from mail or calendar data. To stop sooner, or if Microsoft is switched off for the company, no action is needed: a paused provider's subscriptions are marked removed by the same scan, and the portal drops anything Microsoft still sends for them. Disconnecting an account marks its subscriptions removed at once in the portal's records (no request reaches Microsoft: its token is gone). Microsoft keeps posting to the portal for up to 6 days; the portal answers 202 and drops it. If the marking failed, the daily retention purge removes the leftover row.
 
 **If it does not work.** Settings shows no *Live updates* line after step 4: check the variable's exact value (step 2) and that the function ran (Inngest -> Runs). A message takes the full 15 minutes to arrive: notifications are not reaching the portal (Microsoft refused the address during creation, so no subscription exists) or the sync job is not synced (step 3); polling is unaffected, and nothing needs rolling back.
@@ -403,16 +405,54 @@ What the lane's `teams` block looks like (the file inserts it; the app refuses a
     "cloud": "commercial",
     "tenant_ids": ["__TEAMS_TENANT_ID__"],
     "allowed_domains": ["__TEAMS_DOMAIN__"],
-    "features": ["chat_read", "call_links"]
+    "features": ["chat_read", "call_links"],
+    "max_accounts_per_person": 1
   }
 }
 ```
+
+`max_accounts_per_person` (T-294, a whole number 1 to 5, default 1) is how many Teams accounts one person may connect for this company. Leave it at 1 here; raise it with the next section.
 
 **Switch Teams off again** (a new settings version, never an edit): the same file's pattern with `"enabled": false`, or without the block. People then see "Teams is paused for this company";
 their connections and Vault tokens are kept until they press Disconnect. **Roll back:** a new version without the `teams` block. Neither touches mail.
 
 **What the agent checked:** the schema and the template parse with the app's own settings schema (tests in `packages/core/src/lane-config`); the SQL refuses what is listed above (run against a copy of the
 production shape in a transaction that was rolled back); Teams reads only the `teams` settings, never the mail provider list.
+
+## Allow several Teams accounts per person (T-294 to T-296; H-085)
+
+By default a person connects ONE Teams account per company (`teams.max_accounts_per_person` = 1). A person who has two Microsoft accounts in the same organisation (for `PKG`: a `pubkgroup.com` and a
+`pub-k.org` account, each with its own Teams chats) can connect both and see their chats in one list on Messages once the number is raised to 2. A chat that both accounts are in is shown twice, once
+per account, each labelled with its account (decision D-70); nothing is merged and nothing switches accounts. One Microsoft account is still one connection in one company, owned by one person.
+
+**Order matters (the one thing that can pause Teams for a company).** The app reads the `teams` settings with a strict schema. A deployment older than T-294 reads the new key as malformed and
+**pauses Teams** for the company. So: (1) production part 37 (`part-37-T-294-precheck.sql`, `part-37-T-294.sql`, `part-37-T-294-check.sql`; it changes no row and the live connection stays valid),
+(2) deploy T-294 to T-296, (3) only then the file below. Rolling back is a new settings version with the number set back (or the key removed): nobody is disconnected by it.
+
+1. **Fill in `teams-accounts-limit-H-085.sql`** (same folder as the other manual SQL; gitignored). ONE block at the top holds the three values: the lane code (`PKG`), the number (`2`, no quotes) and the word
+   `DEPLOYED` (you type it to confirm step 2 is finished). Keep the quotes of the two text values. The file refuses when a `PASTE-` placeholder is left, when the lane has no enabled `teams` block, when the key
+   already exists, or when part 37 is missing. Run it in the SQL Editor of the PRODUCTION project. It adds ONE new settings version: the current settings with that one key set; every other key is unchanged.
+2. **Run `check-teams-accounts-limit-H-085.sql`** with the same lane and number (one block at the top). *Expect:* every row `true`, and one count row at the end (the Teams connections of the lane).
+3. **Each person adds the second account:** Settings -> Connections -> Your Teams accounts -> **Connect another Teams account**, then on Microsoft's page choose "Use another account" and sign in with the second one.
+   If Microsoft signs the first account in again, the portal says "That Teams account was already connected": sign out of the other account at Microsoft (or use a private window) and try again.
+4. **If you typed DEPLOYED too early** (the older deployment then reads the new key as malformed and pauses Teams for the company: it fails safe, nothing is lost), back out with a new insert-only version without the key: the same file's pattern, `core.lane_config` gets the previous settings again as the next version number (ask the agent for the SQL, or deploy first and the pause ends at once).
+5. **Lowering the number later** never disconnects or pauses anything: both accounts keep working; the person just cannot add another until they are under the new number.
+
+What the block looks like after step 1 (the file writes it; the app refuses a block it cannot read and treats it as Teams off):
+
+<!-- teams-limit-template -->
+```json
+{
+  "teams": {
+    "enabled": true,
+    "cloud": "commercial",
+    "tenant_ids": ["__TEAMS_TENANT_ID__"],
+    "allowed_domains": ["__TEAMS_DOMAIN__"],
+    "features": ["chat_read", "call_links"],
+    "max_accounts_per_person": 2
+  }
+}
+```
 
 ## Roll back this run
 

@@ -9,7 +9,7 @@ const json = z.record(z.string(), z.unknown());
 const RowSchema = z.object({
   id: z.uuid(),
   lane_id: z.string().regex(/^[A-Z]{1,8}$/),
-  action_type: z.enum(["email.send", "email.save_draft", "qbo.disconnect"]),
+  action_type: z.enum(["email.send", "email.save_draft", "qbo.disconnect", "teams.chat.send", "teams.channel.post", "teams.channel.reply"]),
   connection_id: z.uuid(),
   provider: z.string(),
   target: json,
@@ -33,6 +33,7 @@ const RowSchema = z.object({
   result: json,
   failure_code: z.string().nullable(),
   payload_purged_at: z.string().nullable(),
+  executing_at: z.string().nullable().optional(),
   created_at: z.string(),
   updated_at: z.string(),
 });
@@ -68,6 +69,7 @@ export function toRow(raw: unknown): ActionRow {
     result: r.result,
     failureCode: r.failure_code,
     payloadPurgedAt: r.payload_purged_at,
+    executingAt: r.executing_at ?? null,
     createdAt: r.created_at,
     updatedAt: r.updated_at,
   };

@@ -30,7 +30,16 @@ describe("the Graph subscription client is reachable only from the watch/renew c
       .map(rel)
       .filter((f) => !f.startsWith("packages/eslint-plugin/src/"))
       .sort();
-    expect(offenders).toEqual(["packages/connectors/src/microsoft/index.ts", "packages/connectors/src/microsoft/subscription-client.ts", "packages/connectors/src/microsoft/subscriptions.ts"]);
+    // T-289: the Teams subscription client has the same shape (its own file, wiring and logic, and the HTTP wrapper's comment naming the mail client); teams/subscription-boundary.test.ts pins it
+    expect(offenders).toEqual([
+      "packages/connectors/src/microsoft/index.ts",
+      "packages/connectors/src/microsoft/subscription-client.ts",
+      "packages/connectors/src/microsoft/subscriptions.ts",
+      "packages/connectors/src/teams/http.ts",
+      "packages/connectors/src/teams/index.ts",
+      "packages/connectors/src/teams/subscription-client.ts",
+      "packages/connectors/src/teams/subscriptions.ts",
+    ]);
   });
 
   it("the logic imports the client as a TYPE only and takes the instance as a parameter; the wiring is the one place that builds it", () => {
@@ -46,7 +55,17 @@ describe("the Graph subscription client is reachable only from the watch/renew c
       .filter((f) => /["'`]\/subscriptions/.test(text(f)))
       .map(rel)
       .sort();
-    expect(files).toEqual(["packages/connectors/src/microsoft/constants.ts", "packages/connectors/src/microsoft/http.ts", "packages/connectors/src/microsoft/subscription-client.ts", "packages/connectors/src/microsoft/subscriptions.ts"]);
+    // + (T-289) the Teams copies of the same four, named explicitly
+    expect(files).toEqual([
+      "packages/connectors/src/microsoft/constants.ts",
+      "packages/connectors/src/microsoft/http.ts",
+      "packages/connectors/src/microsoft/subscription-client.ts",
+      "packages/connectors/src/microsoft/subscriptions.ts",
+      "packages/connectors/src/teams/constants.ts",
+      "packages/connectors/src/teams/http.ts",
+      "packages/connectors/src/teams/subscription-client.ts",
+      "packages/connectors/src/teams/subscriptions.ts",
+    ]);
   });
 
   it("the mail write client's allow-list is untouched: no subscription route in it", () => {

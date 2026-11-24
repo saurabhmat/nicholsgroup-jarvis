@@ -19,7 +19,7 @@ import { mapGraphError } from "../microsoft/errors";
 import type { TeamsGuard } from "./guard";
 import { createTeamsHttp } from "./http";
 import type { TeamsTokenManager } from "./token-manager";
-import { TEAMS_CHAT_MESSAGES_RATE_LIMIT, TEAMS_CHATS_RATE_LIMIT, TEAMS_DEFAULT_RATE_LIMIT, TEAMS_GRAPH_BASE, TEAMS_MAX_CONCURRENT, TEAMS_PARAM_FORMATS, TEAMS_READ_ROUTES } from "./constants";
+import { TEAMS_IMAGE_MAX_CONCURRENT, TEAMS_IMAGE_MAX_WAIT_MS, TEAMS_CHAT_MESSAGES_RATE_LIMIT, TEAMS_CHATS_RATE_LIMIT, TEAMS_DEFAULT_RATE_LIMIT, TEAMS_GRAPH_BASE, TEAMS_MAX_CONCURRENT, TEAMS_PARAM_FORMATS, TEAMS_READ_ROUTES } from "./constants";
 
 export type TeamsQuery = Record<string, string | number | boolean | null | undefined | readonly string[]>;
 export type TeamsActor = { kind: "user"; userId: string } | { kind: "service" };
@@ -37,6 +37,12 @@ export type TeamsGetRequest = {
   retry?: boolean;
   /** Per attempt, in ms (default: the shared client's 30 s). A page read asks for less so a slow answer becomes "could not load" at once. */
   timeoutMs?: number;
+  /** `"bytes"` (T-285, a hosted image): the body as raw bytes, cut at `maxBytes` while streaming. Only the hosted-content templates may ask for it. Default: JSON. */
+  responseType?: "json" | "bytes";
+  /** The largest body accepted (default: the shared client's 20 MB). Required with `"bytes"`. */
+  maxBytes?: number;
+  /** The caller's own cancellation (the browser closed the request): a waiting call leaves its place in the queue and the rate limit at once, and a running one stops. */
+  signal?: AbortSignal;
 };
 
 /** What the guard approved for this call, handed back so a reader can tell the person's own messages and external members without a second read: the account's tenant and Entra object id. */
@@ -55,6 +61,8 @@ export type TeamsApiDeps = {
   /** Test hook: extra HTTP client options (fast backoff, injected sleep and clock). It can never replace the base URL. */
   httpOptions?: Partial<HttpClientOptions>;
   maxConcurrent?: number;
+  /** Test hook: the bounded wait of a picture (default TEAMS_IMAGE_MAX_WAIT_MS). */
+  imageMaxWaitMs?: number;
 };
 
 const refused = (message: string) => new ConnectorError({ kind: "invalid_input", message });
@@ -73,6 +81,9 @@ function assertRequest(req: TeamsGetRequest): import("@nichols/core/lane-config"
     if (typeof v !== "string" || format === undefined || !format.test(v)) throw refused("A path parameter is not valid");
   }
   if (req.timeoutMs !== undefined && !(Number.isInteger(req.timeoutMs) && req.timeoutMs >= 1000 && req.timeoutMs <= 30_000)) throw refused("The request timeout is not valid");
+  if (req.responseType !== undefined && req.responseType !== "json" && req.responseType !== "bytes") throw refused("The response type is not valid");
+  if (req.responseType === "bytes" && !req.path.endsWith("/hostedContents/{hostedId}/$value")) throw refused("Only a hosted content may be read as bytes");
+  if (req.responseType === "bytes" ? !(Number.isInteger(req.maxBytes) && (req.maxBytes as number) >= 1024 && (req.maxBytes as number) <= 8 * 1024 * 1024) : req.maxBytes !== undefined) throw refused("The size limit is not valid");
   const actor = req.actor;
   if (actor?.kind === "user") {
     if (typeof actor.userId !== "string" || !USER_ID.test(actor.userId)) throw refused("A signed-in user is required");
@@ -98,7 +109,28 @@ function bucketFor(connectionId: string, req: TeamsGetRequest): { key: string; l
   if (req.path === "/me/chats") return { key: `${connectionId}:chats`, limit: TEAMS_CHATS_RATE_LIMIT };
   // The key is logged on every request line and kept in a process-wide map: a short keyed hash of the chat id, never the id itself (SL2).
   if (req.path === "/chats/{chatId}/messages") return { key: `${connectionId}:chat:${chatPacingToken(req.params?.chatId ?? "")}`, limit: TEAMS_CHAT_MESSAGES_RATE_LIMIT };
+  // T-285: an inline image is paced per chat or channel in its OWN bucket (a message with several pictures does not delay the next page of messages or posts). This ASSUMES hosted contents are not
+  // counted against the documented 1-per-second GET-messages limit; H-081 / H-084 confirm it (a 429 reaches the route as `rate_limited` and nothing is retried here).
+  if (req.path === "/chats/{chatId}/messages/{messageId}/hostedContents/{hostedId}/$value") return { key: `${connectionId}:chatimg:${chatPacingToken(req.params?.chatId ?? "")}`, limit: TEAMS_CHAT_MESSAGES_RATE_LIMIT };
+  if (req.path === "/teams/{teamId}/channels/{channelId}/messages/{messageId}/hostedContents/{hostedId}/$value") return { key: `${connectionId}:chanimg:${chatPacingToken(req.params?.channelId ?? "")}`, limit: TEAMS_CHAT_MESSAGES_RATE_LIMIT };
+  // T-291: a channel's posts and replies are paced per channel (1 request per channel per second, vendor facts A2)
+  if (req.path.startsWith("/teams/{teamId}/channels/{channelId}/messages")) return { key: `${connectionId}:chan:${chatPacingToken(req.params?.channelId ?? "")}`, limit: TEAMS_CHAT_MESSAGES_RATE_LIMIT };
   return { key: connectionId, limit: TEAMS_DEFAULT_RATE_LIMIT };
+}
+
+const PICTURE_403_EVERY_MS = 60 * 60 * 1000;
+const lastPicture403 = new Map<string, number>();
+/** True when a 403 of a picture may be recorded now (and notes it): at most once per connection per hour, in this process. */
+function pictureForbiddenDue(connectionId: string, nowMs: number): boolean {
+  const last = lastPicture403.get(connectionId);
+  if (last !== undefined && nowMs - last < PICTURE_403_EVERY_MS) return false;
+  if (lastPicture403.size > 1000) for (const [k, v] of lastPicture403) if (nowMs - v >= PICTURE_403_EVERY_MS) lastPicture403.delete(k);
+  lastPicture403.set(connectionId, nowMs);
+  return true;
+}
+/** Test helper. */
+export function resetPictureForbiddenForTests(): void {
+  lastPicture403.clear();
 }
 
 export function createTeamsApi(deps: TeamsApiDeps): TeamsApi {
@@ -108,11 +140,17 @@ export function createTeamsApi(deps: TeamsApiDeps): TeamsApi {
       const feature = assertRequest(req);
       assertLaneBound(laneId, conn);
       const requirement = { feature, ...(req.actor.kind === "user" ? { actorUserId: req.actor.userId.toLowerCase() } : {}) };
-      return withMailboxSlot(`${laneId}\u0000teams\u0000${conn.id}`, max, async () => {
+      // Pictures have their OWN small pool (so a page full of them never queues the person's other reads behind them) and a bounded wait for a slot plus the rate limit together: past it the call
+      // ends as `rate_limited` at once. The wait is not part of the request's own timeout (`timeoutMs` covers one attempt, from sending the request to the last byte).
+      const image = req.responseType === "bytes";
+      const waitSignal = image ? AbortSignal.timeout(deps.imageMaxWaitMs ?? TEAMS_IMAGE_MAX_WAIT_MS) : undefined;
+      const slotSignal = waitSignal ? (req.signal ? AbortSignal.any([req.signal, waitSignal]) : waitSignal) : req.signal;
+      const slotKey = `${laneId}\u0000teams${image ? "img" : ""}\u0000${conn.id}`;
+      const run = () => withMailboxSlot(slotKey, image ? TEAMS_IMAGE_MAX_CONCURRENT : max, async () => {
         const g = await deps.guard(laneId, conn, requirement); // decided inside the slot: after any wait for it
         const bucket = bucketFor(g.conn.id, req);
         const http: HttpClient = createTeamsHttp(
-          { ...deps.httpOptions, baseUrl: TEAMS_GRAPH_BASE, laneId, connectionId: g.conn.id, rateLimitKey: bucket.key, rateLimit: bucket.limit, ...(req.timeoutMs !== undefined ? { timeoutMs: req.timeoutMs } : {}), ...(deps.logger ? { logger: deps.logger } : {}) },
+          { ...deps.httpOptions, baseUrl: TEAMS_GRAPH_BASE, laneId, connectionId: g.conn.id, rateLimitKey: bucket.key, rateLimit: bucket.limit, ...(req.timeoutMs !== undefined ? { timeoutMs: req.timeoutMs } : {}), ...(req.maxBytes !== undefined ? { maxResponseBytes: req.maxBytes } : {}), ...(deps.logger ? { logger: deps.logger } : {}) },
           g.cloud,
           "read",
         );
@@ -126,6 +164,9 @@ export function createTeamsApi(deps: TeamsApiDeps): TeamsApi {
             ...(req.params ? { params: req.params } : {}),
             ...(req.query ? { query: req.query } : {}),
             ...(req.retry === false ? { retry: false } : {}),
+            ...(req.responseType === "bytes" ? { responseType: "bytes" as const } : {}),
+            ...(req.signal ? { signal: req.signal } : {}),
+            ...(waitSignal ? { waitSignal } : {}),
             auth: {
               scheme: "Bearer",
               secret: async () => {
@@ -155,10 +196,21 @@ export function createTeamsApi(deps: TeamsApiDeps): TeamsApi {
           if (!isConnectorError(e)) throw e;
           if (credentialError !== undefined) throw toConnectorError(credentialError);
           const mapped = toConnectorError(mapGraphError(e));
-          if (isProviderApiError(mapped.toJSON())) await deps.errors?.record(laneId, g.conn, mapped.toJSON());
+          // Content written by someone else (a hosted picture that is gone or not allowed) must not be able to add an error row on every view: a 403 or 404 of a picture is not recorded.
+          // A 404 is never recorded. A 403 is recorded at most once per connection per hour (a signal for a tenant-wide problem, without letting a message's content add a row per view).
+          const pictureGone = image && (mapped.info.http_status === 404 || (mapped.info.http_status === 403 && !pictureForbiddenDue(g.conn.id, (deps.httpOptions?.now ?? Date.now)())));
+          if (!pictureGone && isProviderApiError(mapped.toJSON())) await deps.errors?.record(laneId, g.conn, mapped.toJSON());
           throw mapped;
         }
-      });
+      }, slotSignal);
+      try {
+        return await run();
+      } catch (e) {
+        // the wait for a slot ran out (the caller did not cancel): the same answer as a rate limit that ran out
+        // only the cap's own abort (its TimeoutError) is relabelled; every other error, a late guard or database error included, keeps its own kind
+        if (waitSignal?.aborted && !req.signal?.aborted && e === waitSignal.reason) throw new ConnectorError({ kind: "rate_limited", message: "Pictures are busy; try again in a moment", retry_after_seconds: 2 });
+        throw e;
+      }
     },
   };
 }

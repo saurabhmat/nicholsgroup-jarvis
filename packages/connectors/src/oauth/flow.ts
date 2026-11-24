@@ -105,6 +105,17 @@ export interface OAuthProvider {
    */
   startCheck?(input: { laneId: LaneId }): Promise<void>;
   /**
+   * T-294: a second check at the start, AFTER the reconnect target (if any) is resolved and before any state is stored or any redirect is built, for a rule that needs the person and the
+   * row: Teams refuses at once when the person already has as many accounts as the company allows (a first connect, or a reconnect of a row that is not counted). `reconnect` is the
+   * person's own row being reconnected, or null for a first connect. `client` is the person's own client (reads run under RLS). Throw `forbidden` to refuse.
+   */
+  accountCheck?(input: { laneId: LaneId; userId: string; client: LaneClient; reconnect: { id: string; status: string } | null }): Promise<void>;
+  /**
+   * T-294: a fixed sub-code (`/^[a-z][a-z_]{0,23}$/`, from a list the provider owns) reported with a SUCCESSFUL connect, decided from the connection row as it was before the tokens were
+   * stored (Teams: the person chose an account they had already connected; its sign-in was refreshed). Never from a provider response.
+   */
+  connectedDetail?(input: { connection: LaneBoundConnection; reconnect: boolean }): string | undefined;
+  /**
    * The connected account and the expiry of the credential whose loss forces a reconnect. Throw a ConnectorError to
    * refuse the account (e.g. a QuickBooks realm that is not the lane's). May call the provider with `http`.
    */
@@ -176,8 +187,8 @@ export class ConnectRefusal extends Error {
 }
 
 export type CallbackResult =
-  | { ok: true; provider: Provider; laneId: LaneId; connectionId: string }
-  | { ok: false; reason: ConnectFailure; provider?: Provider; laneId?: LaneId; message?: string; detail?: string };
+  | { ok: true; provider: Provider; laneId: LaneId; connectionId: string; detail?: string }
+  | { ok: false; reason: ConnectFailure; provider?: Provider; laneId?: LaneId; message?: string; detail?: string; connectionId?: string };
 
 /** Thrown by `authorize` callbacks; the route maps it to 401/403. Anything else is an outage. The provider is passed so the roles can differ (a person's own Google account: any own_mail member, T-247). */
 export type AuthorizeFn = (laneId: LaneId, provider?: Provider) => Promise<Authorized>;
@@ -232,7 +243,7 @@ export function createOAuthFlow(deps: OAuthFlowDeps) {
       const { userId, client } = await authorize(laneId, p.provider);
       if (p.startCheck) await p.startCheck({ laneId });
       // A reconnect (T-238): the connection must be this lane's own, for this provider; its account is the only one the callback accepts.
-      let bound: { id: string; externalAccountId: string } | null = null;
+      let bound: { id: string; externalAccountId: string; status: string } | null = null;
       if (opts.connectionId !== undefined) {
         const found = deps.connections.findById ? await deps.connections.findById(laneId, p.provider, opts.connectionId).catch(() => "error" as const) : null;
         if (found === "error") throw new ConnectorError({ kind: "transient", message: "Connection store unavailable" });
@@ -241,6 +252,7 @@ export function createOAuthFlow(deps: OAuthFlowDeps) {
         if (MAIL_PROVIDERS.has(p.provider) && found.ownerUserId !== userId) throw new ConnectorError({ kind: "not_found", message: "Connection not found" });
         bound = found;
       }
+      if (p.accountCheck) await p.accountCheck({ laneId, userId, client, reconnect: bound ? { id: bound.id, status: bound.status } : null });
       const { clientId, redirectUri } = p.client();
       const { authorization } = await p.endpoints(laneId);
       const url = new URL(authorization);
@@ -303,6 +315,7 @@ export function createOAuthFlow(deps: OAuthFlowDeps) {
       }
       const code = query.get("code") as string;
       let exchanged = false; // a grant exists at the provider (see GRANT_NOT_STORED_MESSAGE)
+      let connectedNote: string | undefined;
 
       try {
         const conn = await withAudit(deps.audit, entry, async () => {
@@ -362,6 +375,8 @@ export function createOAuthFlow(deps: OAuthFlowDeps) {
               throw new RefusedAccount(e);
             }
           }
+          // Decided from the row as it was BEFORE the tokens are stored (a first connect that lands on an already connected row of this person: Teams, T-294).
+          connectedNote = p.connectedDetail?.({ connection, reconnect: boundId !== null });
           await refuseInUse(() =>
             deps.storeToken(laneId, connection, new SecretValue(JSON.stringify({ ...(p.storedTokens ? p.storedTokens(tokens) : tokens), obtained_at: new Date().toISOString() })), identity.expiresAt, userId),
           );
@@ -371,7 +386,8 @@ export function createOAuthFlow(deps: OAuthFlowDeps) {
           }
           return connection;
         });
-        return { ok: true, provider: p.provider, laneId, connectionId: conn.id };
+        const okDetail = safeDetail(connectedNote);
+        return { ok: true, provider: p.provider, laneId, connectionId: conn.id, ...(okDetail ? { detail: okDetail } : {}) };
       } catch (e) {
         const reason: ConnectFailure =
           e instanceof WrongAccount
@@ -385,6 +401,9 @@ export function createOAuthFlow(deps: OAuthFlowDeps) {
                 : "unavailable";
         const cause = e instanceof RefusedAccount || e instanceof ExchangeFailed ? e.cause : e;
         const detail = safeDetail(p.failureDetail?.(cause));
+        // T-294: a reconnect that came back as another account names its row (an id the state vouches for; the page looks up the person's own row, so no address travels in the redirect).
+        const failedBoundId = reason === "wrong_account" ? connectionOfState(query.get("state")) : null;
+        const wrongAccountRow = failedBoundId !== null ? { connectionId: failedBoundId } : {};
         (deps.logger ?? connectorLog).child({ laneId, provider: p.provider }).warn("connector.oauth_callback_failed", {
           reason,
           error: isConnectorError(cause) ? cause : { error_name: cause instanceof Error ? cause.name : typeof cause },
@@ -398,15 +417,15 @@ export function createOAuthFlow(deps: OAuthFlowDeps) {
           const ownedByOther = isConnectorError(cause) && cause.info.message === ACCOUNT_OWNED_BY_OTHER_MESSAGE;
           const oneTeams = isConnectorError(cause) && cause.info.message === TEAMS_ONE_ACCOUNT_MESSAGE;
           const message = oneTeams
-            ? `${TEAMS_ONE_ACCOUNT_MESSAGE}. Disconnect it first to use another one. ${GRANT_NOT_STORED_MESSAGE}`
+            ? `${TEAMS_ONE_ACCOUNT_MESSAGE} ${GRANT_NOT_STORED_MESSAGE}`
             : inUse
             ? `This ${p.accountLabel ?? "account"} is already connected to another company in Jarvis. ${GRANT_NOT_STORED_MESSAGE}`
             : ownedByOther
               ? `This ${p.accountLabel ?? "account"} is already connected by another person in Jarvis. ${GRANT_NOT_STORED_MESSAGE}`
               : GRANT_NOT_STORED_MESSAGE;
-          return { ok: false, reason, provider: p.provider, laneId, message, ...(detail ? { detail } : {}) };
+          return { ok: false, reason, provider: p.provider, laneId, message, ...(detail ? { detail } : {}), ...wrongAccountRow };
         }
-        return { ok: false, reason, provider: p.provider, laneId, ...(detail ? { detail } : {}) };
+        return { ok: false, reason, provider: p.provider, laneId, ...(detail ? { detail } : {}), ...wrongAccountRow };
       }
     },
   };

@@ -22,7 +22,12 @@ function assertSafe(nodes: readonly MessageNode[]): void {
     expect(KINDS.has(n.t)).toBe(true);
     const keys = Object.keys(n).sort().join(",");
     if (n.t === "text" || n.t === "mention" || n.t === "emoji") expect(keys).toBe("t,v");
-    else if (n.t === "br" || n.t === "image") expect(keys).toBe("t");
+    else if (n.t === "br") expect(keys).toBe("t");
+    else if (n.t === "image") {
+      // T-285: the only extra key is a hosted-content ID (validated string, never an address)
+      expect(["t", "hosted,t"]).toContain(keys);
+      if (n.hosted !== undefined) expect(n.hosted).toMatch(/^[A-Za-z0-9._:=@-]{1,256}$/);
+    }
     else if (n.t === "link") {
       expect(keys).toBe("c,host,href,t");
       expect(n.href.startsWith("https://")).toBe(true);
@@ -66,6 +71,50 @@ describe("what survives", () => {
     assertSafe(r.nodes);
     expect(r.nodes).toEqual([{ t: "image" }, { t: "image" }, { t: "image" }, { t: "image" }]); // hosted, http hosted, data:, look-alike; the 1x1 tracker is nothing
     expect(JSON.stringify(r.nodes)).not.toMatch(/tracker|evil|data:/);
+  });
+
+  it("images of the SAME message carry a hosted-content id only (T-285): another message, host, scheme, query, port, user name or path shape leaves a plain placeholder, and no address is kept", () => {
+    const CHAT = "19:x@thread.v2";
+    const ctx = { scope: { kind: "chat" as const, chatId: CHAT }, messageId: "1700000000000" };
+    const base = `https://graph.microsoft.com/v1.0/chats/${CHAT}/messages/1700000000000/hostedContents`;
+    const img = (src: string) => `<img src="${src}">`;
+    const html = [
+      img(`${base}/aGVsbG8=/$value`), // ok
+      img(`https://graph.microsoft.com/v1.0/chats/${encodeURIComponent(CHAT)}/messages/1700000000000/hostedContents/b2s/$value`), // encoded chat id: same chat
+      img(`https://graph.microsoft.com/v1.0/chats/${CHAT}/messages/999/hostedContents/x/$value`), // another message
+      img(`https://graph.microsoft.com/v1.0/chats/19:other@thread.v2/messages/1700000000000/hostedContents/x/$value`), // another chat
+      img(`http://graph.microsoft.com/v1.0/chats/${CHAT}/messages/1700000000000/hostedContents/x/$value`), // http
+      img(`https://graph.microsoft.com.evil.example.test/v1.0/chats/${CHAT}/messages/1700000000000/hostedContents/x/$value`),
+      img(`https://evil.example.test/v1.0/chats/${CHAT}/messages/1700000000000/hostedContents/x/$value`),
+      img(`https://user:pw@graph.microsoft.com/v1.0/chats/${CHAT}/messages/1700000000000/hostedContents/x/$value`),
+      img(`https://graph.microsoft.com:444/v1.0/chats/${CHAT}/messages/1700000000000/hostedContents/x/$value`),
+      img(`${base}/x/$value?redirect=https://evil.example.test`),
+      img(`${base}/x/$value#frag`),
+      img(`https://graph.microsoft.com/beta/chats/${CHAT}/messages/1700000000000/hostedContents/x/$value`),
+      img(`${base}/../../x/$value`),
+      img(`${base}/%2e%2e/$value`),
+      img(`${base}/a%2Fb/$value`),
+      img(`${base}/x/%24value`.replace("%24value", "content")),
+      img(`${base}/${"a".repeat(300)}/$value`),
+    ].join("");
+    const r = htmlToNodes(html, ctx);
+    assertSafe(r.nodes);
+    expect(r.nodes.map((n) => (n.t === "image" ? (n.hosted ?? null) : "?"))).toEqual(["aGVsbG8=", "b2s", ...Array.from({ length: 15 }, () => null)]);
+    expect(JSON.stringify(r.nodes)).not.toMatch(/graph\.microsoft|evil|https?:/);
+    // without a message to compare with, nothing carries an id (the chat list's previews, a message with no known id)
+    expect(htmlToNodes(img(`${base}/aGVsbG8=/$value`)).nodes).toEqual([{ t: "image" }]);
+  });
+
+  it("images in a channel post: the team, channel and post must all match", () => {
+    const T = "11111111-1111-4111-8111-111111111111";
+    const C = "19:chan1@thread.tacv2";
+    const ctx = { scope: { kind: "channel" as const, teamId: T, channelId: C }, messageId: "1700000000001" };
+    const url = (t: string, c: string, m: string) => `<img src="https://graph.microsoft.com/v1.0/teams/${t}/channels/${c}/messages/${m}/hostedContents/aWQ9/$value">`;
+    const r = bodyToNodes("html", [url(T, C, "1700000000001"), url(T.toUpperCase(), C, "1700000000001"), url("33333333-3333-4333-8333-333333333333", C, "1700000000001"), url(T, "19:chan2@thread.tacv2", "1700000000001"), url(T, C, "1700000000002")].join(""), ctx);
+    expect(r.nodes.map((n) => (n.t === "image" ? (n.hosted ?? null) : "?"))).toEqual(["aWQ9", "aWQ9", null, null, null]);
+    // a chat address in a channel post, and the reverse, are not accepted
+    const chat = bodyToNodes("html", `<img src="https://graph.microsoft.com/v1.0/chats/${C}/messages/1700000000001/hostedContents/aWQ9/$value">`, ctx);
+    expect(chat.nodes).toEqual([{ t: "image" }]);
   });
 
   it("a table is flattened to text, cells separated, rows on their own line", () => {
@@ -288,5 +337,114 @@ describe("H1: the converter is linear in its input (time bounds are generous but
     expect(allText(r.nodes)).toBe("x");
     const big = htmlToNodes(`<p>a</p>${"<br>".repeat(5)}${"x".repeat(MAX_INPUT_CHARS)}`);
     expect(big.truncated).toBe(true);
+  });
+});
+
+describe("T-297: empty blocks are trimmed and runs of blank lines collapse (spec 8.4)", () => {
+  const shape = (html: string) => htmlToNodes(html).nodes;
+  const p = (...c: MessageNode[]): MessageNode => ({ t: "p", c });
+  const text = (v: string): MessageNode => ({ t: "text", v });
+
+  it("a message that is only empty paragraphs, only line breaks, only whitespace or only nested empty blocks has no nodes", () => {
+    for (const html of ["<p></p><p></p><p></p>", "<p><br></p><p><br></p>", "<br><br><br>", "<br/>   <br/>", "   ", "&nbsp;", "<p>&nbsp;</p><p>&nbsp;</p>", "<div><div><p><b> </b></p></div></div>", "<p><span> </span><i></i></p>", "<blockquote><p>&nbsp;</p></blockquote>", "<ul></ul>", "<ul> </ul>"]) {
+      expect(shape(html), html).toEqual([]);
+    }
+  });
+
+  it("leading and trailing empty blocks, line breaks and spaces are trimmed (the blank lines at the end of a long incoming message)", () => {
+    expect(shape("<p>&nbsp;</p><p><br></p><p>Hello</p><p>&nbsp;</p><p></p><p><br></p><br><br>")).toEqual([p(text("Hello"))]);
+    expect(shape("<br><br>Hello<br><br><br>")).toEqual([text("Hello")]);
+    expect(shape("<p><br>  Hello there  <br> </p>")).toEqual([p(text("  Hello there  "))]); // only whole-blank nodes go; the text itself is never rewritten
+    expect(shape("<p>a</p><p>b</p><p>&nbsp;</p><p>&nbsp;</p><p>&nbsp;</p>")).toEqual([p(text("a")), p(text("b"))]);
+  });
+
+  it("a run of two or more line breaks (or breaks and blank text) in the middle becomes exactly ONE blank line (two breaks); a single break stays a single break; a word space between inline nodes stays", () => {
+    expect(shape("a<br><br><br><br>b")).toEqual([text("a"), { t: "br" }, { t: "br" }, text("b")]);
+    expect(shape("a<br> <br> <br>b")).toEqual([text("a"), { t: "br" }, { t: "br" }, text("b")]);
+    expect(shape("a<br>b")).toEqual([text("a"), { t: "br" }, text("b")]);
+    expect(shape("<b>x</b> <i>y</i>")).toEqual([{ t: "b", c: [text("x")] }, text(" "), { t: "i", c: [text("y")] }]);
+    // blank paragraphs: ONE between two paragraphs is the person's blank line (one break after a block); two or more are still ONE blank line
+    expect(shape("<p>one</p><p>&nbsp;</p><p>two</p>")).toEqual([p(text("one")), { t: "br" }, p(text("two"))]);
+    expect(shape("<p>one</p><p><br></p><p><br></p><p>&nbsp;</p><p>two</p>")).toEqual([p(text("one")), { t: "br" }, p(text("two"))]);
+  });
+
+  it("a whitespace-only inline element between two words is one space (words are never joined); a blank block between two inline runs is one break", () => {
+    expect(shape("pay<b> </b>here")).toEqual([text("pay"), text(" "), text("here")]);
+    expect(allText(shape("pay<b><i> </i></b>here"))).toBe("pay here");
+    expect(allText(shape("pay<b></b>here"))).toBe("payhere"); // nothing was there: nothing is added
+    expect(shape("a<p></p>b")).toEqual([text("a"), { t: "br" }, text("b")]);
+    expect(shape("a<p>&nbsp;</p><p><br></p>b")).toEqual([text("a"), { t: "br" }, { t: "br" }, text("b")]);
+  });
+
+  it("list items are never dropped, so numbering stays", () => {
+    expect(shape("<ol><li>one</li><li></li><li><br></li><li>four</li></ol>")).toEqual([{ t: "ol", c: [{ t: "li", c: [text("one")] }, { t: "li", c: [] }, { t: "li", c: [] }, { t: "li", c: [text("four")] }] }]);
+    expect(shape("<ul><li></li></ul>")).toEqual([{ t: "ul", c: [{ t: "li", c: [] }] }]);
+  });
+
+  it("inside a code block nothing is collapsed or trimmed except the blank lines around the whole block", () => {
+    expect(shape("<pre>\n\n  indented\n\n\n    more   \n \n</pre>")).toEqual([{ t: "codeblock", c: [text("  indented\n\n\n    more   ")] }]);
+    expect(shape("<pre>a<br><br><br>b<code> </code>c</pre>")).toEqual([{ t: "codeblock", c: [text("a"), { t: "br" }, { t: "br" }, { t: "br" }, text("b"), { t: "code", c: [text(" ")] }, text("c")] }]);
+    expect(shape("<pre> </pre>")).toEqual([]);
+  });
+
+  it("a break one author wrote on purpose between two words still shows, once", () => {
+    expect(shape("first<br>second")).toEqual([text("first"), { t: "br" }, text("second")]);
+  });
+
+  it("content is never lost or invented: pictures, emoji, mentions and links are not 'empty'", () => {
+    expect(shape('<p><img src="https://x.example.test/a.png" alt="a"></p>')).toEqual([p({ t: "image" })]);
+    expect(shape('<p><emoji alt="😀"></emoji></p>')).toEqual([p({ t: "emoji", v: "😀" })]);
+    expect(shape('<p><at id="0">Pat</at></p>')).toEqual([p({ t: "mention", v: "@Pat" })]);
+    expect(shape('<p><a href="https://a.example.test/"></a></p>')).toEqual([p({ t: "link", href: "https://a.example.test/", host: "a.example.test", c: [] })]);
+  });
+
+  it("hostile input: markup around blanks cannot bring back an element, and the output is still the allow-list", () => {
+    const evil = ['<p><script>alert(1)</script>&nbsp;</p>', '<p onclick="x()">&nbsp;</p><img src=x onerror=alert(1)>', "<p><style>p{}</style></p><iframe src=//x></iframe>", "<p>&#x202e;&#x200b;</p>", "<p>\u0000\u0001 </p>"];
+    for (const html of evil) {
+      const r = htmlToNodes(html);
+      assertSafe(r.nodes);
+      expect(allText(r.nodes), html).not.toMatch(/alert|onclick|iframe|script/);
+    }
+    // zero-width and direction controls are removed before the blank test, so a message of only those is empty (not a blank bubble)
+    expect(shape("<p>&#x202e;&#x200b;&#x2060;</p>")).toEqual([]);
+  });
+
+  it("deeply nested empty and non-empty blocks are tidied without recursion trouble (depth is capped), and the text survives", () => {
+    const deep = "<div>".repeat(5_000) + "<p>&nbsp;</p>" + "kept" + "<br><br>" + "</div>".repeat(5_000);
+    const r = htmlToNodes(deep);
+    assertSafe(r.nodes);
+    expect(allText(r.nodes)).toBe("kept");
+    let maxDepth = 0;
+    walk(r.nodes, (_n, d) => (maxDepth = Math.max(maxDepth, d)));
+    expect(maxDepth).toBeLessThanOrEqual(MAX_DEPTH);
+    const deepEmpty = "<div>".repeat(5_000) + "<br>&nbsp;" + "</div>".repeat(5_000);
+    expect(shape(deepEmpty)).toEqual([]);
+    const chain = "pay" + "<b><i><u><s>".repeat(3) + " " + "</s></u></i></b>".repeat(3) + "here";
+    expect(allText(shape(chain))).toBe("pay here");
+  });
+
+  it("stays linear: a megabyte-class run of blanks and 100 KB of alternating blocks and breaks, best of three under 400 ms; every cap still holds", () => {
+    const blanks = "<p>&nbsp;</p><br>".repeat(8_000); // ~136 KB, > MAX_NODES / 2 nodes before tidy
+    const mixed = "<p>a</p><br><br><p></p>".repeat(5_000);
+    for (const html of [blanks, mixed, "<br>".repeat(100_000)]) {
+      const run = () => {
+        const t0 = performance.now();
+        const r = htmlToNodes(html);
+        assertSafe(r.nodes);
+        expect(r.nodes.length).toBeLessThanOrEqual(MAX_NODES);
+        return performance.now() - t0;
+      };
+      expect(Math.min(run(), run(), run())).toBeLessThan(400);
+    }
+    expect(shape(blanks)).toEqual([]);
+    // the text cut and the node cap are reported as before
+    expect(htmlToNodes(`<p>${"x".repeat(MAX_TEXT_CHARS + 50)}</p><p>&nbsp;</p>`).truncated).toBe(true);
+    expect(htmlToNodes("<b>a</b>".repeat(MAX_NODES + 10)).truncated).toBe(true);
+  });
+
+  it("plain-text bodies are tidied the same way: blank lines at the ends go, a run in the middle is one blank line", () => {
+    expect(textToNodes("\n\nhello\n\n\n\nworld\n\n  \n").nodes).toEqual([text("hello"), { t: "br" }, { t: "br" }, text("world")]);
+    expect(textToNodes("   \n \n").nodes).toEqual([]);
+    expect(bodyToNodes("html", "<p>&nbsp;</p>")).toEqual({ nodes: [], truncated: false });
   });
 });

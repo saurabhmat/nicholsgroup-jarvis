@@ -144,6 +144,33 @@ describe("AppShell", () => {
   });
 });
 
+describe("AppShell navAccessory (T-290)", () => {
+  const accessory = (key: string) => <span data-testid={`acc-${key}`} />;
+
+  it("draws what the app returns at the end of the Messages entry and on the More tab only, and the labels stay what they were", () => {
+    shell({ navAccessory: (key) => (key === "messages" || key === "more" ? accessory(key) : null) });
+    const nav = screen.getByRole("navigation", { name: "Main" });
+    expect(within(nav).getByTestId("acc-messages").closest("a")?.getAttribute("href")).toBe("/PKG/messages");
+    expect(within(nav).queryByTestId("acc-more")).toBeNull();
+    expect(within(nav).getAllByRole("link").map((l) => l.textContent)).toEqual(["Home", "Inbox", "Calendar", "Claude", "ChatGPT", "Finance", "Tasks", "Contacts", "Messages", "Settings"]);
+    const tabs = screen.getByRole("navigation", { name: "Tabs" });
+    expect(within(tabs).getByTestId("acc-more").closest("a")?.getAttribute("href")).toBe("/PKG/more");
+    expect(within(tabs).queryByTestId("acc-messages")).toBeNull();
+  });
+
+  it("is asked only for entries that are shown: a company that hides Messages never gets the accessory call for it", () => {
+    const asked: string[] = [];
+    shell({ hiddenKeys: ["messages"], navAccessory: (key) => (asked.push(key), null) });
+    expect(asked).not.toContain("messages");
+    expect(asked).toContain("more");
+  });
+
+  it("is optional: without it nothing changes", () => {
+    shell();
+    expect(screen.queryByTestId("acc-messages")).toBeNull();
+  });
+});
+
 describe("LaneSwitcher", () => {
   it("is a static label with one lane", () => {
     const { container } = render(<LaneSwitcher lanes={ONE} currentLaneId="PKG" />);

@@ -26,6 +26,8 @@ export interface RetentionStore {
   purgePushSubscriptions(laneId: LaneId): Promise<number>;
   /** core.teams_chat_reads_purge (T-282): deletes the lane's Teams read markers untouched for a fixed 90 days and those of disconnected connections. */
   purgeTeamsChatReads(laneId: LaneId): Promise<number>;
+  /** core.teams_activity_purge (T-289): deletes the activity rows of the lane's disconnected Teams connections. */
+  purgeTeamsActivity(laneId: LaneId): Promise<number>;
 }
 
 export function createRetentionStore(clientFor: JobClientFor): RetentionStore {
@@ -52,5 +54,6 @@ export function createRetentionStore(clientFor: JobClientFor): RetentionStore {
     purgeConnectorApiErrors: (laneId) => call(laneId, "connector_api_errors_purge", {}),
     purgePushSubscriptions: (laneId) => call(laneId, "push_subscriptions_purge", {}),
     purgeTeamsChatReads: (laneId) => call(laneId, "teams_chat_reads_purge", {}),
+    purgeTeamsActivity: (laneId) => call(laneId, "teams_activity_purge", {}),
   };
 }

@@ -69,7 +69,10 @@ describe("the wiring (T-282)", () => {
   it("the Teams disconnect is wired with the read-marker purger; later tasks add theirs beside it", async () => {
     const { readFileSync } = await import("node:fs");
     const src = readFileSync(new URL("./index.ts", import.meta.url), "utf8");
-    expect(src).toMatch(/purgers:\s*\[\{ name: "chat_reads", purge: \(laneId, connectionId\) => teamsChatReadsStore\.purgeConnection\(laneId, connectionId\) \}\]/);
+    // T-286: the open Teams send actions of the connection are closed (text purged) beside the read markers; T-289: the notice times (comms.teams_activity) go with them
+    expect(src).toMatch(/purgers:\s*\[\s*\{ name: "chat_reads", purge: \(laneId, connectionId\) => teamsChatReadsStore\.purgeConnection\(laneId, connectionId\) \},\s*\{ name: "send_actions", purge: \(laneId, connectionId\) => teamsActionsStore\.purgeConnection\(laneId, connectionId\) \},\s*(\/\/[^\n]*\n\s*)?\{ name: "activity", purge: \(laneId, connectionId\) => teamsNoticesStore\.purgeConnection\(laneId, connectionId\) \},?\s*\]/);
+    // and the subscriptions are marked removed (their Vault secrets deleted) by the same disconnect, before the purgers
+    expect(src).toMatch(/subscriptions: microsoftSubscriptionStore,/);
   });
 
   it("a purger that fails is logged by class only and the disconnect still completes (the markers are also removed by the retention purge)", async () => {
@@ -78,5 +81,33 @@ describe("the wiring (T-282)", () => {
     expect(await d("PKG", ROW.id, OWNER)).toBe(true);
     expect(warn).toHaveBeenCalledWith("teams.disconnect.purge_unconfirmed", expect.objectContaining({ purger: "reads" }));
     expect(JSON.stringify(warn.mock.calls)).not.toContain("secret");
+  });
+});
+
+describe("two accounts of one person (T-294)", () => {
+  const ROW_B = { ...ROW, id: "00000000-0000-4000-8000-00000000f280", external_account_id: "person@second.example.test" };
+  const A = mintLaneBoundConnection({ ...ROW } as never);
+  const B = mintLaneBoundConnection({ ...ROW_B } as never);
+
+  it("disconnecting one account touches ONLY that connection: its tokens, subscriptions and purgers; the other account's are never named", async () => {
+    const revoke = vi.fn(async () => true);
+    const removeConnection = vi.fn(async () => 1);
+    const purge = vi.fn(async () => undefined);
+    const logger = { child: () => logger, warn: vi.fn(), info: vi.fn(), error: vi.fn(), debug: vi.fn() } as never;
+    const d = createTeamsDisconnect({
+      loader: { loadConnection: async (lane, id) => { const c = [A, B].find((x) => x.id === id); if (lane !== "PKG" || !c) throw new ConnectorError({ kind: "not_found", message: "Connection not found" }); return c; } },
+      vault: { revokeToken: revoke },
+      subscriptions: { removeConnection },
+      purgers: [{ name: "reads", purge }, { name: "activity", purge }],
+      logger,
+    });
+    expect(await d("PKG", ROW_B.id, OWNER)).toBe(true);
+    expect(revoke).toHaveBeenCalledTimes(1);
+    expect(revoke).toHaveBeenCalledWith("PKG", expect.objectContaining({ id: ROW_B.id }), OWNER);
+    expect(removeConnection).toHaveBeenCalledTimes(1);
+    expect(removeConnection).toHaveBeenCalledWith("PKG", ROW_B.id);
+    for (const call of purge.mock.calls) expect(call).toEqual(["PKG", ROW_B.id]);
+    // nothing names the first account anywhere
+    expect(JSON.stringify([revoke.mock.calls, removeConnection.mock.calls, purge.mock.calls])).not.toContain(ROW.id);
   });
 });

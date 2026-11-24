@@ -5,8 +5,9 @@
 // callback: GET from the provider → 303 to a fixed path with a coarse result code; provider text never reaches the page.
 import { authErrorResponse } from "@nichols/core/auth";
 import { EnvValidationError, describeEnvError } from "@nichols/core/env/server";
-import { isConnectorError } from "../contract/errors";
+import { isConnectorError, TEAMS_ONE_ACCOUNT_MESSAGE } from "../contract/errors";
 import { consentReturn } from "../microsoft/consent";
+import { TEAMS_PROVIDER } from "../teams/constants";
 import type { AuthorizeFn, createOAuthFlow } from "./flow";
 
 const NO_STORE = { "cache-control": "no-store" } as const;
@@ -72,7 +73,15 @@ export function createConnectHandlers(flow: Pick<ReturnType<typeof createOAuthFl
           return notConfigured(request, url, provider) ?? json("unavailable", 503);
         }
         const kind = isConnectorError(e) ? e.info.kind : undefined;
-        if (kind === "forbidden") return json("forbidden", 403);
+        if (kind === "forbidden") {
+          // T-294: the person already has as many Teams accounts as the company allows. A person's click goes back to Settings with the fixed refusal (nothing was stored and nobody was redirected to
+          // Microsoft); a script gets the plain 403. The code and sub-code come from this file, never from the request.
+          const lane = url.searchParams.get("lane") ?? "";
+          if (isConnectorError(e) && e.info.message === TEAMS_ONE_ACCOUNT_MESSAGE && isFormNavigation(request) && LANE_CODE.test(lane)) {
+            return new Response(null, { status: 303, headers: { ...NO_STORE, location: `/${lane}/settings?connect=account_refused&provider=${TEAMS_PROVIDER}&detail=one_account`, "referrer-policy": "no-referrer" } });
+          }
+          return json("forbidden", 403);
+        }
         if (kind === "not_found") return json("not_found", 404);
         if (kind === "rate_limited") return json("too_many_connects", 429);
         // The class name, and for a ConnectorError its kind and fixed (already redacted) message: enough to tell a configuration refusal from an outage.
@@ -121,7 +130,10 @@ export function createConnectHandlers(flow: Pick<ReturnType<typeof createOAuthFl
         home.searchParams.set("connect", result.ok ? "ok" : result.reason);
         if (result.provider) home.searchParams.set("provider", result.provider);
         // T-278 review C1: a fixed sub-code from the provider's own list (already checked against a fixed shape in the flow); nothing from a provider response.
-        if (!result.ok && result.detail && /^[a-z][a-z_]{0,23}$/.test(result.detail)) home.searchParams.set("detail", result.detail);
+        // T-294: a successful connect can carry one too (Teams: the account was already connected and only its sign-in was refreshed).
+        if (result.detail && /^[a-z][a-z_]{0,23}$/.test(result.detail)) home.searchParams.set("detail", result.detail);
+        // T-294: a reconnect that came back as another account names its own row (a uuid from the verified state); Settings words it with that row's own address, read from the database.
+        if (!result.ok && result.provider === TEAMS_PROVIDER && result.connectionId && /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/.test(result.connectionId)) home.searchParams.set("conn", result.connectionId);
         // The code was exchanged but nothing was stored: the owner is told to remove the app's access at the provider (D-24).
         if (!result.ok && result.message) home.searchParams.set("notice", "remove_app_access");
         return new Response(null, { status: 303, headers: { ...NO_STORE, location: home.pathname + home.search, "referrer-policy": "no-referrer" } });

@@ -20,7 +20,7 @@ import type { ConnectorLogger } from "../log/index";
 import type { SecretValue } from "../vault/secret";
 import { withMailboxSlot } from "../microsoft/concurrency";
 import { mapGraphError } from "../microsoft/errors";
-import { TEAMS_DEFAULT_RATE_LIMIT, TEAMS_GRAPH_BASE, TEAMS_MAX_CONCURRENT, TEAMS_MAX_TEXT_BYTES, TEAMS_PARAM_FORMATS, TEAMS_WRITE_ROUTES } from "./constants";
+import { TEAMS_GRAPH_BASE, TEAMS_SEND_RATE_LIMIT, TEAMS_MAX_CONCURRENT, TEAMS_MAX_TEXT_BYTES, TEAMS_PARAM_FORMATS, TEAMS_WRITE_ROUTES } from "./constants";
 import type { TeamsGuard } from "./guard";
 import { createTeamsHttp } from "./http";
 import type { TeamsTokenManager } from "./token-manager";
@@ -94,7 +94,7 @@ export function createTeamsWriteClient(deps: TeamsWriteClientDeps): TeamsWriteCl
             laneId,
             connectionId: g.conn.id,
             rateLimitKey: `${g.conn.id}:write`,
-            rateLimit: TEAMS_DEFAULT_RATE_LIMIT,
+            rateLimit: TEAMS_SEND_RATE_LIMIT, // 1 per second per connection (the per-user POST limit); pacing only
             ...(deps.logger ? { logger: deps.logger } : {}),
           },
           g.cloud,
@@ -136,7 +136,13 @@ export function createTeamsWriteClient(deps: TeamsWriteClientDeps): TeamsWriteCl
           }
         } catch (e) {
           if (!isConnectorError(e)) throw e;
-          if (credentialError !== undefined) throw toConnectorError(credentialError);
+          // A credential or Vault failure happens BEFORE any request leaves: nothing was sent. It is never reported as a transport failure (which would read as an unknown outcome).
+          if (credentialError !== undefined) {
+            const c = toConnectorError(credentialError);
+            throw ["reconnect_required", "connection_unavailable", "forbidden", "not_found", "invalid_input", "lane_mismatch", "unsupported_op"].includes(c.info.kind)
+              ? c
+              : new ConnectorError({ kind: "connection_unavailable", message: "The Teams credential could not be read; nothing was sent" });
+          }
           const mapped = toConnectorError(mapGraphError(e));
           if (isProviderApiError(mapped.toJSON())) await deps.errors?.record(laneId, g.conn, mapped.toJSON());
           throw mapped;

@@ -13,7 +13,15 @@ const reader = (config: unknown, error: unknown = null) => {
 describe("teamsSettings", () => {
   it("returns the block with defaults applied", async () => {
     const s = await reader({ teams: { enabled: true, tenant_ids: [T1], allowed_domains: ["teams.example.test"] } }).teamsSettings("PKG");
-    expect(s).toEqual({ enabled: true, cloud: "commercial", tenantIds: [T1], allowedDomains: ["teams.example.test"], features: ["chat_read"] });
+    expect(s).toEqual({ enabled: true, cloud: "commercial", tenantIds: [T1], allowedDomains: ["teams.example.test"], features: ["chat_read"], maxAccountsPerPerson: 1 });
+  });
+
+  it("T-294: max_accounts_per_person is read (1 - 5, default 1) and anything else fails closed", async () => {
+    const base = { enabled: true, tenant_ids: [T1], allowed_domains: ["teams.example.test"] };
+    for (const n of [1, 2, 5]) expect((await reader({ teams: { ...base, max_accounts_per_person: n } }).teamsSettings("PKG"))?.maxAccountsPerPerson).toBe(n);
+    for (const bad of [0, 6, -1, 2.5, "2", null, true, [2]]) {
+      await expect(reader({ teams: { ...base, max_accounts_per_person: bad } }).teamsSettings("PKG"), JSON.stringify(bad)).rejects.toMatchObject({ info: { kind: "provider_error" } });
+    }
   });
 
   it("is null when the lane has no block, no config row, or a null config (Teams is not set up)", async () => {

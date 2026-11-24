@@ -24,6 +24,7 @@ import {
   platformFunctions,
   qboWebhookSyncFunctions,
   microsoftWebhookSyncFunctions,
+  teamsActivityFunctions,
   retentionPurgeFunctions,
   sendLaneEvent,
   shouldNormalizeAfterSync,
@@ -35,6 +36,7 @@ import { getLaneJobClient } from "@nichols/core/lane-router";
 import { BRAIN_RETENTION, createImportPurge } from "@nichols/brain/jobs";
 import { getServerEnv } from "@nichols/core/env/server";
 import { QBO_SYNC_ENTITIES, connSyncJob, isMicrosoftConnectionUsable, isQuickbooksConnectionUsable, listCalendarConnectionIds, listMailConnectionIds, listQuickbooksSyncConnectionIds, qboSyncIntervalHours } from "@nichols/connectors/sync";
+import { recordTeamsNotice } from "@nichols/connectors/teams-notices";
 import { listHealthConnectionIds, listRenewConnectionIds, markReconnectNotified, subscriptionRenewJob, tokenHealthJob } from "@nichols/connectors/health";
 import { retentionPurgeJob, retentionRegistry } from "@nichols/connectors/retention";
 import { listQuickbooksConnectionIds, qboReportsJob } from "@nichols/connectors/reports";
@@ -103,6 +105,12 @@ const functionsFor = (inngest: Parameters<Parameters<typeof inngestRoute>[0]>[0]
   // this function in Inngest Cloud after the deploy (backlog H-073).
   ...microsoftWebhookSyncFunctions(inngest, {
     isUsable: (laneId, connectionId) => isMicrosoftConnectionUsable(laneId as LaneId, connectionId),
+    enabledLanes: () => getServerEnv().ENABLED_LANES,
+  }),
+  // teams.activity (T-289): an accepted Teams new-message notice (`teams_chats.changed`) -> one database write of "a notice arrived" for the connection. No Graph call, no content. Needs a sync of
+  // this function in Inngest Cloud after the deploy (backlog H-083).
+  ...teamsActivityFunctions(inngest, {
+    recordNotice: (laneId, connectionId) => recordTeamsNotice(laneId as LaneId, connectionId),
     enabledLanes: () => getServerEnv().ENABLED_LANES,
   }),
   // fin.qbo_normalize (T-056): raw.source_records -> fin.* for one QuickBooks connection, lane-scoped.

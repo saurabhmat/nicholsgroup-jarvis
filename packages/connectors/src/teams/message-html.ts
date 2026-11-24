@@ -1,12 +1,17 @@
 // Teams message HTML -> a small typed list of safe nodes (T-281, spec 8.4, rule 9). A message body is untrusted: it may carry any markup. Nothing here produces HTML. The output is DATA
 // (strings and a fixed set of node kinds) that React draws as text, so no raw HTML ever reaches the browser. What survives, and nothing else:
 //   text, line break, paragraph (p, div, headings), bold, italic, underline, strike, inline code, code block, quote, bullet and numbered list with items, a link, a mention (as "@Name" text),
-//   an emoji (its alt text), an image placeholder (every picture is one, except a tracking pixel; no image address is read into the output or loaded).
+//   an emoji (its alt text), an image (a neutral placeholder; every picture is one, except a tracking pixel; it carries a hosted-content ID only when its address is exactly the documented Graph
+//   address of a hosted content of THIS message, see ./hosted-content.ts: no address is ever kept, emitted or loaded).
 // Everything else is dropped with its content (script, style, iframe, object, embed, form controls, svg, math, template, noscript, ...) or flattened to its text (unknown and table tags).
 // Attributes are read ONLY for: a link's `href` (https only, no credentials, at most 2,048 characters, no control or space character, normalised by the URL parser so what is checked is what is
-// drawn), an emoji's `alt`, and an image's `itemtype`, `alt`, `width` and `height` (to tell an emoji and a tracking pixel from a picture; no `src` is read or kept). Event handlers, styles, classes and `javascript:`/`data:` URLs are never read.
+// drawn), an emoji's `alt`, and an image's `itemtype`, `alt`, `width` and `height` (to tell an emoji and a tracking pixel from a picture) and, only when the caller names the message, its `src`, which
+// is read by the strict hosted-content parser alone (it returns an id or nothing; the address itself is dropped). Event handlers, styles, classes and `javascript:`/`data:` URLs are never read.
 // Text has bidirectional overrides, zero-width spaces and control characters removed, so a message cannot reorder or hide what the person reads. Bounded: ONE linear pass (open elements are counted per tag, so no close tag and no link walks the stack; at most MAX_STACK open elements; input read up to MAX_INPUT_CHARS), at most MAX_NODES
 // nodes, nesting capped at MAX_DEPTH, and the text cut at MAX_TEXT_CHARS (the cut is reported, never silent). The converter never throws on input and never builds a message from content.
+// T-297: the output is tidied (see `tidyList`): leading and trailing blank lines are trimmed, a run of two or more breaks or blank paragraphs inside a message is ONE blank line, a blank inline element is a word space, list items and code blocks keep their shape.
+
+import { hostedRefFromSrc, type HostedScope } from "./hosted-content";
 
 /** Text kept per message (spec 8.4). */
 export const MAX_TEXT_CHARS = 20_000;
@@ -23,10 +28,13 @@ export type MessageNode =
   | { t: "br" }
   | { t: "mention"; v: string }
   | { t: "emoji"; v: string }
-  /** A picture: drawn as a neutral placeholder only (T-285 adds the proxy). Never a URL; every picture except a tracking pixel becomes one. */
-  | { t: "image" }
+  /** A picture: a neutral placeholder. Never a URL; every picture except a tracking pixel becomes one. `hosted` (T-285) is the validated id of a hosted content of this same message: the page draws it through the portal's own image route. */
+  | { t: "image"; hosted?: string }
   | { t: "link"; href: string; host: string; c: MessageNode[] }
   | { t: "b" | "i" | "u" | "s" | "code" | "p" | "quote" | "codeblock" | "ul" | "ol" | "li"; c: MessageNode[] };
+
+/** The message being converted (T-285): the scope it lives in and its own id. Only a hosted content of exactly this message is given an id. */
+export type HostedOf = { scope: HostedScope; messageId: string };
 
 export type ConvertedMessage = { nodes: MessageNode[]; truncated: boolean };
 
@@ -218,7 +226,7 @@ class Budget {
 }
 
 /** Converts Teams message HTML. Never throws; the result is bounded (see the header). */
-export function htmlToNodes(input: string): ConvertedMessage {
+export function htmlToNodes(input: string, of?: HostedOf): ConvertedMessage {
   const budget = new Budget();
   const html = input.length > MAX_INPUT_CHARS ? input.slice(0, MAX_INPUT_CHARS) : input;
   const cut = html.length < input.length;
@@ -348,7 +356,10 @@ export function htmlToNodes(input: string): ConvertedMessage {
         if (itemtype.includes("emoji") && alt !== "" && alt.length <= 16) push({ t: "emoji", v: alt });
         // Any other picture becomes the same neutral placeholder, so an image-only message is not drawn as empty (C7i). Its address is never kept or loaded (no tracker, no remote picture, no data: URL).
         // A declared size of 3 pixels or less (a tracking pixel) leaves nothing at all.
-        else if (!tiny(tok.attrs.get("width")) && !tiny(tok.attrs.get("height"))) push({ t: "image" });
+        else if (!tiny(tok.attrs.get("width")) && !tiny(tok.attrs.get("height"))) {
+          const hosted = of !== undefined ? hostedRefFromSrc(decodeEntities(tok.attrs.get("src") ?? ""), of.scope, of.messageId) : null;
+          push(hosted !== null ? { t: "image", hosted } : { t: "image" });
+        }
         break;
       }
       case "a": {
@@ -410,20 +421,92 @@ export function cutUnits(s: string, max: number): string {
   return s.slice(0, end);
 }
 
-/** Drops empty containers and leading or trailing breaks; merges nothing else. Pure, linear. */
-function tidy(nodes: MessageNode[]): MessageNode[] {
-  const out: MessageNode[] = [];
+// ---- tidying the output (T-297, spec 8.4)
+// A node that draws as empty space: a line break, whitespace-only text (a Teams "empty line" is often `<p>&nbsp;</p>`), or the internal marker of a blank block.
+const BLANK: MessageNode = { t: "p", c: [] }; // internal marker only: never part of the output (it is turned into line breaks or dropped before `tidy` returns)
+const isGap = (n: MessageNode): boolean => n === BLANK || n.t === "br" || (n.t === "text" && n.v.trim() === "");
+const BLOCK_KINDS = new Set<MessageNode["t"]>(["p", "quote", "codeblock", "ul", "ol", "li"]);
+const INLINE_BOXES = new Set<MessageNode["t"]>(["b", "i", "u", "s", "code"]);
+
+type Tidied = { out: MessageNode[]; /** Some whitespace-only text was inside (it was a word space, not nothing). */ space: boolean };
+
+/**
+ * Tidies a node list. Pure and LINEAR: every node is visited once, children first (nesting is capped at MAX_DEPTH by the builder, so the recursion is shallow). Nothing is added that was not in the
+ * input and the number of nodes never grows.
+ *   - leading and trailing gaps (breaks, blank text, blank blocks) are trimmed at every level;
+ *   - in the middle, one break stays one break, a blank block between two runs is one break, and a run of TWO OR MORE breaks and blank blocks becomes exactly ONE blank line (two breaks after text,
+ *     one after a block, which already ends its line);
+ *   - a whitespace-only inline element (`pay<b> </b>here`) is one space, so words are never joined; a lone whitespace text between inline nodes is a space too;
+ *   - list items are never dropped (the numbering stays);
+ *   - inside a code block nothing is collapsed or trimmed except the leading and trailing blank lines of the whole block.
+ */
+function tidyList(nodes: MessageNode[], mode: "none" | "block" | "inside"): Tidied {
+  const inCode = mode !== "none"; // "block": the code block's own children; "inside": deeper (nothing at all is trimmed)
+  const kept: MessageNode[] = [];
+  let space = false;
   for (const n of nodes) {
-    if ("c" in n) {
-      const c = tidy(n.c);
-      if (c.length === 0 && n.t !== "link") continue;
-      out.push({ ...n, c } as MessageNode);
-    } else out.push(n);
+    if (n.t === "text" && n.v.trim() === "") space = true;
+    if (!("c" in n)) {
+      kept.push(n);
+      continue;
+    }
+    const r = tidyList(n.c, n.t === "codeblock" ? "block" : inCode ? "inside" : "none");
+    if (r.space) space = true;
+    if (r.out.length > 0 || n.t === "link") {
+      kept.push({ ...n, c: r.out } as MessageNode);
+      continue;
+    }
+    if (n.t === "li") kept.push({ t: "li", c: [] });
+    else if (inCode) continue;
+    else if (INLINE_BOXES.has(n.t)) {
+      if (r.space) kept.push({ t: "text", v: " " });
+    } else kept.push(BLANK);
   }
-  while (out[0]?.t === "br") out.shift();
-  while (out[out.length - 1]?.t === "br") out.pop();
-  return out;
+  let start = 0;
+  let end = kept.length;
+  if (mode !== "inside") {
+    while (start < end && isGap(kept[start] as MessageNode)) start += 1;
+    while (end > start && isGap(kept[end - 1] as MessageNode)) end -= 1;
+  }
+  if (inCode) {
+    // a code block keeps every space and line inside; only the blank lines around the whole block go
+    const out = kept.slice(start, end).filter((n) => n !== BLANK);
+    const first = out[0];
+    if (mode === "block" && first?.t === "text") out[0] = { t: "text", v: first.v.replace(/^(?:[ \t]*\r?\n)+/, "") };
+    const last = out[out.length - 1];
+    if (mode === "block" && last?.t === "text") out[out.length - 1] = { t: "text", v: last.v.replace(/(?:\r?\n[ \t]*)+$/, "") };
+    return { out: out.filter((n) => n.t !== "text" || n.v !== ""), space };
+  }
+  const out: MessageNode[] = [];
+  let i = start;
+  while (i < end) {
+    const n = kept[i] as MessageNode;
+    if (!isGap(n)) {
+      out.push(n);
+      i += 1;
+      continue;
+    }
+    let j = i;
+    let lines = 0;
+    let firstSpace: MessageNode | null = null;
+    while (j < end && isGap(kept[j] as MessageNode)) {
+      const g = kept[j] as MessageNode;
+      if (g.t === "br" || g === BLANK) lines += 1;
+      else if (firstSpace === null) firstSpace = g;
+      j += 1;
+    }
+    if (lines === 0) out.push(firstSpace as MessageNode); // a word space
+    else if (lines === 1) out.push({ t: "br" });
+    else {
+      out.push({ t: "br" });
+      if (!BLOCK_KINDS.has((out[out.length - 2] as MessageNode).t)) out.push({ t: "br" }); // after text two breaks make one empty line; after a block one does
+    }
+    i = j;
+  }
+  return { out, space };
 }
+
+const tidy = (nodes: MessageNode[]): MessageNode[] => tidyList(nodes, "none").out;
 
 /** A plain-text body (contentType `text`): lines become breaks. Same character cleaning and the same bound. */
 export function textToNodes(text: string): ConvertedMessage {
@@ -446,11 +529,11 @@ export function textToNodes(text: string): ConvertedMessage {
 }
 
 /** The body of a Teams message as safe nodes, by its content type (`html` is converted; anything else is plain text). */
-export function bodyToNodes(contentType: string | null | undefined, content: string | null | undefined): ConvertedMessage {
+export function bodyToNodes(contentType: string | null | undefined, content: string | null | undefined, hosted?: HostedOf): ConvertedMessage {
   if (typeof content !== "string" || content === "") return { nodes: [], truncated: false };
   // The input itself is bounded before any work (a 50 MB body must not cost 50 MB of tokens): 8x the kept text is more than any real message.
   const bounded = content.length > MAX_INPUT_CHARS ? content.slice(0, MAX_INPUT_CHARS) : content;
-  const r = contentType?.toLowerCase() === "html" ? htmlToNodes(bounded) : textToNodes(bounded);
+  const r = contentType?.toLowerCase() === "html" ? htmlToNodes(bounded, hosted) : textToNodes(bounded);
   return bounded.length < content.length ? { nodes: r.nodes, truncated: true } : r;
 }
 

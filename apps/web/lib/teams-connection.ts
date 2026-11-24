@@ -12,6 +12,7 @@ import type { TeamsFeature } from "@nichols/core/lane-config";
 import { MAIL_CONNECT_ROLES } from "@nichols/connectors/oauth";
 import { teamsSettingsOf, type TeamsLaneView } from "@nichols/connectors/teams-settings";
 import { mapGoogleStatus, type GoogleConnectionState } from "./google-connection";
+import { TEAMS_PROVIDER } from "./teams-wording";
 
 export const TEAMS_FEATURE_LIST: readonly TeamsFeature[] = ["chat_read", "chat_send", "call_links", "channels_read", "channels_send"];
 
@@ -30,6 +31,8 @@ export type TeamsSectionView = {
   connections: TeamsConnectionView[];
   /** The features the company lists. */
   laneFeatures: TeamsFeature[];
+  /** T-294: how many Teams accounts one person may connect in this company (`teams.max_accounts_per_person`, 1 - 5; 1 when the settings are unknown). Counted rows = not disconnected (pending rows are not listed). */
+  maxAccounts: number;
   needsAdminConsent: boolean;
   /** Teams is not enabled for this company (any more): rows are kept, no Sign in or Reconnect. */
   paused?: true;
@@ -81,7 +84,7 @@ export async function teamsSectionFor(
   // The two reads are independent: together.
   const [settings, rows] = await Promise.allSettled([lane(laneId as LaneId), load(client, laneId, userId)]);
   const view = settings.status === "fulfilled" ? settings.value : undefined; // undefined = unreadable
-  const base = { laneFeatures: view?.features ?? [], needsAdminConsent: view?.needsAdminConsent ?? false };
+  const base = { laneFeatures: view?.features ?? [], needsAdminConsent: view?.needsAdminConsent ?? false, maxAccounts: view?.maxAccountsPerPerson ?? 1 };
   if (rows.status === "rejected") return (view?.enabled && view.cloudSupported) || opts.keepEmpty ? { connections: [], ...base, unavailable: true } : null;
   const connections = rows.value;
   if (view === undefined) return connections.length === 0 && !opts.keepEmpty ? null : { connections, ...base, settingsUnknown: true };
@@ -90,4 +93,15 @@ export async function teamsSectionFor(
     return connections.length === 0 && !opts.keepEmpty ? null : { connections, ...base, paused: true, ...(unsupportedCloud ? { unsupportedCloud: true as const } : {}) };
   }
   return { connections, ...base };
+}
+
+const CONN_ID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
+/**
+ * T-294: the sign-in name of the caller's OWN Teams row named by `?conn=` after a refused Teams reconnect (`connect=wrong_account`), so the banner can say which account to choose. Only for that result,
+ * only a lower-case uuid, only a row the section says is the caller's own; anything else is null. The address comes from the database row, never from the address bar.
+ */
+export function reconnectAccountOf(query: Record<string, string | string[] | undefined>, section: TeamsSectionView | null): string | null {
+  const conn = typeof query.conn === "string" ? query.conn : undefined;
+  if (query.connect !== "wrong_account" || query.provider !== TEAMS_PROVIDER || conn === undefined || !CONN_ID.test(conn)) return null;
+  return section?.connections.find((c) => c.mine && c.id === conn)?.account ?? null;
 }

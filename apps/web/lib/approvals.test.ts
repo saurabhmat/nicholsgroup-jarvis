@@ -361,4 +361,24 @@ describe("page view models for qbo.disconnect (T-195)", () => {
     const owner = await loadApprovals(mk(["owner"]), approvals, "PKG");
     expect(owner).toMatchObject({ isOwner: true, canActDisconnect: true });
   });
+
+  // T-286 review M-A: a Teams row is not an email card and not a disconnect card; its history line is a label, never text.
+  it("a pending Teams row is neither a card nor a disconnect card; its history line is a fixed label with no text and no people", async () => {
+    const teams = (over: Partial<ActionRow> = {}) =>
+      row({ id: "00000000-0000-4000-8000-0000000000ac", actionType: "teams.chat.send", provider: "microsoft_teams", target: { chat_id: "19:abc@thread.v2", client_request_id: "5e11d0c0-0000-4000-8000-000000000001" }, payload: { content_type: "text", text: "CANARY-teams" }, ...over });
+    const rpc = async (fn: string) => (fn === "act_list" ? { data: [teams(), row({ id: "00000000-0000-4000-8000-0000000000ab" })].map(snake), error: null } : { data: 0, error: null });
+    const g = { requireLane: async () => ({ session: { userId: USER }, laneId: "PKG", client: { schema: () => ({ rpc }) } }) as never, requireRole: async () => ({}) as never };
+    const approvals = { jobRpc: async () => async () => ({ data: 0, error: null }), readFacts: async () => facts, laneMailboxes: async () => [], audit: { log: async () => undefined } } as unknown as ApprovalsPublicDeps;
+    const view = await loadApprovals(g, approvals, "PKG");
+    expect(view.pending).toHaveLength(1); // only the email
+    expect(view.disconnects).toHaveLength(0); // never shown as "Disconnect QuickBooks"
+    for (const [type, label] of [["teams.chat.send", "Teams message (chat)"], ["teams.channel.post", "Teams message (channel post)"], ["teams.channel.reply", "Teams message (channel reply)"]] as const) {
+      const h = toHistory(teams({ actionType: type, status: "verified", payloadPurgedAt: "2026-11-11T13:00:00Z", payload: { content_type: "text" } }));
+      expect(h).toMatchObject({ actionType: type, subject: label, to: [], provider: null, status: "verified", contentPurged: true });
+    }
+    expect(JSON.stringify(toHistory(teams({ status: "failed", failureCode: "reconcile_connection_disconnected" })))).not.toContain("CANARY-teams");
+    expect(toHistory(teams({ status: "failed", failureCode: "reconcile_connection_disconnected" })).outcomeUnknown).toBe(true); // H1: the disconnect code is an unknown outcome
+    expect(toHistory(teams({ status: "failed", failureCode: "reconcile_sent_unverified" })).outcomeUnknown).toBe(true);
+    expect(toHistory(teams({ status: "failed", failureCode: "not_a_member" })).outcomeUnknown).toBe(false);
+  });
 });

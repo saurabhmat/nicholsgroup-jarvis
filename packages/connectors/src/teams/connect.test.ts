@@ -408,17 +408,33 @@ describe("callback: consent errors, reconnect, ownership, D-23", () => {
     expect([...h.rows.values()].filter((r) => r.lane_id === "PKG" && r.status === "active")).toHaveLength(0);
   });
 
-  it("one Teams connection per person per lane: a second account is refused with its own fixed message, before any token is stored", async () => {
+  it("limit 1 (the default): a second account is refused at the START with its own fixed message, before any redirect, state or token", async () => {
     const { h } = setup();
     h.connect("PKG", PERSON, { owner: TEAMS_CONNECT_USER });
-    const stores = h.stats.stores;
-    const { result } = await h.connectViaCallback("PKG", { upn: `second@${DOMAIN}`, userId: TEAMS_CONNECT_USER });
-    expect(result).toMatchObject({ ok: false, reason: "account_refused" });
-    expect(message(result)).toContain(TEAMS_ONE_ACCOUNT_MESSAGE);
-    expect(h.stats.stores).toBe(stores);
+    const before = frozen(h);
+    const states = h.states.size;
+    await expect(h.connectViaCallback("PKG", { upn: `second@${DOMAIN}`, userId: TEAMS_CONNECT_USER })).rejects.toMatchObject({ info: { kind: "forbidden", message: TEAMS_ONE_ACCOUNT_MESSAGE } });
+    noWrites(h, before);
+    expect(h.states.size).toBe(states); // no state was stored: nobody was sent to Microsoft
+    expect(h.everyRequest()).toBe(0);
     // another person can connect the other account
     const other = await h.connectViaCallback("PKG", { upn: `third@${DOMAIN}`, userId: TEAMS_OTHER_USER });
     expect(other.result.ok).toBe(true);
+  });
+
+  it("limit 1: a crafted callback (the person connected another account after the start) is refused at the callback with the same message and nothing stored", async () => {
+    const { h } = setup();
+    const { result } = await h.connectViaCallback("PKG", {
+      upn: `second@${DOMAIN}`,
+      userId: TEAMS_CONNECT_USER,
+      between: () => {
+        h.connect("PKG", PERSON, { owner: TEAMS_CONNECT_USER });
+      },
+    });
+    expect(result).toMatchObject({ ok: false, reason: "account_refused", detail: "one_account" });
+    expect(message(result)).toContain(TEAMS_ONE_ACCOUNT_MESSAGE);
+    expect([...h.rows.values()].filter((r) => r.external_account_id === `second@${DOMAIN}`).every((r) => r.status === "pending")).toBe(true);
+    expect(h.secrets.size).toBe(1); // only the seeded account's token set
   });
 
   it("a state started by another user, or consumed twice, is invalid", async () => {
@@ -441,12 +457,21 @@ describe("callback: consent errors, reconnect, ownership, D-23", () => {
 describe("T-278 review: sub-codes, reconnect beside another account, the token client label", () => {
   const detailOf = (r: { ok: boolean; detail?: string }) => (r.ok ? undefined : r.detail);
 
-  it("S2: reconnecting a disconnected row while another of the person's rows is usable is refused with the one-account message, before any token is stored", async () => {
+  it("S2: reconnecting a disconnected row while the person is at the limit is refused at the start with the one-account message, before any token or state", async () => {
     const { h } = setup();
     const x = h.connect("PKG", `old@${DOMAIN}`, { owner: TEAMS_CONNECT_USER, status: "disconnected" });
     h.connect("PKG", PERSON, { owner: TEAMS_CONNECT_USER });
+    const before = frozen(h);
+    await expect(h.connectViaCallback("PKG", { upn: `old@${DOMAIN}`, connectionId: x.row.id })).rejects.toMatchObject({ info: { kind: "forbidden", message: TEAMS_ONE_ACCOUNT_MESSAGE } });
+    noWrites(h, before);
+    expect(x.row.status).toBe("disconnected");
+  });
+
+  it("S2: ... and a crafted callback for it (the other account was connected after the start) is refused with the sub-code one_account, nothing stored", async () => {
+    const { h } = setup();
+    const x = h.connect("PKG", `old@${DOMAIN}`, { owner: TEAMS_CONNECT_USER, status: "disconnected" });
     const stores = h.stats.stores;
-    const { result } = await h.connectViaCallback("PKG", { upn: `old@${DOMAIN}`, connectionId: x.row.id });
+    const { result } = await h.connectViaCallback("PKG", { upn: `old@${DOMAIN}`, connectionId: x.row.id, between: () => void h.connect("PKG", PERSON, { owner: TEAMS_CONNECT_USER }) });
     expect(result).toMatchObject({ ok: false, reason: "account_refused" });
     expect(message(result)).toContain(TEAMS_ONE_ACCOUNT_MESSAGE);
     expect(detailOf(result)).toBe("one_account");

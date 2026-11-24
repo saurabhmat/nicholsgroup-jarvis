@@ -9,7 +9,7 @@ import { describe, expect, it } from "vitest";
 
 const web = resolve(__dirname, "..");
 const read = (f: string) => readFileSync(join(web, f), "utf8");
-const MESSAGES = ["components/messages-view.tsx", "components/messages-chats.tsx", "components/messages-client.tsx", "components/messages-page.tsx", "lib/teams-chats.ts", "lib/teams-api.ts", "lib/teams-reads.ts", "lib/teams-format.ts", "lib/teams-errors.ts", "lib/teams-chat-key.ts"];
+const MESSAGES = ["components/messages-view.tsx", "components/messages-chats.tsx", "components/messages-client.tsx", "components/messages-page.tsx", "lib/teams-chats.ts", "lib/teams-api.ts", "lib/teams-reads.ts", "lib/teams-format.ts", "lib/teams-errors.ts", "lib/teams-chat-key.ts", "components/messages-scope.tsx", "components/messages-bubble.tsx", "lib/messages-view-state.ts"];
 const code = (f: string) => read(f).replace(/\/\*[\s\S]*?\*\//g, "").replace(/(^|[^:])\/\/[^\n]*/g, "$1"); // without comments
 
 describe("Messages source rules", () => {
@@ -22,7 +22,7 @@ describe("Messages source rules", () => {
     expect(c).not.toMatch(/console\.(log|info|debug)/);
   });
 
-  it("only two files import the Teams reader; nothing in apps/web names the Graph host, a write route or a mark-read call", () => {
+  it("only three files import the Teams reader (the routes, the chat loaders, the channel loaders); nothing in apps/web names the Graph host, a write route or a mark-read call", () => {
     const files: string[] = [];
     const walk = (dir: string) => {
       for (const name of readdirSync(dir)) {
@@ -34,9 +34,20 @@ describe("Messages source rules", () => {
     };
     walk(web);
     const importers = files.filter((f) => /@nichols\/connectors\/teams-reader/.test(readFileSync(f, "utf8"))).map((f) => relative(web, f)).sort();
-    expect(importers).toEqual(["lib/teams-api.ts", "lib/teams-chats.ts"]); // the reader is server-only; components get types and the pure rules from teams-pure
+    expect(importers).toEqual(["lib/teams-api.ts", "lib/teams-channels.ts", "lib/teams-chats.ts"]); // T-291 added lib/teams-channels.ts (the channel loaders, same server-only rule); // the reader is server-only; components get types and the pure rules from teams-pure
     expect(read("components/messages-view.tsx")).toMatch(/import type \{ MessageNode \} from "@nichols\/connectors\/teams-pure"/);
-    for (const f of ["components/messages-view.tsx", "components/messages-client.tsx", "components/messages-chats.tsx"]) expect(read(f), f).not.toMatch(/connectors\/teams-reader/);
+    for (const f of ["components/messages-view.tsx", "components/messages-client.tsx", "components/messages-chats.tsx", "components/messages-channels.tsx", "components/messages-image.tsx"]) expect(read(f), f).not.toMatch(/connectors\/teams-reader/);
+    // the picture component's only request is ONE status probe of the portal's own route: the address is rebuilt from a static relative prefix, checked against the own-route pattern immediately
+    // before the request, and the request names that checked variable; no other host, no XMLHttpRequest
+    const img = read("components/messages-image.tsx");
+    expect([...img.matchAll(/\bfetch\(/g)]).toHaveLength(1);
+    expect(img).toMatch(/const probe = `\/api\/lanes\/\$\{src\.slice\("\/api\/lanes\/"\.length\)\}`;\s*if \(!OWN_ROUTE\.test\(probe\)\) throw [^\n]*\n\s*const r = await fetch\(probe, \{ credentials: "same-origin", cache: "no-store" \}\);/);
+    expect(img).not.toMatch(/XMLHttpRequest|https?:\/\//);
+    // the only way a `blob:` address reaches an <img> is the probe's own answer: one createObjectURL, from that response's blob, typed by an allowed image type
+    expect([...img.matchAll(/createObjectURL\(/g)]).toHaveLength(1);
+    expect(img).toMatch(/const b = await r\.blob\(\);\s*if \(alive\.current && IMAGE_TYPES\.has\(b\.type\)\) \{\s*showBlob\(URL\.createObjectURL\(b\)\);/);
+    expect([...img.matchAll(/<img [^>]*src=\{([^}]*)\}/g)].map((m) => m[1])).toEqual(["blob ?? src"]);
+    expect(img).toMatch(/revokeObjectURL/);
     for (const f of files) {
       const t = readFileSync(f, "utf8");
       expect(t, relative(web, f)).not.toMatch(/graph\.microsoft\.(com|us)|login\.microsoftonline|markChatReadForUser|\/chats\/[^"'`\s]*\/messages["'`]\s*,\s*\{\s*method/);
@@ -46,8 +57,36 @@ describe("Messages source rules", () => {
   it("the browser code calls only this portal's own routes", () => {
     const urls = [...code("components/messages-client.tsx").matchAll(/fetch\(\s*`([^`]+)`/g)].map((m) => m[1]);
     expect(urls.length).toBeGreaterThan(0);
-    for (const u of urls) expect(u).toMatch(/^\/api\/lanes\/\$\{encodeURIComponent\(laneId\)\}\/messages\/(older|read|call-link)/);
+    for (const u of urls) expect(u).toMatch(/^\/api\/lanes\/\$\{encodeURIComponent\(laneId\)\}\/messages\/(older|read|call-link|newer)/);
     expect(code("components/messages-client.tsx")).not.toMatch(/fetch\(\s*["'`]https?:/);
+  });
+
+  // T-290: the ONE loop of the Messages page asks the portal's OWN database; it is in one file and pinned here.
+  it("the live Messages code (T-290): exactly one timer, it only asks the portal's own activity route; the re-reads and the dot go to own routes; no storage, no raw HTML, no Microsoft host", () => {
+    const live = code("components/messages-live.tsx");
+    expect([...live.matchAll(/\bsetInterval\(/g)]).toHaveLength(1);
+    expect(live).toMatch(/timer = setInterval\(\(\) => void \(begun \? poll\(\) : tryBegin\(\)\), ACTIVITY_POLL_MS\)/);
+    expect(live).not.toMatch(/\bsetTimeout\b|requestAnimationFrame|EventSource|WebSocket|navigator\.sendBeacon|serviceWorker/);
+    // `poll` asks the database only: it names getActivity, never a re-read route
+    const poll = live.slice(live.indexOf("async function poll()"), live.indexOf("async function begin()"));
+    expect(poll).toMatch(/getActivity\(laneId, ac\.signal\)/);
+    expect(poll).not.toMatch(/\bfetch\(|messages\/(chats|newer|older|read)/);
+    // the loop's comment says what it is
+    expect(read("components/messages-live.tsx")).toMatch(/THE LOOP BELOW DOES\s*\/\/ NOT POLL MICROSOFT/);
+    // the fetches of the file are the chat-list re-read and (T-296) "More chats", both to the same own route, both by a person's action or a notice; everything else goes through the activity client
+    const urls = [...live.matchAll(/fetch\(\s*`([^`]+)`/g)].map((m) => m[1]);
+    expect(urls).toHaveLength(2);
+    for (const u of urls) expect(u).toMatch(/^\/api\/lanes\/\$\{encodeURIComponent\(laneId\)\}\/messages\/chats/);
+    const client = code("lib/messages-activity-client.ts");
+    expect([...client.matchAll(/fetch\(/g)]).toHaveLength(2);
+    expect([...client.matchAll(/fetch\(\s*`([^`]+)`/g)].map((m) => m[1])).toEqual(["/api/lanes/${encodeURIComponent(laneId)}/messages/activity", "/api/lanes/${encodeURIComponent(laneId)}/messages/activity"]);
+    for (const f of ["components/messages-live.tsx", "components/messages-dot.tsx", "lib/messages-activity-client.ts", "components/teams-live-status.tsx", "lib/messages-live-config.ts"]) {
+      const c = code(f);
+      expect(c, f).not.toMatch(/dangerouslySetInnerHTML|innerHTML|outerHTML|document\.write|\beval\(|localStorage|sessionStorage|indexedDB|document\.cookie|caches\.|graph\.microsoft|teams\.microsoft|@nichols\/connectors/);
+      expect(c, f).not.toMatch(/console\.(log|info|debug)/);
+    }
+    // the dot never draws anything that came from a chat: it takes no text from the answer
+    expect(code("components/messages-dot.tsx")).not.toMatch(/\.title|\.text|preview|sender|chatId/);
   });
 
   it("every link the page draws from Teams content opens in a new tab with noopener, and none is ever opened by code except the person's click on Call / Video call", () => {

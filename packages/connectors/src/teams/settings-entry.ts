@@ -12,7 +12,7 @@ import { TEAMS_ADMIN_CONSENT_FEATURES } from "./constants";
 export { disconnectTeams } from "./index";
 
 /** What a page draws from: null = the lane has no Teams block; otherwise whether it is on, the cloud is served, and the features (no tenant id or domain leaves this module). */
-export type TeamsLaneView = { enabled: boolean; cloudSupported: boolean; features: TeamsFeature[]; needsAdminConsent: boolean };
+export type TeamsLaneView = { enabled: boolean; cloudSupported: boolean; features: TeamsFeature[]; needsAdminConsent: boolean; maxAccountsPerPerson: number };
 
 export async function teamsSettingsOf(laneId: LaneId): Promise<TeamsLaneView | null> {
   const s = await laneConfigReader.teamsSettings(laneId); // the one read
@@ -22,5 +22,6 @@ export async function teamsSettingsOf(laneId: LaneId): Promise<TeamsLaneView | n
     cloudSupported: isCloudSupported(s.cloud),
     features: [...s.features],
     needsAdminConsent: s.features.some((f) => TEAMS_ADMIN_CONSENT_FEATURES.includes(f)),
+    maxAccountsPerPerson: s.maxAccountsPerPerson,
   };
 }

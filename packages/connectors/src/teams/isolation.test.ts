@@ -124,14 +124,23 @@ describe("source scan: every production file that names the provider is on this 
         "apps/web/lib/teams-wording.ts",
         "packages/connectors/src/contract/schemas.ts",
         "packages/connectors/src/health/index.ts",
+        // T-289: the subscription store records a Teams connection's notice subscription under this provider (and asks the receiver's lookup for it)
+        "packages/connectors/src/microsoft/subscription-store.ts",
         "packages/connectors/src/oauth/flow.ts",
+        // T-294: counts the person's own Teams connections (the start of a connect refuses at the company's limit), read under the person's own row-level security
+        "packages/connectors/src/teams/accounts.ts",
         "packages/connectors/src/teams/constants.ts",
         "packages/connectors/src/teams/guard.ts",
         "packages/connectors/src/teams/http.ts",
         "packages/connectors/src/teams/identity.ts",
+        // T-289: the in-memory twin of the subscription store labels a Teams subscription's provider (as the real store does); test support only
+        "packages/connectors/src/testing/microsoft-subscription-store.ts",
         "packages/connectors/src/teams/provider.ts",
         "packages/connectors/src/testing/teams-harness.ts",
         "packages/connectors/src/vault/connections.ts",
+        // T-286: the approvals-only write door (the loader that refuses a non-Teams row) and the approvals module's facts and executor wiring
+        "packages/connectors/src/write/index.ts",
+        "packages/modules/approvals/src/server/wire.ts",
       ].sort(),
     );
   });

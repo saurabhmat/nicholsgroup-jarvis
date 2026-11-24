@@ -35,6 +35,25 @@ const untouched = (h: ReturnType<typeof setup>["h"], fake: ReturnType<typeof set
   expect(fake.state.graphRequests).toHaveLength(0);
 };
 
+describe("raw bytes (T-285)", () => {
+  const HOSTED = "/chats/{chatId}/messages/{messageId}/hostedContents/{hostedId}/$value";
+  const hosted = { chatId: CHAT, messageId: "1700000000123", hostedId: "aWQ9" };
+
+  it("only a hosted-content template may be read as bytes, and only with a sane size limit: anything else is refused before a token is read", async () => {
+    const { fake, h } = setup();
+    const base = { actor: user, retry: false } as const;
+    const conn = h.connect("PKG", PERSON).conn;
+    await rejects(h.api.get("PKG", conn, { ...base, path: "/me/chats", responseType: "bytes", maxBytes: 4096 }), "invalid_input", /hosted content/);
+    await rejects(h.api.get("PKG", conn, { ...base, path: HOSTED, params: hosted, responseType: "bytes" }), "invalid_input", /size limit/);
+    await rejects(h.api.get("PKG", conn, { ...base, path: HOSTED, params: hosted, responseType: "bytes", maxBytes: 9 * 1024 * 1024 }), "invalid_input", /size limit/);
+    await rejects(h.api.get("PKG", conn, { ...base, path: HOSTED, params: hosted, responseType: "bytes", maxBytes: 10 }), "invalid_input", /size limit/);
+    await rejects(h.api.get("PKG", conn, { ...base, path: "/me/chats", maxBytes: 4096 }), "invalid_input", /size limit/);
+    await rejects(h.api.get("PKG", conn, { ...base, path: HOSTED, params: hosted, responseType: "text" as never, maxBytes: 4096 }), "invalid_input");
+    expect(h.stats.tokenReads).toBe(0);
+    expect(fake.state.graphRequests).toHaveLength(0);
+  });
+});
+
 describe("the read allow-list", () => {
   it("is exactly the spec's thirteen templates, each with the feature it needs; the write list is exactly the three send templates", () => {
     expect(Object.keys(TEAMS_READ_ROUTES).sort()).toEqual(

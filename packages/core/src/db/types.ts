@@ -518,8 +518,14 @@ isOneToOne: false
 "act_claim_open":
 { Args: { "p_approver": string,"p_hash": string,"p_id": string,"p_lane": string }; Returns: boolean
                            },
+"act_claim_outcome":
+{ Args: { "p_id": string,"p_lane": string }; Returns: string
+                           },
 "act_claim_sent":
 { Args: { "p_external_id": string,"p_id": string,"p_lane": string }; Returns: undefined
+                           },
+"act_claimed_external_ids":
+{ Args: { "p_connection": string,"p_except": string,"p_ids": (string)[],"p_lane": string }; Returns: (string)[]
                            },
 "act_expire_stale":
 { Args: { "p_lane": string }; Returns: number
@@ -957,6 +963,29 @@ isOneToOne: false
 "sync_now_claim":
 { Args: { "p_lane": string }; Returns: Json
                            },
+"teams_account_limit":
+{ Args: { "p_lane": string }; Returns: number
+                           },
+"teams_actions_purge_connection":
+{ Args: { "p_connection": string,"p_lane": string }; Returns: number
+                           },
+"teams_activity_get":
+{ Args: { "p_connection": string,"p_lane": string }; Returns: {
+              "last_notice_at": string,"last_seen_at": string,"live": boolean,"live_until": string
+            }[]
+                           },
+"teams_activity_notice":
+{ Args: { "p_connection": string,"p_lane": string }; Returns: string
+                           },
+"teams_activity_purge":
+{ Args: { "p_lane": string }; Returns: number
+                           },
+"teams_activity_purge_connection":
+{ Args: { "p_connection": string,"p_lane": string }; Returns: number
+                           },
+"teams_activity_seen":
+{ Args: { "p_connection": string,"p_lane": string }; Returns: string
+                           },
 "teams_assert_one_per_owner":
 { Args: { "p_connection_id": string,"p_lane": string }; Returns: undefined
                            },
@@ -966,6 +995,11 @@ isOneToOne: false
 "teams_chat_reads_list":
 { Args: { "p_connection": string,"p_lane": string }; Returns: {
               "chat_id": string,"read_through": string
+            }[]
+                           },
+"teams_chat_reads_list_many":
+{ Args: { "p_connections": (string)[],"p_lane": string }; Returns: {
+              "chat_id": string,"connection_id": string,"read_through": string
             }[]
                            },
 "teams_chat_reads_purge":

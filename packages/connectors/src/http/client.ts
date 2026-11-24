@@ -71,14 +71,21 @@ export type HttpRequest = {
    */
   body?: unknown;
   auth?: { scheme: "Bearer" | "Basic"; secret: SecretValue | (() => Promise<SecretValue>) };
-  /** "json" (default): a 2xx with a non-JSON body is a provider_error. "text": the body as a string. */
-  responseType?: "json" | "text";
+  /** "json" (default): a 2xx with a non-JSON body is a provider_error. "text": the body as a string. "bytes": the raw bytes as a Buffer (null when empty), still cut at `maxResponseBytes` while streaming (T-285). */
+  responseType?: "json" | "text" | "bytes";
   /**
    * Retry on 5xx, timeouts and network failures. Default: true for GET/PUT/DELETE, false for POST/PATCH (the request
    * may have been processed). A 429 is retried unless this is explicitly false: the provider did not process it.
    */
   retry?: boolean;
   signal?: AbortSignal;
+  /**
+   * T-285: a bound on the time spent WAITING for this client's rate limit before the request is sent (not on the request itself). When it aborts while the caller's own `signal` has not,
+   * the call ends at once with `rate_limited` (retry after 2 s) instead of sleeping on. Without it (every mail and QuickBooks call) the wait is unbounded, as before.
+   * GET only (refused for any other method: on a write, `rate_limited` could label an unknown outcome as a definite failure), and applied to the wait before the FIRST attempt only: a retried
+   * attempt, or a retry after a token refresh, waits as it always did, because a request may already have gone out.
+   */
+  waitSignal?: AbortSignal;
 };
 
 export type ConnectorResponse<T = unknown> = {
@@ -218,6 +225,7 @@ export function createHttpClient(options: HttpClientOptions): HttpClient {
     async request<T>(req: HttpRequest): Promise<ConnectorResponse<T>> {
       const url = buildUrl(req);
       const endpoint = req.path;
+      if (req.waitSignal && req.method !== "GET") throw new ConnectorError({ kind: "invalid_input", message: "waitSignal is for GET requests only", endpoint });
       const label = `${provider} ${req.method} ${endpoint}`;
       const retryable = req.retry ?? (req.method === "GET" || req.method === "PUT" || req.method === "DELETE");
       const responseType = req.responseType ?? "json";
@@ -342,7 +350,16 @@ export function createHttpClient(options: HttpClientOptions): HttpClient {
       let attempt = 0;
       for (;;) {
         throwIfCancelled();
-        if (limiter) await limiter.take(req.signal);
+        if (limiter) {
+          if (req.waitSignal && attempt === 0) {
+            try {
+              await limiter.take(req.signal ? AbortSignal.any([req.signal, req.waitSignal]) : req.waitSignal);
+            } catch (e) {
+              if (req.waitSignal.aborted && !req.signal?.aborted) throw fail({ kind: "rate_limited", message: `${label} waited too long for its turn`, retry_after_seconds: 2 });
+              throw e;
+            }
+          } else await limiter.take(req.signal);
+        }
         const started = now();
         const result = await attemptOnce(attempt);
         const retrying = !result.ok && result.retry && attempt < maxRetries;
@@ -385,7 +402,7 @@ export function createHttpClient(options: HttpClientOptions): HttpClient {
  * read also races the attempt's signal, so a stalled body times out even if the fetch implementation does not tie its
  * stream to the signal.
  */
-async function readBody(res: Response, maxBytes: number, type: "json" | "text", signal: AbortSignal): Promise<unknown> {
+async function readBody(res: Response, maxBytes: number, type: "json" | "text" | "bytes", signal: AbortSignal): Promise<unknown> {
   const tooBig = () => new ConnectorError({ kind: "provider_error", message: "Response is larger than the limit" });
   const declared = Number(res.headers.get("content-length") ?? "0");
   if (declared > maxBytes) {
@@ -415,6 +432,7 @@ async function readBody(res: Response, maxBytes: number, type: "json" | "text", 
     }
   }
   if (total === 0) return null;
+  if (type === "bytes") return Buffer.concat(chunks, total);
   const text = new TextDecoder().decode(Buffer.concat(chunks, total));
   if (type === "text") return text;
   if (!/\bjson\b/i.test(res.headers.get("content-type") ?? "")) {

@@ -1,7 +1,7 @@
 // T-280: who sees the Teams section on Settings and what it holds (`teamsSectionFor`, `loadTeamsRows`). Synthetic rows; the lane and role guards are fakes. Nothing is read from Microsoft.
 import { describe, expect, it } from "vitest";
 import { AuthError } from "@nichols/core/auth";
-import { loadTeamsRows, teamsSectionFor, type TeamsConnectionView } from "./teams-connection";
+import { loadTeamsRows, reconnectAccountOf, teamsSectionFor, type TeamsConnectionView } from "./teams-connection";
 
 const ME = "00000000-0000-4000-8000-0000000000aa";
 const guard = (userId: string | "denied" = ME) =>
@@ -12,7 +12,7 @@ const guard = (userId: string | "denied" = ME) =>
     },
   }) as Parameters<typeof teamsSectionFor>[0];
 const row = (over: Partial<TeamsConnectionView> = {}): TeamsConnectionView => ({ id: "00000000-0000-4000-8000-0000000000c1", account: "me@teams.example.test", state: "connected", mine: true, has: ["chat_read", "call_links"], ...over });
-const enabled = { enabled: true, cloudSupported: true, features: ["chat_read", "call_links"] as never, needsAdminConsent: false };
+const enabled = { enabled: true, cloudSupported: true, features: ["chat_read", "call_links"] as never, needsAdminConsent: false, maxAccountsPerPerson: 1 };
 const section = (rows: TeamsConnectionView[] | Error, lane: unknown, opts?: { keepEmpty?: boolean }, who: string = ME) =>
   teamsSectionFor(guard(who), "PKG", async () => { if (rows instanceof Error) throw rows; return rows; }, async () => { if (lane instanceof Error) throw lane; return lane as never; }, opts);
 
@@ -26,7 +26,7 @@ describe("teamsSectionFor", () => {
 
   it("enabled: the section with the person's rows and the lane's features; the mail providers are never asked (the loader has no way to)", async () => {
     const r = await section([row()], enabled);
-    expect(r).toEqual({ connections: [row()], laneFeatures: ["chat_read", "call_links"], needsAdminConsent: false });
+    expect(r).toEqual({ connections: [row()], laneFeatures: ["chat_read", "call_links"], needsAdminConsent: false, maxAccounts: 1 });
   });
 
   it("enabled with no rows: a section with no connections (Sign in is drawn)", async () => {
@@ -103,5 +103,25 @@ describe("T-278 review", () => {
     expect((await loadTeamsRows(client, "PKG", ME)).map((r) => r.id)).toEqual(["a"]);
     const only = { schema: () => ({ from: () => ({ select: () => ({ eq: () => ({ eq: () => ({ order: async () => ({ data: [{ id: "p", external_account_id: "second@x.test", status: "pending", owner_user_id: ME, features: {} }], error: null }) }) }) }) }) }) } as never;
     expect(await loadTeamsRows(only, "PKG", ME)).toEqual([]);
+  });
+});
+
+describe("reconnectAccountOf (T-294)", () => {
+  const A = "00000000-0000-4000-8000-0000000000a1";
+  const view = (rows: TeamsConnectionView[]) => ({ connections: rows, laneFeatures: [], maxAccounts: 2, needsAdminConsent: false }) as never;
+  const own = row({ id: A, account: "second@teams.example.test" });
+  const q = (over: Record<string, string> = {}) => ({ connect: "wrong_account", provider: "microsoft_teams", conn: A, ...over });
+
+  it("names the caller's own row, only for a refused Teams reconnect", () => {
+    expect(reconnectAccountOf(q(), view([own]))).toBe("second@teams.example.test");
+    expect(reconnectAccountOf(q({ connect: "ok" }), view([own]))).toBeNull();
+    expect(reconnectAccountOf(q({ provider: "google" }), view([own]))).toBeNull();
+  });
+  it("never another person's row, an unknown id, a crafted value or no section", () => {
+    expect(reconnectAccountOf(q(), view([{ ...own, mine: false }]))).toBeNull();
+    expect(reconnectAccountOf(q({ conn: "00000000-0000-4000-8000-0000000000ff" }), view([own]))).toBeNull();
+    for (const bad of ["second@teams.example.test", "<script>", A.toUpperCase(), `${A}x`, ""]) expect(reconnectAccountOf(q({ conn: bad }), view([own])), bad).toBeNull();
+    expect(reconnectAccountOf({ ...q(), conn: [A, A] as never }, view([own]))).toBeNull();
+    expect(reconnectAccountOf(q(), null)).toBeNull();
   });
 });

@@ -6,12 +6,15 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { cleanup, render, screen, within } from "@testing-library/react";
 
 const refresh = vi.hoisted(() => vi.fn());
-vi.mock("next/navigation", () => ({ useRouter: () => ({ refresh }), usePathname: () => "/PKG/messages" }));
+const nav = vi.hoisted(() => ({ search: "" }));
+vi.mock("next/navigation", () => ({ useRouter: () => ({ refresh }), usePathname: () => "/PKG/messages", useSearchParams: () => new URLSearchParams(nav.search) }));
 
 import { ChatListSkeleton, ChatListView, ConversationPane, ConversationSkeleton, NoChatSelected, TeamsFailureCard, WorkspaceLayout } from "./messages-chats";
 import { htmlToNodes } from "@nichols/connectors/teams-pure";
 import type { ChatListView as ChatListData, ConversationView, MessageView } from "@/lib/teams-chats";
 import { encodeChatKey } from "@/lib/teams-chat-key";
+import { MessagesScope } from "./messages-scope";
+import { act } from "@testing-library/react";
 
 afterEach(() => {
   cleanup();
@@ -25,17 +28,23 @@ const at = (width: number) => {
 const CHAT = "19:abc123def456@thread.v2";
 const KEY = encodeChatKey(CHAT);
 const CONN = "00000000-0000-4000-8000-0000000000c1";
-const row = (over: Partial<Extract<ChatListData, { kind: "ok" }>["rows"][number]> = {}) => ({ key: encodeChatKey("19:x1@thread.v2"), title: "Pat Example", preview: "see you at 3", time: "9:05 AM", unread: false, external: false, ...over });
+const row = (over: Partial<Extract<ChatListData, { kind: "ok" }>["rows"][number]> = {}) => ({ key: encodeChatKey("19:x1@thread.v2"), conn: CONN, account: null, accountName: null, at: null, ord: 0, title: "Pat Example", preview: "see you at 3", time: "9:05 AM", unread: false, external: false, ...over });
 const msg = (id: string, at: string, over: Record<string, unknown> = {}): MessageView => ({ id, at, time: "9:05 AM", fullTime: "Nov 23, 2026, 9:05 AM ET", day: at.slice(0, 10), sender: "Pat", mine: false, edited: false, deleted: false, system: false, nodes: [{ t: "text", v: `text ${id}` }], truncated: false, attachments: [], ...over }) as unknown as MessageView;
 const conv = (over: Partial<Extract<ConversationView, { kind: "ok" }>> = {}): ConversationView => ({
-  kind: "ok", chatKey: KEY, title: "Team chat", subtitle: "3 people", external: false, group: true, openUrl: `https://teams.microsoft.com/l/chat/${CHAT}/conversations`, call: "available",
+  kind: "ok", chatKey: KEY, conn: CONN, account: null, accountName: null, title: "Team chat", subtitle: "3 people", external: false, group: true, openUrl: `https://teams.microsoft.com/l/chat/${CHAT}/conversations`, call: "available",
   messages: [msg("m1", "2026-11-22T14:00:00.000Z"), msg("m2", "2026-11-23T14:00:00.000Z", { mine: true })], nextBefore: "2026-11-22T14:00:00.000Z", readThrough: "2026-11-23T14:00:00.000Z", ...over,
 }) as ConversationView;
 
 describe.each(WIDTHS)("the chat list at %ipx", (width) => {
-  const draw = (view: ChatListData, selected: string | null = null, more: string | null = null) => {
+  // T-296: the open chat comes from the address (the list is drawn by the layout and does not receive it as a prop)
+  const draw = (view: ChatListData, selected: string | null = null) => {
     at(width);
-    return render(<ChatListView view={view} laneId="PKG" connectionId={CONN} selectedKey={selected} more={more} />);
+    nav.search = selected ? `chat=${selected}` : "";
+    return render(
+      <MessagesScope chatConns={[CONN]}>
+        <ChatListView view={view} laneId="PKG" connectionId={CONN} />
+      </MessagesScope>,
+    );
   };
 
   it("rows: title, preview, time, an unread dot only where unread, External only where external; the selected row is marked", () => {
@@ -56,13 +65,44 @@ describe.each(WIDTHS)("the chat list at %ipx", (width) => {
     expect(rows[0]?.getAttribute("href")).toBe(`/PKG/messages?chat=${encodeChatKey("19:x1@thread.v2")}`);
   });
 
-  it("More chats and Back to the newest chats are explicit links that keep the selected chat", () => {
+  it("T-296: More chats is a button that asks the list route for the next page (no address change, so a chat page is not read again), shows it IN PLACE OF the newest page, and Back brings the newest page back with no request", async () => {
     const sel = encodeChatKey("19:x2@thread.v2");
-    draw({ kind: "ok", rows: [row()], moreCursor: "cursor-abc" }, sel, "cur0");
-    expect(screen.getByTestId("more-chats").getAttribute("href")).toBe(`/PKG/messages?chat=${sel}&more=cursor-abc`);
-    expect(screen.getByTestId("newest-chats").getAttribute("href")).toBe(`/PKG/messages?chat=${sel}`);
-    // rows keep the page the person is on
-    expect(screen.getByTestId("chat-row").getAttribute("href")).toContain("more=cur0");
+    const later = row({ key: encodeChatKey("19:later@thread.v2"), title: "Older chat" });
+    const fetchMock = vi.fn(async () => Response.json({ rows: [later], moreCursor: "cursor-2", notes: [], listed: [CONN] }));
+    vi.stubGlobal("fetch", fetchMock);
+    draw({ kind: "ok", rows: [row()], moreCursor: "cursor-abc" }, sel);
+    expect(screen.queryByTestId("newest-chats")).toBeNull();
+    await act(async () => {
+      screen.getByTestId("more-chats").click();
+    });
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    const first = (fetchMock.mock.calls as unknown as [string, RequestInit][])[0] as [string, RequestInit];
+    expect(first[0]).toBe(`/api/lanes/PKG/messages/chats?more=cursor-abc&chat=${sel}`);
+    expect(first[1]).toMatchObject({ credentials: "same-origin", cache: "no-store" });
+    expect(screen.getAllByTestId("chat-row")).toHaveLength(1);
+    expect(screen.getByText("Older chat")).toBeTruthy();
+    expect(screen.queryByText("Pat Example")).toBeNull();
+    // rows no longer carry the page cursor: they are plain chat links
+    expect(screen.getByTestId("chat-row").getAttribute("href")).toBe(`/PKG/messages?chat=${encodeChatKey("19:later@thread.v2")}`);
+    await act(async () => {
+      screen.getByTestId("newest-chats").click();
+    });
+    expect(screen.getByText("Pat Example")).toBeTruthy();
+    expect(screen.queryByText("Older chat")).toBeNull();
+    expect(screen.getByTestId("more-chats")).toBeTruthy();
+    expect(fetchMock).toHaveBeenCalledTimes(1); // Back is a restore, not a read
+    vi.unstubAllGlobals();
+  });
+
+  it("T-296: a failed More chats keeps the page that was shown and says so", async () => {
+    vi.stubGlobal("fetch", vi.fn(async () => new Response("{}", { status: 503 })));
+    draw({ kind: "ok", rows: [row()], moreCursor: "cursor-abc" });
+    await act(async () => {
+      screen.getByTestId("more-chats").click();
+    });
+    expect(screen.getByTestId("chat-list-refresh-failed")).toBeTruthy();
+    expect(screen.getByText("Pat Example")).toBeTruthy();
+    vi.unstubAllGlobals();
   });
 
   it("no more chats: no More link", () => {
@@ -152,12 +192,16 @@ describe.each(WIDTHS)("the conversation at %ipx", (width) => {
     expect(items).toHaveLength(4);
     expect(items.map((i) => i.getAttribute("data-mine"))).toEqual(["false", "false", "true", "false"]);
     expect(screen.getAllByRole("separator").map((s) => s.getAttribute("aria-label"))).toEqual(["Sunday, November 22, 2026", "Monday, November 23, 2026"]);
-    expect(within(items[0] as HTMLElement).getByText("Pat")).toBeTruthy(); // sender name in a group
-    expect(within(items[2] as HTMLElement).queryByText("Pat")).toBeNull(); // not on my own
+    // T-297: the sender is named once per GROUP (m1 and m2 are an hour apart: two groups), never on my own, never on a Teams event
+    expect(screen.getAllByTestId("group-sender").map((s) => s.textContent)).toEqual(["Pat", "Pat"]);
+    expect(within(items[2] as HTMLElement).queryByText("Pat")).toBeNull();
     expect(within(items[0] as HTMLElement).getByText(/Edited/)).toBeTruthy();
     expect(within(items[1] as HTMLElement).getByText("This message was deleted")).toBeTruthy();
     expect(within(items[3] as HTMLElement).getByText("Teams event")).toBeTruthy();
-    expect(screen.getAllByText("9:05 AM")[0]?.getAttribute("title")).toBe("Nov 23, 2026, 9:05 AM ET");
+    // each group shows ONE time (the last message's); every message's full time is in the page for a screen reader and as a tooltip
+    expect(screen.getAllByTestId("group-time").map((t) => t.textContent)).toEqual(["9:05 AM", "9:05 AM", "9:05 AM", "9:05 AM"]);
+    expect(items.map((i) => i.querySelector("time")?.textContent)).toEqual(Array(4).fill("Nov 23, 2026, 9:05 AM ET"));
+    expect(screen.getAllByTestId("bubble")[0]?.getAttribute("title")).toBe("Nov 23, 2026, 9:05 AM ET");
   });
 
   it("a 1:1 chat draws no sender names", () => {
@@ -299,12 +343,12 @@ describe("the phone layout: the list, then the conversation (never both); deskto
     layout(true);
     expect(screen.getByTestId("chat-list-pane").className).toContain("hidden lg:block");
     expect(screen.getByTestId("conversation-pane").className).not.toContain("hidden");
-    expect(screen.getByTestId("messages-workspace").getAttribute("data-selected")).toBe("true");
+    expect(screen.getByTestId("channels-workspace").getAttribute("data-selected")).toBe("true");
   });
 
   it("no horizontal page scroll: every pane can shrink (min-w-0), long words wrap, the grid is one column below lg", () => {
     layout(true);
-    const grid = screen.getByTestId("messages-workspace");
+    const grid = screen.getByTestId("channels-workspace");
     expect(grid.className).toContain("min-w-0");
     expect(grid.className).toContain("lg:grid-cols-");
     expect(grid.className).not.toMatch(/(^| )grid-cols-/); // single column until lg
@@ -320,9 +364,9 @@ describe("the phone layout: the list, then the conversation (never both); deskto
 });
 
 describe("T-281 review follow-ups (view)", () => {
-  it("C7h: the Back link keeps the page of chats the person was on", () => {
-    render(<ConversationPane view={conv()} laneId="PKG" connectionId={CONN} more="cur0" />);
-    expect(screen.getByTestId("back-to-chats").getAttribute("href")).toBe("/PKG/messages?more=cur0");
+  it("C7h (T-296): the Back link goes to the chat list, which is still mounted and remembers the page of chats the person was on", () => {
+    render(<ConversationPane view={conv()} laneId="PKG" connectionId={CONN} />);
+    expect(screen.getByTestId("back-to-chats").getAttribute("href")).toBe("/PKG/messages");
   });
 
   it("C7e / M1: the host label is hidden ONLY when the link text is that very host or address; look-alike text keeps it", () => {
@@ -344,7 +388,7 @@ describe("T-281 review follow-ups (view)", () => {
     render(<ConversationPane view={conv()} laneId="PKG" connectionId={CONN} />);
     expect(screen.getByTestId("conversation-title").getAttribute("tabindex")).toBe("-1");
     for (const s of screen.getAllByRole("separator")) expect(s.tagName).not.toBe("LI");
-    expect(screen.getByTestId("conversation").className).toContain("h-[calc(100dvh-8.5rem)]");
+    expect(screen.getByTestId("conversation").className).toContain("h-[var(--pane-h,calc(100dvh-8.5rem))]");
   });
 
   it("C7i: an image-only message is the placeholder, not '(no text)'", () => {

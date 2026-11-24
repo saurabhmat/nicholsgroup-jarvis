@@ -22,6 +22,7 @@ import {
   PLACEHOLDER_MESSAGE,
   QBO_DISCONNECT,
   WRITE_ROLES,
+  isTeamsType,
 } from "@nichols/approvals/server";
 import { AuthError, authErrorResponse, type Guards } from "@nichols/core/auth";
 import { domainOf } from "@nichols/briefing/domain";
@@ -331,6 +332,11 @@ export function toCard(row: ActionRow, facts: CapabilityFacts, laneId: string, i
   };
 }
 
+/** What the history says about a Teams send: its kind, never the text or the people (the chat or channel name is looked up live by the page, T-288). */
+export function teamsHistoryLabel(type: "teams.chat.send" | "teams.channel.post" | "teams.channel.reply"): string {
+  return type === "teams.chat.send" ? "Teams message (chat)" : type === "teams.channel.post" ? "Teams message (channel post)" : "Teams message (channel reply)";
+}
+
 export function toHistory(row: ActionRow): HistoryItem {
   return {
     id: row.id,
@@ -338,7 +344,7 @@ export function toHistory(row: ActionRow): HistoryItem {
     provider: row.provider === "microsoft" ? "microsoft" : row.provider === "google" ? "google" : null,
     status: row.status,
     to: strs(row.payload.to),
-    subject: row.actionType === "qbo.disconnect" ? "Disconnect QuickBooks" : typeof row.payload.subject === "string" ? row.payload.subject : "",
+    subject: row.actionType === "qbo.disconnect" ? "Disconnect QuickBooks" : isTeamsType(row.actionType) ? teamsHistoryLabel(row.actionType) : typeof row.payload.subject === "string" ? row.payload.subject : "",
     failureCode: row.failureCode,
     outcomeUnknown: row.status === "failed" && isOutcomeUnknown(row.failureCode),
     at: row.verifiedAt ?? row.updatedAt,
@@ -381,7 +387,8 @@ export async function loadApprovals(
     for (const row of rows.filter((r) => r.status === "proposed" && new Date(r.expiresAt).getTime() > Date.now())) {
       const f = await factsOf(row.connectionId);
       if (isEmailType(row.actionType)) pending.push(toCard(row, f, laneId, domains));
-      else disconnects.push(toDisconnectCard(row, f, laneId, lane.session.userId));
+      else if (row.actionType === QBO_DISCONNECT) disconnects.push(toDisconnectCard(row, f, laneId, lane.session.userId));
+      // A Teams send is proposed and approved in one step (T-288): it never waits as a card here, so it is neither listed nor counted.
     }
     const history = rows
       .filter((r) => r.status !== "proposed")

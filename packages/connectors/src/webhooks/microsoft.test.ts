@@ -8,7 +8,7 @@ import { createGraphSubscriptionClient } from "../microsoft/subscription-client"
 import { createMicrosoftSubscriptions } from "../microsoft/subscriptions";
 import { createMicrosoftHarness, TENANT_A } from "../testing/microsoft-harness";
 import { createSubscriptionStoreTwin } from "../testing/microsoft-subscription-store";
-import { createMemoryWebhookStore } from "../testing/mock-webhook";
+import { createMicrosoftMemoryWebhookStore } from "../testing/mock-webhook";
 import { useMockServer } from "../testing/msw/index";
 import { createFakeMicrosoft } from "../testing/msw/microsoft/handlers";
 import { createFakeSubscriptions } from "../testing/msw/microsoft/subscriptions";
@@ -43,7 +43,10 @@ function setup(opts: { lanes?: string[]; jobs?: boolean } = {}) {
     const r = h.rows.get(id);
     return r && r.lane_id === laneId ? { status: r.status } : undefined;
   });
-  const mem = createMemoryWebhookStore({});
+  const mem = createMicrosoftMemoryWebhookStore((laneId, id) => {
+    const r = h.rows.get(id);
+    return r && r.lane_id === laneId ? { provider: r.provider, status: r.status } : undefined;
+  });
   const sent: Sent[] = [];
   const logs: LogEntry[] = [];
   const logger = createConnectorLogger({ sink: (e) => logs.push(e) });

@@ -8,7 +8,9 @@ import { buttonVariants, cn } from "@nichols/ui";
 import type { MessageNode } from "@nichols/connectors/teams-pure";
 import { dayLabel } from "@/lib/teams-format";
 import type { AttachmentView, ChatRowView, MessageView } from "@/lib/teams-chats";
-import { MESSAGES_FILE_OPENS_IN_MICROSOFT, MESSAGES_IMAGE_TEXT, MESSAGES_TRUNCATED_TEXT } from "@/lib/teams-wording";
+import { MESSAGES_FILE_OPENS_IN_MICROSOFT, MESSAGES_TRUNCATED_TEXT, messagesAccountBadgeName } from "@/lib/teams-wording";
+import { MessageBubble } from "./messages-bubble";
+import { HostedImage, ImagePlaceholder } from "./messages-image";
 
 // ---- message bodies: typed nodes -> elements
 const LINK_CLASS = "font-medium text-primary underline underline-offset-2 [overflow-wrap:anywhere]";
@@ -42,7 +44,11 @@ const hostLabel = (href: string, host: string): string => {
   }
 };
 
-export function renderNodes(nodes: readonly MessageNode[]): ReactNode[] {
+/**
+ * `images` (T-285) is the same-site address a picture of THIS message is drawn from, without the hosted-content id (see MessageView.images). A picture node that carries an id is drawn through that
+ * route only; every other picture is the neutral placeholder. The id is URL-encoded and checked against the connector's id format again here.
+ */
+export function renderNodes(nodes: readonly MessageNode[], images: string | null = null): ReactNode[] {
   return nodes.map((n, i) => {
     switch (n.t) {
       case "text":
@@ -58,68 +64,64 @@ export function renderNodes(nodes: readonly MessageNode[]): ReactNode[] {
       case "emoji":
         return <span key={i}>{n.v}</span>;
       case "image":
-        return (
-          <span key={i} data-testid="image-placeholder" className="inline-block rounded-control border border-dashed border-border px-2 py-0.5 text-small text-muted-foreground">
-            {MESSAGES_IMAGE_TEXT}
-          </span>
-        );
+        return n.hosted !== undefined && images !== null && /^\/api\/lanes\//.test(images) && /^[A-Za-z0-9._:=@-]{1,256}$/.test(n.hosted) ? <HostedImage key={i} src={`${images}&hosted=${encodeURIComponent(n.hosted)}`} /> : <ImagePlaceholder key={i} />;
       case "link":
         // The converter only emits https links; this is a second look, so a node that somehow carried anything else is drawn as its text and nothing is clickable.
-        if (!/^https:\/\//i.test(n.href)) return <span key={i}>{n.c.length > 0 ? renderNodes(n.c) : n.host}</span>;
+        if (!/^https:\/\//i.test(n.href)) return <span key={i}>{n.c.length > 0 ? renderNodes(n.c, images) : n.host}</span>;
         return (
           <span key={i}>
             <a href={n.href} target="_blank" rel="noopener noreferrer nofollow" className={LINK_CLASS}>
-              {n.c.length > 0 ? renderNodes(n.c) : n.host}
+              {n.c.length > 0 ? renderNodes(n.c, null) : n.host /* a picture inside a link is a placeholder: no clickable thing inside another */}
             </a>
             {textIsHost(linkText(n.c), n.host) && new URL(n.href).port === "" ? null : <span className="text-small text-muted-foreground"> ({hostLabel(n.href, n.host)})</span>}
           </span>
         );
       case "b":
-        return <strong key={i}>{renderNodes(n.c)}</strong>;
+        return <strong key={i}>{renderNodes(n.c, images)}</strong>;
       case "i":
-        return <em key={i}>{renderNodes(n.c)}</em>;
+        return <em key={i}>{renderNodes(n.c, images)}</em>;
       case "u":
-        return <u key={i}>{renderNodes(n.c)}</u>;
+        return <u key={i}>{renderNodes(n.c, images)}</u>;
       case "s":
-        return <s key={i}>{renderNodes(n.c)}</s>;
+        return <s key={i}>{renderNodes(n.c, images)}</s>;
       case "code":
         return (
           <code key={i} className="rounded bg-muted px-1 font-mono text-small">
-            {renderNodes(n.c)}
+            {renderNodes(n.c, images)}
           </code>
         );
       case "p":
         return (
           <p key={i} className="my-1 first:mt-0 last:mb-0">
-            {renderNodes(n.c)}
+            {renderNodes(n.c, images)}
           </p>
         );
       case "quote":
         return (
           <blockquote key={i} className="my-1 border-l-2 border-border pl-3 text-muted-foreground">
-            {renderNodes(n.c)}
+            {renderNodes(n.c, images)}
           </blockquote>
         );
       case "codeblock":
         return (
           <pre key={i} className="my-1 overflow-x-auto whitespace-pre-wrap rounded-control bg-muted p-2 font-mono text-small [overflow-wrap:anywhere]">
-            {renderNodes(n.c)}
+            {renderNodes(n.c, images)}
           </pre>
         );
       case "ul":
         return (
           <ul key={i} className="my-1 list-disc pl-5">
-            {renderNodes(n.c)}
+            {renderNodes(n.c, images)}
           </ul>
         );
       case "ol":
         return (
           <ol key={i} className="my-1 list-decimal pl-5">
-            {renderNodes(n.c)}
+            {renderNodes(n.c, images)}
           </ol>
         );
       case "li":
-        return <li key={i}>{renderNodes(n.c)}</li>;
+        return <li key={i}>{renderNodes(n.c, images)}</li>;
     }
   });
 }
@@ -147,108 +149,217 @@ function Attachment({ a }: { a: AttachmentView }) {
   );
 }
 
-export function MessageItem({ m, showSender }: { m: MessageView; showSender: boolean }) {
+/** The pieces inside a bubble: the sender (channel posts), the subject, the text or its placeholder, the truncation note and the attachment stubs. */
+function BubbleContent({ m, sender, subject = null }: { m: MessageView; sender: string | null; subject?: string | null }) {
+  return (
+    <>
+      {sender ? (
+        <p dir="auto" className="mb-0.5 text-small font-medium [overflow-wrap:anywhere]">
+          {sender}
+        </p>
+      ) : null}
+      {subject ? (
+        <p dir="auto" data-testid="post-subject" className="mb-0.5 text-body font-semibold [overflow-wrap:anywhere]">
+          {subject}
+        </p>
+      ) : null}
+      {m.deleted ? (
+        <p className="text-body italic text-muted-foreground">This message was deleted</p>
+      ) : m.system ? (
+        <p className="text-body italic text-muted-foreground">Teams event</p>
+      ) : (
+        <div dir="auto" data-testid="message-body" className="min-w-0 text-body [overflow-wrap:anywhere]">
+          {m.nodes.length > 0 ? renderNodes(m.nodes, m.images) : m.attachments.length === 0 ? <span className="text-muted-foreground">(no text)</span> : null}
+        </div>
+      )}
+      {m.truncated ? <p className="mt-1 text-small text-muted-foreground">{MESSAGES_TRUNCATED_TEXT}</p> : null}
+      {m.attachments.length > 0 ? (
+        <ul className="mt-2 flex flex-col gap-1">
+          {m.attachments.map((a, i) => (
+            <Attachment key={i} a={a} />
+          ))}
+        </ul>
+      ) : null}
+    </>
+  );
+}
+
+/** A channel post or reply: its own bubble with its time line under it (Graph orders posts by latest activity, so each carries its date). Chat messages are drawn by `MessageList`'s groups. */
+export function MessageItem({ m, showSender, subject = null, footer = null, showDate = false }: { m: MessageView; showSender: boolean; /** Draw the date with the time (channel posts and replies: Graph orders posts by latest activity, so a bare clock time says nothing). Eastern Time, as everywhere. */ showDate?: boolean; /** A channel post's own title (plain text), drawn above the text. */ subject?: string | null; /** Drawn under the time line, inside the same item (a post's reply and Open in Teams links, and its replies). */ footer?: ReactNode }) {
   return (
     <li data-testid="message" data-mine={m.mine ? "true" : "false"} className={cn("flex flex-col gap-0.5", m.mine ? "items-end" : "items-start")}>
-      <div className={cn("max-w-[92%] min-w-0 rounded-card border px-3 py-2 sm:max-w-[80%]", m.mine ? "border-primary/30 bg-primary/10" : "border-border bg-card")}>
-        {showSender && !m.mine && m.sender ? (
-          <p dir="auto" className="mb-0.5 text-small font-medium [overflow-wrap:anywhere]">
-            {m.sender}
-          </p>
-        ) : null}
-        {m.deleted ? (
-          <p className="text-body italic text-muted-foreground">This message was deleted</p>
-        ) : m.system ? (
-          <p className="text-body italic text-muted-foreground">Teams event</p>
-        ) : (
-          <div dir="auto" data-testid="message-body" className="min-w-0 text-body [overflow-wrap:anywhere]">
-            {m.nodes.length > 0 ? renderNodes(m.nodes) : m.attachments.length === 0 ? <span className="text-muted-foreground">(no text)</span> : null}
-          </div>
-        )}
-        {m.truncated ? <p className="mt-1 text-small text-muted-foreground">{MESSAGES_TRUNCATED_TEXT}</p> : null}
-        {m.attachments.length > 0 ? (
-          <ul className="mt-2 flex flex-col gap-1">
-            {m.attachments.map((a, i) => (
-              <Attachment key={i} a={a} />
-            ))}
-          </ul>
-        ) : null}
-      </div>
+      <MessageBubble mine={m.mine} fullTime={m.fullTime}>
+        <BubbleContent m={m} sender={showSender && !m.mine && m.sender ? m.sender : null} subject={subject} />
+      </MessageBubble>
       <p className="px-1 text-small text-muted-foreground">
         <time dateTime={m.at} title={m.fullTime}>
-          {m.time}
+          {showDate ? m.fullTime : m.time}
         </time>
         {m.edited ? " · Edited" : ""}
+      </p>
+      {footer}
+    </li>
+  );
+}
+
+// ---- a conversation: day separators and groups (T-297)
+/** Messages of one sender this close together (each to the one before it) are one group, with one time shown. */
+export const GROUP_GAP_MS = 5 * 60 * 1000;
+/** ...and a group never spans more than this from its FIRST message, so a steady chat is not one group for hours with a single time. */
+export const GROUP_SPAN_MS = 15 * 60 * 1000;
+
+export type ConversationItem = { kind: "day"; key: string; at: string } | { kind: "group"; key: string; mine: boolean; sender: string | null; senderKey: string | null; messages: MessageView[] };
+
+/**
+ * Pure: the conversation's items, oldest first. A day separator whenever the New York day changes (`m.day`; `after` is the day the list continues from). A message joins the group before it when it is
+ * the same sender (the same side: `mine`, and the same sender key (an opaque per-conversation key made on the server from the sender's ID: never the display name, which two people can share, and never a sender without an ID), on the same day, within GROUP_GAP_MS of that
+ * group's last message and within GROUP_SPAN_MS of its first, and neither it nor the group's last message is a Teams event or a deletion note (those always stand alone). A time that does not parse never joins. Linear.
+ */
+export function groupMessages(messages: readonly MessageView[], after: string | null = null): ConversationItem[] {
+  const items: ConversationItem[] = [];
+  let day = after;
+  let last: Extract<ConversationItem, { kind: "group" }> | null = null;
+  for (const m of messages) {
+    if (m.day !== day) {
+      items.push({ kind: "day", key: `d-${m.day}-${m.id}`, at: m.at });
+      day = m.day;
+      last = null;
+    }
+    const prev = last?.messages[last.messages.length - 1];
+    const first = last?.messages[0];
+    const gap = prev ? Date.parse(m.at) - Date.parse(prev.at) : Number.NaN;
+    const span = first ? Date.parse(m.at) - Date.parse(first.at) : Number.NaN;
+    const plain = (x: MessageView) => !x.system && !x.deleted;
+    const together = last !== null && prev !== undefined && plain(m) && plain(prev) && typeof m.senderKey === "string" && m.senderKey !== "" && last.senderKey === m.senderKey && last.mine === m.mine && gap >= 0 && gap <= GROUP_GAP_MS && span <= GROUP_SPAN_MS;
+    if (together && last) last.messages.push(m);
+    else {
+      last = { kind: "group", key: `g-${m.id}`, mine: m.mine, sender: m.sender, senderKey: m.senderKey ?? null, messages: [m] };
+      items.push(last);
+    }
+  }
+  return items;
+}
+
+function GroupView({ g, showSender }: { g: Extract<ConversationItem, { kind: "group" }>; showSender: boolean }) {
+  const lastMsg = g.messages[g.messages.length - 1] as MessageView;
+  const named = showSender && !g.mine && g.sender && !g.messages[0]?.system;
+  return (
+    <li data-testid="message-group" data-mine={g.mine ? "true" : "false"} className={cn("flex flex-col gap-0.5", g.mine ? "items-end" : "items-start")}>
+      {named ? (
+        // sighted readers see the name once per group; a screen reader hears it in each bubble's hidden "Name, time:" (so it is not read twice)
+        <p aria-hidden dir="auto" data-testid="group-sender" className="px-1 text-small font-medium [overflow-wrap:anywhere]">
+          {g.sender}
+        </p>
+      ) : null}
+      {/* `w-full` on the list and on each item: the bubble's percentage max-width needs a definite base (the group's width), not its own shrink-to-fit content; alignment stays with items-start / items-end */}
+      <ul className={cn("flex w-full min-w-0 flex-col gap-0.5", g.mine ? "items-end" : "items-start")}>
+        {g.messages.map((m) => (
+          <li key={m.id} data-testid="message" data-mine={m.mine ? "true" : "false"} className={cn("flex w-full min-w-0 flex-col", g.mine ? "items-end" : "items-start")}>
+            <MessageBubble mine={m.mine} fullTime={m.fullTime}>
+              {/* the time and the side of every message, for a screen reader (the group shows one time; a tap or hover shows each one) */}
+              <span className="sr-only">
+                {g.mine ? "You" : (g.sender ?? "Message")}, <time dateTime={m.at}>{m.fullTime}</time>:{" "}
+              </span>
+              <BubbleContent m={m} sender={null} />
+              {m.edited ? <p className="mt-0.5 text-small text-muted-foreground">Edited</p> : null}
+            </MessageBubble>
+          </li>
+        ))}
+      </ul>
+      <p aria-hidden data-testid="group-time" className="px-1 text-small text-muted-foreground">
+        <time dateTime={lastMsg.at}>{lastMsg.time}</time>
       </p>
     </li>
   );
 }
 
-/** Messages oldest first, with a separator whenever the New York day changes. Sender names are drawn in group chats. */
+/** Messages oldest first: a separator whenever the New York day changes, then groups of one sender's messages with one time each. Sender names (group chats) are drawn once per group. */
 export function MessageList({ messages, group, after }: { messages: readonly MessageView[]; group: boolean; after?: string | null }) {
-  const items: ReactNode[] = [];
-  let day = after ?? null;
-  for (const m of messages) {
-    if (m.day !== day) {
-      items.push(
-        <li key={`d-${m.day}-${m.id}`} className="flex justify-center py-1">
-          <div role="separator" aria-label={dayLabel(m.at)} className="rounded-full bg-muted px-3 py-0.5 text-small text-muted-foreground">
-            {dayLabel(m.at)}
-          </div>
-        </li>,
-      );
-      day = m.day;
-    }
-    items.push(<MessageItem key={m.id} m={m} showSender={group} />);
-  }
-  return <>{items}</>;
+  return (
+    <>
+      {groupMessages(messages, after ?? null).map((it) =>
+        it.kind === "day" ? (
+          <li key={it.key} className="flex justify-center py-1">
+            <div role="separator" aria-label={dayLabel(it.at)} className="rounded-full bg-muted px-3 py-0.5 text-small text-muted-foreground">
+              {dayLabel(it.at)}
+            </div>
+          </li>
+        ) : (
+          <GroupView key={it.key} g={it} showSender={group} />
+        ),
+      )}
+    </>
+  );
 }
 
 // ---- the chat list
-export function ChatListRows({ rows, selectedKey, hrefFor }: { rows: readonly ChatRowView[]; selectedKey: string | null; hrefFor: (chatKey: string) => string }) {
+/**
+ * The account label of a row or of a conversation (T-295; spec 22.5): TEXT (a colour may be added on top, never alone), the account's domain or the part before the @. The full sign-in name is its
+ * accessible name ("Account: <name>"). At iPhone width it keeps about 14 characters and an ellipsis; the chat title truncates first and nothing scrolls sideways.
+ */
+export function AccountBadge({ label, name, className }: { label: string; name: string | null; className?: string }) {
+  return (
+    <span
+      data-testid="account-badge"
+      role="img"
+      aria-label={messagesAccountBadgeName(name ?? label)}
+      title={name ?? label}
+      className={cn("inline-block min-w-0 max-w-[14ch] shrink-0 truncate rounded-full border border-border bg-muted px-2 text-small text-foreground sm:max-w-[26ch]", className)}
+    >
+      <span aria-hidden>{label}</span>
+    </span>
+  );
+}
+
+export function ChatListRows({ rows, selectedKey, selectedConn = null, hrefFor }: { rows: readonly ChatRowView[]; selectedKey: string | null; /** The account of the open chat: rows are (account, chat) pairs, so only that pair is highlighted. Null: any account's row of the chat key (one account). */ selectedConn?: string | null; hrefFor: (chatKey: string, conn: string | null) => string }) {
   return (
     <ul className="divide-y divide-border rounded-card border border-border bg-card" data-testid="chat-list">
-      {rows.map((r) => (
-        <li key={r.key}>
-          <Link
-            href={hrefFor(r.key)}
-            scroll={false}
-            aria-current={r.key === selectedKey ? "page" : undefined}
-            data-testid="chat-row"
-            data-unread={r.unread ? "true" : "false"}
-            className={cn("flex min-h-14 items-start gap-3 px-4 py-3 hover:bg-muted focus-visible:bg-muted", r.key === selectedKey && "bg-muted")}
-          >
-            <span aria-hidden className="mt-1.5 flex h-3 w-3 shrink-0 items-center justify-center">
-              {r.unread ? <span data-testid="unread-dot" className="h-2.5 w-2.5 rounded-full bg-primary" /> : null}
-            </span>
-            <span className="min-w-0 flex-1">
-              <span className="flex items-baseline justify-between gap-2">
-                <span dir="auto" className={cn("truncate text-body", r.unread ? "font-semibold" : "font-medium")}>
-                  {r.title}
-                </span>
-                <span className="shrink-0 text-small text-muted-foreground">{r.time}</span>
+      {rows.map((r) => {
+        const selected = r.key === selectedKey && (selectedConn === null || r.conn === selectedConn);
+        return (
+          <li key={`${r.conn}:${r.key}`}>
+            <Link
+              href={hrefFor(r.key, r.account !== null ? r.conn : null)}
+              scroll={false}
+              aria-current={selected ? "page" : undefined}
+              data-testid="chat-row"
+              data-unread={r.unread ? "true" : "false"}
+              data-conn={r.conn}
+              className={cn("flex min-h-14 items-start gap-3 px-4 py-3 hover:bg-muted focus-visible:bg-muted", selected && "bg-muted")}
+            >
+              <span aria-hidden className="mt-1.5 flex h-3 w-3 shrink-0 items-center justify-center">
+                {r.unread ? <span data-testid="unread-dot" className="h-2.5 w-2.5 rounded-full bg-primary" /> : null}
               </span>
-              <span className="flex items-center gap-2">
-                <span dir="auto" className={cn("truncate text-small", r.unread ? "text-foreground" : "text-muted-foreground")}>
-                  {r.preview}
+              <span className="min-w-0 flex-1">
+                <span className="flex items-baseline justify-between gap-2">
+                  <span dir="auto" className={cn("truncate text-body", r.unread ? "font-semibold" : "font-medium")}>
+                    {r.title}
+                  </span>
+                  <span className="shrink-0 text-small text-muted-foreground">{r.time}</span>
                 </span>
-                {r.external ? <span className="shrink-0 rounded-full border border-border px-2 text-small text-muted-foreground">External</span> : null}
+                <span className="flex items-center gap-2">
+                  <span dir="auto" className={cn("min-w-0 flex-1 truncate text-small", r.unread ? "text-foreground" : "text-muted-foreground")}>
+                    {r.preview}
+                  </span>
+                  {r.external ? <span className="shrink-0 rounded-full border border-border px-2 text-small text-muted-foreground">External</span> : null}
+                  {r.account ? <AccountBadge label={r.account} name={r.accountName} /> : null}
+                </span>
+                {r.unread ? <span className="sr-only">Unread</span> : null}
               </span>
-              {r.unread ? <span className="sr-only">Unread</span> : null}
-            </span>
-          </Link>
-        </li>
-      ))}
+            </Link>
+          </li>
+        );
+      })}
     </ul>
   );
 }
 
 /** "Sign in to Teams" / "Reconnect Teams": a plain form that posts to the Teams connect route of this lane (the same one Settings uses). */
-export function SignIn({ laneId, connectionId, label }: { laneId: string; connectionId?: string; label: string }) {
+export function SignIn({ laneId, connectionId, label, size }: { laneId: string; connectionId?: string; label: string; size?: "sm" }) {
   const action = `/api/connect/teams/start?lane=${encodeURIComponent(laneId)}${connectionId ? `&connection=${encodeURIComponent(connectionId)}` : ""}`;
   return (
     <form method="post" action={action}>
-      <button type="submit" className={buttonVariants({ variant: "default" })}>
+      <button type="submit" className={buttonVariants({ variant: "default", ...(size ? { size } : {}) })}>
         {label}
       </button>
     </form>

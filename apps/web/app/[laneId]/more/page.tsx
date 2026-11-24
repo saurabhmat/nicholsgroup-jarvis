@@ -3,6 +3,7 @@
 import { SignOutForm } from "@/components/sign-out-form";
 import Link from "next/link";
 import { Button, laneHref, MORE_ITEMS, navItem, PageHeader } from "@nichols/ui";
+import { MessagesDot } from "@/components/messages-dot";
 import { ThemeToggle } from "@/components/theme-toggle";
 import { loadLane } from "@/lib/lane-page";
 import { hiddenNavKeys, laneGate } from "@/lib/lane-modules";
@@ -23,8 +24,10 @@ async function More({ params }: { params: Promise<{ laneId: string }> }) {
           const item = navItem(key);
           return (
             <li key={key}>
-              <Link className="block px-4 py-3 text-body" href={laneHref(lane.laneId, item.segment)}>
+              <Link className="flex items-center gap-2 px-4 py-3 text-body" href={laneHref(lane.laneId, item.segment)}>
                 {item.label}
+                {/* T-290: the "new messages" dot, fetched in the browser after the page rendered (nothing is read here) */}
+                {key === "messages" ? <MessagesDot laneId={lane.laneId} /> : null}
               </Link>
             </li>
           );

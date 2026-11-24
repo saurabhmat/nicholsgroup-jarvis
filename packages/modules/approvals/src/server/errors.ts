@@ -24,6 +24,8 @@ export const APPROVALS_ERROR_CODES = [
   "placeholder_in_body",
   "qbo_not_enabled",
   "disconnect_pending",
+  "teams_not_enabled",
+  "request_reused",
   "unavailable",
 ] as const;
 export type ApprovalsErrorCode = (typeof APPROVALS_ERROR_CODES)[number];
@@ -37,6 +39,11 @@ export const NOT_LIVE_MESSAGE = "Approvals are not live for this company yet.";
 
 /** Shown when disconnecting QuickBooks is not allowed for the company (lane policy class `qbo_disconnect`) or the connection is gone. */
 export const QBO_NOT_ENABLED_MESSAGE = "Disconnecting QuickBooks isn't enabled for this company yet. Ask your administrator to allow it.";
+
+/** Shown when a Teams message cannot be sent: the lane policy, the lane's Teams settings or the connection's send permission is off (T-286). */
+/** The lane keeps no outbound text, so a Teams send cannot be stored for approval (T-286: shown as the reason the composer is off). */
+export const TEAMS_NO_DRAFTS_MESSAGE = "This company does not store outbound drafts, so sending in Teams is off.";
+export const TEAMS_NOT_ENABLED_MESSAGE = "Sending in Teams isn't enabled for this company yet. Reconnect Teams in Settings, or ask your administrator to allow it.";
 
 /** An email whose text still holds a placeholder (T-237): never sent; the approver edits it first. */
 export const PLACEHOLDER_MESSAGE = "This email still contains a placeholder such as [amount]. Edit the text to replace it, save, then approve.";
@@ -68,6 +75,8 @@ const MESSAGES: Record<ApprovalsErrorCode, string> = {
   placeholder_in_body: PLACEHOLDER_MESSAGE,
   qbo_not_enabled: QBO_NOT_ENABLED_MESSAGE,
   disconnect_pending: "A disconnect is already waiting for approval for this QuickBooks company.",
+  teams_not_enabled: TEAMS_NOT_ENABLED_MESSAGE,
+  request_reused: "This message id was already used for a different message.",
   unavailable: "Approvals are unavailable right now.",
 };
 
@@ -100,6 +109,7 @@ export function toApprovalsError(error: { code?: string | undefined; message?: s
   if (has("already_replied")) return new ApprovalsError("already_replied");
   if (has("reply_already_pending")) return new ApprovalsError("reply_already_pending");
   if (has("disconnect_already_pending")) return new ApprovalsError("disconnect_pending");
+  if (has("client_request_id_reused")) return new ApprovalsError("request_reused");
   if (has("already waiting for approval")) return new ApprovalsError("already_proposed");
   if (has("too many pending") || code === "54000") return new ApprovalsError("too_many_pending");
   if (code === "22023" || code === "22004" || code === "23514") return new ApprovalsError("invalid");

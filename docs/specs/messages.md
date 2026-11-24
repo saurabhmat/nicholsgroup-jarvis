@@ -1,6 +1,7 @@
 # Spec — Messages: Microsoft Teams in the portal (M-Teams)
 
 Status: proposed (planner output for T-277, Nov 23, 2026). Adds Phase B11 (T-278 – T-293) to `docs/backlog.md`. Nothing here is approved until Saurabh approves the tasks.
+Amended Nov 24, 2026 (planner): section 22, "Several Teams accounts per person", adds Phase B12 (T-294 – T-296). Places it overrides carry a "changed by §22" note.
 Brief: decisions D-52, D-62, D-63, D-64, D-65 (Nov 23, 2026), D-23, D-43, D-57; read `CLAUDE.md` (rules 1 – 13), `docs/specs/microsoft.md` (§5, §7, §14) and `docs/specs/approvals.md` first.
 
 **Vendor facts.** Every Microsoft fact in this spec comes from `.agent/notes/T-277-vendor-facts.md` (checked against learn.microsoft.com on Nov 23, 2026), cited as **[A1]**, **[B]**, **[D8]** and so on. Facts in that note's "Not confirmed" list are marked **(not confirmed)** here and each has a live check in a human item. Nothing in this spec adds a vendor fact from memory. One fact comes from our own live run instead: Microsoft's token response lists every scope already consented for the app in that tenant, not only the requested ones (observed Nov 22, 2026, `docs/specs/microsoft.md` §7).
@@ -14,13 +15,13 @@ Teams is a **separate connection** from mail: a company whose mail is Google (Pu
 ## 2. Scope and non-goals
 
 **In scope:**
-- A Teams connection per person per lane, its own `teams` settings in `lane_config`, its own consent flow and Settings section (sections 4 – 6).
+- A Teams connection per person per lane, its own `teams` settings in `lane_config`, its own consent flow and Settings section (sections 4 – 6). *Changed by §22: up to `teams.max_accounts_per_person` Teams connections per person per lane (default 1), shown together on Messages.*
 - Chats: list, unread state, read messages, members, "Open in Teams" (phase 2).
 - Call and Video call buttons that open Teams with the people of a chat selected (phase 2, section 13). The call itself happens in Teams.
 - Sending and replying in chats through `packages/modules/approvals` with Send = approval (phase 3, section 10).
 - New-message notices through change-notification subscriptions without resource data, with a "new" dot on Messages; no polling of Microsoft (phase 4, section 9).
 - Channels of the person's joined teams: list, read root posts and replies, post and reply (phase 5, D-64).
-- Optional: AI-drafted reply text placed in the composer, sent only when the person presses Send (only if D-69 says yes).
+- Optional: AI-drafted reply text placed in the composer, sent only when the person presses Send (only if D-69 says yes). *D-69 answered no (Nov 24, 2026): not built.*
 
 **Non-goals:**
 - **Calling inside the portal: not planned** (D-63 revised, Nov 23, 2026: "I will go with option 1"; dropped for now, reopened only if the owner asks). Reasons from the fact sheet: Graph cannot place a call as a user [D6]; the only route is Azure Communication Services with a Teams identity [D8], a new paid vendor at about $0.004 per participant minute, which Microsoft retires as a standalone offering on 2028-09-30 without naming "communication as Teams user" among what stays supported; on iPhone a call rings only while the page is open and drops or mutes in the background, and the installed home-screen app is undocumented [D8]; and it is not available in GCC or GCC High [D8, E10], where these companies are expected to move (D-48). Calls are the deep-link buttons of section 13. If the topic is reopened, start from fact sheet sections D8, D9 and F2: no task, scope or human item for it exists in this plan.
@@ -45,14 +46,14 @@ Teams is a **separate connection** from mail: a company whose mail is Google (Pu
 - Rule 6: message text, `lastMessagePreview`, chat topics, member names and addresses, channel names and file names are **never stored, logged, audited or put in an event**. They are fetched live and shown. The only Teams data stored is listed in section 7; the composed text of a send exists only while its action is open (section 10.4).
 - Rule 9: everything that comes from Teams is untrusted: rendered as text through an allow-list converter (section 8.4), links https only, never triggers an action, never changes a permission.
 - Rule 10: MSW fakes and synthetic data only. Every live check is a human item.
-- D-23: one Teams account, one lane. D-43 / T-247: a person sees only the Teams data of connections they own; admins (owner, admin_technical) see the connection row's health columns only (status, UPN, tenant, cloud, features, owner, times, last error: section 7.1 lists them), never chats.
+- D-23: one Teams account, one lane (*§22 keeps it; how many accounts one person may connect in a lane is the separate `teams.max_accounts_per_person`*). D-43 / T-247: a person sees only the Teams data of connections they own; admins (owner, admin_technical) see the connection row's health columns only (status, UPN, tenant, cloud, features, owner, times, last error: section 7.1 lists them), never chats.
 - Microsoft API terms [A3, E12]: no background polling of Teams (at most once per day; we do none); fetch on page open or refresh; a date range on incremental fetches; notices through subscriptions without resource data; delete the person's data on disconnect; "do not use Teams as a log file" (the portal never posts anything the person did not type and send).
 
 ## 4. Connection model (D-62, decision D-66)
 
 ### 4.1 Decision: a separate Teams connection on a dedicated Entra app (recommended; D-66)
 
-Each person who wants Teams in a lane has one connection row with **provider `microsoft_teams`**, separate from any `google` or `microsoft` mail connection, obtained through a **second Entra app registration used only for Teams** ("Nichols Executive Portal – Teams", H-078). The mail app of H-062 is not changed.
+Each person who wants Teams in a lane has one connection row (*changed by §22: one row per connected Teams account, up to the lane's limit*) with **provider `microsoft_teams`**, separate from any `google` or `microsoft` mail connection, obtained through a **second Entra app registration used only for Teams** ("Nichols Executive Portal – Teams", H-078). The mail app of H-062 is not changed.
 
 Why not "one Microsoft connection with Teams scopes added after a reconnect":
 1. **It breaks NC mail.** The Microsoft connect refuses a grant that holds any scope it did not request (`assertGrantedScopes`, `packages/connectors/src/microsoft/provider.ts`; decided Nov 22, 2026, `microsoft.md` §7), and Microsoft's token response lists every scope already consented for the app in that tenant (observed live). Once Teams scopes are consented on the shared app in the NC tenant, the next Microsoft mail Reconnect there is refused for unrequested Teams scopes, and a Teams connect is refused for the admin-consented `Mail.*` scopes. Loosening that check would reopen the read-only-lane question the Nov 22 decision closed.
@@ -75,7 +76,7 @@ Cost of the decision: one more app registration and client secret (with its own 
 | `features` | what was granted and asked for: `teams_chat_read`, `teams_chat_send`, `teams_call_links`, `teams_channels_read`, `teams_channels_send` (booleans; always written, so a reconnect under fewer features clears them) |
 | `transport` | `native` |
 
-At most **one usable Teams connection per person per lane** (partial unique index on `(lane_id, owner_user_id) where provider = 'microsoft_teams' and status not in ('disconnected','pending')`). The page needs no account switcher; a second account is refused with a fixed message (Q-M10 if two are ever needed).
+At most **one usable Teams connection per person per lane** (partial unique index on `(lane_id, owner_user_id) where provider = 'microsoft_teams' and status not in ('disconnected','pending')`). The page needs no account switcher; a second account is refused with a fixed message (Q-M10 if two are ever needed). *Changed by §22 (22.1, 22.2): the index is dropped; a person may hold up to `teams.max_accounts_per_person` counted Teams connections in a lane (default 1), enforced by a trigger and by `core.teams_assert_one_per_owner`; one Microsoft account is still one row in one lane, owned by one person.*
 
 ### 4.3 Lane settings (`lane_config.teams`, new, strict)
 
@@ -87,6 +88,7 @@ teams?: {
   allowed_domains: mailDomain[],          // 1..20; the UPN domain must be listed; empty refuses (fail closed)
   features: ("chat_read" | "chat_send" | "call_links" | "channels_read" | "channels_send")[],
                                           // default ["chat_read"]; chat_send needs chat_read; channels_send needs channels_read
+  max_accounts_per_person: int,           // added by §22: 1..5, default 1; how many Teams accounts one person may connect in this lane
 }
 ```
 - Independent of `mail.providers`, `mail.allowed_domains` and the `microsoft` block (D-62). A lane may have `teams` with Google mail only (PKG), with Microsoft mail (NC), or with no mail.
@@ -115,7 +117,7 @@ Policy notes:
 
 ## 5. Consent and connect flow (mirrors T-066 / T-257)
 
-**Where:** Settings → Connections → a new section **"Your Teams account"**, shown when `teams.enabled` is true, beside "Your Google accounts" / "Your Microsoft accounts" (which are unchanged). The Messages page shows the same **Sign in to Teams** button in its not-connected state. Both start `/api/connect/teams/start?lane=<laneId>` (slug `teams`, provider `microsoft_teams`). The page says: "This connects your Microsoft Teams account to <company>. It is not your portal sign-in."
+**Where:** Settings → Connections → a new section **"Your Teams account"**, shown when `teams.enabled` is true, beside "Your Google accounts" / "Your Microsoft accounts" (which are unchanged). The Messages page shows the same **Sign in to Teams** button in its not-connected state. Both start `/api/connect/teams/start?lane=<laneId>` (slug `teams`, provider `microsoft_teams`). The page says: "This connects your Microsoft Teams account to <company>. It is not your portal sign-in." *Changed by §22 (22.3, 22.10): the section is "Your Teams accounts", one row per own connection, plus "Connect another Teams account" while the person is under the lane's limit.*
 
 **Who:** any member holding `own_mail` (owner, admin_technical, viewer) connects **their own** account (`connectRolesFor("microsoft_teams")` = `MAIL_CONNECT_ROLES`; `core.oauth_state_create` accepts the provider for those roles). Reusing `own_mail` for "own Teams" avoids a role-matrix change (Q-M6).
 
@@ -126,7 +128,7 @@ Policy notes:
 | `GRAPH_TEAMS_CLIENT_ID`, `GRAPH_TEAMS_CLIENT_SECRET` | the Teams app (H-078). Missing → Settings shows the existing "isn't configured on this server" banner. |
 | `GRAPH_TEAMS_REDIRECT_URI` | optional locally (default `http://localhost:3000/api/connect/teams/callback`); elsewhere https, on `NEXT_PUBLIC_APP_URL`'s origin, path exactly `/api/connect/teams/callback` |
 
-**Start** (generic T-035 flow): role and lane checked; `startCheck` refuses unless `teams.enabled`, a supported cloud, `tenant_ids` and `allowed_domains` are present; state + PKCE + nonce bound to user and lane; authority = the lane's one tenant id, or `organizations` when several (never `common`); `response_mode=query`; `prompt=select_account` (dropped when `login_hint` carries the stored UPN on a reconnect, as Microsoft mail does).
+**Start** (generic T-035 flow): role and lane checked; `startCheck` refuses unless `teams.enabled`, a supported cloud, `tenant_ids` and `allowed_domains` are present; state + PKCE + nonce bound to user and lane; authority = the lane's one tenant id, or `organizations` when several (never `common`); `response_mode=query`; `prompt=select_account` (dropped when `login_hint` carries the stored UPN on a reconnect, as Microsoft mail does). *Changed by §22 (22.3): "Connect another Teams account" is a first connect (with `prompt=select_account`); the start also refuses at once when the person is at the lane's limit; a reconnect names one connection and must come back as that same account.*
 
 **Callback, in order, everything before anything is stored:**
 1. Consent errors map to `admin_consent_required` (`consent_required`; `AADSTS65001`, `AADSTS90094` [E11]), reusing `microsoftCallbackErrorReason`.
@@ -136,7 +138,7 @@ Policy notes:
 5. id_token: `tid` in `teams.tenant_ids`, `iss`, `aud` = the Teams client id, `exp`, `nonce` (reuse `checkIdToken`); otherwise `wrong_tenant`.
 6. `GET /me?$select=id,userPrincipalName,userType`: a guest (`#EXT#` in the UPN, or `userType` other than Member) is refused (as mail); the UPN domain must be in `teams.allowed_domains` (`account_refused`).
 7. Reconnect: the UPN and tenant must equal the stored row's (`wrong_account`).
-8. D-23 (`D0023` → "This Teams account is connected to another company"), owner checks, and one Teams connection per person per lane.
+8. D-23 (`D0023` → "This Teams account is connected to another company"), owner checks, and one Teams connection per person per lane. *Changed by §22 (22.2, 22.3): "at most `teams.max_accounts_per_person` counted Teams connections per person per lane" (`D0024`, new fixed text).*
 9. Store tokens in the Vault; set `tenant_id`, `cloud`, `entra_object_id` once (definer function); record `features`; audit `connection.connected` (ids only).
 
 A grant refused after step 3 is dropped and never stored (the existing `GRANT_NOT_STORED_MESSAGE` path).
@@ -145,7 +147,7 @@ A grant refused after step 3 is dropped and never stored (the existing `GRANT_NO
 
 **Tokens:** a Teams token manager built from `microsoft/token-manager.ts` (the same rotation, compare-and-swap, single-flight, `reconnect_required` mapping and no retried refresh POSTs), on the Teams client credentials.
 
-**Disconnect (local, D-55 pattern):** the owner at AAL2 confirms; in one service call: Vault tokens deleted, row `disconnected`, its push subscriptions marked removed with their secrets deleted (no DELETE to Microsoft, D-61 default), its rows in `comms.teams_chat_reads` and `comms.teams_activity` deleted, every open `teams.*` action of the connection invalidated with its text purged; audited. The page tells the person to remove the app at Microsoft ("My Apps"). This is the API terms' "delete data when the user abandons" [E12].
+**Disconnect (local, D-55 pattern):** the owner at AAL2 confirms; in one service call: Vault tokens deleted, row `disconnected`, its push subscriptions marked removed with their secrets deleted (no DELETE to Microsoft, D-61 default), its rows in `comms.teams_chat_reads` and `comms.teams_activity` deleted, every open `teams.*` action of the connection invalidated with its text purged; audited. The page tells the person to remove the app at Microsoft ("My Apps"). This is the API terms' "delete data when the user abandons" [E12]. *§22.3: with several accounts, Disconnect acts on the one connection named and never touches the person's other Teams connections (already true: every step is keyed by the connection id).*
 
 **Health:** `conn.token_health` registers a Teams check (`GET /me`, `$select=id`). Settings shows status, last check, "Live updates until <time> ET" (phase 4) and which features the connection has. Admins see the row's health (status, UPN, last check, error) through the existing `connections` view, never chats.
 
@@ -175,7 +177,7 @@ All in `supabase/core/supabase/migrations`, pgTAP in the same task, production S
 | `connections_owner_only_mail` | owner allowed for `google`, `microsoft`, `microsoft_teams` |
 | `connections_identity_only_microsoft` (tenant/cloud only on Microsoft rows) | also `microsoft_teams` |
 | `core.connections.entra_object_id uuid` | new; `microsoft_teams` rows only (check); set once by a service-role definer function; immutable (extend `core.connections_identity_immutable`); no column grant to `authenticated` |
-| new partial unique index `connections_one_teams_per_owner` | `(lane_id, owner_user_id) where provider = 'microsoft_teams' and status not in ('disconnected','pending')` |
+| new partial unique index `connections_one_teams_per_owner` | `(lane_id, owner_user_id) where provider = 'microsoft_teams' and status not in ('disconnected','pending')`. *Changed by §22 (22.2): dropped; replaced by the trigger `connections_teams_account_limit` and the lane's `teams.max_accounts_per_person`.* |
 | `core.teams_connection_ids(p_uid, p_lane)` | new definer function, the one place "my Teams connections" is written (as `core.mailbox_ids`): owner = p_uid, provider `microsoft_teams`, lane in `allowed_lanes(p_uid, 'own_mail')`, `core.may_resolve(p_uid)` |
 | `core.mailbox_ids` and every mail/calendar reader | **unchanged**: they keep `provider in ('google','microsoft')`, so a Teams row is never a mailbox (pgTAP asserts it) |
 | RLS on `core.connections` | unchanged (own rows through `owner_user_id` + `own_mail`; the `connections` view reads the lane's rows through the existing column grants). Enforced and tested (pgTAP 328): an admin (owner, admin_technical) reads these columns of another person's Teams row: `id, lane_id, provider, external_account_id` (the UPN), `status, features, features_checked_at, token_expires_at, last_sync_at, last_error, owner_user_id, tenant_id, cloud, created_at, updated_at, transport, toolkit, account_identity`, as for mail rows; never `entra_object_id`, `created_by`, `reconnect_notified_at`, `last_error_stream`, a token or a chat. A viewer cannot read another person's Teams row at all. |
@@ -214,7 +216,7 @@ No chat id, message id or sender: the receiver never reads `resource` (section 9
 
 ### 7.6 pgTAP list
 
-`3xx_teams_connections` (provider in every check, owner and identity rules, `entra_object_id` set-once and hidden, one Teams connection per owner per lane, D-23 across lanes, `teams_connection_ids` fail-closed without AAL2, Teams rows absent from `mailbox_ids`), `3xx_teams_chat_reads` (owner-only select, cross-lane and cross-user denial, admin sees nothing, forward-only marker, row cap, purge on disconnect), `3xx_teams_activity` (same, plus the service-only notice writer), `3xx_push_subscriptions_teams` (resource value, Teams provider, cross-lane), `3xx_approvals_teams` (section 10.6).
+`3xx_teams_connections` (provider in every check, owner and identity rules, `entra_object_id` set-once and hidden, one Teams connection per owner per lane (*changed by §22: up to the lane's limit; tests in 22.12*), D-23 across lanes, `teams_connection_ids` fail-closed without AAL2, Teams rows absent from `mailbox_ids`), `3xx_teams_chat_reads` (owner-only select, cross-lane and cross-user denial, admin sees nothing, forward-only marker, row cap, purge on disconnect), `3xx_teams_activity` (same, plus the service-only notice writer), `3xx_push_subscriptions_teams` (resource value, Teams provider, cross-lane), `3xx_approvals_teams` (section 10.6).
 
 ## 8. Connector interface (read side)
 
@@ -231,7 +233,8 @@ No chat id, message id or sender: the receiver never reads `resource` (section 9
 | `listChannelPosts(teamId, channelId, { cursor? })`, `listReplies(...)` | [B]; `$top=20` posts, `$expand=replies` not used (replies fetched when a post is opened, `$top=50`) | as messages |
 
 Notes:
-- The combined `$expand=members,lastMessagePreview` is listed as allowed [A1] but whether both can be combined in one request is not shown; H-081 checks it. If Graph refuses it, the reader requests `lastMessagePreview` only and fetches members for the visible chats in parallel (at most 20, at the per-user rate).
+- The combined `$expand=members,lastMessagePreview` is listed as allowed [A1] but whether both can be combined in one request is not shown; H-081 checks it. If Graph refuses it, the reader requests `lastMessagePreview` only and fetches members for the visible chats in parallel (at most 20, at the per-user rate). *Changed by §22 (22.6): the 20 is a total per page view across all of the person's accounts, not 20 each.*
+- *§22.4: every reader method is already per connection; with several accounts the page and routes name the connection (`conn`) and call the reader once per connection they address.*
 - System events are not requested (no `Prefer: include-unknown-enum-members` [A1]), so they are not shown. If one arrives anyway (any `messageType` other than `message`), the page does not draw it (T-281 review C4); it still counts for paging and for the read marker, and a system event as the newest preview never makes a chat unread.
 - `lastUpdatedDateTime` of a chat is NOT the last message time [A1]; ordering and unread use `lastMessagePreview.createdDateTime`.
 - Nothing returned by these methods is written to the database, logs, audit, Inngest events, Sentry breadcrumbs or caches outside the one request (a DB-write and logger spy test with a canary, as for Gmail bodies).
@@ -253,11 +256,11 @@ No per-user read state or "mark read" exists for channels [B], so channels show 
 
 ### 8.4 HTML to safe nodes (rule 9)
 
-Message bodies are mostly HTML. The server converts them into a small typed node list: text, line break, paragraph, bold, italic, underline, strike, code, code block, quote, list and item, link (https only, no credentials, shown with its host; `rel="noopener noreferrer nofollow"`, new tab), mention (text), emoji (its alt text), image placeholder (every picture becomes a neutral placeholder except a tracking pixel of 3 px or less; no image address is read or emitted), table cells flattened to text. Everything else (script, style, iframe, object, form, svg, event attributes, `javascript:`/`data:` links, CSS) is dropped. React renders the nodes; **no raw HTML reaches the browser** (no `dangerouslySetInnerHTML`). The text is cut at 20,000 characters per message. Unit tests feed a hostile-HTML corpus.
+Message bodies are mostly HTML. The server converts them into a small typed node list: text, line break, paragraph, bold, italic, underline, strike, code, code block, quote, list and item, link (https only, no credentials, shown with its host; `rel="noopener noreferrer nofollow"`, new tab), mention (text), emoji (its alt text), image placeholder (every picture becomes a neutral placeholder except a tracking pixel of 3 px or less; no image address is read or emitted), table cells flattened to text. Everything else (script, style, iframe, object, form, svg, event attributes, `javascript:`/`data:` links, CSS) is dropped. *T-297 (Nov 24, 2026): leading and trailing empty blocks are trimmed and runs of empty paragraphs or line breaks collapse to one.* React renders the nodes; **no raw HTML reaches the browser** (no `dangerouslySetInnerHTML`). The text is cut at 20,000 characters per message. Unit tests feed a hostile-HTML corpus.
 
-### 8.5 Inline images (T-285, optional within phase 2)
+### 8.5 Inline images (T-285; built)
 
-A server route `/api/lanes/<lane>/messages/image` streams `hostedContents/{id}/$value` [A1] for a (chat, message, hosted id) that the guard and an ownership check allow: content types `image/png|jpeg|gif|webp` only, at most 4 MB (the documented maximum of hosted content [A2]), `Cache-Control: private, no-store`, `Content-Disposition: inline`, `X-Content-Type-Options: nosniff`, `Content-Security-Policy: sandbox`; never stored or logged. Until T-285 ships, images show as "[Image] open in Teams".
+A server route `GET /api/lanes/<lane>/messages/image` (`?chat=<key>&message=<id>&hosted=<id>`, or `?team=<id>&channel=<key>&message=<id>&hosted=<id>`; no other parameter; *changed by §22.9: plus the required `conn=<connection id>`*) streams `hostedContents/{id}/$value` [A1] for a (chat or channel, message, hosted id) that the guard and an ownership check allow. The converter hands over only a hosted-content id, and only when the `<img src>` is exactly the documented Graph address of a hosted content of the same message; no URL from message content is ever fetched. The type is decided from the first bytes (`image/png|jpeg|gif|webp`; SVG and everything else refused), at most 4 MB plus a small margin [A2], enforced while streaming; headers `Cache-Control: private, no-store`, `Content-Disposition: inline`, `X-Content-Type-Options: nosniff`, `Content-Security-Policy: default-src 'none'; sandbox`, `Cross-Origin-Resource-Policy: same-origin`; never stored or logged. Pictures have their own two slots per connection and their own 1-per-second bucket per chat or channel, wait at most 5 seconds for both together (then `429`), and stop when the browser closes the request. The page shows a failed picture as a "tap to load" button. Pictures in channel replies stay placeholders (no reply template in the fact sheet).
 
 ## 9. New-message notices without polling (phase 4)
 
@@ -283,6 +286,7 @@ Delegated channel subscriptions are one per channel, and only one per app and ch
 - **Nav dot:** Messages (side menu and the More list on iPhone) shows a dot when `last_notice_at > last_seen_at`. It is fetched **client-side after the shell renders** from `/api/lanes/<lane>/messages/activity` (DB only, no Graph call), so no page gains a sequential level (T-276). A count is not shown: without reading `resource` or each message the count would include the person's own messages sent from Teams (Q-M4).
 - **While Messages is open and visible:** the page asks the same DB-only endpoint every 30 seconds (paused when the tab is hidden). When `last_notice_at` moves, it refetches the chat list and the open conversation from Graph, the conversation with the `lastModifiedDateTime` date-range filter (8). Graph is called only because a notification arrived or because the person acted (open, Refresh, focus at most once a minute). Polling our own database is not polling Microsoft [A3].
 - Without a configured `GRAPH_NOTIFICATION_URL` (local, preview), there is no dot, and the page offers Refresh.
+- **Built (T-289, T-290; details in `.agent/pr/T-289.md`):** `GET /api/lanes/<lane>/messages/activity` answers `{ live, liveUntil, dot, lastNoticeAt }` for the person's own connection from `core.teams_activity_get` (database only, 20 requests a minute per person, `no-store`); `POST` on the same address is `teams_activity_seen` (the chat list was opened). The page re-reads through `GET .../messages/chats` and `GET .../messages/newer?chat=&since=` (the `lastModifiedDateTime gt` range; the newest message shown is the `since`), 12 a minute per person. The only loop is in `components/messages-live.tsx` (30 s, visible tab only, our database only). Settings shows "Live updates until <time> ET" or "Live updates unavailable" in the Last sync cell of the person's own Teams row. *Changed by §22 (22.7): the activity route answers for every own usable connection (an aggregate plus one entry per connection), the dot shows when any connection has an unseen notice, "seen" is recorded per connection whose chat list loaded, the re-reads name a connection, and each Settings row shows its own connection's live state.*
 
 ## 10. Sending through approvals (phase 3; D-65)
 
@@ -305,13 +309,13 @@ The hash is the existing JCS SHA-256 of `{lane_id, action_type, connection_id, t
 - `act.connection_ok`: provider `microsoft_teams`, status `active|degraded`, feature `teams_chat_send` (chat type) or `teams_channels_send` (channel types).
 - Visibility: a `teams.*` action, its history and claim rows are visible only to the owner of its connection (extend `act.action_rows_visible` and the `proposed_actions_select` policy with `core.teams_connection_ids`). An admin sees `core.action_index` counts only.
 - Content: `teams.*` proposals need `lane_policies.store_outbound_drafts` (D-19 (a): composed outbound text only while the action is open; Q-M2 confirms that it covers Teams). `act.purge_content` empties `payload.text` at every terminal transition in the same statement, and also on supersede, keeping target, hash, type and timestamps.
-- Step-up: `act.approve` reads `approvals.teams_step_up_max_age_s` for `teams.*` (D-67), and `step_up_max_age_s` for every other type, unchanged.
+- Step-up: `act.approve` reads `approvals.teams_step_up_max_age_s` for `teams.*` (D-67), and `step_up_max_age_s` for every other type, unchanged. *D-67 answered Nov 24, 2026: 28,800 s (8 hours) for PKG, a lane_config value (H-082); the route's `requireStepUp` bound is widened in T-288.*
 - One send per composed message: a unique index on `(connection_id, (target->>'client_request_id'))` for `teams.*` types; a repeated request with the same id returns the existing action instead of creating a second one.
 - `approvals_live` stays the gate (approve, claim, execute), as for email. Expiry for `teams.*`: 1 hour (`approvals.expire_after_hours`), since a Teams action is approved at once.
 
 ### 10.3 One user step (`sendTeamsMessage`, `packages/modules/approvals`)
 
-Route `POST /api/lanes/<lane>/messages/send` with `{ connectionId, target (chat key, or team/channel/post), text, textSha256, clientRequestId, aiDrafted }`:
+Route `POST /api/lanes/<lane>/messages/send` with `{ connectionId, target (chat key, or team/channel/post), text, textSha256, clientRequestId, aiDrafted }` (*§22.8: `connectionId` is the connection the open conversation was read through, the page's `conn`; re-checked as the caller's own usable connection in the lane like every other route*):
 1. Session at AAL2; `requireStepUp(teams max age)`; the lane module visible; the caller owns the connection; `teams.enabled` and the feature; lane policy `teams_send`; `approvals_live` (a refusal names which gate is off).
 2. The server normalises the text and checks `textSha256` (computed by the browser from the exact text shown in the composer) against it, so the bytes approved are the bytes the person typed.
 3. `proposeTeamsAction` (`proposerKind: "user"`, `derivedFromRetrieved: aiDrafted`), then `approveAction` with the hash just computed, in the same request: **pressing Send is the approval** of that exact text, recorded in `act.status_history` and the audit (ids, type, hash; never text).
@@ -340,7 +344,7 @@ AI-drafted text (only if D-69 says yes) is placed in the composer and never beco
 
 ### 10.5 What the person sees
 
-The composer is plain text with a "Send" button and the line "Send posts this exact text to Teams as you (logged)." On desktop Ctrl/Cmd+Enter sends and Enter is a newline; on a phone only the button sends (an accidental Enter must not be an approval). The bubble states: Sending… → Sent (verified) / Sent, checking… / Not sent (reason; the text stays in the composer) / Outcome unknown (check Teams). The text stays in the browser only. Approvals → History lists Teams sends as "Teams message" with chat or channel name looked up live, never the text.
+The composer is plain text with a "Send" button and the line "Send posts this exact text to Teams as you (logged)." (*changed by §22.8: "Send posts this exact text to Teams as <sign-in name of the conversation's account> (logged)."*) On desktop Ctrl/Cmd+Enter sends and Enter is a newline; on a phone only the button sends (an accidental Enter must not be an approval). The bubble states: Sending… → Sent (verified) / Sent, checking… / Not sent (reason; the text stays in the composer) / Outcome unknown (check Teams). The text stays in the browser only. Approvals → History lists Teams sends as "Teams message" with chat or channel name looked up live, never the text.
 
 ### 10.6 pgTAP and tests
 
@@ -348,9 +352,9 @@ pgTAP: types allowed only with `teams_send`; a viewer and a non-owner cannot pro
 
 ## 11. The Messages page and phone layout
 
-Route `/[laneId]/messages` with search params `?chat=<b64url>` or `?team=<id>&channel=<b64url>[&post=<id>]`. Module `messages` (`requireModule`). Gates: lane check, `teams.enabled`, the caller's own Teams connection.
+Route `/[laneId]/messages` with search params `?chat=<b64url>` or `?tab=channels&team=<id>&channel=<b64url>[&post=<id>][&more=<cursor>]` (the Channels tab is `?tab=channels`). Module `messages` (`requireModule`). Gates: lane check, `teams.enabled`, the caller's own Teams connection. *Changed by §22 (22.4, 22.5): the address also carries `conn=<connection id>` for an open chat or channel (`?conn=<id>&chat=<b64url>`, `?tab=channels&conn=<id>&team=…`); the chat list combines every own usable connection; the gate is "at least one own Teams connection".*
 
-**Desktop:** two panes. Left: tabs **Chats** and **Channels** (Channels only when the lane has `channels_read`). Chats list rows: avatar initials, title (topic, or the other members' names, "+n"), preview line (text, 1 line), time (ET), unread dot, "External" label when any member is external. Right: the conversation, newest at the bottom, "Load earlier", day separators, sender names in group chats, "Edited" / "This message was deleted" markers, attachment stubs, image placeholders or proxied images. Header: title, member count, **Call**, **Video call** (section 13), **Open in Teams**, Refresh. Composer at the bottom (phase 3).
+**Desktop:** two panes. Left: tabs **Chats** and **Channels** (the bar is drawn only when the lane lists `channels_read`; a direct `?tab=channels` address for another company shows "Channels are not switched on for this company" with a link back). Channels: teams, the open team's channels (shared ones open in Teams and are not read), then the posts of the open channel (Graph's order, with the date and time of each post, "Posts with the newest replies come first.") and the replies of the open post. Chats list rows: avatar initials, title (topic, or the other members' names, "+n"), preview line (text, 1 line), time (ET), unread dot, "External" label when any member is external. Right: the conversation, newest at the bottom, "Load earlier", day separators, sender names in group chats, "Edited" / "This message was deleted" markers, attachment stubs, image placeholders or proxied images. Header: title, member count, **Call**, **Video call** (section 13), **Open in Teams**, Refresh. Composer at the bottom (phase 3). *T-297 (Nov 24, 2026, from Saurabh's screenshot): a slim connection row instead of the "Connected as" card; a one-row header (title and people line left, actions right, the calls note only when calls are unavailable); messages grouped per sender within 5 minutes with one time per group; day separators; capped bubble width; own messages in a distinct token tint; each pane fills the viewport height and scrolls on its own; a pinned composer place at the bottom (backlog T-297).*
 
 **Phone (iPhone width first):** the list fills the screen; tapping a chat opens it full screen with a back arrow; the composer is sticky above the keyboard with safe-area padding; the header keeps Call / Video / Open in Teams as icons. Messages is in the More tab (T-271), with the dot.
 
@@ -367,9 +371,9 @@ Route `/[laneId]/messages` with search params `?chat=<b64url>` or `?team=<id>&ch
 | Could not load | "Teams could not be reached. Try again." with Retry; on 429 "Teams is busy; try again in N seconds" |
 | Approvals not live / sending not enabled | the composer is replaced by "Sending is not enabled for this company yet" (names the gate for owner/admin) |
 
-**Settings → Connections:** "Your Teams account" (own row: UPN, status, features, live updates until …, Sign in / Reconnect / Disconnect), beside the mail sections. Admins see other people's Teams rows as health only.
+**Settings → Connections:** "Your Teams account" (own row: UPN, status, features, live updates until …, Sign in / Reconnect / Disconnect), beside the mail sections. Admins see other people's Teams rows as health only. *Changed by §22.10: "Your Teams accounts", one row per own connection, "Connect another Teams account" while under the limit.*
 
-**Performance (T-276):** the page shell (header, tabs, skeleton) renders at once. Level 1 starts in parallel: the lane gate, `teamsSettings`, the caller's Teams connection row (shared request-scoped reads, no repeated lane_config read). Level 2: the chat list and, when the URL names a chat, its messages are **started together** (not list then conversation), each in its own Suspense section. Members' UPNs are resolved only when Call is pressed. No Graph call runs during a link prefetch (Graph reads live only in dynamic sections; a test asserts that a prefetch makes none). The nav dot is client-side (9.4). No other page gains a database or Graph call.
+**Performance (T-276):** the page shell (header, tabs, skeleton) renders at once. Level 1 starts in parallel: the lane gate, `teamsSettings`, the caller's Teams connection row (shared request-scoped reads, no repeated lane_config read). Level 2: the chat list and, when the URL names a chat, its messages are **started together** (not list then conversation), each in its own Suspense section. *Changed by §22.6: one chat-list read per own usable connection, all started together with the conversation read (which uses only the `conn` connection); still one level.* Members' UPNs are resolved only when Call is pressed. No Graph call runs during a link prefetch (Graph reads live only in dynamic sections; a test asserts that a prefetch makes none). The nav dot is client-side (9.4). No other page gains a database or Graph call.
 
 ## 12. Jobs
 
@@ -386,7 +390,7 @@ Route `/[laneId]/messages` with search params `?chat=<b64url>` or `?team=<id>&ch
 
 The call itself always happens in Teams; the portal only opens Teams with the people selected. Calling inside the portal is not planned (section 2). Graph cannot place a call as a user [D6]. The buttons use deep links [D7]:
 - **Call:** `https://teams.microsoft.com/l/call/0/0?users=<upn>[,<upn>...]`; **Video call:** the same plus `&withVideo=true`. Teams asks for confirmation before it calls [D7].
-- Pressing the button calls `POST /api/lanes/<lane>/messages/call-link` `{chatKey, video}`. The server resolves the chat's members to UPNs (`call_links` feature, `User.ReadBasic.All` [C]) for same-tenant members other than the person, builds the URL and returns it. The browser opens it in a new tab. Nothing is stored or logged; opening a link is navigation, not a write.
+- Pressing the button calls `POST /api/lanes/<lane>/messages/call-link` `{chatKey, video}` (*changed by §22.4: plus `conn`, the connection the chat was opened through*). The server resolves the chat's members to UPNs (`call_links` feature, `User.ReadBasic.All` [C]) for same-tenant members other than the person, builds the URL and returns it. The browser opens it in a new tab. Nothing is stored or logged; opening a link is navigation, not a write.
 - Shown only when every other member is in the person's tenant and there are at most 10 of them (our own cap: the maximum users in a deep link is not confirmed). Otherwise only **Open in Teams** is shown: the chat's `webUrl` (host `teams.microsoft.com`) or `https://teams.microsoft.com/l/chat/<chatId>/conversations` [D7].
 - Channels: **Open in Teams** only (the post's `webUrl` or the channel-message deep link [D7]).
 - `https://` links are used (they work with or without the installed client, via the browser page [D7]); `msteams:` is not used. Behaviour from the iPhone home-screen app is not documented [F3] and is part of H-081.
@@ -414,7 +418,7 @@ What differs [E10]: a separate app registration in that cloud and its own env gr
 - PKG person with a Google mailbox and a Teams account at the same address: two connections (`google`, `microsoft_teams`); no conflict; Google untouched.
 - NC person with a Microsoft mailbox signs in to Teams with the same account: a second row (`microsoft_teams`); mail Reconnect is unaffected (dedicated app).
 - The Teams account is already connected in another lane → refused (D-23).
-- A second Teams account for the same person in the lane → refused with a fixed message.
+- A second Teams account for the same person in the lane → refused with a fixed message. *Changed by §22: allowed up to `teams.max_accounts_per_person`; refused with a fixed message beyond it (edge cases in 22.11).*
 - UPN on a domain not in `teams.allowed_domains`, or a guest → refused, nothing stored.
 - Admin consent not given and the tenant blocks user consent → `admin_consent_required` text.
 - The lane adds `channels_read` after people connected → chats keep working; "Reconnect Teams to add channels".
@@ -432,7 +436,7 @@ What differs [E10]: a separate app registration in that cloud and its own env gr
 
 ## 17. Acceptance tests (Given / When / Then)
 
-All with MSW fakes of Entra and Graph and synthetic data. Every SQL test includes cross-lane and cross-user denial.
+All with MSW fakes of Entra and Graph and synthetic data. Every SQL test includes cross-lane and cross-user denial. *§22.12 adds tests 22 – 33 for several accounts per person; test 6 (privacy) also runs with two accounts per person.*
 
 1. **Teams in a Google-mail lane.** Given lane A with `mail.providers = ["google"]` and `teams = {enabled, tenant_ids:[T], allowed_domains:[d]}`, when a viewer signs in to Teams as `u@d` in tenant T, then one `microsoft_teams` row exists, owned by them, with `tenant_id`, `cloud`, `entra_object_id`, tokens only in the Vault; the lane's Google rows, sync and Settings section are unchanged; no mail or calendar job lists the new row.
 2. **Same account, mail and Teams.** Given lane B with a usable `microsoft` mail row for `x@e`, when the owner signs in to Teams as `x@e`, then a second row (`microsoft_teams`) is created and a later mail Reconnect still succeeds.
@@ -460,22 +464,22 @@ All with MSW fakes of Entra and Graph and synthetic data. Every SQL test include
 
 - **Q-M1 (D-66):** separate Teams connection on a dedicated Entra app (recommended), or one app with the scope check relaxed for both purposes? Blocks T-278.
 - **Q-M2:** does D-19 (a) (composed outbound text kept only while the action is open, gated by `store_outbound_drafts`) cover Teams messages too? Default yes.
-- **Q-M3 (D-67):** step-up for Teams sends: (a) a fresh authenticator code within 5 minutes, as email; (b) recommended: at most once per 8 hours for `teams.*` (`approvals.teams_step_up_max_age_s`, 300 to 43,200); (c) AAL2 sign-in only. Blocks T-288.
+- **Q-M3 (D-67):** step-up for Teams sends: (a) a fresh authenticator code within 5 minutes, as email; (b) recommended: at most once per 8 hours for `teams.*` (`approvals.teams_step_up_max_age_s`, 300 to 43,200); (c) AAL2 sign-in only. **Answered Nov 24, 2026 (Saurabh): (b), once per 8 hours = 28,800 s for PKG** (set by H-082). 28,800 is inside the setting's clamp; the shared `requireStepUp` guard (`packages/core/src/auth/index.ts`) refuses windows above 3,600 s today, and T-288 widens it (backlog T-288).
 - **Q-M4:** the Messages nav shows a dot (built), or a count (needs reading each notified message and its sender in a job)?
 - **Q-M5:** mark chats read in Teams when opened in the portal? Needs `Chat.ReadWrite` (replaces `Chat.Read` and `ChatMessage.Send`, broader) and it is an external write. Default no: portal-only marker.
 - **Q-M6:** reuse the `own_mail` view for "own Teams" (built) or add an `own_messages` view?
 - **Q-M7:** channel notices are not possible per person (one subscription per app per channel). Accept "fetch on open" for channels? Default yes.
 - **Q-M8:** phone push for new Teams messages (a later task on the T-161 notifications path, text-free "New Teams message")?
 - **Q-M9:** start new chats from the portal (needs `Chat.Create` and a people search with `User.ReadBasic.All`)? Default: no; "Open Teams".
-- **Q-M10:** one Teams account per person per lane (built), or several?
+- **Q-M10:** one Teams account per person per lane (built), or several? **Answered Nov 24, 2026 (Saurabh): several** ("I need another option, especially under Pub K group, to have the second team connected"); §22, with the number per lane in `teams.max_accounts_per_person`.
 - **Q-M11 (D-68):** may a viewer send from their own Teams connection? Default: owner and admin_technical only (as email).
 - **Q-M12 (owner):** later, the reverse direction: the portal as a personal tab app inside Teams [F3]? Not planned; no task.
-- **Q-M13 (D-69):** may the assistant draft Teams replies (chat text sent to the model; a new `teams` category in `lane_policies.llm_allowed_categories`)?
+- **Q-M13 (D-69):** may the assistant draft Teams replies (chat text sent to the model; a new `teams` category in `lane_policies.llm_allowed_categories`)? **Answered Nov 24, 2026 (Saurabh): no AI drafts.** T-293 is dropped; no Teams text goes to a model.
 - **Q-M14:** enable Teams in `NC` too (H-080), or PKG only first?
 
 ## 19. Human setup items (backlog "Needs human")
 
-H-078 (Teams app registration), H-079 (PKG tenant consent), H-080 (NC, optional), H-081 (production SQL, PKG switch-on and first live check of chats and call buttons), H-082 (sending), H-083 (notifications), H-084 (channels). Exact steps are in `docs/backlog.md`. No human item exists for in-portal calling (not planned).
+H-078 (Teams app registration), H-079 (PKG tenant consent), H-080 (NC, optional), H-081 (production SQL, PKG switch-on and first live check of chats and call buttons), H-082 (sending), H-083 (notifications), H-084 (channels), H-085 (several Teams accounts per person: production part 37, the PKG limit, connecting the second account, §22), H-086 (the screenshot for the tidier conversation pane, T-297; done Nov 24, 2026). Exact steps are in `docs/backlog.md`. No human item exists for in-portal calling (not planned).
 
 ## 20. Risks
 
@@ -490,4 +494,156 @@ H-078 (Teams app registration), H-079 (PKG tenant consent), H-080 (NC, optional)
 
 ## 21. Sub-tasks
 
-See `docs/backlog.md`, Phase B11 (T-278 – T-293). Every task is app code (connectors/tokens, RLS/data access, approvals): full security + code review, fix all BLOCKER and HIGH before done.
+See `docs/backlog.md`, Phase B11 (T-278 – T-293) and Phase B12 (T-294 – T-296, section 22; T-297, the tidier conversation pane). T-293 dropped (D-69 no). Order: T-294 → T-295 → T-296 → T-297 → T-288 → T-292. Every task is app code (connectors/tokens, RLS/data access, approvals): full security + code review, fix all BLOCKER and HIGH before done.
+
+## 22. Several Teams accounts per person (Nov 24, 2026; Phase B12)
+
+Status: proposed (planner, Nov 24, 2026). Asked by Saurabh on Nov 24, 2026 after the first live Teams test in production, verbatim: "I logged in, and I can see the Teams messages inside the portal. I was able to connect using the pubkgroup.com account. What I want is another connection for Teams. As you know, we have got two different teams for pubkgroup.com and pub-k.org, so I need another option, especially under Pub K group, to have the second team connected. Those messages, when they are displayed in the portal, can be combined together." Answers Q-M10.
+
+The case: in `PKG` one person has two Microsoft accounts in the SAME Entra tenant (D-62), one `@pubkgroup.com` and one `@pub-k.org`, each with its own Teams chats. Both domains are already in `teams.allowed_domains`. The same person already connects two Google mail accounts in this lane (the mail pattern, T-275). This section lets a person connect several Teams accounts in one lane and shows the chats of all of them in one list. Nothing here is company-specific: the number is a `lane_config` setting.
+
+Not touched: Google connections, the Microsoft mail connector and its app, D-23, owner-only reads (D-43), AAL2, no chat text stored (rule 6), writes only through approvals (rule 5), retrieved content untrusted (rule 9), the Teams guard (section 6, already per connection), the Teams scope rule (4.4).
+
+### 22.1 The rule
+
+- **Limit:** `lane_config.teams.max_accounts_per_person`, an integer 1 – 5, **default 1** (so every lane keeps today's behaviour until a human version of its config raises it; `PKG` gets 2 in H-085). It counts a person's Teams connections in the lane whose status is not `disconnected` or `pending` (`active`, `degraded`, `reconnect_required`: the same "counted" rule as the old index). Why 5 at most: every page view reads one chat list per account (22.6), so the cost grows with the number; 5 bounds it. Why not unlimited: fail closed, as every other list in `teams`.
+- **What stays unique (unchanged indexes):** one Microsoft account is one row in one lane: `connections_one_lane_per_account` on `(provider, lower(external_account_id))` and `connections_one_teams_per_entra_object` on `entra_object_id`, both across all lanes. Two people can never share one Teams account: the second person's connect lands on the first person's row and is refused (`ACCOUNT_OWNED_BY_OTHER_MESSAGE`, the T-247 rule in the connect flow), and the account cannot be connected in another lane (D-23, `D0023`).
+- **Only moves into "counted" are checked.** A first connect, a reconnect of a disconnected row and a pending row becoming active are checked against the limit; a reconnect of a row that is already counted (`reconnect_required` back to `active`) is never refused by the limit. So lowering the limit in a new config version never disconnects, pauses or hides anything: existing rows keep working, and the person cannot add another one until they are under the new limit.
+- The page, the routes and the jobs never assume "the" Teams connection of a person; they work per connection id (22.4).
+
+### 22.2 SQL (T-294)
+
+| Object | Change |
+|---|---|
+| index `core.connections_one_teams_per_owner` | **dropped** |
+| `core.teams_account_limit(p_lane text) returns int` | **new**, `stable`, `security definer`, `search_path = ''`: reads `teams.max_accounts_per_person` of the lane's current `lane_config` version; an integer 1 – 5 is returned as is; missing, malformed or out of range returns 1 (fail closed, and the default). Execute: `service_role` only (revoked from public, anon, authenticated). |
+| `core.teams_assert_one_per_owner(text, uuid)` | **body replaced; name, signature, grants and error codes kept** (the connector calls it by name, and `core.connection_set_teams_identity` calls it, so neither changes). New meaning: raises `D0024` when making this connection usable would give its owner more than `core.teams_account_limit(p_lane)` counted Teams connections in the lane. A connection that is itself already counted passes. `22004`, `P0002` (no such connection in THIS lane: another lane's id gets the same answer), `23514` unchanged. The comment says the name is historical. |
+| trigger function `core.connections_teams_account_limit()` and trigger `connections_teams_account_limit` | **new**: `before insert or update of status on core.connections for each row when (new.provider = 'microsoft_teams')`. When the new status is counted and the old one was not (an insert, or `pending`/`disconnected` before): `pg_advisory_xact_lock` on a key of (lane, owner), then counts the owner's OTHER counted Teams rows in the lane and raises `D0024` at the limit. The lock makes two concurrent connects of the same person wait for each other, so the second one's count sees the first (the database is the backstop; the earlier checks only give a clear message sooner). Revoked from public, anon, authenticated. |
+| `core.connection_token_store` | **unchanged** (it serves every provider). Its `unique_violation` branch for `connections_one_teams_per_owner` becomes unreachable and is left as is; the trigger's `D0024` passes through it unchanged, and `vault/tokens.ts` already maps `D0024` to the fixed Teams message. The Vault write earlier in the same transaction rolls back. |
+| unchanged, verified by pgTAP | `connections_one_teams_per_entra_object`, `connections_one_lane_per_account`, `core.connection_set_teams_identity`, `core.teams_connection_ids` (already returns every owned connection), every RLS policy and function of `comms.teams_chat_reads`, `comms.teams_activity` and the `teams.*` approvals (all already `connection_id = any (core.teams_connection_ids(...))`), the one-live-subscription-per-connection-and-resource index of `core.push_subscriptions`, `core.mailbox_ids` (a Teams row is never a mailbox). No policy changes. |
+
+- **Existing rows: no data change.** The one live `PKG` row (H-081) stays `active` and valid; the trigger does not fire for it unless its status moves out of and back into "counted".
+- **Production: part 37** (the next after 36), gitignored, in `supabase/core/bootstrap/manual-migrations/`, like parts 33 – 36: `part-37-T-294-precheck.sql` (read-only; one row per fact with an `ok` column: part 36 applied; md5 of the body of every function replaced (`core.teams_assert_one_per_owner`) and of every function relied on (`core.connection_set_teams_identity`, `core.connection_token_store`) equal to the values of the migrations; the index to drop exists with its exact definition; the two unique indexes that stay exist; the trigger and `core.teams_account_limit` do not exist yet; for information, no person has more than one counted Teams row in any lane), `part-37-T-294.sql` (one transaction; re-asserts the precheck facts and raises if any differs; refuses a second run (trigger or function already present) and a missing part 36), `part-37-T-294-check.sql` (read-only, every row true: index gone, trigger and function present with the new md5s, `teams_assert_one_per_owner` md5 changed and grants unchanged, the two unique indexes still present, every usable Teams row still has tenant, cloud and object id, and no owner exceeds their lane's limit). The builder states the exact row counts in H-085.
+- **Lane config (TypeScript):** `teamsSchema` (strict) gains `max_accounts_per_person: z.int().min(1).max(5).default(1)`; `teamsSettings` / the settings view carry it. Because the schema is strict, an OLDER deployment reads a config that has the new key as malformed and pauses Teams: the config version that raises the limit is written only after the T-294 code is deployed (H-085 step order). The runbook template (`docs/runbooks/enable-lane-mail.md`, "Enable Teams for a company") shows the key; its schema test follows.
+
+### 22.3 Connect, reconnect, disconnect
+
+- **"Connect another Teams account"** (Settings, and a link on the Messages "Connected as" card): the same `POST /api/connect/teams/start?lane=<laneId>` as "Sign in to Teams", without a connection id, so it is a first connect with `prompt=select_account` (built today). The start refuses at once (before the redirect to Microsoft) when the person already has `max_accounts_per_person` counted Teams rows in the lane (read through the person's own client under RLS); the callback enforces it again (`teams_assert_one_per_owner` in `beforeStore`, then the trigger when the token is stored). The refusal is `account_refused` with `detail=one_account` and the new fixed text "You have connected as many Teams accounts as this company allows. Disconnect one to connect another." (`TEAMS_ONE_ACCOUNT_MESSAGE` changes; no number from the config is put in the text).
+- **The same account chosen again:** if Microsoft returns an account the person has already connected (same UPN), the generic flow lands on that existing row (same owner), the identity matches, and the tokens are refreshed on it: no second row. The Teams provider reports this (`detail=already_connected`, Teams only, so Google's banners do not change) and Settings says: "That Teams account was already connected; its sign-in was refreshed. To add a different account, choose it on Microsoft's page (\"Use another account\")."
+- **Assumption A-1 (live test, H-085):** with one account signed in to Microsoft in the browser, `prompt=select_account` shows Microsoft's account picker, where "Use another account" lets the person sign in as the second one. The fact sheet does not state this. If Microsoft signs the first account in without a picker, the code behaves as in the previous bullet (`already_connected`), and the banner adds: "If Microsoft did not let you choose, sign out of the other account at Microsoft or use a private browser window, then try again." No other authorization parameter is assumed; a change of parameter would be a follow-up after the live check.
+- **Reconnect of one connection:** `start` with `connection=<id>` (built): the row must be the person's own in this lane (else `not_found`), the stored UPN goes as `login_hint` and `prompt` is dropped (built). The callback refuses any other account (`wrong_account`: UPN, tenant and Entra object id must equal the row's) before anything is stored; the other connection is not touched. **Assumption A-2:** Microsoft honours `login_hint` when two accounts are signed in. If it signs in the other account, the result is `wrong_account` and Settings says: "Microsoft signed in a different Teams account. Try again and choose <UPN of the row>." If H-085 shows that the hint is ignored, the follow-up is one line (`loginHint: false` for the Teams provider: a reconnect then always shows the picker, and the callback's same-account check is unchanged).
+- **Reconnect of a disconnected row** is offered only while the person is under the limit (generalises today's "another usable" rule); otherwise the row says "Disconnect another Teams account first to use this one again."
+- **Disconnect of one** connection: unchanged (section 5). Tokens, its subscription and secret, its `teams_chat_reads` and `teams_activity` rows and its open `teams.*` actions go; the person's other Teams connections, their subscriptions and markers are not touched (a test proves it).
+
+### 22.4 Addressing: which connection a request reads
+
+The browser names the connection by its **connection id** (the `core.connections.id` uuid of the person's OWN Teams row; not a secret, carries no content, already visible to admins as a health row) in the parameter `conn`. It is a name, never a permission: **every request re-checks it**.
+
+Check order on every Messages route and on the page (replacing "the person's own usable Teams connection" of `lib/teams-api.ts`): same site → lane id shape → AAL2 session with `own_mail` → `messages` module visible → `conn` is a lower-case uuid (else `400 bad_request`) → `conn` is one of the caller's own Teams rows in THIS lane read under RLS with `mine` true (else `404 not_found`) → its state is usable (`reconnect_required` → `409 reconnect` naming nothing but the code; `disconnected`, `pending` → `404`) → the feature the route needs is on the connection (`409 feature_missing`) → the Teams guard re-checks the owner = session user, the lane, the provider and the features before any token read (section 6, unchanged). Another person's id, another lane's id, a disconnected one, a pending one and an unknown uuid all get the same `404` before any Graph call or token read.
+
+| Route | Connection named by | Without `conn` |
+|---|---|---|
+| page `/[laneId]/messages` | `?conn=<id>&chat=<key>`; `?tab=channels&conn=<id>&team=…&channel=…[&post=…]` | the chat list (every account) is shown; a `chat=` without `conn` opens the chat only when the person has exactly one usable connection (old links keep working), otherwise "Select a chat" (no guess, no extra read) |
+| `GET …/messages/chats` | `?conn=<id>` reads that one account's first page (used after a notice of that account); none reads every own usable account (Refresh); `?more=<cursor>` is the combined cursor of 22.5; `?open=<id>` (with `chat=`) names the account of the open chat, validated exactly like `conn` (so only that account's row of a shared chat is not unread) | every account |
+| `GET …/messages/older`, `GET …/messages/newer` | `?conn=` required | `400` |
+| `POST …/messages/read` | `{conn, chat, readThrough}` | `400` |
+| `POST …/messages/call-link` | `{conn, chat, video}` | `400` |
+| `GET …/messages/image` | `conn` added to the exact parameter set | `400` |
+| `GET …/messages/activity` | none: answers for every own usable connection (22.7) | — |
+| `POST …/messages/activity` (seen) | optional body `{conns: [id, …]}` (1 – 5 ids, each re-checked; an id that fails is dropped, not an error) | every own usable connection |
+| `POST …/messages/send` (T-288) | `connectionId` (section 10.3) = the conversation's `conn` | `400` |
+
+### 22.5 The combined chat list
+
+- **Sources:** one `listChats` per own usable connection that has `chat_read` (lane and connection). Started together; each its own result.
+- **Order:** merged by `lastMessagePreview.createdDateTime` descending (the existing ordering key, section 8); ties by chat KEY (the encoded chat id), then by the order the connections were created in (deterministic); a time that does not parse counts as no time (last).
+- **Account label** (only when the person has two or more usable connections; with one, the page looks exactly as today): a short text badge on each row's second line and in the conversation header. Text: the account's domain when the person's connected accounts are on different domains ("pubkgroup.com", "pub-k.org"), otherwise the part before "@". Computed on the server from the person's own UPNs, never from chat content. The full UPN is the badge's accessible name ("Account: <UPN>"). Text, not colour alone (a colour may be added on top, with contrast checked). At iPhone width the badge keeps its text up to 14 characters with an ellipsis; the chat title truncates first; no horizontal scroll.
+- **The same chat seen by two accounts** (a group chat both accounts are in, or a 1:1 chat between the person's own two accounts): **shown twice, one row per account** (D-70 default, chosen by the lead agent Nov 24, 2026 and told to Saurabh; built). Each row carries its own account label and its own unread marker (that account's `viewpoint` and `read_through`), and opens the conversation as that account (`conn` of the row). Nothing is merged and there is no account switching anywhere: a row is always one (account, chat) pair, so it is always plain which account a reply goes out as. Rows are keyed by `(connection id, chat id)`, never by chat id alone. A 1:1 chat between the person's own two accounts is simply two rows. Whether Microsoft returns the same chat id in both lists does not matter to this behaviour. Merging such rows into one is a possible later change (D-70, open, nothing waits on it).
+- **Paging across sources:** the "More chats" cursor is one opaque server-built value: base64url of `{v:1, s:[{c:<connection id>, k:<that source's $skiptoken, or "" when it has no more>}]}`, at most 5 entries and 6,400 characters (the current 3,200-character rule per source, section 6 paging). On use, every `c` is re-checked as in 22.4 (an entry that fails is dropped and the page says "One of your Teams accounts changed; showing the others"), every `k` is validated as today and re-attached only to `/me/chats` on the Graph host. "More chats" is a link to the page with `?more=<cursor>`: it reads the next page of every source that has more, merges that page among itself and SHOWS IT IN PLACE OF the first page (the list is replaced, with "Back to the newest chats"; as built in T-283); the first page is exactly ordered across accounts; a later page is ordered within itself (a known limit: nothing may be buffered on the server, rule 6). A source that failed on a later page stays in the cursor with the token it was asked with, so the next read retries it. Rows are keyed by (connection id, chat id): when ONE account's list is read again after a notice, its rows replace its old rows and a row is never drawn twice.
+- **Unread per connection:** the rule of 8.1 per account (its own `viewpoint` and its own `read_through` rows, keyed `(connection_id, chat_id)` as built). The portal's markers of all the person's connections are read in ONE database query (`connection_id in (…)` under the existing RLS).
+- **Partial failure:** sources are read with "all settled". The rows of the accounts that answered are shown; above the list, one plain line per account that did not: "<label>: Your Teams sign-in expired." with **Reconnect <label>** (that connection's id); "<label>: Teams is busy; try again in N seconds."; "<label>: Teams could not be reached." with Try again. Only when every source fails is the existing failure card shown. Never an empty list without a reason.
+- **States** (the section 11 table, per account): "Connected as" lists each account with its label and status; a feature missing on one account is said for that account only ("pub-k.org: Reconnect Teams to add call buttons"); the page is `reconnect` only when no account is usable; `not_connected` only when the person has none.
+
+### 22.6 Request counts and rate limits
+
+- **What doubles, and only that:** the chat-list read, one per account, started in parallel. Microsoft's `GET /me/chats` limit is per user (1/s [A2]), and each account is its own user, so the per-connection read bucket of section 6 already keeps them apart; the per-app-per-tenant limit (20/s) is shared and unaffected at this size.
+- **What does not double:** the open conversation (`GET /chats/{id}` and its messages) is read only through `conn`; "Load earlier", newer-since, read marker, Call, pictures and channel reads use only the connection named. The member fallback of section 8 (if `$expand` is refused) is at most 20 reads per page view in total, split across sources (in list order).
+- **After a notice:** only the account whose `lastNoticeAt` moved is re-read (`chats?conn=`), plus the open conversation if it belongs to that account. Refresh and the once-a-minute focus re-read read every account.
+- **Per person, not per account:** the route limiters keep their numbers (activity 20 a minute, re-reads 12 a minute per person and lane): two accounts do not double the allowance; one Refresh is one request to our server however many accounts it reads.
+- **Chat clicks** must not re-read the lists: T-296 keeps the chat list mounted across `?conn=&chat=` changes (the open follow-up C5 of the T-281 review, `docs/plan-review.md`), which matters twice as much with two lists. *Built (T-296): the list is drawn by a layout; "More chats" is a client request to the same route (no `?more=` in the address); counts before and after are in the PR body and `docs/plan-review.md`.*
+- At most `max_accounts_per_person` (≤ 5) list reads per page view; the page's levels do not change (section 11, T-276).
+
+### 22.7 Notices
+
+- **Subscriptions:** one all-chats subscription per Teams connection (already keyed per connection and resource; Microsoft's quota of 10 is per user [A3], and each account is its own user). The renewal scan already lists every usable Teams connection; a newly connected account is subscribed at the next scan (or at once when a human invokes it, H-085).
+- **Activity route answer:** `{ live, liveUntil, dot, lastNoticeAt, serverNow, accounts: [{ conn, live, liveUntil, dot, lastNoticeAt }] }`: `accounts` has one entry per own usable connection (from `core.teams_activity_get` once per connection, in parallel, no SQL change); `live` = any live; `liveUntil` = the earliest `liveUntil` among live ones; `dot` = any `dot`; `lastNoticeAt` = the latest. A person with no usable connection still gets `live: false` and 200.
+- **The dot** (side menu, iPhone More) shows when any account has an unseen notice. Still one 30-second loop over our own database (`components/messages-live.tsx`); never a Graph poll.
+- **Seen:** after the combined list loads, the page posts "seen" for the connections whose list read succeeded (an account whose read failed keeps its dot). Recorded per connection (`teams_activity_seen` per id), never "all" blindly.
+- **Settings:** each own Teams row shows its own "Live updates until <time> ET" / "Live updates unavailable", from its entry in `accounts` (one request for the whole section).
+
+### 22.8 Sending (T-288, T-292)
+
+- The composer belongs to a conversation opened through `conn`; the send body's `connectionId` is that id, re-checked like every route (22.4) and again by the approvals SQL (owner of the connection, section 10.2: unchanged).
+- The line under the composer: "Send posts this exact text to Teams as <UPN of that connection> (logged)." (with one account too). A chat both accounts are in has one row per account (22.5), so the composer always belongs to exactly one account; opening the other account's row is a different conversation with its own, empty composer, so typed text can never be sent as the other account by mistake.
+- Approvals → History: "Teams message (chat) · <account label>", the chat name looked up live through the action's own connection, never the text.
+- Channel posts and replies (T-292) post as the account under which the team is listed (its `conn`).
+
+### 22.9 Channels and pictures
+
+- **Teams list:** `GET /me/joinedTeams` per account with `channels_read`, in parallel; shown grouped under each account's label (only when there are two or more accounts). A team both accounts belong to is listed under each account's group (D-70 default, as for chats): each entry reads and posts as its own account; no switching.
+- Channels, posts, replies and channel pictures are read only through the `conn` of the team's group; the address carries `conn` (22.4). The `channels_read` state ("Reconnect Teams to add channels", admin text) is per account.
+- *Built (T-296): one team list per account with `channels_read`, grouped under the account label for two or more such accounts, `conn` in every channel address, per-account notes for an account without channels.*
+- **Pictures:** the image route requires `conn` (chat and channel forms); the converter's image base address includes it; the pacing (two slots per connection, 1 per second per chat or channel) stays per connection.
+
+### 22.10 Settings
+
+- Section title "Your Teams accounts". One row per own Teams connection (as built), each with its UPN, status, features, live state, **Reconnect** and **Disconnect** for that row only.
+- Under the last row: **Connect another Teams account** while the person's counted rows are fewer than the lane's limit; **Sign in to Teams** when they have none. At the limit (and a limit above 1): "You have connected <n> Teams accounts, the most this company allows." (n is our own count). With a limit of 1 and one account, the section looks as today.
+- Admins (owner, admin_technical) still see other people's Teams rows as health only, one row each (several per person now), never chats (unchanged; pgTAP 328's column list applies to each row).
+- Banners for the new results: `one_account` (new text, 22.3), `already_connected`, and the `wrong_account` text naming the row's UPN.
+
+### 22.11 Edge cases
+
+- Limit 2, two accounts connected, a third connect → refused at start; a crafted callback is refused by the function and the trigger; nothing stored.
+- Two connects of two different accounts by the same person at the same moment with one slot left → one succeeds, the other gets `D0024` (advisory lock; pgTAP with two sessions or a deterministic lock test).
+- The limit lowered from 2 to 1 while two are connected → both keep working; "Connect another" disappears; a disconnected third cannot be reconnected; nothing is paused.
+- One account `reconnect_required`, the other fine → its chats are shown, a plain line with Reconnect for the other (22.5).
+- One account throttled → its line says busy with seconds; the other's chats are shown.
+- A disconnect of one account while the page is open → the next request naming it gets `404`; the page reloads the list without it; open drafts of that account are invalidated by the disconnect (section 5).
+- Another person (an admin) passes Robert's `conn` → `404`, no Graph call; Robert's second account is not revealed by a different answer.
+- A `conn` of another lane where the same person is a member → `404` (rows are read for THIS lane).
+- The person's own two accounts chat with each other → that chat is two rows, one per account, each labelled (D-70 default).
+- A group chat both accounts are in → two rows, each with its own label, unread marker and conversation; a reply goes out as the row's account.
+- A notice for an account that was disconnected since → dropped by the job (`not_usable`, built).
+- The two accounts are in different tenants of the lane's `tenant_ids` → works the same (each row has its own tenant; the guard checks each).
+- `max_accounts_per_person` malformed in a config version → the app refuses the config (strict schema: Teams paused, as for any malformed `teams` block); the SQL reads it as 1.
+
+### 22.12 Tests (all synthetic; MSW fakes of Entra and Graph)
+
+pgTAP (new file `3xx_teams_several_accounts.test.sql`; existing 328 updated where it asserted one per owner):
+22. **Limit.** Lane A limit 2 (config version in the test): a person activates two Teams rows; a third is refused `D0024` at `teams_assert_one_per_owner` and at the trigger; limit absent or malformed → 1; limit 6 → 1.
+23. **Cross-user and cross-lane denial for every changed object.** Person B's rows never count toward A's limit; A's rows in lane C never count in lane A; `teams_assert_one_per_owner` with another lane's connection id → `P0002`; `authenticated` cannot execute `teams_account_limit`, `teams_assert_one_per_owner` or the trigger function; `teams_connection_ids(A, lane A)` returns both of A's rows and none of B's or of lane C; A cannot read B's `teams_chat_reads` / `teams_activity` rows for either of B's connections, nor B's rows in another lane; an admin sees both of A's rows' health columns only and never `entra_object_id`.
+24. **Uniqueness kept.** The same UPN or Entra object id cannot be active twice (same lane, other lane, other person).
+25. **Only moves are checked.** With limit lowered to 1 and two active rows: `reconnect_required → active` passes; `disconnected → active` is refused; no row changes status by itself.
+26. **Approvals.** A `teams.chat.send` on A's second connection is proposed and approved only by A; B is refused; existing 10.6 tests pass unchanged.
+
+Connector and routes (Vitest; the Teams harness gains a second fake account on another domain of the same fake tenant):
+27. **Connect another.** First account connected; "Connect another" with the second fake account → two rows, two identities, features each; the first row's tokens unchanged; the same account again → no new row, `already_connected`; at the limit → refused at start with no redirect and refused at callback (crafted state) with nothing stored.
+28. **Reconnect one.** Reconnect row 2 and the fake answers as account 1 → `wrong_account`, nothing stored on either row; as account 2 → tokens on row 2 only.
+29. **Addressing.** For every route of 22.4: own `conn` → works; another person's, another lane's, disconnected, pending, unknown uuid → the same `404` and zero Graph requests and zero token reads (spy); non-uuid → `400`; `conn` missing where required → `400`.
+30. **Combined list.** Two fake accounts with interleaved preview times → one list in time order with the right labels; a chat id in both → two rows, one per account, each with its own label and unread state, each opening with its own `conn` (and the same when the two lists give different ids); paging with both sources having more → the cursor holds both, re-checked, and a cursor naming a foreign connection drops that entry; one source 401/reconnect and one 429 → rows of the other plus the per-account lines; both failing → the failure card; one markers query.
+31. **Counts.** A page view with two accounts and an open chat makes exactly 2 list reads + the conversation reads of one account; a notice for account 2 re-reads only account 2's list (and the conversation only if it is account 2's); Refresh reads both; the per-person limiter is not doubled.
+32. **Notices.** The activity answer for two connections (aggregate and per-account); dot when either has a notice; "seen" only for the accounts whose list loaded; Settings rows each show their own live state.
+33. **Render** (desktop and iPhone width, 375 px): list with labels (text present, not colour only, no horizontal scroll), shared chat row, per-account notice lines, "Connected as" with two accounts, Settings with two rows and "Connect another" / at-limit note, composer line naming the UPN (T-288).
+Also: the canary test of section 17 test 8 with two accounts; Google and Microsoft mail tests unchanged and passing.
+
+### 22.13 Assumptions to settle at the live test (H-085)
+
+- **A-1** `prompt=select_account` shows Microsoft's picker with "Use another account" while another account is signed in (22.3). Either answer works; the banner text covers the silent case.
+- **A-2** `login_hint` makes Microsoft pick the right one of two signed-in accounts on Reconnect (22.3). If not, a one-line provider change (`loginHint: false`).
+- **A-3** (no longer affects the design since D-70's two-rows default): whether a chat both accounts are in has the same chat id in both lists. Recorded for a possible later merge only.
+- **A-4** the fact sheet gives a per-resource limit of 1 GET per second per chat [A2] but does not say whether two users of one app share it; assumed shared, so opening the second account's row of a shared chat right after the first can meet a 429. The page shows "Teams is busy" with the seconds (no retry); nothing else depends on it.
+
+### 22.14 Places in this spec changed by this section
+
+Status line; §2 (in scope, first bullet); §3 (D-23 bullet); §4.1 (first paragraph); §4.2 (the "at most one usable Teams connection" paragraph); §4.3 (new key `max_accounts_per_person`); §5 ("Where", "Start", callback step 8, "Disconnect"); §7.1 (row `connections_one_teams_per_owner`); §7.6 (pgTAP list); §8 (member fallback note, per-connection note); §8.5 (image route parameters); §9.4 ("Built" paragraph: activity, dot, seen, re-reads, Settings); §10.3 (`connectionId`); §10.5 (composer line); §11 (route parameters and gates, Settings, Performance level 2); §13 (call-link body); §16 (second-account edge case); §17 (pointer to tests 22 – 33); §18 (Q-M10 answered); §19 (H-085, H-086); §21 (Phase B12).

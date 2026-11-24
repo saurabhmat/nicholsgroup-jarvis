@@ -12,6 +12,7 @@ import { ConnectorError, isConnectorError } from "../contract/errors";
 import { connectorLog, type ConnectorLogger } from "../log/index";
 import type { TeamsApi, TeamsSelf } from "./api";
 import { TEAMS_PARAM_FORMATS } from "./constants";
+import type { HostedScope } from "./hosted-content";
 import { bodyToNodes, cleanText, cutUnits, nodesToPlainText, safeHttpsUrl, type MessageNode } from "./message-html";
 
 // ---- limits (vendor facts A1: `$top` at most 50; at most 25 members come back with `$expand=members`)
@@ -24,7 +25,7 @@ export const MEMBER_EXPAND_LIMIT = 25;
 export const CALL_MAX_OTHERS = 10;
 /** With the fallback (no combined expand) members are read for at most this many chats, in parallel (spec 8 notes). */
 export const FALLBACK_MEMBER_READS = 20;
-const NAME_CHARS = 120;
+export const NAME_CHARS = 120;
 /** A name that is empty after cleaning (hangul fillers, braille blank, ...) is drawn as this, never as nothing (SL6). */
 export const NO_NAME = "(no name)";
 const TOPIC_CHARS = 200;
@@ -74,12 +75,12 @@ export type ChatMessage = {
   truncated: boolean;
   attachments: AttachmentStub[];
 };
-export type MessagePage = { messages: ChatMessage[]; /** The `createdAt` to ask "older than" next; null when this was the last page. */ nextBefore: string | null; self: TeamsSelf };
+export type MessagePage = { messages: ChatMessage[]; /** The `createdAt` to ask "older than" next; null when this was the last page. */ nextBefore: string | null; /** `sinceModified` only: the page was full or had a next link, so changes may be missing from it (the caller must read the chat again, not merge). */ truncated?: boolean; self: TeamsSelf };
 
 export type CallTargets = { ok: true; upns: string[] } | { ok: false; reason: "no_one" | "external" | "too_many" | "unresolved" };
 
 // ---- helpers
-const fixed = (kind: "invalid_input" | "provider_error", message: string) => new ConnectorError({ kind, message });
+export const fixed = (kind: "invalid_input" | "provider_error", message: string) => new ConnectorError({ kind, message });
 const UUID = TEAMS_PARAM_FORMATS.userId as RegExp;
 const ISO = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(\.\d{1,7})?Z$/;
 
@@ -90,8 +91,8 @@ export function normalizeTime(v: unknown): string | null {
   return Number.isNaN(ms) ? null : new Date(ms).toISOString();
 }
 
-const lowerUuid = (v: unknown): string | null => (typeof v === "string" && UUID.test(v.toLowerCase()) ? v.toLowerCase() : null);
-const text = (v: unknown, max: number): string => (typeof v === "string" ? cutUnits(cleanText(v).trim(), max) : "");
+export const lowerUuid = (v: unknown): string | null => (typeof v === "string" && UUID.test(v.toLowerCase()) ? v.toLowerCase() : null);
+export const text = (v: unknown, max: number): string => (typeof v === "string" ? cutUnits(cleanText(v).trim(), max) : "");
 
 const Opt = <T extends z.ZodType>(t: T) => t.nullish();
 const BodySchema = z.looseObject({ contentType: Opt(z.string().max(32)), content: Opt(z.string()) });
@@ -123,7 +124,7 @@ const MessageSchema = z.looseObject({
   body: Opt(BodySchema),
   attachments: Opt(z.array(z.unknown()).max(200)),
 });
-const PageSchema = z.looseObject({ value: z.array(z.unknown()).max(500), "@odata.nextLink": Opt(z.string().max(8192)) });
+export const PageSchema = z.looseObject({ value: z.array(z.unknown()).max(500), "@odata.nextLink": Opt(z.string().max(8192)) });
 
 const sameTenant = (a: string | null | undefined, b: string): boolean => typeof a === "string" && a.toLowerCase() === b.toLowerCase();
 
@@ -196,15 +197,23 @@ export function chatIsUnread(chat: Pick<TeamsChat, "preview" | "lastReadAt" | "h
 // ---- the opaque cursor: only a `$skiptoken` leaves Graph's nextLink; the link itself never reaches the browser
 const TOKEN = /^[\x21-\x7e]{1,2048}$/; // printable ASCII without space; bound
 const CURSOR = /^[A-Za-z0-9_-]{1,3200}$/;
-function cursorFromNextLink(link: unknown, path: string): string | null {
+/** The path of a next link as written, or with its percent-escapes undone once (`19%3Aabc%40thread.tacv2` is `19:abc@thread.tacv2`): both are compared to the path WE asked for. */
+const pathOf = (pathname: string): string[] => {
+  try {
+    return [pathname, decodeURIComponent(pathname)];
+  } catch {
+    return [pathname];
+  }
+};
+export function cursorFromNextLink(link: unknown, path: string): string | null {
   if (typeof link !== "string" || !URL.canParse(link)) return null;
   const u = new URL(link);
-  if (u.protocol !== "https:" || u.hostname !== "graph.microsoft.com" || u.port !== "" || u.username !== "" || u.pathname !== `/v1.0${path}`) return null;
+  if (u.protocol !== "https:" || u.hostname !== "graph.microsoft.com" || u.port !== "" || u.username !== "" || !pathOf(u.pathname).includes(`/v1.0${path}`)) return null;
   const token = u.searchParams.get("$skiptoken");
   if (token === null || !TOKEN.test(token) || /[&#%\\]/.test(token)) return null;
   return Buffer.from(JSON.stringify({ v: 1, p: path, s: token }), "utf8").toString("base64url");
 }
-function skipTokenFrom(cursor: string, path: string): string {
+export function skipTokenFrom(cursor: string, path: string): string {
   const bad = () => fixed("invalid_input", "The page cursor is not valid");
   if (!CURSOR.test(cursor)) throw bad();
   let o: unknown;
@@ -241,7 +250,11 @@ function attachmentOf(raw: unknown): AttachmentStub | null {
   return { kind, name, href: ok && link ? link.href : null, host: ok && link ? link.host : null };
 }
 
-function messageOf(raw: unknown, self: TeamsSelf): ChatMessage | null {
+/**
+ * One message as the page draws it. `scope` (T-285) is where the message lives (its chat, or the channel of a root post): only then can a picture in its body name a hosted content, and only
+ * one of this very message. Without it every picture is a plain placeholder (a reply in a channel, a preview).
+ */
+export function messageOf(raw: unknown, self: TeamsSelf, scope?: HostedScope): ChatMessage | null {
   const r = MessageSchema.safeParse(raw);
   if (!r.success || !TEAMS_PARAM_FORMATS.messageId?.test(r.data.id)) return null;
   const m = r.data;
@@ -256,7 +269,7 @@ function messageOf(raw: unknown, self: TeamsSelf): ChatMessage | null {
       ? { id: null, name: text(m.from.application.displayName, NAME_CHARS) || NO_NAME, kind: "app" }
       : { id: null, name: null, kind: "unknown" };
   // A deleted message and a system event show no body: the text is not even converted.
-  const body = deleted || system ? { nodes: [] as MessageNode[], truncated: false } : bodyToNodes(m.body?.contentType, m.body?.content);
+  const body = deleted || system ? { nodes: [] as MessageNode[], truncated: false } : bodyToNodes(m.body?.contentType, m.body?.content, scope ? { scope, messageId: m.id } : undefined);
   return {
     id: m.id,
     createdAt,
@@ -297,7 +310,7 @@ export function createTeamsReader(deps: TeamsReaderDeps) {
      * One page of the person's chats, newest message first, hidden chats left out. `cursor` (from the previous page, by an explicit "More chats") continues it. When Graph refuses the combined
      * `$expand=members,lastMessagePreview` (H-081 checks it), the previews are asked for alone and members are read for the first chats in parallel; a log line says so (no content).
      */
-    async listChats(laneId: LaneId, conn: Conn, userId: string, opts: { cursor?: string } = {}): Promise<ChatList> {
+    async listChats(laneId: LaneId, conn: Conn, userId: string, opts: { cursor?: string; memberReads?: number } = {}): Promise<ChatList> {
       const skip = opts.cursor !== undefined ? skipTokenFrom(opts.cursor, "/me/chats") : undefined;
       const base = { $orderby: "lastMessagePreview/createdDateTime desc", $top: CHATS_PAGE, ...(skip !== undefined ? { $skiptoken: skip } : {}) };
       let combined = true;
@@ -313,7 +326,9 @@ export function createTeamsReader(deps: TeamsReaderDeps) {
       const page = pageOf(res.data);
       let chats = page.value.flatMap((c) => chatOf(c, res.self) ?? []);
       if (!combined) {
-        const first = chats.slice(0, FALLBACK_MEMBER_READS);
+        // T-294 (spec 22.6): with several accounts the page gives each list a share of the 20 reads, so the whole page view stays at 20; never more than the 20 of one list
+        const budget = Math.max(0, Math.min(FALLBACK_MEMBER_READS, Math.floor(opts.memberReads ?? FALLBACK_MEMBER_READS)));
+        const first = chats.slice(0, budget);
         const got = await Promise.allSettled(first.map((c) => listMembers(laneId, conn, userId, c.chatId)));
         chats = chats.map((c) => {
           const k = first.indexOf(c);
@@ -353,9 +368,9 @@ export function createTeamsReader(deps: TeamsReaderDeps) {
           : { $top: top, $orderby: "createdDateTime desc", ...(before !== undefined ? { $filter: `createdDateTime lt ${before}` } : {}) };
       const res = await get<unknown>(laneId, conn, userId, { path: "/chats/{chatId}/messages", params: { chatId }, query });
       const page = pageOf(res.data);
-      const messages = page.value.flatMap((m) => messageOf(m, res.self) ?? []);
+      const messages = page.value.flatMap((m) => messageOf(m, res.self, { kind: "chat", chatId }) ?? []);
       const oldest = messages.reduce<string | null>((acc, m) => (acc === null || m.createdAt < acc ? m.createdAt : acc), null);
-      return { messages, nextBefore: since === undefined && (page.value.length >= top || typeof page["@odata.nextLink"] === "string") && oldest !== null ? oldest : null, self: res.self };
+      return { messages, nextBefore: since === undefined && (page.value.length >= top || typeof page["@odata.nextLink"] === "string") && oldest !== null ? oldest : null, ...(since !== undefined ? { truncated: page.value.length >= top || typeof page["@odata.nextLink"] === "string" } : {}), self: res.self };
     },
 
     /**

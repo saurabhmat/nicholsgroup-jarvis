@@ -6,7 +6,7 @@
 import { AuthError, type Guards } from "@nichols/core/auth";
 import { MAIL_CONNECT_ROLES } from "@nichols/connectors/oauth";
 import { microsoftConnects, type MicrosoftWrites } from "./microsoft-wording";
-import { TEAMS_ADMIN_CONSENT_TEXT, TEAMS_PROVIDER, TEAMS_REMOVE_AT_MICROSOFT_TEXT } from "./teams-wording";
+import { TEAMS_ADMIN_CONSENT_TEXT, TEAMS_ALREADY_CONNECTED_TEXT, TEAMS_ONE_ACCOUNT_TEXT, TEAMS_PROVIDER, TEAMS_REMOVE_AT_MICROSOFT_TEXT, teamsWrongAccountText } from "./teams-wording";
 
 export type ConnectResultMessage = { tone: "success" | "alert"; title: string; description: string };
 
@@ -46,7 +46,11 @@ const SERVER_NOT_CONFIGURED: Record<string, ConnectResultMessage | undefined> = 
 export type MicrosoftContext = { enabled: boolean; writes: MicrosoftWrites };
 
 /** What the page knows about Teams for this lane: whether the Messages page is switched on for the company (a limited company must list the module; T-278 review C4). */
-export type TeamsContext = { messagesShown: boolean };
+export type TeamsContext = {
+  messagesShown: boolean;
+  /** T-294: the sign-in name of the person's OWN Teams row that a reconnect named (`?conn=<id>`, looked up in the database by the page); null = not known. Never taken from the address. */
+  reconnectAccount?: string | null;
+};
 
 /**
  * The one short sentence for a refused Teams account, by a coarse FIXED sub-code from the connector (`detail` in the redirect; T-278 review C1). Only these keys are ever used: an
@@ -59,7 +63,8 @@ export const TEAMS_REFUSALS: Readonly<Record<string, string>> = Object.freeze({
   scope_extra: "Microsoft listed a permission that the Teams connection may not hold. Ask your Microsoft administrator to remove it from the portal's Teams app, then try again.",
   not_enabled: "Teams is not enabled for this company. Ask your administrator.",
   other_company: "This Teams account is already connected elsewhere in Jarvis: in another company, or under another sign-in name. Each Teams account belongs to one company.",
-  one_account: "You already have a Teams account connected for this company. Disconnect it in Settings first if you want to use another one.",
+  one_account: TEAMS_ONE_ACCOUNT_TEXT,
+  already_connected: TEAMS_ALREADY_CONNECTED_TEXT,
   other_person: "This Teams account is already connected by another person. Each Teams account belongs to the person who connected it.",
   not_set_up: "Teams isn't fully set up for this company: the Teams app lacks a permission the company asked for. Ask your administrator.",
 });
@@ -108,8 +113,8 @@ export function connectResultMessage(params: SearchParams, microsoft: MicrosoftC
       if (baseName === "Teams") {
         return {
           tone: "success",
-          title: "Teams connected",
-          description: `Your Teams account is connected. ${teams.messagesShown ? "Open Messages to use it." : "Messages is not switched on for this company yet: ask your administrator."} The portal stores no message text.`,
+          title: teamsDetail(params) === "already_connected" ? "That Teams account was already connected" : "Teams connected",
+          description: teamsDetail(params) === "already_connected" ? TEAMS_ALREADY_CONNECTED_TEXT : `Your Teams account is connected. ${teams.messagesShown ? "Open Messages to use it." : "Messages is not switched on for this company yet: ask your administrator."} The portal stores no message text.`,
         };
       }
       if (baseName === "Composio") return { tone: "success", title: `${name} connected`, description: "The account was checked and saved. If it replaced an earlier account, the earlier one stays in Composio until it is removed by hand. Mail and calendar keep syncing through the Google connection until this company is switched to Composio." };
@@ -128,6 +133,7 @@ export function connectResultMessage(params: SearchParams, microsoft: MicrosoftC
             : `The ${name} account you chose is not the one set up for this company, or is already connected to another company. Nothing was saved.`) + ms + removeAccess,
       };
     case "wrong_account":
+      if (baseName === "Teams") return { tone: "alert", title: "Teams account does not match", description: `${teamsWrongAccountText(teams.reconnectAccount ?? null)}${removeAccess}` };
       return {
         tone: "alert",
         title: `${name} account does not match`,
