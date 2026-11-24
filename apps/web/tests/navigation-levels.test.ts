@@ -113,9 +113,9 @@ vi.mock("@nichols/connectors/teams-reader", () => {
     return value;
   };
   return {
-    listChats: () => started("listChats", { chats: [], nextCursor: null, self }),
-    listMessages: () => started("listMessages", { messages: [], nextBefore: null, self }),
-    openChat: () => started("openChat", { chat: { chatId: "19:abc123def456@thread.v2", chatType: "group", topic: "T", webUrl: null, members: [], membersCapped: false, preview: null, lastReadAt: null, hidden: false }, members: [], membersMore: false }),
+    listChats: (...a: unknown[]) => started("listChats", { chats: [], nextCursor: null, self }, a),
+    listMessages: (...a: unknown[]) => started("listMessages", { messages: [], nextBefore: null, self }, a),
+    openChat: (...a: unknown[]) => started("openChat", { chat: { chatId: "19:abc123def456@thread.v2", chatType: "group", topic: "T", webUrl: null, members: [], membersCapped: false, preview: null, lastReadAt: null, hidden: false }, members: [], membersMore: false }, a),
     resolveCallTargets: () => started("resolveCallTargets", { ok: false, reason: "no_one" }),
     // T-291: the channel reads, recorded the same way
     listTeams: () => started("listTeams", { teams: [{ teamId: "aaaaaaaa-aaaa-4aaa-8aaa-0000000000a1", name: "Alpha" }], more: false, self }),
@@ -314,6 +314,33 @@ describe("Messages (T-280, T-283)", () => {
     expect(count("teams.settings")).toBe(1);
     expect(count("lane.check")).toBe(1);
     expect(maxLevel()).toBeLessThanOrEqual(3);
+  });
+
+  const TEAMS_ROW_B = { ...TEAMS_ROW, id: "00000000-0000-4000-8000-0000000000c2", external_account_id: "me@second.example.test" };
+
+  it("T-295, two accounts: one list read per account and the open conversation's reads of ONE account, the markers in ONE query, all started together; no extra level", async () => {
+    t.answers["from:connections"] = { data: [TEAMS_ROW, TEAMS_ROW_B], error: null };
+    t.answers["rpc:teams_chat_reads_list_many"] = { data: [], error: null };
+    const { default: Page } = await import("@/app/[laneId]/messages/page");
+    await resolve(Page({ params: params(), searchParams: sp({ chat: CHAT_KEY, conn: TEAMS_ROW_B.id }) } as never) as ReactNode);
+    expect(t.reader.calls.map((c) => c.fn).sort()).toEqual(["listChats", "listChats", "listMessages", "openChat"]);
+    expect(t.reader.calls.map((c) => c.resolvedBefore)).toEqual([0, 0, 0, 0]); // every read had STARTED before any answered
+    expect(t.reader.calls.filter((c) => c.fn !== "listChats").every((c) => JSON.stringify(c.args).includes(TEAMS_ROW_B.id))).toBe(true); // the conversation is read as the named account only
+    expect(count("rpc:teams_chat_reads_list_many")).toBe(1);
+    expect(count("teams.settings")).toBe(1);
+    expect(count("lane.check")).toBe(1);
+    expect(maxLevel()).toBeLessThanOrEqual(3);
+  });
+
+  it("T-295, two accounts: a `chat` without `conn` opens nothing (no guess, no conversation read); an unknown or another person's `conn` opens nothing either; the list is still read for both accounts", async () => {
+    t.answers["from:connections"] = { data: [TEAMS_ROW, TEAMS_ROW_B, { ...TEAMS_ROW, id: "00000000-0000-4000-8000-0000000000d1", owner_user_id: "someone-else" }], error: null };
+    t.answers["rpc:teams_chat_reads_list_many"] = { data: [], error: null };
+    const { default: Page } = await import("@/app/[laneId]/messages/page");
+    for (const q of [{ chat: CHAT_KEY }, { chat: CHAT_KEY, conn: "00000000-0000-4000-8000-0000000000d1" }, { chat: CHAT_KEY, conn: "00000000-0000-4000-8000-0000000000ff" }, { chat: CHAT_KEY, conn: "../x" }]) {
+      t.reader.calls.length = 0;
+      await resolve(Page({ params: params(), searchParams: sp(q) } as never) as ReactNode);
+      expect(t.reader.calls.map((c) => c.fn), JSON.stringify(q)).toEqual(["listChats", "listChats"]);
+    }
   });
 
   it("no chat in the address: only the chat list is read (no conversation read, no Graph read for a chat that was not asked for)", async () => {
