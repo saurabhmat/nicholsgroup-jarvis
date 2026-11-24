@@ -72,13 +72,13 @@ const chatsListed = (state: Connected): boolean => state.laneFeatures.includes("
 export function ConnectedFrame({ laneId, state, children }: { laneId: string; state: Connected; children: ReactNode }) {
   const listed = chatsListed(state);
   const body = (
-    <div data-testid="messages-workspace" className="grid min-h-0 min-w-0 gap-4 lg:flex-1 lg:grid-cols-[minmax(300px,380px)_minmax(0,1fr)] group-data-[view=channels]/messages:lg:grid-cols-1 lg:grid-rows-[minmax(0,1fr)]">
+    <div data-testid="messages-workspace" className={cn("grid min-h-0 min-w-0 gap-4 lg:flex-1 lg:grid-rows-[minmax(0,1fr)]", listed ? "lg:grid-cols-[minmax(300px,380px)_minmax(0,1fr)] group-data-[view=channels]/messages:lg:grid-cols-1" : "lg:grid-cols-1")}>
       {listed ? (
         <div data-testid="messages-left" className="min-h-0 min-w-0 group-data-[view=channels]/messages:hidden group-data-[view=chat]/messages:max-lg:hidden lg:overflow-y-auto lg:overscroll-contain">
           <ChatListColumn laneId={laneId} state={state} />
         </div>
       ) : null}
-      <div data-testid="messages-right" className="min-h-0 min-w-0 group-data-[view=list]/messages:max-lg:hidden lg:flex lg:flex-col">
+      <div data-testid="messages-right" className={cn("min-h-0 min-w-0 lg:flex lg:flex-col", listed && "group-data-[view=list]/messages:max-lg:hidden")}>
         {children}
       </div>
     </div>

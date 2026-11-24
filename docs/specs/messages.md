@@ -570,7 +570,7 @@ Check order on every Messages route and on the page (replacing "the person's own
 - **What does not double:** the open conversation (`GET /chats/{id}` and its messages) is read only through `conn`; "Load earlier", newer-since, read marker, Call, pictures and channel reads use only the connection named. The member fallback of section 8 (if `$expand` is refused) is at most 20 reads per page view in total, split across sources (in list order).
 - **After a notice:** only the account whose `lastNoticeAt` moved is re-read (`chats?conn=`), plus the open conversation if it belongs to that account. Refresh and the once-a-minute focus re-read read every account.
 - **Per person, not per account:** the route limiters keep their numbers (activity 20 a minute, re-reads 12 a minute per person and lane): two accounts do not double the allowance; one Refresh is one request to our server however many accounts it reads.
-- **Chat clicks** must not re-read the lists: T-296 keeps the chat list mounted across `?conn=&chat=` changes (the open follow-up C5 of the T-281 review, `docs/plan-review.md`), which matters twice as much with two lists.
+- **Chat clicks** must not re-read the lists: T-296 keeps the chat list mounted across `?conn=&chat=` changes (the open follow-up C5 of the T-281 review, `docs/plan-review.md`), which matters twice as much with two lists. *Built (T-296): the list is drawn by a layout; "More chats" is a client request to the same route (no `?more=` in the address); counts before and after are in the PR body and `docs/plan-review.md`.*
 - At most `max_accounts_per_person` (≤ 5) list reads per page view; the page's levels do not change (section 11, T-276).
 
 ### 22.7 Notices
@@ -592,6 +592,7 @@ Check order on every Messages route and on the page (replacing "the person's own
 
 - **Teams list:** `GET /me/joinedTeams` per account with `channels_read`, in parallel; shown grouped under each account's label (only when there are two or more accounts). A team both accounts belong to is listed under each account's group (D-70 default, as for chats): each entry reads and posts as its own account; no switching.
 - Channels, posts, replies and channel pictures are read only through the `conn` of the team's group; the address carries `conn` (22.4). The `channels_read` state ("Reconnect Teams to add channels", admin text) is per account.
+- *Built (T-296): one team list per account with `channels_read`, grouped under the account label for two or more such accounts, `conn` in every channel address, per-account notes for an account without channels.*
 - **Pictures:** the image route requires `conn` (chat and channel forms); the converter's image base address includes it; the pacing (two slots per connection, 1 per second per chat or channel) stays per connection.
 
 ### 22.10 Settings

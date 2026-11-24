@@ -309,7 +309,8 @@ describe("the page fills the window and each pane scrolls on its own (T-297; cla
   const all = async () => {
     const { MessagesLayoutShell, ConnectedFrame } = await import("./messages-page");
     const state = { kind: "connected", connectionId: "00000000-0000-4000-8000-0000000000c1", account: "me@teams.example.test", degraded: false, missing: [], adminConsent: false, laneFeatures: ["chat_read", "channels_read"], accounts: [{ connectionId: "00000000-0000-4000-8000-0000000000c1", account: "me@teams.example.test", label: "teams.example.test", usable: true, degraded: false, missing: [], has: ["chat_read", "channels_read"] }], multi: false, canAddAnother: false } as never;
-    return { shell: classes(MessagesLayoutShell({ params: Promise.resolve({ laneId: "PKG" }), children: null })), frame: classes(ConnectedFrame({ laneId: "PKG", state, children: null })) };
+    const noChats = { ...(state as object), laneFeatures: ["channels_read"] } as never;
+    return { shell: classes(MessagesLayoutShell({ params: Promise.resolve({ laneId: "PKG" }), children: null })), frame: classes(ConnectedFrame({ laneId: "PKG", state, children: null })), noChatsFrame: classes(ConnectedFrame({ laneId: "PKG", state: noChats, children: null })) };
   };
 
   it("on a wide window the page is exactly the window's height (so the page itself does not scroll); the list column and the conversation column each take the rest and scroll alone", async () => {
@@ -326,5 +327,12 @@ describe("the page fills the window and each pane scrolls on its own (T-297; cla
     const right = frame.find((c) => c.includes("group-data-[view=list]/messages:max-lg:hidden")) ?? "";
     expect(right).toContain("lg:flex-col");
     expect(frame.some((c) => c.includes("group-data-[view=channels]/messages:lg:grid-cols-1"))).toBe(true);
+  });
+
+  it("a company without chats has no list column: the page takes the whole width and is never hidden by the phone rule", async () => {
+    const { noChatsFrame } = await all();
+    expect(noChatsFrame.some((c) => c.includes("lg:grid-cols-1") && !c.includes("minmax(300px,380px)"))).toBe(true);
+    expect(noChatsFrame.some((c) => c.includes("group-data-[view=list]"))).toBe(false);
+    expect(noChatsFrame.some((c) => c.includes("messages-left"))).toBe(false);
   });
 });
