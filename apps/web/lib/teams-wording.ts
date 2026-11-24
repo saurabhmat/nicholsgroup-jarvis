@@ -148,7 +148,7 @@ export const SEND_STATE_TEXT: Readonly<Record<SendState, string>> = Object.freez
   sent: "Sent",
   checking: "Sent, checking…",
   not_sent: "Not sent",
-  unknown: "Outcome unknown: check the chat in Teams before sending again",
+  unknown: "This message may have been sent. Look at the chat in Teams first.",
 });
 /** What each refusal of the send route says (the route's `error` code). The text typed stays in the composer for every one of them. */
 export const SEND_ERROR_TEXT: Readonly<Record<string, string>> = Object.freeze({
@@ -161,7 +161,7 @@ export const SEND_ERROR_TEXT: Readonly<Record<string, string>> = Object.freeze({
   forbidden: SEND_OFF_TEXT.role,
   not_found: "This chat could not be found, so nothing was sent.",
   reconnect: "Your Teams sign-in expired, so nothing was sent. Reconnect Teams in Settings.",
-  request_reused: "This message was already used. Press Send again.",
+  request_reused: "This message could not be sent as it is. Press Send again to send it as a new message.",
   gate_lane_off: SEND_OFF_TEXT.lane_off,
   gate_not_usable: SEND_OFF_TEXT.reconnect,
   gate_reconnect: SEND_OFF_TEXT.reconnect,
@@ -172,7 +172,7 @@ export const SEND_ERROR_TEXT: Readonly<Record<string, string>> = Object.freeze({
   unavailable: "The portal could not send this just now, so nothing was sent. Try again.",
 });
 export const SEND_STEP_UP_TEXT = "Enter your authenticator code to send. Your message is kept and you will come back to this chat.";
-export const SEND_NETWORK_TEXT = "The portal could not tell whether Teams received this message. Check the chat in Teams before sending again.";
+export const SEND_NETWORK_TEXT = "The portal got no answer, so it cannot tell.";
 export const SEND_TEXT_PROBLEM: Readonly<Record<"empty" | "too_long" | "too_big" | "control" | "malformed", string>> = Object.freeze({
   malformed: "The message holds an invalid character", // the server's own sentence (teams-pure TEAMS_TEXT_PROBLEMS.malformed)
   empty: "Type a message to send.",
@@ -180,7 +180,17 @@ export const SEND_TEXT_PROBLEM: Readonly<Record<"empty" | "too_long" | "too_big"
   too_big: "This message is larger than 80 KB.",
   control: "This message has a character Teams cannot take. Remove it to send.",
 });
-export const SEND_MAYBE_SENT_TEXT = "This message may have been sent. Check the chat in Teams before sending again.";
-export const SEND_CHECK_AGAIN = "Check again";
-export const SEND_DISCARD = "Discard";
-export const SEND_DISCARDED_TEXT = "Not checked. The text above stays here to copy.";
+export const SEND_IF_NOT_SENT = "Send if it has not been sent";
+export const SEND_DISMISS = "Dismiss";
+/** Notes under the one state line (never a second copy of the state line). */
+export const SEND_STALE_TEXT = "It was not confirmed. Look at the chat in Teams; if it is not there, type it again.";
+export const SEND_DISMISSED_TEXT = "Dismissed. Typing the same text again asks about this message first, so it is sent at most once.";
+/** A refusal answered to a request about a message that may already have gone: it says only that THIS request sent nothing. */
+export const SEND_REPLAY_NOTE: Readonly<Record<string, string>> = Object.freeze({
+  rate_limited: "Could not check just now: wait a second and try again.",
+  step_up_required: "Enter your authenticator code to check.",
+  reconnect: "Reconnect Teams to check.",
+  mfa_required: "Finish signing in to check.",
+  no_session: "Sign in to check.",
+  default: "Could not check just now. Try again in a moment.",
+});

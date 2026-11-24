@@ -475,7 +475,7 @@ export function createTeamsRoutes(deps: TeamsRouteDeps) {
         if (r.status === "already_in_progress") return json({ ok: true, state: "unknown" }, 200);
         if (r.status === "failed") {
           const unknown = isOutcomeUnknown(r.failureCode);
-          return json({ ok: true, state: unknown ? "unknown" : "not_sent", code: r.failureCode, message: sender.failureText(r.failureCode) }, 200);
+          return json({ ok: true, state: unknown ? "unknown" : "not_sent", code: r.failureCode, message: sender.failureText(r.failureCode), ...(unknown ? {} : { fresh: true }) }, 200); // a definite failure is final: the next press needs a new id
         }
         return json({ ok: true, state: "unknown" }, 200); // outcome_pending: the sweep looks again; the person checks Teams, never a blind resend
       }),

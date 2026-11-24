@@ -103,27 +103,41 @@ export async function sendTeamsMessage(deps: TeamsExecDeps, ctx: UserCtx, input:
     const result = await approveAndExecuteTeams(deps, ctx, { actionId: proposed.id, hashSeen: proposed.hash });
     return { kind: "result", result };
   } catch (e) {
-    // D1: refused between propose and approve (step-up refused by the database, a gate closing at that moment): the proposal still holds the text until it expires. If it is still only
-    // `proposed` (never approved, never claimed: nothing can have been sent), the owner's own reject (approvals only) removes the text now.
+    // The approve / claim / execute step threw. Say only what is certain (T-288 re-check):
+    //  * `expired` (a replay of a proposal that lapsed before it was approved): nothing was sent, and it never will be: a definite "failed / expired".
+    //  * D1: refused between propose and approve (the database refuses the step-up, a gate closing at that moment): the proposal still holds the text until it expires. If it is still only `proposed`
+    //    (never approved, never claimed), the owner's own reject (approvals only) removes the text now. If that reject fails (a concurrent request approved it in between: `not_pending`), the state is read
+    //    again: only `rejected` or `expired` is a definite refusal; still `proposed` means nothing was sent (the text waits for expiry); any other state means an earlier or concurrent request may have
+    //    sent it, so the answer is an unknown outcome (a plain ApprovalsError, 502), never a "before".
+    if (e instanceof ApprovalsError && e.code === "expired") return { kind: "result", result: { status: "failed", actionId: proposed.id, failureCode: "expired" } };
     const code = e instanceof ApprovalsError ? e.code : "unavailable";
-    let state: unknown = null;
-    try {
-      const job = await deps.jobRpc(ctx.laneId as LaneId);
-      const { data, error } = await job("act_action_state", { p_lane: ctx.laneId, p_id: proposed.id });
-      state = !error && Array.isArray(data) ? (data[0] as { status?: unknown } | undefined)?.status : null;
-    } catch {
-      state = null;
-    }
+    const stateOf = async (): Promise<string | null> => {
+      try {
+        const job = await deps.jobRpc(ctx.laneId as LaneId);
+        const { data, error } = await job("act_action_state", { p_lane: ctx.laneId, p_id: proposed.id });
+        const st = !error && Array.isArray(data) ? (data[0] as { status?: unknown } | undefined)?.status : null;
+        return typeof st === "string" ? st : null;
+      } catch {
+        return null;
+      }
+    };
+    const state = await stateOf();
     if (state === "proposed") {
+      let rejected = true;
       try {
         await rejectAction(deps, ctx, proposed.id, "The send was refused before it was approved");
-        throw new TeamsSendRefusal(code, "rejected");
-      } catch (r) {
-        if (r instanceof TeamsSendRefusal) throw r;
-        throw new TeamsSendRefusal(code, "before"); // the reject itself failed: the text waits for the one-hour expiry (accepted); still nothing was sent
+      } catch {
+        rejected = false;
       }
+      if (rejected) throw new TeamsSendRefusal(code, "rejected");
+      const after = await stateOf();
+      if (after === "rejected" || after === "expired") throw new TeamsSendRefusal(code, "rejected");
+      if (after === "proposed") throw new TeamsSendRefusal(code, "before"); // the reject itself failed: the text waits for the one-hour expiry (accepted); still nothing was sent
+      throw new ApprovalsError("unavailable"); // approved, executing, verified or unreadable: it may have been sent
     }
-    throw e;
+    if (state === "rejected" || state === "expired") throw new TeamsSendRefusal(code, "rejected");
+    // approved, executing, verified, failed, unreadable: the error above does not describe what happened to the message
+    throw new ApprovalsError("unavailable");
   }
 }
 

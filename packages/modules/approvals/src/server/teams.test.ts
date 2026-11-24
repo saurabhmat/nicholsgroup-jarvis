@@ -1002,3 +1002,55 @@ describe("sendTeamsMessage: structural phases (T-288 review B, D1)", () => {
     noText(w);
   });
 });
+
+describe("sendTeamsMessage: what is certain after a failed approve step (T-288 re-check)", () => {
+  const approveFails = (w: ReturnType<typeof world>, message: string, onReject?: (rows: Map<string, Row>) => void) => ({
+    ...w.ctx(),
+    rpc: (async (fn: string, a: Record<string, unknown>) => {
+      if (fn === "act_approve") return { data: null, error: { code: "P0001", message } };
+      if (fn === "act_reject" && onReject) {
+        onReject(w.rows);
+        return { data: null, error: { code: "P0001", message: "act: not_pending" } };
+      }
+      return w.rpc(fn, a);
+    }) as never,
+  });
+
+  it("a replay of a proposal that lapsed before it was approved ends as a definite failed / expired (never an unknown outcome)", async () => {
+    const w = world();
+    const out = await sendTeamsMessage(w.deps, approveFails(w, "act: expired"), sendInput());
+    expect(out).toMatchObject({ kind: "result", result: { status: "failed", failureCode: "expired" } });
+    expect(w.calls.writes).toBe(0);
+  });
+
+  it("D1 RACE: the on-the-spot reject fails because a concurrent request approved the action in between: an UNKNOWN outcome (a plain error, not a refusal 'before'), never a definite refusal", async () => {
+    const w = world();
+    const ctx = approveFails(w, "act: step_up_required", (rows) => void ([...rows.values()][0]!.status = "approved"));
+    const e = await sendTeamsMessage(w.deps, ctx, sendInput()).catch((x: unknown) => x);
+    expect(e).not.toBeInstanceOf(TeamsSendRefusal);
+    expect(e).toMatchObject({ code: "unavailable" });
+  });
+
+  it("D1 RACE: the reject fails but the action turns out rejected or expired: a definite refusal; still proposed: a refusal 'before' (nothing was sent); executing or verified: unknown", async () => {
+    for (const [status, phase] of [["rejected", "rejected"], ["expired", "rejected"], ["proposed", "before"]] as const) {
+      const w = world();
+      const e = await sendTeamsMessage(w.deps, approveFails(w, "act: step_up_required", (rows) => void ([...rows.values()][0]!.status = status)), sendInput()).catch((x: unknown) => x);
+      expect(e, status).toMatchObject({ phase, code: "step_up_required" });
+    }
+    for (const status of ["executing", "verified"]) {
+      const w = world();
+      const e = await sendTeamsMessage(w.deps, approveFails(w, "act: step_up_required", (rows) => void ([...rows.values()][0]!.status = status)), sendInput()).catch((x: unknown) => x);
+      expect(e, status).not.toBeInstanceOf(TeamsSendRefusal);
+    }
+  });
+
+  it("an error from a state that is neither proposed nor rejected (approved, executing...) is never described as the error code it carried", async () => {
+    const w = world({ executeDelayMs: 0 });
+    const first = await proposed(w, {});
+    w.rows.get(first.id)!.status = "executing";
+    w.claims.set(first.id, { outcome: null, external_id: null });
+    const e = await sendTeamsMessage(w.deps, approveFails(w, "act: step_up_required"), sendInput()).catch((x: unknown) => x);
+    // the replay of an executing row does not reach act_approve at all: the settled state is reported
+    expect(e).toMatchObject({ kind: "result", result: { status: "outcome_pending" } });
+  });
+});
