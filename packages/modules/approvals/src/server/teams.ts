@@ -249,6 +249,10 @@ export async function approveAndExecuteTeams(deps: TeamsExecDeps, ctx: UserCtx, 
     await audit(deps, ctx.laneId, actor, "action.resumed", row.id, { action_type: row.actionType, hash: row.payloadSha256 });
     return executeApprovedTeams(deps, ctx.laneId, row.id);
   }
+  // T-288 review (A): a replay of a send that ended without being sent. Expired (lazily or by the sweep), invalidated by a disconnect, rejected: nothing was sent, said as a definite failure so the person can send again with a new id.
+  if (row.status === "expired") return { status: "failed", actionId: row.id, failureCode: "expired" };
+  if (row.status === "invalidated") return { status: "failed", actionId: row.id, failureCode: "connection_disconnected" };
+  if (row.status === "rejected") return { status: "failed", actionId: row.id, failureCode: "execution_refused" };
   if (row.status !== "proposed") return blocked("not_pending");
   // The stored content must still hash to the stored hash, and the hash the approver saw must be that hash.
   if (hashOfRow(row) !== row.payloadSha256 || input.hashSeen !== row.payloadSha256) return blocked("hash_mismatch");
@@ -327,7 +331,7 @@ export async function executeApprovedTeams(deps: TeamsExecDeps, laneId: LaneId, 
       // Posted and read back; only recording it failed. Never turn a sent message into "failed": the row stays executing with its claim at "sent" and the sweep finishes it.
       console.error("[approvals] verified Teams message could not be recorded", { laneId, actionId });
       await audit(deps, laneId, { kind: "service" }, "action.record_failed", actionId, { external_id: externalId }).catch(() => undefined);
-      return { status: "verified", actionId };
+      return externalId === null ? { status: "verified", actionId } : { status: "verified", actionId, externalId };
     }
     let f: { code: string; outcome: FailureOutcome } | null;
     if (stage === "before") f = beforeFailureOf(e);
@@ -362,5 +366,5 @@ export async function executeApprovedTeams(deps: TeamsExecDeps, laneId: LaneId, 
     return { status: "failed", actionId, failureCode: f.code };
   }
   await audit(deps, laneId, { kind: "service" }, "action.verified", actionId, { outcome, external_id: externalId }).catch(() => undefined);
-  return { status: "verified", actionId };
+  return externalId === null ? { status: "verified", actionId } : { status: "verified", actionId, externalId };
 }

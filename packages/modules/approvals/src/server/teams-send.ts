@@ -14,7 +14,7 @@ import type { LaneId } from "@nichols/core";
 import { TEAMS_SEND_FAILURES } from "@nichols/connectors/write";
 import { teamsChatSendGate, type TeamsSendGate } from "./capability";
 import type { ApproveResult } from "./email";
-import { checkId, checkLane } from "./email";
+import { checkId, checkLane, rejectAction } from "./email";
 import { ApprovalsError } from "./errors";
 import { approveAndExecuteTeams, buildTeamsSend, proposeTeamsAction, type TeamsExecDeps } from "./teams";
 import { WRITE_ROLES, type UserCtx } from "./types";
@@ -46,16 +46,42 @@ function sameHash(a: string, b: string): boolean {
   return timingSafeEqual(Buffer.from(a, "hex"), Buffer.from(b, "hex"));
 }
 
+/**
+ * A refusal that happened BEFORE any message could have left, said structurally (T-288 review B), not by a string match: `phase: "before"` = nothing was proposed (the role read, the facts read, the
+ * proposal itself failed); `phase: "rejected"` = it was proposed and then refused before approval, and the proposal was rejected on the spot so its text is gone (`freshId`: a replay of the same
+ * request id would find that rejected action, so the person's next press needs a new id). The route answers both as a definite refusal that keeps the person's text.
+ */
+export class TeamsSendRefusal extends ApprovalsError {
+  readonly phase: "before" | "rejected";
+  constructor(code: ApprovalsError["code"], phase: "before" | "rejected") {
+    super(code);
+    this.phase = phase;
+  }
+  get freshId(): boolean {
+    return this.phase === "rejected";
+  }
+}
+
 export async function sendTeamsMessage(deps: TeamsExecDeps, ctx: UserCtx, input: SendTeamsInput): Promise<TeamsSendOutcome> {
   checkLane(ctx.laneId as LaneId);
   checkId(input.connectionId);
   if (typeof input.text !== "string" || typeof input.textSha256 !== "string") throw new ApprovalsError("invalid");
-  // 1: role (the database checks it again at propose)
-  const role = await ctx.rpc("has_lane_role", { p_uid: ctx.userId, p_lane: ctx.laneId, p_roles: [...WRITE_ROLES["teams.chat.send"]] });
-  if (role.error) throw new ApprovalsError("unavailable");
+  // 1: role (the database checks it again at propose). A read that fails here is "nothing sent".
+  let role: Awaited<ReturnType<UserCtx["rpc"]>>;
+  try {
+    role = await ctx.rpc("has_lane_role", { p_uid: ctx.userId, p_lane: ctx.laneId, p_roles: [...WRITE_ROLES["teams.chat.send"]] });
+  } catch {
+    throw new TeamsSendRefusal("unavailable", "before");
+  }
+  if (role.error) throw new TeamsSendRefusal("unavailable", "before");
   if (role.data !== true) throw new ApprovalsError("forbidden");
   // 2 and 3: the facts of THIS connection
-  const facts = await deps.readFacts(ctx.laneId as LaneId, input.connectionId);
+  let facts: Awaited<ReturnType<TeamsExecDeps["readFacts"]>>;
+  try {
+    facts = await deps.readFacts(ctx.laneId as LaneId, input.connectionId);
+  } catch {
+    throw new TeamsSendRefusal("unavailable", "before");
+  }
   if (!facts.teams || facts.teams.ownerUserId !== ctx.userId) throw new ApprovalsError("not_found");
   const gate = teamsChatSendGate(facts);
   if (gate !== null) return { kind: "gate", gate };
@@ -64,10 +90,41 @@ export async function sendTeamsMessage(deps: TeamsExecDeps, ctx: UserCtx, input:
   const send = buildTeamsSend({ place, text: input.text, clientRequestId: input.clientRequestId });
   // 5: the bytes approved are the bytes typed
   if (!sameHash(teamsTextHash(send.text), input.textSha256)) return { kind: "text_mismatch" };
-  // 6: propose; approve exactly the hash just computed; claim; one POST; read back
-  const proposed = await proposeTeamsAction(deps, ctx, { connectionId: input.connectionId, place, text: input.text, clientRequestId: input.clientRequestId, aiDrafted: false });
-  const result = await approveAndExecuteTeams(deps, ctx, { actionId: proposed.id, hashSeen: proposed.hash });
-  return { kind: "result", result };
+  // 6: propose. The same request id is the same action (a replay finds it, in whatever state it is in). A failure here means no message was approved, so nothing can have been sent.
+  let proposed: Awaited<ReturnType<typeof proposeTeamsAction>>;
+  try {
+    proposed = await proposeTeamsAction(deps, ctx, { connectionId: input.connectionId, place, text: input.text, clientRequestId: input.clientRequestId, aiDrafted: false });
+  } catch (e) {
+    if (e instanceof ApprovalsError && e.code !== "unavailable") throw e;
+    throw new TeamsSendRefusal("unavailable", "before");
+  }
+  // 7: approve exactly the hash just computed, claim, one POST, read back
+  try {
+    const result = await approveAndExecuteTeams(deps, ctx, { actionId: proposed.id, hashSeen: proposed.hash });
+    return { kind: "result", result };
+  } catch (e) {
+    // D1: refused between propose and approve (step-up refused by the database, a gate closing at that moment): the proposal still holds the text until it expires. If it is still only
+    // `proposed` (never approved, never claimed: nothing can have been sent), the owner's own reject (approvals only) removes the text now.
+    const code = e instanceof ApprovalsError ? e.code : "unavailable";
+    let state: unknown = null;
+    try {
+      const job = await deps.jobRpc(ctx.laneId as LaneId);
+      const { data, error } = await job("act_action_state", { p_lane: ctx.laneId, p_id: proposed.id });
+      state = !error && Array.isArray(data) ? (data[0] as { status?: unknown } | undefined)?.status : null;
+    } catch {
+      state = null;
+    }
+    if (state === "proposed") {
+      try {
+        await rejectAction(deps, ctx, proposed.id, "The send was refused before it was approved");
+        throw new TeamsSendRefusal(code, "rejected");
+      } catch (r) {
+        if (r instanceof TeamsSendRefusal) throw r;
+        throw new TeamsSendRefusal(code, "before"); // the reject itself failed: the text waits for the one-hour expiry (accepted); still nothing was sent
+      }
+    }
+    throw e;
+  }
 }
 
 /** The fixed sentence for a Teams send failure code (never text from the message or from Microsoft), or null for a code that is not one of them. */

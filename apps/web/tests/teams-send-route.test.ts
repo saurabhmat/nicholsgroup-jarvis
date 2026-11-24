@@ -5,7 +5,7 @@
 // nowhere but the call into `run`. Synthetic data only (rule 10).
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { AuthError } from "@nichols/core/auth";
-import { ApprovalsError } from "@nichols/approvals/server";
+import { ApprovalsError, TeamsSendRefusal } from "@nichols/approvals/server";
 import type { TeamsSendOutcome } from "@nichols/approvals/server";
 
 const reader = vi.hoisted(() => ({ resolveCallTargets: vi.fn(), listMessages: vi.fn(), listChats: vi.fn(), openChat: vi.fn(), fetchHostedImage: vi.fn() }));
@@ -253,7 +253,10 @@ describe("what the approvals entry says, as the route's fixed answers (spec 17 t
     const st = async (result: { status: string; failureCode?: string }) => json(await send(outcome({ kind: "result", result: { actionId: "a1", ...result } as never }), goodBody()));
     expect(await st({ status: "verified" })).toEqual({ ok: true, state: "sent" });
     expect(await st({ status: "sent_unverified" })).toEqual({ ok: true, state: "checking" });
-    expect(await st({ status: "already_in_progress" })).toEqual({ ok: true, state: "checking" });
+    // T-288 review (security L1): approved but not claimed by this request is NEVER "Sent, checking": the first request may still be running or may have died
+    expect(await st({ status: "already_in_progress" })).toEqual({ ok: true, state: "unknown" });
+    expect(await st({ status: "verified", externalId: "1700000000001" })).toEqual({ ok: true, state: "sent", messageId: "1700000000001" });
+    expect(await st({ status: "verified", externalId: "../x" })).toEqual({ ok: true, state: "sent" }); // an id that is not a message id is not handed on
     expect(await st({ status: "failed", failureCode: "not_a_member" })).toEqual({ ok: true, state: "not_sent", code: "not_a_member", message: "You are not a member of this chat or channel, or sending is not allowed" });
     expect(await st({ status: "failed", failureCode: "throttled" })).toMatchObject({ state: "not_sent", code: "throttled" });
     for (const failureCode of ["outcome_unknown", "ambiguous_match", "verification_mismatch", "reconcile_connection_disconnected", "reconcile_sent_unverified"]) expect(await st({ status: "failed", failureCode }), failureCode).toMatchObject({ state: "unknown" });
@@ -279,6 +282,17 @@ describe("what the approvals entry says, as the route's fixed answers (spec 17 t
     const boom = setup({ run: async () => Promise.reject(new Error("db down")) });
     const r = await send(boom, goodBody());
     expect([r.status, await json(r)]).toEqual([502, { error: "unknown_outcome" }]);
+  });
+
+  it("T-288 review B/D1: a refusal the approvals entry marks as before-anything-was-sent is a definite JSON answer that keeps the text; a rejected proposal says `fresh` (the next press needs a new id); a plain unavailable after the entry started stays unknown", async () => {
+    const r1 = await send(setup({ run: async () => Promise.reject(new TeamsSendRefusal("unavailable", "before")) }), goodBody());
+    expect([r1.status, await json(r1)]).toEqual([503, { error: "unavailable" }]);
+    const r2 = await send(setup({ run: async () => Promise.reject(new TeamsSendRefusal("step_up_required", "rejected")) }), goodBody());
+    expect([r2.status, await json(r2)]).toEqual([403, { error: "step_up_required", fresh: true }]);
+    const r3 = await send(setup({ run: async () => Promise.reject(new TeamsSendRefusal("unavailable", "rejected")) }), goodBody());
+    expect([r3.status, await json(r3)]).toEqual([503, { error: "unavailable", fresh: true }]);
+    const r4 = await send(setup({ run: async () => Promise.reject(new ApprovalsError("unavailable")) }), goodBody());
+    expect([r4.status, await json(r4)]).toEqual([502, { error: "unknown_outcome" }]);
   });
 
   it("without the send wiring the route is 503 and nothing runs", async () => {

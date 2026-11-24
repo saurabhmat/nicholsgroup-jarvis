@@ -9,3 +9,6 @@ export type { ChannelKind, ChannelList, ChannelPost, ChannelSummary, PostPage, R
 export { HOSTED_IMAGE_MAX_BYTES, hostedRefFromSrc, sniffImage } from "./hosted-content";
 export type { HostedScope, HostedTarget, ImageType } from "./hosted-content";
 export type { HostedImage } from "./images";
+// T-288 review C4: the text rules of a Teams send, shared with the composer (one normalisation, one validation).
+export { TEAMS_TEXT_MAX_CHARS, TEAMS_TEXT_PROBLEMS, isWellFormedText, normalizeTeamsText, teamsCodePoints, teamsTextProblem, teamsTextProblemCode } from "./send-text";
+export type { TeamsTextProblemCode } from "./send-text";

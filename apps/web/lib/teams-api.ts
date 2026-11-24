@@ -23,7 +23,7 @@ import { AuthError, authErrorResponse, type Guards } from "@nichols/core/auth";
 import type { LaneId } from "@nichols/core";
 import type { LaneClient } from "@nichols/core/lane-router";
 import { MAIL_CONNECT_ROLES } from "@nichols/connectors/oauth";
-import { ApprovalsError, type SendTeamsInput, type TeamsSendOutcome, type UserCtx } from "@nichols/approvals/server";
+import { ApprovalsError, TeamsSendRefusal, type SendTeamsInput, type TeamsSendOutcome, type UserCtx } from "@nichols/approvals/server";
 import { isOutcomeUnknown } from "./outcome";
 import { fetchHostedImage, resolveCallTargets } from "@nichols/connectors/teams-reader";
 import { callUrl, normalizeTime } from "@nichols/connectors/teams-pure";
@@ -169,6 +169,8 @@ function sendRefusal(code: string): Response {
       return json({ error: "gate_not_enabled" }, 409);
     case "step_up_required":
       return json({ error: "step_up_required" }, 403);
+    case "unavailable_before": // a read failed before anything was proposed: nothing was sent (the route's own JSON, so the browser may say "Not sent")
+      return json({ error: "unavailable" }, 503);
     default:
       return json({ error: "unknown_outcome" }, 502);
   }
@@ -456,13 +458,21 @@ export function createTeamsRoutes(deps: TeamsRouteDeps) {
         } catch (e) {
           // Once the approvals entry has been called a Teams POST may have left, so anything that is not a definite, early refusal is an UNKNOWN outcome (the person checks Teams; nothing is retried here).
           console.error("[api/teams-messages] send ended unknown:", e instanceof Error ? e.name : typeof e); // the class only, never a message (it could carry the text)
+          // A refusal the approvals entry marks as "before anything could have been sent" is a definite answer that keeps the text (503 `unavailable` for a read that failed); `fresh` says the
+          // proposal was rejected on the spot, so the browser's next press needs a new request id. Everything else unclassified is an unknown outcome.
+          if (e instanceof TeamsSendRefusal) {
+            const r = sendRefusal(e.code === "unavailable" ? "unavailable_before" : e.code);
+            return e.freshId ? json({ ...((await r.clone().json()) as Record<string, unknown>), fresh: true }, r.status) : r;
+          }
           return e instanceof ApprovalsError ? sendRefusal(e.code) : json({ error: "unknown_outcome" }, 502);
         }
         if (out.kind === "gate") return json({ error: `gate_${out.gate}` }, 409);
         if (out.kind === "text_mismatch") return json({ error: "text_mismatch" }, 400);
         const r = out.result;
-        if (r.status === "verified") return json({ ok: true, state: "sent" }, 200);
-        if (r.status === "sent_unverified" || r.status === "already_in_progress") return json({ ok: true, state: "checking" }, 200);
+        if (r.status === "verified") return json({ ok: true, state: "sent", ...(typeof r.externalId === "string" && isMessageId(r.externalId) ? { messageId: r.externalId } : {}) }, 200);
+        if (r.status === "sent_unverified") return json({ ok: true, state: "checking" }, 200);
+        // approved but not claimed by this request (the first request may still be running): never "Sent, checking"; the person checks Teams, or asks again with the same id
+        if (r.status === "already_in_progress") return json({ ok: true, state: "unknown" }, 200);
         if (r.status === "failed") {
           const unknown = isOutcomeUnknown(r.failureCode);
           return json({ ok: true, state: unknown ? "unknown" : "not_sent", code: r.failureCode, message: sender.failureText(r.failureCode) }, 200);

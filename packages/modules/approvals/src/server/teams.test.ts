@@ -12,7 +12,7 @@ import { rejectAction } from "./email";
 import { createTeamsReconciler } from "./reconcile-teams";
 import { reconcileStuckActions } from "./reconcile";
 import { hashOfRow } from "./rows";
-import { sendTeamsMessage, teamsTextHash, type SendTeamsInput } from "./teams-send";
+import { sendTeamsMessage, teamsTextHash, TeamsSendRefusal, type SendTeamsInput } from "./teams-send";
 import { teamsChatSendGate } from "./capability";
 import { approveAndExecuteTeams, buildTeamsSend, executeApprovedTeams, proposeTeamsAction, type ProposeTeamsInput, type TeamsExecDeps } from "./teams";
 import { TEAMS_ACTION_TYPES, type CapabilityFacts, type Rpc } from "./types";
@@ -319,7 +319,7 @@ describe("approveAndExecuteTeams: the one send", () => {
     const w = world();
     const { id, hash } = await proposed(w);
     const r = await approveAndExecuteTeams(w.deps, w.ctx(), { actionId: id, hashSeen: hash });
-    expect(r).toEqual({ status: "verified", actionId: id });
+    expect(r).toEqual({ status: "verified", actionId: id, externalId: "synthetic-message-1" });
     expect(w.calls.writes).toBe(1);
     expect(w.calls.actions[0]).toMatchObject({ id, lane_id: "PKG", connection_id: CONN, action_type: "teams.chat.send", payload_sha256: hash, approved_by: OWNER });
     expect(w.claims.get(id)).toEqual({ outcome: "sent", external_id: "synthetic-message-1" });
@@ -404,7 +404,7 @@ describe("approveAndExecuteTeams: the one send", () => {
     const { id, hash } = await proposed(w);
     await w.rpc("act_approve", { p_lane: "PKG", p_id: id, p_hash_seen: hash });
     await expect(approveAndExecuteTeams(w.deps, w.ctx(), { actionId: id, hashSeen: "1".repeat(64) })).rejects.toMatchObject({ code: "already_approved" });
-    expect(await approveAndExecuteTeams(w.deps, w.ctx(), { actionId: id, hashSeen: hash })).toEqual({ status: "verified", actionId: id });
+    expect(await approveAndExecuteTeams(w.deps, w.ctx(), { actionId: id, hashSeen: hash })).toEqual({ status: "verified", actionId: id, externalId: "synthetic-message-1" });
     expect(w.calls.writes).toBe(1);
     expect(w.audits.map((a) => a.action)).toContain("action.resumed");
   });
@@ -566,7 +566,7 @@ describe("how each outcome ends", () => {
   it("already applied (the lookup found the message): verified with outcome already_applied", async () => {
     const w = world({ writer: "already_applied" });
     const { id, hash } = await proposed(w);
-    expect(await approveAndExecuteTeams(w.deps, w.ctx(), { actionId: id, hashSeen: hash })).toEqual({ status: "verified", actionId: id });
+    expect(await approveAndExecuteTeams(w.deps, w.ctx(), { actionId: id, hashSeen: hash })).toEqual({ status: "verified", actionId: id, externalId: "synthetic-message-1" });
     expect(w.rows.get(id)).toMatchObject({ result: { outcome: "already_applied" } });
   });
 
@@ -600,7 +600,7 @@ describe("how each outcome ends", () => {
   it("a verified message whose result could not be recorded is still reported as verified (never turned into failed)", async () => {
     const w = world({ markVerifiedThrows: true });
     const { id, hash } = await proposed(w);
-    expect(await approveAndExecuteTeams(w.deps, w.ctx(), { actionId: id, hashSeen: hash })).toEqual({ status: "verified", actionId: id });
+    expect(await approveAndExecuteTeams(w.deps, w.ctx(), { actionId: id, hashSeen: hash })).toEqual({ status: "verified", actionId: id, externalId: "synthetic-message-1" });
     expect(w.rows.get(id)!.status).toBe("executing");
   });
 
@@ -892,5 +892,113 @@ describe("sendTeamsMessage (T-288): spec 17 tests 10, 11, 12, 13", () => {
     expect([...w.rows.values()].map((r) => r.connection_id)).toEqual([CONN2]);
     expect(seen).toEqual({ write: [`${CONN2}|${CONN2}`], verify: [`${CONN2}|${CONN2}`] });
     expect(w.audits.every((a) => (a.metadata as Record<string, unknown>).connection_id === undefined || (a.metadata as Record<string, unknown>).connection_id === CONN2)).toBe(true);
+  });
+});
+
+
+// ---------------------------------------------------------------------------------------------------- T-288 review: a replay of the same request id, in every state of the action
+describe("sendTeamsMessage: the same request id and the same text again (a replay), in every state the action can be in", () => {
+  const replay = async (mutate: (w: ReturnType<typeof world>, id: string) => void, over: Parameters<typeof world>[0] = {}) => {
+    const w = world(over);
+    const first = await proposed(w, {});
+    mutate(w, first.id);
+    const out = await sendTeamsMessage(w.deps, w.ctx(), sendInput());
+    return { w, out, id: first.id };
+  };
+  it("proposed (never approved): the replay approves the same text and sends it ONCE", async () => {
+    const { w, out } = await replay(() => undefined);
+    expect(out).toMatchObject({ kind: "result", result: { status: "verified", externalId: "synthetic-message-1" } });
+    expect(w.calls.writes).toBe(1);
+    expect(w.rows.size).toBe(1);
+  });
+  it("approved but not claimed (a killed request): the replay resumes it, ONE POST", async () => {
+    const { w, out } = await replay((w, id) => {
+      const r = w.rows.get(id)!;
+      r.status = "approved";
+      r.approved_by = OWNER;
+      r.approved_hash = r.payload_sha256;
+    });
+    expect(out).toMatchObject({ kind: "result", result: { status: "verified" } });
+    expect(w.calls.writes).toBe(1);
+  });
+  it("executing, nothing recorded yet: outcome_pending (unknown), no second POST", async () => {
+    const { w, out } = await replay((w, id) => {
+      w.rows.get(id)!.status = "executing";
+      w.claims.set(id, { outcome: null, external_id: null });
+    });
+    expect(out).toMatchObject({ kind: "result", result: { status: "outcome_pending" } });
+    expect(w.calls.writes).toBe(0);
+  });
+  it("executing with the message accepted but not read back: sent_unverified (Sent, checking), no second POST", async () => {
+    const { w, out } = await replay((w, id) => {
+      w.rows.get(id)!.status = "executing";
+      w.claims.set(id, { outcome: "sent", external_id: "m1" });
+    });
+    expect(out).toMatchObject({ kind: "result", result: { status: "sent_unverified" } });
+    expect(w.calls.writes).toBe(0);
+  });
+  it("verified, and verified with the text already purged: verified (no message id on a replay), no POST, the text is not needed", async () => {
+    const { w, out } = await replay((w, id) => {
+      const r = w.rows.get(id)!;
+      r.status = "verified";
+      delete r.payload.text;
+      r.payload_purged_at = new Date().toISOString();
+    });
+    expect(out).toEqual({ kind: "result", result: { status: "verified", actionId: [...w.rows.keys()][0] } });
+    expect(w.calls.writes).toBe(0);
+  });
+  it("failed (a definite code, or an unknown outcome): the same failure again, no POST", async () => {
+    for (const code of ["not_a_member", "outcome_unknown"]) {
+      const { w, out } = await replay((w, id) => {
+        const r = w.rows.get(id)!;
+        r.status = "failed";
+        r.failure_code = code;
+        delete r.payload.text;
+      });
+      expect(out).toMatchObject({ kind: "result", result: { status: "failed", failureCode: code } });
+      expect(w.calls.writes).toBe(0);
+    }
+  });
+  it("expired, invalidated (a disconnect) and rejected: a definite failure (nothing was sent), no POST", async () => {
+    for (const [status, code] of [["expired", "expired"], ["invalidated", "connection_disconnected"], ["rejected", "execution_refused"]] as const) {
+      const { w, out } = await replay((w, id) => {
+        w.rows.get(id)!.status = status;
+        delete w.rows.get(id)!.payload.text;
+      });
+      expect(out, status).toMatchObject({ kind: "result", result: { status: "failed", failureCode: code } });
+      expect(w.calls.writes).toBe(0);
+    }
+  });
+  it("the same id with another text is request_reused (the browser makes a new id when the text changes)", async () => {
+    const w = world();
+    await proposed(w, {});
+    await expect(sendTeamsMessage(w.deps, w.ctx(), sendInput({ text: "another text" }))).rejects.toMatchObject({ code: "request_reused" });
+  });
+});
+
+describe("sendTeamsMessage: structural phases (T-288 review B, D1)", () => {
+  it("a role read, a facts read or a propose that fails BEFORE anything was approved is a TeamsSendRefusal(phase before): nothing was sent", async () => {
+    const w = world();
+    const roleDown = { ...w.ctx(), rpc: (async (fn: string, a: Record<string, unknown>) => (fn === "has_lane_role" ? { data: null, error: { message: "db down" } } : w.rpc(fn, a))) as never };
+    await expect(sendTeamsMessage(w.deps, roleDown, sendInput())).rejects.toMatchObject({ phase: "before", code: "unavailable" });
+    const factsDown = { ...w.deps, readFacts: async () => { throw new Error("db down"); } };
+    await expect(sendTeamsMessage(factsDown, w.ctx(), sendInput())).rejects.toBeInstanceOf(TeamsSendRefusal);
+    const proposeDown = { ...w.deps, jobRpc: async () => async (fn: string, a: Record<string, unknown>) => (fn === "act_propose" ? { data: null, error: { message: "db down" } } : w.rpc(fn, a)) };
+    const e = await sendTeamsMessage(proposeDown, w.ctx(), sendInput()).catch((x: unknown) => x);
+    expect(e).toMatchObject({ phase: "before" });
+    expect(w.rows.size).toBe(0);
+    expect(w.calls.writes).toBe(0);
+  });
+
+  it("D1: refused between propose and approve (the database refuses the step-up): the proposal is rejected at once, its text is gone, nothing was sent, and the error says a new request id is needed", async () => {
+    const w = world();
+    const ctx = { ...w.ctx(), rpc: (async (fn: string, a: Record<string, unknown>) => (fn === "act_approve" ? { data: null, error: { code: "P0001", message: "act: step_up_required" } } : w.rpc(fn, a))) as never };
+    const e = await sendTeamsMessage(w.deps, ctx, sendInput()).catch((x: unknown) => x);
+    expect(e).toMatchObject({ phase: "rejected", code: "step_up_required", freshId: true });
+    const [row] = [...w.rows.values()];
+    expect(row).toMatchObject({ status: "rejected" });
+    expect(row!.payload.text).toBeUndefined();
+    expect(w.calls.writes).toBe(0);
+    noText(w);
   });
 });

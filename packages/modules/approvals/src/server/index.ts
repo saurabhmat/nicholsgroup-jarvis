@@ -23,7 +23,7 @@ export { buildTeamsSend, proposeTeamsAction } from "./teams";
 // T-288: the pure helpers the page and the route share (the gates by name, the text hash). `sendTeamsMessage` itself is in `@nichols/approvals/wire`.
 export { teamsChatSendGate, TEAMS_SEND_GATES, teamsStepUpFromConfig } from "./capability";
 export type { TeamsSendGate } from "./capability";
-export { teamsSendFailureText, teamsTextHash } from "./teams-send";
+export { TeamsSendRefusal, teamsSendFailureText, teamsTextHash } from "./teams-send";
 export type { SendTeamsInput, TeamsSendOutcome } from "./teams-send";
 export type { ProposeTeamsInput, TeamsPlace } from "./teams";
 export { hashOfRow } from "./rows";
