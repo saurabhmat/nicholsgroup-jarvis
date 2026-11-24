@@ -87,3 +87,11 @@ Browser runs (CSP, cookies, clickjacking), the hosted Supabase settings (sign-up
 
 1 approvals catalog (L), 2 route inventory (M), 3 isolation catalog (L), 4 webhooks (M), 5 token canaries (M), 6 injection (M), 7 report (S).
 Drop "monday.com actions" (no such action type) and "report ... no open blocker/high" stays. Rename "webhook spoofing per provider" to the providers that exist.
+
+## 10. Revision after the independent review (Nov 24, 2026)
+
+The review showed that several first-version tests were weaker than their names. What changed: the table test (335) now seeds real rows and compares what each
+persona sees with an oracle, over column-granted tables too; the function test (336) calls with real ids and measures writes; the route inventory checks each
+handler's own code and names its behaviour tests; model call sites and tools are found from imports and from the real handler at run time; the canary tests
+cover each redaction layer and the real HTTP error path; rules 6 and 7 have catalog tests (339); the date-dependent pgTAP 303 no longer expires. The counts and
+the mutation table are in `docs/security/pilot-test.md`. Numbers in sections 1 to 9 above are the first inventory and are kept as written.
