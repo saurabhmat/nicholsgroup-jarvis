@@ -977,16 +977,30 @@ describe("sendTeamsMessage: the same request id and the same text again (a repla
 });
 
 describe("sendTeamsMessage: structural phases (T-288 review B, D1)", () => {
-  it("a role read, a facts read or a propose that fails BEFORE anything was approved is a TeamsSendRefusal(phase before): nothing was sent", async () => {
+  it("F2: a role read or a facts read that fails BEFORE propose is called is a TeamsSendRefusal(phase before, a definite 503): nothing was proposed or sent", async () => {
     const w = world();
     const roleDown = { ...w.ctx(), rpc: (async (fn: string, a: Record<string, unknown>) => (fn === "has_lane_role" ? { data: null, error: { message: "db down" } } : w.rpc(fn, a))) as never };
     await expect(sendTeamsMessage(w.deps, roleDown, sendInput())).rejects.toMatchObject({ phase: "before", code: "unavailable" });
     const factsDown = { ...w.deps, readFacts: async () => { throw new Error("db down"); } };
     await expect(sendTeamsMessage(factsDown, w.ctx(), sendInput())).rejects.toBeInstanceOf(TeamsSendRefusal);
+    expect(w.rows.size).toBe(0); // nothing was proposed
+    expect(w.calls.writes).toBe(0);
+  });
+
+  it("F2: a failure INSIDE proposeTeamsAction that is not a definite refusal (the insert may have committed, its answer lost; the audit write failing after it) is a plain UNKNOWN outcome, never a refusal 'before'; a definite refusal before the insert is passed on as it is", async () => {
+    const w = world();
     const proposeDown = { ...w.deps, jobRpc: async () => async (fn: string, a: Record<string, unknown>) => (fn === "act_propose" ? { data: null, error: { message: "db down" } } : w.rpc(fn, a)) };
+    // F2: a failure INSIDE proposeTeamsAction (the insert may have committed with its answer lost) is an UNKNOWN outcome, a plain unavailable, never a refusal "before"
     const e = await sendTeamsMessage(proposeDown, w.ctx(), sendInput()).catch((x: unknown) => x);
-    expect(e).toMatchObject({ phase: "before" });
-    expect(w.rows.size).toBe(0);
+    expect(e).not.toBeInstanceOf(TeamsSendRefusal);
+    expect(e).toMatchObject({ code: "unavailable" });
+    // an audit write that fails after the insert is the same
+    const auditDown = { ...w.deps, audit: { log: async () => { throw new Error("audit down"); } } as never };
+    const e2 = await sendTeamsMessage(auditDown, w.ctx(), sendInput({ clientRequestId: "5e11d0c0-0000-4000-8000-000000000077" })).catch((x: unknown) => x);
+    expect(e2).not.toBeInstanceOf(TeamsSendRefusal);
+    // a DEFINITE refusal before the insert (the database's gate) is passed on as it is
+    const gateDown = { ...w.deps, jobRpc: async () => async (fn: string, a: Record<string, unknown>) => (fn === "act_propose" ? { data: null, error: { code: "42501", message: "act: this lane does not allow storing outbound drafts" } } : w.rpc(fn, a)) };
+    await expect(sendTeamsMessage(gateDown, w.ctx(), sendInput({ clientRequestId: "5e11d0c0-0000-4000-8000-000000000078" }))).rejects.toMatchObject({ code: "drafts_not_allowed" });
     expect(w.calls.writes).toBe(0);
   });
 

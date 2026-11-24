@@ -47,8 +47,7 @@ function sameHash(a: string, b: string): boolean {
 }
 
 /**
- * A refusal that happened BEFORE any message could have left, said structurally (T-288 review B), not by a string match: `phase: "before"` = nothing was proposed (the role read, the facts read, the
- * proposal itself failed); `phase: "rejected"` = it was proposed and then refused before approval, and the proposal was rejected on the spot so its text is gone (`freshId`: a replay of the same
+ * A refusal that happened BEFORE any message could have left, said structurally (T-288 review B), not by a string match: `phase: "before"` = nothing was proposed because a read before `proposeTeamsAction` was called failed (the role read, the facts read; a failure INSIDE `proposeTeamsAction` is an unknown outcome, see below); `phase: "rejected"` = it was proposed and then refused before approval, and the proposal was rejected on the spot so its text is gone (`freshId`: a replay of the same
  * request id would find that rejected action, so the person's next press needs a new id). The route answers both as a definite refusal that keeps the person's text.
  */
 export class TeamsSendRefusal extends ApprovalsError {
@@ -90,13 +89,15 @@ export async function sendTeamsMessage(deps: TeamsExecDeps, ctx: UserCtx, input:
   const send = buildTeamsSend({ place, text: input.text, clientRequestId: input.clientRequestId });
   // 5: the bytes approved are the bytes typed
   if (!sameHash(teamsTextHash(send.text), input.textSha256)) return { kind: "text_mismatch" };
-  // 6: propose. The same request id is the same action (a replay finds it, in whatever state it is in). A failure here means no message was approved, so nothing can have been sent.
+  // 6: propose. The same request id is the same action (a replay finds it, in whatever state it is in). Only a DEFINITE refusal raised before the insert (a gate, the shape check, `request_reused`, a role) is
+  // passed on as it is. Anything else that goes wrong INSIDE `proposeTeamsAction` (the insert committed and its answer was lost, the audit write failed after the insert, an odd answer) may have left a
+  // proposal behind that a duplicate of this request can approve: an UNKNOWN outcome (a plain `unavailable`, 502), never "before". "Before" is only for the reads above, before it is called.
   let proposed: Awaited<ReturnType<typeof proposeTeamsAction>>;
   try {
     proposed = await proposeTeamsAction(deps, ctx, { connectionId: input.connectionId, place, text: input.text, clientRequestId: input.clientRequestId, aiDrafted: false });
   } catch (e) {
     if (e instanceof ApprovalsError && e.code !== "unavailable") throw e;
-    throw new TeamsSendRefusal("unavailable", "before");
+    throw new ApprovalsError("unavailable");
   }
   // 7: approve exactly the hash just computed, claim, one POST, read back
   try {

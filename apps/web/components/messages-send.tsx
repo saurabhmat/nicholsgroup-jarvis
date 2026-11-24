@@ -182,19 +182,21 @@ export function SendScope({ laneId, conn, chatKey, userId, enabled, clear = fals
       idsByText.current.set(canonical, id);
       upsert({ id, text: canonical, state: "sending", reason: null, note: null, at: startedAt, messageId: null, closed: false, earlier: false, sticky: false, off: false });
       say(SEND_STATE_TEXT.sending);
+      // a late answer (the chat was left, or sending was switched off meanwhile) writes only the text the stored record already holds (a stripped record stays stripped); the hash matches the id
+      const heldText = (): string => readMarkers(where).find((x) => x.id === id)?.text ?? "";
       const settle = (state: SendState, reason: string | null, messageId: string | null, markerState: SendMarker["state"] | null, extra: Partial<SendItem> = {}) => {
         patch(id, { state, reason, note: null, messageId, closed: false, ...extra });
         say(state === "not_sent" ? `${SEND_STATE_TEXT.not_sent}${reason ? `: ${reason}` : ""}` : extra.earlier ? SEND_SENT_EARLIER : SEND_STATE_TEXT[state]);
         inDoubt.current.delete(id);
         if (markerState === null || alive.current) removeMarker(where, id);
-        else putMarker(where, { ...marker, state: markerState, messageId, reason }); // a late answer after the chat was left: the right state shows on return
+        else putMarker(where, { ...marker, text: heldText(), state: markerState, messageId, reason }); // a late answer after the chat was left: the right state shows on return, and it never writes text the stored record does not already hold
       };
       const stillUnknown = (noteText: string | null) => {
         // the warning cannot be kept across a reload when the tab's storage refused it: the bubble says so
         const joined = [noteText, saved ? null : SEND_UNSAVED_NOTE].filter((x): x is string => x !== null).join(" ");
         patch(id, { state: "unknown", reason: null, note: joined === "" ? null : joined, messageId: null, closed: false });
         say(SEND_STATE_TEXT.unknown);
-        putMarker(where, { ...marker, state: "unknown" }); // kept: on return, or for "Send if it has not been sent", the bubble is rebuilt from it
+        putMarker(where, { ...marker, text: alive.current ? canonical : heldText(), state: "unknown" }); // kept: on return, or for "Send if it has not been sent", the bubble is rebuilt from it
       };
       const definiteNotSent = (reason: string) => {
         // nothing was sent. A replay's bubble is the only place the text is: it stays until dismissed, and the text goes back into an empty box

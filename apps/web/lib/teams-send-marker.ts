@@ -8,6 +8,8 @@ import { draftNamespace } from "./reply-draft-store";
 export type MarkerState = "inflight" | "unknown" | "sent" | "checking" | "not_sent";
 export type SendMarker = { id: string; hash: string; text: string; startedAt: number; state: MarkerState; messageId: string | null; reason: string | null; dismissed: boolean };
 export const MAX_MARKERS = 5;
+/** Dismissed records are small and keep a promise ("the portal first looks for this message"), so they live OUTSIDE the cap of 5 for their whole life, capped on their own (oldest first). */
+export const MAX_DISMISSED = 20;
 /** A record is never evicted while its outcome is unresolved: this many unresolved (in flight or unknown, not dismissed) records for one chat stop a new send until the person has looked at them. */
 export const unresolvedOf = (list: readonly SendMarker[]): SendMarker[] => list.filter((m) => !m.dismissed && (m.state === "inflight" || m.state === "unknown"));
 
@@ -35,11 +37,11 @@ const ns = draftNamespace<SendMarker[]>("teams-send", {
       const m = one(x);
       return m ? [m] : [];
     });
-    return out.length === 0 ? null : out.slice(-MAX_MARKERS);
+    return out.length === 0 ? null : out.slice(-(MAX_MARKERS + MAX_DISMISSED));
   },
 });
 // the namespace stores `{ list }` (an object, so the validator can tell it from an older single record)
-const write = (w: Where, list: SendMarker[]): boolean => (list.length === 0 ? (ns.remove(w.laneId, w.userId, w.item), true) : ns.write(w.laneId, w.userId, w.item, { list: list.slice(-MAX_MARKERS) } as unknown as SendMarker[]));
+const write = (w: Where, list: SendMarker[]): boolean => (list.length === 0 ? (ns.remove(w.laneId, w.userId, w.item), true) : ns.write(w.laneId, w.userId, w.item, { list: list.slice(-(MAX_MARKERS + MAX_DISMISSED)) } as unknown as SendMarker[]));
 
 type Where = { laneId: string; userId: string; item: string };
 const listeners = new Map<string, Set<(id: string, m: SendMarker | null) => void>>();
@@ -53,9 +55,18 @@ export const readMarkers = (w: Where): SendMarker[] => ns.read(w.laneId, w.userI
  */
 export function putMarker(w: Where, m: SendMarker): boolean {
   let rest = readMarkers(w).filter((x) => x.id !== m.id);
-  while (rest.length >= MAX_MARKERS) {
-    const i = rest.findIndex((x) => !(x.state === "inflight" || x.state === "unknown") || x.dismissed);
-    rest = rest.filter((_, k) => k !== (i >= 0 ? i : 0));
+  // two separate caps: at most MAX_MARKERS records that are not dismissed (resolved ones go first, an unresolved one only if nothing else can), and at most MAX_DISMISSED dismissed ones (oldest first)
+  const live = (x: SendMarker) => !x.dismissed;
+  while (rest.filter(live).length + (live(m) ? 1 : 0) > MAX_MARKERS) {
+    const live0 = rest.filter(live);
+    const victim = live0.find((x) => !(x.state === "inflight" || x.state === "unknown")) ?? live0[0];
+    if (!victim) break;
+    rest = rest.filter((x) => x.id !== victim.id);
+  }
+  while (rest.filter((x) => x.dismissed).length + (m.dismissed ? 1 : 0) > MAX_DISMISSED) {
+    const victim = rest.find((x) => x.dismissed);
+    if (!victim) break;
+    rest = rest.filter((x) => x.id !== victim.id);
   }
   const ok = write(w, [...rest, m]);
   emit(w, m.id, m);

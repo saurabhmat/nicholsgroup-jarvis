@@ -763,9 +763,9 @@ describe("T-288 re-check 2: one record per message", () => {
     // a dismissed one makes room (dismissed records are evicted first)
     await act(async () => void fireEvent.click(screen.getAllByTestId("send-dismiss")[0] as HTMLElement));
     await press();
-    expect(requests).toHaveLength(6); // four unresolved now: it goes, and the dismissed record made room
-    expect(markerList()).toHaveLength(5);
-    expect(markerList().some((m) => m.dismissed)).toBe(false);
+    expect(requests).toHaveLength(6); // four unresolved now: it goes
+    expect(markerList().filter((m) => !m.dismissed)).toHaveLength(5);
+    expect(markerList().filter((m) => m.dismissed)).toHaveLength(1); // the dismissed one is kept outside the cap (F1)
   });
 });
 
@@ -921,6 +921,46 @@ describe("T-288 re-check 4 and 5: layout, and nothing kept when sending is off",
     await settle();
     expect(markerList().map((m) => m.id.slice(-1))).toEqual(["a", "b"]);
     expect(markerList().every((m) => m.text === "")).toBe(true);
+  });
+});
+
+describe("T-288 closing", () => {
+  it("F1: a dismissed record is never evicted by new sends: with four unresolved and one dismissed record a fifth unresolved send keeps the dismissed one (they have their own cap of 20), and after a reload its text still gets its id", async () => {
+    reply = R(502, { error: "unknown_outcome" });
+    render(composer());
+    type("keep my id");
+    await press();
+    await act(async () => void fireEvent.click(screen.getByTestId("send-dismiss")));
+    const dismissedId = ids()[0];
+    for (let n = 0; n < 5; n++) {
+      type(`other ${n}`);
+      await press();
+    }
+    expect(markerList().filter((m) => m.dismissed).map((m) => m.id)).toEqual([dismissedId]);
+    expect(markerList().filter((m) => !m.dismissed)).toHaveLength(5);
+    cleanup();
+    render(composer());
+    await settle();
+    requests = [];
+    reply = SENT;
+    type("keep my id");
+    await press();
+    expect(requests[0]?.body.clientRequestId).toBe(dismissedId);
+  });
+
+  it("F3: a late answer never writes text the stored record does not already hold: a record that was stripped while the person was away stays stripped", async () => {
+    reply = "hang";
+    render(composer());
+    type("stripped meanwhile");
+    await press();
+    cleanup(); // left the chat; the request is open
+    const list = JSON.parse(window.sessionStorage.getItem(markerKey) ?? "null");
+    list.d.list[0].text = ""; // sending was switched off meanwhile: the record was stripped
+    window.sessionStorage.setItem(markerKey, JSON.stringify(list));
+    reply = R(502, { error: "unknown_outcome" });
+    await act(async () => release?.());
+    await settle();
+    expect(markerList()[0]).toMatchObject({ text: "", state: "unknown", hash: expect.stringMatching(/^[0-9a-f]{64}$/) });
   });
 });
 
