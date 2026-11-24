@@ -263,6 +263,8 @@ export function AccountNotes({ laneId, notes, dropped }: { laneId: string; notes
   );
 }
 
+const NO_NOTES: AccountNote[] = []; // a stable default: a new array on every render would look like a new page of rows
+
 /**
  * The rows of the chat list, the same as the page drew them, plus a Refresh and the re-read: after a notice or an allowed Refresh the list is fetched again from `/messages/chats` (the same read the
  * page makes), keeping what is shown if it fails. T-295: after a notice of ONE account only that account's list is read again (`?conn=`) and its rows are replaced; Refresh and the window coming back
@@ -275,7 +277,7 @@ export function ChatListLive({
   selectedKey,
   more,
   selectedConn = null,
-  initialNotes = [],
+  initialNotes = NO_NOTES,
   initialDropped = false,
   initialListed,
 }: {
@@ -355,7 +357,8 @@ export function ChatListLive({
         }
         return failed ? { ...next, failed: true } : next;
       });
-      if (listed.length > 0) latest.current.listRefreshed?.(listed);
+      // an answer that names no accounts (an older server) is a list read for every usable one
+      if (answers.some((x) => x.answer !== null)) latest.current.listRefreshed?.(listed.length > 0 ? listed : undefined);
     })();
     return () => ac.abort();
   });

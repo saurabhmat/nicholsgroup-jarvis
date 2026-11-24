@@ -51,7 +51,7 @@ describe("ConversationMessages: Load older messages", () => {
     fireEvent.click(screen.getByTestId("load-older"));
     await waitFor(() => expect(screen.getAllByTestId("message")).toHaveLength(4));
     expect(fetchMock).toHaveBeenCalledTimes(1);
-    expect(fetchMock.mock.calls[0]?.[0]).toBe(`/api/lanes/PKG/messages/older?chat=${KEY}&before=${encodeURIComponent("2026-11-23T14:00:00.000Z")}`);
+    expect(fetchMock.mock.calls[0]?.[0]).toBe(`/api/lanes/PKG/messages/older?conn=${CONN}&chat=${KEY}&before=${encodeURIComponent("2026-11-23T14:00:00.000Z")}`);
     expect(fetchMock.mock.calls[0]?.[1]).toMatchObject({ credentials: "same-origin", cache: "no-store" });
     expect(screen.getAllByTestId("message").map((m) => m.textContent?.match(/text m\d/)?.[0])).toEqual(["text m1", "text m2", "text m3", "text m4"]);
     // no more: the button is replaced by the note, and one separator per day
@@ -142,11 +142,11 @@ describe("CallButtons", () => {
     const opened = (window.open as unknown as { mock: { results: { value: { opener: unknown } }[] } }).mock.results[0]?.value;
     expect(opened?.opener).toBeNull(); // the new page cannot reach this one
     expect(fetchMock.mock.calls[0]?.[0]).toBe("/api/lanes/PKG/messages/call-link");
-    expect(fetchMock.mock.calls[0]?.[1]).toMatchObject({ method: "POST", body: JSON.stringify({ chat: KEY, video: false }) });
+    expect(fetchMock.mock.calls[0]?.[1]).toMatchObject({ method: "POST", body: JSON.stringify({ conn: CONN, chat: KEY, video: false }) });
     fetchMock.mockImplementationOnce(() => reply(200, { url: "https://teams.microsoft.com/l/call/0/0?users=pat@teams.example.test&withVideo=true" }));
     fireEvent.click(screen.getByRole("button", { name: "Video call" }));
     await waitFor(() => expect(window.open).toHaveBeenCalledTimes(2));
-    expect(fetchMock.mock.calls[1]?.[1]).toMatchObject({ body: JSON.stringify({ chat: KEY, video: true }) });
+    expect(fetchMock.mock.calls[1]?.[1]).toMatchObject({ body: JSON.stringify({ conn: CONN, chat: KEY, video: true }) });
   });
 
   it("a blocked new tab shows the link to click instead", async () => {
@@ -218,7 +218,7 @@ describe("MarkRead", () => {
     expect(container.innerHTML).toBe("");
     await waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(1));
     expect(fetchMock.mock.calls[0]?.[0]).toBe("/api/lanes/PKG/messages/read");
-    expect(fetchMock.mock.calls[0]?.[1]).toMatchObject({ method: "POST", body: JSON.stringify({ chat: KEY, readThrough: "2026-11-23T14:05:00.000Z" }) });
+    expect(fetchMock.mock.calls[0]?.[1]).toMatchObject({ method: "POST", body: JSON.stringify({ conn: CONN, chat: KEY, readThrough: "2026-11-23T14:05:00.000Z" }) });
     rerender(<MarkRead conn={CONN} laneId="PKG" chatKey={KEY} readThrough="2026-11-23T14:05:00.000Z" />);
     expect(fetchMock).toHaveBeenCalledTimes(1);
   });

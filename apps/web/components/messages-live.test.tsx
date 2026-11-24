@@ -171,7 +171,7 @@ describe("with working notices: the loop asks OUR database, never Microsoft", ()
     await tick(ACTIVITY_POLL_MS);
     expect(calls.chats).toBe(1);
     expect(calls.newer).toBe(1);
-    expect(calls.urls.find((u) => u.includes("/messages/newer"))).toBe(`GET /api/lanes/PKG/messages/newer?chat=${KEY}&since=${encodeURIComponent("2026-11-23T14:05:00.000Z")}`);
+    expect(calls.urls.find((u) => u.includes("/messages/newer"))).toBe(`GET /api/lanes/PKG/messages/newer?conn=${CONN}&chat=${KEY}&since=${encodeURIComponent("2026-11-23T14:05:00.000Z")}`);
     expect(calls.urls.find((u) => u.includes("/messages/chats"))).toBe(`GET /api/lanes/PKG/messages/chats?chat=${KEY}`);
     await tick(5 * 60_000);
     expect(calls.chats).toBe(1);
