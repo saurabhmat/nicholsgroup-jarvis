@@ -250,7 +250,7 @@ describe("what the approvals entry says, as the route's fixed answers (spec 17 t
   });
 
   it("the states: verified = sent; accepted but not read back, or in progress = checking; a definite refusal = not_sent with the fixed sentence; an unknown outcome = unknown", async () => {
-    const st = async (result: { status: string; failureCode?: string }) => json(await send(outcome({ kind: "result", result: { actionId: "a1", ...result } as never }), goodBody()));
+    const st = async (result: { status: string; failureCode?: string; externalId?: string }) => json(await send(outcome({ kind: "result", result: { actionId: "a1", ...result } as never }), goodBody()));
     expect(await st({ status: "verified" })).toEqual({ ok: true, state: "sent" });
     expect(await st({ status: "sent_unverified" })).toEqual({ ok: true, state: "checking" });
     // T-288 review (security L1): approved but not claimed by this request is NEVER "Sent, checking": the first request may still be running or may have died

@@ -1,12 +1,46 @@
-// T-288 review D4: the REAL one-step send (propose, approve, claim, execute, verify: `runTeamsSend`) behind the REAL route handler (`createTeamsRoutes(...).send`), over a stateful fake of the approvals
+// T-288 review D4: the REAL one-step send (`sendTeamsMessage` of `@nichols/approvals/wire`: propose, approve, claim, execute, verify, with the real `readFacts` and gates) behind the REAL route handler
+// (`createTeamsRoutes(...).send`, wired exactly as the route file wires it), with only the outside world replaced: the lane router (a stateful fake of the approvals
 // database functions that enforces the unique (connection, request id) rule and the single claim, and a counting fake writer. Two overlapping requests with the same request id make ONE action and ONE
 // POST; two different ids with the same text make TWO POSTs (the accepted case: they are two intended messages; two tabs can do this). Synthetic data only.
 import { randomUUID } from "node:crypto";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { runTeamsSend, teamsSendFailureText, teamsTextHash } from "@nichols/approvals/server";
+import { teamsSendFailureText, teamsTextHash } from "@nichols/approvals/server";
 
 const reader = vi.hoisted(() => ({ resolveCallTargets: vi.fn(), listMessages: vi.fn(), listChats: vi.fn(), openChat: vi.fn(), fetchHostedImage: vi.fn() }));
 vi.mock("@nichols/connectors/teams-reader", () => ({ ...reader }));
+// the database functions (a stateful fake, below), the audit log, and the Teams writer (counting); everything else in `wire.ts` is the real code
+const world = vi.hoisted(() => ({ rpc: (async () => ({ data: null, error: null })) as (fn: string, a: Record<string, unknown>) => Promise<unknown>, posts: [] as { connection: string; text: unknown }[], logged: [] as string[] }));
+vi.mock("@nichols/connectors/facade", () => ({ prepareEmailWrite: vi.fn(), laneMailboxes: vi.fn(), mailboxAllowed: vi.fn(), providerGate: { enabled: async () => true } }));
+vi.mock("@nichols/connectors/write", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@nichols/connectors/write")>()), // the pure parts (the text schema, the fixed sentences) are the real ones
+  loadTeamsWriteConnection: async (_l: string, id: string) => ({ id }),
+  teamsMessageReconciler: { findWrite: vi.fn(), verifyWrite: async () => undefined },
+  teamsMessageWriter: {
+    async executeWrite(_l: unknown, c: { id: string }, action: { payload: { text: unknown } }) {
+      world.posts.push({ connection: c.id, text: action.payload.text });
+      await new Promise((r) => setTimeout(r, 20)); // the POST takes a moment: a second request overlaps it
+      return { outcome: "accepted", external_id: `g${world.posts.length}`, executed_at: new Date().toISOString(), provider_tid: null };
+    },
+  },
+}));
+vi.mock("@nichols/core/lane-router", () => ({
+  getAudit: () => ({ log: async (e: unknown) => void world.logged.push(JSON.stringify(e)) }),
+  getLaneJobClient: async () => laneClient(),
+}));
+const laneClient = () => ({
+  schema: () => ({
+    rpc: (fn: string, a: Record<string, unknown>) => world.rpc(fn, a),
+    from: (table: string) => ({
+      select: () => ({
+        eq: () => ({
+          eq: () => ({ maybeSingle: async () => ({ data: { provider: "microsoft_teams", external_account_id: "robert@pubkgroup.com", status: "active", features: { teams_chat_send: true }, owner_user_id: ME }, error: null }) }),
+          maybeSingle: async () => ({ data: table === "lane_policies" ? { write_actions_allowed: ["teams_send"], store_outbound_drafts: true } : { config: { approvals: { approvals_live: true }, teams: { enabled: true, features: ["chat_send"] } } }, error: null }),
+        }),
+      }),
+    }),
+  }),
+});
+import { sendTeamsMessage, teamsStepUpWindow } from "@nichols/approvals/wire";
 
 import { createTeamsRoutes } from "@/lib/teams-api";
 import { createWindowLimiter } from "@/lib/teams-activity";
@@ -86,37 +120,20 @@ function database() {
 
 function setup() {
   const db = database();
-  const posts: { connection: string; text: unknown }[] = [];
-  const logged: string[] = [];
-  const deps = {
-    jobRpc: async () => db.rpc,
-    prepareEmailWrite: async () => {
-      throw new Error("not used");
-    },
-    laneMailboxes: async () => [],
-    mailboxAllowed: async () => false,
-    readFacts: async () => ({ mailbox: null, composeGranted: false, writeActionsAllowed: ["teams_send"], approvalsLive: true, stepUpMaxAgeS: 300, storeOutboundDrafts: true, teams: { ownerUserId: ME, chatSend: true, channelsSend: false, laneChatSend: true, connChatSend: true } }),
-    audit: { log: async (e: unknown) => void logged.push(JSON.stringify(e)) },
-    loadWriteConnection: async () => ({ id: CONN }) as never,
-    writer: {
-      async executeWrite(_l: unknown, c: unknown, action: { payload: { text: unknown } }) {
-        posts.push({ connection: (c as { id: string }).id, text: action.payload.text });
-        await new Promise((r) => setTimeout(r, 20)); // the POST takes a moment: a second request overlaps it
-        return { outcome: "accepted", external_id: `g${posts.length}`, executed_at: new Date().toISOString(), provider_tid: null };
-      },
-      async verifyWrite() {},
-    },
-  };
-  const client = { schema: () => ({ rpc: db.rpc }) };
+  world.rpc = db.rpc;
+  world.posts.length = 0;
+  world.logged.length = 0;
+  const client = laneClient();
   const routes = createTeamsRoutes({
     guards: async () => ({ requireLane: async () => ({ client, session: { userId: ME } }) as never, requireRole: async () => ({ client, session: { userId: ME } }) as never, requireStepUp: (async () => ({})) as never }),
     gate: async () => ({ limited: false, newsShown: true, visible: () => true }),
     rows: async () => [{ id: CONN, account: "robert@pubkgroup.com", state: "connected", mine: true, has: ["chat_read", "chat_send"] }] as never,
-    send: { window: async () => 28800, run: (ctx, input) => runTeamsSend(deps as never, ctx, input), failureText: teamsSendFailureText, limiter: createWindowLimiter(1000, 1000) },
+    // wired exactly as app/api/lanes/[laneId]/messages/send/route.ts wires it (a permissive limiter: the rate limit is not what is under test)
+    send: { window: teamsStepUpWindow, run: sendTeamsMessage, failureText: teamsSendFailureText, limiter: createWindowLimiter(1000, 1000) },
   });
   const request = (clientRequestId: string, text = TEXT) =>
     routes.send(new Request("http://localhost:3000/api/lanes/PKG/messages/send", { method: "POST", headers: { "content-type": "application/json", origin: "http://localhost:3000", "sec-fetch-site": "same-origin" }, body: JSON.stringify({ conn: CONN, chat: KEY, text, textSha256: teamsTextHash(text), clientRequestId }) }), "PKG");
-  return { db, posts, logged, request };
+  return { db, posts: world.posts, logged: world.logged, request };
 }
 
 beforeEach(() => {

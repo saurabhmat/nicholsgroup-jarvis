@@ -32,4 +32,3 @@ export type { ActionRow, ActionStatus, ActionType, QboActionType, TeamsActionTyp
 // action.reconcile_stuck (T-192); the wired sweep is `reconcileStuckLane` in `@nichols/approvals/wire`.
 export { RECONCILE_BATCH, reconcileStuckActions } from "./reconcile";
 export type { ActionReconciler, ReconcileDecision, ReconcileDeps, ReconcileInput, ReconcileSummary } from "./reconcile";
-export { sendTeamsMessage as runTeamsSend } from "./teams-send"; // T-288 review D4: the same one-step send with its dependencies passed in (the writer stays private to `wire.ts`; nothing here can post by itself)

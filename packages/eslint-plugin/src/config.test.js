@@ -92,6 +92,8 @@ const cases = [
   ["approveAndExecuteTeamsAction in the T-288 send route", `import { approveAndExecuteTeamsAction } from "@nichols/approvals/wire";`, "apps/web/app/api/lanes/[laneId]/messages/send/route.ts", undefined],
   ["executeApprovedTeamsAction in another route", `import { executeApprovedTeamsAction } from "@nichols/approvals/wire";`, "apps/web/app/api/lanes/[laneId]/messages/read/route.ts", "nichols/no-restricted-names"],
   ["sendTeamsMessage in the T-288 send route", `import { sendTeamsMessage } from "@nichols/approvals/wire";`, "apps/web/app/api/lanes/[laneId]/messages/send/route.ts", undefined],
+  ["sendTeamsMessage in the one combined double-press test", `import { sendTeamsMessage } from "@nichols/approvals/wire";`, "apps/web/tests/teams-send-combined.test.ts", undefined],
+  ["sendTeamsMessage in another web test", `import { sendTeamsMessage } from "@nichols/approvals/wire";`, "apps/web/tests/teams-send-route.test.ts", "nichols/no-restricted-names"],
   ["sendTeamsMessage in the Messages API logic", `import { sendTeamsMessage } from "@nichols/approvals/wire";`, "apps/web/lib/teams-api.ts", "nichols/no-restricted-names"],
   ["sendTeamsMessage in another route", `import { sendTeamsMessage } from "@nichols/approvals/wire";`, "apps/web/app/api/lanes/[laneId]/messages/read/route.ts", "nichols/no-restricted-names"],
   ["sendTeamsMessage in a component", `import { sendTeamsMessage } from "@nichols/approvals/wire";`, "apps/web/components/messages-composer.tsx", "nichols/no-restricted-names"],

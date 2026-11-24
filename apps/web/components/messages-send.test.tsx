@@ -334,11 +334,11 @@ describe("a stale authenticator code: the person enters it and comes back to the
 
   it("the copy is per conversation: another chat or another account's composer never shows it", async () => {
     teamsDrafts.write("PKG", USER, `${CONN}:${KEY}`, { text: "for this chat" });
-    render(<SendScope><Composer laneId="PKG" conn="00000000-0000-4000-8000-0000000000c2" chatKey={KEY} account="robert@pub-k.org" userId={USER} /></SendScope>);
+    render(<Chat conn="00000000-0000-4000-8000-0000000000c2" account="robert@pub-k.org" />);
     await settle();
     expect((screen.getByTestId("composer-text") as HTMLTextAreaElement).value).toBe("");
     cleanup();
-    render(<SendScope><Composer laneId="PKG" conn={CONN} chatKey={KEY} account={ACCOUNT} userId="00000000-0000-4000-8000-0000000000bb" /></SendScope>);
+    render(<Chat user="00000000-0000-4000-8000-0000000000bb" />);
     await settle();
     expect((screen.getByTestId("composer-text") as HTMLTextAreaElement).value).toBe(""); // another person on this tab
   });
