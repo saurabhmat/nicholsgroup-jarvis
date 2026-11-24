@@ -33,22 +33,6 @@ describe("Enable Teams runbook", () => {
     expect(parseLaneConfig({ teams: { enabled: true, tenant_ids: [T], allowed_domains: [D] } }).teams?.max_accounts_per_person).toBe(1);
   });
 
-  it("T-294: the SQL pair for the number (gitignored; checked only where present) sets exactly one key, keeps its values in one block, refuses a second run", () => {
-    const run = join(DIR, "teams-accounts-limit-H-085.sql");
-    const check = join(DIR, "check-teams-accounts-limit-H-085.sql");
-    if (!existsSync(run) || !existsSync(check)) return;
-    const sql = readFileSync(run, "utf8");
-    expect(sql).toMatch(/'\{teams,max_accounts_per_person\}'/);
-    expect(sql).toMatch(/\? 'max_accounts_per_person'/); // refuses when the key exists
-    expect(sql).toMatch(/v_deployed <> 'DEPLOYED'/);
-    // every value is typed once: the lane code appears once in each file
-    const lane = /'(PASTE-LANE-CODE|[A-Z]{1,8})'[,;]?\s+-- VALUE 1/g;
-    expect(sql.match(lane)).toHaveLength(1);
-    expect(readFileSync(check, "utf8").match(lane)).toHaveLength(1);
-    expect((sql.match(/v_lane\b/g) ?? []).length).toBeGreaterThan(3); // used by name everywhere else
-    // no cast sits on a value line (a value pasted over a ::text cast is how an earlier file broke)
-    for (const line of sql.split("\n").filter((l) => /VALUE [123]:/.test(l))) expect(line).not.toMatch(/::/);
-  });
 
   it("added to a Google-mail lane, a Microsoft-mail lane and a limited mail-only lane it changes nothing else", () => {
     const bases: Record<string, unknown>[] = [
@@ -65,18 +49,39 @@ describe("Enable Teams runbook", () => {
     }
   });
 
-  it("the SQL pair (gitignored; checked only where present) builds the same block and never edits an existing one", () => {
-    const run = join(DIR, "enable-lane-teams-T-280.sql");
-    const check = join(DIR, "check-enable-lane-teams-T-280.sql");
-    if (!existsSync(run) || !existsSync(check)) return;
-    const sql = readFileSync(run, "utf8");
-    // The operator's FILLED copy holds a real tenant id (that is what it is for): only the template is checked here.
-    if (!/v_lane\s+constant text\s+:= 'PASTE-LANE-CODE'/.test(sql)) return;
+  it("the runbook itself (committed) names the SQL pair, the order and the way back, for the Teams enable step and for the several-accounts step", () => {
+    const md = readFileSync(RUNBOOK, "utf8");
+    for (const name of ["enable-lane-teams-T-280.sql", "check-enable-lane-teams-T-280.sql", "teams-accounts-limit-H-085.sql", "check-teams-accounts-limit-H-085.sql", "part-37-T-294.sql"]) expect(md, name).toContain(name);
+    expect(md).toContain("DEPLOYED");
+    expect(md).toMatch(/a new insert-only (settings )?version without the key/); // the way back if the number was set before the deploy
+  });
+
+  // The two gitignored operator copies. A copy that is still a TEMPLATE (a placeholder lane) is checked; a copy the operator has FILLED IN (it holds real values) is reported as skipped, visibly,
+  // and is never read for its values: this test never passes or fails because of what the operator typed.
+  const readIf = (file: string): string | null => (existsSync(join(DIR, file)) ? readFileSync(join(DIR, file), "utf8") : null);
+  const enableSql = readIf("enable-lane-teams-T-280.sql");
+  const limitSql = readIf("teams-accounts-limit-H-085.sql");
+  const limitCheck = readIf("check-teams-accounts-limit-H-085.sql");
+  const isTemplate = (sql: string | null) => sql !== null && /constant text\s+:= 'PASTE-LANE-CODE'/.test(sql);
+
+  it.skipIf(!isTemplate(enableSql))("the T-280 SQL (template copy): builds the same block and never edits an existing one", () => {
+    const sql = enableSql as string;
     for (const key of ["'enabled', true", "'cloud', 'commercial'", "'tenant_ids'", "'allowed_domains'", "'features'"]) expect(sql).toContain(key);
     expect(sql).toMatch(/v_cur \? 'teams'/);
-    // the file is either the template (a placeholder) or the operator's filled copy on this machine (a lane code): both have the lane in the one block
-    expect(sql).toMatch(/v_lane\s+constant text\s+:= '(PASTE-LANE-CODE|[A-Z]{1,8})'/);
-    expect(sql.replace("9188040d-6c67-4c5b-b112-36a304b66dad", "")).not.toMatch(/[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[0-9a-f]{4}-[0-9a-f]{12}/); // no tenant id but Microsoft's fixed personal-account tenant (refused on purpose) is in the file
-    expect(readFileSync(check, "utf8")).toMatch(/'(PASTE-LANE-CODE|[A-Z]{1,8})'/);
+    expect(sql.replace("9188040d-6c67-4c5b-b112-36a304b66dad", "")).not.toMatch(/[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[0-9a-f]{4}-[0-9a-f]{12}/); // no tenant id but Microsoft's fixed personal-account tenant (refused on purpose)
+  });
+
+  it.skipIf(!isTemplate(limitSql) || limitCheck === null || !/'PASTE-LANE-CODE'/.test(limitCheck))("the several-accounts SQL pair (template copies): sets exactly one key, keeps its values in one block, refuses a second run", () => {
+    const sql = limitSql as string;
+    expect(sql).toMatch(/'\{teams,max_accounts_per_person\}'/);
+    expect(sql).toMatch(/\? 'max_accounts_per_person'/); // refuses when the key exists
+    expect(sql).toMatch(/v_deployed <> 'DEPLOYED'/);
+    // every value is typed once: the lane code appears once in each file
+    const lane = /'PASTE-LANE-CODE'[,;]?\s+-- VALUE 1/g;
+    expect(sql.match(lane)).toHaveLength(1);
+    expect((limitCheck as string).match(lane)).toHaveLength(1);
+    expect((sql.match(/v_lane\b/g) ?? []).length).toBeGreaterThan(3); // used by name everywhere else
+    // no cast sits on a value line (a value pasted over a ::text cast is how an earlier file broke)
+    for (const line of sql.split("\n").filter((l) => /VALUE [123]:/.test(l))) expect(line).not.toMatch(/::/);
   });
 });

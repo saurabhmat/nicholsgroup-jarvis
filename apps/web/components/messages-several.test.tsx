@@ -88,8 +88,8 @@ describe.each(WIDTHS)("two accounts at %ipx", (width) => {
     );
     const lines = screen.getAllByTestId("account-note").map((l) => l.textContent);
     expect(lines[0]).toContain("pubkgroup.com: Your Teams sign-in expired.");
-    expect(lines[1]).toBe("pub-k.org: Teams is busy; try again in 7 seconds.");
-    expect(lines[2]).toBe("third.test: Teams could not be reached.");
+    expect(lines[1]).toMatch(/^pub-k\.org: Teams is busy; try again in 7 seconds\./);
+    expect(lines[2]).toMatch(/^third\.test: Teams could not be reached\./);
     const reconnect = screen.getByRole("button", { name: "Reconnect pubkgroup.com" });
     expect(reconnect.closest("form")?.getAttribute("action")).toBe(`/api/connect/teams/start?lane=PKG&connection=${A}`);
     expect(screen.getAllByRole("button", { name: /^Reconnect / })).toHaveLength(1); // only the expired one has a button
@@ -129,6 +129,7 @@ describe.each(WIDTHS)("two accounts at %ipx", (width) => {
 describe("live: a notice of ONE account (test 32)", () => {
   const calls = { urls: [] as string[], seenBodies: [] as unknown[] };
   let notices: Record<string, string | null>;
+  let failConn: string | null = null;
   const msg = (id: string, at: string): MessageView => ({ id, images: null, at, time: "9:05 AM", fullTime: "x", day: at.slice(0, 10), sender: "Pat", mine: false, edited: false, deleted: false, system: false, nodes: [{ t: "text", v: id }], truncated: false, attachments: [] });
   const json = (status: number, body: unknown) => Promise.resolve(new Response(status === 204 ? null : JSON.stringify(body), { status, headers: { "content-type": "application/json" } }));
   const fetchMock = vi.fn((url: string, init?: RequestInit) => {
@@ -144,6 +145,7 @@ describe("live: a notice of ONE account (test 32)", () => {
     }
     if (u.includes("/messages/chats")) {
       const conn = new URL(`http://x${u}`).searchParams.get("conn");
+      if (conn !== null && conn === failConn) return json(503, { error: "unavailable" });
       const rows = conn === B ? [row(B, ONLY_B, "Only B new"), row(B, SHARED, "Shared chat")] : [row(A, SHARED, "Shared chat")];
       return json(200, { rows, moreCursor: null, notes: [], listed: conn === null ? [A, B] : [conn], dropped: true });
     }
@@ -170,6 +172,7 @@ describe("live: a notice of ONE account (test 32)", () => {
     calls.urls = [];
     calls.seenBodies = [];
     notices = {};
+    failConn = null;
     resetDotForTests();
     fetchMock.mockClear();
   });
@@ -208,5 +211,63 @@ describe("live: a notice of ONE account (test 32)", () => {
     await tick(ACTIVITY_POLL_MS);
     expect(calls.urls.filter((u) => u.includes("/messages/chats")).every((u) => u.includes(`conn=${A}`))).toBe(true);
     expect(calls.urls.some((u) => u.includes("/messages/newer"))).toBe(false);
+  });
+
+  it("M5: when one account's re-read fails, 'seen' is posted only for the account that loaded (decided from the answers, not inside a state updater), and the page says the refresh failed", async () => {
+    await draw(A);
+    calls.seenBodies = [];
+    failConn = A;
+    notices[A] = "2026-11-23T15:00:20.000Z";
+    notices[B] = "2026-11-23T15:00:20.000Z";
+    await tick(ACTIVITY_POLL_MS);
+    expect(calls.seenBodies).toEqual([{ conns: [B] }]);
+    expect(screen.getByTestId("chat-list-refresh-failed")).toBeTruthy();
+  });
+
+  it("M3: 'Try again' on an account's line reads just that account (`chats?conn=`); a busy account is not asked before the seconds it was given; Refresh inside the first minute is not 'up to date' while a line is showing", async () => {
+    render(
+      <MessagesLiveProvider laneId="PKG" expectLists>
+        <ChatListLive laneId="PKG" initialRows={[row(A, SHARED, "Shared chat")]} moreCursor={null} selectedKey={null} more={null} initialListed={[A]}
+          initialNotes={[{ conn: B, label: "pub-k.org", kind: "busy", seconds: 7 }]} />
+      </MessagesLiveProvider>,
+    );
+    await tick(0);
+    calls.urls = [];
+    const retry = screen.getByRole("button", { name: "Try again: pub-k.org" });
+    await act(async () => void retry.click());
+    expect(calls.urls.filter((u) => u.includes("/messages/chats"))).toEqual([]); // too early: said, not asked
+    expect(screen.getByTestId("account-note-wait").textContent).toMatch(/can try again in \d+ seconds/);
+    await tick(8_000);
+    await act(async () => void screen.getByRole("button", { name: "Try again: pub-k.org" }).click());
+    const chats = calls.urls.filter((u) => u.includes("/messages/chats"));
+    expect(chats).toHaveLength(1);
+    expect(chats[0]).toContain(`conn=${B}`);
+    // the answer cleared the line (the fake answers with no notes)
+    expect(screen.queryByTestId("account-note")).toBeNull();
+  });
+
+  it("M3: Refresh pressed inside the first minute, while an account's line is showing, reads every account at once and never says 'Already up to date'", async () => {
+    render(
+      <MessagesLiveProvider laneId="PKG" expectLists>
+        <ChatListLive laneId="PKG" initialRows={[row(A, SHARED, "Shared chat")]} moreCursor={null} selectedKey={null} more={null} initialListed={[A]}
+          initialNotes={[{ conn: B, label: "pub-k.org", kind: "unreachable", seconds: null }]} />
+      </MessagesLiveProvider>,
+    );
+    await tick(0);
+    calls.urls = [];
+    await act(async () => void screen.getByTestId("chat-list-refresh").click());
+    await tick(0);
+    expect(calls.urls.filter((u) => u.includes("/messages/chats"))).toHaveLength(1);
+    expect(screen.getByTestId("chat-list-refresh-note").textContent).toBe("");
+  });
+
+  it("the re-read of the list names the open account (`open=`) so only that account's row of a shared chat is not unread", async () => {
+    await draw(A);
+    calls.urls = [];
+    notices[B] = "2026-11-23T15:00:20.000Z";
+    await tick(ACTIVITY_POLL_MS);
+    const chats = calls.urls.find((u) => u.includes("/messages/chats")) ?? "";
+    expect(chats).toContain(`open=${A}`);
+    expect(chats).toContain(`chat=${SHARED}`);
   });
 });

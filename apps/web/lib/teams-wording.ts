@@ -120,3 +120,5 @@ export const MESSAGES_CONNECTED_AS_SEVERAL = "Your Teams accounts are connected.
 export const MESSAGES_ACCOUNT_STATE_OK = "Connected";
 export const MESSAGES_ACCOUNT_STATE_DEGRADED = "Connected, with problems";
 export const MESSAGES_ACCOUNT_STATE_RECONNECT = "Sign-in expired";
+export const messagesRefreshWaitSecondsText = (seconds: number): string => `Teams asked to wait. You can try again in ${String(Math.max(1, Math.ceil(seconds)))} seconds.`;
+export const MESSAGES_PICK_ACCOUNT_TEXT = "This link does not say which Teams account the chat belongs to. Pick the chat from the list.";

@@ -435,7 +435,8 @@ per account, each labelled with its account (decision D-70); nothing is merged a
 2. **Run `check-teams-accounts-limit-H-085.sql`** with the same lane and number (one block at the top). *Expect:* every row `true`, and one count row at the end (the Teams connections of the lane).
 3. **Each person adds the second account:** Settings -> Connections -> Your Teams accounts -> **Connect another Teams account**, then on Microsoft's page choose "Use another account" and sign in with the second one.
    If Microsoft signs the first account in again, the portal says "That Teams account was already connected": sign out of the other account at Microsoft (or use a private window) and try again.
-4. **Lowering the number later** never disconnects or pauses anything: both accounts keep working; the person just cannot add another until they are under the new number.
+4. **If you typed DEPLOYED too early** (the older deployment then reads the new key as malformed and pauses Teams for the company: it fails safe, nothing is lost), back out with a new insert-only version without the key: the same file's pattern, `core.lane_config` gets the previous settings again as the next version number (ask the agent for the SQL, or deploy first and the pause ends at once).
+5. **Lowering the number later** never disconnects or pauses anything: both accounts keep working; the person just cannot add another until they are under the new number.
 
 What the block looks like after step 1 (the file writes it; the app refuses a block it cannot read and treats it as Teams off):
 

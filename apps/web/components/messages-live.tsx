@@ -15,7 +15,7 @@ import { ACTIVITY_POLL_MS, FIRST_ANSWER_BACKOFF_MS, FIRST_ANSWER_FAILURES_BEFORE
 import { hrefFor } from "@/lib/messages-href";
 import type { AccountNote, ChatRowView } from "@/lib/teams-chats";
 import { replaceAccountRows } from "@/lib/teams-row-order";
-import { MESSAGES_ACCOUNT_CHANGED_TEXT, MESSAGES_EMPTY_LIST_TEXT, MESSAGES_REFRESH_FAILED_TEXT, messagesAccountBusyText, messagesAccountExpiredText, messagesAccountUnreachableText, messagesReconnectAccountLabel, messagesRefreshWaitText } from "@/lib/teams-wording";
+import { MESSAGES_ACCOUNT_CHANGED_TEXT, MESSAGES_EMPTY_LIST_TEXT, MESSAGES_REFRESH_FAILED_TEXT, messagesAccountBusyText, messagesAccountExpiredText, messagesAccountUnreachableText, messagesReconnectAccountLabel, messagesRefreshWaitSecondsText, messagesRefreshWaitText } from "@/lib/teams-wording";
 import { Button, EmptyState } from "@nichols/ui";
 import { ChatListRows, SignIn } from "./messages-view";
 import Link from "next/link";
@@ -32,8 +32,13 @@ export type LiveApi = {
   conns: readonly string[] | null;
   /** The last answer from the database said notices work. */
   live: boolean;
-  /** A person's action asks for a re-read: allowed at most once per REFETCH_MIN_GAP_MS. */
+  /**
+   * A person's action asks for a re-read: allowed at most once per REFETCH_MIN_GAP_MS, EXCEPT while an account's list has not loaded (`setListIncomplete`): then the page is not "up to date" and a Refresh is
+   * never held back or told so (the routes' own per-person limiter still bounds it).
+   */
   requestRefresh(reason: "refresh" | "focus"): { ok: true } | { ok: false; waitSeconds: number };
+  /** The chat list tells the provider whether an account's list is missing (a line "could not be reached / busy / sign-in expired" is showing). */
+  setListIncomplete(incomplete: boolean): void;
   /**
    * The chat list was read (on the page's own load or again): the person has seen it (`teams_activity_seen`), for the connections whose list WAS read (T-295: an account whose read failed keeps its
    * dot). Without the names: every usable connection (the one-account page).
@@ -72,7 +77,7 @@ export function MessagesLiveProvider({ laneId, children, expectLists = false }: 
   const [state, setState] = useState<{ version: number; reason: LiveReason | null; live: boolean; conns: readonly string[] | null }>({ version: 0, reason: null, live: false, conns: null });
   // `at`: when Microsoft was last read for this page (the page's own load counts as the first read), in the browser's clock; used only for the once-a-minute bound.
   // `notices`: the latest notice time of each connection as the database last said (per account, so only the account that moved is read again); `lastNotice` is the aggregate for an older server.
-  const r = useRef({ at: 0, lastNotice: null as string | null, live: false, begun: false, notices: new Map<string, string | null>(), listed: new Set<string>() });
+  const r = useRef({ at: 0, lastNotice: null as string | null, live: false, begun: false, incomplete: false, notices: new Map<string, string | null>(), listed: new Set<string>() });
   const bump = useCallback((reason: LiveReason, conns: readonly string[] | null = null) => {
     r.current.at = Date.now();
     setState((s) => ({ ...s, version: s.version + 1, reason, conns }));
@@ -217,9 +222,12 @@ export function MessagesLiveProvider({ laneId, children, expectLists = false }: 
       reason: state.reason,
       conns: state.conns,
       live: state.live,
+      setListIncomplete(incomplete) {
+        r.current.incomplete = incomplete;
+      },
       requestRefresh(reason) {
         const wait = REFETCH_MIN_GAP_MS - (Date.now() - r.current.at);
-        if (wait > 0) return { ok: false, waitSeconds: Math.ceil(wait / 1000) };
+        if (!r.current.incomplete && wait > 0) return { ok: false, waitSeconds: Math.ceil(wait / 1000) };
         bump(reason);
         return { ok: true };
       },
@@ -238,11 +246,13 @@ export function MessagesLiveProvider({ laneId, children, expectLists = false }: 
 }
 
 // ---- the chat list that can read itself again
-type ListState = { rows: ChatRowView[]; moreCursor: string | null; notes: AccountNote[]; dropped: boolean; failed: boolean };
+/** A line for an account that did not answer; `retryAt` (a busy account: not before this time) is set where the answer is received, never while rendering. */
+type TimedNote = AccountNote & { retryAt?: number };
+type ListState = { rows: ChatRowView[]; moreCursor: string | null; notes: TimedNote[]; dropped: boolean; failed: boolean };
 type ChatsAnswer = { rows?: ChatRowView[]; moreCursor?: string | null; notes?: AccountNote[]; listed?: string[]; dropped?: boolean };
 
 /** One plain line per account that did not answer (T-295, spec 22.5), with what the person can do about it. */
-export function AccountNotes({ laneId, notes, dropped }: { laneId: string; notes: readonly AccountNote[]; dropped: boolean }) {
+export function AccountNotes({ laneId, notes, dropped, onRetry, retryNote }: { laneId: string; notes: readonly AccountNote[]; dropped: boolean; /** Reads just that account's list again ("Try again"); absent where no list is drawn. */ onRetry?: (note: AccountNote & { retryAt?: number }) => void; /** What a retry said (a "busy" account is not asked before the seconds Microsoft gave), by connection. */ retryNote?: Readonly<Record<string, string>> }) {
   if (notes.length === 0 && !dropped) return null;
   return (
     <div className="flex flex-col gap-2" data-testid="account-notes">
@@ -252,6 +262,16 @@ export function AccountNotes({ laneId, notes, dropped }: { laneId: string; notes
             {n.kind === "reconnect" ? messagesAccountExpiredText(n.label) : n.kind === "busy" ? messagesAccountBusyText(n.label, n.seconds) : messagesAccountUnreachableText(n.label)}
           </span>
           {n.kind === "reconnect" ? <SignIn laneId={laneId} connectionId={n.conn} label={messagesReconnectAccountLabel(n.label)} /> : null}
+          {n.kind !== "reconnect" && onRetry ? (
+            <Button type="button" variant="outline" size="sm" onClick={() => onRetry(n)} data-testid="account-note-retry" aria-label={`Try again: ${n.label}`}>
+              Try again
+            </Button>
+          ) : null}
+          {retryNote?.[n.conn] ? (
+            <span role="status" data-testid="account-note-wait" className="text-muted-foreground">
+              {retryNote[n.conn]}
+            </span>
+          ) : null}
         </div>
       ))}
       {dropped ? (
@@ -302,9 +322,9 @@ export function ChatListLive({
     setState({ rows: initialRows, moreCursor, notes: initialNotes, dropped: initialDropped, failed: false });
   }
   const [note, setNote] = useState<string | null>(null);
-  const latest = useRef({ selectedKey, more, listRefreshed: live?.listRefreshed });
+  const latest = useRef({ selectedKey, selectedConn, more, listRefreshed: live?.listRefreshed });
   useEffect(() => {
-    latest.current = { selectedKey, more, listRefreshed: live?.listRefreshed };
+    latest.current = { selectedKey, selectedConn, more, listRefreshed: live?.listRefreshed };
   });
   // The page drew these lists: tell the live provider which accounts' lists were read, so exactly those are marked seen (an account that failed keeps its dot).
   const reported = useRef<string | null>(null);
@@ -315,18 +335,27 @@ export function ChatListLive({
     reported.current = k;
     latest.current.listRefreshed?.(initialListed);
   }, [initialListed]);
-  useOnLiveRefetch((reason, conns) => {
-    const ac = new AbortController();
-    // a notice of some accounts: only those are read; anything else (Refresh, focus, an older server): every account in one request
-    const targets: (string | null)[] = reason === "notice" && conns !== null && conns.length > 0 ? [...conns] : [null];
-    void (async () => {
+  // the Refresh button is never "up to date" while an account's list is missing
+  const incomplete = state.notes.length > 0;
+  useEffect(() => {
+    live?.setListIncomplete(incomplete);
+    return () => live?.setListIncomplete(false);
+  }, [live, incomplete]);
+
+  /**
+   * Reads the lists again: `targets` are accounts (`?conn=`), or `null` for every account in one request. The result (which accounts loaded, whether something failed) is computed here from the
+   * answers, OUTSIDE any state updater (React may run an updater later or twice); the updater only applies it.
+   */
+  const readAgain = useCallback(
+    async (targets: (string | null)[], signal: AbortSignal): Promise<void> => {
       const ask = async (conn: string | null): Promise<{ conn: string | null; answer: ChatsAnswer | null }> => {
         try {
           const q = new URLSearchParams();
           if (conn !== null) q.set("conn", conn);
           if (latest.current.selectedKey) q.set("chat", latest.current.selectedKey);
+          if (latest.current.selectedKey && latest.current.selectedConn) q.set("open", latest.current.selectedConn); // the account of the open chat: its row is the one that is not unread
           if (latest.current.more) q.set("more", latest.current.more);
-          const res = await fetch(`/api/lanes/${encodeURIComponent(laneId)}/messages/chats${q.toString() === "" ? "" : `?${q.toString()}`}`, { credentials: "same-origin", cache: "no-store", signal: ac.signal });
+          const res = await fetch(`/api/lanes/${encodeURIComponent(laneId)}/messages/chats${q.toString() === "" ? "" : `?${q.toString()}`}`, { credentials: "same-origin", cache: "no-store", signal });
           if (!res.ok) return { conn, answer: null };
           const b = (await res.json()) as ChatsAnswer;
           return { conn, answer: Array.isArray(b.rows) ? b : null };
@@ -335,33 +364,55 @@ export function ChatListLive({
         }
       };
       const answers = await Promise.all(targets.map(ask));
-      if (ac.signal.aborted) return;
-      let failed = false;
-      const listed: string[] = [];
+      if (signal.aborted) return;
+      const failed = answers.some((x) => x.answer === null);
+      const listed = answers.flatMap((x) => (x.answer === null ? [] : (x.answer.listed ?? [])));
+      const anyOk = answers.some((x) => x.answer !== null);
       setState((s) => {
         let next = s;
         for (const { conn, answer } of answers) {
-          if (answer === null) {
-            failed = true;
-            continue;
-          }
+          if (answer === null) continue;
           const rows = answer.rows as ChatRowView[];
+          const received = Date.now();
+          const timed: TimedNote[] = (answer.notes ?? []).map((n) => (n.kind === "busy" && n.seconds !== null ? { ...n, retryAt: received + n.seconds * 1000 } : n));
           if (conn === null) {
-            next = { rows, moreCursor: typeof answer.moreCursor === "string" ? answer.moreCursor : null, notes: answer.notes ?? [], dropped: answer.dropped === true, failed: false };
-            listed.push(...(answer.listed ?? []));
+            next = { rows, moreCursor: typeof answer.moreCursor === "string" ? answer.moreCursor : null, notes: timed, dropped: answer.dropped === true, failed: false };
           } else {
             // one account was read again: its rows are replaced, its note is replaced, everything else stays (a cursor of the whole list is not this answer's to change)
-            next = { ...next, rows: replaceAccountRows(next.rows, conn, rows), notes: [...next.notes.filter((n) => n.conn !== conn), ...(answer.notes ?? [])], failed: false };
-            listed.push(...(answer.listed ?? []));
+            next = { ...next, rows: replaceAccountRows(next.rows, conn, rows), notes: [...next.notes.filter((n) => n.conn !== conn), ...timed], failed: false };
           }
         }
         return failed ? { ...next, failed: true } : next;
       });
       // an answer that names no accounts (an older server) is a list read for every usable one
-      if (answers.some((x) => x.answer !== null)) latest.current.listRefreshed?.(listed.length > 0 ? listed : undefined);
-    })();
+      if (anyOk) latest.current.listRefreshed?.(listed.length > 0 ? listed : undefined);
+    },
+    [laneId],
+  );
+  useOnLiveRefetch((reason, conns) => {
+    const ac = new AbortController();
+    // a notice of some accounts: only those are read; anything else (Refresh, focus, an older server): every account in one request
+    const targets: (string | null)[] = reason === "notice" && conns !== null && conns.length > 0 ? [...conns] : [null];
+    void readAgain(targets, ac.signal);
     return () => ac.abort();
   });
+  // "Try again" on an account's line: read just that account (counted by the same per-person limit as any re-read). A busy account is not asked before the seconds Microsoft gave.
+  const [waits, setWaits] = useState<Record<string, string>>({});
+  // when the notes of the server's own page arrived (set after render, in an effect); notes from a re-read carry their own `retryAt`
+  const seededAt = useRef(0);
+  useEffect(() => {
+    seededAt.current = Date.now();
+  }, [initialNotes]);
+  const retry = (n: TimedNote) => {
+    const notBefore = n.retryAt ?? (n.kind === "busy" && n.seconds !== null ? seededAt.current + n.seconds * 1000 : 0);
+    const left = Math.ceil((notBefore - Date.now()) / 1000);
+    if (left > 0) {
+      setWaits((w) => ({ ...w, [n.conn]: messagesRefreshWaitSecondsText(left) }));
+      return;
+    }
+    setWaits((w) => Object.fromEntries(Object.entries(w).filter(([k]) => k !== n.conn)));
+    void readAgain([n.conn], new AbortController().signal);
+  };
   const refresh = () => {
     if (!live) return;
     const r = live.requestRefresh("refresh");
@@ -380,7 +431,7 @@ export function ChatListLive({
           </span>
         </div>
       ) : null}
-      <AccountNotes laneId={laneId} notes={state.notes} dropped={state.dropped} />
+      <AccountNotes laneId={laneId} notes={state.notes} dropped={state.dropped} onRetry={retry} retryNote={waits} />
       {state.failed ? (
         <p role="alert" data-testid="chat-list-refresh-failed" className="text-small text-alert-foreground">
           {MESSAGES_REFRESH_FAILED_TEXT}

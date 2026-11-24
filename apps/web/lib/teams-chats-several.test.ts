@@ -239,8 +239,71 @@ describe("partial failure (spec 22.5)", () => {
     expect(await loadChatLists(person(), [{ ...SRC_A, label: null }], { selectedKey: null })).toEqual({ kind: "busy", seconds: 7 });
   });
 
-  it("an unreadable markers query is 'could not load', never 'everything is read'", async () => {
-    answer({ [A]: { chats: [chat("19:a1@thread.v2", "2026-11-23T15:00:00Z")], nextCursor: null, self }, [B]: { chats: [], nextCursor: null, self } });
-    expect(await loadChatLists(person(client({}, { code: "XX000" })), [SRC_A, SRC_B], { selectedKey: null })).toEqual({ kind: "unavailable" });
+  it("L1: an unreadable markers query (a deploy before part 37, an outage) does NOT hide the lists: unread falls back to Teams' own read time, one content-free line is logged", async () => {
+    answer({ [A]: { chats: [chat("19:a1@thread.v2", "2026-11-23T15:00:00Z", { lastReadAt: "2026-11-20T10:00:00.000Z" })], nextCursor: null, self }, [B]: { chats: [], nextCursor: null, self } });
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => undefined);
+    const v = await loadChatLists(person(client({}, { code: "XX000", message: "secret db text" })), [SRC_A, SRC_B], { selectedKey: null });
+    if (v.kind !== "ok") throw new Error("expected ok");
+    expect(v.rows).toHaveLength(1);
+    expect(v.rows[0]?.unread).toBe(true); // Graph's viewpoint still drives it
+    expect(warn).toHaveBeenCalledTimes(1);
+    expect(JSON.stringify(warn.mock.calls)).not.toContain("secret db text");
+    warn.mockRestore();
+  });
+});
+
+describe("review fixes (M1, M2, L3)", () => {
+  it("M1: the same chat under two accounts, ONE open: the open account's row is not unread, the OTHER account's row keeps its dot; with no open account named and several sources nothing is 'selected'", async () => {
+    answer({ [A]: { chats: [chat(SHARED, "2026-11-23T14:00:00Z")], nextCursor: null, self }, [B]: { chats: [chat(SHARED, "2026-11-23T14:00:00Z")], nextCursor: null, self } });
+    const open = await loadChatLists(person(), [SRC_A, SRC_B], { selectedKey: encodeChatKey(SHARED), selectedConn: A });
+    if (open.kind !== "ok") throw new Error("expected ok");
+    expect(open.rows.map((r) => [r.conn, r.unread])).toEqual([[A, false], [B, true]]);
+    const none = await loadChatLists(person(), [SRC_A, SRC_B], { selectedKey: encodeChatKey(SHARED) });
+    if (none.kind !== "ok") throw new Error("expected ok");
+    expect(none.rows.map((r) => r.unread)).toEqual([true, true]);
+  });
+
+  it("M2: an account that fails on a 'More chats' page stays in the cursor with the token it was asked with, so the next read retries it", async () => {
+    const cursor = encodeCursor([{ conn: A, token: "tokA" }, { conn: B, token: "tokB" }]) as string;
+    answer({ [A]: { chats: [chat("19:a0@thread.v2", "2026-11-22T09:00:00Z")], nextCursor: "tokA2", self }, [B]: { info: { kind: "timeout" } } });
+    const v = await loadChatLists(person(), [SRC_A, SRC_B], { cursor, selectedKey: null });
+    if (v.kind !== "ok") throw new Error("expected ok");
+    expect(v.notes).toMatchObject([{ conn: B, kind: "unreachable" }]);
+    expect(decodeCursor(v.moreCursor)).toEqual([{ conn: A, token: "tokA2" }, { conn: B, token: "tokB" }]);
+  });
+
+  it("L3: a time that does not parse sorts last without breaking the order; ties are by chat key then connection order", () => {
+    const rows = [
+      { at: "garbage", key: "a", ord: 0 },
+      { at: "2026-11-23T10:00:00Z", key: "b", ord: 0 },
+      { at: null, key: "c", ord: 0 },
+      { at: "2026-11-23T11:00:00Z", key: "d", ord: 0 },
+    ];
+    expect([...rows].sort(compareRows).map((r) => r.key)).toEqual(["d", "b", "a", "c"]);
+    expect([...rows].reverse().sort(compareRows).map((r) => r.key)).toEqual(["d", "b", "a", "c"]);
+  });
+});
+
+describe("M4: nothing from a chat is stored, logged or put in a cursor (spec 17 test 8, two accounts)", () => {
+  const CANARY = "canary-chat-content-7c3e-not-real";
+  it("a canary in a preview, a topic and a member name: the two-account list, a partial failure and 'More chats' write nothing to the database, log nothing and leave it out of every cursor", async () => {
+    const spies = (["log", "info", "warn", "error", "debug"] as const).map((m) => vi.spyOn(console, m).mockImplementation(() => undefined));
+    const loud = (id: string, at: string) => chat(id, at, { topic: `Topic ${CANARY}`, members: [member(`Me ${CANARY}`, true), member(`Pat ${CANARY}`)], preview: { createdAt: at, senderId: "u", senderName: `Pat ${CANARY}`, mine: false, text: `Hello ${CANARY}`, deleted: false, system: false } });
+    answer({ [A]: { chats: [loud("19:a1@thread.v2", "2026-11-23T16:00:00Z")], nextCursor: `tok${"x".repeat(10)}`, self }, [B]: { info: { kind: "reconnect_required", message: `secret ${CANARY}` } } });
+    const c = client({ [A]: [{ chat_id: "19:a1@thread.v2", read_through: "2026-11-23T15:00:00Z" }] });
+    const first = await loadChatLists(person(c), [SRC_A, SRC_B], { selectedKey: null });
+    if (first.kind !== "ok") throw new Error("expected ok");
+    const second = await loadChatLists(person(c), [SRC_A, SRC_B], { cursor: first.moreCursor, selectedKey: null });
+    expect(second.kind).toBe("ok");
+    // the content appears in the rows drawn for THIS response (that is what they are for) ...
+    expect(JSON.stringify(first.rows)).toContain(CANARY);
+    // ... and nowhere else: not in a cursor, a note, a log line, or any database call (the only calls are the one markers READ per list)
+    expect(first.moreCursor).not.toBeNull();
+    expect(Buffer.from(first.moreCursor as string, "base64url").toString("utf8")).not.toContain(CANARY);
+    expect(JSON.stringify(first.notes)).not.toContain(CANARY);
+    expect(markersCalls.every((m) => m.fn === "teams_chat_reads_list_many")).toBe(true);
+    expect(JSON.stringify(markersCalls)).not.toContain(CANARY);
+    for (const s of spies) expect(JSON.stringify(s.mock.calls)).not.toContain(CANARY);
+    for (const s of spies) s.mockRestore();
   });
 });

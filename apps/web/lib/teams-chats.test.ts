@@ -100,9 +100,13 @@ describe("loadChatList", () => {
     }
   });
 
-  it("an unreadable marker table is 'could not load', not 'everything is read'", async () => {
+  it("an unreadable marker table does not hide the list (T-295 L1): unread uses Teams' own read time", async () => {
     reader.listChats.mockResolvedValue({ chats: [chat()], nextCursor: null, self });
-    expect(await loadChatList(person(rpcClient([], { code: "XX000" })), { selectedKey: null })).toEqual({ kind: "unavailable" });
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => undefined);
+    const v = await loadChatList(person(rpcClient([], { code: "XX000" })), { selectedKey: null });
+    expect(v.kind).toBe("ok");
+    expect(warn).toHaveBeenCalledTimes(1);
+    warn.mockRestore();
   });
 
   it("the Graph read and the marker read start in the same turn (neither waits for the other)", async () => {

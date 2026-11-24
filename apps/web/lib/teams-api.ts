@@ -151,9 +151,9 @@ export function createTeamsRoutes(deps: TeamsRouteDeps) {
    * The connection a request names (spec 22.4): `conn` must be a lower-case uuid (else 400), one of the caller's OWN Teams rows in THIS lane (else 404: the same answer for another person's, another
    * lane's, an unknown, a disconnected and a pending row), and usable (a sign-in that expired is 409 `reconnect`). Nothing has called Microsoft or read a token by now.
    */
-  async function pick(ctx: Ctx, conn: unknown): Promise<Who | Response> {
+  async function pick(ctx: Ctx, conn: unknown, known?: readonly MessagesAccount[]): Promise<Who | Response> {
     if (!isConnId(conn)) return json({ error: "bad_request" }, 400);
-    const own = (await accountsOf(ctx)).find((a) => a.connectionId === conn);
+    const own = (known ?? (await accountsOf(ctx))).find((a) => a.connectionId === conn);
     if (!own) return json({ error: "not_found" }, 404);
     if (!own.usable) return json({ error: "reconnect" }, 409);
     return whoOf(ctx, own);
@@ -320,18 +320,22 @@ export function createTeamsRoutes(deps: TeamsRouteDeps) {
         const ctx = await begin(laneId, { limit: "reads" });
         if (ctx instanceof Response) return ctx;
         const q = new URL(request.url).searchParams;
-        for (const k of new Set(q.keys())) if (k !== "chat" && k !== "more" && k !== "conn") return json({ error: "bad_request" }, 400);
+        for (const k of new Set(q.keys())) if (k !== "chat" && k !== "more" && k !== "conn" && k !== "open") return json({ error: "bad_request" }, 400);
         const connParam = q.get("conn");
-        let all: MessagesAccount[];
+        const all = await accountsOf(ctx); // one read of the person's own accounts for the whole request
         let sources: ChatSource[];
+        // `open` names the account of the open chat (so that chat's row of THAT account is not unread and the other account's row is): validated exactly like `conn`, with the same answers, before any read
+        const openParam = q.get("open");
+        if (openParam !== null) {
+          const o = await pick(ctx, openParam, all);
+          if (o instanceof Response) return o;
+        }
         if (connParam !== null) {
-          const w = await pick(ctx, connParam);
+          const w = await pick(ctx, connParam, all);
           if (w instanceof Response) return w;
           if (!w.has.includes("chat_read")) return json({ error: "feature_missing" }, 409);
-          all = await accountsOf(ctx);
           sources = sourcesOf(all).filter((s) => s.connectionId === w.connectionId);
         } else {
-          all = await accountsOf(ctx);
           const usable = all.filter((a) => a.usable);
           if (usable.length === 0) return json({ error: "not_found" }, 404);
           sources = sourcesOf(all);
@@ -341,7 +345,7 @@ export function createTeamsRoutes(deps: TeamsRouteDeps) {
         const more = q.get("more");
         if (chatParam !== null && decodeChatKey(chatParam) === null) return json({ error: "bad_request" }, 400);
         if (more !== null && !(looksLikeCursor(more) && (decodeCursor(more) !== null || (sources.length === 1 && SOURCE_TOKEN.test(more))))) return json({ error: "bad_request" }, 400);
-        const r = await loadChatLists({ laneId, userId: ctx.userId, client: ctx.client }, sources, { ...(more ? { cursor: more } : {}), selectedKey: chatParam });
+        const r = await loadChatLists({ laneId, userId: ctx.userId, client: ctx.client }, sources, { ...(more ? { cursor: more } : {}), selectedKey: chatParam, selectedConn: openParam });
         if (r.kind !== "ok") return failure(r);
         return json({ rows: r.rows, moreCursor: r.moreCursor, notes: r.notes ?? [], listed: r.listed ?? [], dropped: r.dropped === true }, 200);
       }),

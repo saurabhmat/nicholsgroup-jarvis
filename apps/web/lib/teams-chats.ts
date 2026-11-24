@@ -203,6 +203,11 @@ export async function loadChatLists(
       // anything else is not a cursor: the newest chats
     }
     const budgets = splitMemberBudget(PAGE_MEMBER_READS, plan.length);
+    // L1: the portal's own markers are only a refinement (Graph's own `viewpoint` still drives unread): a markers failure (a database not yet migrated, an outage) must not hide every chat list
+    const markersOf = readMarkersMany(p.client, p.laneId, sources.map((s) => s.connectionId)).catch(() => {
+      console.warn("[teams-chats] portal read markers unavailable; unread uses Teams' own read time only"); // fixed text: nothing about a chat, an account or a database message
+      return new Map<string, Map<string, string>>();
+    });
     const [settled, markers] = await Promise.all([
       Promise.all(
         plan.map(
@@ -215,7 +220,7 @@ export async function loadChatLists(
           }),
         ),
       ),
-      readMarkersMany(p.client, p.laneId, sources.map((s) => s.connectionId)),
+      markersOf,
     ]);
     const failures = settled.flatMap((s) => (s.list.status === "rejected" ? [{ source: s.source, failure: teamsFailure(s.list.reason) }] : []));
     if (plan.length > 0 && failures.length === plan.length) {
@@ -226,11 +231,16 @@ export async function loadChatLists(
     const rows: ChatRowView[] = [];
     const next: { conn: string; token: string | null }[] = [];
     for (const s of settled) {
-      if (s.list.status !== "fulfilled") continue;
+      if (s.list.status !== "fulfilled") {
+        // M2: a source that failed on a later page stays in the cursor with the token it was asked with, so the next read retries it (a failed first page has no token: Refresh reads it from the start)
+        const asked = plan.find((x) => x.source.connectionId === s.source.connectionId)?.token ?? null;
+        if (asked !== null) next.push({ conn: s.source.connectionId, token: asked });
+        continue;
+      }
       const m = markers.get(s.source.connectionId) ?? new Map<string, string>();
       for (const c of s.list.value.chats) {
         try {
-          rows.push(chatRow(c, m.get(c.chatId) ?? null, encodeChatKey(c.chatId) === opts.selectedKey && s.source.connectionId === (opts.selectedConn ?? s.source.connectionId), now, s.source));
+          rows.push(chatRow(c, m.get(c.chatId) ?? null, encodeChatKey(c.chatId) === opts.selectedKey && (opts.selectedConn != null ? s.source.connectionId === opts.selectedConn : sources.length === 1), now, s.source));
         } catch {
           // an id the page cannot encode is not shown
         }
@@ -238,7 +248,6 @@ export async function loadChatLists(
       next.push({ conn: s.source.connectionId, token: s.list.value.nextCursor });
     }
     if (plan.length > 1) rows.sort(compareRows); // one source keeps Graph's own order exactly
-    // a source that failed keeps its place in the cursor as "no more" is wrong (its next page is unknown): it is left out, and "Try again" reads it from its first page
     const moreCursor = encodeCursor(next);
     const notes = failures.map((f) => noteOf(f.source, f.failure));
     const listed = settled.flatMap((s) => (s.list.status === "fulfilled" ? [s.source.connectionId] : []));

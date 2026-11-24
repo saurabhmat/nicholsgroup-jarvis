@@ -18,6 +18,7 @@ import {
   MESSAGES_LOAD_ERROR_TEXT,
   MESSAGES_LOAD_ERROR_TITLE,
   MESSAGES_NO_CHAT_SELECTED_TEXT,
+  MESSAGES_PICK_ACCOUNT_TEXT,
   MESSAGES_NOT_ENABLED_TEXT,
   MESSAGES_RECONNECT_TITLE,
   MESSAGES_TIMES_NOTE,
@@ -215,6 +216,11 @@ export async function MessagesWorkspace({ laneId, state, searchParams }: { laneI
                 <ConversationSection promise={conversation} laneId={laneId} connectionId={openAccount.connectionId} more={more} />
               </Suspense>
             </SectionBoundary>
+          ) : chatId !== null ? (
+            // a chat is in the address but no account of the person's opens it (several accounts and no `conn`, or a `conn` that is not one of their usable accounts): said plainly, nothing is guessed or read
+            <p data-testid="pick-account" className="rounded-card border border-border p-4 text-body text-muted-foreground">
+              {MESSAGES_PICK_ACCOUNT_TEXT}
+            </p>
           ) : (
             <NoChatSelected />
           )

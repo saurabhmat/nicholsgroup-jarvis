@@ -2123,3 +2123,15 @@ Done as the spec says, except the points below. Not reviewed yet by the security
 - **Local test helpers:** `teams-runbook.test.ts` skipped its T-280 SQL checks on this machine because the operator's FILLED copy holds a real tenant id; the test now checks only the template (placeholder) copy and accepts a filled copy for the new pair.
 - **Assumptions only the live test settles (H-085):** A-1 (the account picker with one account signed in), A-2 (`login_hint` with two signed in; if ignored, `loginHint: false` for the Teams provider), A-4 (the per-chat read limit shared by two users of the app: "Teams is busy" with seconds, no retry). A-3 no longer matters (D-70).
 - **Not built (out of scope):** T-296 (channels per account, list kept mounted), T-297, T-288 (send; the "posts as <UPN>" line), the approvals-history account label. Spec 17 test 8 (the canary) is covered by the existing canary tests plus assertions in the new tests that no provider text reaches a result; a two-account run of the full canary harness is not added.
+
+### Review fixes of T-294 / T-295 (builder, Nov 24, 2026): accepted and later
+
+Fixed in the review commit: M1 (`?open=` names the account of the open chat, validated like `conn`), M2 (a source that failed on a later page stays in the cursor), M3 ("Try again" per account line; Refresh is never "up to date" while a line shows), M4 (canary tests), M5 (the "seen" set is computed outside the state updater), L1 (a markers failure no longer hides the lists), L2 to L9. Accepted or for later, not built:
+- The `DEPLOYED` guard in `teams-accounts-limit-H-085.sql` is the operator's word only. Typed before the deploy, the older deployment pauses Teams for the lane (it fails safe); the runbook now says how to back out (a new insert-only version without the key).
+- The combined cursor can exceed 6,400 characters with 3 to 5 accounts and long skip tokens; "More chats" then disappears (fails closed). Record real token lengths at H-085.
+- The limit trigger fires only on insert and on update of status. A change of owner, lane or provider is refused by `core.connections_identity_immutable` and `connections_teams_has_owner`, so it is unreachable today; the trigger depends on those two staying.
+- Failure kinds other than reconnect and busy all read "Teams could not be reached".
+- With ONE account whose list fails entirely, "seen" is no longer posted, so the dot stays (a change from before for the one-account case; the person can Try again or Refresh).
+- A chat click re-reads every account's list until T-296.
+- A Messages tab left open from before the deploy gets 400 on older / newer / read / call-link / image (they now need `conn`) until the page is reloaded.
+- The spec says ties sort by chat id; the code sorts by chat key (the encoded id); the spec line now says so.

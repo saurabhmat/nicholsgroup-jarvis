@@ -153,6 +153,13 @@ vi.mock("@nichols/connectors/teams-settings", () => ({
 
 type El = ReactElement<{ children?: ReactNode }>;
 /** Resolves a server component tree the way a render does: a parent before its children, siblings together, Suspense children included. Records each async component it runs. */
+/** The text of a resolved tree (strings only; no props that could be circular). */
+function textOf(node: unknown): string {
+  if (typeof node === "string" || typeof node === "number") return String(node);
+  if (Array.isArray(node)) return node.map(textOf).join(" ");
+  if (isValidElement(node)) return textOf((node.props as { children?: unknown }).children);
+  return "";
+}
 async function resolve(node: ReactNode): Promise<ReactNode> {
   if (Array.isArray(node)) return Promise.all(node.map((n) => resolve(n)));
   if (!isValidElement(node)) return node;
@@ -338,8 +345,10 @@ describe("Messages (T-280, T-283)", () => {
     const { default: Page } = await import("@/app/[laneId]/messages/page");
     for (const q of [{ chat: CHAT_KEY } as Record<string, string>, { chat: CHAT_KEY, conn: "00000000-0000-4000-8000-0000000000d1" }, { chat: CHAT_KEY, conn: "00000000-0000-4000-8000-0000000000ff" }, { chat: CHAT_KEY, conn: "../x" }]) {
       t.reader.calls.length = 0;
-      await resolve(Page({ params: params(), searchParams: sp(q) } as never) as ReactNode);
+      const tree = await resolve(Page({ params: params(), searchParams: sp(q) } as never) as ReactNode);
       expect(t.reader.calls.map((c) => c.fn), JSON.stringify(q)).toEqual(["listChats", "listChats"]);
+      // L4: one plain line says why nothing opened (no guess, no extra read)
+      expect(textOf(tree), JSON.stringify(q)).toContain("This link does not say which Teams account the chat belongs to. Pick the chat from the list.");
     }
   });
 
