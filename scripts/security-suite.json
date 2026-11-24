@@ -3,7 +3,8 @@
   "vitest": {
     "apps/web": [
       "tests/route-inventory.test.ts",
-      "tests/console-sites.test.ts"
+      "tests/console-sites.test.ts",
+      "tests/security-headers.test.ts"
     ],
     "packages/connectors": [
       "src/webhooks/spoofing-catalog.test.ts",
@@ -22,6 +23,7 @@
     "334_security_approval_types.test.sql",
     "335_security_isolation_catalog.test.sql",
     "336_security_function_isolation.test.sql",
-    "337_security_secret_sinks.test.sql"
+    "337_security_secret_sinks.test.sql",
+    "338_security_approval_gate_matrix.test.sql"
   ]
 }
