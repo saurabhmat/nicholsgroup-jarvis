@@ -336,7 +336,7 @@ describe("Messages (T-280, T-283)", () => {
     t.answers["from:connections"] = { data: [TEAMS_ROW, TEAMS_ROW_B, { ...TEAMS_ROW, id: "00000000-0000-4000-8000-0000000000d1", owner_user_id: "someone-else" }], error: null };
     t.answers["rpc:teams_chat_reads_list_many"] = { data: [], error: null };
     const { default: Page } = await import("@/app/[laneId]/messages/page");
-    for (const q of [{ chat: CHAT_KEY }, { chat: CHAT_KEY, conn: "00000000-0000-4000-8000-0000000000d1" }, { chat: CHAT_KEY, conn: "00000000-0000-4000-8000-0000000000ff" }, { chat: CHAT_KEY, conn: "../x" }]) {
+    for (const q of [{ chat: CHAT_KEY } as Record<string, string>, { chat: CHAT_KEY, conn: "00000000-0000-4000-8000-0000000000d1" }, { chat: CHAT_KEY, conn: "00000000-0000-4000-8000-0000000000ff" }, { chat: CHAT_KEY, conn: "../x" }]) {
       t.reader.calls.length = 0;
       await resolve(Page({ params: params(), searchParams: sp(q) } as never) as ReactNode);
       expect(t.reader.calls.map((c) => c.fn), JSON.stringify(q)).toEqual(["listChats", "listChats"]);

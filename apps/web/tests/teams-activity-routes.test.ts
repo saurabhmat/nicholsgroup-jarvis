@@ -20,7 +20,9 @@ const KEY = encodeChatKey(CHAT);
 const row = (over: Record<string, unknown> = {}) => ({ id: CONN, account: "me@teams.example.test", state: "connected", mine: true, has: ["chat_read", "call_links"], ...over });
 /** The answer without the server's clock (which must be there, as a time). */
 const noClock = (b: unknown) => {
-  const { serverNow, accounts: _accounts, ...rest } = b as Record<string, unknown>; // `accounts` (one entry per usable connection) has its own tests
+  const { serverNow, ...withAccounts } = b as Record<string, unknown>;
+  const { accounts, ...rest } = withAccounts;
+  void accounts; // `accounts` (one entry per usable connection) has its own tests
   expect(Number.isNaN(Date.parse(String(serverNow)))).toBe(false);
   return rest;
 };

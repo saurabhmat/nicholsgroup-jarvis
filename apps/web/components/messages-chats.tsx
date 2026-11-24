@@ -9,8 +9,7 @@ import { Suspense, type ReactNode } from "react";
 import { Alert, AlertDescription, AlertTitle, cn, EmptyState } from "@nichols/ui";
 import { guards } from "@/lib/guards";
 import { decodeChatKey } from "@/lib/teams-chat-key";
-import { loadChatLists, loadConversation, type CallPolicy, type ChatListView, type ChatSource, type ConversationView, type TeamsPerson } from "@/lib/teams-chats";
-import { isConnId } from "@/lib/teams-accounts";
+import { loadChatLists, loadConversation, type ChatListView, type ChatSource, type ConversationView } from "@/lib/teams-chats";
 import { looksLikeCursor } from "@/lib/teams-cursor";
 import type { TeamsFailure } from "@/lib/teams-errors";
 import {

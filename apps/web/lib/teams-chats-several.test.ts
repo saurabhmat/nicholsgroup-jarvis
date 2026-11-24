@@ -34,7 +34,6 @@ const client = (markers: Record<string, { chat_id: string; read_through: string 
   }),
 });
 const person = (c: unknown = client()) => ({ laneId: "PKG", userId: ME, client: c as never });
-const byConn = (a: unknown, b: unknown) => (conn: string) => (conn === A ? a : b);
 
 beforeEach(() => {
   reader.listChats.mockReset();

@@ -34,7 +34,6 @@ const acct = (id: string, upn: string, label: string, over: Partial<MessagesAcco
 const connected = (accounts: MessagesAccount[], over: Partial<Extract<MessagesState, { kind: "connected" }>> = {}): Extract<MessagesState, { kind: "connected" }> => ({
   kind: "connected", connectionId: A, account: "robert@pubkgroup.com", degraded: false, missing: [], adminConsent: false, laneFeatures: ["chat_read", "call_links"], accounts, multi: accounts.filter((a) => a.usable).length >= 2, canAddAnother: false, ...over,
 });
-const TWO = [acct(A, "robert@pubkgroup.com", "pubkgroup.com"), acct(B, "robert@pub-k.org", "pub-k.org")];
 
 afterEach(() => {
   cleanup();
