@@ -98,7 +98,14 @@ export type CapabilityFacts = {
    * The connection as a usable Teams connection of the lane (T-286): its owner, and whether the connection and the lane's `teams` block both allow chat sends and channel sends.
    * Null (or absent) when it is not a usable Teams connection of the lane.
    */
-  teams?: { ownerUserId: string | null; chatSend: boolean; channelsSend: boolean } | null;
+  teams?: {
+    ownerUserId: string | null;
+    chatSend: boolean;
+    channelsSend: boolean;
+    /** T-288: the two halves of `chatSend`, so a refusal can name the gate: the company's `teams.enabled` + `chat_send`, and the connection's own `teams_chat_send` grant. Absent in older fakes (then only `chatSend` is known). */
+    laneChatSend?: boolean;
+    connChatSend?: boolean;
+  } | null;
 };
 
 /** The email providers (T-262, T-263): the writer is picked by the action's connection row, never by the lane. */

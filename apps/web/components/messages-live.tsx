@@ -382,6 +382,12 @@ export function ChatListLive({
           const res = await fetch(`/api/lanes/${encodeURIComponent(laneId)}/messages/chats${q.toString() === "" ? "" : `?${q.toString()}`}`, { credentials: "same-origin", cache: "no-store", signal });
           if (!res.ok) {
             if (res.status === 401 || res.status === 403 || res.status === 404) refused = true;
+            // T-288 (carried from the T-296 re-check): a sign-in that expired while its chat is open answers 409 `reconnect` (the `open` account, or `conn`, is no longer usable). The server draws the
+            // layout again ONCE (same one-refresh guard as above) so the page shows the account's own Reconnect; the code is the only thing read from the body.
+            if (res.status === 409) {
+              const code = ((await res.json().catch(() => null)) as { error?: unknown } | null)?.error;
+              if (code === "reconnect") refused = true;
+            }
             return { conn, answer: null };
           }
           const b = (await res.json()) as ChatsAnswer;

@@ -2,7 +2,7 @@
 // The approvals module for Teams messages (T-286, T-287) over an in-memory twin of the act.* functions and a fake Teams writer. The SQL is pinned by pgTAP (330_approvals_teams) and the writer by
 // connectors/src/teams/writer.test.ts; here: the module's own rules (what is proposed, hashed, audited, executed once, how each outcome ends, what is reconciled). Synthetic data (rule 10).
 import { randomUUID } from "node:crypto";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { ConnectorError } from "@nichols/connectors";
 import { TEAMS_ACTION_TYPES as CONNECTOR_TEAMS_TYPES, TEAMS_SEND_FAILURES } from "@nichols/connectors/write";
 import type { AuditEntry } from "@nichols/core/audit";
@@ -12,6 +12,8 @@ import { rejectAction } from "./email";
 import { createTeamsReconciler } from "./reconcile-teams";
 import { reconcileStuckActions } from "./reconcile";
 import { hashOfRow } from "./rows";
+import { sendTeamsMessage, teamsTextHash, type SendTeamsInput } from "./teams-send";
+import { teamsChatSendGate } from "./capability";
 import { approveAndExecuteTeams, buildTeamsSend, executeApprovedTeams, proposeTeamsAction, type ProposeTeamsInput, type TeamsExecDeps } from "./teams";
 import { TEAMS_ACTION_TYPES, type CapabilityFacts, type Rpc } from "./types";
 
@@ -724,5 +726,171 @@ describe("the reconcile sweep for Teams", () => {
     const r = createTeamsReconciler({ loadWriteConnection: async () => ({}) as never, reconciler: { findWrite: async () => [], verifyWrite: async () => undefined } });
     expect(Object.keys(r).sort()).toEqual(["actionTypes", "decide"]);
     expect(r.actionTypes).toEqual(["teams.chat.send", "teams.channel.post", "teams.channel.reply"]);
+  });
+});
+
+
+// ---------------------------------------------------------------------------------------------------- T-288: sendTeamsMessage ("Send = your approval")
+const CONN2 = "00000000-0000-4000-8000-0000000c3002";
+const sendInput = (over: Partial<SendTeamsInput> = {}): SendTeamsInput => {
+  const text = over.text ?? CANARY;
+  return { connectionId: CONN, chatId: CHAT, text, textSha256: teamsTextHash(text.replace(/\r\n?/g, "\n").normalize("NFC").trim()), clientRequestId: REQ, ...over };
+};
+
+describe("sendTeamsMessage (T-288): spec 17 tests 10, 11, 12, 13", () => {
+  it("TEST 10: one press = proposed -> approved -> executing -> verified by that person, exactly one POST, the hash approved is the hash of the typed text, the text is emptied, no text in the audit", async () => {
+    const w = world();
+    const out = await sendTeamsMessage(w.deps, w.ctx(), sendInput());
+    expect(out).toMatchObject({ kind: "result", result: { status: "verified" } });
+    expect(w.calls.writes).toBe(1);
+    const [row] = [...w.rows.values()];
+    expect(row).toMatchObject({ status: "verified", proposer_kind: "user", proposer_user_id: OWNER, approved_by: OWNER, derived_from_retrieved: false });
+    expect(row!.approved_hash).toBe(row!.payload_sha256);
+    expect(row!.payload.text).toBeUndefined();
+    expect(w.calls.actions[0]).toMatchObject({ approved_by: OWNER, payload: { text: CANARY } }); // the ONE place the text is: the POST's action
+    expect(w.audits.map((a) => a.action)).toEqual(["action.proposed", "action.approved", "action.execute_started", "action.verified"]);
+    noText(w);
+  });
+
+  it("the browser's hash is over the NORMALISED text: CRLF, trailing spaces and a decomposed accent hash the same as the text the server sends", async () => {
+    const w = world();
+    const typed = `  hello\r\nwor${"l"}d e${String.fromCharCode(769)} \n`;
+    const out = await sendTeamsMessage(w.deps, w.ctx(), { ...sendInput({ text: typed }), textSha256: teamsTextHash("hello\nworld é") });
+    expect(out).toMatchObject({ kind: "result", result: { status: "verified" } });
+    expect(w.calls.actions[0]!.payload).toEqual({ content_type: "text", text: "hello\nworld é" });
+  });
+
+  it("a hash that is not the server's hash of the text (a changed byte, a wrong length, upper case, not hex) refuses BEFORE anything is proposed", async () => {
+    for (const bad of [teamsTextHash("other text"), teamsTextHash(CANARY).slice(0, 63), teamsTextHash(CANARY).toUpperCase(), "z".repeat(64), "", teamsTextHash(CANARY) + "0"]) {
+      const w = world();
+      expect(await sendTeamsMessage(w.deps, w.ctx(), { ...sendInput(), textSha256: bad })).toEqual({ kind: "text_mismatch" });
+      expect(w.rows.size).toBe(0);
+      expect(w.calls.writes).toBe(0);
+      expect(w.audits).toHaveLength(0);
+    }
+  });
+
+  it("TEST 13: every gate refuses by name before anything is proposed or sent", async () => {
+    const T = (over: Record<string, unknown>) => ({ ownerUserId: OWNER, chatSend: true, channelsSend: true, laneChatSend: true, connChatSend: true, ...over });
+    const cases: [string, Partial<CapabilityFacts>][] = [
+      ["lane_off", { teams: T({ laneChatSend: false, chatSend: false }) }],
+      ["reconnect", { teams: T({ connChatSend: false, chatSend: false }) }],
+      ["policy_off", { writeActionsAllowed: ["email_send"] }],
+      ["drafts_off", { storeOutboundDrafts: false }],
+      ["not_live", { approvalsLive: false }],
+    ];
+    for (const [gate, facts] of cases) {
+      const w = world({ facts: { teams: T({}), ...facts } });
+      expect(await sendTeamsMessage(w.deps, w.ctx(), sendInput()), gate).toEqual({ kind: "gate", gate });
+      expect(w.rows.size, gate).toBe(0);
+      expect(w.calls.writes, gate).toBe(0);
+      expect(w.audits, gate).toHaveLength(0);
+    }
+    // the order: the first closed gate is the one named
+    const all = world({ facts: { teams: T({ laneChatSend: false, chatSend: false }), writeActionsAllowed: [], approvalsLive: false, storeOutboundDrafts: false } });
+    expect(await sendTeamsMessage(all.deps, all.ctx(), sendInput())).toEqual({ kind: "gate", gate: "lane_off" });
+    const noPolicyNotLive = world({ facts: { teams: T({}), writeActionsAllowed: [], approvalsLive: false } });
+    expect(await sendTeamsMessage(noPolicyNotLive.deps, noPolicyNotLive.ctx(), sendInput())).toEqual({ kind: "gate", gate: "policy_off" });
+  });
+
+  it("teamsChatSendGate on facts that predate the split flags falls back to chatSend (a closed chat gate is lane_off); an open one is null", () => {
+    const base: CapabilityFacts = { mailbox: null, composeGranted: false, writeActionsAllowed: ["teams_send"], approvalsLive: true, stepUpMaxAgeS: 300, teams: { ownerUserId: OWNER, chatSend: true, channelsSend: false } };
+    expect(teamsChatSendGate(base)).toBeNull();
+    expect(teamsChatSendGate({ ...base, teams: { ownerUserId: OWNER, chatSend: false, channelsSend: false } })).toBe("lane_off");
+    expect(teamsChatSendGate({ ...base, teams: null })).toBe("not_usable");
+  });
+
+  it("a viewer, another person's connection and an unusable connection are refused with nothing stored (the same not_found for the last two)", async () => {
+    const w = world();
+    await expect(sendTeamsMessage(w.deps, w.ctx(VIEWER), sendInput())).rejects.toMatchObject({ code: "forbidden" });
+    await expect(sendTeamsMessage(w.deps, w.ctx(OTHER), sendInput())).rejects.toMatchObject({ code: "not_found" });
+    const gone = world({ facts: null });
+    await expect(sendTeamsMessage(gone.deps, gone.ctx(), sendInput())).rejects.toMatchObject({ code: "not_found" });
+    expect(w.rows.size + gone.rows.size).toBe(0);
+  });
+
+  it("text and ids that the schema refuses are `invalid` with nothing stored, and the error never holds the text", async () => {
+    for (const bad of [{ text: "" }, { text: "x".repeat(10_001) }, { text: `bell\u0007${CANARY}` }, { chatId: "nope" }, { clientRequestId: "not-a-uuid" }]) {
+      const w = world();
+      const e = await sendTeamsMessage(w.deps, w.ctx(), { ...sendInput(bad as never), textSha256: teamsTextHash("x") }).catch((x: unknown) => x);
+      expect(e, JSON.stringify(bad).slice(0, 40)).toMatchObject({ code: "invalid" });
+      expect(JSON.stringify(e) + String((e as Error).message)).not.toContain("CANARY");
+      expect(w.rows.size).toBe(0);
+    }
+  });
+
+  it("TEST 11: the same client request id sent twice at the same time, and again afterwards, is ONE action and ONE POST", async () => {
+    const w = world({ executeDelayMs: 25 });
+    const [a, b] = await Promise.all([sendTeamsMessage(w.deps, w.ctx(), sendInput()), sendTeamsMessage(w.deps, w.ctx(), sendInput())]);
+    const c = await sendTeamsMessage(w.deps, w.ctx(), sendInput());
+    expect(w.rows.size).toBe(1);
+    expect(w.calls.writes).toBe(1);
+    const states = [a, b, c].map((o) => (o.kind === "result" ? o.result.status : o.kind));
+    expect(states).toContain("verified");
+    expect(states.every((x) => ["verified", "already_in_progress", "outcome_pending", "sent_unverified"].includes(x))).toBe(true);
+    expect(c).toMatchObject({ kind: "result", result: { status: "verified" } });
+  });
+
+  it("TEST 12: an unknown outcome (the POST times out) ends as outcome_pending with ONE POST and the text still held for the sweep; the same request again never posts a second time", async () => {
+    const w = world({ writer: "outcome_pending" });
+    const out = await sendTeamsMessage(w.deps, w.ctx(), sendInput());
+    expect(out).toMatchObject({ kind: "result", result: { status: "outcome_pending" } });
+    const again = await sendTeamsMessage(w.deps, w.ctx(), sendInput());
+    expect(again).toMatchObject({ kind: "result" });
+    expect(w.calls.writes).toBe(1);
+    expect([...w.rows.values()][0]).toMatchObject({ status: "executing" });
+  });
+
+  it("a definite refusal by Teams is `failed` with a fixed code, nothing sent twice, the text emptied", async () => {
+    const w = world({ writer: "not_a_member" });
+    const out = await sendTeamsMessage(w.deps, w.ctx(), sendInput());
+    expect(out).toMatchObject({ kind: "result", result: { status: "failed" } });
+    expect(w.calls.writes).toBe(1);
+    expect([...w.rows.values()][0]!.payload.text).toBeUndefined();
+    noText(w);
+  });
+
+  it("CANARY: the message text is in the one writer call and nowhere else the module touches (audit, rows after the terminal state, the returned outcome, thrown errors)", async () => {
+    const logged: string[] = [];
+    const spies = (["log", "info", "warn", "error", "debug"] as const).map((k) => vi.spyOn(console, k).mockImplementation((...a: unknown[]) => void logged.push(JSON.stringify(a))));
+    try {
+      for (const writer of ["ok", "not_a_member", "outcome_pending", "timeout", "throttled"] as WriterMode[]) {
+        const w = world({ writer });
+        const out = await sendTeamsMessage(w.deps, w.ctx(), sendInput());
+        expect(JSON.stringify(out)).not.toContain("CANARY");
+        noText(w);
+        expect(w.calls.actions.filter((a) => JSON.stringify(a).includes("CANARY"))).toHaveLength(1);
+        if (writer !== "outcome_pending" && writer !== "timeout") expect(JSON.stringify([...w.rows.values()])).not.toContain("CANARY"); // terminal: emptied
+      }
+      expect(logged.join("\n")).not.toContain("CANARY");
+    } finally {
+      for (const s of spies) s.mockRestore();
+    }
+  });
+
+  it("SEVERAL ACCOUNTS: a send on the SECOND connection proposes, claims, POSTs and reads back on that connection only", async () => {
+    const w = world();
+    const seen: { write: string[]; verify: string[] } = { write: [], verify: [] };
+    const facts = (id: string) => ({ ...w.facts, teams: { ownerUserId: OWNER, chatSend: true, channelsSend: true, laneChatSend: true, connChatSend: id === CONN2 || id === CONN } });
+    const deps: TeamsExecDeps = {
+      ...w.deps,
+      readFacts: async (_l, id) => facts(id),
+      loadWriteConnection: async (_l, id) => ({ id }) as never,
+      writer: {
+        async executeWrite(l, c, a) {
+          seen.write.push(`${(c as { id: string }).id}|${a.connection_id}`);
+          return w.deps.writer.executeWrite(l, c, a);
+        },
+        async verifyWrite(l, c, a, id, win) {
+          seen.verify.push(`${(c as { id: string }).id}|${a.connection_id}`);
+          return w.deps.writer.verifyWrite(l, c, a, id, win);
+        },
+      },
+    };
+    const out = await sendTeamsMessage(deps, w.ctx(), sendInput({ connectionId: CONN2 }));
+    expect(out).toMatchObject({ kind: "result", result: { status: "verified" } });
+    expect([...w.rows.values()].map((r) => r.connection_id)).toEqual([CONN2]);
+    expect(seen).toEqual({ write: [`${CONN2}|${CONN2}`], verify: [`${CONN2}|${CONN2}`] });
+    expect(w.audits.every((a) => (a.metadata as Record<string, unknown>).connection_id === undefined || (a.metadata as Record<string, unknown>).connection_id === CONN2)).toBe(true);
   });
 });

@@ -23,7 +23,7 @@ const KEY = encodeChatKey("19:abc123def456@thread.v2");
 const msg = (id: string, at: string, over: Record<string, unknown> = {}): MessageView => ({ id, at, time: "9:05 AM", fullTime: "x", day: at.slice(0, 10), sender: "Pat", mine: false, edited: false, deleted: false, system: false, nodes: [{ t: "text", v: `text ${id}` }], truncated: false, attachments: [], ...over }) as unknown as MessageView;
 const row = (key: string, title: string, unread = false): ChatRowView => ({ key, conn: CONN, account: null, accountName: null, at: null, ord: 0, title, preview: `p ${title}`, time: "9:00 AM", unread, external: false });
 
-type Server = { truncated?: boolean; live: boolean; lastNoticeAt: string | null; dot: boolean; activityStatus: number; chats: ChatRowView[]; chatsStatus: number; newer: MessageView[]; newerStatus: number };
+type Server = { truncated?: boolean; live: boolean; lastNoticeAt: string | null; dot: boolean; activityStatus: number; chats: ChatRowView[]; chatsStatus: number; chatsError?: string; newer: MessageView[]; newerStatus: number };
 let server: Server;
 let vis: "visible" | "hidden" = "visible";
 const calls = { activity: 0, seen: 0, chats: 0, newer: 0, read: 0, urls: [] as string[] };
@@ -42,7 +42,7 @@ const fetchMock = vi.fn((url: string, init?: RequestInit) => {
   }
   if (u.includes("/messages/chats")) {
     calls.chats += 1;
-    return server.chatsStatus === 200 ? json(200, { rows: server.chats, moreCursor: null }) : json(server.chatsStatus, { error: "busy" });
+    return server.chatsStatus === 200 ? json(200, { rows: server.chats, moreCursor: null }) : json(server.chatsStatus, { error: server.chatsError ?? "busy" });
   }
   if (u.includes("/messages/newer")) {
     calls.newer += 1;
@@ -344,6 +344,24 @@ describe("the first answer (T-290 review M2, M3)", () => {
     expect(screen.getByTestId("messages-refresh-note").textContent).toMatch(/Already up to date/);
     await tick(5 * 60_000);
     expect([calls.chats, calls.newer]).toEqual([1, 1]); // the same value is not a second re-read
+  });
+});
+
+describe("a sign-in that expires while its chat is open (T-288, carried from the T-296 re-check)", () => {
+  it("the chat list re-read answering 409 reconnect makes ONE server refresh (guarded: a second 409 does not loop); a 409 feature_missing does not", async () => {
+    await start();
+    server.chatsStatus = 409;
+    server.chatsError = "feature_missing";
+    server.lastNoticeAt = "2026-11-23T15:00:10.000Z";
+    await tick(ACTIVITY_POLL_MS);
+    expect(refresh).not.toHaveBeenCalled();
+    server.chatsError = "reconnect";
+    server.lastNoticeAt = "2026-11-23T15:05:00.000Z";
+    await tick(ACTIVITY_POLL_MS);
+    expect(refresh).toHaveBeenCalledTimes(1);
+    server.lastNoticeAt = "2026-11-23T15:10:00.000Z";
+    await tick(ACTIVITY_POLL_MS);
+    expect(refresh).toHaveBeenCalledTimes(1);
   });
 });
 

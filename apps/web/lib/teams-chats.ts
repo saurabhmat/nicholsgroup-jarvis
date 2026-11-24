@@ -283,7 +283,7 @@ export function senderKeyOf(scope: string, sender: { id: string | null; kind: st
 }
 
 /** `scope`: the id of the chat (or channel thread) the message belongs to; it only scopes the grouping key. */
-export function messageView(m: ChatMessage, images: string | null = null, scope = ""): MessageView {
+export function messageView(m: ChatMessage, images: string | null, scope: string): MessageView {
   return {
     id: m.id,
     images,

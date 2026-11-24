@@ -1,0 +1,70 @@
+// "Send = your approval" for a Teams chat message (T-288; docs/specs/messages.md 10.3, 22.8; decision D-67): ONE user step that is propose + approve + claim + execute + verify, inline, for the exact text
+// the person typed. Rule 5: this is the only way the Messages page reaches the Teams writer, and it does so only through the approvals functions below (the database checks owner, role, AAL2, the
+// step-up age, every gate and the single claim again at each step). The caller (the route) has already done: same site, session at AAL2, `requireStepUp` within the lane's Teams window, the module
+// visible and the connection named by `conn` being the caller's own usable Teams row. Here, in this order, each refusal with a fixed name and nothing proposed until the last one passes:
+//   1 the caller's write role (owner, admin_technical)          -> ApprovalsError("forbidden")
+//   2 the connection is the caller's usable Teams connection    -> ApprovalsError("not_found") (the same answer for anything else)
+//   3 the gates, by name (`teamsChatSendGate`)                   -> { kind: "gate", gate }
+//   4 the text, validated by the connector's Zod schema          -> ApprovalsError("invalid")
+//   5 `textSha256` (the browser's hash of the text it shows) equals the server's hash of the same text -> { kind: "text_mismatch" }
+//   6 propose (the same client request id is the same action) -> approve the hash just computed -> claim -> ONE POST (no retry) -> read back, as `approveAndExecuteTeams`.
+// The text lives only in the one proposal (until a terminal state, when the database empties it) and the one POST body: never in a log, an audit row, an error or an event.
+import { createHash, timingSafeEqual } from "node:crypto";
+import type { LaneId } from "@nichols/core";
+import { teamsChatSendGate, type TeamsSendGate } from "./capability";
+import type { ApproveResult } from "./email";
+import { checkId, checkLane } from "./email";
+import { ApprovalsError } from "./errors";
+import { approveAndExecuteTeams, buildTeamsSend, proposeTeamsAction, type TeamsExecDeps } from "./teams";
+import { WRITE_ROLES, type UserCtx } from "./types";
+
+export type SendTeamsInput = {
+  /** The connection the open conversation was read through (the route re-checked it as the caller's own). */
+  connectionId: string;
+  /** The chat id (decoded and validated by the route from the chat key). */
+  chatId: string;
+  /** What the person typed (any line-break style; normalised here exactly as the browser normalises before hashing). */
+  text: string;
+  /** SHA-256 (lower-case hex) of the NORMALISED text, computed by the browser from the text it shows. */
+  textSha256: string;
+  /** One per composed message (the browser's lower-case UUID): a double click or a repeated request is the same action. */
+  clientRequestId: string;
+};
+
+export type TeamsSendOutcome =
+  | { kind: "gate"; gate: TeamsSendGate }
+  | { kind: "text_mismatch" }
+  | { kind: "result"; result: ApproveResult };
+
+/** SHA-256 of a normalised text, lower-case hex. The one definition both the browser (Web Crypto) and the server compute. */
+export const teamsTextHash = (normalisedText: string): string => createHash("sha256").update(normalisedText, "utf8").digest("hex");
+
+const HEX64 = /^[0-9a-f]{64}$/;
+function sameHash(a: string, b: string): boolean {
+  if (!HEX64.test(a) || !HEX64.test(b)) return false;
+  return timingSafeEqual(Buffer.from(a, "hex"), Buffer.from(b, "hex"));
+}
+
+export async function sendTeamsMessage(deps: TeamsExecDeps, ctx: UserCtx, input: SendTeamsInput): Promise<TeamsSendOutcome> {
+  checkLane(ctx.laneId as LaneId);
+  checkId(input.connectionId);
+  if (typeof input.text !== "string" || typeof input.textSha256 !== "string") throw new ApprovalsError("invalid");
+  // 1: role (the database checks it again at propose)
+  const role = await ctx.rpc("has_lane_role", { p_uid: ctx.userId, p_lane: ctx.laneId, p_roles: [...WRITE_ROLES["teams.chat.send"]] });
+  if (role.error) throw new ApprovalsError("unavailable");
+  if (role.data !== true) throw new ApprovalsError("forbidden");
+  // 2 and 3: the facts of THIS connection
+  const facts = await deps.readFacts(ctx.laneId as LaneId, input.connectionId);
+  if (!facts.teams || facts.teams.ownerUserId !== ctx.userId) throw new ApprovalsError("not_found");
+  const gate = teamsChatSendGate(facts);
+  if (gate !== null) return { kind: "gate", gate };
+  // 4: the text and ids, by the connector's own schema (the database says the same in act.teams_shape_ok)
+  const place = { type: "teams.chat.send" as const, chatId: input.chatId };
+  const send = buildTeamsSend({ place, text: input.text, clientRequestId: input.clientRequestId });
+  // 5: the bytes approved are the bytes typed
+  if (!sameHash(teamsTextHash(send.text), input.textSha256)) return { kind: "text_mismatch" };
+  // 6: propose; approve exactly the hash just computed; claim; one POST; read back
+  const proposed = await proposeTeamsAction(deps, ctx, { connectionId: input.connectionId, place, text: input.text, clientRequestId: input.clientRequestId, aiDrafted: false });
+  const result = await approveAndExecuteTeams(deps, ctx, { actionId: proposed.id, hashSeen: proposed.hash });
+  return { kind: "result", result };
+}

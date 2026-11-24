@@ -20,6 +20,11 @@ export type { ApproveResult, EmailChanges, EmailComposeInput, ProposeEmailInput,
 export { proposeQboDisconnect, qboExternalId } from "./qbo";
 // T-286: propose a Teams message (the one-step send of T-288 builds on it). Execution is `approveAndExecuteTeamsAction` in `@nichols/approvals/wire`.
 export { buildTeamsSend, proposeTeamsAction } from "./teams";
+// T-288: the pure helpers the page and the route share (the gates by name, the text hash). `sendTeamsMessage` itself is in `@nichols/approvals/wire`.
+export { teamsChatSendGate, TEAMS_SEND_GATES, teamsStepUpFromConfig } from "./capability";
+export type { TeamsSendGate } from "./capability";
+export { teamsTextHash } from "./teams-send";
+export type { SendTeamsInput, TeamsSendOutcome } from "./teams-send";
 export type { ProposeTeamsInput, TeamsPlace } from "./teams";
 export { hashOfRow } from "./rows";
 export { ACTION_TYPES, EMAIL_ACTION_TYPES, isEmailType, isTeamsType, QBO_DISCONNECT, TEAMS_ACTION_TYPES, WRITE_ROLES } from "./types";

@@ -31,6 +31,29 @@ export function teamsStepUpFromConfig(v: unknown): number {
   return raw !== null && /^[0-9]{1,5}$/.test(raw) ? Math.min(Math.max(Number(raw), 300), 43200) : 300;
 }
 
+/**
+ * The gates in front of a Teams CHAT send, in the order the route and the page report them (T-288; spec 10.3, 17 test 13), each by name so the person can be told which one is off:
+ *   not_usable  the connection is not a usable Teams connection of the lane (or not the caller's: the caller has already been told "not found" before this runs)
+ *   lane_off    the company's `teams.enabled` or its `teams.features` lacks `chat_send`
+ *   reconnect   the connection lacks its own send grant (connected before sending was switched on): Reconnect
+ *   policy_off  `teams_send` is not in the lane policy
+ *   drafts_off  the lane does not store outbound drafts (a Teams send holds its text while open)
+ *   not_live    `approvals_live` is not true
+ * `null`: every gate is open. Pure over the facts; the database checks the same gates again at propose, approve and claim.
+ */
+export const TEAMS_SEND_GATES = ["not_usable", "lane_off", "reconnect", "policy_off", "drafts_off", "not_live"] as const;
+export type TeamsSendGate = (typeof TEAMS_SEND_GATES)[number];
+export function teamsChatSendGate(facts: CapabilityFacts): TeamsSendGate | null {
+  const t = facts.teams;
+  if (!t) return "not_usable";
+  if (!(t.laneChatSend ?? t.chatSend)) return "lane_off";
+  if (!(t.connChatSend ?? t.chatSend)) return "reconnect";
+  if (!facts.writeActionsAllowed.includes("teams_send")) return "policy_off";
+  if (facts.storeOutboundDrafts === false) return "drafts_off";
+  if (!facts.approvalsLive) return "not_live";
+  return null;
+}
+
 export function capabilityOf(laneId: LaneId, facts: CapabilityFacts, type: ActionType): Capability {
   if (isTeamsType(type)) {
     // T-286: a usable Teams connection of the lane, the connection's send permission and the lane's teams.features (chat_send for a chat, channels_send for a channel), the lane policy class

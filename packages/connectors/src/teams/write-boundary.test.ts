@@ -105,6 +105,18 @@ describe("the Teams write path is reachable only from approvals", () => {
     expect(named).toEqual(["packages/modules/approvals/src/server/index.ts", "packages/modules/approvals/src/server/teams.ts", "packages/modules/approvals/src/server/wire.ts"]);
   });
 
+  it("`sendTeamsMessage` (T-288, Send = your approval) is named only inside the approvals module and by the ONE Messages send route (added deliberately to the allowed files); that route names no propose, approve or execute entry itself", () => {
+    const named = production()
+      .filter((f) => /\bsendTeamsMessage\b/.test(text(f)))
+      .map(rel)
+      .filter((f) => !f.startsWith("packages/eslint-plugin/src/"))
+      .sort();
+    expect(named.filter((f) => !f.startsWith("packages/modules/approvals/src/"))).toEqual(["apps/web/app/api/lanes/[laneId]/messages/send/route.ts"]);
+    expect(named.filter((f) => f.startsWith("packages/modules/approvals/src/"))).toEqual(["packages/modules/approvals/src/server/teams-send.ts", "packages/modules/approvals/src/server/wire.ts"]);
+    const route = text(join(root, "apps/web/app/api/lanes/[laneId]/messages/send/route.ts"));
+    expect(route).not.toMatch(/\b(proposeTeamsAction|approveAndExecuteTeamsAction|executeApprovedTeamsAction|approveAndExecuteTeams|executeApprovedTeams|teamsMessageWriter|@nichols\/connectors\/write)\b/);
+  });
+
   it("the message writer reaches Microsoft only through the guarded read client and the write client: no fetch, no HTTP method, no token read, no other write route", () => {
     const t = text(join(root, "packages/connectors/src/teams/writer.ts"));
     expect(t).not.toMatch(/\bfetch\(|XMLHttpRequest|method:\s*"|createTeamsHttp|getToken|tokens\.|accessToken|markChatReadForUser|setReaction|softDelete|console\./);
