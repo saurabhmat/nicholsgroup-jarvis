@@ -3,13 +3,32 @@
 // component. No timer lives here: the only loop is in components/messages-live.tsx, with a comment that says why it is allowed.
 import { DOT_MIN_GAP_MS } from "./messages-live-config";
 
-export type ActivityAnswer = { live: boolean; liveUntil: string | null; dot: boolean; lastNoticeAt: string | null; /** The server's clock when it answered (null from an older server): only to compare with `lastNoticeAt`. */ serverNow: string | null };
+/** One usable connection's notice state (T-295): its own live state, expiry, dot and latest notice. */
+export type AccountActivityAnswer = { conn: string; live: boolean; liveUntil: string | null; dot: boolean; lastNoticeAt: string | null };
+export type ActivityAnswer = {
+  live: boolean;
+  liveUntil: string | null;
+  dot: boolean;
+  lastNoticeAt: string | null;
+  /** The server's clock when it answered (null from an older server): only to compare with `lastNoticeAt`. */
+  serverNow: string | null;
+  /** One entry per usable connection (empty from an older server or for a person without one). */
+  accounts: AccountActivityAnswer[];
+};
 
+const CONN = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
 function parse(v: unknown): ActivityAnswer | null {
   if (typeof v !== "object" || v === null) return null;
   const r = v as Record<string, unknown>;
   const at = (x: unknown) => (typeof x === "string" && !Number.isNaN(Date.parse(x)) ? x : null);
-  return { live: r.live === true, liveUntil: at(r.liveUntil), dot: r.dot === true, lastNoticeAt: at(r.lastNoticeAt), serverNow: at(r.serverNow) };
+  const accounts: AccountActivityAnswer[] = Array.isArray(r.accounts)
+    ? (r.accounts as unknown[]).slice(0, 5).flatMap((a) => {
+        if (typeof a !== "object" || a === null) return [];
+        const x = a as Record<string, unknown>;
+        return typeof x.conn === "string" && CONN.test(x.conn) ? [{ conn: x.conn, live: x.live === true, liveUntil: at(x.liveUntil), dot: x.dot === true, lastNoticeAt: at(x.lastNoticeAt) }] : [];
+      })
+    : [];
+  return { live: r.live === true, liveUntil: at(r.liveUntil), dot: r.dot === true, lastNoticeAt: at(r.lastNoticeAt), serverNow: at(r.serverNow), accounts };
 }
 
 /** The state from the portal's own database, or why not: the HTTP status of a refusal (null: the request itself failed). */
@@ -30,10 +49,32 @@ export async function getActivity(laneId: string, signal?: AbortSignal): Promise
   return r.ok ? r.answer : null;
 }
 
-/** The person opened the chat list: records it and returns the state as it is now. */
-export async function postSeen(laneId: string, signal?: AbortSignal): Promise<ActivityAnswer | null> {
+/**
+ * Several readers of one answer (T-295, spec 22.7: Settings draws one live state per Teams row from ONE request): while a request for a lane is in flight, a second caller gets the same answer instead
+ * of asking again. No cache after the answer: the next call asks the database again. The shared request carries no caller's abort signal; each caller ignores a late answer itself.
+ */
+const sharing = new Map<string, Promise<ActivityAnswer | null>>();
+export function getActivityShared(laneId: string): Promise<ActivityAnswer | null> {
+  const open = sharing.get(laneId);
+  if (open) return open;
+  const p = getActivity(laneId).finally(() => sharing.delete(laneId));
+  sharing.set(laneId, p);
+  return p;
+}
+
+/**
+ * The person opened the chat list: records it and returns the state as it is now. `conns` names the connections whose list was read (T-295): only those are marked seen (an account whose list failed
+ * keeps its dot). Without it every usable connection is marked.
+ */
+export async function postSeen(laneId: string, signal?: AbortSignal, conns?: readonly string[]): Promise<ActivityAnswer | null> {
   try {
-    const res = await fetch(`/api/lanes/${encodeURIComponent(laneId)}/messages/activity`, { method: "POST", credentials: "same-origin", cache: "no-store", ...(signal ? { signal } : {}) });
+    const res = await fetch(`/api/lanes/${encodeURIComponent(laneId)}/messages/activity`, {
+      method: "POST",
+      credentials: "same-origin",
+      cache: "no-store",
+      ...(conns !== undefined ? { headers: { "content-type": "application/json" }, body: JSON.stringify({ conns: [...conns].slice(0, 5) }) } : {}),
+      ...(signal ? { signal } : {}),
+    });
     return res.ok ? parse(await res.json()) : null;
   } catch {
     return null;

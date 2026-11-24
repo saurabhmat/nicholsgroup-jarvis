@@ -9,14 +9,14 @@ import { Alert, AlertDescription, AlertTitle, Card, CardDescription, CardHeader,
 import { guards } from "@/lib/guards";
 import { messagesStateOf, type MessagesState } from "@/lib/teams-messages";
 import { teamsSectionFor } from "@/lib/teams-connection";
-import { reconnectToAddText, TEAMS_ADMIN_CONSENT_TEXT, TEAMS_CLOUD_UNSUPPORTED_PAGE_TEXT, TEAMS_CONNECTS_TEXT, TEAMS_NOT_SET_UP_TEXT, TEAMS_PAUSED_PAGE_TEXT } from "@/lib/teams-wording";
+import { MESSAGES_ACCOUNT_STATE_DEGRADED, MESSAGES_ACCOUNT_STATE_OK, MESSAGES_ACCOUNT_STATE_RECONNECT, MESSAGES_CONNECTED_AS_SEVERAL, messagesAccountFeatureText, messagesReconnectAccountLabel, reconnectToAddText, TEAMS_ADMIN_CONSENT_TEXT, TEAMS_CONNECT_ANOTHER_TEXT, TEAMS_CLOUD_UNSUPPORTED_PAGE_TEXT, TEAMS_CONNECTS_TEXT, TEAMS_NOT_SET_UP_TEXT, TEAMS_PAUSED_PAGE_TEXT } from "@/lib/teams-wording";
 import { LaneEyebrow } from "./module-page";
 import { MessagesWorkspace } from "./messages-chats";
 import { ChannelsUnavailable, ChannelsWorkspace } from "./messages-channels";
 import { decodeChannelKey, isTeamId } from "@/lib/teams-channel-key";
-import { channelsAvailability } from "@/lib/teams-messages";
+import { channelsAvailability, openAccountOf } from "@/lib/teams-messages";
 import { decodeChatKey } from "@/lib/teams-chat-key";
-import { SignIn } from "./messages-view";
+import { AccountBadge, SignIn } from "./messages-view";
 import { CardSkeleton } from "./page-skeleton";
 
 /** One read per request and lane, shared by the gate's early start and the body (React cache). */
@@ -50,7 +50,8 @@ async function MessagesBody({ params, searchParams }: { params: Promise<{ laneId
   const tab = tabOf(sp?.tab);
   const chat = sp?.chat;
   // a conversation (a chat, or a channel's posts) is open: on a phone it gets the screen
-  const chatOpen = state.kind === "connected" && (tab === "channels" ? isTeamId(sp?.team) && decodeChannelKey(typeof sp?.channel === "string" ? sp.channel : null) !== null : decodeChatKey(typeof chat === "string" ? chat : null) !== null);
+  // T-295: a chat is open only when the address names an account that opens it (`?conn=`; a one-account person's old `?chat=` link too)
+  const chatOpen = state.kind === "connected" && (tab === "channels" ? isTeamId(sp?.team) && decodeChannelKey(typeof sp?.channel === "string" ? sp.channel : null) !== null : decodeChatKey(typeof chat === "string" ? chat : null) !== null && openAccountOf(state, sp ?? {}) !== undefined);
   return <MessagesScreen laneId={laneId} state={state} chatOpen={chatOpen} tab={tab} workspace={state.kind === "connected" ? <ConnectedWorkspace laneId={laneId} state={state} tab={tab} chatOpen={chatOpen} searchParams={searchParams} /> : null} />;
 }
 
@@ -102,7 +103,8 @@ export function ConnectedWorkspace({ laneId, state, tab, chatOpen, searchParams 
       </>
     );
   }
-  if (state.missing.includes("chat_read")) return tabs; // the feature-missing note above carries the Reconnect button
+  // no usable account has chat_read: the feature-missing note above carries the Reconnect button(s)
+  if (!state.accounts.some((a) => a.usable && a.has.includes("chat_read"))) return tabs;
   return (
     <>
       {tabs}
@@ -145,8 +147,12 @@ export function MessagesScreen({ laneId, state, workspace = null, chatOpen = fal
             <CardTitle as="h2">Your Teams sign-in expired</CardTitle>
             <CardDescription>Reconnect Teams to see your chats again.</CardDescription>
           </CardHeader>
-          <div className="px-6 pb-6">
-            <SignIn laneId={laneId} connectionId={state.connectionId} label="Reconnect Teams" />
+          <div className="flex flex-wrap gap-2 px-6 pb-6">
+            {state.accounts.length > 1 ? (
+              state.accounts.map((a) => <SignIn key={a.connectionId} laneId={laneId} connectionId={a.connectionId} label={messagesReconnectAccountLabel(a.label)} />)
+            ) : (
+              <SignIn laneId={laneId} connectionId={state.connectionId} label="Reconnect Teams" />
+            )}
           </div>
         </Card>
       );
@@ -157,23 +163,53 @@ export function MessagesScreen({ laneId, state, workspace = null, chatOpen = fal
         <div className="flex flex-col gap-4" data-testid="messages-connected">
           <Card className={chatOpen ? "hidden lg:block" : undefined}>
             <CardHeader>
-              <CardTitle as="h2">Connected as {state.account}</CardTitle>
-              <CardDescription>
-                Your Teams account is connected.{" "}
-                <Link href={`${laneHref(laneId, "settings")}#connections`} className="font-medium underline underline-offset-4">
-                  Manage it in Settings
-                </Link>
-                .
-              </CardDescription>
+              {state.accounts.length > 1 ? (
+                <>
+                  <CardTitle as="h2">Connected accounts</CardTitle>
+                  <CardDescription>
+                    {MESSAGES_CONNECTED_AS_SEVERAL}{" "}
+                    <Link href={`${laneHref(laneId, "settings")}#connections`} className="font-medium underline underline-offset-4">
+                      Manage them in Settings
+                    </Link>
+                    .
+                  </CardDescription>
+                  <ul className="mt-2 flex flex-col gap-1" data-testid="messages-accounts">
+                    {state.accounts.map((a) => (
+                      <li key={a.connectionId} data-testid="messages-account" className="flex min-w-0 flex-wrap items-center gap-2 text-body">
+                        <AccountBadge label={a.label} name={a.account} />
+                        <span className="min-w-0 [overflow-wrap:anywhere]">{a.account}</span>
+                        <span className="text-small text-muted-foreground">{!a.usable ? MESSAGES_ACCOUNT_STATE_RECONNECT : a.degraded ? MESSAGES_ACCOUNT_STATE_DEGRADED : MESSAGES_ACCOUNT_STATE_OK}</span>
+                      </li>
+                    ))}
+                  </ul>
+                </>
+              ) : (
+                <>
+                  <CardTitle as="h2">Connected as {state.account}</CardTitle>
+                  <CardDescription>
+                    Your Teams account is connected.{" "}
+                    <Link href={`${laneHref(laneId, "settings")}#connections`} className="font-medium underline underline-offset-4">
+                      Manage it in Settings
+                    </Link>
+                    .
+                  </CardDescription>
+                </>
+              )}
             </CardHeader>
+            {state.canAddAnother ? (
+              <div className="px-6 pb-6" data-testid="messages-connect-another">
+                <SignIn laneId={laneId} label={TEAMS_CONNECT_ANOTHER_TEXT} />
+              </div>
+            ) : null}
           </Card>
-          {state.degraded ? (
+          {state.accounts.length > 1 ? <AccountProblems laneId={laneId} state={state} tab={tab} /> : null}
+          {state.accounts.length <= 1 && state.degraded ? (
             <Alert variant="alert" data-testid="messages-degraded">
               <AlertTitle>Teams is having problems</AlertTitle>
               <AlertDescription>The last check of your Teams connection failed. If it keeps happening, reconnect Teams in Settings.</AlertDescription>
             </Alert>
           ) : null}
-          {missingHere.length > 0 ? (
+          {state.accounts.length <= 1 && missingHere.length > 0 ? (
             <Alert data-testid="messages-feature-missing">
               <AlertDescription>
                 {reconnectToAddText(missingHere)}
@@ -189,4 +225,32 @@ export function MessagesScreen({ laneId, state, workspace = null, chatOpen = fal
       );
     }
   }
+}
+
+/**
+ * Several accounts (T-295; spec 22.5 "States"): what is wrong is said for the account it is wrong for ("pub-k.org: Reconnect Teams to add call buttons."), each with its own Reconnect. An expired
+ * sign-in is an account line; the list below still shows the other accounts' chats.
+ */
+function AccountProblems({ laneId, state, tab }: { laneId: string; state: Extract<MessagesState, { kind: "connected" }>; tab: MessagesTab }) {
+  const lines = state.accounts.flatMap((a) => {
+    const missing = tab === "channels" ? a.missing.filter((f) => f !== "channels_read") : a.missing;
+    const out: { key: string; text: string; connectionId: string; label: string }[] = [];
+    if (!a.usable) out.push({ key: `${a.connectionId}:expired`, text: `${a.label}: Your Teams sign-in expired.`, connectionId: a.connectionId, label: messagesReconnectAccountLabel(a.label) });
+    else if (a.degraded) out.push({ key: `${a.connectionId}:degraded`, text: `${a.label}: Teams is having problems. If it keeps happening, reconnect it.`, connectionId: a.connectionId, label: messagesReconnectAccountLabel(a.label) });
+    if (a.usable && missing.length > 0) out.push({ key: `${a.connectionId}:missing`, text: messagesAccountFeatureText(a.label, reconnectToAddText(missing)), connectionId: a.connectionId, label: messagesReconnectAccountLabel(a.label) });
+    return out;
+  });
+  if (lines.length === 0) return null;
+  return (
+    <div className="flex flex-col gap-2" data-testid="messages-account-problems">
+      {lines.map((l) => (
+        <Alert key={l.key} data-testid="messages-account-problem">
+          <AlertDescription>{l.text}</AlertDescription>
+          <div className="pt-2">
+            <SignIn laneId={laneId} connectionId={l.connectionId} label={l.label} />
+          </div>
+        </Alert>
+      ))}
+    </div>
+  );
 }

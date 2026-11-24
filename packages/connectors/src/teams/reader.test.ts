@@ -146,6 +146,18 @@ describe("listChats", () => {
     expect(JSON.stringify(lines)).not.toContain(CANARY);
   });
 
+  it("T-294: the member fallback reads at most the budget the caller gives (the page splits its 20 across accounts); never more than 20, never a negative or fractional count", async () => {
+    for (const [budget, expected] of [[10, 10], [0, 0], [-4, 0], [7.9, 7], [99, 20]] as const) {
+      const { fake, reader, conn, me } = setup();
+      fake.state.refuseCombinedExpand = true;
+      const ids = Array.from({ length: 25 }, (_, i) => `19:chat${String(i)}@thread.v2`);
+      fake.state.chatPages = [ids.map((id) => chat(id, { topic: "t", lastMessagePreview: preview("2026-11-21T09:00:00Z", U1, "x"), members: [member(me, "Me")] }))];
+      for (const id of ids) fake.state.membersByChat.set(id, [member(me, "Me"), member(U1, "Pat")]);
+      await reader.listChats("PKG", conn, asUser, { memberReads: budget });
+      expect(fake.state.graphRequests.filter((q) => q.path.endsWith("/members")), String(budget)).toHaveLength(expected);
+    }
+  });
+
   it("any other failure is not a fallback: a 403 is raised as it is", async () => {
     const { fake, reader, conn } = setup();
     fake.state.graphFail = { status: 403, code: "Forbidden", times: 5 };

@@ -104,3 +104,19 @@ export const MESSAGES_NEW_DOT_LABEL = "New messages";
 export const messagesLiveUntilText = (when: string): string => `Live updates until ${when}`;
 export const messagesRefreshWaitText = (seconds: number): string => `Already up to date. You can refresh again in ${String(Math.max(1, Math.ceil(seconds)))} seconds.`;
 export const MESSAGES_REFRESH_FAILED_TEXT = "Could not refresh just now. What you see is as of your last refresh.";
+
+// ---- several accounts on Messages (T-295, spec 22.5). One plain line per account that did not answer; the label is the account's own (its domain or the part before the @), computed from the person's
+// own sign-in names, never from chat content.
+export const MESSAGES_ACCOUNT_CHANGED_TEXT = "One of your Teams accounts changed; showing the others.";
+export const messagesAccountExpiredText = (label: string): string => `${label}: Your Teams sign-in expired.`;
+export const messagesAccountBusyText = (label: string, seconds: number | null): string =>
+  seconds === null ? `${label}: Teams is busy; try again in a moment.` : `${label}: Teams is busy; try again in ${String(seconds)} ${seconds === 1 ? "second" : "seconds"}.`;
+export const messagesAccountUnreachableText = (label: string): string => `${label}: Teams could not be reached.`;
+export const messagesReconnectAccountLabel = (label: string): string => `Reconnect ${label}`;
+/** "pub-k.org: Reconnect Teams to add call buttons." (a missing feature said for that account only). */
+export const messagesAccountFeatureText = (label: string, text: string): string => `${label}: ${text}`;
+export const messagesAccountBadgeName = (upn: string): string => `Account: ${upn}`;
+export const MESSAGES_CONNECTED_AS_SEVERAL = "Your Teams accounts are connected.";
+export const MESSAGES_ACCOUNT_STATE_OK = "Connected";
+export const MESSAGES_ACCOUNT_STATE_DEGRADED = "Connected, with problems";
+export const MESSAGES_ACCOUNT_STATE_RECONNECT = "Sign-in expired";

@@ -9,7 +9,9 @@ import { Suspense, type ReactNode } from "react";
 import { Alert, AlertDescription, AlertTitle, cn, EmptyState } from "@nichols/ui";
 import { guards } from "@/lib/guards";
 import { decodeChatKey } from "@/lib/teams-chat-key";
-import { loadChatList, loadConversation, type CallPolicy, type ChatListView, type ConversationView, type TeamsPerson } from "@/lib/teams-chats";
+import { loadChatLists, loadConversation, type CallPolicy, type ChatListView, type ChatSource, type ConversationView, type TeamsPerson } from "@/lib/teams-chats";
+import { isConnId } from "@/lib/teams-accounts";
+import { looksLikeCursor } from "@/lib/teams-cursor";
 import type { TeamsFailure } from "@/lib/teams-errors";
 import {
   MESSAGES_CHAT_NOT_FOUND_TEXT,
@@ -22,17 +24,16 @@ import {
   MESSAGES_TIMES_NOTE,
   messagesBusyText,
 } from "@/lib/teams-wording";
-import type { MessagesState } from "@/lib/teams-messages";
+import { openAccountOf, type MessagesState } from "@/lib/teams-messages";
 import { hrefFor } from "@/lib/messages-href";
 import { CallButtons, ConversationMessages, FocusConversation, MarkRead, MessagesRefresh } from "./messages-client";
-import { ChatListLive, MessagesLiveProvider } from "./messages-live";
-import { SignIn } from "./messages-view";
+import { AccountNotes, ChatListLive, MessagesLiveProvider } from "./messages-live";
+import { AccountBadge, SignIn } from "./messages-view";
 import { SectionBoundary } from "./section-boundary";
 
 type Connected = Extract<MessagesState, { kind: "connected" }>;
 type SearchParams = Record<string, string | string[] | undefined>;
 const one = (v: string | string[] | undefined) => (typeof v === "string" ? v : undefined);
-const CURSOR = /^[A-Za-z0-9_-]{1,3200}$/;
 
 
 // ---- skeletons: the final shape (rows of a list, a header and bubbles), so nothing jumps
@@ -90,14 +91,35 @@ export function TeamsFailureCard({ failure, laneId, connectionId, testId }: { fa
 }
 
 // ---- the chat list
-export function ChatListView({ view, laneId, connectionId, selectedKey, more }: { view: ChatListView; laneId: string; connectionId: string; selectedKey: string | null; more: string | null }) {
-  if (view.kind !== "ok") return <TeamsFailureCard failure={view} laneId={laneId} connectionId={connectionId} testId="chat-list-error" />;
+export function ChatListView({ view, laneId, connectionId, selectedKey, selectedConn = null, more }: { view: ChatListView; laneId: string; connectionId: string; selectedKey: string | null; /** The account of the open chat (several accounts only). */ selectedConn?: string | null; more: string | null }) {
+  if (view.kind !== "ok") {
+    // every account failed: the existing failure card; with several accounts a plain line per account follows (each with its own Reconnect where that helps)
+    const notes = view.notes ?? [];
+    return (
+      <div className="flex min-w-0 flex-col gap-3">
+        <TeamsFailureCard failure={view} laneId={laneId} connectionId={notes.length > 0 ? (notes.find((n) => n.kind === "reconnect")?.conn ?? connectionId) : connectionId} testId="chat-list-error" />
+        {notes.length > 1 ? <AccountNotes laneId={laneId} notes={notes} dropped={false} /> : null}
+      </div>
+    );
+  }
   // The rows are drawn by a client component that can read the list again after a notice or a Refresh (T-290); on the server it draws exactly what it always did.
-  return <ChatListLive laneId={laneId} initialRows={view.rows} moreCursor={view.moreCursor} selectedKey={selectedKey} more={more} />;
+  return (
+    <ChatListLive
+      laneId={laneId}
+      initialRows={view.rows}
+      moreCursor={view.moreCursor}
+      selectedKey={selectedKey}
+      selectedConn={selectedConn}
+      more={more}
+      initialNotes={view.notes ?? []}
+      initialDropped={view.dropped === true}
+      {...(view.listed ? { initialListed: view.listed } : {})}
+    />
+  );
 }
 
-async function ChatListSection({ promise, laneId, connectionId, selectedKey, more }: { promise: Promise<ChatListView>; laneId: string; connectionId: string; selectedKey: string | null; more: string | null }) {
-  return <ChatListView view={await promise} laneId={laneId} connectionId={connectionId} selectedKey={selectedKey} more={more} />;
+async function ChatListSection({ promise, laneId, connectionId, selectedKey, selectedConn, more }: { promise: Promise<ChatListView>; laneId: string; connectionId: string; selectedKey: string | null; selectedConn: string | null; more: string | null }) {
+  return <ChatListView view={await promise} laneId={laneId} connectionId={connectionId} selectedKey={selectedKey} selectedConn={selectedConn} more={more} />;
 }
 
 // ---- the conversation
@@ -114,18 +136,19 @@ export function ConversationPane({ view, laneId, connectionId, more = null }: { 
             <h2 id="conversation-title" tabIndex={-1} dir="auto" data-testid="conversation-title" className="truncate text-h3 font-semibold outline-none">
               {view.title}
             </h2>
-            <p dir="auto" className="truncate text-small text-muted-foreground">
-              {view.subtitle}
+            <p dir="auto" className="flex min-w-0 items-center gap-2 text-small text-muted-foreground">
+              <span className="min-w-0 truncate">{view.subtitle}</span>
+              {view.account ? <AccountBadge label={view.account} name={view.accountName} /> : null}
             </p>
           </div>
           <MessagesRefresh mode="live" />
         </div>
-        <CallButtons laneId={laneId} chatKey={view.chatKey} call={view.call} openUrl={view.openUrl} />
+        <CallButtons laneId={laneId} chatKey={view.chatKey} conn={view.conn} call={view.call} openUrl={view.openUrl} />
       </header>
-      <ConversationMessages key={view.chatKey} laneId={laneId} chatKey={view.chatKey} initial={view.messages} nextBefore={view.nextBefore} group={view.group} />
+      <ConversationMessages key={`${view.conn}:${view.chatKey}`} laneId={laneId} chatKey={view.chatKey} conn={view.conn} initial={view.messages} nextBefore={view.nextBefore} group={view.group} />
       <p className="border-t border-border px-4 py-1 text-small text-muted-foreground">{MESSAGES_TIMES_NOTE}</p>
-      <FocusConversation chatKey={view.chatKey} />
-      <MarkRead laneId={laneId} chatKey={view.chatKey} readThrough={view.readThrough} />
+      <FocusConversation chatKey={`${view.conn}:${view.chatKey}`} />
+      <MarkRead laneId={laneId} chatKey={view.chatKey} conn={view.conn} readThrough={view.readThrough} />
     </section>
   );
 }
@@ -153,37 +176,44 @@ export function NoChatSelected() {
 }
 
 /**
- * The connected person's workspace. Reads the address, then STARTS the chat list and the conversation together; each streams into its own boundary. Never throws for a Teams failure (the loaders
- * return one); a database or session problem is the section boundary's.
+ * The connected person's workspace. Reads the address, then STARTS the chat list (one read per usable account with chats, and the person's markers in ONE query) and the conversation together; each
+ * streams into its own boundary. Never throws for a Teams failure (the loaders return one); a database or session problem is the section boundary's.
+ * T-295: the address names the account of the open chat (`?conn=<id>&chat=<key>`); the page re-checks it against the person's own usable accounts, so an unknown, another person's, a disconnected or an
+ * expired account's id opens nothing (the list is still drawn). A `chat` without `conn` opens only for a person with exactly one usable account (old links keep working); with several it is "Select a chat".
  */
 export async function MessagesWorkspace({ laneId, state, searchParams }: { laneId: string; state: Connected; searchParams: Promise<SearchParams> }) {
   const sp = await searchParams;
   const chatKey = one(sp.chat) ?? null;
   const chatId = decodeChatKey(chatKey);
   const moreRaw = one(sp.more);
-  const more = moreRaw !== undefined && CURSOR.test(moreRaw) ? moreRaw : null;
+  const more = looksLikeCursor(moreRaw) ? moreRaw : null;
+  const openAccount = openAccountOf(state, sp);
   const { session, client } = await (await guards()).requireLane(laneId as Parameters<Awaited<ReturnType<typeof guards>>["requireLane"]>[0]);
-  const person: TeamsPerson = { laneId, userId: session.userId, connectionId: state.connectionId, client };
-  const policy: CallPolicy = { laneListsCalls: state.laneFeatures.includes("call_links"), connectionHasCalls: !state.missing.includes("call_links") };
+  const sources: ChatSource[] = state.accounts.flatMap((a, ord) => (a.usable && a.has.includes("chat_read") ? [{ connectionId: a.connectionId, label: state.multi ? a.label : null, account: a.account, ord }] : []));
+  const selectedKey = openAccount && chatId ? chatKey : null;
+  const selectedConn = openAccount && state.multi ? openAccount.connectionId : null;
   // started together, before either is awaited
-  const list = loadChatList(person, { ...(more ? { cursor: more } : {}), selectedKey: chatId ? chatKey : null });
-  const conversation = chatId && chatKey ? loadConversation(person, chatId, chatKey, policy) : null;
+  const list = loadChatLists({ laneId, userId: session.userId, client }, sources, { ...(more ? { cursor: more } : {}), selectedKey, selectedConn });
+  const conversation =
+    openAccount && chatId && chatKey
+      ? loadConversation({ laneId, userId: session.userId, connectionId: openAccount.connectionId, client }, chatId, chatKey, { laneListsCalls: state.laneFeatures.includes("call_links"), connectionHasCalls: openAccount.has.includes("call_links") }, { label: state.multi ? openAccount.label : null, name: openAccount.account })
+      : null;
   return (
-    <MessagesLiveProvider laneId={laneId}>
+    <MessagesLiveProvider laneId={laneId} expectLists>
       <WorkspaceLayout
-        selected={chatId !== null}
+        selected={openAccount !== undefined && chatId !== null}
         list={
           <SectionBoundary>
             <Suspense fallback={<ChatListSkeleton />}>
-              <ChatListSection promise={list} laneId={laneId} connectionId={state.connectionId} selectedKey={chatId ? chatKey : null} more={more} />
+              <ChatListSection promise={list} laneId={laneId} connectionId={sources[0]?.connectionId ?? state.connectionId} selectedKey={selectedKey} selectedConn={selectedConn} more={more} />
             </Suspense>
           </SectionBoundary>
         }
         conversation={
-          conversation ? (
+          conversation && openAccount ? (
             <SectionBoundary>
               <Suspense fallback={<ConversationSkeleton />}>
-                <ConversationSection promise={conversation} laneId={laneId} connectionId={state.connectionId} more={more} />
+                <ConversationSection promise={conversation} laneId={laneId} connectionId={openAccount.connectionId} more={more} />
               </Suspense>
             </SectionBoundary>
           ) : (

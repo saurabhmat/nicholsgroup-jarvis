@@ -4,6 +4,7 @@
 //   - nothing else: channels have no unread state in Teams, so there is no read marker, no table and nothing stored (rule 6).
 // Everything from Teams is fetched live, turned into a view for this response and dropped: no cache, no store, no log line with content. A failure becomes a fixed `TeamsFailure` (never
 // Microsoft's text). Rule 9: names and text are untrusted strings that components draw as text; links come out of the reader already checked (https only, teams.microsoft.com for Open in Teams).
+import { isConnId } from "./teams-accounts";
 import type { LaneId } from "@nichols/core";
 import { listChannelPosts, listChannels, listReplies, listTeams } from "@nichols/connectors/teams-reader";
 import { openChannelUrl, openPostUrl, type ChannelPost, type ChannelSummary } from "@nichols/connectors/teams-pure";
@@ -30,8 +31,9 @@ export type ThreadView = { kind: "ok"; posts: PostView[]; nextCursor: string | n
 export type RepliesView = { kind: "ok"; postId: string; replies: MessageView[]; more: boolean } | TeamsFailure;
 
 /** The image route's address for a root post of a channel (T-285). Null when an id is not valid. */
-export function postImagesBase(laneId: string, teamId: string, channelKey: string, messageId: string): string | null {
-  return isMessageId(messageId) ? `/api/lanes/${encodeURIComponent(laneId)}/messages/image?team=${encodeURIComponent(teamId)}&channel=${encodeURIComponent(channelKey)}&message=${encodeURIComponent(messageId)}` : null;
+export function postImagesBase(laneId: string, teamId: string, channelKey: string, messageId: string, conn: string): string | null {
+  // T-295: the image route names the connection (`conn`) in both forms; channels are read through the person's first usable account until T-296 gives each team its own account
+  return isMessageId(messageId) && isConnId(conn) ? `/api/lanes/${encodeURIComponent(laneId)}/messages/image?team=${encodeURIComponent(teamId)}&channel=${encodeURIComponent(channelKey)}&conn=${encodeURIComponent(conn)}&message=${encodeURIComponent(messageId)}` : null;
 }
 
 export async function loadTeams(p: Omit<TeamsPerson, "client">): Promise<TeamListView> {
@@ -60,14 +62,14 @@ export async function loadChannels(p: Omit<TeamsPerson, "client">, teamId: strin
   }
 }
 
-function postView(laneId: string, teamId: string, channelKey: string, tenantId: string, channelId: string, post: ChannelPost): PostView {
+function postView(laneId: string, conn: string, teamId: string, channelKey: string, tenantId: string, channelId: string, post: ChannelPost): PostView {
   let openUrl: string;
   try {
     openUrl = openPostUrl({ webUrl: post.webUrl, channelId, messageId: post.id, teamId, tenantId });
   } catch {
     openUrl = openChannelUrl(null); // an id the link cannot carry: Teams itself
   }
-  return { ...messageView(post, postImagesBase(laneId, teamId, channelKey, post.id)), subject: post.subject, openUrl };
+  return { ...messageView(post, postImagesBase(laneId, teamId, channelKey, post.id, conn)), subject: post.subject, openUrl };
 }
 
 /** A page of a channel's root posts, in Graph's order (the thread with the newest activity first). System events are not drawn. */
@@ -75,7 +77,7 @@ export async function loadThread(p: Omit<TeamsPerson, "client">, teamId: string,
   try {
     const r = await listChannelPosts(p.laneId as LaneId, p.connectionId, p.userId, teamId, channelId, opts.cursor ? { cursor: opts.cursor } : {});
     const key = encodeChannelKey(channelId);
-    return { kind: "ok", posts: r.posts.filter((m) => !m.system).map((m) => postView(p.laneId, teamId, key, r.self.tenantId, channelId, m)), nextCursor: r.nextCursor };
+    return { kind: "ok", posts: r.posts.filter((m) => !m.system).map((m) => postView(p.laneId, p.connectionId, teamId, key, r.self.tenantId, channelId, m)), nextCursor: r.nextCursor };
   } catch (e) {
     return teamsFailure(e);
   }

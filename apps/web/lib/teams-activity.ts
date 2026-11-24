@@ -65,3 +65,25 @@ export function createWindowLimiter(max: number, windowMs: number, now: () => nu
     },
   };
 }
+
+/** One entry of the activity answer per usable connection (T-295, spec 22.7). */
+export type AccountActivity = ActivityView & { conn: string };
+export type CombinedActivity = ActivityView & { accounts: AccountActivity[] };
+
+/**
+ * The whole person's state from their usable connections' states: `live` = any live; `liveUntil` = the EARLIEST expiry among the live ones; `dot` = any dot; `lastNoticeAt` = the latest. With no
+ * connection it is `ACTIVITY_OFF` with no accounts. Pure.
+ */
+export function combineActivity(accounts: readonly AccountActivity[]): CombinedActivity {
+  if (accounts.length === 0) return { ...ACTIVITY_OFF, accounts: [] };
+  const live = accounts.filter((a) => a.live);
+  const liveUntils = live.map((a) => a.liveUntil).filter((t): t is string => t !== null).sort();
+  const notices = accounts.map((a) => a.lastNoticeAt).filter((t): t is string => t !== null).sort();
+  return {
+    live: live.length > 0,
+    liveUntil: liveUntils[0] ?? null,
+    dot: accounts.some((a) => a.dot),
+    lastNoticeAt: notices[notices.length - 1] ?? null,
+    accounts: [...accounts],
+  };
+}

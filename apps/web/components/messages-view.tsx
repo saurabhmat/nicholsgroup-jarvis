@@ -8,7 +8,7 @@ import { buttonVariants, cn } from "@nichols/ui";
 import type { MessageNode } from "@nichols/connectors/teams-pure";
 import { dayLabel } from "@/lib/teams-format";
 import type { AttachmentView, ChatRowView, MessageView } from "@/lib/teams-chats";
-import { MESSAGES_FILE_OPENS_IN_MICROSOFT, MESSAGES_TRUNCATED_TEXT } from "@/lib/teams-wording";
+import { MESSAGES_FILE_OPENS_IN_MICROSOFT, MESSAGES_TRUNCATED_TEXT, messagesAccountBadgeName } from "@/lib/teams-wording";
 import { HostedImage, ImagePlaceholder } from "./messages-image";
 
 // ---- message bodies: typed nodes -> elements
@@ -212,40 +212,63 @@ export function MessageList({ messages, group, after }: { messages: readonly Mes
 }
 
 // ---- the chat list
-export function ChatListRows({ rows, selectedKey, hrefFor }: { rows: readonly ChatRowView[]; selectedKey: string | null; hrefFor: (chatKey: string) => string }) {
+/**
+ * The account label of a row or of a conversation (T-295; spec 22.5): TEXT (a colour may be added on top, never alone), the account's domain or the part before the @. The full sign-in name is its
+ * accessible name ("Account: <name>"). At iPhone width it keeps about 14 characters and an ellipsis; the chat title truncates first and nothing scrolls sideways.
+ */
+export function AccountBadge({ label, name, className }: { label: string; name: string | null; className?: string }) {
+  return (
+    <span
+      data-testid="account-badge"
+      role="img"
+      aria-label={messagesAccountBadgeName(name ?? label)}
+      title={name ?? label}
+      className={cn("inline-block min-w-0 max-w-[14ch] shrink-0 truncate rounded-full border border-border bg-muted px-2 text-small text-foreground sm:max-w-[26ch]", className)}
+    >
+      <span aria-hidden>{label}</span>
+    </span>
+  );
+}
+
+export function ChatListRows({ rows, selectedKey, selectedConn = null, hrefFor }: { rows: readonly ChatRowView[]; selectedKey: string | null; /** The account of the open chat: rows are (account, chat) pairs, so only that pair is highlighted. Null: any account's row of the chat key (one account). */ selectedConn?: string | null; hrefFor: (chatKey: string, conn: string | null) => string }) {
   return (
     <ul className="divide-y divide-border rounded-card border border-border bg-card" data-testid="chat-list">
-      {rows.map((r) => (
-        <li key={r.key}>
-          <Link
-            href={hrefFor(r.key)}
-            scroll={false}
-            aria-current={r.key === selectedKey ? "page" : undefined}
-            data-testid="chat-row"
-            data-unread={r.unread ? "true" : "false"}
-            className={cn("flex min-h-14 items-start gap-3 px-4 py-3 hover:bg-muted focus-visible:bg-muted", r.key === selectedKey && "bg-muted")}
-          >
-            <span aria-hidden className="mt-1.5 flex h-3 w-3 shrink-0 items-center justify-center">
-              {r.unread ? <span data-testid="unread-dot" className="h-2.5 w-2.5 rounded-full bg-primary" /> : null}
-            </span>
-            <span className="min-w-0 flex-1">
-              <span className="flex items-baseline justify-between gap-2">
-                <span dir="auto" className={cn("truncate text-body", r.unread ? "font-semibold" : "font-medium")}>
-                  {r.title}
-                </span>
-                <span className="shrink-0 text-small text-muted-foreground">{r.time}</span>
+      {rows.map((r) => {
+        const selected = r.key === selectedKey && (selectedConn === null || r.conn === selectedConn);
+        return (
+          <li key={`${r.conn}:${r.key}`}>
+            <Link
+              href={hrefFor(r.key, r.account !== null ? r.conn : null)}
+              scroll={false}
+              aria-current={selected ? "page" : undefined}
+              data-testid="chat-row"
+              data-unread={r.unread ? "true" : "false"}
+              data-conn={r.conn}
+              className={cn("flex min-h-14 items-start gap-3 px-4 py-3 hover:bg-muted focus-visible:bg-muted", selected && "bg-muted")}
+            >
+              <span aria-hidden className="mt-1.5 flex h-3 w-3 shrink-0 items-center justify-center">
+                {r.unread ? <span data-testid="unread-dot" className="h-2.5 w-2.5 rounded-full bg-primary" /> : null}
               </span>
-              <span className="flex items-center gap-2">
-                <span dir="auto" className={cn("truncate text-small", r.unread ? "text-foreground" : "text-muted-foreground")}>
-                  {r.preview}
+              <span className="min-w-0 flex-1">
+                <span className="flex items-baseline justify-between gap-2">
+                  <span dir="auto" className={cn("truncate text-body", r.unread ? "font-semibold" : "font-medium")}>
+                    {r.title}
+                  </span>
+                  <span className="shrink-0 text-small text-muted-foreground">{r.time}</span>
                 </span>
-                {r.external ? <span className="shrink-0 rounded-full border border-border px-2 text-small text-muted-foreground">External</span> : null}
+                <span className="flex items-center gap-2">
+                  <span dir="auto" className={cn("min-w-0 flex-1 truncate text-small", r.unread ? "text-foreground" : "text-muted-foreground")}>
+                    {r.preview}
+                  </span>
+                  {r.external ? <span className="shrink-0 rounded-full border border-border px-2 text-small text-muted-foreground">External</span> : null}
+                  {r.account ? <AccountBadge label={r.account} name={r.accountName} /> : null}
+                </span>
+                {r.unread ? <span className="sr-only">Unread</span> : null}
               </span>
-              {r.unread ? <span className="sr-only">Unread</span> : null}
-            </span>
-          </Link>
-        </li>
-      ))}
+            </Link>
+          </li>
+        );
+      })}
     </ul>
   );
 }

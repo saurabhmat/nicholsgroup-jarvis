@@ -997,6 +997,11 @@ isOneToOne: false
               "chat_id": string,"read_through": string
             }[]
                            },
+"teams_chat_reads_list_many":
+{ Args: { "p_connections": (string)[],"p_lane": string }; Returns: {
+              "chat_id": string,"connection_id": string,"read_through": string
+            }[]
+                           },
 "teams_chat_reads_purge":
 { Args: { "p_lane": string }; Returns: number
                            },

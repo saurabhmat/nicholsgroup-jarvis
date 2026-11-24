@@ -120,7 +120,7 @@ export function TeamsRows({ laneId, view }: { laneId: string; view: TeamsSection
           }
           status={status(c)}
           // T-289: a usable connection that reads chats also says whether live updates (new-message notices) work; the browser asks after the page rendered
-          lastSync={!view.paused && !view.settingsUnknown && (c.state === "connected" || c.state === "degraded") && c.has.includes("chat_read") ? <TeamsLiveStatus laneId={laneId}>No sync: chats are read live</TeamsLiveStatus> : "No sync: chats are read live"}
+          lastSync={!view.paused && !view.settingsUnknown && (c.state === "connected" || c.state === "degraded") && c.has.includes("chat_read") ? <TeamsLiveStatus laneId={laneId} connectionId={c.id}>No sync: chats are read live</TeamsLiveStatus> : "No sync: chats are read live"}
           actions={
             <>
               {reconnect(c)}

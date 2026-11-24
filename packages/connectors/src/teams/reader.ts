@@ -310,7 +310,7 @@ export function createTeamsReader(deps: TeamsReaderDeps) {
      * One page of the person's chats, newest message first, hidden chats left out. `cursor` (from the previous page, by an explicit "More chats") continues it. When Graph refuses the combined
      * `$expand=members,lastMessagePreview` (H-081 checks it), the previews are asked for alone and members are read for the first chats in parallel; a log line says so (no content).
      */
-    async listChats(laneId: LaneId, conn: Conn, userId: string, opts: { cursor?: string } = {}): Promise<ChatList> {
+    async listChats(laneId: LaneId, conn: Conn, userId: string, opts: { cursor?: string; memberReads?: number } = {}): Promise<ChatList> {
       const skip = opts.cursor !== undefined ? skipTokenFrom(opts.cursor, "/me/chats") : undefined;
       const base = { $orderby: "lastMessagePreview/createdDateTime desc", $top: CHATS_PAGE, ...(skip !== undefined ? { $skiptoken: skip } : {}) };
       let combined = true;
@@ -326,7 +326,9 @@ export function createTeamsReader(deps: TeamsReaderDeps) {
       const page = pageOf(res.data);
       let chats = page.value.flatMap((c) => chatOf(c, res.self) ?? []);
       if (!combined) {
-        const first = chats.slice(0, FALLBACK_MEMBER_READS);
+        // T-294 (spec 22.6): with several accounts the page gives each list a share of the 20 reads, so the whole page view stays at 20; never more than the 20 of one list
+        const budget = Math.max(0, Math.min(FALLBACK_MEMBER_READS, Math.floor(opts.memberReads ?? FALLBACK_MEMBER_READS)));
+        const first = chats.slice(0, budget);
         const got = await Promise.allSettled(first.map((c) => listMembers(laneId, conn, userId, c.chatId)));
         chats = chats.map((c) => {
           const k = first.indexOf(c);

@@ -184,6 +184,7 @@ insert into authenticated_exec_ok values
   ('comms.teams_chat_read_mark', 'the Teams read-marker writer (definer): the caller must own the Teams connection at aal2 (T-282)'),
   ('core.teams_chat_read_mark', 'invoker wrapper of comms.teams_chat_read_mark (comms is not exposed to the API) (T-282)'),
   ('core.teams_chat_reads_list', 'the caller''s own Teams read markers of one connection; invoker, RLS on comms.teams_chat_reads applies (T-282)'),
+  ('core.teams_chat_reads_list_many', 'the caller''s own Teams read markers of up to five connections in one query; invoker, RLS on comms.teams_chat_reads applies (T-295)'),
   ('comms.teams_activity_seen', 'the Teams activity "seen" writer (definer): the caller must own the Teams connection at aal2 (T-289)'),
   ('core.teams_activity_seen', 'invoker wrapper of comms.teams_activity_seen (comms is not exposed to the API) (T-289)'),
   ('core.teams_activity_get', 'the owner''s read of a Teams connection''s notice state (definer): owner of a usable connection at aal2 only (T-289)'),

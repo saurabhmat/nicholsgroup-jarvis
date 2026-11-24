@@ -15,7 +15,7 @@ import type { CallTargets, ChatList, MessagePage, TeamsChat, TeamsMember } from 
 
 const load = (laneId: LaneId, connectionId: string) => connectionLoader.loadConnection(laneId, connectionId);
 
-export async function listChats(laneId: LaneId, connectionId: string, userId: string, opts: { cursor?: string } = {}): Promise<ChatList> {
+export async function listChats(laneId: LaneId, connectionId: string, userId: string, opts: { cursor?: string; memberReads?: number } = {}): Promise<ChatList> {
   return teamsReader.listChats(laneId, await load(laneId, connectionId), userId, opts);
 }
 

@@ -27,3 +27,21 @@ export async function markRead(client: Db, laneId: string, connectionId: string,
   const { error } = await rpc(client)("teams_chat_read_mark", { p_lane: laneId, p_connection: connectionId, p_chat: chatId, p_read_through: readThrough });
   return !error;
 }
+
+/**
+ * T-295 (spec 22.5): the markers of ALL of the caller's usable Teams connections in ONE database query (`core.teams_chat_reads_list_many`, row-level security as for the one-connection read):
+ * connection id -> (chat id -> `read_through`). A connection with no marker has an empty map. Throws on a database error, like `readMarkers`. At most 5 connections.
+ */
+export async function readMarkersMany(client: Db, laneId: string, connectionIds: readonly string[]): Promise<Map<string, Map<string, string>>> {
+  const out = new Map<string, Map<string, string>>(connectionIds.map((id) => [id, new Map<string, string>()]));
+  if (connectionIds.length === 0) return out;
+  const { data, error } = await rpc(client)("teams_chat_reads_list_many", { p_lane: laneId, p_connections: [...connectionIds] });
+  if (error || !Array.isArray(data)) throw new Error("markers unavailable");
+  for (const r of data as unknown[]) {
+    if (typeof r !== "object" || r === null) continue;
+    const { connection_id, chat_id, read_through } = r as { connection_id?: unknown; chat_id?: unknown; read_through?: unknown };
+    if (typeof connection_id !== "string" || typeof chat_id !== "string" || typeof read_through !== "string" || Number.isNaN(Date.parse(read_through))) continue;
+    out.get(connection_id)?.set(chat_id, new Date(Date.parse(read_through)).toISOString());
+  }
+  return out;
+}

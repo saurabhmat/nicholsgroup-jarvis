@@ -60,7 +60,8 @@ export function MessagesRefresh({ label = "Refresh", mode = "page" }: { label?: 
   );
 }
 
-export function ConversationMessages({ laneId, chatKey, initial, nextBefore, group }: { laneId: string; chatKey: string; initial: MessageView[]; nextBefore: string | null; group: boolean }) {
+/** `conn` (T-295): the connection (account) the conversation is read as; every request of the open conversation names it, and the server checks it again each time. */
+export function ConversationMessages({ laneId, chatKey, conn, initial, nextBefore, group }: { laneId: string; chatKey: string; conn: string; initial: MessageView[]; nextBefore: string | null; group: boolean }) {
   const router = useRouter();
   // Older pages the person asked for. After a Refresh the server sends a new `initial`; the pages kept here are merged BY MESSAGE ID and the "older than" time is the oldest message shown, so no
   // hole can appear between what was loaded before and what the refresh returned (C2).
@@ -92,12 +93,14 @@ export function ConversationMessages({ laneId, chatKey, initial, nextBefore, gro
   });
 
   // A notice arrived (or Refresh was pressed): read what changed in THIS chat since the newest message shown, with a date range; keep what is shown if it fails.
-  useOnLiveRefetch(() => {
+  useOnLiveRefetch((reason, conns) => {
+    // a notice of OTHER accounts says nothing about this conversation: it is read again only when its own account is one of those that moved (Refresh and the window coming back read it too)
+    if (reason === "notice" && conns !== null && !conns.includes(conn)) return undefined;
     const ac = new AbortController();
     void (async () => {
       try {
         const since = latest.current.newestShown ?? NEWER_EPOCH;
-        const res = await fetch(`/api/lanes/${encodeURIComponent(laneId)}/messages/newer?chat=${encodeURIComponent(chatKey)}&since=${encodeURIComponent(since)}`, { credentials: "same-origin", cache: "no-store", signal: ac.signal });
+        const res = await fetch(`/api/lanes/${encodeURIComponent(laneId)}/messages/newer?conn=${encodeURIComponent(conn)}&chat=${encodeURIComponent(chatKey)}&since=${encodeURIComponent(since)}`, { credentials: "same-origin", cache: "no-store", signal: ac.signal });
         if (!res.ok) {
           setRefreshFailed(true);
           return;
@@ -122,7 +125,7 @@ export function ConversationMessages({ laneId, chatKey, initial, nextBefore, gro
         });
         // what the person now sees is read: the portal's own marker moves (never anything at Microsoft)
         const newest = incoming.reduce<string | null>((a, x) => (a === null || x.at > a ? x.at : a), null);
-        if (newest !== null) void fetch(`/api/lanes/${encodeURIComponent(laneId)}/messages/read`, { method: "POST", headers: JSON_HEADERS, credentials: "same-origin", cache: "no-store", body: JSON.stringify({ chat: chatKey, readThrough: newest }) }).catch(() => undefined);
+        if (newest !== null) void fetch(`/api/lanes/${encodeURIComponent(laneId)}/messages/read`, { method: "POST", headers: JSON_HEADERS, credentials: "same-origin", cache: "no-store", body: JSON.stringify({ conn, chat: chatKey, readThrough: newest }) }).catch(() => undefined);
       } catch {
         if (!ac.signal.aborted) setRefreshFailed(true);
       }
@@ -152,7 +155,7 @@ export function ConversationMessages({ laneId, chatKey, initial, nextBefore, gro
     if (before === null || state.busy) return;
     setState({ busy: true, error: null });
     try {
-      const res = await fetch(`/api/lanes/${encodeURIComponent(laneId)}/messages/older?chat=${encodeURIComponent(chatKey)}&before=${encodeURIComponent(before)}`, { credentials: "same-origin", cache: "no-store" });
+      const res = await fetch(`/api/lanes/${encodeURIComponent(laneId)}/messages/older?conn=${encodeURIComponent(conn)}&chat=${encodeURIComponent(chatKey)}&before=${encodeURIComponent(before)}`, { credentials: "same-origin", cache: "no-store" });
       if (!res.ok) {
         setState({ busy: false, error: { text: await failureText(res) } });
         return;
@@ -196,7 +199,7 @@ export function ConversationMessages({ laneId, chatKey, initial, nextBefore, gro
   );
 }
 
-export function CallButtons({ laneId, chatKey, call, openUrl }: { laneId: string; chatKey: string; call: CallState; openUrl: string }) {
+export function CallButtons({ laneId, chatKey, conn, call, openUrl }: { laneId: string; chatKey: string; conn: string; call: CallState; openUrl: string }) {
   const [state, setState] = useState<{ busy: "call" | "video" | null; error: string | null; link: string | null }>({ busy: null, error: null, link: null });
   const note = call === "available" ? null : callUnavailableText(call);
 
@@ -204,7 +207,7 @@ export function CallButtons({ laneId, chatKey, call, openUrl }: { laneId: string
     if (state.busy) return;
     setState({ busy: video ? "video" : "call", error: null, link: null });
     try {
-      const res = await fetch(`/api/lanes/${encodeURIComponent(laneId)}/messages/call-link`, { method: "POST", headers: JSON_HEADERS, credentials: "same-origin", cache: "no-store", body: JSON.stringify({ chat: chatKey, video }) });
+      const res = await fetch(`/api/lanes/${encodeURIComponent(laneId)}/messages/call-link`, { method: "POST", headers: JSON_HEADERS, credentials: "same-origin", cache: "no-store", body: JSON.stringify({ conn, chat: chatKey, video }) });
       if (!res.ok) {
         setState({ busy: null, error: await failureText(res), link: null });
         return;
@@ -267,11 +270,11 @@ export function CallButtons({ laneId, chatKey, call, openUrl }: { laneId: string
 }
 
 /** Opening a chat records that the newest message shown has been seen (the portal's own marker). No UI: a failure only means the dot may come back. */
-export function MarkRead({ laneId, chatKey, readThrough }: { laneId: string; chatKey: string; readThrough: string | null }) {
+export function MarkRead({ laneId, chatKey, conn, readThrough }: { laneId: string; chatKey: string; conn: string; readThrough: string | null }) {
   useEffect(() => {
     if (readThrough === null) return;
-    void fetch(`/api/lanes/${encodeURIComponent(laneId)}/messages/read`, { method: "POST", headers: JSON_HEADERS, credentials: "same-origin", cache: "no-store", body: JSON.stringify({ chat: chatKey, readThrough }) }).catch(() => undefined);
-  }, [laneId, chatKey, readThrough]);
+    void fetch(`/api/lanes/${encodeURIComponent(laneId)}/messages/read`, { method: "POST", headers: JSON_HEADERS, credentials: "same-origin", cache: "no-store", body: JSON.stringify({ conn, chat: chatKey, readThrough }) }).catch(() => undefined);
+  }, [laneId, chatKey, conn, readThrough]);
   return null;
 }
 
