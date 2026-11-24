@@ -5,7 +5,7 @@
 import { Alert, AlertDescription, AlertTitle, Badge, buttonVariants } from "@nichols/ui";
 import type { GoogleConnectionState } from "@/lib/google-connection";
 import type { TeamsConnectionView, TeamsSectionView } from "@/lib/teams-connection";
-import { reconnectToAddText, TEAMS_ADMIN_CONSENT_TEXT, TEAMS_CLOUD_UNSUPPORTED_TEXT, TEAMS_CONNECTS_TEXT, TEAMS_PAUSED_TEXT, TEAMS_REMOVE_ACCESS_TEXT } from "@/lib/teams-wording";
+import { reconnectToAddText, TEAMS_ADMIN_CONSENT_TEXT, TEAMS_CLOUD_UNSUPPORTED_TEXT, TEAMS_CONNECT_ANOTHER_TEXT, TEAMS_CONNECTS_TEXT, TEAMS_DISCONNECTED_FIRST_TEXT, TEAMS_PAUSED_TEXT, TEAMS_REMOVE_ACCESS_TEXT, teamsAtLimitText } from "@/lib/teams-wording";
 import { ConnectionRow } from "./connection-rows";
 import { TeamsLiveStatus } from "./teams-live-status";
 import { TeamsDisconnectButton } from "./teams-disconnect-button";
@@ -52,20 +52,30 @@ export function TeamsRows({ laneId, view }: { laneId: string; view: TeamsSection
   const start = `/api/connect/teams/start?lane=${encodeURIComponent(laneId)}`;
   const mine = view.connections.filter((c) => c.mine);
   const others = view.connections.filter((c) => !c.mine);
-  const hasActive = mine.some((c) => c.state !== "disconnected");
+  // T-294: the person's counted accounts (everything but disconnected) against the company's limit. "Sign in to Teams" when they have none; "Connect another" while under the limit.
+  const counted = mine.filter((c) => c.state !== "disconnected").length;
+  const underLimit = counted < view.maxAccounts;
   const status = (c: TeamsConnectionView) => (view.paused ? <Badge variant="muted">{view.unsupportedCloud ? TEAMS_CLOUD_UNSUPPORTED_TEXT : TEAMS_PAUSED_TEXT}</Badge> : <Badge variant={LABEL[c.state].variant}>{LABEL[c.state].text}</Badge>);
   const features = (c: TeamsConnectionView) => <span className="block text-small text-muted-foreground">{c.has.length === 0 ? "No features yet" : `Has: ${c.has.map((f) => f.replace("_", " ")).join(", ")}`}</span>;
-  const signIn = locked || hasActive ? null : (
+  const signIn = locked || counted > 0 ? null : (
     <form method="post" action={start}>
       <button type="submit" className={buttonVariants({ variant: "default" })}>
         Sign in to Teams
       </button>
     </form>
   );
-  // A disconnected row cannot be reconnected beside another usable one of the person's (the database allows one usable Teams connection per person per company): no button that could only fail.
-  const anotherUsable = (c: TeamsConnectionView) => mine.some((o) => o.id !== c.id && o.state !== "disconnected");
+  // The same start without a connection id is a first connect (Microsoft's account picker): offered while the person is under the company's limit.
+  const connectAnother = locked || counted === 0 || !underLimit ? null : (
+    <form method="post" action={start} data-testid="teams-connect-another">
+      <button type="submit" className={buttonVariants({ variant: "outline" })}>
+        {TEAMS_CONNECT_ANOTHER_TEXT}
+      </button>
+    </form>
+  );
+  // A disconnected row cannot be reconnected once the person has as many counted accounts as the company allows: no button that could only fail.
+  const blockedByLimit = (c: TeamsConnectionView) => c.state === "disconnected" && !underLimit;
   const reconnect = (c: TeamsConnectionView) =>
-    locked || (c.state === "disconnected" && anotherUsable(c)) ? null : (
+    locked || blockedByLimit(c) ? null : (
       <form method="post" action={`${start}&connection=${encodeURIComponent(c.id)}`}>
         <button type="submit" aria-label={`Reconnect ${c.account}`} className={buttonVariants({ variant: URGENT.has(c.state) ? "default" : "outline" })}>
           Reconnect
@@ -100,7 +110,7 @@ export function TeamsRows({ laneId, view }: { laneId: string; view: TeamsSection
         <ConnectionRow
           key={c.id}
           testId="teams-connection"
-          provider="Your Teams account"
+          provider={mine.length > 1 || view.maxAccounts > 1 ? "Your Teams accounts" : "Your Teams account"}
           sub="Chats and calls, read live"
           account={
             <>
@@ -115,14 +125,14 @@ export function TeamsRows({ laneId, view }: { laneId: string; view: TeamsSection
             <>
               {reconnect(c)}
               {c.state !== "disconnected" ? <TeamsDisconnectButton laneId={laneId} connectionId={c.id} account={c.account} /> : null}
-              {i === mine.length - 1 ? signIn : null}
+              {i === mine.length - 1 ? (signIn ?? connectAnother) : null}
             </>
           }
           note={
             view.paused ? (
               <>Nothing was deleted: the connection is kept and Teams is paused. You can still disconnect it.</>
-            ) : c.state === "disconnected" && anotherUsable(c) ? (
-              <>This account is disconnected. You already have another Teams account connected; disconnect that one first to use this one again.</>
+            ) : blockedByLimit(c) ? (
+              <>This account is disconnected. {TEAMS_DISCONNECTED_FIRST_TEXT}</>
             ) : view.settingsUnknown ? (
               <>Sign in and Reconnect are unavailable until the company&apos;s Teams settings can be read. You can still disconnect it.</>
             ) : c.state !== "disconnected" && featureNote(view, c) ? (
@@ -131,6 +141,11 @@ export function TeamsRows({ laneId, view }: { laneId: string; view: TeamsSection
           }
         />
       ))}
+      {!locked && counted > 0 && !underLimit && view.maxAccounts > 1 ? (
+        <p className="text-small text-muted-foreground" data-testid="teams-at-limit">
+          {teamsAtLimitText(counted)}
+        </p>
+      ) : null}
       {otherRows}
     </>
   );
@@ -143,6 +158,7 @@ export function TeamsNotes({ view }: { view: TeamsSectionView }) {
       <p>
         {TEAMS_CONNECTS_TEXT} Each Teams account belongs to the person who connected it, and you sign in to your own. <span className="font-medium text-foreground">Removing the portal&apos;s access:</span> {TEAMS_REMOVE_ACCESS_TEXT}
       </p>
+      {view.maxAccounts > 1 ? <p data-testid="teams-several-note">You can connect up to {view.maxAccounts} Teams accounts for this company. Each is your own and is shown in Messages under its own label.</p> : null}
       {view.needsAdminConsent ? <p data-testid="teams-admin-consent">If Microsoft says an administrator must approve the app: {TEAMS_ADMIN_CONSENT_TEXT}</p> : null}
     </div>
   );

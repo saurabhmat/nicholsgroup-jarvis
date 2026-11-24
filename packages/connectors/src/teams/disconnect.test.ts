@@ -83,3 +83,31 @@ describe("the wiring (T-282)", () => {
     expect(JSON.stringify(warn.mock.calls)).not.toContain("secret");
   });
 });
+
+describe("two accounts of one person (T-294)", () => {
+  const ROW_B = { ...ROW, id: "00000000-0000-4000-8000-00000000f280", external_account_id: "person@second.example.test" };
+  const A = mintLaneBoundConnection({ ...ROW } as never);
+  const B = mintLaneBoundConnection({ ...ROW_B } as never);
+
+  it("disconnecting one account touches ONLY that connection: its tokens, subscriptions and purgers; the other account's are never named", async () => {
+    const revoke = vi.fn(async () => true);
+    const removeConnection = vi.fn(async () => 1);
+    const purge = vi.fn(async () => undefined);
+    const logger = { child: () => logger, warn: vi.fn(), info: vi.fn(), error: vi.fn(), debug: vi.fn() } as never;
+    const d = createTeamsDisconnect({
+      loader: { loadConnection: async (lane, id) => { const c = [A, B].find((x) => x.id === id); if (lane !== "PKG" || !c) throw new ConnectorError({ kind: "not_found", message: "Connection not found" }); return c; } },
+      vault: { revokeToken: revoke },
+      subscriptions: { removeConnection },
+      purgers: [{ name: "reads", purge }, { name: "activity", purge }],
+      logger,
+    });
+    expect(await d("PKG", ROW_B.id, OWNER)).toBe(true);
+    expect(revoke).toHaveBeenCalledTimes(1);
+    expect(revoke).toHaveBeenCalledWith("PKG", expect.objectContaining({ id: ROW_B.id }), OWNER);
+    expect(removeConnection).toHaveBeenCalledTimes(1);
+    expect(removeConnection).toHaveBeenCalledWith("PKG", ROW_B.id);
+    for (const call of purge.mock.calls) expect(call).toEqual(["PKG", ROW_B.id]);
+    // nothing names the first account anywhere
+    expect(JSON.stringify([revoke.mock.calls, removeConnection.mock.calls, purge.mock.calls])).not.toContain(ROW.id);
+  });
+});

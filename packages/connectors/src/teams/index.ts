@@ -11,6 +11,7 @@ import { ConnectorError } from "../contract/errors";
 import type { SubscriptionRenewer } from "../health/types";
 import { connectionLoader, laneConfigReader, microsoftSubscriptionStore, revokeToken, teamsActionsStore, teamsChatReadsStore, teamsIdentityReader, teamsIdentityWriter, teamsNoticesStore } from "../vault/index";
 import { SecretValue } from "../vault/secret";
+import { countOwnTeamsAccounts } from "./accounts";
 import { createTeamsDisconnect } from "./disconnect";
 import { createTeamsHealth, createTeamsHealthSkip } from "./health";
 import { createTeamsOAuthProvider, type TeamsClientConfig } from "./provider";
@@ -39,6 +40,7 @@ export const teamsOAuthProvider = createTeamsOAuthProvider({
   laneConfig: laneConfigReader,
   identity: teamsIdentityReader,
   identityWriter: teamsIdentityWriter,
+  countAccounts: countOwnTeamsAccounts,
 });
 
 /** Local Disconnect (spec 5): deletes the Vault tokens, marks the row `disconnected`, marks its subscriptions removed. No request to Microsoft. */

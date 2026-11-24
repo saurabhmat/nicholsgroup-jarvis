@@ -81,9 +81,9 @@ select throws_ok($$update core.connections set provider = 'microsoft' where id =
 select lives_ok($$update core.connections set status = 'degraded' where id = '00000000-0000-4000-8000-000000032801'$$, 'other columns still update on a row that has an identity');
 update core.connections set status = 'active' where id = '00000000-0000-4000-8000-000000032801';
 
--- ---------------------------------------------------------------- one usable Teams connection per person per lane; D-23 across lanes
-select throws_ok($$insert into core.connections (lane_id, provider, external_account_id, status, owner_user_id) values ('PKG', 'microsoft_teams', 'viewer2@teams.example.test', 'active', (select pg_temp.uid('viewer@example.test')))$$, '23505', null,
-                 'a second usable Teams connection of the same person in the lane is refused by the index');
+-- ---------------------------------------------------------------- one usable Teams connection per person per lane (the DEFAULT limit; T-294 moved the rule from an index to the limit trigger, see 332); D-23 across lanes
+select throws_ok($$insert into core.connections (lane_id, provider, external_account_id, status, owner_user_id) values ('PKG', 'microsoft_teams', 'viewer2@teams.example.test', 'active', (select pg_temp.uid('viewer@example.test')))$$, 'D0024', null,
+                 'a second usable Teams connection of the same person in the lane is refused by the limit trigger (default limit 1; T-294 replaced the index)');
 select lives_ok($$insert into core.connections (id, lane_id, provider, external_account_id, status, owner_user_id) values ('00000000-0000-4000-8000-000000032807', 'PKG', 'microsoft_teams', 'viewer2@teams.example.test', 'pending', (select pg_temp.uid('viewer@example.test')))$$,
                 'a pending Teams row of the same person does not count (it is the account being connected)');
 set local role service_role;
@@ -96,7 +96,7 @@ select lives_ok($$select core.connection_set_teams_identity('PKG', '00000000-000
                 'after a Disconnect the person can connect another Teams account');
 reset role;
 update core.connections set status = 'active' where id = '00000000-0000-4000-8000-000000032807';
-select throws_ok($$update core.connections set status = 'active' where id = '00000000-0000-4000-8000-000000032801'$$, '23505', null, 'the disconnected account cannot be reactivated beside the new one (index)');
+select throws_ok($$update core.connections set status = 'active' where id = '00000000-0000-4000-8000-000000032801'$$, 'D0024', null, 'the disconnected account cannot be reactivated beside the new one (limit trigger, default limit 1)');
 -- the same person, another lane: allowed (the index is per lane)
 select is((select count(*)::int from core.connections where provider = 'microsoft_teams' and owner_user_id = pg_temp.uid('owner@example.test')), 2, 'the owner holds one Teams connection in each of two lanes');
 -- D-23: one Teams account in one lane only (same address, another lane, both usable)

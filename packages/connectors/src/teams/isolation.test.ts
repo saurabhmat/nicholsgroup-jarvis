@@ -127,6 +127,8 @@ describe("source scan: every production file that names the provider is on this 
         // T-289: the subscription store records a Teams connection's notice subscription under this provider (and asks the receiver's lookup for it)
         "packages/connectors/src/microsoft/subscription-store.ts",
         "packages/connectors/src/oauth/flow.ts",
+        // T-294: counts the person's own Teams connections (the start of a connect refuses at the company's limit), read under the person's own row-level security
+        "packages/connectors/src/teams/accounts.ts",
         "packages/connectors/src/teams/constants.ts",
         "packages/connectors/src/teams/guard.ts",
         "packages/connectors/src/teams/http.ts",

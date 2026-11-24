@@ -405,16 +405,53 @@ What the lane's `teams` block looks like (the file inserts it; the app refuses a
     "cloud": "commercial",
     "tenant_ids": ["__TEAMS_TENANT_ID__"],
     "allowed_domains": ["__TEAMS_DOMAIN__"],
-    "features": ["chat_read", "call_links"]
+    "features": ["chat_read", "call_links"],
+    "max_accounts_per_person": 1
   }
 }
 ```
+
+`max_accounts_per_person` (T-294, a whole number 1 to 5, default 1) is how many Teams accounts one person may connect for this company. Leave it at 1 here; raise it with the next section.
 
 **Switch Teams off again** (a new settings version, never an edit): the same file's pattern with `"enabled": false`, or without the block. People then see "Teams is paused for this company";
 their connections and Vault tokens are kept until they press Disconnect. **Roll back:** a new version without the `teams` block. Neither touches mail.
 
 **What the agent checked:** the schema and the template parse with the app's own settings schema (tests in `packages/core/src/lane-config`); the SQL refuses what is listed above (run against a copy of the
 production shape in a transaction that was rolled back); Teams reads only the `teams` settings, never the mail provider list.
+
+## Allow several Teams accounts per person (T-294 to T-296; H-085)
+
+By default a person connects ONE Teams account per company (`teams.max_accounts_per_person` = 1). A person who has two Microsoft accounts in the same organisation (for `PKG`: a `pubkgroup.com` and a
+`pub-k.org` account, each with its own Teams chats) can connect both and see their chats in one list on Messages once the number is raised to 2. A chat that both accounts are in is shown twice, once
+per account, each labelled with its account (decision D-70); nothing is merged and nothing switches accounts. One Microsoft account is still one connection in one company, owned by one person.
+
+**Order matters (the one thing that can pause Teams for a company).** The app reads the `teams` settings with a strict schema. A deployment older than T-294 reads the new key as malformed and
+**pauses Teams** for the company. So: (1) production part 37 (`part-37-T-294-precheck.sql`, `part-37-T-294.sql`, `part-37-T-294-check.sql`; it changes no row and the live connection stays valid),
+(2) deploy T-294 to T-296, (3) only then the file below. Rolling back is a new settings version with the number set back (or the key removed): nobody is disconnected by it.
+
+1. **Fill in `teams-accounts-limit-H-085.sql`** (same folder as the other manual SQL; gitignored). ONE block at the top holds the three values: the lane code (`PKG`), the number (`2`, no quotes) and the word
+   `DEPLOYED` (you type it to confirm step 2 is finished). Keep the quotes of the two text values. The file refuses when a `PASTE-` placeholder is left, when the lane has no enabled `teams` block, when the key
+   already exists, or when part 37 is missing. Run it in the SQL Editor of the PRODUCTION project. It adds ONE new settings version: the current settings with that one key set; every other key is unchanged.
+2. **Run `check-teams-accounts-limit-H-085.sql`** with the same lane and number (one block at the top). *Expect:* every row `true`, and one count row at the end (the Teams connections of the lane).
+3. **Each person adds the second account:** Settings -> Connections -> Your Teams accounts -> **Connect another Teams account**, then on Microsoft's page choose "Use another account" and sign in with the second one.
+   If Microsoft signs the first account in again, the portal says "That Teams account was already connected": sign out of the other account at Microsoft (or use a private window) and try again.
+4. **Lowering the number later** never disconnects or pauses anything: both accounts keep working; the person just cannot add another until they are under the new number.
+
+What the block looks like after step 1 (the file writes it; the app refuses a block it cannot read and treats it as Teams off):
+
+<!-- teams-limit-template -->
+```json
+{
+  "teams": {
+    "enabled": true,
+    "cloud": "commercial",
+    "tenant_ids": ["__TEAMS_TENANT_ID__"],
+    "allowed_domains": ["__TEAMS_DOMAIN__"],
+    "features": ["chat_read", "call_links"],
+    "max_accounts_per_person": 2
+  }
+}
+```
 
 ## Roll back this run
 

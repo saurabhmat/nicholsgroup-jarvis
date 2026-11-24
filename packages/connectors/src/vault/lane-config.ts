@@ -50,7 +50,8 @@ export interface LaneConfigReader {
 
 export type MailProvider = "google" | "microsoft";
 /** The lane's Teams settings (T-278). `enabled` false = the lane has the block but Teams is switched off. */
-export type TeamsSettings = { enabled: boolean; cloud: MicrosoftConfig["cloud"]; tenantIds: string[]; allowedDomains: string[]; features: TeamsFeature[] };
+export type TeamsSettings = { enabled: boolean; cloud: MicrosoftConfig["cloud"]; tenantIds: string[]; allowedDomains: string[]; features: TeamsFeature[];
+  /** T-294: how many Teams accounts one person may connect in the lane (1 - 5; default 1). */ maxAccountsPerPerson: number };
 export type MicrosoftSettings = {
   cloud: MicrosoftConfig["cloud"]; tenantIds: string[]; allowGcc: boolean; mailFolders: MicrosoftConfig["mail_folders"];
   /** Explicit raw Graph calendar ids for Microsoft connections (replaces the default selection), or null = the default selection (T-269). */
@@ -103,7 +104,7 @@ function readTeamsView(config: unknown): TeamsSettings | null {
   const parsed = teamsViewSchema.safeParse(config === undefined || config === null ? {} : config);
   if (!parsed.success) throw new ConnectorError({ kind: "provider_error", message: "The lane's Teams settings are not valid" });
   const t = parsed.data.teams;
-  return t ? { enabled: t.enabled, cloud: t.cloud, tenantIds: [...t.tenant_ids], allowedDomains: [...t.allowed_domains], features: [...t.features] } : null;
+  return t ? { enabled: t.enabled, cloud: t.cloud, tenantIds: [...t.tenant_ids], allowedDomains: [...t.allowed_domains], features: [...t.features], maxAccountsPerPerson: t.max_accounts_per_person } : null;
 }
 
 export function createLaneConfigReader(clientFor: JobClientFor): LaneConfigReader {

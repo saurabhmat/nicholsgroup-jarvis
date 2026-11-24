@@ -227,6 +227,9 @@ export const teamsSchema = z.strictObject({
     .refine((a) => !a.includes("chat_send") || a.includes("chat_read"), "chat_send needs chat_read")
     .refine((a) => !a.includes("channels_send") || a.includes("channels_read"), "channels_send needs channels_read")
     .default(["chat_read"]),
+  // T-294 (spec messages.md 22.1): how many Teams accounts one person may connect in this lane. Default 1 = today's behaviour until a human version raises it; 5 at most (every page view reads
+  // one chat list per account). Strict like the rest of the block: an older deployment reads a config that has this key as malformed and pauses Teams, so the version that sets it is written after deploy.
+  max_accounts_per_person: z.int().min(1).max(5).default(1),
 });
 export type TeamsConfig = z.infer<typeof teamsSchema>;
 /** Only the `teams` key of a config, for the reader that must not depend on unrelated settings (other root keys are ignored). */

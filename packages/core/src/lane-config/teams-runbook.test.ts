@@ -19,7 +19,35 @@ const template = () => {
 describe("Enable Teams runbook", () => {
   it("the template parses and says what the runbook says", () => {
     const c = parseLaneConfig(template());
-    expect(c.teams).toEqual({ enabled: true, cloud: "commercial", tenant_ids: [T], allowed_domains: [D], features: ["chat_read", "call_links"] });
+    expect(c.teams).toEqual({ enabled: true, cloud: "commercial", tenant_ids: [T], allowed_domains: [D], features: ["chat_read", "call_links"], max_accounts_per_person: 1 });
+  });
+
+  it("T-294: the several-accounts template parses with the app's own schema and differs from the plain one only in the number; the number is bounded 1 to 5", () => {
+    const raw = /<!-- teams-limit-template -->\s*```json\n([\s\S]*?)```/.exec(readFileSync(RUNBOOK, "utf8"))?.[1];
+    expect(raw, "the runbook must carry the several-accounts template").toBeTruthy();
+    const several = JSON.parse((raw as string).replaceAll("__TEAMS_TENANT_ID__", T).replaceAll("__TEAMS_DOMAIN__", D)) as { teams: Record<string, unknown> };
+    expect(parseLaneConfig(several).teams).toEqual({ ...parseLaneConfig(template()).teams, max_accounts_per_person: 2 });
+    for (const n of [1, 5]) expect(parseLaneConfig({ teams: { ...several.teams, max_accounts_per_person: n } }).teams?.max_accounts_per_person).toBe(n);
+    for (const n of [0, 6, 2.5, "2", null]) expect(() => parseLaneConfig({ teams: { ...several.teams, max_accounts_per_person: n } }), String(n)).toThrow();
+    // a lane config without the key still reads as 1 (every lane keeps today's behaviour until a human version sets it)
+    expect(parseLaneConfig({ teams: { enabled: true, tenant_ids: [T], allowed_domains: [D] } }).teams?.max_accounts_per_person).toBe(1);
+  });
+
+  it("T-294: the SQL pair for the number (gitignored; checked only where present) sets exactly one key, keeps its values in one block, refuses a second run", () => {
+    const run = join(DIR, "teams-accounts-limit-H-085.sql");
+    const check = join(DIR, "check-teams-accounts-limit-H-085.sql");
+    if (!existsSync(run) || !existsSync(check)) return;
+    const sql = readFileSync(run, "utf8");
+    expect(sql).toMatch(/'\{teams,max_accounts_per_person\}'/);
+    expect(sql).toMatch(/\? 'max_accounts_per_person'/); // refuses when the key exists
+    expect(sql).toMatch(/v_deployed <> 'DEPLOYED'/);
+    // every value is typed once: the lane code appears once in each file
+    const lane = /'(PASTE-LANE-CODE|[A-Z]{1,8})'[,;]?\s+-- VALUE 1/g;
+    expect(sql.match(lane)).toHaveLength(1);
+    expect(readFileSync(check, "utf8").match(lane)).toHaveLength(1);
+    expect((sql.match(/v_lane\b/g) ?? []).length).toBeGreaterThan(3); // used by name everywhere else
+    // no cast sits on a value line (a value pasted over a ::text cast is how an earlier file broke)
+    for (const line of sql.split("\n").filter((l) => /VALUE [123]:/.test(l))) expect(line).not.toMatch(/::/);
   });
 
   it("added to a Google-mail lane, a Microsoft-mail lane and a limited mail-only lane it changes nothing else", () => {
@@ -42,10 +70,13 @@ describe("Enable Teams runbook", () => {
     const check = join(DIR, "check-enable-lane-teams-T-280.sql");
     if (!existsSync(run) || !existsSync(check)) return;
     const sql = readFileSync(run, "utf8");
+    // The operator's FILLED copy holds a real tenant id (that is what it is for): only the template is checked here.
+    if (!/v_lane\s+constant text\s+:= 'PASTE-LANE-CODE'/.test(sql)) return;
     for (const key of ["'enabled', true", "'cloud', 'commercial'", "'tenant_ids'", "'allowed_domains'", "'features'"]) expect(sql).toContain(key);
     expect(sql).toMatch(/v_cur \? 'teams'/);
-    expect(sql).toMatch(/PASTE-LANE-CODE/);
+    // the file is either the template (a placeholder) or the operator's filled copy on this machine (a lane code): both have the lane in the one block
+    expect(sql).toMatch(/v_lane\s+constant text\s+:= '(PASTE-LANE-CODE|[A-Z]{1,8})'/);
     expect(sql.replace("9188040d-6c67-4c5b-b112-36a304b66dad", "")).not.toMatch(/[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[0-9a-f]{4}-[0-9a-f]{12}/); // no tenant id but Microsoft's fixed personal-account tenant (refused on purpose) is in the file
-    expect(readFileSync(check, "utf8")).toMatch(/PASTE-LANE-CODE/);
+    expect(readFileSync(check, "utf8")).toMatch(/'(PASTE-LANE-CODE|[A-Z]{1,8})'/);
   });
 });

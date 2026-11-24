@@ -14,6 +14,17 @@ export const TEAMS_ADMIN_CONSENT_TEXT = "Your organisation's Microsoft admin mus
 export const TEAMS_REMOVE_AT_MICROSOFT_TEXT = "remove it in your Microsoft account (My Apps) or ask your Microsoft 365 administrator to remove it in the Entra admin center (Enterprise apps → the app → Permissions).";
 export const TEAMS_REMOVE_ACCESS_TEXT = `Disconnect deletes the access the portal stored and does not contact Microsoft, so Microsoft may still list the app: ${TEAMS_REMOVE_AT_MICROSOFT_TEXT}`;
 
+// ---- several accounts per person (T-294, spec 22.3, 22.10). Fixed text; an address in a sentence is the person's own row read from the database, never text from a query or a provider.
+export const TEAMS_ONE_ACCOUNT_TEXT = "You have connected as many Teams accounts as this company allows. Disconnect one to connect another.";
+export const TEAMS_ALREADY_CONNECTED_TEXT = "That Teams account was already connected; its sign-in was refreshed. To add a different account, choose it on Microsoft's page (\"Use another account\"). If Microsoft did not let you choose, sign out of the other account at Microsoft or use a private browser window, then try again.";
+export const teamsWrongAccountText = (upn: string | null): string =>
+  upn === null
+    ? "Microsoft signed in a different Teams account than the one you were reconnecting. Nothing was saved and the connection was not changed. Try again and choose the account you are reconnecting."
+    : `Microsoft signed in a different Teams account. Nothing was saved and the connection was not changed. Try again and choose ${upn}.`;
+export const TEAMS_DISCONNECTED_FIRST_TEXT = "Disconnect another Teams account first to use this one again.";
+export const TEAMS_CONNECT_ANOTHER_TEXT = "Connect another Teams account";
+export const teamsAtLimitText = (n: number): string => `You have connected ${String(n)} Teams ${n === 1 ? "account" : "accounts"}, the most this company allows.`;
+
 /** What a missing feature is called in "Reconnect Teams to add …". */
 const FEATURE_WORDS: Record<TeamsFeature, string> = {
   chat_read: "chats",

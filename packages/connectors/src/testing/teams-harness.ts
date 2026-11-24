@@ -62,6 +62,7 @@ export const defaultTeams = (patch: Partial<TeamsSettings> = {}): TeamsSettings 
   tenantIds: [TEAMS_TENANT_A],
   allowedDomains: ["teams.example.test"],
   features: ["chat_read", "call_links"],
+  maxAccountsPerPerson: 1,
   ...patch,
 });
 
@@ -99,6 +100,8 @@ export function createTeamsHarness(options: TeamsHarnessOptions) {
       // D-23 (one account, one lane) is per provider and ignores pending rows, as the SQL index does.
       const holder = [...rows.values()].find((r) => r.id !== row.id && r.provider === row.provider && r.external_account_id.toLowerCase() === row.external_account_id.toLowerCase() && r.status !== "disconnected" && r.status !== "pending" && r.lane_id !== laneId);
       if (holder) throw new ConnectorError({ kind: "forbidden", message: ACCOUNT_IN_USE_MESSAGE });
+      // The connections trigger (T-294): a move INTO "counted" is refused (D0024) beyond the lane's limit; nothing is stored then (the Vault write rolls back with it).
+      assertOnePerOwner(laneId, row.id);
       secrets.set(row.id, secret.reveal());
       writes.push({ store: "token_store" });
       row.status = "active";
@@ -250,10 +253,18 @@ export function createTeamsHarness(options: TeamsHarnessOptions) {
       writes.push({ store: "features" });
     },
   };
+  // core.teams_assert_one_per_owner (T-294): a row that is already counted passes; a move into "counted" is refused (D0024) when the owner's OTHER counted Teams rows in the lane are as many as the lane allows.
+  const limitOf = (laneId: string): number => {
+    const v = lanes[laneId]?.teams?.maxAccountsPerPerson;
+    return typeof v === "number" && Number.isInteger(v) && v >= 1 && v <= 5 ? v : 1;
+  };
+  const isCounted = (status: Row["status"]) => status !== "disconnected" && status !== "pending";
+  const countedOf = (laneId: string, owner: string | null | undefined, exceptId?: string) =>
+    [...rows.values()].filter((r) => r.id !== exceptId && r.lane_id === laneId && r.provider === "microsoft_teams" && r.owner_user_id === owner && isCounted(r.status)).length;
   const assertOnePerOwner = (laneId: string, connectionId: string) => {
     const row = rowOf(laneId, { id: connectionId });
-    const other = [...rows.values()].find((r) => r.id !== row.id && r.lane_id === laneId && r.provider === "microsoft_teams" && r.owner_user_id === row.owner_user_id && r.status !== "disconnected" && r.status !== "pending");
-    if (other) throw new ConnectorError({ kind: "forbidden", message: TEAMS_ONE_ACCOUNT_MESSAGE });
+    if (isCounted(row.status)) return;
+    if (countedOf(laneId, row.owner_user_id, row.id) >= limitOf(laneId)) throw new ConnectorError({ kind: "forbidden", message: TEAMS_ONE_ACCOUNT_MESSAGE });
   };
   const identityWriter = {
     async assertOnePerOwner(laneId: string, connectionId: string) {
@@ -288,6 +299,8 @@ export function createTeamsHarness(options: TeamsHarnessOptions) {
     laneConfig,
     identity: identityReader,
     identityWriter,
+    // T-294: the person's counted rows (the real one counts through the person's own client under RLS; the twin reads its rows).
+    countAccounts: async ({ laneId, userId }) => countedOf(laneId, userId),
     logger,
     ...(options.now ? { now: options.now } : {}),
     tokenHttpFor: (laneId, baseUrl) => createTeamsTokenHttp({ baseUrl, laneId, ...fastOptions }),
@@ -329,6 +342,8 @@ export function createTeamsHarness(options: TeamsHarnessOptions) {
     nonce?: string;
     redirectUri?: string;
     profile?: NonNullable<FakeTeamsAccount["profile"]>;
+    /** Runs between the start and the callback (T-294: something changed meanwhile, e.g. another account was connected by a second tab; the callback must still enforce the limit). */
+    between?: () => void | Promise<void>;
   };
   /** Start + callback through the real flow against the fake. The code is registered with the fake between the two, with the nonce and PKCE challenge of the authorize request. */
   async function connectViaCallback(laneId: string, opts: ConnectOptions) {
@@ -352,6 +367,7 @@ export function createTeamsHarness(options: TeamsHarnessOptions) {
       ...(opts.idToken !== undefined ? { idToken: opts.idToken } : {}),
     });
     const state = q.get("state") ?? "";
+    await opts.between?.();
     const result = await flow.callback("teams", new URLSearchParams({ state, code }), as(userId));
     return { url, state, code, result };
   }

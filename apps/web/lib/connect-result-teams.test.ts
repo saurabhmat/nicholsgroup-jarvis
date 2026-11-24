@@ -34,10 +34,11 @@ describe("Teams connect results", () => {
       scope_extra: /permission that the Teams connection may not hold/,
       not_enabled: /Teams is not enabled for this company/,
       other_company: /already connected elsewhere in Jarvis/,
-      one_account: /You already have a Teams account connected for this company/,
+      one_account: /You have connected as many Teams accounts as this company allows\. Disconnect one to connect another\./,
       other_person: /already connected by another person/,
     };
-    expect(Object.keys(TEAMS_REFUSALS).sort()).toEqual([...Object.keys(expected), "not_set_up"].sort());
+    // `already_connected` is a SUCCESS sub-code (T-294), `not_set_up` a connect-time one: both have their own tests
+    expect(Object.keys(TEAMS_REFUSALS).sort()).toEqual([...Object.keys(expected), "already_connected", "not_set_up"].sort());
     for (const [detail, re] of Object.entries(expected)) {
       const m = q("account_refused", { detail });
       expect(m?.tone, detail).toBe("alert");
@@ -81,5 +82,31 @@ describe("Teams connect results", () => {
     const m = connectResultMessage({ connect: "ok", provider: "microsoft_teams", title: "<script>x</script>", notice: "<b>x</b>" });
     expect(JSON.stringify(m)).not.toContain("<script>");
     expect(connectResultMessage({ connect: "<script>", provider: "microsoft_teams" })).toBeNull();
+  });
+});
+
+describe("T-294: several accounts, the new results", () => {
+  const ok = (params: Record<string, string>, teams?: Parameters<typeof connectResultMessage>[2]) => connectResultMessage({ connect: "ok", provider: "microsoft_teams", ...params }, undefined, teams);
+
+  it("a connect that landed on an account the person already had says so, with the picker hint; without the sub-code it is the plain success", () => {
+    const again = ok({ detail: "already_connected" });
+    expect(again?.tone).toBe("success");
+    expect(again?.title).toBe("That Teams account was already connected");
+    expect(again?.description).toBe("That Teams account was already connected; its sign-in was refreshed. To add a different account, choose it on Microsoft's page (\"Use another account\"). If Microsoft did not let you choose, sign out of the other account at Microsoft or use a private browser window, then try again.");
+    expect(ok({})?.title).toBe("Teams connected");
+    // the sub-code never changes another provider's success text
+    expect(connectResultMessage({ connect: "ok", provider: "google", detail: "already_connected" })?.title).toBe("Google connected");
+  });
+
+  it("a refused Teams reconnect names the person's own row's address when the page found it, and only then; nothing from the address bar is put in a sentence", () => {
+    const named = connectResultMessage({ connect: "wrong_account", provider: "microsoft_teams", conn: "00000000-0000-4000-8000-0000000000aa" }, undefined, { messagesShown: true, reconnectAccount: "second@teams.example.test" });
+    expect(named?.description).toContain("Microsoft signed in a different Teams account.");
+    expect(named?.description).toContain("Try again and choose second@teams.example.test.");
+    expect(named?.description).toContain("Nothing was saved");
+    const unnamed = connectResultMessage({ connect: "wrong_account", provider: "microsoft_teams", conn: "<script>x</script>" }, undefined, { messagesShown: true, reconnectAccount: null });
+    expect(unnamed?.description).toContain("choose the account you are reconnecting");
+    expect(unnamed?.description).not.toContain("<script>");
+    // Google's wrong-account text is unchanged
+    expect(connectResultMessage({ connect: "wrong_account", provider: "google" })?.description).toContain("You chose a different Google account than the one being reconnected");
   });
 });

@@ -12,7 +12,7 @@ import { quickbooksSectionFor } from "@/lib/quickbooks-connection";
 import { googleSectionFor } from "@/lib/google-connection";
 import { mailProvidersFor } from "@/lib/mail-providers";
 import { microsoftSectionFor } from "@/lib/microsoft-connection";
-import { teamsSectionFor } from "@/lib/teams-connection";
+import { reconnectAccountOf, teamsSectionFor } from "@/lib/teams-connection";
 import { availability, missingSettings } from "@/lib/composio-availability";
 import { composioSectionFor } from "@/lib/composio-connection";
 import { ConnectionsSection } from "./connections-section";
@@ -83,6 +83,8 @@ export async function SettingsPage({
   const microsoft = started(timed("load.microsoft", async () => microsoftSectionFor(g, laneId, await providers)));
   // T-265: which sections this company uses (finance = the QuickBooks row, brain = AI brain, news = GovCon news). One read, shared with the layout.
   const gate = started(laneGate(laneId));
+  // T-280: the company's Teams settings and the caller's own Teams rows, read beside the other sections (never behind the mail provider read: Teams does not depend on it).
+  const teams = started(timed("load.teams", () => teamsSectionFor(g, laneId)));
   const sections: Sections = {
     gate,
     admin: started(g.requireRole(laneId as Lane, ["owner", "admin_technical"]).then(() => true, () => false)),
@@ -93,14 +95,16 @@ export async function SettingsPage({
       timed("load.connect_result", async () => {
         const section = await microsoft; // the banner's Microsoft wording follows the same scope list as the section; consent returns show only where Microsoft is enabled
         const messagesShown = (await gate).visible("messages"); // a limited company that does not list Messages has no page to point to (T-278 review C4)
-        return connectResultFor(g, laneId, query, { enabled: Boolean(section && !section.paused && !section.unavailable && !section.settingsUnknown), writes: section?.writes ?? null }, { messagesShown });
+        // T-294: a Teams reconnect that came back as another account names its row by id (`?conn=`); the sentence uses that row's address read from the database (the person's OWN row), never text from the address bar.
+        // Only for that one result: every other page view starts the banner at once, without waiting for the Teams rows (T-276).
+        const reconnectAccount = query.connect === "wrong_account" && typeof query.conn === "string" ? reconnectAccountOf(query, await teams.catch(() => null)) : null;
+        return connectResultFor(g, laneId, query, { enabled: Boolean(section && !section.paused && !section.unavailable && !section.settingsUnknown), writes: section?.writes ?? null }, { messagesShown, reconnectAccount });
       }),
     ),
     quickbooks: started(timed("load.quickbooks", async () => ((await gate).visible("finance") ? quickbooksSectionFor(g, laneId, undefined, approvalsDeps) : null))),
     google: started(timed("load.google", async () => googleSectionFor(g, laneId, undefined, await providers))),
     microsoft,
-    // T-280: the company's Teams settings and the caller's own Teams rows, read beside the other sections (never behind the mail provider read: Teams does not depend on it).
-    teams: started(timed("load.teams", () => teamsSectionFor(g, laneId))),
+    teams,
     composio: started(
       timed("load.composio", async () => {
         const view = await composioSectionFor(g, laneId, availability, undefined, missingSettings);

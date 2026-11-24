@@ -4,7 +4,7 @@ import { channelsAvailability, messagesStateOf } from "./teams-messages";
 import type { TeamsConnectionView, TeamsSectionView } from "./teams-connection";
 
 const c = (over: Partial<TeamsConnectionView> = {}): TeamsConnectionView => ({ id: "00000000-0000-4000-8000-0000000000c1", account: "me@teams.example.test", state: "connected", mine: true, has: ["chat_read", "call_links"], ...over });
-const v = (over: Partial<TeamsSectionView> = {}): TeamsSectionView => ({ connections: [c()], laneFeatures: ["chat_read", "call_links"], needsAdminConsent: false, ...over });
+const v = (over: Partial<TeamsSectionView> = {}): TeamsSectionView => ({ connections: [c()], laneFeatures: ["chat_read", "call_links"], maxAccounts: 1, needsAdminConsent: false, ...over });
 
 describe("messagesStateOf", () => {
   it("no section (the caller may not connect an account here)", () => expect(messagesStateOf(null)).toEqual({ kind: "no_access" }));

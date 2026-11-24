@@ -13,7 +13,7 @@ describe("teams block", () => {
 
   it("applies the defaults: enabled false, commercial cloud, features [chat_read]", () => {
     const t = teamsSchema.parse({ tenant_ids: [T1], allowed_domains: ["teams.example.test"] });
-    expect(t).toEqual({ enabled: false, cloud: "commercial", tenant_ids: [T1], allowed_domains: ["teams.example.test"], features: ["chat_read"] });
+    expect(t).toEqual({ enabled: false, cloud: "commercial", tenant_ids: [T1], allowed_domains: ["teams.example.test"], features: ["chat_read"], max_accounts_per_person: 1 });
   });
 
   it("accepts a full valid block, independent of mail.providers and of a microsoft block", () => {

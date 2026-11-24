@@ -70,7 +70,7 @@ vi.mock("@/lib/google-connection", () => ({ googleSectionFor: (g: unknown) => lo
 vi.mock("@/lib/mail-providers", () => ({ mailProvidersFor: async () => { m.providerReads += 1; return m.providersView ?? { state: "known", google: true, microsoft: null }; } }));
 vi.mock("@/lib/microsoft-connection", () => ({ microsoftSectionFor: async (_g: unknown, _l: string, providers: unknown) => { m.providersSeen.push(providers); return m.microsoft; } }));
 // T-280: the Teams section loader (its own tests are in lib/teams-connection.test.ts). Recorded in `m.started` like the other loaders, so the parallel-start rule (T-276) is asserted for it too.
-vi.mock("@/lib/teams-connection", () => ({ teamsSectionFor: (g: unknown) => loader("teams", () => m.teams)(g) }));
+vi.mock("@/lib/teams-connection", () => ({ teamsSectionFor: (g: unknown) => loader("teams", () => m.teams)(g), reconnectAccountOf: () => null }));
 vi.mock("@/lib/composio-availability", () => ({ availability: () => ({}), missingSettings: () => ({}) }));
 vi.mock("@/lib/composio-connection", () => ({ composioSectionFor: (g: unknown) => loader("composio", () => m.composio)(g) }));
 vi.mock("@/lib/news-settings", () => ({ newsSectionFor: async () => { m.newsCalls += 1; return m.news; } }));
