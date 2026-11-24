@@ -70,16 +70,21 @@ export async function ApprovalsBody({ laneId }: { laneId: string }) {
                 <div className="min-w-0">
                   <p className="truncate font-medium text-foreground">{h.subject || "(no subject)"}</p>
                   <p className="truncate text-small text-muted-foreground">
-                    {h.actionType === "qbo.disconnect" ? "QuickBooks connection" : `${h.actionType === "email.send" ? "To" : "Draft to"} ${h.to.join(", ") || "unknown"}`}
+                    {h.actionType === "qbo.disconnect" ? "QuickBooks connection" : h.actionType.startsWith("teams.") ? "Sent from your Teams account" : `${h.actionType === "email.send" ? "To" : "Draft to"} ${h.to.join(", ") || "unknown"}`}
                     {h.provider === "microsoft" ? " · Outlook" : h.provider === "google" ? " · Gmail" : ""}
                     {h.failureCode ? ` · ${h.failureCode.replaceAll("_", " ")}` : ""}
                   </p>
+                  {h.outcomeUnknown && h.actionType.startsWith("teams.") ? (
+                    <p data-testid="approvals-outcome-unknown" className="text-small text-alert-foreground">
+                      Outcome unknown: check the chat in Teams before sending again.
+                    </p>
+                  ) : null}
                   {h.outcomeUnknown && h.actionType === "qbo.disconnect" ? (
                     <p data-testid="approvals-outcome-unknown" className="text-small text-alert-foreground">
                       The disconnect could not be confirmed. Check the QuickBooks connection in Settings before asking again.
                     </p>
                   ) : null}
-                  {h.outcomeUnknown && h.actionType !== "qbo.disconnect" && h.provider === "microsoft" ? (
+                  {h.outcomeUnknown && h.actionType !== "qbo.disconnect" && !h.actionType.startsWith("teams.") && h.provider === "microsoft" ? (
                     <p data-testid="approvals-outcome-unknown" className="text-small text-alert-foreground">
                       {h.failureCode === "reconcile_sent_unverified" ? "It was sent but could not be read back. " : "Outcome unknown: it may have been " + (h.actionType === "email.send" ? "sent" : "saved") + ". "}
                       Check Drafts and Sent Items in Outlook before trying again.

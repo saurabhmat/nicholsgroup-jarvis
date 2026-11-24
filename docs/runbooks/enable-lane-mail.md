@@ -454,6 +454,23 @@ What the block looks like after step 1 (the file writes it; the app refuses a bl
 }
 ```
 
+## Set the Teams authenticator window (T-288; decision D-67; H-082 step 4)
+
+A Teams message is sent with ONE press of Send: the press is the person's approval of the exact text. The portal asks for the authenticator code at most once per **window**: `approvals.teams_step_up_max_age_s`
+(300 to 43,200 seconds; unset = 300, the same as email). Decision D-67 (Nov 24, 2026) for `PKG`: **28,800 seconds (8 hours)**. Email approvals keep their own 5-minute rule (`step_up_max_age_s`); this changes nothing for them.
+When the code is older than the window the composer sends the person to enter a code and brings them back to the same chat with the typed text kept (in that browser tab only).
+
+**Order matters.** (1) Production part 35 (T-286) with its check, (2) deploy T-288, (3) only then the file below. Before the deploy: the app reads the `approvals` block with a strict schema, so a deployment older than T-286
+reads the new key as malformed; and a build older than T-288 refuses any window above 3,600 seconds. The file refuses until you type `DEPLOYED`. Until it is run the Teams window is 300 seconds: safe, just more codes.
+
+1. **Fill in `teams-step-up-window-H-082.sql`** (same folder as the other manual SQL; gitignored). ONE block at the top holds the three values: the lane code (`PKG`), the number of seconds (`28800`, no quotes) and the word
+   `DEPLOYED`. Keep the quotes of the two text values; change nothing else in the file. It refuses when a `PASTE-` placeholder is left, when the number is outside 300 to 43,200, when the lane has no `approvals` block,
+   when the key already exists, or when part 35 is missing. Run it in the SQL Editor of the PRODUCTION project. It adds ONE new settings version: the current settings with that one key set; every other key is unchanged.
+   *Expect:* one row (the lane, the new version number, `28800`).
+2. **Run `check-teams-step-up-window-H-082.sql`** with the same lane and number (one block at the top; the file is ONE statement so the SQL Editor shows it). *Expect:* 12 rows; the first 10 say `true`; the last 2 are information (`approvals_live`, and the email window).
+3. **Roll back** by a new settings version without the key (ask the agent for the SQL; the pattern is the same file reversed): the window is then 300 seconds again. Nothing else changes, and nobody is signed out.
+4. Sending also needs `teams_send` in the lane policy, `chat_send` in `teams.features`, `approvals_live` true (H-047 step 5) and a Teams reconnect (H-082 steps 3, 5 and 6).
+
 ## Roll back this run
 
 Pick the smallest step that fixes the problem. Nothing below deletes mail metadata, a token or an audit row.
