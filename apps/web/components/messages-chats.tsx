@@ -8,7 +8,11 @@
 import Link from "next/link";
 import { Suspense, type ReactNode } from "react";
 import { Alert, AlertDescription, AlertTitle, cn, EmptyState } from "@nichols/ui";
+import { approvalsDeps } from "@nichols/approvals/wire";
+import { WRITE_ROLES } from "@nichols/approvals/server";
+import { AuthError } from "@nichols/core/auth";
 import { guards } from "@/lib/guards";
+import { loadSendView, type SendView } from "@/lib/teams-send-view";
 import { decodeChatKey } from "@/lib/teams-chat-key";
 import { loadChatLists, loadConversation, type ChatListView, type ChatSource, type ConversationView } from "@/lib/teams-chats";
 import type { TeamsFailure } from "@/lib/teams-errors";
@@ -23,10 +27,12 @@ import {
   MESSAGES_RECONNECT_TITLE,
   MESSAGES_TIMES_NOTE,
   messagesBusyText,
+  SEND_OFF_TEXT,
 } from "@/lib/teams-wording";
 import { openAccountOf, type MessagesState } from "@/lib/teams-messages";
 import { hrefFor } from "@/lib/messages-href";
 import { CallButtons, ConversationMessages, FocusConversation, MarkRead, MessagesRefresh } from "./messages-client";
+import { Composer, SendScope } from "./messages-send";
 import { AccountNotes, ChatListLive } from "./messages-live";
 import { AccountBadge, SignIn } from "./messages-view";
 import { SectionBoundary } from "./section-boundary";
@@ -121,25 +127,37 @@ async function ChatListSection({ promise, laneId, connectionId }: { promise: Pro
 
 // ---- the conversation
 /**
- * Where the composer goes (T-288 adds it): the pinned place at the bottom of the conversation pane. The messages scroll above it; it never scrolls away, and for now it holds the one line about the
- * time zone. No safe-area padding: the pane is never at the screen edge (on a phone the fixed tab bar below it takes the inset). `children` is drawn above that line.
+ * The pinned place at the bottom of the conversation pane (T-297), where the composer goes (T-288). The messages scroll above it; it never scrolls away, and it holds the one line about the time zone.
+ * No safe-area padding: the pane is never at the screen edge (on a phone the fixed tab bar below it takes the inset). `children` (the Send box, or the one line that says why there is none) is drawn above that line.
  */
 export function ComposerSlot({ children }: { children?: ReactNode }) {
   return (
-    <div data-testid="composer-slot" className="shrink-0 border-t border-border bg-card px-3 py-1 sm:px-4">
+    <div data-testid="composer-slot" className="group/slot shrink-0 border-t border-border bg-card px-3 py-1 sm:px-4">
       {children}
-      <p data-testid="times-note" className="text-small text-muted-foreground">
+      {/* on a phone the note gives way while the box has the focus (the keyboard is up and every line counts) */}
+      <p data-testid="times-note" className="text-small text-muted-foreground group-has-[[data-focused=true]]/slot:max-lg:hidden">
         {MESSAGES_TIMES_NOTE}
       </p>
     </div>
   );
 }
 
+/** The one plain line that says why there is no Send box (T-288), by the gate that is off. A closed gate that Reconnect fixes carries the Reconnect button. */
+export function SendOff({ reason, laneId, connectionId }: { reason: keyof typeof SEND_OFF_TEXT; laneId: string; connectionId: string }) {
+  return (
+    <div data-testid="send-off" data-gate={reason} className="flex min-w-0 flex-wrap items-center gap-x-3 gap-y-1 py-1">
+      <p className="min-w-0 text-small text-muted-foreground">{SEND_OFF_TEXT[reason]}</p>
+      {reason === "reconnect" ? <SignIn laneId={laneId} connectionId={connectionId} label="Reconnect Teams" size="sm" /> : null}
+    </div>
+  );
+}
+
 /** The conversation header (T-297): ONE row: the name and the people line on the left, the actions on the right (they wrap under the name on a phone), and, only when calls are unavailable for this chat, a small muted note under it. */
-export function ConversationPane({ view, laneId, connectionId }: { view: ConversationView; laneId: string; connectionId: string }) {
+export function ConversationPane({ view, laneId, connectionId, send = null, userId = "" }: { view: ConversationView; laneId: string; connectionId: string; /** T-288: whether the Send box is offered for this conversation's account, or why not. Null: no Send box and no line (older callers). */ send?: SendView | null; /** Only a key part of the tab's unsent-text copy; never an access decision. */ userId?: string }) {
   if (view.kind !== "ok") return <TeamsFailureCard failure={view.kind === "not_found" ? { kind: "not_found" } : view} laneId={laneId} connectionId={connectionId} testId="conversation-error" />;
   return (
-    <section aria-label="Conversation" data-testid="conversation" className="flex h-[var(--pane-h,calc(100dvh-8.5rem))] min-h-[16rem] min-w-0 flex-col overflow-hidden rounded-card border border-border bg-card lg:h-auto lg:min-h-0 lg:flex-1">
+    <section aria-label="Conversation" data-testid="conversation" className="flex h-[var(--pane-h,calc(100dvh-8.5rem))] min-h-[var(--pane-min,16rem)] min-w-0 flex-col overflow-hidden rounded-card border border-border bg-card lg:h-auto lg:min-h-0 lg:flex-1">
+      <SendScope key={`${view.conn}:${view.chatKey}`} laneId={laneId} conn={view.conn} chatKey={view.chatKey} userId={userId} enabled={send?.kind === "ready"} clear={send?.kind === "off" ? (send.reason === "drafts_off" ? "strip_text" : send.reason === "lane_off" || send.reason === "policy_off" ? "keep_text" : false) : false}>
       <header data-testid="conversation-header" className="flex shrink-0 flex-wrap items-center gap-x-2 gap-y-2 border-b border-border px-3 py-2 sm:px-4">
         <div className="flex min-w-0 flex-1 basis-48 items-center gap-2">
           <Link href={hrefFor(laneId, null, null)} aria-label="Back to chats" data-testid="back-to-chats" className="inline-flex min-h-11 min-w-11 items-center justify-center rounded-control text-body font-medium text-primary hover:bg-muted lg:hidden">
@@ -160,15 +178,19 @@ export function ConversationPane({ view, laneId, connectionId }: { view: Convers
         </CallButtons>
       </header>
       <ConversationMessages key={`${view.conn}:${view.chatKey}`} laneId={laneId} chatKey={view.chatKey} conn={view.conn} initial={view.messages} nextBefore={view.nextBefore} group={view.group} />
-      <ComposerSlot />
+      <ComposerSlot>
+        {send === null ? null : send.kind === "ready" ? <Composer key={`${view.conn}:${view.chatKey}`} laneId={laneId} conn={view.conn} chatKey={view.chatKey} account={send.account} accountLabel={view.account} userId={userId} /> : <SendOff reason={send.reason} laneId={laneId} connectionId={view.conn} />}
+      </ComposerSlot>
       <FocusConversation chatKey={`${view.conn}:${view.chatKey}`} />
       <MarkRead laneId={laneId} chatKey={view.chatKey} conn={view.conn} readThrough={view.readThrough} />
+      </SendScope>
     </section>
   );
 }
 
-async function ConversationSection({ promise, laneId, connectionId }: { promise: Promise<ConversationView>; laneId: string; connectionId: string }) {
-  return <ConversationPane view={await promise} laneId={laneId} connectionId={connectionId} />;
+async function ConversationSection({ promise, sendPromise, laneId, connectionId, userId }: { promise: Promise<ConversationView>; sendPromise: Promise<SendView>; laneId: string; connectionId: string; userId: string }) {
+  const [view, send] = await Promise.all([promise, sendPromise]);
+  return <ConversationPane view={view} laneId={laneId} connectionId={connectionId} send={view.kind === "ok" ? send : null} userId={userId} />;
 }
 
 /** The two panes. `selected` hides the list on a phone (and the empty conversation placeholder is for wide screens only). */
@@ -219,6 +241,18 @@ export async function ConversationSide({ laneId, state, searchParams }: { laneId
   const chatId = decodeChatKey(chatKey);
   const openAccount = openAccountOf(state, sp);
   const { session, client } = await (await guards()).requireLane(laneId as Parameters<Awaited<ReturnType<typeof guards>>["requireLane"]>[0]);
+  const g = await guards();
+  // T-288: whether the Send box is offered for THIS account (database only; starts with the conversation read and does not wait for it)
+  const canWrite = async (): Promise<boolean> => {
+    try {
+      await g.requireRole(laneId as Parameters<typeof g.requireRole>[0], [...WRITE_ROLES["teams.chat.send"]]);
+      return true;
+    } catch (e) {
+      if (e instanceof AuthError) return false;
+      throw e;
+    }
+  };
+  const sendView = openAccount && chatId && chatKey ? loadSendView({ readFacts: (l, c) => approvalsDeps.readFacts(l as never, c), canWrite }, laneId, openAccount.connectionId, openAccount.account, session.userId) : null;
   const conversation =
     openAccount && chatId && chatKey
       ? loadConversation({ laneId, userId: session.userId, connectionId: openAccount.connectionId, client }, chatId, chatKey, { laneListsCalls: state.laneFeatures.includes("call_links"), connectionHasCalls: openAccount.has.includes("call_links") }, { label: state.multi ? openAccount.label : null, name: openAccount.account })
@@ -227,7 +261,7 @@ export async function ConversationSide({ laneId, state, searchParams }: { laneId
     return (
       <SectionBoundary>
         <Suspense fallback={<ConversationSkeleton />}>
-          <ConversationSection promise={conversation} laneId={laneId} connectionId={openAccount.connectionId} />
+          <ConversationSection promise={conversation} sendPromise={sendView ?? Promise.resolve<SendView>({ kind: "off", reason: "unavailable" })} laneId={laneId} connectionId={openAccount.connectionId} userId={session.userId} />
         </Suspense>
       </SectionBoundary>
     );

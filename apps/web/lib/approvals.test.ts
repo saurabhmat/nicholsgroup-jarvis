@@ -381,4 +381,25 @@ describe("page view models for qbo.disconnect (T-195)", () => {
     expect(toHistory(teams({ status: "failed", failureCode: "reconcile_sent_unverified" })).outcomeUnknown).toBe(true);
     expect(toHistory(teams({ status: "failed", failureCode: "not_a_member" })).outcomeUnknown).toBe(false);
   });
+
+  // T-288 (spec 22.8): the history names the person's own account, never the text.
+  it("a finished Teams send is listed as \"Teams message (chat) · <account label>\" through the connection it was sent on (two accounts: each its own), with no text; a disconnected account is the plain label", async () => {
+    const C1 = "00000000-0000-4000-8000-0000000000c1";
+    const C2 = "00000000-0000-4000-8000-0000000000c2";
+    const GONE = "00000000-0000-4000-8000-0000000000c9";
+    const mk = (id: string, connectionId: string) => row({ id, connectionId, actionType: "teams.chat.send", provider: "microsoft_teams", status: "verified", payloadPurgedAt: "2026-11-11T13:00:00Z", target: { chat_id: "19:abc@thread.v2", client_request_id: "5e11d0c0-0000-4000-8000-000000000001" }, payload: { content_type: "text" } });
+    const rows = [mk("00000000-0000-4000-8000-0000000000a1", C1), mk("00000000-0000-4000-8000-0000000000a2", C2), mk("00000000-0000-4000-8000-0000000000a3", GONE)];
+    const connRows = [
+      { id: C1, external_account_id: "robert@pubkgroup.com", status: "active", owner_user_id: USER, features: {}, created_at: "1" },
+      { id: C2, external_account_id: "robert@pub-k.org", status: "active", owner_user_id: USER, features: {}, created_at: "2" },
+      { id: GONE, external_account_id: "old@pubkgroup.com", status: "disconnected", owner_user_id: USER, features: {}, created_at: "0" },
+    ];
+    const query = { select: () => query, eq: () => query, order: async () => ({ data: connRows, error: null }) };
+    const client = { schema: () => ({ rpc: async (fn: string) => (fn === "act_list" ? { data: rows.map(snake), error: null } : { data: 0, error: null }), from: () => query }) };
+    const g = { requireLane: async () => ({ session: { userId: USER }, laneId: "PKG", client }) as never, requireRole: async () => ({}) as never };
+    const approvals = { jobRpc: async () => async () => ({ data: 0, error: null }), readFacts: async () => facts, laneMailboxes: async () => [], audit: { log: async () => undefined } } as unknown as ApprovalsPublicDeps;
+    const view = await loadApprovals(g, approvals, "PKG");
+    expect(view.history.map((h) => h.subject).sort()).toEqual(["Teams message (chat)", "Teams message (chat) · pub-k.org", "Teams message (chat) · pubkgroup.com"]);
+    expect(JSON.stringify(view)).not.toContain("CANARY");
+  });
 });

@@ -2,7 +2,7 @@
 // The approvals module for Teams messages (T-286, T-287) over an in-memory twin of the act.* functions and a fake Teams writer. The SQL is pinned by pgTAP (330_approvals_teams) and the writer by
 // connectors/src/teams/writer.test.ts; here: the module's own rules (what is proposed, hashed, audited, executed once, how each outcome ends, what is reconciled). Synthetic data (rule 10).
 import { randomUUID } from "node:crypto";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { ConnectorError } from "@nichols/connectors";
 import { TEAMS_ACTION_TYPES as CONNECTOR_TEAMS_TYPES, TEAMS_SEND_FAILURES } from "@nichols/connectors/write";
 import type { AuditEntry } from "@nichols/core/audit";
@@ -12,6 +12,8 @@ import { rejectAction } from "./email";
 import { createTeamsReconciler } from "./reconcile-teams";
 import { reconcileStuckActions } from "./reconcile";
 import { hashOfRow } from "./rows";
+import { sendTeamsMessage, teamsTextHash, TeamsSendRefusal, type SendTeamsInput } from "./teams-send";
+import { teamsChatSendGate } from "./capability";
 import { approveAndExecuteTeams, buildTeamsSend, executeApprovedTeams, proposeTeamsAction, type ProposeTeamsInput, type TeamsExecDeps } from "./teams";
 import { TEAMS_ACTION_TYPES, type CapabilityFacts, type Rpc } from "./types";
 
@@ -317,7 +319,7 @@ describe("approveAndExecuteTeams: the one send", () => {
     const w = world();
     const { id, hash } = await proposed(w);
     const r = await approveAndExecuteTeams(w.deps, w.ctx(), { actionId: id, hashSeen: hash });
-    expect(r).toEqual({ status: "verified", actionId: id });
+    expect(r).toEqual({ status: "verified", actionId: id, externalId: "synthetic-message-1" });
     expect(w.calls.writes).toBe(1);
     expect(w.calls.actions[0]).toMatchObject({ id, lane_id: "PKG", connection_id: CONN, action_type: "teams.chat.send", payload_sha256: hash, approved_by: OWNER });
     expect(w.claims.get(id)).toEqual({ outcome: "sent", external_id: "synthetic-message-1" });
@@ -402,7 +404,7 @@ describe("approveAndExecuteTeams: the one send", () => {
     const { id, hash } = await proposed(w);
     await w.rpc("act_approve", { p_lane: "PKG", p_id: id, p_hash_seen: hash });
     await expect(approveAndExecuteTeams(w.deps, w.ctx(), { actionId: id, hashSeen: "1".repeat(64) })).rejects.toMatchObject({ code: "already_approved" });
-    expect(await approveAndExecuteTeams(w.deps, w.ctx(), { actionId: id, hashSeen: hash })).toEqual({ status: "verified", actionId: id });
+    expect(await approveAndExecuteTeams(w.deps, w.ctx(), { actionId: id, hashSeen: hash })).toEqual({ status: "verified", actionId: id, externalId: "synthetic-message-1" });
     expect(w.calls.writes).toBe(1);
     expect(w.audits.map((a) => a.action)).toContain("action.resumed");
   });
@@ -564,7 +566,7 @@ describe("how each outcome ends", () => {
   it("already applied (the lookup found the message): verified with outcome already_applied", async () => {
     const w = world({ writer: "already_applied" });
     const { id, hash } = await proposed(w);
-    expect(await approveAndExecuteTeams(w.deps, w.ctx(), { actionId: id, hashSeen: hash })).toEqual({ status: "verified", actionId: id });
+    expect(await approveAndExecuteTeams(w.deps, w.ctx(), { actionId: id, hashSeen: hash })).toEqual({ status: "verified", actionId: id, externalId: "synthetic-message-1" });
     expect(w.rows.get(id)).toMatchObject({ result: { outcome: "already_applied" } });
   });
 
@@ -598,7 +600,7 @@ describe("how each outcome ends", () => {
   it("a verified message whose result could not be recorded is still reported as verified (never turned into failed)", async () => {
     const w = world({ markVerifiedThrows: true });
     const { id, hash } = await proposed(w);
-    expect(await approveAndExecuteTeams(w.deps, w.ctx(), { actionId: id, hashSeen: hash })).toEqual({ status: "verified", actionId: id });
+    expect(await approveAndExecuteTeams(w.deps, w.ctx(), { actionId: id, hashSeen: hash })).toEqual({ status: "verified", actionId: id, externalId: "synthetic-message-1" });
     expect(w.rows.get(id)!.status).toBe("executing");
   });
 
@@ -724,5 +726,345 @@ describe("the reconcile sweep for Teams", () => {
     const r = createTeamsReconciler({ loadWriteConnection: async () => ({}) as never, reconciler: { findWrite: async () => [], verifyWrite: async () => undefined } });
     expect(Object.keys(r).sort()).toEqual(["actionTypes", "decide"]);
     expect(r.actionTypes).toEqual(["teams.chat.send", "teams.channel.post", "teams.channel.reply"]);
+  });
+});
+
+
+// ---------------------------------------------------------------------------------------------------- T-288: sendTeamsMessage ("Send = your approval")
+const CONN2 = "00000000-0000-4000-8000-0000000c3002";
+const sendInput = (over: Partial<SendTeamsInput> = {}): SendTeamsInput => {
+  const text = over.text ?? CANARY;
+  return { connectionId: CONN, chatId: CHAT, text, textSha256: teamsTextHash(text.replace(/\r\n?/g, "\n").normalize("NFC").trim()), clientRequestId: REQ, ...over };
+};
+
+describe("sendTeamsMessage (T-288): spec 17 tests 10, 11, 12, 13", () => {
+  it("TEST 10: one press = proposed -> approved -> executing -> verified by that person, exactly one POST, the hash approved is the hash of the typed text, the text is emptied, no text in the audit", async () => {
+    const w = world();
+    const out = await sendTeamsMessage(w.deps, w.ctx(), sendInput());
+    expect(out).toMatchObject({ kind: "result", result: { status: "verified" } });
+    expect(w.calls.writes).toBe(1);
+    const [row] = [...w.rows.values()];
+    expect(row).toMatchObject({ status: "verified", proposer_kind: "user", proposer_user_id: OWNER, approved_by: OWNER, derived_from_retrieved: false });
+    expect(row!.approved_hash).toBe(row!.payload_sha256);
+    expect(row!.payload.text).toBeUndefined();
+    expect(w.calls.actions[0]).toMatchObject({ approved_by: OWNER, payload: { text: CANARY } }); // the ONE place the text is: the POST's action
+    expect(w.audits.map((a) => a.action)).toEqual(["action.proposed", "action.approved", "action.execute_started", "action.verified"]);
+    noText(w);
+  });
+
+  it("the browser's hash is over the NORMALISED text: CRLF, trailing spaces and a decomposed accent hash the same as the text the server sends", async () => {
+    const w = world();
+    const typed = `  hello\r\nwor${"l"}d e${String.fromCharCode(769)} \n`;
+    const out = await sendTeamsMessage(w.deps, w.ctx(), { ...sendInput({ text: typed }), textSha256: teamsTextHash("hello\nworld é") });
+    expect(out).toMatchObject({ kind: "result", result: { status: "verified" } });
+    expect(w.calls.actions[0]!.payload).toEqual({ content_type: "text", text: "hello\nworld é" });
+  });
+
+  it("a hash that is not the server's hash of the text (a changed byte, a wrong length, upper case, not hex) refuses BEFORE anything is proposed", async () => {
+    for (const bad of [teamsTextHash("other text"), teamsTextHash(CANARY).slice(0, 63), teamsTextHash(CANARY).toUpperCase(), "z".repeat(64), "", teamsTextHash(CANARY) + "0"]) {
+      const w = world();
+      expect(await sendTeamsMessage(w.deps, w.ctx(), { ...sendInput(), textSha256: bad })).toEqual({ kind: "text_mismatch" });
+      expect(w.rows.size).toBe(0);
+      expect(w.calls.writes).toBe(0);
+      expect(w.audits).toHaveLength(0);
+    }
+  });
+
+  it("TEST 13: every gate refuses by name before anything is proposed or sent", async () => {
+    const T = (over: Record<string, unknown>) => ({ ownerUserId: OWNER, chatSend: true, channelsSend: true, laneChatSend: true, connChatSend: true, ...over });
+    const cases: [string, Partial<CapabilityFacts>][] = [
+      ["lane_off", { teams: T({ laneChatSend: false, chatSend: false }) }],
+      ["reconnect", { teams: T({ connChatSend: false, chatSend: false }) }],
+      ["policy_off", { writeActionsAllowed: ["email_send"] }],
+      ["drafts_off", { storeOutboundDrafts: false }],
+      ["not_live", { approvalsLive: false }],
+    ];
+    for (const [gate, facts] of cases) {
+      const w = world({ facts: { teams: T({}), ...facts } });
+      expect(await sendTeamsMessage(w.deps, w.ctx(), sendInput()), gate).toEqual({ kind: "gate", gate });
+      expect(w.rows.size, gate).toBe(0);
+      expect(w.calls.writes, gate).toBe(0);
+      expect(w.audits, gate).toHaveLength(0);
+    }
+    // the order: the first closed gate is the one named
+    const all = world({ facts: { teams: T({ laneChatSend: false, chatSend: false }), writeActionsAllowed: [], approvalsLive: false, storeOutboundDrafts: false } });
+    expect(await sendTeamsMessage(all.deps, all.ctx(), sendInput())).toEqual({ kind: "gate", gate: "lane_off" });
+    const noPolicyNotLive = world({ facts: { teams: T({}), writeActionsAllowed: [], approvalsLive: false } });
+    expect(await sendTeamsMessage(noPolicyNotLive.deps, noPolicyNotLive.ctx(), sendInput())).toEqual({ kind: "gate", gate: "policy_off" });
+  });
+
+  it("teamsChatSendGate on facts that predate the split flags falls back to chatSend (a closed chat gate is lane_off); an open one is null", () => {
+    const base: CapabilityFacts = { mailbox: null, composeGranted: false, writeActionsAllowed: ["teams_send"], approvalsLive: true, stepUpMaxAgeS: 300, teams: { ownerUserId: OWNER, chatSend: true, channelsSend: false } };
+    expect(teamsChatSendGate(base)).toBeNull();
+    expect(teamsChatSendGate({ ...base, teams: { ownerUserId: OWNER, chatSend: false, channelsSend: false } })).toBe("lane_off");
+    expect(teamsChatSendGate({ ...base, teams: null })).toBe("not_usable");
+  });
+
+  it("a viewer, another person's connection and an unusable connection are refused with nothing stored (the same not_found for the last two)", async () => {
+    const w = world();
+    await expect(sendTeamsMessage(w.deps, w.ctx(VIEWER), sendInput())).rejects.toMatchObject({ code: "forbidden" });
+    await expect(sendTeamsMessage(w.deps, w.ctx(OTHER), sendInput())).rejects.toMatchObject({ code: "not_found" });
+    const gone = world({ facts: null });
+    await expect(sendTeamsMessage(gone.deps, gone.ctx(), sendInput())).rejects.toMatchObject({ code: "not_found" });
+    expect(w.rows.size + gone.rows.size).toBe(0);
+  });
+
+  it("text and ids that the schema refuses are `invalid` with nothing stored, and the error never holds the text", async () => {
+    for (const bad of [{ text: "" }, { text: "x".repeat(10_001) }, { text: `bell\u0007${CANARY}` }, { chatId: "nope" }, { clientRequestId: "not-a-uuid" }]) {
+      const w = world();
+      const e = await sendTeamsMessage(w.deps, w.ctx(), { ...sendInput(bad as never), textSha256: teamsTextHash("x") }).catch((x: unknown) => x);
+      expect(e, JSON.stringify(bad).slice(0, 40)).toMatchObject({ code: "invalid" });
+      expect(JSON.stringify(e) + String((e as Error).message)).not.toContain("CANARY");
+      expect(w.rows.size).toBe(0);
+    }
+  });
+
+  it("TEST 11: the same client request id sent twice at the same time, and again afterwards, is ONE action and ONE POST", async () => {
+    const w = world({ executeDelayMs: 25 });
+    const [a, b] = await Promise.all([sendTeamsMessage(w.deps, w.ctx(), sendInput()), sendTeamsMessage(w.deps, w.ctx(), sendInput())]);
+    const c = await sendTeamsMessage(w.deps, w.ctx(), sendInput());
+    expect(w.rows.size).toBe(1);
+    expect(w.calls.writes).toBe(1);
+    const states = [a, b, c].map((o) => (o.kind === "result" ? o.result.status : o.kind));
+    expect(states).toContain("verified");
+    expect(states.every((x) => ["verified", "already_in_progress", "outcome_pending", "sent_unverified"].includes(x))).toBe(true);
+    expect(c).toMatchObject({ kind: "result", result: { status: "verified" } });
+  });
+
+  it("TEST 12: an unknown outcome (the POST times out) ends as outcome_pending with ONE POST and the text still held for the sweep; the same request again never posts a second time", async () => {
+    const w = world({ writer: "outcome_pending" });
+    const out = await sendTeamsMessage(w.deps, w.ctx(), sendInput());
+    expect(out).toMatchObject({ kind: "result", result: { status: "outcome_pending" } });
+    const again = await sendTeamsMessage(w.deps, w.ctx(), sendInput());
+    expect(again).toMatchObject({ kind: "result" });
+    expect(w.calls.writes).toBe(1);
+    expect([...w.rows.values()][0]).toMatchObject({ status: "executing" });
+  });
+
+  it("a definite refusal by Teams is `failed` with a fixed code, nothing sent twice, the text emptied", async () => {
+    const w = world({ writer: "not_a_member" });
+    const out = await sendTeamsMessage(w.deps, w.ctx(), sendInput());
+    expect(out).toMatchObject({ kind: "result", result: { status: "failed" } });
+    expect(w.calls.writes).toBe(1);
+    expect([...w.rows.values()][0]!.payload.text).toBeUndefined();
+    noText(w);
+  });
+
+  it("CANARY: the message text is in the one writer call and nowhere else the module touches (audit, rows after the terminal state, the returned outcome, thrown errors)", async () => {
+    const logged: string[] = [];
+    const spies = (["log", "info", "warn", "error", "debug"] as const).map((k) => vi.spyOn(console, k).mockImplementation((...a: unknown[]) => void logged.push(JSON.stringify(a))));
+    try {
+      for (const writer of ["ok", "not_a_member", "outcome_pending", "timeout", "throttled"] as WriterMode[]) {
+        const w = world({ writer });
+        const out = await sendTeamsMessage(w.deps, w.ctx(), sendInput());
+        expect(JSON.stringify(out)).not.toContain("CANARY");
+        noText(w);
+        expect(w.calls.actions.filter((a) => JSON.stringify(a).includes("CANARY"))).toHaveLength(1);
+        if (writer !== "outcome_pending" && writer !== "timeout") expect(JSON.stringify([...w.rows.values()])).not.toContain("CANARY"); // terminal: emptied
+      }
+      expect(logged.join("\n")).not.toContain("CANARY");
+    } finally {
+      for (const s of spies) s.mockRestore();
+    }
+  });
+
+  it("SEVERAL ACCOUNTS: a send on the SECOND connection proposes, claims, POSTs and reads back on that connection only", async () => {
+    const w = world();
+    const seen: { write: string[]; verify: string[] } = { write: [], verify: [] };
+    const facts = (id: string) => ({ ...w.facts, teams: { ownerUserId: OWNER, chatSend: true, channelsSend: true, laneChatSend: true, connChatSend: id === CONN2 || id === CONN } });
+    const deps: TeamsExecDeps = {
+      ...w.deps,
+      readFacts: async (_l, id) => facts(id),
+      loadWriteConnection: async (_l, id) => ({ id }) as never,
+      writer: {
+        async executeWrite(l, c, a) {
+          seen.write.push(`${(c as { id: string }).id}|${a.connection_id}`);
+          return w.deps.writer.executeWrite(l, c, a);
+        },
+        async verifyWrite(l, c, a, id, win) {
+          seen.verify.push(`${(c as { id: string }).id}|${a.connection_id}`);
+          return w.deps.writer.verifyWrite(l, c, a, id, win);
+        },
+      },
+    };
+    const out = await sendTeamsMessage(deps, w.ctx(), sendInput({ connectionId: CONN2 }));
+    expect(out).toMatchObject({ kind: "result", result: { status: "verified" } });
+    expect([...w.rows.values()].map((r) => r.connection_id)).toEqual([CONN2]);
+    expect(seen).toEqual({ write: [`${CONN2}|${CONN2}`], verify: [`${CONN2}|${CONN2}`] });
+    expect(w.audits.every((a) => (a.metadata as Record<string, unknown>).connection_id === undefined || (a.metadata as Record<string, unknown>).connection_id === CONN2)).toBe(true);
+  });
+});
+
+
+// ---------------------------------------------------------------------------------------------------- T-288 review: a replay of the same request id, in every state of the action
+describe("sendTeamsMessage: the same request id and the same text again (a replay), in every state the action can be in", () => {
+  const replay = async (mutate: (w: ReturnType<typeof world>, id: string) => void, over: Parameters<typeof world>[0] = {}) => {
+    const w = world(over);
+    const first = await proposed(w, {});
+    mutate(w, first.id);
+    const out = await sendTeamsMessage(w.deps, w.ctx(), sendInput());
+    return { w, out, id: first.id };
+  };
+  it("proposed (never approved): the replay approves the same text and sends it ONCE", async () => {
+    const { w, out } = await replay(() => undefined);
+    expect(out).toMatchObject({ kind: "result", result: { status: "verified", externalId: "synthetic-message-1" } });
+    expect(w.calls.writes).toBe(1);
+    expect(w.rows.size).toBe(1);
+  });
+  it("approved but not claimed (a killed request): the replay resumes it, ONE POST", async () => {
+    const { w, out } = await replay((w, id) => {
+      const r = w.rows.get(id)!;
+      r.status = "approved";
+      r.approved_by = OWNER;
+      r.approved_hash = r.payload_sha256;
+    });
+    expect(out).toMatchObject({ kind: "result", result: { status: "verified" } });
+    expect(w.calls.writes).toBe(1);
+  });
+  it("executing, nothing recorded yet: outcome_pending (unknown), no second POST", async () => {
+    const { w, out } = await replay((w, id) => {
+      w.rows.get(id)!.status = "executing";
+      w.claims.set(id, { outcome: null, external_id: null });
+    });
+    expect(out).toMatchObject({ kind: "result", result: { status: "outcome_pending" } });
+    expect(w.calls.writes).toBe(0);
+  });
+  it("executing with the message accepted but not read back: sent_unverified (Sent, checking), no second POST", async () => {
+    const { w, out } = await replay((w, id) => {
+      w.rows.get(id)!.status = "executing";
+      w.claims.set(id, { outcome: "sent", external_id: "m1" });
+    });
+    expect(out).toMatchObject({ kind: "result", result: { status: "sent_unverified" } });
+    expect(w.calls.writes).toBe(0);
+  });
+  it("verified, and verified with the text already purged: verified (no message id on a replay), no POST, the text is not needed", async () => {
+    const { w, out } = await replay((w, id) => {
+      const r = w.rows.get(id)!;
+      r.status = "verified";
+      delete r.payload.text;
+      r.payload_purged_at = new Date().toISOString();
+    });
+    expect(out).toEqual({ kind: "result", result: { status: "verified", actionId: [...w.rows.keys()][0] } });
+    expect(w.calls.writes).toBe(0);
+  });
+  it("failed (a definite code, or an unknown outcome): the same failure again, no POST", async () => {
+    for (const code of ["not_a_member", "outcome_unknown"]) {
+      const { w, out } = await replay((w, id) => {
+        const r = w.rows.get(id)!;
+        r.status = "failed";
+        r.failure_code = code;
+        delete r.payload.text;
+      });
+      expect(out).toMatchObject({ kind: "result", result: { status: "failed", failureCode: code } });
+      expect(w.calls.writes).toBe(0);
+    }
+  });
+  it("expired, invalidated (a disconnect) and rejected: a definite failure (nothing was sent), no POST", async () => {
+    for (const [status, code] of [["expired", "expired"], ["invalidated", "connection_disconnected"], ["rejected", "execution_refused"]] as const) {
+      const { w, out } = await replay((w, id) => {
+        w.rows.get(id)!.status = status;
+        delete w.rows.get(id)!.payload.text;
+      });
+      expect(out, status).toMatchObject({ kind: "result", result: { status: "failed", failureCode: code } });
+      expect(w.calls.writes).toBe(0);
+    }
+  });
+  it("the same id with another text is request_reused (the browser makes a new id when the text changes)", async () => {
+    const w = world();
+    await proposed(w, {});
+    await expect(sendTeamsMessage(w.deps, w.ctx(), sendInput({ text: "another text" }))).rejects.toMatchObject({ code: "request_reused" });
+  });
+});
+
+describe("sendTeamsMessage: structural phases (T-288 review B, D1)", () => {
+  it("F2: a role read or a facts read that fails BEFORE propose is called is a TeamsSendRefusal(phase before, a definite 503): nothing was proposed or sent", async () => {
+    const w = world();
+    const roleDown = { ...w.ctx(), rpc: (async (fn: string, a: Record<string, unknown>) => (fn === "has_lane_role" ? { data: null, error: { message: "db down" } } : w.rpc(fn, a))) as never };
+    await expect(sendTeamsMessage(w.deps, roleDown, sendInput())).rejects.toMatchObject({ phase: "before", code: "unavailable" });
+    const factsDown = { ...w.deps, readFacts: async () => { throw new Error("db down"); } };
+    await expect(sendTeamsMessage(factsDown, w.ctx(), sendInput())).rejects.toBeInstanceOf(TeamsSendRefusal);
+    expect(w.rows.size).toBe(0); // nothing was proposed
+    expect(w.calls.writes).toBe(0);
+  });
+
+  it("F2: a failure INSIDE proposeTeamsAction that is not a definite refusal (the insert may have committed, its answer lost; the audit write failing after it) is a plain UNKNOWN outcome, never a refusal 'before'; a definite refusal before the insert is passed on as it is", async () => {
+    const w = world();
+    const proposeDown = { ...w.deps, jobRpc: async () => async (fn: string, a: Record<string, unknown>) => (fn === "act_propose" ? { data: null, error: { message: "db down" } } : w.rpc(fn, a)) };
+    // F2: a failure INSIDE proposeTeamsAction (the insert may have committed with its answer lost) is an UNKNOWN outcome, a plain unavailable, never a refusal "before"
+    const e = await sendTeamsMessage(proposeDown, w.ctx(), sendInput()).catch((x: unknown) => x);
+    expect(e).not.toBeInstanceOf(TeamsSendRefusal);
+    expect(e).toMatchObject({ code: "unavailable" });
+    // an audit write that fails after the insert is the same
+    const auditDown = { ...w.deps, audit: { log: async () => { throw new Error("audit down"); } } as never };
+    const e2 = await sendTeamsMessage(auditDown, w.ctx(), sendInput({ clientRequestId: "5e11d0c0-0000-4000-8000-000000000077" })).catch((x: unknown) => x);
+    expect(e2).not.toBeInstanceOf(TeamsSendRefusal);
+    // a DEFINITE refusal before the insert (the database's gate) is passed on as it is
+    const gateDown = { ...w.deps, jobRpc: async () => async (fn: string, a: Record<string, unknown>) => (fn === "act_propose" ? { data: null, error: { code: "42501", message: "act: this lane does not allow storing outbound drafts" } } : w.rpc(fn, a)) };
+    await expect(sendTeamsMessage(gateDown, w.ctx(), sendInput({ clientRequestId: "5e11d0c0-0000-4000-8000-000000000078" }))).rejects.toMatchObject({ code: "drafts_not_allowed" });
+    expect(w.calls.writes).toBe(0);
+  });
+
+  it("D1: refused between propose and approve (the database refuses the step-up): the proposal is rejected at once, its text is gone, nothing was sent, and the error says a new request id is needed", async () => {
+    const w = world();
+    const ctx = { ...w.ctx(), rpc: (async (fn: string, a: Record<string, unknown>) => (fn === "act_approve" ? { data: null, error: { code: "P0001", message: "act: step_up_required" } } : w.rpc(fn, a))) as never };
+    const e = await sendTeamsMessage(w.deps, ctx, sendInput()).catch((x: unknown) => x);
+    expect(e).toMatchObject({ phase: "rejected", code: "step_up_required", freshId: true });
+    const [row] = [...w.rows.values()];
+    expect(row).toMatchObject({ status: "rejected" });
+    expect(row!.payload.text).toBeUndefined();
+    expect(w.calls.writes).toBe(0);
+    noText(w);
+  });
+});
+
+describe("sendTeamsMessage: what is certain after a failed approve step (T-288 re-check)", () => {
+  const approveFails = (w: ReturnType<typeof world>, message: string, onReject?: (rows: Map<string, Row>) => void) => ({
+    ...w.ctx(),
+    rpc: (async (fn: string, a: Record<string, unknown>) => {
+      if (fn === "act_approve") return { data: null, error: { code: "P0001", message } };
+      if (fn === "act_reject" && onReject) {
+        onReject(w.rows);
+        return { data: null, error: { code: "P0001", message: "act: not_pending" } };
+      }
+      return w.rpc(fn, a);
+    }) as never,
+  });
+
+  it("a replay of a proposal that lapsed before it was approved ends as a definite failed / expired (never an unknown outcome)", async () => {
+    const w = world();
+    const out = await sendTeamsMessage(w.deps, approveFails(w, "act: expired"), sendInput());
+    expect(out).toMatchObject({ kind: "result", result: { status: "failed", failureCode: "expired" } });
+    expect(w.calls.writes).toBe(0);
+  });
+
+  it("D1 RACE: the on-the-spot reject fails because a concurrent request approved the action in between: an UNKNOWN outcome (a plain error, not a refusal 'before'), never a definite refusal", async () => {
+    const w = world();
+    const ctx = approveFails(w, "act: step_up_required", (rows) => void ([...rows.values()][0]!.status = "approved"));
+    const e = await sendTeamsMessage(w.deps, ctx, sendInput()).catch((x: unknown) => x);
+    expect(e).not.toBeInstanceOf(TeamsSendRefusal);
+    expect(e).toMatchObject({ code: "unavailable" });
+  });
+
+  it("D1 RACE: the reject fails but the action turns out rejected or expired: a definite refusal; still proposed (a duplicate can still approve it), executing or verified: unknown (never 'before')", async () => {
+    for (const [status, phase] of [["rejected", "rejected"], ["expired", "rejected"]] as const) {
+      const w = world();
+      const e = await sendTeamsMessage(w.deps, approveFails(w, "act: step_up_required", (rows) => void ([...rows.values()][0]!.status = status)), sendInput()).catch((x: unknown) => x);
+      expect(e, status).toMatchObject({ phase, code: "step_up_required" });
+    }
+    for (const status of ["proposed", "executing", "verified"]) {
+      const w = world();
+      const e = await sendTeamsMessage(w.deps, approveFails(w, "act: step_up_required", (rows) => void ([...rows.values()][0]!.status = status)), sendInput()).catch((x: unknown) => x);
+      expect(e, status).not.toBeInstanceOf(TeamsSendRefusal);
+    }
+  });
+
+  it("an error from a state that is neither proposed nor rejected (approved, executing...) is never described as the error code it carried", async () => {
+    const w = world({ executeDelayMs: 0 });
+    const first = await proposed(w, {});
+    w.rows.get(first.id)!.status = "executing";
+    w.claims.set(first.id, { outcome: null, external_id: null });
+    const e = await sendTeamsMessage(w.deps, approveFails(w, "act: step_up_required"), sendInput()).catch((x: unknown) => x);
+    // the replay of an executing row does not reach act_approve at all: the settled state is reported
+    expect(e).toMatchObject({ kind: "result", result: { status: "outcome_pending" } });
   });
 });

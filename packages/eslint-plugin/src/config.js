@@ -210,6 +210,9 @@ export const RESTRICTED_NAMES = {
   proposeTeamsAction: { allow: [...APPROVALS, TEAMS_SEND_ROUTE], allowReexport: [], hint: "only the approvals package and the Messages send route (T-288) propose a Teams message" },
   approveAndExecuteTeamsAction: { allow: [...APPROVALS, TEAMS_SEND_ROUTE], allowReexport: [], hint: "only the approvals package and the Messages send route (T-288) carry out a Teams message" },
   executeApprovedTeamsAction: { allow: [...APPROVALS, TEAMS_SEND_ROUTE], allowReexport: [], hint: "only the approvals package and the Messages send route (T-288) carry out a Teams message" },
+  // T-288: "Send = your approval" (propose + approve + claim + execute + verify in one call). The ONE caller outside the approvals package is the Messages send route.
+  // The one test file that runs the REAL route logic over the REAL `sendTeamsMessage` (T-288 review D4) is listed by name, like the connector tests above; it posts nothing (the writer is replaced).
+  sendTeamsMessage: { allow: [...APPROVALS, TEAMS_SEND_ROUTE, "apps/web/tests/teams-send-combined.test.ts"], allowReexport: [], hint: "only the approvals package and the Messages send route (T-288) send a Teams message" },
   // T-278 review S6: the Teams HTTP wrapper takes a "read" or "write" kind; the "write" kind can send a POST. Only the Teams read client, the write client and the OAuth provider (the `/me`
   // read at connect time) build one; the harness builds the read kind for tests. Anything else goes through those. T-289: the Teams subscription client builds the third, `subscriptions` kind
   // (POST, PATCH and DELETE on `/subscriptions` and `/subscriptions/{id}` only: no chat, no message route).

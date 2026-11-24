@@ -128,14 +128,22 @@ export function totpVerifiedAt(amr: unknown): number | null {
   return latest;
 }
 
+/** The step-up windows a caller may ask for (seconds): every existing caller keeps 30 - 3,600; the Teams send (T-288, D-67) has its own 300 - 43,200, the same clamp as `act.approve` and the lane config schema. */
+const STEP_UP_BOUNDS = [30, 3600] as const;
+const TEAMS_STEP_UP_BOUNDS = [300, 43200] as const;
+
 export type Guards = {
   requireSession(opts?: { allowAal1?: boolean }): Promise<VerifiedSession>;
   requireLane(laneId: LaneId): Promise<{ session: VerifiedSession; laneId: LaneId; client: LaneClient }>;
   /** The session plus the lanes its user may open (the lane switcher's list); AAL2 required. */
   listLanes(): Promise<LaneSummary[]>;
   requireRole(laneId: LaneId, roles: readonly Role[]): Promise<{ session: VerifiedSession; laneId: LaneId; client: LaneClient }>;
-  /** AAL2 plus a TOTP code entered within the last `maxAgeSeconds` (30 – 3600). */
-  requireStepUp(maxAgeSeconds: number): Promise<VerifiedSession>;
+  /**
+   * AAL2 plus a TOTP code entered within the last `maxAgeSeconds`. Without `opts` the window is 30 - 3,600 (email approvals 30 - 900, QuickBooks, every existing caller): unchanged.
+   * `opts.window: "teams"` (T-288, D-67) is the Teams send's own window, 300 - 43,200 (8 hours = 28,800). The bound is chosen by the CALLER'S CODE, never by a request, and the value passed is
+   * the lane's `approvals.teams_step_up_max_age_s` read on the server.
+   */
+  requireStepUp(maxAgeSeconds: number, opts?: { window?: "teams" }): Promise<VerifiedSession>;
 };
 
 export function createGuards(
@@ -183,8 +191,9 @@ export function createGuards(
     return ctx;
   };
 
-  const requireStepUp: Guards["requireStepUp"] = async (maxAgeSeconds) => {
-    if (!Number.isInteger(maxAgeSeconds) || maxAgeSeconds < 30 || maxAgeSeconds > 3600) throw new AuthError("forbidden");
+  const requireStepUp: Guards["requireStepUp"] = async (maxAgeSeconds, opts) => {
+    const [lo, hi] = opts?.window === "teams" ? TEAMS_STEP_UP_BOUNDS : STEP_UP_BOUNDS;
+    if (!Number.isInteger(maxAgeSeconds) || maxAgeSeconds < lo || maxAgeSeconds > hi) throw new AuthError("forbidden");
     const session = await requireSession();
     const nowSeconds = Math.floor(now() / 1000);
     const at = session.mfaVerifiedAt;

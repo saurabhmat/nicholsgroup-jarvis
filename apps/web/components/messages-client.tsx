@@ -15,6 +15,7 @@ import type { CallState, MessageView } from "@/lib/teams-chats";
 import { callUnavailableText, MESSAGES_NO_OLDER_TEXT, MESSAGES_REFRESH_FAILED_TEXT, messagesBusyText, messagesRefreshWaitText } from "@/lib/teams-wording";
 import { useMessagesLive, useOnLiveRefetch } from "./messages-live";
 import { MessageList } from "./messages-view";
+import { PendingBubbles } from "./messages-send";
 
 const JSON_HEADERS = { "content-type": "application/json" } as const;
 
@@ -195,6 +196,7 @@ export function ConversationMessages({ laneId, chatKey, conn, initial, nextBefor
       </div>
       <ul className="flex flex-col gap-3" data-testid="message-list">
         <MessageList messages={all} group={group} />
+        <PendingBubbles shown={all} />
       </ul>
     </div>
   );

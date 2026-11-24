@@ -126,3 +126,84 @@ export const MESSAGES_PICK_ACCOUNT_TEXT = "This link does not say which Teams ac
 export const CHANNELS_PICK_ACCOUNT_TEXT = "This link does not say which Teams account the team belongs to. Pick the channel from the list.";
 /** T-296: the heading of one account's teams when the person has two or more accounts that can read channels. */
 export const channelsGroupLabel = (upn: string): string => `Teams of ${upn}`;
+
+// ---- sending (T-288, spec 10.5, 22.8). Fixed text only; the sign-in address in the line under the composer is the person's own row read from the database (never text from a query or from Teams).
+export const teamsSendLine = (account: string): string => `Send posts this exact text to Teams as ${account} (logged).`;
+export const MESSAGES_SEND_HINT_DESKTOP = "Ctrl+Enter or Cmd+Enter sends. Enter starts a new line.";
+/** Why there is no composer, by the gate that is off (the names are the route's `gate_*` codes and the page's reasons). */
+export type SendOffReason = "lane_off" | "reconnect" | "policy_off" | "drafts_off" | "not_live" | "role" | "unavailable";
+export const SEND_OFF_TEXT: Readonly<Record<SendOffReason, string>> = Object.freeze({
+  lane_off: "Sending is not switched on for this company yet.",
+  reconnect: "Reconnect Teams to allow sending.",
+  policy_off: "Sending Teams messages is not allowed for this company yet.",
+  drafts_off: "This company does not keep outbound drafts, so sending from the portal is off.",
+  not_live: "Approvals are not live for this company yet, so sending is off.",
+  role: "Your role cannot send messages from the portal. Open the chat in Teams to reply.",
+  unavailable: "Sending is not available right now. Try again in a minute.",
+});
+/** The five states of a message the person sent, each a TEXT label (never colour alone). */
+export type SendState = "sending" | "sent" | "checking" | "not_sent" | "unknown";
+export const SEND_STATE_TEXT: Readonly<Record<SendState, string>> = Object.freeze({
+  sending: "Sending…",
+  sent: "Sent",
+  checking: "Sent, checking…",
+  not_sent: "Not sent",
+  unknown: "This message may have been sent. Look at the chat in Teams first.",
+});
+/** What each refusal of the send route says (the route's `error` code). The text typed stays in the composer for every one of them. */
+export const SEND_ERROR_TEXT: Readonly<Record<string, string>> = Object.freeze({
+  rate_limited: "Wait a second, then press Send again.",
+  text_mismatch: "The message changed on its way, so nothing was sent. Check the text and try again.",
+  no_session: "Your sign-in ended, so nothing was sent.",
+  mfa_required: "Finish signing in with your authenticator code first, so nothing was sent.",
+  invalid_message: "This message cannot be sent. Check its length and remove any unusual characters.",
+  bad_request: "This message cannot be sent. Reload the page and try again.",
+  forbidden: SEND_OFF_TEXT.role,
+  not_found: "This chat could not be found, so nothing was sent.",
+  reconnect: "Your Teams sign-in expired, so nothing was sent. Reconnect Teams in Settings.",
+  request_reused: "This message could not be sent as it is. Press Send again to send it as a new message.",
+  gate_lane_off: SEND_OFF_TEXT.lane_off,
+  gate_not_usable: SEND_OFF_TEXT.reconnect,
+  gate_reconnect: SEND_OFF_TEXT.reconnect,
+  gate_policy_off: SEND_OFF_TEXT.policy_off,
+  gate_drafts_off: SEND_OFF_TEXT.drafts_off,
+  gate_not_live: SEND_OFF_TEXT.not_live,
+  gate_not_enabled: SEND_OFF_TEXT.lane_off,
+  unavailable: "The portal could not send this just now, so nothing was sent. Try again.",
+});
+export const SEND_STEP_UP_TEXT = "Enter your authenticator code to send. Your message is kept and you will come back to this chat.";
+export const SEND_NETWORK_TEXT = "The portal got no answer, so it cannot tell.";
+export const SEND_TEXT_PROBLEM: Readonly<Record<"empty" | "too_long" | "too_big" | "control" | "malformed", string>> = Object.freeze({
+  malformed: "The message holds an invalid character", // the server's own sentence (teams-pure TEAMS_TEXT_PROBLEMS.malformed)
+  empty: "Type a message to send.",
+  too_long: "This message is longer than 10,000 characters.",
+  too_big: "This message is larger than 80 KB.",
+  control: "This message has a character Teams cannot take. Remove it to send.",
+});
+export const SEND_IF_NOT_SENT = "Send if it has not been sent";
+export const SEND_DISMISS = "Dismiss";
+/** Notes under the one state line (never a second copy of the state line). */
+export const SEND_DISMISSED_TEXT = "Dismissed. If you type the same words again, the portal first looks for this message, so it is never sent twice.";
+export const SEND_SENT_EARLIER = "Sent earlier: this is the message from before, nothing new was sent.";
+export const SEND_OFF_EARLIER = "A message you sent earlier may have been sent. Look at the chat in Teams.";
+export const SEND_SAFE_LINE = "Safe to press: the portal sends this message at most once.";
+export const SEND_UNSAVED_NOTE = "This warning cannot be kept if you reload: look at the chat in Teams before reloading.";
+export const SEND_TOO_MANY_UNKNOWN = "Look at the earlier messages in Teams first, then dismiss them here.";
+/** A refusal answered to a request about a message that may already have gone: it says only that THIS request sent nothing, and says what is true of it (transient ones say "try again"). */
+export const SEND_REPLAY_NOTE: Readonly<Record<string, string>> = Object.freeze({
+  rate_limited: "Could not check just now: wait a second and try again.",
+  step_up_required: "Enter your authenticator code to check.",
+  reconnect: "Reconnect Teams to check.",
+  mfa_required: "Finish signing in to check.",
+  no_session: "Sign in to check.",
+  forbidden: "You can no longer send from this account.",
+  not_found: "This chat or account is no longer available here.",
+  gate_lane_off: "Sending is not switched on for this company yet.",
+  gate_not_usable: "Reconnect Teams to check.",
+  gate_reconnect: "Reconnect Teams to check.",
+  gate_policy_off: "Sending Teams messages is not allowed for this company yet.",
+  gate_drafts_off: "This company does not keep outbound drafts, so sending from the portal is off.",
+  gate_not_live: "Approvals are not live for this company yet.",
+  gate_not_enabled: "Sending is not switched on for this company yet.",
+  default: "Could not check just now. Try again in a moment.",
+});

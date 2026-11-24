@@ -28,6 +28,8 @@ import { AuthError, authErrorResponse, type Guards } from "@nichols/core/auth";
 import { domainOf } from "@nichols/briefing/domain";
 import { z } from "zod";
 import { isOutcomeUnknown } from "./outcome";
+import { ownAccounts } from "./teams-messages";
+import { loadTeamsRows } from "./teams-connection";
 import { draftReply, replyContext, ReplyError, saveReply, type ReplyDeps } from "./reply";
 import { flagRecipients, type RecipientFlag } from "./reply-flags";
 
@@ -337,14 +339,19 @@ export function teamsHistoryLabel(type: "teams.chat.send" | "teams.channel.post"
   return type === "teams.chat.send" ? "Teams message (chat)" : type === "teams.channel.post" ? "Teams message (channel post)" : "Teams message (channel reply)";
 }
 
-export function toHistory(row: ActionRow): HistoryItem {
+/** "Teams message (chat) · pubkgroup.com": the kind and the person's own account (T-288, spec 22.8), never the text or the chat's people. `accountLabel` null: the account is no longer one of theirs (disconnected). */
+export function teamsHistorySubject(type: "teams.chat.send" | "teams.channel.post" | "teams.channel.reply", accountLabel: string | null): string {
+  return accountLabel ? `${teamsHistoryLabel(type)} · ${accountLabel}` : teamsHistoryLabel(type);
+}
+
+export function toHistory(row: ActionRow, accountLabel: string | null = null): HistoryItem {
   return {
     id: row.id,
     actionType: row.actionType,
     provider: row.provider === "microsoft" ? "microsoft" : row.provider === "google" ? "google" : null,
     status: row.status,
     to: strs(row.payload.to),
-    subject: row.actionType === "qbo.disconnect" ? "Disconnect QuickBooks" : isTeamsType(row.actionType) ? teamsHistoryLabel(row.actionType) : typeof row.payload.subject === "string" ? row.payload.subject : "",
+    subject: row.actionType === "qbo.disconnect" ? "Disconnect QuickBooks" : isTeamsType(row.actionType) ? teamsHistorySubject(row.actionType, accountLabel) : typeof row.payload.subject === "string" ? row.payload.subject : "",
     failureCode: row.failureCode,
     outcomeUnknown: row.status === "failed" && isOutcomeUnknown(row.failureCode),
     at: row.verifiedAt ?? row.updatedAt,
@@ -390,10 +397,17 @@ export async function loadApprovals(
       else if (row.actionType === QBO_DISCONNECT) disconnects.push(toDisconnectCard(row, f, laneId, lane.session.userId));
       // A Teams send is proposed and approved in one step (T-288): it never waits as a card here, so it is neither listed nor counted.
     }
-    const history = rows
-      .filter((r) => r.status !== "proposed")
-      .slice(0, 20)
-      .map(toHistory);
+    const shown = rows.filter((r) => r.status !== "proposed").slice(0, 20);
+    // T-288 (spec 22.8): a Teams send names the person's own account ("Teams message (chat) · pubkgroup.com"). Read only when a Teams row is listed; a failed read leaves the plain label.
+    let labels = new Map<string, string>();
+    if (shown.some((r) => isTeamsType(r.actionType))) {
+      try {
+        labels = new Map(ownAccounts(await loadTeamsRows(lane.client, laneId, lane.session.userId), []).map((a) => [a.connectionId, a.label]));
+      } catch {
+        labels = new Map();
+      }
+    }
+    const history = shown.map((r) => toHistory(r, isTeamsType(r.actionType) ? (labels.get(r.connectionId) ?? null) : null));
     return { isOwner, canActDisconnect, pending, disconnects, history };
   } catch {
     return { isOwner, canActDisconnect, pending: [], disconnects: [], history: [], unavailable: true };

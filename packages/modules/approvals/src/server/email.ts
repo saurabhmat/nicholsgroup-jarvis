@@ -66,7 +66,8 @@ export const WITHDRAW_REASON_TIMEOUT = "briefing run timed out";
 
 export type ProposeResult = { id: string; hash: string };
 export type ApproveResult =
-  | { status: "verified"; actionId: string }
+  /** `externalId`: the id of the message at the provider when this call made the send (Teams: the Graph message id); absent on a replay. */
+  | { status: "verified"; actionId: string; externalId?: string }
   | { status: "failed"; actionId: string; failureCode: string }
   | { status: "already_in_progress"; actionId: string }
   /** The provider accepted the send and the sent copy is not visible yet (a provider that declares `sentCopyMayLag`): the action stays `executing` with its claim at "sent" and the reconcile sweep finishes it. */

@@ -18,6 +18,7 @@ import { ApprovalsError } from "./errors";
 import { createQboReconciler } from "./reconcile-qbo";
 import { createTeamsReconciler } from "./reconcile-teams";
 import { approveAndExecuteTeams, executeApprovedTeams, type TeamsExecDeps } from "./teams";
+import { sendTeamsMessage as sendTeamsMessageWith, type SendTeamsInput } from "./teams-send";
 import { getRow } from "./email";
 import { isEmailType, isTeamsType } from "./types";
 import type { CapabilityFacts, ApprovalsDeps, ApprovalsPublicDeps, Rpc, UserCtx } from "./types";
@@ -62,7 +63,15 @@ async function readFacts(laneId: LaneId, connectionId: string): Promise<Capabili
     mailbox: usable ? c.external_account_id.toLowerCase() : null,
     provider: usable ? emailProvider : null,
     qbo: qboOk ? { realmId: c.external_account_id } : null,
-    teams: teamsUsable ? { ownerUserId: c.owner_user_id, chatSend: teamsLane("chat_send") && c.features?.teams_chat_send === true, channelsSend: teamsLane("channels_send") && c.features?.teams_channels_send === true } : null,
+    teams: teamsUsable
+      ? {
+          ownerUserId: c.owner_user_id,
+          chatSend: teamsLane("chat_send") && c.features?.teams_chat_send === true,
+          channelsSend: teamsLane("channels_send") && c.features?.teams_channels_send === true,
+          laneChatSend: teamsLane("chat_send"),
+          connChatSend: c.features?.teams_chat_send === true,
+        }
+      : null,
     composeGranted: usable && c.features?.[grantFeature] === true,
     writeActionsAllowed: ((policy.data?.write_actions_allowed as string[] | undefined) ?? []).filter((x) => typeof x === "string"),
     approvalsLive: approvals.approvals_live === true,
@@ -156,6 +165,30 @@ export function executeApprovedEmail(laneId: Parameters<typeof executeApproved>[
 /** Approves a Teams message the person pressed Send on and carries it out once (T-286, T-287; the one-step `sendTeamsMessage` of T-288 calls this after its own checks). Not called by anything yet. */
 export function approveAndExecuteTeamsAction(ctx: UserCtx, input: { actionId: string; hashSeen: string }) {
   return approveAndExecuteTeams(teamsDeps, ctx, input);
+}
+
+/**
+ * "Send = your approval" (T-288): the one entry the Messages send route calls, after its own checks (same site, AAL2, the Teams step-up window, the module, the caller's own connection). Propose + approve
+ * the exact text + claim + ONE POST + read back, inline; see `teams-send.ts` for the order and what each refusal is. The writer stays private to this file.
+ */
+export function sendTeamsMessage(ctx: UserCtx, input: SendTeamsInput) {
+  return sendTeamsMessageWith(teamsDeps, ctx, input);
+}
+
+/**
+ * The Teams step-up window of a lane (D-67), for the route's step-up check with the Teams option: `lane_config.approvals.teams_step_up_max_age_s` clamped 300..43,200 exactly like
+ * `act.approve` (default 300). Read for the LANE (not a connection: it runs before the route has looked at any connection) from the service-role client, scoped by the lane id; it is never a request value.
+ * An unreadable config fails closed to the strictest window (300).
+ */
+export async function teamsStepUpWindow(laneId: LaneId): Promise<number> {
+  try {
+    const client = await getLaneJobClient(laneId);
+    const { data, error } = await client.schema("core").from("lane_config_current").select("config").eq("lane_id", laneId).maybeSingle();
+    if (error) return 300;
+    return teamsStepUpFromConfig(((data?.config as { approvals?: Record<string, unknown> } | null | undefined)?.approvals ?? {}).teams_step_up_max_age_s);
+  } catch {
+    return 300;
+  }
 }
 
 /** Carries out a Teams message already approved in the database (a resume); the approver is read from the row. */

@@ -9,7 +9,7 @@
 //     only when the lane stores drafts (the drawer does it after its context loads).
 //   * `noteSignedInUser()` clears every namespace when this tab sees a different user than last time (a sign-out that did not run).
 //   * `clearAllDrafts()` runs at sign-out and removes every namespace listed in DRAFT_NAMESPACES.
-export const DRAFT_NAMESPACES = ["reply-draft", "reply-ai", "reply-origin", "home-open", "drawer-open"] as const;
+export const DRAFT_NAMESPACES = ["reply-draft", "reply-ai", "reply-origin", "home-open", "drawer-open", "teams-draft", "teams-send"] as const;
 export type DraftNamespaceName = (typeof DRAFT_NAMESPACES)[number];
 
 const ROOT = "nichols:";
@@ -201,5 +201,21 @@ export const openDrawer = draftNamespace<{ messageId: string }>("drawer-open", {
   validate(v) {
     const id = typeof v === "object" && v !== null ? str((v as Record<string, unknown>).messageId, 256) : null;
     return id ? { messageId: id } : null;
+  },
+});
+
+// ------------------------------------------------------------------------------------------------------ the Teams composer (T-288)
+
+/**
+ * The text typed in a Teams composer that has not been sent, per lane + person + conversation (item id = `<connection id>:<chat key>`), for two hours, in THIS TAB only (sessionStorage). It exists so that
+ * a stale authenticator code (the person is sent to enter one and comes back to the same chat) does not cost the typed text; it is never sent to the server. A Teams composer exists only for a company
+ * that stores outbound drafts (a Teams send holds its text while it is open, D-19 (a)), so this follows the lane policy: nothing is written without it. Removed on a send that leaves the server holding the
+ * text or an unknown outcome, and at sign-out (`clearAllDrafts`).
+ */
+export const teamsDrafts = draftNamespace<{ text: string }>("teams-draft", {
+  ttlMs: 2 * 3_600_000,
+  validate(v) {
+    const text = typeof v === "object" && v !== null ? str((v as Record<string, unknown>).text, 40_000) : null;
+    return text === null || text === "" ? null : { text };
   },
 });

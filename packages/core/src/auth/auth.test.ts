@@ -121,6 +121,40 @@ describe("requireStepUp (T-020)", () => {
   });
 });
 
+describe("requireStepUp: the Teams window (T-288, D-67)", () => {
+  const guards = (nowSeconds: number) => createGuards(async () => SESSION, { getLaneClient: vi.fn() }, () => nowSeconds * 1000);
+  const TEAMS = { window: "teams" } as const;
+  const refused = async (p: Promise<unknown>) => (await reason(p)) === "403 forbidden";
+
+  it("accepts 300, 3,600, 28,800 and 43,200 and refuses 43,201 (and anything below 300, or not a whole number) for the Teams window", async () => {
+    for (const w of [300, 3600, 28800, 43200]) expect(await guards(1_000_000).requireStepUp(w, TEAMS)).toBe(SESSION);
+    for (const w of [43201, 299, 30, 0, -1, 1.5, Number.NaN, Infinity]) expect(await refused(guards(1_000_000).requireStepUp(w, TEAMS))).toBe(true);
+  });
+
+  it("applies the window: a code 28,800 s old passes at 28,800, 28,801 s old needs a new code; 43,200 s old passes only at 43,200", async () => {
+    expect(await guards(1_000_000 + 28800).requireStepUp(28800, TEAMS)).toBe(SESSION);
+    expect(await reason(guards(1_000_000 + 28801).requireStepUp(28800, TEAMS))).toBe("403 step_up_required");
+    expect(await guards(1_000_000 + 43200).requireStepUp(43200, TEAMS)).toBe(SESSION);
+    expect(await reason(guards(1_000_000 + 43201).requireStepUp(43200, TEAMS))).toBe("403 step_up_required");
+  });
+
+  it("still requires AAL2 and a session first", async () => {
+    expect(await reason(createGuards(async () => null, { getLaneClient: vi.fn() }, () => 1_000_000_000).requireStepUp(28800, TEAMS))).toBe("401 no_session");
+    expect(await reason(createGuards(async () => ({ ...SESSION, aal: "aal1" }), { getLaneClient: vi.fn() }, () => 1_000_000_000).requireStepUp(28800, TEAMS))).toBe("403 mfa_required");
+  });
+
+  it("EVERY OTHER CALLER IS UNCHANGED: without the Teams window the bound is still 30 - 3,600 (email approvals 30 - 900, QuickBooks, the step-up probe); a Teams-size window is refused for them", async () => {
+    for (const w of [30, 300, 900, 3600]) expect(await guards(1_000_000).requireStepUp(w)).toBe(SESSION);
+    for (const w of [3601, 28800, 43200, 43201, 29, 0, 1.5, Number.NaN]) expect(await refused(guards(1_000_000).requireStepUp(w))).toBe(true);
+    // an options object that does not name the Teams window changes nothing
+    expect(await refused(guards(1_000_000).requireStepUp(28800, {}))).toBe(true);
+    expect(await refused(guards(1_000_000).requireStepUp(28800, { window: "other" } as never))).toBe(true);
+    // the email window keeps its age rule exactly: 900 s passes at 900 s old, fails at 901
+    expect(await guards(1_000_000 + 900).requireStepUp(900)).toBe(SESSION);
+    expect(await reason(guards(1_000_000 + 901).requireStepUp(900))).toBe("403 step_up_required");
+  });
+});
+
 describe("totpVerifiedAt", () => {
   it("takes the latest TOTP timestamp from the detailed amr form", () => {
     expect(totpVerifiedAt([{ method: "otp", timestamp: 5 }, { method: "totp", timestamp: 10 }, { method: "mfa/totp", timestamp: 20 }])).toBe(20);
