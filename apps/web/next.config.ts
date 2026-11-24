@@ -29,6 +29,13 @@ export const SECURITY_HEADERS = [
   { key: "X-Content-Type-Options", value: "nosniff" },
 ] as const;
 
+/**
+ * The connect routes (OAuth start and callback, every provider) send `Referrer-Policy: no-referrer` themselves (packages/connectors/src/oauth/handlers.ts, composio/handlers.ts):
+ * the general rule above was replacing it (found by the T-299 security re-check; so since T-281). The same value here, so the browser gets it whichever side wins.
+ */
+export const CONNECT_ROUTE_SOURCE = "/api/connect/:provider/:step";
+export const CONNECT_ROUTE_HEADERS = [{ key: "Referrer-Policy", value: "no-referrer" }] as const;
+
 /** The Teams image route (T-285) answers with bytes from a chat: nothing may load or run from them, and no referrer leaves. The same values as IMAGE_HEADERS in apps/web/lib/teams-api.ts. */
 export const IMAGE_ROUTE_SOURCE = "/api/lanes/:laneId/messages/image";
 export const IMAGE_ROUTE_HEADERS = [
@@ -43,11 +50,12 @@ const nextConfig: NextConfig = {
   experimental: {
     agentFeedback: true,
   },
-  // Every response (pages, API routes, static files), then the stricter values of the one route that has its own: see SECURITY_HEADERS above. Order matters: later wins.
+  // Every response (pages, API routes, static files), then the stricter values of the routes that have their own: see SECURITY_HEADERS above. Order matters: later wins.
   async headers() {
     return [
       { source: "/:path*", headers: [...SECURITY_HEADERS] },
       { source: IMAGE_ROUTE_SOURCE, headers: [...IMAGE_ROUTE_HEADERS] },
+      { source: CONNECT_ROUTE_SOURCE, headers: [...CONNECT_ROUTE_HEADERS] },
     ];
   },
   cacheComponents: true,

@@ -27,11 +27,11 @@ function ownHeaders(file: string, name: string): Record<string, string> {
   return Object.fromEntries([...body.matchAll(/"([a-z-]+)":\s*(?:"([^"]*)"|'([^']*)')/g)].map((m) => [m[1] ?? "", m[2] ?? m[3] ?? ""]));
 }
 function sourceFiles(): string[] {
-  const roots = ["../app", "../lib", "../components", "../proxy.ts", "../../../packages/core/src/auth"].map((r) => join(__dirname, r));
+  const roots = ["../app", "../lib", "../components", "../proxy.ts", "../../../packages/core/src/auth", "../../../packages/connectors/src", "../../../packages/modules"].map((r) => join(__dirname, r));
   const files: string[] = [];
   const walk = (p: string) => {
     if (statSync(p).isDirectory()) for (const e of readdirSync(p)) walk(join(p, e));
-    else if (/\.(ts|tsx|js|mjs)$/.test(p) && !/\.test\.[a-z]+$/.test(p)) files.push(p);
+    else if (/\.(ts|tsx|js|jsx|mjs|cjs)$/.test(p) && !/\.test\.[a-z]+$/.test(p) && !/\/(node_modules|dist|testing)\//.test(p)) files.push(p);
   };
   for (const r of roots) walk(r);
   return files;
@@ -42,9 +42,9 @@ describe("response headers set by the app", () => {
   // IS the approval, and its authenticator window can be up to 12 hours), and the session cookie is SameSite=Lax, which is per SITE: a page on the same registrable domain
   // could have framed the portal with the session. These tests read the CONFIG the framework applies, with the framework's own path matcher; nobody has seen the headers in
   // a browser here: that is the production check (report, step 2).
-  it("the rules: one for every path, then one for the Teams image route, with no conditions", async () => {
+  it("the rules: one for every path, then the Teams image route and the connect routes (later wins), with no conditions", async () => {
     const rules = await rulesOf();
-    expect(rules.map((r) => r.source)).toEqual(["/:path*", "/api/lanes/:laneId/messages/image"]);
+    expect(rules.map((r) => r.source)).toEqual(["/:path*", "/api/lanes/:laneId/messages/image", "/api/connect/:provider/:step"]);
     expect(rules.every((r) => !("has" in r) && !("missing" in r) && !("basePath" in r) && !("locale" in r))).toBe(true);
     for (const r of rules) expect(new Set(r.headers.map((h) => h.key.toLowerCase())).size).toBe(r.headers.length);
   });
@@ -71,18 +71,33 @@ describe("response headers set by the app", () => {
     expect(shared.sort()).toEqual(["content-security-policy", "referrer-policy", "x-content-type-options"]);
     for (const k of shared) expect(own[k]).toBe(config[k]);
   });
+  it.each(["/api/connect/google/start", "/api/connect/google/callback", "/api/connect/microsoft/callback", "/api/connect/teams/start", "/api/connect/composio/callback"])(
+    "%s (an OAuth redirect) keeps the general headers and sends no referrer, as its own handler asks",
+    async (path) => {
+      expect(await configHeaders(path)).toEqual({ ...BASE, "referrer-policy": "no-referrer" });
+    },
+  );
+  it("the connect handlers' own referrer rule equals the config's (whichever side wins)", () => {
+    for (const f of ["../../../packages/connectors/src/oauth/handlers.ts", "../../../packages/connectors/src/composio/handlers.ts"]) {
+      const own = [...readFileSync(join(__dirname, f), "utf8").matchAll(/"referrer-policy":\s*"([^"]*)"/gi)].map((m) => m[1]);
+      expect(own.length).toBeGreaterThan(0);
+      expect(new Set(own)).toEqual(new Set(["no-referrer"]));
+    }
+  });
   it("every Content-Security-Policy the config can send forbids framing", async () => {
     for (const r of await rulesOf()) for (const h of r.headers) if (h.key.toLowerCase() === "content-security-policy") expect(directives(h.value)).toContain("frame-ancestors 'none'");
   });
-  it("no other file names a framing or policy header: a handler's copy would be dropped by the framework and the proxy's copy would REPLACE the config's (so neither may exist)", () => {
-    // By name, whatever the value or the quoting (a literal, a variable, a template, set / append / delete): the only places are the config and the image route's own headers.
+  it("no other file names a framing, policy or referrer header (comments count too): a handler's copy would be dropped by the framework and the proxy's copy would REPLACE the config's", () => {
+    // By name, whatever the value or the quoting (a literal, a variable, a template, set / append / delete): the only places are the config, the image route's own headers and
+    // the connect handlers' referrer rule, each kept equal to the config by a test above. A name assembled from pieces ("content-" + "security-policy") is not seen: this is a
+    // lint-style guard, and the production check (report, step 2) is the proof of what a browser receives.
     const files = sourceFiles();
     expect(files.length).toBeGreaterThan(100);
     const named = (re: RegExp) => files.filter((f) => re.test(readFileSync(f, "utf8"))).map((f) => f.slice(f.indexOf("/apps/web/") >= 0 ? f.indexOf("/apps/web/") + 10 : f.indexOf("/packages/") + 1));
     expect(named(/x-frame-options/i)).toEqual([]);
     expect(named(/frame-ancestors/i)).toEqual(["lib/teams-api.ts"]);
     expect(named(/content-security-policy/i)).toEqual(["lib/teams-api.ts"]);
-    expect(named(/referrer-policy/i)).toEqual(["lib/teams-api.ts"]);
+    expect(named(/referrer-policy/i).sort()).toEqual(["lib/teams-api.ts", "packages/connectors/src/composio/handlers.ts", "packages/connectors/src/oauth/handlers.ts"]);
   });
   it("the proxy sets no header of these kinds (its headers replace the config's)", () => {
     const text = readFileSync(join(__dirname, "../proxy.ts"), "utf8");
