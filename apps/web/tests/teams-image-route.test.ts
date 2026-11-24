@@ -149,7 +149,7 @@ describe("the answer", () => {
     expect(r.headers.get("x-content-type-options")).toBe("nosniff");
     expect(r.headers.get("content-disposition")).toBe('inline; filename="image"');
     expect(r.headers.get("cache-control")).toBe("private, no-store");
-    expect(r.headers.get("content-security-policy")).toBe("default-src 'none'; sandbox");
+    expect(r.headers.get("content-security-policy")).toBe("default-src 'none'; sandbox; frame-ancestors 'none'");
     expect(r.headers.get("cross-origin-resource-policy")).toBe("same-origin");
     expect(r.headers.get("content-length")).toBe(String(PNG.byteLength));
     expect([...new Uint8Array(await r.arrayBuffer())]).toEqual([...PNG]);

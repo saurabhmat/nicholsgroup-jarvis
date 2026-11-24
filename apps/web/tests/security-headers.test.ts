@@ -1,6 +1,6 @@
-// T-170 (security suite), area 2, finding F-01 and F-02. `it.fails` pins a known defect: the suite stays green while it exists and this test
-// starts FAILING the day the defect is fixed (then remove `.fails`). See docs/security/pilot-test.md.
-import { readFileSync } from "node:fs";
+// T-170 (security suite), area 2, findings F-01 (closed by T-299: the tests below now assert the headers) and F-02. `it.fails` pins a known defect: the suite stays green
+// while it exists and that test starts FAILING the day the defect is fixed (then remove `.fails`). See docs/security/pilot-test.md.
+import { readdirSync, readFileSync, statSync } from "node:fs";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import nextConfig from "../next.config";
@@ -15,20 +15,47 @@ async function headerValue(key: string): Promise<string> {
 }
 
 describe("response headers set by the app", () => {
-  it("sets Referrer-Policy (the one header it sets today)", async () => {
-    expect(await headerNames()).toContain("referrer-policy");
+  // F-01 (was MEDIUM, closed by T-299): the app sent no clickjacking or sniffing header. An Approve or a Teams Send is one click for a signed-in person (a Teams send IS the
+  // approval, and its authenticator window can be up to 12 hours), and the session cookie is SameSite=Lax, which is per SITE: a page on the same registrable domain could
+  // have framed the portal with the session. Now every response forbids framing and sniffing. Production check: report, step 2.
+  it("one rule covers every path (pages, API routes, static files)", async () => {
+    const rules = (await nextConfig.headers?.()) ?? [];
+    expect(rules.map((r) => r.source)).toEqual(["/:path*"]);
+    expect(rules.every((r) => !("has" in r) && !("missing" in r))).toBe(true);
   });
-  // F-01 (MEDIUM): no clickjacking, sniffing or transport headers from the app. The barriers today: the session cookie is SameSite=Lax, which is per SITE,
-  // so a page on another SITE cannot frame the portal with the signed-in session, but ANY page on the same registrable domain (a sibling sub-domain) could.
-  // Email approvals also need a fresh authenticator code (30 to 900 s), but a Teams send IS the approval and its code window can be up to 12 hours (8 hours
-  // in production), so the code is not a second barrier there. The rating becomes HIGH if the portal is ever served from a domain shared with pages that are
-  // not fully controlled. The header fix is product code (its own task); this pin turns red the day it lands (then remove `.fails`).
-  it.fails("F-01: forbids framing (X-Frame-Options or CSP frame-ancestors), sniffing (X-Content-Type-Options) and sets a CSP", async () => {
+  it("keeps Referrer-Policy", async () => {
+    expect(await headerValue("referrer-policy")).toBe("strict-origin-when-cross-origin");
+  });
+  it("F-01: forbids framing by any site, with both headers (frame-ancestors for current browsers, X-Frame-Options for older ones)", async () => {
+    expect(await headerValue("x-frame-options")).toBe("DENY");
+    const directives = (await headerValue("content-security-policy")).split(";").map((d) => d.trim());
+    expect(directives).toContain("frame-ancestors 'none'");
+  });
+  it("F-01: forbids content sniffing", async () => {
+    expect(await headerValue("x-content-type-options")).toBe("nosniff");
+  });
+  it("sets no header twice and no script or style policy (a full Content-Security-Policy is a separate decision)", async () => {
     const names = await headerNames();
-    const csp = await headerValue("content-security-policy");
-    expect(names).toContain("x-content-type-options");
-    expect(names.includes("x-frame-options") || /frame-ancestors/.test(csp)).toBe(true);
-    expect(csp).not.toBe("");
+    expect(new Set(names).size).toBe(names.length);
+    expect(await headerValue("content-security-policy")).toBe("frame-ancestors 'none'");
+  });
+  it("a route that sends its own Content-Security-Policy still forbids framing in it (the Teams image route)", () => {
+    const text = readFileSync(join(__dirname, "../lib/teams-api.ts"), "utf8");
+    const own = [...text.matchAll(/"content-security-policy":\s*"([^"]*)"/g)].map((m) => m[1] ?? "");
+    expect(own.length).toBeGreaterThan(0);
+    for (const policy of own) expect(policy.split(";").map((d) => d.trim())).toContain("frame-ancestors 'none'");
+  });
+  it("no route handler or page sets a framing header of its own that could loosen the rule", () => {
+    const loose = /x-frame-options["']?\s*[:,]\s*["'](?!DENY)|frame-ancestors\s+(?!'none')/i;
+    const roots = [join(__dirname, "../app"), join(__dirname, "../lib"), join(__dirname, "../components"), join(__dirname, "../proxy.ts")];
+    const files: string[] = [];
+    const walk = (p: string) => {
+      if (statSync(p).isDirectory()) for (const e of readdirSync(p)) walk(join(p, e));
+      else if (/\.(ts|tsx)$/.test(p) && !/\.test\.tsx?$/.test(p)) files.push(p);
+    };
+    for (const r of roots) walk(r);
+    expect(files.length).toBeGreaterThan(50);
+    expect(files.filter((f) => loose.test(readFileSync(f, "utf8")))).toEqual([]);
   });
 });
 

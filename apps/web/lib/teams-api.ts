@@ -50,7 +50,7 @@ const IMAGE_HEADERS = {
   "x-content-type-options": "nosniff",
   "content-disposition": 'inline; filename="image"',
   "cache-control": "private, no-store",
-  "content-security-policy": "default-src 'none'; sandbox",
+  "content-security-policy": "default-src 'none'; sandbox; frame-ancestors 'none'",
   "cross-origin-resource-policy": "same-origin",
   "referrer-policy": "no-referrer",
 } as const;
