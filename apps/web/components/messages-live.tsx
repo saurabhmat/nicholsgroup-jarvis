@@ -19,7 +19,6 @@ import { MESSAGES_ACCOUNT_CHANGED_TEXT, MESSAGES_EMPTY_LIST_TEXT, MESSAGES_REFRE
 import { Button, EmptyState } from "@nichols/ui";
 import { ChatListRows, SignIn } from "./messages-view";
 import { useMessagesView } from "./messages-scope";
-import Link from "next/link";
 
 export type LiveReason = "notice" | "refresh" | "focus";
 export type LiveApi = {

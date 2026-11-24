@@ -75,7 +75,7 @@ function page() {
   return render(
     <MessagesLiveProvider laneId="PKG">
       <MessagesRefresh mode="live" />
-      <ChatListLive laneId="PKG" initialRows={[row(KEY, "Pat")]} moreCursor={null} selectedKey={KEY} more={null} />
+      <ChatListLive laneId="PKG" initialRows={[row(KEY, "Pat")]} moreCursor={null} selectedKey={KEY} />
       <ConversationMessages conn={CONN} laneId="PKG" chatKey={KEY} initial={initial} nextBefore={null} group />
     </MessagesLiveProvider>,
   );

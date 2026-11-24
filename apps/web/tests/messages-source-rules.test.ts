@@ -73,10 +73,10 @@ describe("Messages source rules", () => {
     expect(poll).not.toMatch(/\bfetch\(|messages\/(chats|newer|older|read)/);
     // the loop's comment says what it is
     expect(read("components/messages-live.tsx")).toMatch(/THE LOOP BELOW DOES\s*\/\/ NOT POLL MICROSOFT/);
-    // the one fetch of the file is the chat-list re-read, to an own route; everything else goes through the activity client
+    // the fetches of the file are the chat-list re-read and (T-296) "More chats", both to the same own route, both by a person's action or a notice; everything else goes through the activity client
     const urls = [...live.matchAll(/fetch\(\s*`([^`]+)`/g)].map((m) => m[1]);
-    expect(urls).toHaveLength(1);
-    expect(urls[0]).toMatch(/^\/api\/lanes\/\$\{encodeURIComponent\(laneId\)\}\/messages\/chats/);
+    expect(urls).toHaveLength(2);
+    for (const u of urls) expect(u).toMatch(/^\/api\/lanes\/\$\{encodeURIComponent\(laneId\)\}\/messages\/chats/);
     const client = code("lib/messages-activity-client.ts");
     expect([...client.matchAll(/fetch\(/g)]).toHaveLength(2);
     expect([...client.matchAll(/fetch\(\s*`([^`]+)`/g)].map((m) => m[1])).toEqual(["/api/lanes/${encodeURIComponent(laneId)}/messages/activity", "/api/lanes/${encodeURIComponent(laneId)}/messages/activity"]);

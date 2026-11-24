@@ -46,14 +46,15 @@ describe.each(WIDTHS)("two accounts at %ipx", (width) => {
   const hrefFor = (key: string) => key;
 
   it("the list: every row has its account label as text (the full sign-in name is the accessible name), a chat both accounts are in is TWO rows with their own unread marker, and each opens as its own account", () => {
-    render(<ChatListLive laneId="PKG" initialRows={[row(A, SHARED, "Shared chat", { unread: false }), row(B, SHARED, "Shared chat", { unread: true }), row(B, ONLY_B, "Only B")]} moreCursor={null} selectedKey={SHARED} selectedConn={B} more={null} />);
+    render(<ChatListLive laneId="PKG" initialRows={[row(A, SHARED, "Shared chat", { unread: true }), row(B, SHARED, "Shared chat", { unread: true }), row(B, ONLY_B, "Only B")]} moreCursor={null} selectedKey={SHARED} selectedConn={B} />);
     const rows = screen.getAllByTestId("chat-row");
     expect(rows).toHaveLength(3);
     const badges = screen.getAllByTestId("account-badge");
     expect(badges.map((b) => b.textContent)).toEqual(["pubkgroup.com", "pub-k.org", "pub-k.org"]); // text, not colour alone
     expect(screen.getAllByRole("img", { name: "Account: robert@pubkgroup.com" })).toHaveLength(1);
     expect(screen.getAllByRole("img", { name: "Account: robert@pub-k.org" })).toHaveLength(2);
-    expect(rows.map((r) => r.getAttribute("data-unread"))).toEqual(["false", "true", "false"]);
+    // T-296: the open pair's dot is cleared in the browser (the list is not read again by a chat click); the OTHER account's row of the same chat keeps its dot
+    expect(rows.map((r) => r.getAttribute("data-unread"))).toEqual(["true", "false", "false"]);
     // each row's address names its own account (and the chat)
     const hrefs = rows.map((r) => r.getAttribute("href") ?? "");
     expect(hrefs[0]).toContain(`conn=${A}`);
@@ -69,7 +70,7 @@ describe.each(WIDTHS)("two accounts at %ipx", (width) => {
   });
 
   it("a one-account list looks as it always did: no label, no conn in the address", () => {
-    render(<ChatListLive laneId="PKG" initialRows={[row(A, SHARED, "Chat", { account: null, accountName: null })]} moreCursor={null} selectedKey={null} more={null} />);
+    render(<ChatListLive laneId="PKG" initialRows={[row(A, SHARED, "Chat", { account: null, accountName: null })]} moreCursor={null} selectedKey={null} />);
     expect(screen.queryByTestId("account-badge")).toBeNull();
     expect(screen.getByTestId("chat-row").getAttribute("href")).toBe(`/PKG/messages?chat=${SHARED}`);
   });
@@ -81,7 +82,7 @@ describe.each(WIDTHS)("two accounts at %ipx", (width) => {
         initialRows={[row(B, ONLY_B, "Only B")]}
         moreCursor={null}
         selectedKey={null}
-        more={null}
+       
         initialNotes={[{ conn: A, label: "pubkgroup.com", kind: "reconnect", seconds: null }, { conn: B, label: "pub-k.org", kind: "busy", seconds: 7 }, { conn: "00000000-0000-4000-8000-0000000000c3", label: "third.test", kind: "unreachable", seconds: null }]}
         initialDropped
       />,
@@ -157,7 +158,7 @@ describe("live: a notice of ONE account (test 32)", () => {
   const draw = async (openConn: string) => {
     render(
       <MessagesLiveProvider laneId="PKG" expectLists>
-        <ChatListLive laneId="PKG" initialRows={[row(A, SHARED, "Shared chat"), row(B, SHARED, "Shared chat")]} moreCursor={null} selectedKey={SHARED} selectedConn={openConn} more={null} initialListed={[A]} />
+        <ChatListLive laneId="PKG" initialRows={[row(A, SHARED, "Shared chat"), row(B, SHARED, "Shared chat")]} moreCursor={null} selectedKey={SHARED} selectedConn={openConn} initialListed={[A]} />
         <ConversationMessages conn={openConn} laneId="PKG" chatKey={SHARED} initial={[msg("m1", "2026-11-23T14:00:00.000Z")]} nextBefore={null} group />
       </MessagesLiveProvider>,
     );
@@ -227,7 +228,7 @@ describe("live: a notice of ONE account (test 32)", () => {
   it("M3: 'Try again' on an account's line reads just that account (`chats?conn=`); a busy account is not asked before the seconds it was given; Refresh inside the first minute is not 'up to date' while a line is showing", async () => {
     render(
       <MessagesLiveProvider laneId="PKG" expectLists>
-        <ChatListLive laneId="PKG" initialRows={[row(A, SHARED, "Shared chat")]} moreCursor={null} selectedKey={null} more={null} initialListed={[A]}
+        <ChatListLive laneId="PKG" initialRows={[row(A, SHARED, "Shared chat")]} moreCursor={null} selectedKey={null} initialListed={[A]}
           initialNotes={[{ conn: B, label: "pub-k.org", kind: "busy", seconds: 7 }]} />
       </MessagesLiveProvider>,
     );
@@ -249,7 +250,7 @@ describe("live: a notice of ONE account (test 32)", () => {
   it("M3: Refresh pressed inside the first minute, while an account's line is showing, reads every account at once and never says 'Already up to date'", async () => {
     render(
       <MessagesLiveProvider laneId="PKG" expectLists>
-        <ChatListLive laneId="PKG" initialRows={[row(A, SHARED, "Shared chat")]} moreCursor={null} selectedKey={null} more={null} initialListed={[A]}
+        <ChatListLive laneId="PKG" initialRows={[row(A, SHARED, "Shared chat")]} moreCursor={null} selectedKey={null} initialListed={[A]}
           initialNotes={[{ conn: B, label: "pub-k.org", kind: "unreachable", seconds: null }]} />
       </MessagesLiveProvider>,
     );

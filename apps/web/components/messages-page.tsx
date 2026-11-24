@@ -9,10 +9,11 @@ import { Alert, AlertDescription, AlertTitle, Card, CardDescription, CardHeader,
 import { guards } from "@/lib/guards";
 import { messagesStateOf, type MessagesState } from "@/lib/teams-messages";
 import { teamsSectionFor } from "@/lib/teams-connection";
-import { MESSAGES_ACCOUNT_STATE_DEGRADED, MESSAGES_ACCOUNT_STATE_OK, MESSAGES_ACCOUNT_STATE_RECONNECT, MESSAGES_CONNECTED_AS_SEVERAL, messagesAccountFeatureText, messagesReconnectAccountLabel, reconnectToAddText, TEAMS_ADMIN_CONSENT_TEXT, TEAMS_CONNECT_ANOTHER_TEXT, TEAMS_CLOUD_UNSUPPORTED_PAGE_TEXT, TEAMS_CONNECTS_TEXT, TEAMS_NOT_SET_UP_TEXT, TEAMS_PAUSED_PAGE_TEXT } from "@/lib/teams-wording";
+import { MESSAGES_ACCOUNT_STATE_DEGRADED, MESSAGES_ACCOUNT_STATE_OK, MESSAGES_ACCOUNT_STATE_RECONNECT, messagesAccountFeatureText, messagesReconnectAccountLabel, reconnectToAddText, TEAMS_ADMIN_CONSENT_TEXT, TEAMS_CONNECT_ANOTHER_TEXT, TEAMS_CLOUD_UNSUPPORTED_PAGE_TEXT, TEAMS_CONNECTS_TEXT, TEAMS_NOT_SET_UP_TEXT, TEAMS_PAUSED_PAGE_TEXT } from "@/lib/teams-wording";
 import { LaneEyebrow } from "./module-page";
 import { ChatListColumn, ConversationSide, ConversationSkeleton } from "./messages-chats";
-import { ByTab, LiveTabs, MessagesScope, MessagesTabs, tabOf, type MessagesTab } from "./messages-scope";
+import { ByTab, LiveTabs, MessagesScope, MessagesTabs } from "./messages-scope";
+import { tabOf, type MessagesTab } from "@/lib/messages-view-state";
 import { MessagesLiveProvider } from "./messages-live";
 import { ChannelsUnavailable, ChannelsWorkspace } from "./messages-channels";
 import { channelsAvailability } from "@/lib/teams-messages";
@@ -68,7 +69,7 @@ const chatsListed = (state: Connected): boolean => state.laneFeatures.includes("
  * The connected person's frame (T-296): the tabs, the live provider, and the two columns. The left column is the chat list (the layout's own, mounted once); the right column is the page (`children`: the
  * conversation, or the whole Channels workspace, which hides the left column and takes the width). The classes read the `data-view` of the scope (components/messages-scope.tsx), because the layout cannot read the address.
  */
-function ConnectedFrame({ laneId, state, children }: { laneId: string; state: Connected; children: ReactNode }) {
+export function ConnectedFrame({ laneId, state, children }: { laneId: string; state: Connected; children: ReactNode }) {
   const listed = chatsListed(state);
   const body = (
     <div data-testid="messages-workspace" className="grid min-h-0 min-w-0 gap-4 lg:flex-1 lg:grid-cols-[minmax(300px,380px)_minmax(0,1fr)] group-data-[view=channels]/messages:lg:grid-cols-1 lg:grid-rows-[minmax(0,1fr)]">

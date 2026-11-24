@@ -131,6 +131,22 @@ describe("conn addressing: the checks come before any Graph call or token read (
     expect(reader.resolveCallTargets.mock.calls[0]?.[1]).toBe(B);
   });
 
+  it("T-296: the picture of a channel post is read as the account named, and only when THAT account has channels: the other account's feature does not count (409 for it, zero reader calls)", async () => {
+    const rows = [row(A, "robert@pubkgroup.com", { has: ["chat_read", "channels_read"] }), row(B, "robert@pub-k.org", { has: ["chat_read"] })];
+    const s = setup({ rows });
+    const q = (c: string) => `conn=${c}&team=${TEAM}&channel=${KEY}&message=1700000000001&hosted=h1`;
+    const refused = await s.routes.image(getReq("image", q(B)), "PKG");
+    expect(refused.status).toBe(409);
+    expect(await refused.json()).toEqual({ error: "feature_missing" });
+    expect(reader.fetchHostedImage).not.toHaveBeenCalled();
+    expect((await s.routes.image(getReq("image", q(A)), "PKG")).status).toBe(200);
+    expect(reader.fetchHostedImage).toHaveBeenCalledTimes(1);
+    expect(reader.fetchHostedImage.mock.calls[0]?.[1]).toBe(A); // the connection the picture is read through is the one named
+    // the same address as the other person's, a disconnected or an unknown account is the same 404 as ever
+    for (const other of [OTHER_PERSON, DISCONNECTED, UNKNOWN]) expect((await s.routes.image(getReq("image", q(other)), "PKG")).status).toBe(404);
+    expect(reader.fetchHostedImage).toHaveBeenCalledTimes(1);
+  });
+
   it("the read marker is written for the account named in the body only", async () => {
     const s = setup();
     expect((await s.routes.read(postReq("read", { conn: B, chat: KEY, readThrough: T(2) }), "PKG")).status).toBe(204);

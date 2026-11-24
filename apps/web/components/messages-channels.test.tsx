@@ -9,7 +9,8 @@ const refresh = vi.hoisted(() => vi.fn());
 vi.mock("next/navigation", () => ({ useRouter: () => ({ refresh }), usePathname: () => "/PKG/messages" }));
 
 import { ChannelFailureCard, ChannelRows, ChannelsUnavailable, NoChannelSelected, TeamsList, ThreadPane } from "./messages-channels";
-import { MessagesScreen, MessagesTabs } from "./messages-page";
+import { MessagesScreen } from "./messages-page";
+import { MessagesTabs } from "./messages-scope";
 import { WorkspaceLayout } from "./messages-chats";
 import { encodeChannelKey } from "@/lib/teams-channel-key";
 import { htmlToNodes } from "@nichols/connectors/teams-pure";
@@ -30,7 +31,12 @@ const T1 = "aaaaaaaa-aaaa-4aaa-8aaa-0000000000a1";
 const T2 = "aaaaaaaa-aaaa-4aaa-8aaa-0000000000a2";
 const CH = "19:general111@thread.tacv2";
 const KEY = encodeChannelKey(CH);
-const connected = (over: Partial<Extract<MessagesState, { kind: "connected" }>> = {}): Extract<MessagesState, { kind: "connected" }> => ({ kind: "connected", connectionId: CONN, account: "me@teams.example.test", degraded: false, missing: [], adminConsent: false, accounts: [{ connectionId: CONN, account: "me@teams.example.test", label: "teams.example.test", usable: true, degraded: false, missing: [], has: ["chat_read", "call_links"] }], multi: false, canAddAnother: false, laneFeatures: ["chat_read", "channels_read"], ...over });
+// the account's features follow `missing` (an account that lacks channels is one whose `missing` lists them), as the page's state is built
+const connected = (over: Partial<Extract<MessagesState, { kind: "connected" }>> = {}): Extract<MessagesState, { kind: "connected" }> => {
+  const missing = over.missing ?? [];
+  const has = (["chat_read", "call_links", "channels_read"] as const).filter((f) => !missing.includes(f));
+  return { kind: "connected", connectionId: CONN, account: "me@teams.example.test", degraded: false, missing: [], adminConsent: false, accounts: [{ connectionId: CONN, account: "me@teams.example.test", label: "teams.example.test", usable: true, degraded: false, missing: [...missing], has: [...has] }], multi: false, canAddAnother: false, laneFeatures: ["chat_read", "channels_read"], ...over };
+};
 const post = (id: string, over: Partial<PostView> = {}): PostView =>
   ({ id, images: null, at: "2026-11-23T14:00:00.000Z", time: "9:00 AM", fullTime: "Nov 23, 2026, 9:00 AM ET", day: "2026-11-23", sender: "Pat", mine: false, edited: false, deleted: false, system: false, nodes: [{ t: "text", v: `post ${id}` }], truncated: false, attachments: [], subject: null, openUrl: "https://teams.microsoft.com/l/message/x/1", ...over }) as PostView;
 
@@ -340,19 +346,18 @@ describe.each(WIDTHS)("the tabs and the page around them at %ipx", (width) => {
 
 describe("the Chats | Channels bar (T-291 review M1)", () => {
   it("is drawn only for a company that lists channels_read; a direct Channels address for any other company still gets its neutral state with a way back", async () => {
-    const { ConnectedWorkspace } = await import("./messages-page");
+    const { ConnectedFrame } = await import("./messages-page");
+    const { LiveTabs } = await import("./messages-scope");
     const has = (node: unknown, type: unknown): boolean => {
       if (Array.isArray(node)) return node.some((n) => has(n, type));
       if (typeof node !== "object" || node === null) return false;
       const el = node as { type?: unknown; props?: { children?: unknown } };
       return el.type === type || has(el.props?.children, type);
     };
-    const sp = Promise.resolve({});
     const off = connected({ laneFeatures: ["chat_read"] });
     const on = connected({ laneFeatures: ["chat_read", "channels_read"] });
-    expect(has(ConnectedWorkspace({ laneId: "PKG", state: off, tab: "chats", chatOpen: false, searchParams: sp }), MessagesTabs)).toBe(false);
-    expect(has(ConnectedWorkspace({ laneId: "PKG", state: off, tab: "channels", chatOpen: false, searchParams: sp }), MessagesTabs)).toBe(false);
-    expect(has(ConnectedWorkspace({ laneId: "PKG", state: on, tab: "chats", chatOpen: false, searchParams: sp }), MessagesTabs)).toBe(true);
+    expect(has(ConnectedFrame({ laneId: "PKG", state: off, children: null }), LiveTabs)).toBe(false);
+    expect(has(ConnectedFrame({ laneId: "PKG", state: on, children: null }), LiveTabs)).toBe(true);
     at(1280);
     render(<ChannelsUnavailable laneId="PKG" state={off} />);
     expect(screen.getByTestId("back-to-chats-link").getAttribute("href")).toBe("/PKG/messages");

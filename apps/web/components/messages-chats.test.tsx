@@ -6,12 +6,15 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { cleanup, render, screen, within } from "@testing-library/react";
 
 const refresh = vi.hoisted(() => vi.fn());
-vi.mock("next/navigation", () => ({ useRouter: () => ({ refresh }), usePathname: () => "/PKG/messages" }));
+const nav = vi.hoisted(() => ({ search: "" }));
+vi.mock("next/navigation", () => ({ useRouter: () => ({ refresh }), usePathname: () => "/PKG/messages", useSearchParams: () => new URLSearchParams(nav.search) }));
 
 import { ChatListSkeleton, ChatListView, ConversationPane, ConversationSkeleton, NoChatSelected, TeamsFailureCard, WorkspaceLayout } from "./messages-chats";
 import { htmlToNodes } from "@nichols/connectors/teams-pure";
 import type { ChatListView as ChatListData, ConversationView, MessageView } from "@/lib/teams-chats";
 import { encodeChatKey } from "@/lib/teams-chat-key";
+import { MessagesScope } from "./messages-scope";
+import { act } from "@testing-library/react";
 
 afterEach(() => {
   cleanup();
@@ -33,9 +36,15 @@ const conv = (over: Partial<Extract<ConversationView, { kind: "ok" }>> = {}): Co
 }) as ConversationView;
 
 describe.each(WIDTHS)("the chat list at %ipx", (width) => {
-  const draw = (view: ChatListData, selected: string | null = null, more: string | null = null) => {
+  // T-296: the open chat comes from the address (the list is drawn by the layout and does not receive it as a prop)
+  const draw = (view: ChatListData, selected: string | null = null) => {
     at(width);
-    return render(<ChatListView view={view} laneId="PKG" connectionId={CONN} selectedKey={selected} more={more} />);
+    nav.search = selected ? `chat=${selected}` : "";
+    return render(
+      <MessagesScope chatConns={[CONN]}>
+        <ChatListView view={view} laneId="PKG" connectionId={CONN} />
+      </MessagesScope>,
+    );
   };
 
   it("rows: title, preview, time, an unread dot only where unread, External only where external; the selected row is marked", () => {
@@ -56,13 +65,44 @@ describe.each(WIDTHS)("the chat list at %ipx", (width) => {
     expect(rows[0]?.getAttribute("href")).toBe(`/PKG/messages?chat=${encodeChatKey("19:x1@thread.v2")}`);
   });
 
-  it("More chats and Back to the newest chats are explicit links that keep the selected chat", () => {
+  it("T-296: More chats is a button that asks the list route for the next page (no address change, so a chat page is not read again), shows it IN PLACE OF the newest page, and Back brings the newest page back with no request", async () => {
     const sel = encodeChatKey("19:x2@thread.v2");
-    draw({ kind: "ok", rows: [row()], moreCursor: "cursor-abc" }, sel, "cur0");
-    expect(screen.getByTestId("more-chats").getAttribute("href")).toBe(`/PKG/messages?chat=${sel}&more=cursor-abc`);
-    expect(screen.getByTestId("newest-chats").getAttribute("href")).toBe(`/PKG/messages?chat=${sel}`);
-    // rows keep the page the person is on
-    expect(screen.getByTestId("chat-row").getAttribute("href")).toContain("more=cur0");
+    const later = row({ key: encodeChatKey("19:later@thread.v2"), title: "Older chat" });
+    const fetchMock = vi.fn(async () => Response.json({ rows: [later], moreCursor: "cursor-2", notes: [], listed: [CONN] }));
+    vi.stubGlobal("fetch", fetchMock);
+    draw({ kind: "ok", rows: [row()], moreCursor: "cursor-abc" }, sel);
+    expect(screen.queryByTestId("newest-chats")).toBeNull();
+    await act(async () => {
+      screen.getByTestId("more-chats").click();
+    });
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    const first = (fetchMock.mock.calls as unknown as [string, RequestInit][])[0] as [string, RequestInit];
+    expect(first[0]).toBe(`/api/lanes/PKG/messages/chats?more=cursor-abc&chat=${sel}`);
+    expect(first[1]).toMatchObject({ credentials: "same-origin", cache: "no-store" });
+    expect(screen.getAllByTestId("chat-row")).toHaveLength(1);
+    expect(screen.getByText("Older chat")).toBeTruthy();
+    expect(screen.queryByText("Pat Example")).toBeNull();
+    // rows no longer carry the page cursor: they are plain chat links
+    expect(screen.getByTestId("chat-row").getAttribute("href")).toBe(`/PKG/messages?chat=${encodeChatKey("19:later@thread.v2")}`);
+    await act(async () => {
+      screen.getByTestId("newest-chats").click();
+    });
+    expect(screen.getByText("Pat Example")).toBeTruthy();
+    expect(screen.queryByText("Older chat")).toBeNull();
+    expect(screen.getByTestId("more-chats")).toBeTruthy();
+    expect(fetchMock).toHaveBeenCalledTimes(1); // Back is a restore, not a read
+    vi.unstubAllGlobals();
+  });
+
+  it("T-296: a failed More chats keeps the page that was shown and says so", async () => {
+    vi.stubGlobal("fetch", vi.fn(async () => new Response("{}", { status: 503 })));
+    draw({ kind: "ok", rows: [row()], moreCursor: "cursor-abc" });
+    await act(async () => {
+      screen.getByTestId("more-chats").click();
+    });
+    expect(screen.getByTestId("chat-list-refresh-failed")).toBeTruthy();
+    expect(screen.getByText("Pat Example")).toBeTruthy();
+    vi.unstubAllGlobals();
   });
 
   it("no more chats: no More link", () => {
@@ -320,9 +360,9 @@ describe("the phone layout: the list, then the conversation (never both); deskto
 });
 
 describe("T-281 review follow-ups (view)", () => {
-  it("C7h: the Back link keeps the page of chats the person was on", () => {
-    render(<ConversationPane view={conv()} laneId="PKG" connectionId={CONN} more="cur0" />);
-    expect(screen.getByTestId("back-to-chats").getAttribute("href")).toBe("/PKG/messages?more=cur0");
+  it("C7h (T-296): the Back link goes to the chat list, which is still mounted and remembers the page of chats the person was on", () => {
+    render(<ConversationPane view={conv()} laneId="PKG" connectionId={CONN} />);
+    expect(screen.getByTestId("back-to-chats").getAttribute("href")).toBe("/PKG/messages");
   });
 
   it("C7e / M1: the host label is hidden ONLY when the link text is that very host or address; look-alike text keeps it", () => {

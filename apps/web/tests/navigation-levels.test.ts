@@ -136,8 +136,16 @@ vi.mock("@/components/messages-client", () => ({
 vi.mock("@/components/messages-live", () => ({
   MessagesLiveProvider: ({ children }: { children: ReactNode }) => children,
   ChatListLive: () => null,
+  AccountNotes: () => null,
   useMessagesLive: () => null,
   useOnLiveRefetch: () => undefined,
+}));
+// T-296: the scope that reads the address in the browser (useSearchParams) is a client component too: here it draws its children / the tab's own notes, exactly what the server does with it
+vi.mock("@/components/messages-scope", async (orig) => ({
+  ...(await orig<typeof import("@/components/messages-scope")>()),
+  MessagesScope: ({ children }: { children: ReactNode }) => children,
+  ByTab: ({ chats }: { chats: ReactNode }) => chats,
+  LiveTabs: () => null,
 }));
 vi.mock("@/components/messages-dot", () => ({ MessagesDot: () => null, useMessagesDot: () => false }));
 vi.mock("@/components/theme-toggle", () => ({ ThemeToggle: () => null }));
@@ -190,6 +198,17 @@ const PAGES: Record<string, () => Promise<{ default: (p: never) => unknown }>> =
   messages: () => import("@/app/[laneId]/messages/page"),
 };
 const params = () => Promise.resolve({ laneId: "PKG" });
+/**
+ * T-296: Messages is a LAYOUT (the header, the connect states, the chat list: drawn once) and a PAGE (the conversation side, or the Channels workspace). One "page view" renders the layout with the
+ * page as its children; `clickTo` renders only the page again, which is what a chat click does (the layout is kept by the router, not rendered again).
+ */
+async function renderMessages(query: Record<string, string> = {}, opts: { layout?: boolean } = {}): Promise<ReactNode> {
+  const { default: Layout } = await import("@/app/[laneId]/messages/layout");
+  const { default: Page } = await import("@/app/[laneId]/messages/page");
+  const page = Page({ params: params(), searchParams: sp(query) } as never) as ReactNode;
+  if (opts.layout === false) return resolve(page);
+  return resolve(Layout({ params: params(), children: page } as never) as ReactNode);
+}
 const sp = (o: Record<string, string> = {}) => Promise.resolve(o);
 const maxLevel = () => Math.max(0, ...t.calls.map((c) => c.level));
 const count = (name: string) => t.calls.filter((c) => c.name === name).length;
@@ -276,8 +295,7 @@ const CHANNELS_ROW = { ...TEAMS_ROW, features: { teams_chat_read: true, teams_ca
 describe("Messages (T-280, T-283)", () => {
   it("the gate, the lane list and the Teams reads (settings and own rows) start together: no read waits for another beyond the one lane check", async () => {
     t.answers["from:connections"] = { data: [], error: null };
-    const { default: Page } = await import("@/app/[laneId]/messages/page");
-    await resolve(Page({ params: params() } as never) as ReactNode);
+    await renderMessages();
     expect(t.calls.map((c) => c.name).sort()).toEqual(["from:connections", "from:lane_config_current", "lane.check", "lane.list", "teams.settings"]);
     expect(maxLevel()).toBe(2);
     expect(count("lane.check")).toBe(1);
@@ -287,8 +305,7 @@ describe("Messages (T-280, T-283)", () => {
   it("a limited company that does not list `messages` is sent Home before the page draws anything", async () => {
     t.answers["from:lane_config_current"] = HIDE("comms");
     t.rendered = [];
-    const { default: Page } = await import("@/app/[laneId]/messages/page");
-    await expect(resolve(Page({ params: params() } as never) as ReactNode)).rejects.toThrow("REDIRECT /PKG");
+    await expect(renderMessages()).rejects.toThrow("REDIRECT /PKG");
     expect(t.rendered).toEqual(["ModuleGate"]);
     for (const r of t.roots) r.clear();
   });
@@ -307,8 +324,7 @@ describe("Messages (T-280, T-283)", () => {
   it("a connected person: the chat list, the read markers and the open conversation are all STARTED together after the gate (the list and the conversation never wait for each other)", async () => {
     t.answers["from:connections"] = { data: [TEAMS_ROW], error: null };
     t.answers["rpc:teams_chat_reads_list_many"] = { data: [], error: null };
-    const { default: Page } = await import("@/app/[laneId]/messages/page");
-    await resolve(Page({ params: params(), searchParams: sp({ chat: CHAT_KEY }) } as never) as ReactNode);
+    await renderMessages({ chat: CHAT_KEY });
     const fns = t.reader.calls.map((c) => c.fn).sort();
     expect(fns).toEqual(["listChats", "listMessages", "openChat"]);
     // (no clock: every Graph read had STARTED before any of them had answered)
@@ -328,8 +344,7 @@ describe("Messages (T-280, T-283)", () => {
   it("T-295, two accounts: one list read per account and the open conversation's reads of ONE account, the markers in ONE query, all started together; no extra level", async () => {
     t.answers["from:connections"] = { data: [TEAMS_ROW, TEAMS_ROW_B], error: null };
     t.answers["rpc:teams_chat_reads_list_many"] = { data: [], error: null };
-    const { default: Page } = await import("@/app/[laneId]/messages/page");
-    await resolve(Page({ params: params(), searchParams: sp({ chat: CHAT_KEY, conn: TEAMS_ROW_B.id }) } as never) as ReactNode);
+    await renderMessages({ chat: CHAT_KEY, conn: TEAMS_ROW_B.id });
     expect(t.reader.calls.map((c) => c.fn).sort()).toEqual(["listChats", "listChats", "listMessages", "openChat"]);
     expect(t.reader.calls.map((c) => c.resolvedBefore)).toEqual([0, 0, 0, 0]); // every read had STARTED before any answered
     expect(t.reader.calls.filter((c) => c.fn !== "listChats").every((c) => JSON.stringify(c.args).includes(TEAMS_ROW_B.id))).toBe(true); // the conversation is read as the named account only
@@ -342,10 +357,9 @@ describe("Messages (T-280, T-283)", () => {
   it("T-295, two accounts: a `chat` without `conn` opens nothing (no guess, no conversation read); an unknown or another person's `conn` opens nothing either; the list is still read for both accounts", async () => {
     t.answers["from:connections"] = { data: [TEAMS_ROW, TEAMS_ROW_B, { ...TEAMS_ROW, id: "00000000-0000-4000-8000-0000000000d1", owner_user_id: "someone-else" }], error: null };
     t.answers["rpc:teams_chat_reads_list_many"] = { data: [], error: null };
-    const { default: Page } = await import("@/app/[laneId]/messages/page");
     for (const q of [{ chat: CHAT_KEY } as Record<string, string>, { chat: CHAT_KEY, conn: "00000000-0000-4000-8000-0000000000d1" }, { chat: CHAT_KEY, conn: "00000000-0000-4000-8000-0000000000ff" }, { chat: CHAT_KEY, conn: "../x" }]) {
       t.reader.calls.length = 0;
-      const tree = await resolve(Page({ params: params(), searchParams: sp(q) } as never) as ReactNode);
+      const tree = await renderMessages(q);
       expect(t.reader.calls.map((c) => c.fn), JSON.stringify(q)).toEqual(["listChats", "listChats"]);
       // L4: one plain line says why nothing opened (no guess, no extra read)
       expect(textOf(tree), JSON.stringify(q)).toContain("This link does not say which Teams account the chat belongs to. Pick the chat from the list.");
@@ -355,23 +369,20 @@ describe("Messages (T-280, T-283)", () => {
   it("no chat in the address: only the chat list is read (no conversation read, no Graph read for a chat that was not asked for)", async () => {
     t.answers["from:connections"] = { data: [TEAMS_ROW], error: null };
     t.answers["rpc:teams_chat_reads_list_many"] = { data: [], error: null };
-    const { default: Page } = await import("@/app/[laneId]/messages/page");
-    await resolve(Page({ params: params(), searchParams: sp() } as never) as ReactNode);
+    await renderMessages();
     expect(t.reader.calls.map((c) => c.fn)).toEqual(["listChats"]);
   });
 
   it("a made-up chat key is 'no chat selected', not a Graph request", async () => {
     t.answers["from:connections"] = { data: [TEAMS_ROW], error: null };
     t.answers["rpc:teams_chat_reads_list_many"] = { data: [], error: null };
-    const { default: Page } = await import("@/app/[laneId]/messages/page");
-    await resolve(Page({ params: params(), searchParams: sp({ chat: "../../etc/passwd" }) } as never) as ReactNode);
+    await renderMessages({ chat: "../../etc/passwd" });
     expect(t.reader.calls.map((c) => c.fn)).toEqual(["listChats"]);
   });
 
   it("privacy: when the only Teams row visible is another person's (an admin sees its health), the person is 'not connected' and nothing is read from Teams", async () => {
     t.answers["from:connections"] = { data: [{ ...TEAMS_ROW, owner_user_id: "someone-else" }], error: null };
-    const { default: Page } = await import("@/app/[laneId]/messages/page");
-    await resolve(Page({ params: params(), searchParams: sp({ chat: CHAT_KEY }) } as never) as ReactNode);
+    await renderMessages({ chat: CHAT_KEY });
     expect(t.reader.calls).toEqual([]);
     expect(t.rendered).not.toContain("MessagesWorkspace");
   });
@@ -379,8 +390,7 @@ describe("Messages (T-280, T-283)", () => {
   it("a hidden module redirects before any Graph read, even for a connected person", async () => {
     t.answers["from:lane_config_current"] = HIDE("comms");
     t.answers["from:connections"] = { data: [TEAMS_ROW], error: null };
-    const { default: Page } = await import("@/app/[laneId]/messages/page");
-    await expect(resolve(Page({ params: params(), searchParams: sp({ chat: CHAT_KEY }) } as never) as ReactNode)).rejects.toThrow("REDIRECT /PKG");
+    await expect(renderMessages({ chat: CHAT_KEY })).rejects.toThrow("REDIRECT /PKG");
     await new Promise((r) => setTimeout(r, 30));
     expect(t.reader.calls).toEqual([]);
     for (const r of t.roots) r.clear();
@@ -389,8 +399,7 @@ describe("Messages (T-280, T-283)", () => {
   it("T-291: the team list and the open team's channels START together; the posts and replies start as soon as the channel list has answered (it says whether the channel may be read), without waiting for the team list or each other", async () => {
     t.teamsFeatures = ["chat_read", "channels_read"];
     t.answers["from:connections"] = { data: [CHANNELS_ROW], error: null };
-    const { default: Page } = await import("@/app/[laneId]/messages/page");
-    await resolve(Page({ params: params(), searchParams: sp({ tab: "channels", team: TEAM, channel: CHANNEL_KEY, post: "1700000000001" }) } as never) as ReactNode);
+    await renderMessages({ tab: "channels", team: TEAM, channel: CHANNEL_KEY, post: "1700000000001" }, { layout: false });
     const by = (fn: string) => t.reader.calls.find((c) => c.fn === fn);
     expect(t.reader.calls.map((c) => c.fn).sort()).toEqual(["listChannelPosts", "listChannels", "listReplies", "listTeams"]);
     expect([by("listTeams")?.resolvedBefore, by("listChannels")?.resolvedBefore]).toEqual([0, 0]); // both STARTED before either answered
@@ -407,24 +416,22 @@ describe("Messages (T-280, T-283)", () => {
   it("T-291 L1: a shared channel (or a channel that is not in the team's list) is never read, even by a made-up address: no posts and no replies request", async () => {
     t.teamsFeatures = ["chat_read", "channels_read"];
     t.answers["from:connections"] = { data: [CHANNELS_ROW], error: null };
-    const { default: Page } = await import("@/app/[laneId]/messages/page");
     t.channelKind = "shared";
-    await resolve(Page({ params: params(), searchParams: sp({ tab: "channels", team: TEAM, channel: CHANNEL_KEY, post: "1700000000001" }) } as never) as ReactNode);
+    await renderMessages({ tab: "channels", team: TEAM, channel: CHANNEL_KEY, post: "1700000000001" }, { layout: false });
     expect(t.reader.calls.map((c) => c.fn).sort()).toEqual(["listChannels", "listTeams"]);
     t.reader.calls = [];
     t.channelKind = "standard";
     const other = Buffer.from("19:other999@thread.tacv2").toString("base64url");
-    await resolve(Page({ params: params(), searchParams: sp({ tab: "channels", team: TEAM, channel: other }) } as never) as ReactNode);
+    await renderMessages({ tab: "channels", team: TEAM, channel: other }, { layout: false });
     expect(t.reader.calls.map((c) => c.fn).sort()).toEqual(["listChannels", "listTeams"]);
   });
 
   it("T-291: only what the address names is read: no team means only the team list; a team means its channels; a channel means its posts; a post that is not named means no replies", async () => {
     t.teamsFeatures = ["chat_read", "channels_read"];
     t.answers["from:connections"] = { data: [CHANNELS_ROW], error: null };
-    const { default: Page } = await import("@/app/[laneId]/messages/page");
     const fns = async (q: Record<string, string>) => {
       t.reader.calls = [];
-      await resolve(Page({ params: params(), searchParams: sp(q) } as never) as ReactNode);
+      await renderMessages(q, { layout: false });
       return t.reader.calls.map((c) => c.fn).sort();
     };
     expect(await fns({ tab: "channels" })).toEqual(["listTeams"]);
@@ -441,20 +448,18 @@ describe("Messages (T-280, T-283)", () => {
     t.teamsFeatures = ["chat_read", "channels_read"];
     t.answers["from:connections"] = { data: [CHANNELS_ROW], error: null };
     t.answers["rpc:teams_chat_reads_list_many"] = { data: [], error: null };
-    const { default: Page } = await import("@/app/[laneId]/messages/page");
-    await resolve(Page({ params: params(), searchParams: sp({ chat: CHAT_KEY, team: TEAM, channel: CHANNEL_KEY }) } as never) as ReactNode);
+    await renderMessages({ chat: CHAT_KEY, team: TEAM, channel: CHANNEL_KEY });
     expect(t.reader.calls.map((c) => c.fn).sort()).toEqual(["listChats", "listMessages", "openChat"]);
   });
 
   it("T-291: no Microsoft request for channels unless they can work: the company does not list them, or this connection lacks them (made before, or the administrator's approval was not given)", async () => {
-    const { default: Page } = await import("@/app/[laneId]/messages/page");
     t.teamsFeatures = ["chat_read"]; // not switched on
     t.answers["from:connections"] = { data: [CHANNELS_ROW], error: null };
-    await resolve(Page({ params: params(), searchParams: sp({ tab: "channels", team: TEAM, channel: CHANNEL_KEY }) } as never) as ReactNode);
+    await renderMessages({ tab: "channels", team: TEAM, channel: CHANNEL_KEY }, { layout: false });
     expect(t.reader.calls).toEqual([]);
     t.teamsFeatures = ["chat_read", "channels_read"]; // listed, but the connection has not got the feature
     t.answers["from:connections"] = { data: [TEAMS_ROW], error: null };
-    await resolve(Page({ params: params(), searchParams: sp({ tab: "channels", team: TEAM, channel: CHANNEL_KEY }) } as never) as ReactNode);
+    await renderMessages({ tab: "channels", team: TEAM, channel: CHANNEL_KEY }, { layout: false });
     expect(t.reader.calls).toEqual([]);
     expect(t.rendered).not.toContain("ChannelsWorkspace");
   });
@@ -482,6 +487,81 @@ describe("Messages (T-280, T-283)", () => {
   });
 });
 
+describe("T-296: the chat list is kept mounted across chat changes (spec 22.6)", () => {
+  const TEAMS_ROW_B2 = { ...TEAMS_ROW, id: "00000000-0000-4000-8000-0000000000c2", external_account_id: "me@second.example.test" };
+  const CHAT_KEY_2 = Buffer.from("19:other999def456@thread.v2").toString("base64url");
+  const reads = () => t.reader.calls.map((c) => c.fn).sort();
+  const two = () => {
+    t.answers["from:connections"] = { data: [TEAMS_ROW, TEAMS_ROW_B2], error: null };
+    t.answers["rpc:teams_chat_reads_list_many"] = { data: [], error: null };
+  };
+
+  it("page open with a chat = the two accounts' lists + the ONE open conversation (2 reads: the chat and its messages); a chat click renders only the page again = the conversation's 2 reads and NO list read, the markers' query included", async () => {
+    two();
+    // the page open (layout + page)
+    await renderMessages({ chat: CHAT_KEY, conn: TEAMS_ROW.id });
+    expect(reads()).toEqual(["listChats", "listChats", "listMessages", "openChat"]); // PAGE OPEN: 4 Graph reads (before T-296 the same 4)
+    expect(count("rpc:teams_chat_reads_list_many")).toBe(1);
+    // three chat clicks, to another chat of either account, back and forth: the layout is not rendered again, only the page
+    for (const [chat, conn] of [[CHAT_KEY_2, TEAMS_ROW_B2.id], [CHAT_KEY, TEAMS_ROW.id], [CHAT_KEY_2, TEAMS_ROW.id]] as const) {
+      t.reader.calls = [];
+      t.calls = [];
+      await renderMessages({ chat, conn }, { layout: false });
+      expect(reads(), `${chat} ${conn}`).toEqual(["listMessages", "openChat"]); // A CHAT CLICK: 2 Graph reads (before T-296: 2 lists + these 2 = 4)
+      expect(t.calls.filter((c) => c.name === "rpc:teams_chat_reads_list_many")).toEqual([]); // the markers belong to the list: not read either
+      expect(t.reader.calls.every((c) => JSON.stringify(c.args).includes(conn))).toBe(true); // as the named account only
+    }
+  });
+
+  it("a change of only the tab or only `?more=`-like state re-reads no list; the Channels tab reads its own teams (one list per account that has channels) and the chat lists are not read by the page", async () => {
+    t.teamsFeatures = ["chat_read", "channels_read"];
+    t.answers["from:connections"] = { data: [{ ...TEAMS_ROW, features: { teams_chat_read: true, teams_channels_read: true } }, { ...TEAMS_ROW_B2, features: { teams_chat_read: true, teams_channels_read: true } }], error: null };
+    t.answers["rpc:teams_chat_reads_list_many"] = { data: [], error: null };
+    await renderMessages({ tab: "channels", conn: TEAMS_ROW_B2.id, team: TEAM }, { layout: false });
+    // page only: a team list per account (2), the open team's channels as the NAMED account only (1)
+    expect(reads()).toEqual(["listChannels", "listTeams", "listTeams"]);
+    expect(t.reader.calls.filter((c) => c.fn === "listChannels").every((c) => JSON.stringify(c.args).includes(TEAMS_ROW_B2.id))).toBe(true);
+    expect(t.reader.calls.some((c) => c.fn === "listChats")).toBe(false);
+  });
+
+  it("LANDING on the Channels tab (a full page load) also draws the layout: the chat lists are read once (accepted: a layout cannot read the tab), and not again by a later tab or chat change", async () => {
+    two();
+    t.teamsFeatures = ["chat_read", "channels_read"];
+    await renderMessages({ tab: "channels" });
+    expect(reads().filter((f) => f === "listChats")).toHaveLength(2);
+  });
+
+  it("the layout alone (no chat in the address): the lists and nothing else; and it is synchronous, so a link prefetch of it makes no read", async () => {
+    two();
+    const { default: Layout } = await import("@/app/[laneId]/messages/layout");
+    const tree = Layout({ params: params(), children: null } as never) as ReactNode;
+    expect(isValidElement(tree)).toBe(true);
+    await new Promise((r) => setTimeout(r, 30));
+    expect(t.reader.calls).toEqual([]);
+    expect(t.calls.filter((c) => c.name === "rpc:teams_chat_reads_list_many")).toEqual([]);
+    await resolve(tree);
+    expect(reads()).toEqual(["listChats", "listChats"]);
+  });
+
+  it("a hidden module redirects from the LAYOUT before any list is read (the layout runs beside its page, so it has its own gate)", async () => {
+    two();
+    t.answers["from:lane_config_current"] = HIDE("comms");
+    const { default: Layout } = await import("@/app/[laneId]/messages/layout");
+    await expect(resolve(Layout({ params: params(), children: null } as never) as ReactNode)).rejects.toThrow("REDIRECT /PKG");
+    await new Promise((r) => setTimeout(r, 30));
+    expect(t.reader.calls).toEqual([]);
+    for (const r of t.roots) r.clear();
+  });
+
+  it("no chat data is part of the layout's prefetched shell: the layout and the chat list column import no clock and no Graph client", async () => {
+    const { readFileSync } = await import("node:fs");
+    const layout = readFileSync(new URL("../app/[laneId]/messages/layout.tsx", import.meta.url), "utf8");
+    const scope = readFileSync(new URL("../components/messages-scope.tsx", import.meta.url), "utf8");
+    expect(layout).not.toMatch(/Date\.now|new Date\(|graph\.microsoft|fetch\(|@nichols\/connectors/);
+    expect(scope).not.toMatch(/Date\.now|new Date\(|graph\.microsoft|fetch\(|@nichols\/connectors|localStorage|sessionStorage|document\.cookie/);
+  });
+});
+
 describe("the Messages dot adds no server read and no level (T-290)", () => {
   const activityCalls = () => t.calls.filter((c) => /teams_activity|activity/i.test(c.name));
 
@@ -498,7 +578,8 @@ describe("the Messages dot adds no server read and no level (T-290)", () => {
       t.done = 0;
       guardsObj = makeGuards();
       const { default: Page } = await (PAGES[dir] as NonNullable<(typeof PAGES)[string]>)();
-      await resolve(Page({ params: params(), searchParams: sp(dir === "messages" ? { chat: CHAT_KEY } : {}) } as never) as ReactNode);
+      if (dir === "messages") await renderMessages({ chat: CHAT_KEY });
+      else await resolve(Page({ params: params(), searchParams: sp({}) } as never) as ReactNode);
       expect(activityCalls(), dir).toEqual([]);
       expect(maxLevel(), dir).toBeLessThanOrEqual(3);
     }
@@ -507,8 +588,7 @@ describe("the Messages dot adds no server read and no level (T-290)", () => {
   it("Messages with the live provider in the tree: the levels and the reads are exactly those without it (the provider, the live list and the dot read nothing on the server)", async () => {
     t.answers["from:connections"] = { data: [TEAMS_ROW], error: null };
     t.answers["rpc:teams_chat_reads_list_many"] = { data: [], error: null };
-    const { default: Page } = await import("@/app/[laneId]/messages/page");
-    await resolve(Page({ params: params(), searchParams: sp({ chat: CHAT_KEY }) } as never) as ReactNode);
+    await renderMessages({ chat: CHAT_KEY });
     expect(t.calls.map((c) => c.name).sort()).toEqual(["from:connections", "from:lane_config_current", "lane.check", "lane.list", "rpc:teams_chat_reads_list_many", "teams.settings"]);
     expect(maxLevel()).toBeLessThanOrEqual(3);
     expect(t.reader.calls.map((c) => c.fn).sort()).toEqual(["listChats", "listMessages", "openChat"]); // the page's own three reads; nothing for notices
