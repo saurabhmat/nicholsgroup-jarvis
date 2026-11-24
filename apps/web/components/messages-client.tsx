@@ -51,13 +51,12 @@ export function MessagesRefresh({ label = "Refresh", mode = "page" }: { label?: 
     <>
       {/* T-297: `aria-disabled`, not `disabled`: the keyboard focus stays on Refresh while it works and after it. 44 px high on a phone. */}
       <Button type="button" variant="outline" size="sm" aria-disabled={pending ? true : undefined} onClick={click} data-testid="messages-refresh" className="max-lg:min-h-11">
-        {pending ? "Refreshing..." : label}
+        {label}
       </Button>
-      {note ? (
-        <span role="status" aria-live="polite" data-testid="messages-refresh-note" className="sr-only">
-          {note}
-        </span>
-      ) : null}
+      {/* always mounted, so a change is announced: "Refreshing..." while a refresh works, and (live mode) the wait note, visible to everyone */}
+      <span role="status" aria-live="polite" data-testid="messages-refresh-note" className="text-small text-muted-foreground">
+        {pending ? "Refreshing..." : note}
+      </span>
     </>
   );
 }

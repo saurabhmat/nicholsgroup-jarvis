@@ -205,13 +205,15 @@ export function MessageItem({ m, showSender, subject = null, footer = null, show
 // ---- a conversation: day separators and groups (T-297)
 /** Messages of one sender this close together (each to the one before it) are one group, with one time shown. */
 export const GROUP_GAP_MS = 5 * 60 * 1000;
+/** ...and a group never spans more than this from its FIRST message, so a steady chat is not one group for hours with a single time. */
+export const GROUP_SPAN_MS = 15 * 60 * 1000;
 
-export type ConversationItem = { kind: "day"; key: string; at: string } | { kind: "group"; key: string; mine: boolean; sender: string | null; messages: MessageView[] };
+export type ConversationItem = { kind: "day"; key: string; at: string } | { kind: "group"; key: string; mine: boolean; sender: string | null; senderKey: string | null; messages: MessageView[] };
 
 /**
  * Pure: the conversation's items, oldest first. A day separator whenever the New York day changes (`m.day`; `after` is the day the list continues from). A message joins the group before it when it is
- * the same sender (the same side: `mine`, and the same name), on the same day, within GROUP_GAP_MS of that group's last message, and neither it nor the group's last message is a Teams event or a deletion
- * note (those stand alone). A time that does not parse never joins. Linear.
+ * the same sender (the same side: `mine`, and the same sender key (an opaque per-conversation key made on the server from the sender's ID: never the display name, which two people can share, and never a sender without an ID), on the same day, within GROUP_GAP_MS of that
+ * group's last message and within GROUP_SPAN_MS of its first, and neither it nor the group's last message is a Teams event or a deletion note (those always stand alone). A time that does not parse never joins. Linear.
  */
 export function groupMessages(messages: readonly MessageView[], after: string | null = null): ConversationItem[] {
   const items: ConversationItem[] = [];
@@ -224,11 +226,14 @@ export function groupMessages(messages: readonly MessageView[], after: string | 
       last = null;
     }
     const prev = last?.messages[last.messages.length - 1];
+    const first = last?.messages[0];
     const gap = prev ? Date.parse(m.at) - Date.parse(prev.at) : Number.NaN;
-    const together = last !== null && prev !== undefined && !m.system && !prev.system && last.mine === m.mine && last.sender === m.sender && gap >= 0 && gap <= GROUP_GAP_MS;
+    const span = first ? Date.parse(m.at) - Date.parse(first.at) : Number.NaN;
+    const plain = (x: MessageView) => !x.system && !x.deleted;
+    const together = last !== null && prev !== undefined && plain(m) && plain(prev) && typeof m.senderKey === "string" && m.senderKey !== "" && last.senderKey === m.senderKey && last.mine === m.mine && gap >= 0 && gap <= GROUP_GAP_MS && span <= GROUP_SPAN_MS;
     if (together && last) last.messages.push(m);
     else {
-      last = { kind: "group", key: `g-${m.id}`, mine: m.mine, sender: m.sender, messages: [m] };
+      last = { kind: "group", key: `g-${m.id}`, mine: m.mine, sender: m.sender, senderKey: m.senderKey ?? null, messages: [m] };
       items.push(last);
     }
   }
@@ -241,13 +246,15 @@ function GroupView({ g, showSender }: { g: Extract<ConversationItem, { kind: "gr
   return (
     <li data-testid="message-group" data-mine={g.mine ? "true" : "false"} className={cn("flex flex-col gap-0.5", g.mine ? "items-end" : "items-start")}>
       {named ? (
-        <p dir="auto" data-testid="group-sender" className="px-1 text-small font-medium [overflow-wrap:anywhere]">
+        // sighted readers see the name once per group; a screen reader hears it in each bubble's hidden "Name, time:" (so it is not read twice)
+        <p aria-hidden dir="auto" data-testid="group-sender" className="px-1 text-small font-medium [overflow-wrap:anywhere]">
           {g.sender}
         </p>
       ) : null}
-      <ul className={cn("flex min-w-0 max-w-full flex-col gap-0.5", g.mine ? "items-end" : "items-start")}>
+      {/* `w-full` on the list and on each item: the bubble's percentage max-width needs a definite base (the group's width), not its own shrink-to-fit content; alignment stays with items-start / items-end */}
+      <ul className={cn("flex w-full min-w-0 flex-col gap-0.5", g.mine ? "items-end" : "items-start")}>
         {g.messages.map((m) => (
-          <li key={m.id} data-testid="message" data-mine={m.mine ? "true" : "false"} className={cn("flex min-w-0 max-w-full flex-col", g.mine ? "items-end" : "items-start")}>
+          <li key={m.id} data-testid="message" data-mine={m.mine ? "true" : "false"} className={cn("flex w-full min-w-0 flex-col", g.mine ? "items-end" : "items-start")}>
             <MessageBubble mine={m.mine} fullTime={m.fullTime}>
               {/* the time and the side of every message, for a screen reader (the group shows one time; a tap or hover shows each one) */}
               <span className="sr-only">

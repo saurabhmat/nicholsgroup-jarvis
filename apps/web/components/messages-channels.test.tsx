@@ -6,11 +6,12 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { cleanup, render, screen, within } from "@testing-library/react";
 
 const refresh = vi.hoisted(() => vi.fn());
-vi.mock("next/navigation", () => ({ useRouter: () => ({ refresh }), usePathname: () => "/PKG/messages" }));
+const addr = vi.hoisted(() => ({ q: "" }));
+vi.mock("next/navigation", () => ({ useRouter: () => ({ refresh }), usePathname: () => "/PKG/messages", useSearchParams: () => new URLSearchParams(addr.q) }));
 
 import { ChannelFailureCard, ChannelRows, ChannelsUnavailable, NoChannelSelected, TeamsList, ThreadPane } from "./messages-channels";
 import { MessagesScreen } from "./messages-page";
-import { MessagesTabs } from "./messages-scope";
+import { MessagesScope, MessagesTabs } from "./messages-scope";
 import { WorkspaceLayout } from "./messages-chats";
 import { encodeChannelKey } from "@/lib/teams-channel-key";
 import { htmlToNodes } from "@nichols/connectors/teams-pure";
@@ -331,15 +332,23 @@ describe.each(WIDTHS)("the tabs and the page around them at %ipx", (width) => {
 
   it("on the Channels tab the page's own feature note leaves channels out (the tab says it once), but another missing feature is still listed", () => {
     at(width);
-    render(<MessagesScreen laneId="PKG" tab="channels" state={connected({ missing: ["channels_read"], adminConsent: true })} />);
+    const screenFor = (tab: "chats" | "channels", state: Extract<MessagesState, { kind: "connected" }>) => {
+      addr.q = tab === "channels" ? "tab=channels" : "";
+      return render(
+        <MessagesScope chatConns={[CONN]}>
+          <MessagesScreen laneId="PKG" state={state} />
+        </MessagesScope>,
+      );
+    };
+    screenFor("channels", connected({ missing: ["channels_read"], adminConsent: true }));
     expect(screen.queryByTestId("messages-feature-missing")).toBeNull();
     cleanup();
-    render(<MessagesScreen laneId="PKG" tab="channels" state={connected({ missing: ["channels_read", "call_links"], adminConsent: true })} />);
+    screenFor("channels", connected({ missing: ["channels_read", "call_links"], adminConsent: true }));
     const note = screen.getByTestId("messages-feature-missing").textContent ?? "";
     expect(note).toContain("call buttons");
     expect(note).not.toContain("channels");
     cleanup();
-    render(<MessagesScreen laneId="PKG" tab="chats" state={connected({ missing: ["channels_read"], adminConsent: true })} />);
+    screenFor("chats", connected({ missing: ["channels_read"], adminConsent: true }));
     expect(screen.getByTestId("messages-feature-missing").textContent).toContain("Reconnect Teams to add channels");
   });
 });

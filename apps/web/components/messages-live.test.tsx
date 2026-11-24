@@ -6,10 +6,14 @@ import { act, cleanup, fireEvent, render, screen } from "@testing-library/react"
 
 const CONN = "00000000-0000-4000-8000-0000000000c1";
 const refresh = vi.hoisted(() => vi.fn());
-vi.mock("next/navigation", () => ({ useRouter: () => ({ refresh }), usePathname: () => "/PKG/messages" }));
+const testAddress = vi.hoisted(() => ({ useTestSearchParams: (): URLSearchParams => { throw new Error("not set"); } }));
+vi.mock("next/navigation", () => ({ useRouter: () => ({ refresh }), usePathname: () => "/PKG/messages", useSearchParams: () => testAddress.useTestSearchParams() }));
 
 import { ConversationMessages, MessagesRefresh } from "./messages-client";
 import { ChatListLive, MessagesLiveProvider } from "./messages-live";
+import { MessagesScope } from "./messages-scope";
+import { AddressContext, useTestSearchParams } from "../tests/support/address";
+testAddress.useTestSearchParams = useTestSearchParams;
 import { dotSnapshot, resetDotForTests } from "@/lib/messages-activity-client";
 import { ACTIVITY_POLL_MS, REFETCH_MIN_GAP_MS } from "@/lib/messages-live-config";
 import { encodeChatKey } from "@/lib/teams-chat-key";
@@ -70,12 +74,24 @@ afterEach(() => {
   vi.useRealTimers();
 });
 
+// T-296 review (L8): the list gets the open chat from the address through the scope, as in the page; this wrapper only turns the old props into an address
+function ChatList({ selectedKey = null, selectedConn = null, ...rest }: React.ComponentProps<typeof ChatListLive> & { selectedKey?: string | null; selectedConn?: string | null }) {
+  const q = selectedKey ? `${selectedConn ? `conn=${selectedConn}&` : ""}chat=${selectedKey}` : "";
+  return (
+    <AddressContext.Provider value={q}>
+      <MessagesScope chatConns={selectedConn ? [CONN, selectedConn] : [CONN]}>
+        <ChatListLive {...rest} />
+      </MessagesScope>
+    </AddressContext.Provider>
+  );
+}
+
 const initial = [msg("m1", "2026-11-23T14:00:00.000Z"), msg("m2", "2026-11-23T14:05:00.000Z")];
 function page() {
   return render(
     <MessagesLiveProvider laneId="PKG">
       <MessagesRefresh mode="live" />
-      <ChatListLive laneId="PKG" initialRows={[row(KEY, "Pat")]} moreCursor={null} selectedKey={KEY} />
+      <ChatList laneId="PKG" initialRows={[row(KEY, "Pat")]} moreCursor={null} selectedKey={KEY} />
       <ConversationMessages conn={CONN} laneId="PKG" chatKey={KEY} initial={initial} nextBefore={null} group />
     </MessagesLiveProvider>,
   );

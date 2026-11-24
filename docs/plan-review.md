@@ -2171,3 +2171,13 @@ Built on `agent/T-296`, stacked on `agent/T-294` (not pushed). No SQL change, no
 - On the Channels tab the hidden chat list still lives under the provider: its notice handling is the flag above; the Channels tab itself has no notices (as before).
 - A "More chats" page is a snapshot: a notice re-reads only the page shown; Back restores the first page as it was (a later notice or Refresh brings it current).
 - Opening `?chat=` for a chat that is on no loaded page still works (the conversation is read by id); the list simply shows no highlighted row.
+
+### Review fixes of T-296 / T-297 (builder, Nov 24, 2026): done, and accepted for later
+
+Fixed in the review commit: H1 (bubble width base), M1 (a foreign `conn` is not handed to the list), M2 (phone pane height measured from the real chrome), M3 (converter keeps typed blank lines, word spaces, list items and code blocks), M4 (minimum heights on `lg`), M5 (`aria-disabled` look, live region, visible wait note), L1 (grouping by an opaque per-conversation `senderKey` computed on the server: the sender's directory id never reaches the browser), L2 to L9.
+
+Accepted, not built:
+- Landing directly on the Channels tab reads the chat lists once (N list reads and one markers query that did not happen before T-296, also for one account); the Channels pane's Refresh (`router.refresh()`) re-reads the chat lists too, bounded only by its pending guard; the activity poll (database only) now also runs on the Channels tab; every Channels click re-reads each channel account's team list.
+- A sighted keyboard-only person sees only each group's time (the per-message time is hover, tap and screen-reader text).
+- The phone pane's height is measured in the browser (`--pane-h`, set by `messages-scope.tsx` after layout and on resize); before the first measurement, and without scripts, the old `calc(100dvh - 8.5rem)` is used. The main area's own bottom padding (6rem, for the tab bar) still lets the page scroll a little below the pane; the shell was not changed.
+- The framework may keep hidden route trees alive; whether an earlier person's or company's chat list can reappear after sign-out or a company switch plus Back cannot be settled by reading the code: H-087 (f).

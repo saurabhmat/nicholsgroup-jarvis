@@ -12,7 +12,7 @@ import { teamsSectionFor } from "@/lib/teams-connection";
 import { MESSAGES_ACCOUNT_STATE_DEGRADED, MESSAGES_ACCOUNT_STATE_OK, MESSAGES_ACCOUNT_STATE_RECONNECT, messagesAccountFeatureText, messagesReconnectAccountLabel, reconnectToAddText, TEAMS_ADMIN_CONSENT_TEXT, TEAMS_CONNECT_ANOTHER_TEXT, TEAMS_CLOUD_UNSUPPORTED_PAGE_TEXT, TEAMS_CONNECTS_TEXT, TEAMS_NOT_SET_UP_TEXT, TEAMS_PAUSED_PAGE_TEXT } from "@/lib/teams-wording";
 import { LaneEyebrow } from "./module-page";
 import { ChatListColumn, ConversationSide, ConversationSkeleton } from "./messages-chats";
-import { ByTab, LiveTabs, MessagesScope, MessagesTabs } from "./messages-scope";
+import { ByTab, LiveTabs, MessagesScope } from "./messages-scope";
 import { tabOf, type MessagesTab } from "@/lib/messages-view-state";
 import { MessagesLiveProvider } from "./messages-live";
 import { ChannelsUnavailable, ChannelsWorkspace } from "./messages-channels";
@@ -40,7 +40,7 @@ type SearchParams = Record<string, string | string[] | undefined>;
  */
 export function MessagesLayoutShell({ params, children }: { params: Promise<{ laneId: string }>; children: ReactNode }) {
   return (
-    <div className="flex min-w-0 flex-col gap-4 lg:h-[calc(100dvh-4rem)]" data-testid="messages-page">
+    <div className="flex min-w-0 flex-col gap-4 lg:h-[calc(100dvh-4rem)] lg:min-h-[44rem]" data-testid="messages-page">
       <PageHeader eyebrow={<LaneEyebrow params={params} />} title="Messages" />
       <Suspense fallback={<CardSkeleton />}>
         <MessagesFrame params={params}>{children}</MessagesFrame>
@@ -55,7 +55,7 @@ async function MessagesFrame({ params, children }: { params: Promise<{ laneId: s
   if (state.kind !== "connected") return <MessagesScreen laneId={laneId} state={state} />;
   return (
     <MessagesScope chatConns={state.accounts.filter((a) => a.usable).map((a) => a.connectionId)} className="flex min-h-0 min-w-0 flex-col lg:flex-1">
-      <MessagesScreen laneId={laneId} state={state} liveTabs workspace={<ConnectedFrame laneId={laneId} state={state}>{children}</ConnectedFrame>} />
+      <MessagesScreen laneId={laneId} state={state} workspace={<ConnectedFrame laneId={laneId} state={state}>{children}</ConnectedFrame>} />
     </MessagesScope>
   );
 }
@@ -72,9 +72,9 @@ const chatsListed = (state: Connected): boolean => state.laneFeatures.includes("
 export function ConnectedFrame({ laneId, state, children }: { laneId: string; state: Connected; children: ReactNode }) {
   const listed = chatsListed(state);
   const body = (
-    <div data-testid="messages-workspace" className={cn("grid min-h-0 min-w-0 gap-4 lg:flex-1 lg:grid-rows-[minmax(0,1fr)]", listed ? "lg:grid-cols-[minmax(300px,380px)_minmax(0,1fr)] group-data-[view=channels]/messages:lg:grid-cols-1" : "lg:grid-cols-1")}>
+    <div data-testid="messages-frame" className={cn("grid min-h-0 min-w-0 gap-4 lg:min-h-[24rem] lg:flex-1 lg:grid-rows-[minmax(0,1fr)]", listed ? "lg:grid-cols-[minmax(300px,380px)_minmax(0,1fr)] group-data-[view=channels]/messages:lg:grid-cols-1" : "lg:grid-cols-1")}>
       {listed ? (
-        <div data-testid="messages-left" className="min-h-0 min-w-0 group-data-[view=channels]/messages:hidden group-data-[view=chat]/messages:max-lg:hidden lg:overflow-y-auto lg:overscroll-contain">
+        <div data-testid="messages-left" className="min-h-0 min-w-0 group-data-[view=channels]/messages:hidden group-data-[view=chat]/messages:max-lg:hidden lg:-mx-1.5 lg:overflow-y-auto lg:overscroll-contain lg:px-1.5 lg:py-1.5 lg:-my-1.5">
           <ChatListColumn laneId={laneId} state={state} />
         </div>
       ) : null}
@@ -104,15 +104,12 @@ async function MessagesBody({ params, searchParams }: { params: Promise<{ laneId
   const laneId = (await params).laneId;
   const state = await messagesState(laneId);
   if (state.kind !== "connected") return null; // the layout drew the state's own card
-  const tab = tabOf((await searchParams)?.tab);
-  return <ConnectedWorkspace laneId={laneId} state={state} tab={tab} searchParams={searchParams} />;
+  return <ConnectedWorkspace laneId={laneId} state={state} searchParams={searchParams} />;
 }
 
-export { tabOf, MessagesTabs };
-export type { MessagesTab };
-
 /** The page's part for a connected person. Chats need the company's `chat_read` and the connection's: otherwise the page says so (the "Reconnect Teams to add chats" note is the connect card's), never an empty list. */
-export function ConnectedWorkspace({ laneId, state, tab, searchParams }: { laneId: string; state: Connected; tab: MessagesTab; searchParams: Promise<SearchParams> }) {
+export async function ConnectedWorkspace({ laneId, state, searchParams }: { laneId: string; state: Connected; searchParams: Promise<SearchParams> }) {
+  const tab = tabOf((await searchParams)?.tab);
   // T-291: Channels is a second tab. Microsoft is asked about teams and channels only here, only for a company that lists `channels_read` and an account that has it; otherwise a short neutral state.
   if (tab === "channels") {
     return channelsAvailability(state).kind === "ready" ? <ChannelsWorkspace laneId={laneId} state={state} searchParams={searchParams} /> : <ChannelsUnavailable laneId={laneId} state={state} />;
@@ -124,7 +121,7 @@ export function ConnectedWorkspace({ laneId, state, tab, searchParams }: { laneI
 }
 
 /** The page below the header, for a given state (the tests render this directly). */
-export function MessagesScreen({ laneId, state, workspace = null, chatOpen = false, tab = "chats", liveTabs = false }: { laneId: string; state: MessagesState; /** A chat or channel is open: on a phone the conversation gets the screen, so the "Connected as" card is hidden there (wide screens keep it). */ chatOpen?: boolean; /** The open tab: on Channels the feature-missing note leaves out channels (the tab itself says so). */ tab?: MessagesTab; /** T-296: the tab and the open conversation come from the address in the browser (the layout cannot read it): the notes are drawn for both tabs and the scope mounts the right one. */ liveTabs?: boolean; /** The connected person's chats (streamed sections); null where there are none to draw. */ workspace?: ReactNode }) {
+export function MessagesScreen({ laneId, state, workspace = null }: { laneId: string; state: MessagesState; /** The connected person's chats (streamed sections); null where there are none to draw. */ workspace?: ReactNode }) {
   switch (state.kind) {
     case "no_access":
     case "not_enabled":
@@ -167,11 +164,12 @@ export function MessagesScreen({ laneId, state, workspace = null, chatOpen = fal
         </Card>
       );
     case "connected": {
+      // the tab and the open conversation come from the address in the browser (a layout cannot read it): the notes are drawn for both tabs and the scope mounts the right one
       const notices = (t: MessagesTab) => <ConnectionNotices laneId={laneId} state={state} tab={t} />;
       return (
         <div className="flex min-h-0 flex-col gap-4 lg:flex-1" data-testid="messages-connected">
-          <ConnectionRow laneId={laneId} state={state} className={cn(chatOpen && "hidden lg:flex", "group-data-[open=true]/messages:max-lg:hidden")} />
-          {liveTabs ? <ByTab chats={notices("chats")} channels={notices("channels")} /> : notices(tab)}
+          <ConnectionRow laneId={laneId} state={state} className="group-data-[open=true]/messages:max-lg:hidden" />
+          <ByTab chats={notices("chats")} channels={notices("channels")} />
           {workspace}
         </div>
       );

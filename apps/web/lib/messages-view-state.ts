@@ -28,5 +28,5 @@ export function viewOf(q: Query, chatConns: readonly string[]): MessagesView {
   const shaped = decodeChatKey(key) !== null;
   const connOk = conn === null ? chatConns.length === 1 : isConnId(conn) && chatConns.includes(conn);
   const open = shaped && connOk;
-  return { tab, view: open ? "chat" : "list", open, chatKey: shaped ? key : null, conn: conn !== null && isConnId(conn) ? conn : null };
+  return { tab, view: open ? "chat" : "list", open, chatKey: shaped ? key : null, conn: conn !== null && connOk ? conn : null }; // a `conn` that is not one of the person's own usable accounts is never handed on (the list would send it as `open=` and be refused)
 }

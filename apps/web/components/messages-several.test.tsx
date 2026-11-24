@@ -6,9 +6,13 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { act, cleanup, render, screen, within } from "@testing-library/react";
 
 const nav = vi.hoisted(() => ({ refresh: vi.fn() }));
-vi.mock("next/navigation", () => ({ useRouter: () => ({ refresh: nav.refresh, replace: vi.fn() }), usePathname: () => "/PKG/messages" }));
+const testAddress = vi.hoisted(() => ({ useTestSearchParams: (): URLSearchParams => { throw new Error("not set"); } }));
+vi.mock("next/navigation", () => ({ useRouter: () => ({ refresh: nav.refresh, replace: vi.fn() }), usePathname: () => "/PKG/messages", useSearchParams: () => testAddress.useTestSearchParams() }));
 
 import { ChatListLive, MessagesLiveProvider } from "./messages-live";
+import { MessagesScope } from "./messages-scope";
+import { AddressContext, useTestSearchParams } from "../tests/support/address";
+testAddress.useTestSearchParams = useTestSearchParams;
 import { ConversationMessages } from "./messages-client";
 import { MessagesScreen } from "./messages-page";
 import { resetDotForTests } from "@/lib/messages-activity-client";
@@ -35,6 +39,18 @@ const connected = (accounts: MessagesAccount[], over: Partial<Extract<MessagesSt
   kind: "connected", connectionId: A, account: "robert@pubkgroup.com", degraded: false, missing: [], adminConsent: false, laneFeatures: ["chat_read", "call_links"], accounts, multi: accounts.filter((a) => a.usable).length >= 2, canAddAnother: false, ...over,
 });
 
+// T-296 review (L8): the list gets the open chat from the address through the scope, as in the page; this wrapper only turns the old props into an address
+function ChatList({ selectedKey = null, selectedConn = null, ...rest }: React.ComponentProps<typeof ChatListLive> & { selectedKey?: string | null; selectedConn?: string | null }) {
+  const q = selectedKey ? `${selectedConn ? `conn=${selectedConn}&` : ""}chat=${selectedKey}` : "";
+  return (
+    <AddressContext.Provider value={q}>
+      <MessagesScope chatConns={selectedConn ? [A, selectedConn] : [A]}>
+        <ChatListLive {...rest} />
+      </MessagesScope>
+    </AddressContext.Provider>
+  );
+}
+
 afterEach(() => {
   cleanup();
   vi.unstubAllGlobals();
@@ -46,7 +62,7 @@ describe.each(WIDTHS)("two accounts at %ipx", (width) => {
   const hrefFor = (key: string) => key;
 
   it("the list: every row has its account label as text (the full sign-in name is the accessible name), a chat both accounts are in is TWO rows with their own unread marker, and each opens as its own account", () => {
-    render(<ChatListLive laneId="PKG" initialRows={[row(A, SHARED, "Shared chat", { unread: true }), row(B, SHARED, "Shared chat", { unread: true }), row(B, ONLY_B, "Only B")]} moreCursor={null} selectedKey={SHARED} selectedConn={B} />);
+    render(<ChatList laneId="PKG" initialRows={[row(A, SHARED, "Shared chat", { unread: true }), row(B, SHARED, "Shared chat", { unread: true }), row(B, ONLY_B, "Only B")]} moreCursor={null} selectedKey={SHARED} selectedConn={B} />);
     const rows = screen.getAllByTestId("chat-row");
     expect(rows).toHaveLength(3);
     const badges = screen.getAllByTestId("account-badge");
@@ -70,14 +86,14 @@ describe.each(WIDTHS)("two accounts at %ipx", (width) => {
   });
 
   it("a one-account list looks as it always did: no label, no conn in the address", () => {
-    render(<ChatListLive laneId="PKG" initialRows={[row(A, SHARED, "Chat", { account: null, accountName: null })]} moreCursor={null} selectedKey={null} />);
+    render(<ChatList laneId="PKG" initialRows={[row(A, SHARED, "Chat", { account: null, accountName: null })]} moreCursor={null} selectedKey={null} />);
     expect(screen.queryByTestId("account-badge")).toBeNull();
     expect(screen.getByTestId("chat-row").getAttribute("href")).toBe(`/PKG/messages?chat=${SHARED}`);
   });
 
   it("an account that did not answer is one plain line: sign-in expired (with Reconnect <label> naming that connection), busy with seconds, could not be reached; and the changed-account line", () => {
     render(
-      <ChatListLive
+      <ChatList
         laneId="PKG"
         initialRows={[row(B, ONLY_B, "Only B")]}
         moreCursor={null}
@@ -158,7 +174,7 @@ describe("live: a notice of ONE account (test 32)", () => {
   const draw = async (openConn: string) => {
     render(
       <MessagesLiveProvider laneId="PKG" expectLists>
-        <ChatListLive laneId="PKG" initialRows={[row(A, SHARED, "Shared chat"), row(B, SHARED, "Shared chat")]} moreCursor={null} selectedKey={SHARED} selectedConn={openConn} initialListed={[A]} />
+        <ChatList laneId="PKG" initialRows={[row(A, SHARED, "Shared chat"), row(B, SHARED, "Shared chat")]} moreCursor={null} selectedKey={SHARED} selectedConn={openConn} initialListed={[A]} />
         <ConversationMessages conn={openConn} laneId="PKG" chatKey={SHARED} initial={[msg("m1", "2026-11-23T14:00:00.000Z")]} nextBefore={null} group />
       </MessagesLiveProvider>,
     );
@@ -228,7 +244,7 @@ describe("live: a notice of ONE account (test 32)", () => {
   it("M3: 'Try again' on an account's line reads just that account (`chats?conn=`); a busy account is not asked before the seconds it was given; Refresh inside the first minute is not 'up to date' while a line is showing", async () => {
     render(
       <MessagesLiveProvider laneId="PKG" expectLists>
-        <ChatListLive laneId="PKG" initialRows={[row(A, SHARED, "Shared chat")]} moreCursor={null} selectedKey={null} initialListed={[A]}
+        <ChatList laneId="PKG" initialRows={[row(A, SHARED, "Shared chat")]} moreCursor={null} selectedKey={null} initialListed={[A]}
           initialNotes={[{ conn: B, label: "pub-k.org", kind: "busy", seconds: 7 }]} />
       </MessagesLiveProvider>,
     );
@@ -250,7 +266,7 @@ describe("live: a notice of ONE account (test 32)", () => {
   it("M3: Refresh pressed inside the first minute, while an account's line is showing, reads every account at once and never says 'Already up to date'", async () => {
     render(
       <MessagesLiveProvider laneId="PKG" expectLists>
-        <ChatListLive laneId="PKG" initialRows={[row(A, SHARED, "Shared chat")]} moreCursor={null} selectedKey={null} initialListed={[A]}
+        <ChatList laneId="PKG" initialRows={[row(A, SHARED, "Shared chat")]} moreCursor={null} selectedKey={null} initialListed={[A]}
           initialNotes={[{ conn: B, label: "pub-k.org", kind: "unreachable", seconds: null }]} />
       </MessagesLiveProvider>,
     );

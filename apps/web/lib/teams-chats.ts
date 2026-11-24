@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 // Messages: the chat list and a conversation as the page draws them (T-283, T-284; spec 8.1, 11, 13). Server-only reads, ONE request each:
 //   - the chat list: Graph (through `@nichols/connectors/teams-reader`: the guard, the owner check, fixed templates) and the portal's own read markers (the person's own lane client), started TOGETHER;
 //   - a conversation: the chat, its members and its newest messages, started together.
@@ -71,6 +72,12 @@ export type MessageView = {
   fullTime: string;
   day: string;
   sender: string | null;
+  /**
+   * An opaque grouping key (T-297 review L1): messages are grouped by it, never by the display name. The first 16 hex characters of SHA-256 over (the conversation's id, the sender's id and kind), made on the
+   * server: scoped to the conversation, the same for the same sender on every page (older / newer pages group at the seam), and NOT the sender's directory id (that never reaches the browser). Null: the
+   * sender has no id, so the message is never grouped.
+   */
+  senderKey?: string | null;
   mine: boolean;
   edited: boolean;
   deleted: boolean;
@@ -270,7 +277,13 @@ export function chatImagesBase(laneId: string, chatKey: string, messageId: strin
   return isMessageId(messageId) && decodeChatKey(chatKey) !== null && isConnId(conn) ? `/api/lanes/${encodeURIComponent(laneId)}/messages/image?chat=${encodeURIComponent(chatKey)}&conn=${encodeURIComponent(conn)}&message=${encodeURIComponent(messageId)}` : null;
 }
 
-export function messageView(m: ChatMessage, images: string | null = null): MessageView {
+/** The grouping key of a sender within one conversation (see MessageView.senderKey). Null without a sender id. */
+export function senderKeyOf(scope: string, sender: { id: string | null; kind: string }): string | null {
+  return sender.id === null || sender.id === "" ? null : createHash("sha256").update(`${scope}\u0000${sender.id}\u0000${sender.kind}`).digest("hex").slice(0, 16);
+}
+
+/** `scope`: the id of the chat (or channel thread) the message belongs to; it only scopes the grouping key. */
+export function messageView(m: ChatMessage, images: string | null = null, scope = ""): MessageView {
   return {
     id: m.id,
     images,
@@ -280,6 +293,7 @@ export function messageView(m: ChatMessage, images: string | null = null): Messa
     fullTime: fullTime(m.createdAt),
     day: dayKey(m.createdAt),
     sender: m.sender.name,
+    senderKey: senderKeyOf(scope, m.sender),
     mine: m.mine,
     edited: m.edited,
     deleted: m.deleted,
@@ -305,7 +319,7 @@ export async function loadConversation(p: TeamsPerson, chatId: string, chatKey: 
     else if (!policy.laneListsCalls) call = "off_lane";
     else if (!policy.connectionHasCalls) call = "needs_reconnect";
     // Events that are not a person's message are not drawn (C4) but still count: the newest item of any kind is what opening the chat marks as read
-    const messages = [...page.messages].filter((m) => !m.system).reverse().map((m) => messageView(m, chatImagesBase(p.laneId, chatKey, m.id, p.connectionId)));
+    const messages = [...page.messages].filter((m) => !m.system).reverse().map((m) => messageView(m, chatImagesBase(p.laneId, chatKey, m.id, p.connectionId), chatId));
     const newestAny = page.messages.reduce<string | null>((a, m) => (a === null || m.createdAt > a ? m.createdAt : a), null);
     return {
       kind: "ok",
@@ -333,7 +347,7 @@ export async function loadOlder(p: Omit<TeamsPerson, "client">, chatId: string, 
   try {
     const page = await listMessages(p.laneId as LaneId, p.connectionId, p.userId, chatId, { before });
     const key = encodeChatKey(chatId);
-    return { kind: "ok", messages: [...page.messages].filter((m) => !m.system).reverse().map((m) => messageView(m, chatImagesBase(p.laneId, key, m.id, p.connectionId))), nextBefore: page.nextBefore };
+    return { kind: "ok", messages: [...page.messages].filter((m) => !m.system).reverse().map((m) => messageView(m, chatImagesBase(p.laneId, key, m.id, p.connectionId), chatId)), nextBefore: page.nextBefore };
   } catch (e) {
     return teamsFailure(e);
   }
@@ -348,7 +362,7 @@ export async function loadNewer(p: Omit<TeamsPerson, "client">, chatId: string, 
   try {
     const page = await listMessages(p.laneId as LaneId, p.connectionId, p.userId, chatId, { sinceModified: since });
     const key = encodeChatKey(chatId);
-    return { kind: "ok", messages: [...page.messages].filter((m) => !m.system).reverse().map((m) => messageView(m, chatImagesBase(p.laneId, key, m.id, p.connectionId))), truncated: page.truncated === true };
+    return { kind: "ok", messages: [...page.messages].filter((m) => !m.system).reverse().map((m) => messageView(m, chatImagesBase(p.laneId, key, m.id, p.connectionId), chatId)), truncated: page.truncated === true };
   } catch (e) {
     return teamsFailure(e);
   }

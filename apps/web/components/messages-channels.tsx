@@ -352,7 +352,7 @@ export function ThreadPane({
     </header>
   );
   const shell = (body: ReactNode) => (
-    <section aria-label="Channel posts" data-testid="conversation" className="flex h-[calc(100dvh-8.5rem)] min-h-[22rem] min-w-0 flex-col overflow-hidden rounded-card border border-border bg-card lg:h-auto lg:min-h-0 lg:flex-1">
+    <section aria-label="Channel posts" data-testid="conversation" className="flex h-[var(--pane-h,calc(100dvh-8.5rem))] min-h-[16rem] min-w-0 flex-col overflow-hidden rounded-card border border-border bg-card lg:h-auto lg:min-h-0 lg:flex-1">
       {header}
       <div tabIndex={0} role="region" aria-label="Posts in this channel" data-testid="conversation-scroll" className="flex min-h-0 flex-1 flex-col gap-3 overflow-y-auto overscroll-contain px-3 py-3 sm:px-4">
         {body}

@@ -12,7 +12,7 @@ vi.mock("next/navigation", () => ({ useRouter: () => ({ refresh: nav.refresh }),
 
 import { ConversationPane } from "./messages-chats";
 import { MessagesScreen } from "./messages-page";
-import { groupMessages, GROUP_GAP_MS } from "./messages-view";
+import { groupMessages, GROUP_GAP_MS, GROUP_SPAN_MS } from "./messages-view";
 import { htmlToNodes } from "@nichols/connectors/teams-pure";
 import { clockTime, dayKey, fullTime } from "@/lib/teams-format";
 import { encodeChatKey } from "@/lib/teams-chat-key";
@@ -31,7 +31,7 @@ const at = (w: number) => {
 const CONN = "00000000-0000-4000-8000-0000000000c1";
 const CHAT = "19:abc123def456@thread.v2";
 const KEY = encodeChatKey(CHAT);
-const msg = (id: string, iso: string, over: Partial<MessageView> = {}): MessageView => ({ id, images: null, at: iso, time: clockTime(iso), fullTime: fullTime(iso), day: dayKey(iso), sender: "Pat Example", mine: false, edited: false, deleted: false, system: false, nodes: [{ t: "text", v: `text ${id}` }], truncated: false, attachments: [], ...over });
+const msg = (id: string, iso: string, over: Partial<MessageView> = {}): MessageView => ({ id, images: null, at: iso, time: clockTime(iso), fullTime: fullTime(iso), day: dayKey(iso), sender: "Pat Example", senderKey: "k-pat", mine: false, edited: false, deleted: false, system: false, nodes: [{ t: "text", v: `text ${id}` }], truncated: false, attachments: [], ...over });
 const conv = (messages: MessageView[], over: Partial<Extract<ConversationView, { kind: "ok" }>> = {}): ConversationView => ({
   kind: "ok", chatKey: KEY, conn: CONN, account: null, accountName: null, title: "Project chat", subtitle: "2 people", external: false, group: false, openUrl: `https://teams.microsoft.com/l/chat/${CHAT}/conversations`, call: "available",
   messages, nextBefore: null, readThrough: null, ...over,
@@ -48,9 +48,22 @@ describe("groupMessages (pure)", () => {
 
   it("a gap over five minutes, another sender, the other side, or a Teams event starts a new group", () => {
     expect(g([msg("a", T(15, 0)), msg("b", T(15, 5, 23).replace(":00.000Z", ":01.000Z"))])).toEqual(["day 2026-11-23", "group a", "group b"]);
-    expect(g([msg("a", T(15, 0)), msg("b", T(15, 1), { sender: "Sam Example" })])).toEqual(["day 2026-11-23", "group a", "group b"]);
+    expect(g([msg("a", T(15, 0)), msg("b", T(15, 1), { sender: "Sam Example", senderKey: "k-sam" })])).toEqual(["day 2026-11-23", "group a", "group b"]);
     expect(g([msg("a", T(15, 0)), msg("b", T(15, 1), { mine: true })])).toEqual(["day 2026-11-23", "group a", "group b"]);
     expect(g([msg("a", T(15, 0)), msg("b", T(15, 1), { system: true }), msg("c", T(15, 2))])).toEqual(["day 2026-11-23", "group a", "group b", "group c"]);
+  });
+
+  it("L1: grouped by sender ID, never by display name: two people with one name, or a sender with no ID, are never one group; a deleted note and a Teams event always stand alone", () => {
+    expect(g([msg("a", T(15, 0)), msg("b", T(15, 1), { senderKey: "k-other" })])).toEqual(["day 2026-11-23", "group a", "group b"]); // same name "Pat Example", different people
+    expect(g([msg("a", T(15, 0), { senderKey: null }), msg("b", T(15, 1), { senderKey: null })])).toEqual(["day 2026-11-23", "group a", "group b"]);
+    expect(g([{ ...msg("a", T(15, 0)), senderKey: undefined }, { ...msg("b", T(15, 1)), senderKey: undefined }])).toEqual(["day 2026-11-23", "group a", "group b"]);
+    expect(g([msg("a", T(15, 0)), msg("b", T(15, 1), { deleted: true, nodes: [] }), msg("c", T(15, 2))])).toEqual(["day 2026-11-23", "group a", "group b", "group c"]);
+  });
+
+  it("L4: a group spans at most 15 minutes from its first message, even when every gap is under five", () => {
+    const steady = [0, 4, 8, 12, 16, 20].map((m) => msg(`m${m}`, T(15, m)));
+    expect(g(steady)).toEqual(["day 2026-11-23", "group m0+m4+m8+m12", "group m16+m20"]);
+    expect(GROUP_SPAN_MS).toBe(900_000);
   });
 
   it("a day change (New York time) separates groups even a minute apart; a time that does not parse never joins; an older page keeps its day", () => {
@@ -99,12 +112,36 @@ describe.each(WIDTHS)("the conversation pane at %ipx", (width) => {
   });
 
   it("group chat: the sender is named once per group, not on my own messages; a second sender is a second group", () => {
-    draw(conv([msg("m1", T(15, 0)), msg("m2", T(15, 1)), msg("m3", T(15, 2), { sender: "Sam Example" }), msg("m4", T(15, 3), { mine: true, sender: "Robert" })], { group: true, subtitle: "3 people, includes external people" }));
+    draw(conv([msg("m1", T(15, 0)), msg("m2", T(15, 1)), msg("m3", T(15, 2), { sender: "Sam Example", senderKey: "k-sam" }), msg("m4", T(15, 3), { mine: true, sender: "Robert", senderKey: "k-robert" })], { group: true, subtitle: "3 people, includes external people" }));
     expect(screen.getAllByTestId("group-sender").map((s) => s.textContent)).toEqual(["Pat Example", "Sam Example"]);
     expect(screen.getAllByTestId("message-group")).toHaveLength(3);
     // the sender comes BEFORE the group's messages in the document (reading order)
     const first = screen.getAllByTestId("message-group")[0] as HTMLElement;
     expect(first.firstElementChild?.getAttribute("data-testid")).toBe("group-sender");
+  });
+
+  it("L5: a screen reader hears the sender once per message in a group chat: the visible group line is hidden from it, each bubble's hidden text carries the name and time", () => {
+    draw(conv([msg("m1", T(15, 0)), msg("m2", T(15, 1))], { group: true, subtitle: "3 people" }));
+    const group = screen.getAllByTestId("message-group")[0] as HTMLElement;
+    expect(within(group).getByTestId("group-sender").getAttribute("aria-hidden")).toBe("true");
+    const clone = group.cloneNode(true) as HTMLElement;
+    clone.querySelectorAll("[aria-hidden=true]").forEach((e) => e.remove());
+    expect((clone.textContent ?? "").match(/Pat Example/g)).toHaveLength(2); // once for each of the two messages, not three times
+    expect(clone.textContent).toContain("Nov 23, 2026, 10:01 AM ET");
+  });
+
+  it("H1: the percentage cap of a bubble has a definite base all the way up: the group's list and every item are full width (alignment comes from items-start / items-end), up to the scrolling log", () => {
+    // source-level, because jsdom has no layout: a bubble in a shrink-to-fit parent resolves max-width: calc(100% - 1.5rem) against its OWN content and ends up narrower than its text
+    const view = readFileSync(join(__dirname, "messages-view.tsx"), "utf8");
+    const client = readFileSync(join(__dirname, "messages-client.tsx"), "utf8");
+    const bubble = readFileSync(join(__dirname, "messages-bubble.tsx"), "utf8");
+    expect(bubble).toMatch(/max-w-\[min\(calc\(100%-1\.5rem\),65ch\)\]/);
+    expect(view).toMatch(/<ul className=\{cn\("flex w-full min-w-0 flex-col gap-0\.5", g\.mine \? "items-end" : "items-start"\)\}>/);
+    expect(view).toMatch(/<li key=\{m\.id\} data-testid="message" data-mine=\{m\.mine \? "true" : "false"\} className=\{cn\("flex w-full min-w-0 flex-col", g\.mine \? "items-end" : "items-start"\)\}>/);
+    // the group item and the message list stretch (no items-* on the log or its list), so their width is the log's
+    expect(client).toMatch(/<ul className="flex flex-col gap-3" data-testid="message-list">/);
+    expect(client).toMatch(/role="log"[^>]*className="flex min-h-0 flex-1 flex-col gap-3 overflow-y-auto/);
+    expect(client).not.toMatch(/role="log"[^>]*items-/);
   });
 
   it("a long message: capped bubble (about 65 characters, never wider than the pane minus a margin), long words wrap, and the empty paragraphs Teams puts at the end are gone", () => {
@@ -173,10 +210,10 @@ describe.each(WIDTHS)("the conversation pane at %ipx", (width) => {
     expect(section.className).toContain("overflow-hidden");
     expect(section.className).toContain("lg:flex-1");
     expect(section.className).toContain("lg:min-h-0");
-    expect(section.className).toContain("h-[calc(100dvh-8.5rem)]"); // the phone: the screen minus the header band and the tab bar
+    expect(section.className).toContain("h-[var(--pane-h,calc(100dvh-8.5rem))]"); // the phone: measured by the scope (see messages-mounted.test.tsx), with the old calc as the fallback
     const slot = screen.getByTestId("composer-slot");
     expect(slot.className).toContain("shrink-0");
-    expect(slot.className).toContain("env(safe-area-inset-bottom)");
+    expect(slot.className).not.toContain("safe-area"); // never at the screen edge: on a phone the tab bar below the pane takes the inset
     const log = screen.getByRole("log");
     expect(log.className).toContain("flex-1");
     expect(log.className).toContain("min-h-0");
@@ -252,11 +289,11 @@ describe.each(WIDTHS)("the connection line at %ipx (T-297)", (width) => {
     expect(screen.getByTestId("messages-feature-missing")).toBeTruthy();
   });
 
-  it("with a chat open the row is hidden on a phone only (it stays on a wide window)", () => {
+  it("the row is hidden on a phone (only) while a chat or channel is open: the class reads the scope's data-open", () => {
     at(width);
-    render(<MessagesScreen laneId="PKG" state={connected()} chatOpen />);
-    const row = screen.getByTestId("messages-connection-row");
-    expect(row.className).toContain("hidden lg:flex");
+    render(<MessagesScreen laneId="PKG" state={connected()} />);
+    expect(screen.getByTestId("messages-connection-row").className).toContain("group-data-[open=true]/messages:max-lg:hidden");
+    expect(screen.getByTestId("messages-connection-row").className).not.toContain("hidden lg:flex");
   });
 });
 
@@ -315,7 +352,8 @@ describe("the page fills the window and each pane scrolls on its own (T-297; cla
 
   it("on a wide window the page is exactly the window's height (so the page itself does not scroll); the list column and the conversation column each take the rest and scroll alone", async () => {
     const { shell, frame } = await all();
-    expect(shell.some((c) => c.includes("lg:h-[calc(100dvh-4rem)]"))).toBe(true);
+    expect(shell.some((c) => c.includes("lg:h-[calc(100dvh-4rem)]") && c.includes("lg:min-h-[44rem]"))).toBe(true); // M4: a short window scrolls the page instead of squeezing the panes
+    expect(frame.some((c) => c.includes("lg:min-h-[24rem]"))).toBe(true);
     expect(frame.some((c) => c.includes("lg:flex-1") && c.includes("lg:grid-rows-[minmax(0,1fr)]") && c.includes("min-h-0"))).toBe(true);
     expect(frame.some((c) => c.includes("lg:overflow-y-auto"))).toBe(true); // the list column
   });

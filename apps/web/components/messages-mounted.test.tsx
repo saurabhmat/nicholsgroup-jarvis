@@ -5,8 +5,8 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { act, cleanup, render, screen } from "@testing-library/react";
 
-const nav = vi.hoisted(() => ({ search: "" }));
-vi.mock("next/navigation", () => ({ useRouter: () => ({ refresh: vi.fn() }), usePathname: () => "/PKG/messages", useSearchParams: () => new URLSearchParams(nav.search) }));
+const nav = vi.hoisted(() => ({ search: "", refresh: vi.fn() }));
+vi.mock("next/navigation", () => ({ useRouter: () => ({ refresh: nav.refresh }), usePathname: () => "/PKG/messages", useSearchParams: () => new URLSearchParams(nav.search) }));
 
 import { ChatListLive, MessagesLiveProvider } from "./messages-live";
 import { ByTab, MessagesScope } from "./messages-scope";
@@ -36,6 +36,12 @@ describe("viewOf: what the address says (pure)", () => {
     expect(viewOf(q(""), conns)).toMatchObject({ view: "list", open: false, chatKey: null, conn: null });
     // two accounts and no conn: no guess; another person's / uppercase / malformed conn: nothing opens, nothing falls back
     for (const bad of [`chat=${K1}`, `conn=${OTHER}&chat=${K1}`, `conn=${A.toUpperCase()}&chat=${K1}`, `conn=../x&chat=${K1}`, `conn=${B}&chat=not-a-key`, `conn=${B}&chat=../../etc`]) expect(viewOf(q(bad), conns).view, bad).toBe("list");
+  });
+  it("M1: a `conn` that is not one of the person's own usable accounts is never handed on (the list would send it as `open=` and be refused)", () => {
+    expect(viewOf(q(`conn=${OTHER}&chat=${K1}`), conns).conn).toBeNull();
+    expect(viewOf(q(`conn=${A.toUpperCase()}&chat=${K1}`), conns).conn).toBeNull();
+    expect(viewOf(q(`conn=${B}&chat=${K1}`), conns).conn).toBe(B);
+    expect(viewOf(q(`conn=${OTHER}&chat=${K1}`), conns).open).toBe(false);
   });
   it("with exactly one usable account an old link without conn still opens", () => {
     expect(viewOf(q(`chat=${K1}`), [A])).toMatchObject({ view: "chat", open: true, conn: null });
@@ -143,6 +149,48 @@ describe("the mounted chat list", () => {
     expect(chatReads()).toEqual([]); // THREE clicks, ZERO list reads
   });
 
+  it.each([
+    ["a stale or foreign conn", `conn=${OTHER}&chat=${K1}`],
+    ["two accounts and no conn", `chat=${K1}`],
+  ])("M1 / L2, %s: not 'the open chat': no `chat` / `open` on a re-read, no dot cleared, no highlight", async (_n, search) => {
+    nav.search = search;
+    render(tree());
+    await tick(0);
+    expect(dots()).toEqual(["true", "true", "true"]);
+    expect(current()).toEqual([null, null, null]);
+    calls.urls = [];
+    notices[B] = "2026-11-23T15:00:20.000Z";
+    await tick(ACTIVITY_POLL_MS);
+    const reads = chatReads();
+    expect(reads.length).toBeGreaterThan(0);
+    for (const u of reads) expect(u).not.toMatch(/[?&](open|chat)=/);
+  });
+
+  it("L3: a re-read the server refuses as a whole (401, 403, 404) draws the layout again ONCE with the server's state; a second refusal does not loop", async () => {
+    nav.search = "";
+    nav.refresh.mockClear();
+    const real = fetchMock.getMockImplementation() as (u: string, i?: RequestInit) => Promise<Response>;
+    fetchMock.mockImplementation((u: string, i?: RequestInit) => {
+      if (!String(u).includes("/messages/chats")) return real(u, i);
+      calls.urls.push(`GET ${String(u)}`);
+      return Promise.resolve(new Response("{}", { status: 404 }));
+    });
+    try {
+    render(tree());
+    await tick(0);
+    notices[B] = "2026-11-23T15:00:20.000Z";
+    await tick(ACTIVITY_POLL_MS);
+    expect(chatReads()).toHaveLength(1);
+    expect(nav.refresh).toHaveBeenCalledTimes(1);
+    notices[B] = "2026-11-23T15:01:20.000Z";
+    await tick(ACTIVITY_POLL_MS);
+    expect(chatReads()).toHaveLength(2);
+    expect(nav.refresh).toHaveBeenCalledTimes(1); // guarded
+    } finally {
+      fetchMock.mockImplementation(real);
+    }
+  });
+
   it("a notice of one account while a chat is open re-reads that account's list through the route (with the open chat), and the rows it brings carry the markers", async () => {
     nav.search = `conn=${A}&chat=${K1}`;
     render(tree());
@@ -180,5 +228,47 @@ describe("the mounted chat list", () => {
     rerender(tree());
     await tick(0);
     expect(chatReads()).toEqual([]);
+  });
+});
+
+describe("the phone pane's height is measured from the real chrome (T-297 review M2)", () => {
+  afterEach(() => {
+    cleanup();
+    vi.unstubAllGlobals();
+    document.querySelectorAll('[data-slot="tab-bar"]').forEach((e) => e.remove());
+  });
+  const rect = (top: number, height: number) => ({ top, height, bottom: top + height, left: 0, right: 0, width: 0, x: 0, y: top, toJSON: () => ({}) }) as DOMRect;
+  it("--pane-h = window height - tab bar height - the right column's distance from the top of the page, so the pane ends exactly above the tab bar", () => {
+    nav.search = `conn=${A}&chat=${K1}`;
+    const bar = document.createElement("nav");
+    bar.setAttribute("data-slot", "tab-bar");
+    bar.getBoundingClientRect = () => rect(0, 64);
+    document.body.appendChild(bar);
+    vi.stubGlobal("matchMedia", () => ({ matches: false }));
+    Object.defineProperty(window, "innerHeight", { configurable: true, value: 800 });
+    Object.defineProperty(window, "scrollY", { configurable: true, value: 0 });
+    const orig = HTMLElement.prototype.getBoundingClientRect;
+    HTMLElement.prototype.getBoundingClientRect = function () {
+      return this.getAttribute("data-testid") === "messages-right" ? rect(210, 500) : orig.call(this);
+    };
+    try {
+      render(
+        <MessagesScope chatConns={[A]}>
+          <div data-testid="messages-right" />
+        </MessagesScope>,
+      );
+      expect(screen.getByTestId("messages-scope").style.getPropertyValue("--pane-h")).toBe("526px"); // 800 - 64 - 210
+    } finally {
+      HTMLElement.prototype.getBoundingClientRect = orig;
+    }
+  });
+  it("on a wide window the variable is not set (the panes are sized by the flex chain)", () => {
+    vi.stubGlobal("matchMedia", () => ({ matches: true }));
+    render(
+      <MessagesScope chatConns={[A]}>
+        <div data-testid="messages-right" />
+      </MessagesScope>,
+    );
+    expect(screen.getByTestId("messages-scope").style.getPropertyValue("--pane-h")).toBe("");
   });
 });

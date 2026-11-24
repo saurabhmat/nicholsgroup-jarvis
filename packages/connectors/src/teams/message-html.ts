@@ -9,7 +9,7 @@
 // is read by the strict hosted-content parser alone (it returns an id or nothing; the address itself is dropped). Event handlers, styles, classes and `javascript:`/`data:` URLs are never read.
 // Text has bidirectional overrides, zero-width spaces and control characters removed, so a message cannot reorder or hide what the person reads. Bounded: ONE linear pass (open elements are counted per tag, so no close tag and no link walks the stack; at most MAX_STACK open elements; input read up to MAX_INPUT_CHARS), at most MAX_NODES
 // nodes, nesting capped at MAX_DEPTH, and the text cut at MAX_TEXT_CHARS (the cut is reported, never silent). The converter never throws on input and never builds a message from content.
-// T-297: the output is tidied (see `tidy`): empty containers go, leading and trailing blank lines are trimmed, and a run of line breaks or blank paragraphs inside a message is ONE line break.
+// T-297: the output is tidied (see `tidyList`): leading and trailing blank lines are trimmed, a run of two or more breaks or blank paragraphs inside a message is ONE blank line, a blank inline element is a word space, list items and code blocks keep their shape.
 
 import { hostedRefFromSrc, type HostedScope } from "./hosted-content";
 
@@ -421,31 +421,62 @@ export function cutUnits(s: string, max: number): string {
   return s.slice(0, end);
 }
 
-/** Whitespace-only text (a Teams "empty line" is often `<p>&nbsp;</p>`, which decodes to a space). */
-const isBlankText = (n: MessageNode): boolean => n.t === "text" && n.v.trim() === "";
-/** A node that draws as empty space: a line break or whitespace-only text. */
-const isGap = (n: MessageNode): boolean => n.t === "br" || isBlankText(n);
+// ---- tidying the output (T-297, spec 8.4)
+// A node that draws as empty space: a line break, whitespace-only text (a Teams "empty line" is often `<p>&nbsp;</p>`), or the internal marker of a blank block.
+const BLANK: MessageNode = { t: "p", c: [] }; // internal marker only: never part of the output (it is turned into line breaks or dropped before `tidy` returns)
+const isGap = (n: MessageNode): boolean => n === BLANK || n.t === "br" || (n.t === "text" && n.v.trim() === "");
+const BLOCK_KINDS = new Set<MessageNode["t"]>(["p", "quote", "codeblock", "ul", "ol", "li"]);
+const INLINE_BOXES = new Set<MessageNode["t"]>(["b", "i", "u", "s", "code"]);
+
+type Tidied = { out: MessageNode[]; /** Some whitespace-only text was inside (it was a word space, not nothing). */ space: boolean };
 
 /**
- * Tidies a node list (T-297, spec 8.4). Pure and LINEAR: every node is visited once, children first (the nesting is capped at MAX_DEPTH by the builder, so the recursion is shallow).
- *   - a container left with no content is dropped (an empty paragraph, `<p><br></p>`, `<p>&nbsp;</p>`), a link keeps its host;
- *   - leading and trailing gaps (line breaks, whitespace-only text) are trimmed at every level, so a message does not start or end with blank lines;
- *   - a run of gaps in the middle that holds a line break collapses to ONE line break; a lone whitespace-only text between two inline nodes is a word space and stays.
- * Nothing else is merged or reordered, and nothing is added that was not in the input.
+ * Tidies a node list. Pure and LINEAR: every node is visited once, children first (nesting is capped at MAX_DEPTH by the builder, so the recursion is shallow). Nothing is added that was not in the
+ * input and the number of nodes never grows.
+ *   - leading and trailing gaps (breaks, blank text, blank blocks) are trimmed at every level;
+ *   - in the middle, one break stays one break, a blank block between two runs is one break, and a run of TWO OR MORE breaks and blank blocks becomes exactly ONE blank line (two breaks after text,
+ *     one after a block, which already ends its line);
+ *   - a whitespace-only inline element (`pay<b> </b>here`) is one space, so words are never joined; a lone whitespace text between inline nodes is a space too;
+ *   - list items are never dropped (the numbering stays);
+ *   - inside a code block nothing is collapsed or trimmed except the leading and trailing blank lines of the whole block.
  */
-function tidy(nodes: MessageNode[]): MessageNode[] {
+function tidyList(nodes: MessageNode[], mode: "none" | "block" | "inside"): Tidied {
+  const inCode = mode !== "none"; // "block": the code block's own children; "inside": deeper (nothing at all is trimmed)
   const kept: MessageNode[] = [];
+  let space = false;
   for (const n of nodes) {
-    if ("c" in n) {
-      const c = tidy(n.c);
-      if (c.length === 0 && n.t !== "link") continue;
-      kept.push({ ...n, c } as MessageNode);
-    } else kept.push(n);
+    if (n.t === "text" && n.v.trim() === "") space = true;
+    if (!("c" in n)) {
+      kept.push(n);
+      continue;
+    }
+    const r = tidyList(n.c, n.t === "codeblock" ? "block" : inCode ? "inside" : "none");
+    if (r.space) space = true;
+    if (r.out.length > 0 || n.t === "link") {
+      kept.push({ ...n, c: r.out } as MessageNode);
+      continue;
+    }
+    if (n.t === "li") kept.push({ t: "li", c: [] });
+    else if (inCode) continue;
+    else if (INLINE_BOXES.has(n.t)) {
+      if (r.space) kept.push({ t: "text", v: " " });
+    } else kept.push(BLANK);
   }
   let start = 0;
   let end = kept.length;
-  while (start < end && isGap(kept[start] as MessageNode)) start += 1;
-  while (end > start && isGap(kept[end - 1] as MessageNode)) end -= 1;
+  if (mode !== "inside") {
+    while (start < end && isGap(kept[start] as MessageNode)) start += 1;
+    while (end > start && isGap(kept[end - 1] as MessageNode)) end -= 1;
+  }
+  if (inCode) {
+    // a code block keeps every space and line inside; only the blank lines around the whole block go
+    const out = kept.slice(start, end).filter((n) => n !== BLANK);
+    const first = out[0];
+    if (mode === "block" && first?.t === "text") out[0] = { t: "text", v: first.v.replace(/^(?:[ \t]*\r?\n)+/, "") };
+    const last = out[out.length - 1];
+    if (mode === "block" && last?.t === "text") out[out.length - 1] = { t: "text", v: last.v.replace(/(?:\r?\n[ \t]*)+$/, "") };
+    return { out: out.filter((n) => n.t !== "text" || n.v !== ""), space };
+  }
   const out: MessageNode[] = [];
   let i = start;
   while (i < end) {
@@ -456,16 +487,26 @@ function tidy(nodes: MessageNode[]): MessageNode[] {
       continue;
     }
     let j = i;
-    let hasBreak = false;
+    let lines = 0;
+    let firstSpace: MessageNode | null = null;
     while (j < end && isGap(kept[j] as MessageNode)) {
-      if ((kept[j] as MessageNode).t === "br") hasBreak = true;
+      const g = kept[j] as MessageNode;
+      if (g.t === "br" || g === BLANK) lines += 1;
+      else if (firstSpace === null) firstSpace = g;
       j += 1;
     }
-    out.push(hasBreak ? { t: "br" } : n); // a break inside the run wins; a run of spaces is its first space
+    if (lines === 0) out.push(firstSpace as MessageNode); // a word space
+    else if (lines === 1) out.push({ t: "br" });
+    else {
+      out.push({ t: "br" });
+      if (!BLOCK_KINDS.has((out[out.length - 2] as MessageNode).t)) out.push({ t: "br" }); // after text two breaks make one empty line; after a block one does
+    }
     i = j;
   }
-  return out;
+  return { out, space };
 }
+
+const tidy = (nodes: MessageNode[]): MessageNode[] => tidyList(nodes, "none").out;
 
 /** A plain-text body (contentType `text`): lines become breaks. Same character cleaning and the same bound. */
 export function textToNodes(text: string): ConvertedMessage {

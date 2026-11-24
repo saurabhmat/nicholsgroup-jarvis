@@ -343,12 +343,12 @@ describe("the phone layout: the list, then the conversation (never both); deskto
     layout(true);
     expect(screen.getByTestId("chat-list-pane").className).toContain("hidden lg:block");
     expect(screen.getByTestId("conversation-pane").className).not.toContain("hidden");
-    expect(screen.getByTestId("messages-workspace").getAttribute("data-selected")).toBe("true");
+    expect(screen.getByTestId("channels-workspace").getAttribute("data-selected")).toBe("true");
   });
 
   it("no horizontal page scroll: every pane can shrink (min-w-0), long words wrap, the grid is one column below lg", () => {
     layout(true);
-    const grid = screen.getByTestId("messages-workspace");
+    const grid = screen.getByTestId("channels-workspace");
     expect(grid.className).toContain("min-w-0");
     expect(grid.className).toContain("lg:grid-cols-");
     expect(grid.className).not.toMatch(/(^| )grid-cols-/); // single column until lg
@@ -388,7 +388,7 @@ describe("T-281 review follow-ups (view)", () => {
     render(<ConversationPane view={conv()} laneId="PKG" connectionId={CONN} />);
     expect(screen.getByTestId("conversation-title").getAttribute("tabindex")).toBe("-1");
     for (const s of screen.getAllByRole("separator")) expect(s.tagName).not.toBe("LI");
-    expect(screen.getByTestId("conversation").className).toContain("h-[calc(100dvh-8.5rem)]");
+    expect(screen.getByTestId("conversation").className).toContain("h-[var(--pane-h,calc(100dvh-8.5rem))]");
   });
 
   it("C7i: an image-only message is the placeholder, not '(no text)'", () => {

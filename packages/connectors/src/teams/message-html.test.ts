@@ -346,7 +346,7 @@ describe("T-297: empty blocks are trimmed and runs of blank lines collapse (spec
   const text = (v: string): MessageNode => ({ t: "text", v });
 
   it("a message that is only empty paragraphs, only line breaks, only whitespace or only nested empty blocks has no nodes", () => {
-    for (const html of ["<p></p><p></p><p></p>", "<p><br></p><p><br></p>", "<br><br><br>", "<br/>   <br/>", "   ", "&nbsp;", "<p>&nbsp;</p><p>&nbsp;</p>", "<div><div><p><b> </b></p></div></div>", "<p><span> </span><i></i></p>", "<blockquote><p>&nbsp;</p></blockquote>", "<ul><li></li><li><br></li></ul>"]) {
+    for (const html of ["<p></p><p></p><p></p>", "<p><br></p><p><br></p>", "<br><br><br>", "<br/>   <br/>", "   ", "&nbsp;", "<p>&nbsp;</p><p>&nbsp;</p>", "<div><div><p><b> </b></p></div></div>", "<p><span> </span><i></i></p>", "<blockquote><p>&nbsp;</p></blockquote>", "<ul></ul>", "<ul> </ul>"]) {
       expect(shape(html), html).toEqual([]);
     }
   });
@@ -358,11 +358,33 @@ describe("T-297: empty blocks are trimmed and runs of blank lines collapse (spec
     expect(shape("<p>a</p><p>b</p><p>&nbsp;</p><p>&nbsp;</p><p>&nbsp;</p>")).toEqual([p(text("a")), p(text("b"))]);
   });
 
-  it("a run of line breaks (or breaks and blank text) in the middle becomes ONE line break; a word space between inline nodes stays", () => {
-    expect(shape("a<br><br><br><br>b")).toEqual([text("a"), { t: "br" }, text("b")]);
-    expect(shape("a<br> <br> <br>b")).toEqual([text("a"), { t: "br" }, text("b")]);
+  it("a run of two or more line breaks (or breaks and blank text) in the middle becomes exactly ONE blank line (two breaks); a single break stays a single break; a word space between inline nodes stays", () => {
+    expect(shape("a<br><br><br><br>b")).toEqual([text("a"), { t: "br" }, { t: "br" }, text("b")]);
+    expect(shape("a<br> <br> <br>b")).toEqual([text("a"), { t: "br" }, { t: "br" }, text("b")]);
+    expect(shape("a<br>b")).toEqual([text("a"), { t: "br" }, text("b")]);
     expect(shape("<b>x</b> <i>y</i>")).toEqual([{ t: "b", c: [text("x")] }, text(" "), { t: "i", c: [text("y")] }]);
-    expect(shape("<p>one</p><p><br></p><p><br></p><p>two</p>")).toEqual([p(text("one")), p(text("two"))]);
+    // blank paragraphs: ONE between two paragraphs is the person's blank line (one break after a block); two or more are still ONE blank line
+    expect(shape("<p>one</p><p>&nbsp;</p><p>two</p>")).toEqual([p(text("one")), { t: "br" }, p(text("two"))]);
+    expect(shape("<p>one</p><p><br></p><p><br></p><p>&nbsp;</p><p>two</p>")).toEqual([p(text("one")), { t: "br" }, p(text("two"))]);
+  });
+
+  it("a whitespace-only inline element between two words is one space (words are never joined); a blank block between two inline runs is one break", () => {
+    expect(shape("pay<b> </b>here")).toEqual([text("pay"), text(" "), text("here")]);
+    expect(allText(shape("pay<b><i> </i></b>here"))).toBe("pay here");
+    expect(allText(shape("pay<b></b>here"))).toBe("payhere"); // nothing was there: nothing is added
+    expect(shape("a<p></p>b")).toEqual([text("a"), { t: "br" }, text("b")]);
+    expect(shape("a<p>&nbsp;</p><p><br></p>b")).toEqual([text("a"), { t: "br" }, { t: "br" }, text("b")]);
+  });
+
+  it("list items are never dropped, so numbering stays", () => {
+    expect(shape("<ol><li>one</li><li></li><li><br></li><li>four</li></ol>")).toEqual([{ t: "ol", c: [{ t: "li", c: [text("one")] }, { t: "li", c: [] }, { t: "li", c: [] }, { t: "li", c: [text("four")] }] }]);
+    expect(shape("<ul><li></li></ul>")).toEqual([{ t: "ul", c: [{ t: "li", c: [] }] }]);
+  });
+
+  it("inside a code block nothing is collapsed or trimmed except the blank lines around the whole block", () => {
+    expect(shape("<pre>\n\n  indented\n\n\n    more   \n \n</pre>")).toEqual([{ t: "codeblock", c: [text("  indented\n\n\n    more   ")] }]);
+    expect(shape("<pre>a<br><br><br>b<code> </code>c</pre>")).toEqual([{ t: "codeblock", c: [text("a"), { t: "br" }, { t: "br" }, { t: "br" }, text("b"), { t: "code", c: [text(" ")] }, text("c")] }]);
+    expect(shape("<pre> </pre>")).toEqual([]);
   });
 
   it("a break one author wrote on purpose between two words still shows, once", () => {
@@ -397,6 +419,8 @@ describe("T-297: empty blocks are trimmed and runs of blank lines collapse (spec
     expect(maxDepth).toBeLessThanOrEqual(MAX_DEPTH);
     const deepEmpty = "<div>".repeat(5_000) + "<br>&nbsp;" + "</div>".repeat(5_000);
     expect(shape(deepEmpty)).toEqual([]);
+    const chain = "pay" + "<b><i><u><s>".repeat(3) + " " + "</s></u></i></b>".repeat(3) + "here";
+    expect(allText(shape(chain))).toBe("pay here");
   });
 
   it("stays linear: a megabyte-class run of blanks and 100 KB of alternating blocks and breaks, best of three under 400 ms; every cap still holds", () => {
@@ -418,8 +442,8 @@ describe("T-297: empty blocks are trimmed and runs of blank lines collapse (spec
     expect(htmlToNodes("<b>a</b>".repeat(MAX_NODES + 10)).truncated).toBe(true);
   });
 
-  it("plain-text bodies are tidied the same way: blank lines at the ends go, a run in the middle is one break", () => {
-    expect(textToNodes("\n\nhello\n\n\n\nworld\n\n  \n").nodes).toEqual([text("hello"), { t: "br" }, text("world")]);
+  it("plain-text bodies are tidied the same way: blank lines at the ends go, a run in the middle is one blank line", () => {
+    expect(textToNodes("\n\nhello\n\n\n\nworld\n\n  \n").nodes).toEqual([text("hello"), { t: "br" }, { t: "br" }, text("world")]);
     expect(textToNodes("   \n \n").nodes).toEqual([]);
     expect(bodyToNodes("html", "<p>&nbsp;</p>")).toEqual({ nodes: [], truncated: false });
   });

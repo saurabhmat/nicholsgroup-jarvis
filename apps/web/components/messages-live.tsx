@@ -9,6 +9,7 @@
 //
 // Parts: `MessagesLiveProvider` owns the loop and the bounds and hands a `version` down; `ChatListLive` and `ConversationMessages` (messages-client.tsx) re-read on a new `version` only.
 // Nothing from a chat is stored in the browser: lists and messages live in component state.
+import { useRouter } from "next/navigation";
 import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { askActivity, getActivity, postSeen, publishDot } from "@/lib/messages-activity-client";
 import { ACTIVITY_POLL_MS, FIRST_ANSWER_BACKOFF_MS, FIRST_ANSWER_FAILURES_BEFORE_BACKOFF, FIRST_ANSWER_FINAL_STATUSES, NOTICE_FRESH_MS, REFETCH_MIN_GAP_MS } from "@/lib/messages-live-config";
@@ -302,8 +303,6 @@ export function ChatListLive({
   laneId,
   initialRows,
   moreCursor,
-  selectedKey: selectedKeyProp = null,
-  selectedConn: selectedConnProp = null,
   initialNotes = NO_NOTES,
   initialDropped = false,
   initialListed,
@@ -311,9 +310,6 @@ export function ChatListLive({
   laneId: string;
   initialRows: ChatRowView[];
   moreCursor: string | null;
-  /** Only where there is no Messages scope (a test): the open chat. With a scope the address says it. */
-  selectedKey?: string | null;
-  selectedConn?: string | null;
   initialNotes?: AccountNote[];
   initialDropped?: boolean;
   /** The accounts whose list the page read: reported once to the live provider (they are marked seen); undefined for a caller that does not report. */
@@ -321,12 +317,23 @@ export function ChatListLive({
 }) {
   const live = useMessagesLive();
   const view = useMessagesView();
-  const selectedKey = view ? view.chatKey : selectedKeyProp;
-  const selectedConn = view ? view.conn : selectedConnProp;
+  // only a conversation that REALLY opened (the address names a chat that one of the person's accounts opens) is "the open chat": the highlight, the cleared dot and the `chat` / `open` of a re-read
+  // follow it, not just a well-formed key in the address (two accounts and no `conn`, or a `conn` that is not theirs, open nothing)
+  const selectedKey = view?.open ? view.chatKey : null;
+  const selectedConn = view?.open ? view.conn : null;
+  const router = useRouter();
+  const routerRef = useRef(router);
+  useEffect(() => {
+    routerRef.current = router;
+  });
+  const reloaded = useRef(false);
   const visible = view ? view.tab === "chats" : true;
   const [state, setState] = useState<ListState>({ rows: initialRows, moreCursor, notes: initialNotes, dropped: initialDropped, failed: false });
   // a new page of rows from the server (a server refresh) replaces what was re-read here (state adjusted during render, as React documents for a changed prop)
   const [seed, setSeed] = useState({ initialRows, moreCursor, initialNotes, initialDropped });
+  useEffect(() => {
+    reloaded.current = false; // a fresh server render re-arms the one reload
+  }, [initialRows]);
   // `later`: the cursor of the page shown in place of the newest (null: the newest chats); `kept`: what the newest page looked like, for "Back to the newest chats"
   const [paging, setPaging] = useState<{ later: string | null; kept: Kept | null; busy: boolean }>({ later: null, kept: null, busy: false });
   if (seed.initialRows !== initialRows || seed.moreCursor !== moreCursor || seed.initialNotes !== initialNotes || seed.initialDropped !== initialDropped) {
@@ -364,6 +371,7 @@ export function ChatListLive({
    */
   const readAgain = useCallback(
     async (targets: (string | null)[], signal: AbortSignal): Promise<void> => {
+      let refused = false; // the whole request was refused (not signed in / not allowed / not found), not one account's note
       const ask = async (conn: string | null): Promise<{ conn: string | null; answer: ChatsAnswer | null }> => {
         try {
           const q = new URLSearchParams();
@@ -372,7 +380,10 @@ export function ChatListLive({
           if (latest.current.selectedKey && latest.current.selectedConn) q.set("open", latest.current.selectedConn); // the account of the open chat: its row is the one that is not unread
           if (latest.current.more) q.set("more", latest.current.more);
           const res = await fetch(`/api/lanes/${encodeURIComponent(laneId)}/messages/chats${q.toString() === "" ? "" : `?${q.toString()}`}`, { credentials: "same-origin", cache: "no-store", signal });
-          if (!res.ok) return { conn, answer: null };
+          if (!res.ok) {
+            if (res.status === 401 || res.status === 403 || res.status === 404) refused = true;
+            return { conn, answer: null };
+          }
           const b = (await res.json()) as ChatsAnswer;
           return { conn, answer: Array.isArray(b.rows) ? b : null };
         } catch {
@@ -381,6 +392,11 @@ export function ChatListLive({
       };
       const answers = await Promise.all(targets.map(ask));
       if (signal.aborted) return;
+      // the server's state moved under this tab (a role revoked, an account disconnected, the module hidden): the layout is drawn again ONCE with what the server says now (guarded: no loop)
+      if (refused && !reloaded.current) {
+        reloaded.current = true;
+        routerRef.current.refresh();
+      }
       const failed = answers.some((x) => x.answer === null);
       const listed = answers.flatMap((x) => (x.answer === null ? [] : (x.answer.listed ?? [])));
       const anyOk = answers.some((x) => x.answer !== null);

@@ -5,7 +5,7 @@
 // chat KEY (an encoded id the page validates again) and a connection id (a name, never a permission: the page and every route re-check it).
 import Link from "next/link";
 import { useSearchParams } from "next/navigation";
-import { createContext, useContext, type ReactNode } from "react";
+import { createContext, useContext, useLayoutEffect, useRef, type ReactNode } from "react";
 import { laneHref } from "@nichols/ui";
 import { viewOf, type MessagesTab, type MessagesView } from "@/lib/messages-view-state";
 
@@ -18,9 +18,40 @@ export const useMessagesView = (): MessagesView | null => useContext(Ctx);
  */
 export function MessagesScope({ chatConns, className, children }: { chatConns: readonly string[]; className?: string; children: ReactNode }) {
   const v = viewOf(useSearchParams(), chatConns);
+  const box = useRef<HTMLDivElement>(null);
+  // PHONE HEIGHT (T-297 review M2). Below `lg` the conversation pane is one screen: its bottom edge must sit exactly above the fixed tab bar, with the header and back control visible and the
+  // messages scrolling inside it. The chrome above it (the navy header band, the main area's padding, the page header, the notice lines) has no fixed size, so the pane's height is measured here
+  // (after layout, never while rendering): window height - the tab bar's height - the pane column's distance from the top of the page. It is handed down as the CSS variable `--pane-h`, which
+  // the pane's classes read (their fallback is the old calc). From `lg` the panes are sized by the flex chain and the variable is unused.
+  useLayoutEffect(() => {
+    const el = box.current;
+    if (!el) return undefined;
+    const measure = () => {
+      const col = el.querySelector<HTMLElement>('[data-testid="messages-right"]');
+      const bar = document.querySelector<HTMLElement>('[data-slot="tab-bar"]');
+      if (!col || window.matchMedia?.("(min-width: 1024px)")?.matches) {
+        el.style.removeProperty("--pane-h");
+        return;
+      }
+      const top = col.getBoundingClientRect().top + window.scrollY;
+      const h = Math.floor(window.innerHeight - (bar?.getBoundingClientRect().height ?? 0) - top);
+      el.style.setProperty("--pane-h", `${Math.max(h, 256)}px`);
+    };
+    measure();
+    window.addEventListener("resize", measure);
+    const vv = window.visualViewport;
+    vv?.addEventListener("resize", measure);
+    const ro = typeof ResizeObserver === "undefined" ? null : new ResizeObserver(measure);
+    ro?.observe(document.body);
+    return () => {
+      window.removeEventListener("resize", measure);
+      vv?.removeEventListener("resize", measure);
+      ro?.disconnect();
+    };
+  }, [v.view, v.open, v.chatKey]);
   return (
     <Ctx.Provider value={v}>
-      <div data-testid="messages-scope" data-tab={v.tab} data-view={v.view} data-open={v.open ? "true" : "false"} className={`group/messages ${className ?? ""}`}>
+      <div ref={box} data-testid="messages-scope" data-tab={v.tab} data-view={v.view} data-open={v.open ? "true" : "false"} className={`group/messages ${className ?? ""}`}>
         {children}
       </div>
     </Ctx.Provider>

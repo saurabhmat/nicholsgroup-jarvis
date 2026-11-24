@@ -69,7 +69,7 @@ function postView(laneId: string, conn: string, teamId: string, channelKey: stri
   } catch {
     openUrl = openChannelUrl(null); // an id the link cannot carry: Teams itself
   }
-  return { ...messageView(post, postImagesBase(laneId, teamId, channelKey, post.id, conn)), subject: post.subject, openUrl };
+  return { ...messageView(post, postImagesBase(laneId, teamId, channelKey, post.id, conn), `${teamId}/${channelId}`), subject: post.subject, openUrl };
 }
 
 /** A page of a channel's root posts, in Graph's order (the thread with the newest activity first). System events are not drawn. */
@@ -87,7 +87,7 @@ export async function loadThread(p: Omit<TeamsPerson, "client">, teamId: string,
 export async function loadReplies(p: Omit<TeamsPerson, "client">, teamId: string, channelId: string, postId: string): Promise<RepliesView> {
   try {
     const r = await listReplies(p.laneId as LaneId, p.connectionId, p.userId, teamId, channelId, postId);
-    return { kind: "ok", postId, replies: r.replies.filter((m) => !m.system).map((m) => messageView(m, null)), more: r.more };
+    return { kind: "ok", postId, replies: r.replies.filter((m) => !m.system).map((m) => messageView(m, null, `${teamId}/${channelId}/${postId}`)), more: r.more };
   } catch (e) {
     return teamsFailure(e);
   }

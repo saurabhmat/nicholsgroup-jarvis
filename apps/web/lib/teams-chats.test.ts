@@ -222,7 +222,20 @@ describe("privacy (rule 6)", () => {
 
   it("messageView carries only what the page draws (no raw body, no ids of members)", () => {
     const v = messageView(msg("m1", "2026-11-23T14:05:00.000Z") as never);
-    expect(Object.keys(v).sort()).toEqual(["at", "attachments", "day", "deleted", "edited", "fullTime", "id", "images", "mine", "modifiedAt", "nodes", "sender", "system", "time", "truncated"]);
+    expect(Object.keys(v).sort()).toEqual(["at", "attachments", "day", "deleted", "edited", "fullTime", "id", "images", "mine", "modifiedAt", "nodes", "sender", "senderKey", "system", "time", "truncated"]);
+  });
+
+  it("T-297 review L1: the browser gets an opaque grouping key, never the sender's directory id; the key is per conversation, the same across pages, and null without an id", () => {
+    const REAL = "11111111-2222-4333-8444-555555555555"; // a recognisable synthetic Graph user id
+    const m = msg("m1", "2026-11-23T14:05:00.000Z", { sender: { id: REAL, name: "Pat", kind: "user" } });
+    const v = messageView(m as never, null, "19:chat-a@thread.v2");
+    expect(JSON.stringify(v)).not.toContain(REAL);
+    expect(JSON.stringify(v)).not.toContain(REAL.replace(/-/g, ""));
+    expect(v.senderKey).toMatch(/^[0-9a-f]{16}$/);
+    expect(messageView({ ...m, id: "m2" } as never, null, "19:chat-a@thread.v2").senderKey).toBe(v.senderKey); // another page, same sender: same key
+    expect(messageView(m as never, null, "19:chat-b@thread.v2").senderKey).not.toBe(v.senderKey); // scoped to the conversation
+    expect(messageView({ ...m, sender: { id: "99999999-2222-4333-8444-555555555555", name: "Pat", kind: "user" } } as never, null, "19:chat-a@thread.v2").senderKey).not.toBe(v.senderKey); // same name, other person
+    expect(messageView({ ...m, sender: { id: null, name: "Pat", kind: "unknown" } } as never, null, "19:chat-a@thread.v2").senderKey).toBeNull();
   });
 });
 

@@ -121,12 +121,12 @@ async function ChatListSection({ promise, laneId, connectionId }: { promise: Pro
 
 // ---- the conversation
 /**
- * Where the composer goes (T-288 adds it): the pinned place at the bottom of the conversation pane. The messages scroll above it; it never scrolls away, keeps the phone's safe area, and for now holds the
- * one line about the time zone. `children` is drawn above that line.
+ * Where the composer goes (T-288 adds it): the pinned place at the bottom of the conversation pane. The messages scroll above it; it never scrolls away, and for now it holds the one line about the
+ * time zone. No safe-area padding: the pane is never at the screen edge (on a phone the fixed tab bar below it takes the inset). `children` is drawn above that line.
  */
 export function ComposerSlot({ children }: { children?: ReactNode }) {
   return (
-    <div data-testid="composer-slot" className="shrink-0 border-t border-border bg-card px-3 pb-[max(0.25rem,env(safe-area-inset-bottom))] pt-1 sm:px-4">
+    <div data-testid="composer-slot" className="shrink-0 border-t border-border bg-card px-3 py-1 sm:px-4">
       {children}
       <p data-testid="times-note" className="text-small text-muted-foreground">
         {MESSAGES_TIMES_NOTE}
@@ -139,7 +139,7 @@ export function ComposerSlot({ children }: { children?: ReactNode }) {
 export function ConversationPane({ view, laneId, connectionId }: { view: ConversationView; laneId: string; connectionId: string }) {
   if (view.kind !== "ok") return <TeamsFailureCard failure={view.kind === "not_found" ? { kind: "not_found" } : view} laneId={laneId} connectionId={connectionId} testId="conversation-error" />;
   return (
-    <section aria-label="Conversation" data-testid="conversation" className="flex h-[calc(100dvh-8.5rem)] min-h-[22rem] min-w-0 flex-col overflow-hidden rounded-card border border-border bg-card lg:h-auto lg:min-h-0 lg:flex-1">
+    <section aria-label="Conversation" data-testid="conversation" className="flex h-[var(--pane-h,calc(100dvh-8.5rem))] min-h-[16rem] min-w-0 flex-col overflow-hidden rounded-card border border-border bg-card lg:h-auto lg:min-h-0 lg:flex-1">
       <header data-testid="conversation-header" className="flex shrink-0 flex-wrap items-center gap-x-2 gap-y-2 border-b border-border px-3 py-2 sm:px-4">
         <div className="flex min-w-0 flex-1 basis-48 items-center gap-2">
           <Link href={hrefFor(laneId, null, null)} aria-label="Back to chats" data-testid="back-to-chats" className="inline-flex min-h-11 min-w-11 items-center justify-center rounded-control text-body font-medium text-primary hover:bg-muted lg:hidden">
@@ -174,8 +174,8 @@ async function ConversationSection({ promise, laneId, connectionId }: { promise:
 /** The two panes. `selected` hides the list on a phone (and the empty conversation placeholder is for wide screens only). */
 export function WorkspaceLayout({ selected, list, conversation }: { selected: boolean; list: ReactNode; conversation: ReactNode }) {
   return (
-    <div data-testid="messages-workspace" data-selected={selected ? "true" : "false"} className="grid min-w-0 gap-4 lg:min-h-0 lg:flex-1 lg:grid-cols-[minmax(300px,380px)_minmax(0,1fr)] lg:grid-rows-[minmax(0,1fr)]">
-      <div id="chat-list" data-testid="chat-list-pane" className={cn("min-w-0 lg:min-h-0 lg:overflow-y-auto lg:overscroll-contain", selected ? "hidden lg:block" : "block")}>
+    <div data-testid="channels-workspace" data-selected={selected ? "true" : "false"} className="grid min-w-0 gap-4 lg:min-h-0 lg:flex-1 lg:grid-cols-[minmax(300px,380px)_minmax(0,1fr)] lg:grid-rows-[minmax(0,1fr)]">
+      <div id="chat-list" data-testid="chat-list-pane" className={cn("min-w-0 lg:-mx-1.5 lg:-my-1.5 lg:min-h-0 lg:overflow-y-auto lg:overscroll-contain lg:px-1.5 lg:py-1.5", selected ? "hidden lg:block" : "block")}>
         {list}
       </div>
       <div id="conversation" data-testid="conversation-pane" className={cn("min-w-0 lg:flex lg:min-h-0 lg:flex-col", selected ? "block" : "hidden lg:block")}>
