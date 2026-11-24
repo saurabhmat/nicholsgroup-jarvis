@@ -76,7 +76,7 @@ export async function ApprovalsBody({ laneId }: { laneId: string }) {
                   </p>
                   {h.outcomeUnknown && h.actionType.startsWith("teams.") ? (
                     <p data-testid="approvals-outcome-unknown" className="text-small text-alert-foreground">
-                      Outcome unknown: check the chat in Teams before sending again.
+                      This message may have been sent. Look at the chat in Teams first.
                     </p>
                   ) : null}
                   {h.outcomeUnknown && h.actionType === "qbo.disconnect" ? (

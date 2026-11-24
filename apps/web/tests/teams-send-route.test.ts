@@ -257,7 +257,7 @@ describe("what the approvals entry says, as the route's fixed answers (spec 17 t
     expect(await st({ status: "already_in_progress" })).toEqual({ ok: true, state: "unknown" });
     expect(await st({ status: "verified", externalId: "1700000000001" })).toEqual({ ok: true, state: "sent", messageId: "1700000000001" });
     expect(await st({ status: "verified", externalId: "../x" })).toEqual({ ok: true, state: "sent" }); // an id that is not a message id is not handed on
-    expect(await st({ status: "failed", failureCode: "not_a_member" })).toEqual({ ok: true, state: "not_sent", code: "not_a_member", message: "You are not a member of this chat or channel, or sending is not allowed" });
+    expect(await st({ status: "failed", failureCode: "not_a_member" })).toEqual({ ok: true, state: "not_sent", code: "not_a_member", message: "You are not a member of this chat or channel, or sending is not allowed", fresh: true }); // a definite failure is final: `fresh` says the next press needs a new id
     expect(await st({ status: "failed", failureCode: "throttled" })).toMatchObject({ state: "not_sent", code: "throttled" });
     for (const failureCode of ["outcome_unknown", "ambiguous_match", "verification_mismatch", "reconcile_connection_disconnected", "reconcile_sent_unverified"]) expect(await st({ status: "failed", failureCode }), failureCode).toMatchObject({ state: "unknown" });
     expect(await st({ status: "outcome_pending" })).toEqual({ ok: true, state: "unknown" });
