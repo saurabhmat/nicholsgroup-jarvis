@@ -1047,7 +1047,8 @@ T-160/T-161 can run in parallel after T-025. T-162/T-163 wait for W12, W13 and t
 Serial. T-171 can start any time after T-004. T-170 is the gate for PKG approvals going live.
 
 ### T-170 Security test suite
-- status: proposed
+- status: approved
+- note: approved by Saurabh, Nov 24, 2026 ("can you do the security test suite first"), after approvals went live for PKG the same day by his decision D-71 (option B), before this suite existed. The suite is therefore a check on a system that is already live: a BLOCKER or HIGH it finds is reported at once with the immediate mitigation (for a write path: `approvals_live` false for the lane). The `depends:` line and the acceptance below date from Nov 2 and name tasks whose numbers no longer match what was built; the test engineer first writes `docs/security/pilot-test-plan.md` (what exists today, what is covered, the gaps), the lead agent agrees the scope, then the tests and the report `docs/security/pilot-test.md` are written. Tests only: product defects found are recorded as findings and fixed in their own tasks.
 - depends: T-119, T-105, T-124, T-118, T-163
 - acceptance: catalog-driven cross-lane RLS tests over every table; auth/AAL and step-up; token canaries; webhook spoofing per provider; injection suite; approval tampering (hash change, replay, double execute) for email + monday.com actions; report in `docs/security/pilot-test.md`; no open blocker/high. **Must pass before PKG approvals go live on Nov 25 (D-11).**
 
