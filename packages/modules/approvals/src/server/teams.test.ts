@@ -1031,13 +1031,13 @@ describe("sendTeamsMessage: what is certain after a failed approve step (T-288 r
     expect(e).toMatchObject({ code: "unavailable" });
   });
 
-  it("D1 RACE: the reject fails but the action turns out rejected or expired: a definite refusal; still proposed: a refusal 'before' (nothing was sent); executing or verified: unknown", async () => {
-    for (const [status, phase] of [["rejected", "rejected"], ["expired", "rejected"], ["proposed", "before"]] as const) {
+  it("D1 RACE: the reject fails but the action turns out rejected or expired: a definite refusal; still proposed (a duplicate can still approve it), executing or verified: unknown (never 'before')", async () => {
+    for (const [status, phase] of [["rejected", "rejected"], ["expired", "rejected"]] as const) {
       const w = world();
       const e = await sendTeamsMessage(w.deps, approveFails(w, "act: step_up_required", (rows) => void ([...rows.values()][0]!.status = status)), sendInput()).catch((x: unknown) => x);
       expect(e, status).toMatchObject({ phase, code: "step_up_required" });
     }
-    for (const status of ["executing", "verified"]) {
+    for (const status of ["proposed", "executing", "verified"]) {
       const w = world();
       const e = await sendTeamsMessage(w.deps, approveFails(w, "act: step_up_required", (rows) => void ([...rows.values()][0]!.status = status)), sendInput()).catch((x: unknown) => x);
       expect(e, status).not.toBeInstanceOf(TeamsSendRefusal);

@@ -571,7 +571,7 @@ describe("T-288 review A: the request id belongs to the text, and an in-flight m
 
 const seed = (over: Record<string, unknown> = {}, item = `${CONN}:${KEY}`) =>
   window.sessionStorage.setItem(`nichols:teams-send:PKG:${USER}:${item}`, JSON.stringify({ v: 1, t: Date.now(), d: { list: [{ id: "5e11d0c0-0000-4000-8000-000000000009", hash: "a".repeat(64), text: "unsure", startedAt: Date.now(), state: "unknown", messageId: null, reason: null, dismissed: false, ...over }] } }));
-const markerList = () => (JSON.parse(window.sessionStorage.getItem(markerKey) ?? "null")?.d?.list ?? []) as { id: string; state: string; dismissed: boolean }[];
+const markerList = () => (JSON.parse(window.sessionStorage.getItem(markerKey) ?? "null")?.d?.list ?? []) as { id: string; state: string; dismissed: boolean; text: string; hash: string }[];
 const OLD = "5e11d0c0-0000-4000-8000-000000000009";
 
 describe("T-288 re-check 1: a refusal answered to a REPLAY is not 'Not sent'", () => {
@@ -579,9 +579,10 @@ describe("T-288 re-check 1: a refusal answered to a REPLAY is not 'Not sent'", (
     ["429 rate limited", R(429, { error: "rate_limited" }), /wait a second and try again/],
     ["a stale authenticator code", R(403, { error: "step_up_required" }), /authenticator code to check/],
     ["reconnect", R(409, { error: "reconnect" }), /Reconnect Teams to check/],
-    ["a gate closed", R(409, { error: "gate_not_live" }), /Could not check just now/],
+    ["a gate closed", R(409, { error: "gate_not_live" }), /Approvals are not live for this company yet\./],
+    ["the role was removed", R(403, { error: "forbidden" }), /You can no longer send from this account\./],
     ["a 503 unavailable", R(503, { error: "unavailable" }), /Could not check just now/],
-    ["not found", R(404, { error: "not_found" }), /Could not check just now/],
+    ["not found", R(404, { error: "not_found" }), /This chat or account is no longer available here\./],
   ])("%s on a replay: the message stays 'may have been sent', the marker stays, the reason is a note, nothing is restored into the box", async (_n, answer, note) => {
     seed();
     render(composer());
@@ -717,7 +718,7 @@ describe("T-288 re-check 2: one record per message", () => {
     expect((screen.getByTestId("composer-text") as HTMLTextAreaElement).value).toBe("");
     expect(screen.getByTestId("send-item").getAttribute("data-closed")).toBe("true");
     expect(screen.queryByTestId("send-actions")).toBeNull();
-    expect(screen.getByTestId("send-note").textContent).toMatch(/at most once/);
+    expect(screen.getByTestId("send-note").textContent).toMatch(/never sent twice/);
     reply = SENT;
     type("unsure");
     await press();
@@ -744,14 +745,27 @@ describe("T-288 re-check 2: one record per message", () => {
     expect(stateOf()).toEqual(["unknown"]);
     cleanup();
     window.sessionStorage.clear();
+    requests = [];
     reply = R(502, { error: "unknown_outcome" });
     render(composer());
-    for (let n = 0; n < 7; n++) {
+    for (let n = 0; n < 5; n++) {
       type(`unsure ${n}`);
       await press();
     }
-    expect(markerList()).toHaveLength(5); // the oldest are dropped from the tab; their bubbles stay while the page lives
-    expect(screen.getAllByTestId("send-item")).toHaveLength(7);
+    expect(markerList()).toHaveLength(5);
+    // a sixth unresolved message is NOT sent: the oldest is never evicted to make room; the text stays in the box
+    type("one too many");
+    await press();
+    expect(requests).toHaveLength(5);
+    expect(markerList()).toHaveLength(5);
+    expect(screen.getByTestId("composer-note").textContent).toBe("Look at the earlier messages in Teams first, then dismiss them here.");
+    expect((screen.getByTestId("composer-text") as HTMLTextAreaElement).value).toBe("one too many");
+    // a dismissed one makes room (dismissed records are evicted first)
+    await act(async () => void fireEvent.click(screen.getAllByTestId("send-dismiss")[0] as HTMLElement));
+    await press();
+    expect(requests).toHaveLength(6); // four unresolved now: it goes, and the dismissed record made room
+    expect(markerList()).toHaveLength(5);
+    expect(markerList().some((m) => m.dismissed)).toBe(false);
   });
 });
 
@@ -783,17 +797,18 @@ describe("T-288 re-check 3: wording and the two actions", () => {
     expect(stateOf()).toEqual(["sent"]);
   });
 
-  it("a marker older than the action's life (one hour): no 'Send if it has not been sent', the state line says it was not confirmed, and a retyped text gets a NEW id", async () => {
-    seed({ startedAt: Date.now() - 2 * 3_600_000 + 60_000 - 60_000 * 60 });
+  it("a record is offered 'Send if it has not been sent' for its WHOLE life (there is no separate 'older than an hour' state): 90 minutes old still has the action and a retyped text reuses the id", async () => {
+    seed({ startedAt: Date.now() - 90 * 60_000 });
     render(composer());
     await settle();
-    expect(screen.getByTestId("send-state").textContent).toContain("It was not confirmed. Look at the chat in Teams; if it is not there, type it again.");
-    expect(screen.queryByTestId("send-if-not-sent")).toBeNull();
-    expect(screen.getByTestId("send-dismiss")).toBeTruthy();
-    reply = SENT;
+    expect(screen.getByTestId("send-state").textContent).toBe("?This message may have been sent. Look at the chat in Teams first.");
+    expect(screen.getByTestId("send-if-not-sent")).toBeTruthy();
+    expect(screen.getByTestId("send-safe").textContent).toBe("Safe to press: the portal sends this message at most once.");
+    reply = R(200, { ok: true, state: "not_sent", code: "expired", message: "This message expired before it was sent, so nothing was sent. Send it again" });
     type("unsure");
     await press();
-    expect(requests[0]?.body.clientRequestId).not.toBe(OLD);
+    expect(requests[0]?.body.clientRequestId).toBe(OLD);
+    expect(stateOf()).toEqual(["not_sent"]); // the server says a replay of an expired action failed: a definite refusal, and the next press has a new id
   });
 
   it("request_reused is not a dead end: it is Not sent with its own sentence and the next press has a new id", async () => {
@@ -829,10 +844,11 @@ describe("T-288 re-check 4 and 5: layout, and nothing kept when sending is off",
         </div>,
       );
       const scroller = screen.getByTestId("conversation-scroll");
-      const geometry = (top: number) => {
+      const geometry = (top: number, client = 100) => {
         Object.defineProperty(scroller, "scrollHeight", { configurable: true, value: 500 });
-        Object.defineProperty(scroller, "clientHeight", { configurable: true, value: 100 });
+        Object.defineProperty(scroller, "clientHeight", { configurable: true, value: client });
         scroller.scrollTop = top;
+        scroller.dispatchEvent(new Event("scroll")); // the remembered "at the bottom" comes from the list's own scroll events
       };
       geometry(400); // at the bottom
       type("one\ntwo\nthree");
@@ -870,18 +886,156 @@ describe("T-288 re-check 4 and 5: layout, and nothing kept when sending is off",
     }
   });
 
-  it("sending switched off for this company (policy, lane, drafts): this person's tab copies and markers for the lane are removed; another person's are not", async () => {
-    seed();
+  it.each([
+    ["lane_off", "keep_text", "unsure"],
+    ["policy_off", "keep_text", "unsure"],
+    ["drafts_off", "strip_text", ""],
+  ] as const)("sending switched off (%s): unsent copies go, the records of unresolved messages STAY as plain warnings (text %s), another person's and another lane's are untouched; Dismiss removes one", async (_n, mode, kept) => {
+    seed(); // unknown
     teamsDrafts.write("PKG", USER, `${CONN}:${KEY}`, { text: "a copy" });
     const other = "00000000-0000-4000-8000-0000000000bb";
     window.sessionStorage.setItem(`nichols:teams-send:PKG:${other}:x`, "{}");
     window.sessionStorage.setItem(`nichols:teams-draft:OTHERLANE:${USER}:x`, "{}");
-    render(<SendScope laneId="PKG" conn={CONN} chatKey={KEY} userId={USER} enabled={false} clear>x</SendScope>);
+    render(<SendScope laneId="PKG" conn={CONN} chatKey={KEY} userId={USER} enabled={false} clear={mode}><ul><PendingBubbles shown={[]} /></ul></SendScope>);
     await settle();
-    expect(window.sessionStorage.getItem(markerKey)).toBeNull();
     expect(teamsDrafts.read("PKG", USER, `${CONN}:${KEY}`)).toBeNull();
+    expect(markerList()).toHaveLength(1);
+    expect(markerList()[0]).toMatchObject({ id: OLD, text: kept, hash: "a".repeat(64), state: "unknown" });
+    expect(screen.getByTestId("send-state").textContent).toBe("?A message you sent earlier may have been sent. Look at the chat in Teams.");
+    expect(screen.queryByTestId("send-if-not-sent")).toBeNull();
+    expect(screen.getByTestId("send-dismiss")).toBeTruthy();
     expect(window.sessionStorage.getItem(`nichols:teams-send:PKG:${other}:x`)).not.toBeNull();
     expect(window.sessionStorage.getItem(`nichols:teams-draft:OTHERLANE:${USER}:x`)).not.toBeNull();
+    await act(async () => void fireEvent.click(screen.getByTestId("send-dismiss")));
+    expect(markerList()).toHaveLength(0);
+    expect(screen.queryAllByTestId("send-item")).toHaveLength(0);
+  });
+
+  it("sending switched off: an in-flight and a dismissed record stay too, a resolved one (sent) goes", async () => {
+    window.sessionStorage.setItem(markerKey, JSON.stringify({ v: 1, t: Date.now(), d: { list: [
+      { id: "5e11d0c0-0000-4000-8000-00000000000a", hash: "b".repeat(64), text: "x", startedAt: Date.now(), state: "inflight", messageId: null, reason: null, dismissed: false },
+      { id: "5e11d0c0-0000-4000-8000-00000000000b", hash: "c".repeat(64), text: "y", startedAt: Date.now(), state: "unknown", messageId: null, reason: null, dismissed: true },
+      { id: "5e11d0c0-0000-4000-8000-00000000000c", hash: "d".repeat(64), text: "z", startedAt: Date.now(), state: "sent", messageId: "g", reason: null, dismissed: false },
+    ] } }));
+    render(<SendScope laneId="PKG" conn={CONN} chatKey={KEY} userId={USER} enabled={false} clear="strip_text"><ul><PendingBubbles shown={[]} /></ul></SendScope>);
+    await settle();
+    expect(markerList().map((m) => m.id.slice(-1))).toEqual(["a", "b"]);
+    expect(markerList().every((m) => m.text === "")).toBe(true);
+  });
+});
+
+describe("T-288 second re-check", () => {
+  it("R1: when the tab's storage refuses the marker and the answer is lost, retyping the same text in the open page REUSES the id; the bubble says the warning cannot be kept", async () => {
+    const orig = Storage.prototype.setItem;
+    Storage.prototype.setItem = () => {
+      throw new Error("quota");
+    };
+    try {
+      reply = "throw";
+      render(composer());
+      type("no storage");
+      await press();
+      expect(screen.getByTestId("send-note").textContent).toContain("This warning cannot be kept if you reload: look at the chat in Teams before reloading.");
+      reply = SENT;
+      type("no storage");
+      await press();
+      expect(new Set(ids()).size).toBe(1);
+      // and after Dismiss as well
+    } finally {
+      Storage.prototype.setItem = orig;
+    }
+  });
+
+  it("R1: the same after Dismiss with no storage", async () => {
+    const orig = Storage.prototype.setItem;
+    Storage.prototype.setItem = () => {
+      throw new Error("quota");
+    };
+    try {
+      reply = R(502, { error: "unknown_outcome" });
+      render(composer());
+      type("dismissed text");
+      await press();
+      await act(async () => void fireEvent.click(screen.getByTestId("send-dismiss")));
+      reply = SENT;
+      type("dismissed text");
+      await press();
+      expect(new Set(ids()).size).toBe(1);
+    } finally {
+      Storage.prototype.setItem = orig;
+    }
+  });
+
+  it("P1: retyping a dismissed message whose replay says it WAS sent shows 'Sent earlier' (nothing new was sent) and KEEPS the text in the box; a deliberate second press is a NEW message with a new id", async () => {
+    reply = R(502, { error: "unknown_outcome" });
+    render(composer());
+    type("did it go");
+    await press();
+    await act(async () => void fireEvent.click(screen.getByTestId("send-dismiss")));
+    reply = SENT;
+    type("did it go");
+    await press();
+    expect(screen.getByTestId("send-state").textContent).toBe("✓Sent earlier: this is the message from before, nothing new was sent.");
+    expect((screen.getByTestId("composer-text") as HTMLTextAreaElement).value).toBe("did it go");
+    await press();
+    expect(requests).toHaveLength(3);
+    expect(ids()[2]).not.toBe(ids()[0]);
+  });
+
+  it("P5: a held Ctrl+Enter while a send is open does not save the box text as a draft", async () => {
+    reply = "hang";
+    render(composer());
+    type("held key");
+    await press();
+    teamsDrafts.remove("PKG", USER, `${CONN}:${KEY}`);
+    type("more");
+    await act(async () => void fireEvent.keyDown(screen.getByTestId("composer-text"), { key: "Enter", ctrlKey: true }));
+    await act(async () => void (await new Promise((r) => setTimeout(r, 600))));
+    expect(requests).toHaveLength(1);
+    expect(teamsDrafts.read("PKG", USER, `${CONN}:${KEY}`)).toEqual({ text: "more" }); // only the typing's own debounced copy; the held key added nothing
+    reply = SENT;
+    await act(async () => release?.());
+  });
+
+  it("P6: a replay that ends in a definite 'not sent' puts the text back into an EMPTY box; the bubble stays until dismissed, and survives the next press", async () => {
+    seed({ text: "come back" });
+    render(composer());
+    await settle();
+    reply = R(200, { ok: true, state: "not_sent", code: "not_a_member", message: "You are not a member of this chat or channel, or sending is not allowed", fresh: true });
+    await act(async () => void fireEvent.click(screen.getByTestId("send-if-not-sent")));
+    await settle();
+    expect((screen.getByTestId("composer-text") as HTMLTextAreaElement).value).toBe("come back");
+    expect(screen.getByTestId("send-dismiss")).toBeTruthy();
+    reply = SENT;
+    await press();
+    expect(stateOf()).toContain("not_sent"); // the replay's bubble was not swept away by the next press
+    await act(async () => void fireEvent.click(screen.getAllByTestId("send-dismiss")[0] as HTMLElement));
+    expect(screen.queryAllByTestId("send-item").some((i) => i.getAttribute("data-state") === "not_sent")).toBe(false);
+  });
+
+  it("P2: the list stays pinned when the pane shrinks BEFORE the observer fires (the keyboard): 'at the bottom' is remembered from the last scroll, not measured late", () => {
+    let callback: (() => void) | null = null;
+    vi.stubGlobal("ResizeObserver", class { constructor(cb: () => void) { callback = cb; } observe() {} disconnect() {} });
+    try {
+      render(
+        <div data-testid="conversation">
+          <div data-testid="conversation-scroll" />
+          {composer()}
+        </div>,
+      );
+      const scroller = screen.getByTestId("conversation-scroll");
+      Object.defineProperty(scroller, "scrollHeight", { configurable: true, value: 500 });
+      Object.defineProperty(scroller, "clientHeight", { configurable: true, writable: true, value: 100 });
+      scroller.scrollTop = 400;
+      scroller.dispatchEvent(new Event("scroll")); // at the bottom
+      Object.defineProperty(scroller, "clientHeight", { configurable: true, value: 10 }); // the pane shrank first: measured now, 500 - 400 - 10 = 90... made larger below
+      Object.defineProperty(scroller, "scrollHeight", { configurable: true, value: 700 }); // measured late it is 290 from the bottom: "not at the bottom"
+      act(() => void callback?.());
+      expect(scroller.scrollTop).toBe(700);
+    } finally {
+      vi.unstubAllGlobals();
+      vi.stubGlobal("fetch", fetchMock);
+    }
   });
 });
 
