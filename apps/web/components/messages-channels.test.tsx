@@ -30,7 +30,7 @@ const T1 = "aaaaaaaa-aaaa-4aaa-8aaa-0000000000a1";
 const T2 = "aaaaaaaa-aaaa-4aaa-8aaa-0000000000a2";
 const CH = "19:general111@thread.tacv2";
 const KEY = encodeChannelKey(CH);
-const connected = (over: Partial<Extract<MessagesState, { kind: "connected" }>> = {}): Extract<MessagesState, { kind: "connected" }> => ({ kind: "connected", connectionId: CONN, account: "me@teams.example.test", degraded: false, missing: [], adminConsent: false, laneFeatures: ["chat_read", "channels_read"], ...over });
+const connected = (over: Partial<Extract<MessagesState, { kind: "connected" }>> = {}): Extract<MessagesState, { kind: "connected" }> => ({ kind: "connected", connectionId: CONN, account: "me@teams.example.test", degraded: false, missing: [], adminConsent: false, accounts: [{ connectionId: CONN, account: "me@teams.example.test", label: "teams.example.test", usable: true, degraded: false, missing: [], has: ["chat_read", "call_links"] }], multi: false, canAddAnother: false, laneFeatures: ["chat_read", "channels_read"], ...over });
 const post = (id: string, over: Partial<PostView> = {}): PostView =>
   ({ id, images: null, at: "2026-11-23T14:00:00.000Z", time: "9:00 AM", fullTime: "Nov 23, 2026, 9:00 AM ET", day: "2026-11-23", sender: "Pat", mine: false, edited: false, deleted: false, system: false, nodes: [{ t: "text", v: `post ${id}` }], truncated: false, attachments: [], subject: null, openUrl: "https://teams.microsoft.com/l/message/x/1", ...over }) as PostView;
 

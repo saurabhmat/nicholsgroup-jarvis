@@ -25,10 +25,10 @@ const at = (width: number) => {
 const CHAT = "19:abc123def456@thread.v2";
 const KEY = encodeChatKey(CHAT);
 const CONN = "00000000-0000-4000-8000-0000000000c1";
-const row = (over: Partial<Extract<ChatListData, { kind: "ok" }>["rows"][number]> = {}) => ({ key: encodeChatKey("19:x1@thread.v2"), title: "Pat Example", preview: "see you at 3", time: "9:05 AM", unread: false, external: false, ...over });
+const row = (over: Partial<Extract<ChatListData, { kind: "ok" }>["rows"][number]> = {}) => ({ key: encodeChatKey("19:x1@thread.v2"), conn: CONN, account: null, accountName: null, at: null, ord: 0, title: "Pat Example", preview: "see you at 3", time: "9:05 AM", unread: false, external: false, ...over });
 const msg = (id: string, at: string, over: Record<string, unknown> = {}): MessageView => ({ id, at, time: "9:05 AM", fullTime: "Nov 23, 2026, 9:05 AM ET", day: at.slice(0, 10), sender: "Pat", mine: false, edited: false, deleted: false, system: false, nodes: [{ t: "text", v: `text ${id}` }], truncated: false, attachments: [], ...over }) as unknown as MessageView;
 const conv = (over: Partial<Extract<ConversationView, { kind: "ok" }>> = {}): ConversationView => ({
-  kind: "ok", chatKey: KEY, title: "Team chat", subtitle: "3 people", external: false, group: true, openUrl: `https://teams.microsoft.com/l/chat/${CHAT}/conversations`, call: "available",
+  kind: "ok", chatKey: KEY, conn: CONN, account: null, accountName: null, title: "Team chat", subtitle: "3 people", external: false, group: true, openUrl: `https://teams.microsoft.com/l/chat/${CHAT}/conversations`, call: "available",
   messages: [msg("m1", "2026-11-22T14:00:00.000Z"), msg("m2", "2026-11-23T14:00:00.000Z", { mine: true })], nextBefore: "2026-11-22T14:00:00.000Z", readThrough: "2026-11-23T14:00:00.000Z", ...over,
 }) as ConversationView;
 

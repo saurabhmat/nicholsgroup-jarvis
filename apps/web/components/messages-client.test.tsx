@@ -4,6 +4,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 
+const CONN = "00000000-0000-4000-8000-0000000000c1";
 const refresh = vi.hoisted(() => vi.fn());
 vi.mock("next/navigation", () => ({ useRouter: () => ({ refresh }) }));
 
@@ -45,7 +46,7 @@ describe("ConversationMessages: Load older messages", () => {
 
   it("one request per click, to this portal's route, for the chat and the time; older messages appear above, the next time replaces the old", async () => {
     fetchMock.mockImplementation(() => reply(200, { messages: [msg("m1", "2026-11-22T14:00:00.000Z"), msg("m2", "2026-11-22T14:05:00.000Z")], nextBefore: null }));
-    render(<ConversationMessages laneId="PKG" chatKey={KEY} initial={initial} nextBefore="2026-11-23T14:00:00.000Z" group />);
+    render(<ConversationMessages conn={CONN} laneId="PKG" chatKey={KEY} initial={initial} nextBefore="2026-11-23T14:00:00.000Z" group />);
     expect(fetchMock).not.toHaveBeenCalled(); // nothing is fetched on its own
     fireEvent.click(screen.getByTestId("load-older"));
     await waitFor(() => expect(screen.getAllByTestId("message")).toHaveLength(4));
@@ -61,7 +62,7 @@ describe("ConversationMessages: Load older messages", () => {
 
   it("the same day on both sides of the join has one separator", async () => {
     fetchMock.mockImplementation(() => reply(200, { messages: [msg("m2", "2026-11-23T10:00:00.000Z")], nextBefore: null }));
-    render(<ConversationMessages laneId="PKG" chatKey={KEY} initial={initial} nextBefore="x" group />);
+    render(<ConversationMessages conn={CONN} laneId="PKG" chatKey={KEY} initial={initial} nextBefore="x" group />);
     fireEvent.click(screen.getByTestId("load-older"));
     await waitFor(() => expect(screen.getAllByTestId("message")).toHaveLength(3));
     expect(screen.getAllByRole("separator")).toHaveLength(1);
@@ -70,7 +71,7 @@ describe("ConversationMessages: Load older messages", () => {
   it("Teams busy: the wait Microsoft asked for is shown, the button stays, and nothing is retried", async () => {
     fetchMock.mockImplementation(() => reply(429, { error: "busy", seconds: 6 }));
     vi.useFakeTimers({ shouldAdvanceTime: true });
-    render(<ConversationMessages laneId="PKG" chatKey={KEY} initial={initial} nextBefore="2026-11-23T14:00:00.000Z" group />);
+    render(<ConversationMessages conn={CONN} laneId="PKG" chatKey={KEY} initial={initial} nextBefore="2026-11-23T14:00:00.000Z" group />);
     fireEvent.click(screen.getByTestId("load-older"));
     await waitFor(() => expect(screen.getByTestId("older-error").textContent).toBe("Teams is busy. Try again in 6 seconds."));
     expect(screen.getByTestId("load-older")).toBeTruthy();
@@ -83,7 +84,7 @@ describe("ConversationMessages: Load older messages", () => {
 
   it("other failures: a fixed line; a network error too; the messages already shown stay", async () => {
     fetchMock.mockImplementationOnce(() => reply(503, { error: "unavailable" }));
-    render(<ConversationMessages laneId="PKG" chatKey={KEY} initial={initial} nextBefore="x" group />);
+    render(<ConversationMessages conn={CONN} laneId="PKG" chatKey={KEY} initial={initial} nextBefore="x" group />);
     fireEvent.click(screen.getByTestId("load-older"));
     await waitFor(() => expect(screen.getByTestId("older-error").textContent).toBe("Teams could not be reached. Try again."));
     fetchMock.mockImplementationOnce(() => Promise.reject(new Error("canary secret chat text")));
@@ -96,7 +97,7 @@ describe("ConversationMessages: Load older messages", () => {
 
   it("a reconnect answer says so; the route's own text is never shown", async () => {
     fetchMock.mockImplementation(() => reply(409, { error: "reconnect", message: "canary secret chat text" }));
-    render(<ConversationMessages laneId="PKG" chatKey={KEY} initial={initial} nextBefore="x" group />);
+    render(<ConversationMessages conn={CONN} laneId="PKG" chatKey={KEY} initial={initial} nextBefore="x" group />);
     fireEvent.click(screen.getByTestId("load-older"));
     await waitFor(() => expect(screen.getByTestId("older-error").textContent).toContain("Reconnect Teams in Settings"));
     expect(document.body.textContent).not.toContain("canary");
@@ -105,7 +106,7 @@ describe("ConversationMessages: Load older messages", () => {
   it("nothing is kept in the browser: no storage, no cookie", async () => {
     const set = vi.spyOn(Storage.prototype, "setItem");
     fetchMock.mockImplementation(() => reply(200, { messages: [msg("m2", "2026-11-22T10:00:00.000Z")], nextBefore: null }));
-    render(<ConversationMessages laneId="PKG" chatKey={KEY} initial={initial} nextBefore="x" group />);
+    render(<ConversationMessages conn={CONN} laneId="PKG" chatKey={KEY} initial={initial} nextBefore="x" group />);
     fireEvent.click(screen.getByTestId("load-older"));
     await waitFor(() => expect(screen.getAllByTestId("message")).toHaveLength(3));
     expect(set).not.toHaveBeenCalled();
@@ -113,14 +114,14 @@ describe("ConversationMessages: Load older messages", () => {
   });
 
   it("the page opens at the newest message (the list is scrolled to its end)", () => {
-    render(<ConversationMessages laneId="PKG" chatKey={KEY} initial={initial} nextBefore={null} group />);
+    render(<ConversationMessages conn={CONN} laneId="PKG" chatKey={KEY} initial={initial} nextBefore={null} group />);
     const box = screen.getByTestId("conversation-scroll");
     Object.defineProperty(box, "scrollHeight", { configurable: true, value: 900 });
     cleanup();
     // scrollTop is assigned from scrollHeight in a layout effect: a fresh render with the property defined up front
     const proto = Object.getOwnPropertyDescriptor(Element.prototype, "scrollHeight");
     Object.defineProperty(HTMLElement.prototype, "scrollHeight", { configurable: true, get: () => 900 });
-    render(<ConversationMessages laneId="PKG" chatKey={KEY} initial={initial} nextBefore={null} group />);
+    render(<ConversationMessages conn={CONN} laneId="PKG" chatKey={KEY} initial={initial} nextBefore={null} group />);
     expect(screen.getByTestId("conversation-scroll").scrollTop).toBe(900);
     if (proto) Object.defineProperty(Element.prototype, "scrollHeight", proto);
     else delete (HTMLElement.prototype as unknown as Record<string, unknown>).scrollHeight;
@@ -132,7 +133,7 @@ describe("CallButtons", () => {
 
   it("Call asks this portal's route, then opens the returned https Teams link in a new tab (noopener); Video call asks for video", async () => {
     fetchMock.mockImplementationOnce(() => reply(200, { url: "https://teams.microsoft.com/l/call/0/0?users=pat@teams.example.test" }));
-    render(<CallButtons laneId="PKG" chatKey={KEY} call="available" openUrl={OPEN} />);
+    render(<CallButtons conn={CONN} laneId="PKG" chatKey={KEY} call="available" openUrl={OPEN} />);
     expect(window.open).not.toHaveBeenCalled(); // never opened on its own
     fireEvent.click(screen.getByRole("button", { name: "Call" }));
     await waitFor(() => expect(window.open).toHaveBeenCalledTimes(1));
@@ -151,7 +152,7 @@ describe("CallButtons", () => {
   it("a blocked new tab shows the link to click instead", async () => {
     (window.open as unknown as ReturnType<typeof vi.fn>).mockImplementation(() => null);
     fetchMock.mockImplementation(() => reply(200, { url: "https://teams.microsoft.com/l/call/0/0?users=pat@teams.example.test" }));
-    render(<CallButtons laneId="PKG" chatKey={KEY} call="available" openUrl={OPEN} />);
+    render(<CallButtons conn={CONN} laneId="PKG" chatKey={KEY} call="available" openUrl={OPEN} />);
     fireEvent.click(screen.getByRole("button", { name: "Call" }));
     const a = (await screen.findByTestId("call-link")) as HTMLAnchorElement;
     expect(a.getAttribute("href")).toBe("https://teams.microsoft.com/l/call/0/0?users=pat@teams.example.test");
@@ -161,7 +162,7 @@ describe("CallButtons", () => {
   it("a link that is not an https Teams call link is never opened, whatever the route says", async () => {
     for (const url of ["javascript:alert(1)", "http://teams.microsoft.com/l/call/0/0?users=a@b.test", "https://evil.example.test/l/call/0/0?users=a@b.test", "https://teams.microsoft.com.evil.example.test/l/call/0/0?users=x", "https://teams.microsoft.com/l/chat/0/0?users=x", 5, null]) {
       fetchMock.mockImplementationOnce(() => reply(200, { url }));
-      render(<CallButtons laneId="PKG" chatKey={KEY} call="available" openUrl={OPEN} />);
+      render(<CallButtons conn={CONN} laneId="PKG" chatKey={KEY} call="available" openUrl={OPEN} />);
       fireEvent.click(screen.getByRole("button", { name: "Call" }));
       await waitFor(() => expect(screen.getByTestId("call-error")).toBeTruthy());
       expect(window.open).not.toHaveBeenCalled();
@@ -179,7 +180,7 @@ describe("CallButtons", () => {
     ];
     for (const [status, body, text] of cases) {
       fetchMock.mockImplementationOnce(() => reply(status, body));
-      render(<CallButtons laneId="PKG" chatKey={KEY} call="available" openUrl={OPEN} />);
+      render(<CallButtons conn={CONN} laneId="PKG" chatKey={KEY} call="available" openUrl={OPEN} />);
       fireEvent.click(screen.getByRole("button", { name: "Video call" }));
       await waitFor(() => expect(screen.getByTestId("call-error").textContent).toBe(text));
       cleanup();
@@ -188,7 +189,7 @@ describe("CallButtons", () => {
   });
 
   it("Open in Teams is a plain new-tab link; without call permission there are no Call buttons and the reason is shown", () => {
-    render(<CallButtons laneId="PKG" chatKey={KEY} call="needs_reconnect" openUrl={OPEN} />);
+    render(<CallButtons conn={CONN} laneId="PKG" chatKey={KEY} call="needs_reconnect" openUrl={OPEN} />);
     expect(screen.queryByRole("button")).toBeNull();
     expect(screen.getByTestId("call-note").textContent).toBe("Reconnect Teams to add call buttons.");
     const a = screen.getByTestId("open-in-teams") as HTMLAnchorElement;
@@ -199,7 +200,7 @@ describe("CallButtons", () => {
   it("a double click is one request", async () => {
     let release: (r: Response) => void = () => undefined;
     fetchMock.mockImplementation(() => new Promise<Response>((r) => (release = r)));
-    render(<CallButtons laneId="PKG" chatKey={KEY} call="available" openUrl={OPEN} />);
+    render(<CallButtons conn={CONN} laneId="PKG" chatKey={KEY} call="available" openUrl={OPEN} />);
     const b = screen.getByRole("button", { name: "Call" });
     fireEvent.click(b);
     fireEvent.click(b);
@@ -213,20 +214,20 @@ describe("CallButtons", () => {
 describe("MarkRead", () => {
   it("opening a chat records the marker once, for the newest message shown; no UI", async () => {
     fetchMock.mockImplementation(() => Promise.resolve(new Response(null, { status: 204 })));
-    const { container, rerender } = render(<MarkRead laneId="PKG" chatKey={KEY} readThrough="2026-11-23T14:05:00.000Z" />);
+    const { container, rerender } = render(<MarkRead conn={CONN} laneId="PKG" chatKey={KEY} readThrough="2026-11-23T14:05:00.000Z" />);
     expect(container.innerHTML).toBe("");
     await waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(1));
     expect(fetchMock.mock.calls[0]?.[0]).toBe("/api/lanes/PKG/messages/read");
     expect(fetchMock.mock.calls[0]?.[1]).toMatchObject({ method: "POST", body: JSON.stringify({ chat: KEY, readThrough: "2026-11-23T14:05:00.000Z" }) });
-    rerender(<MarkRead laneId="PKG" chatKey={KEY} readThrough="2026-11-23T14:05:00.000Z" />);
+    rerender(<MarkRead conn={CONN} laneId="PKG" chatKey={KEY} readThrough="2026-11-23T14:05:00.000Z" />);
     expect(fetchMock).toHaveBeenCalledTimes(1);
   });
   it("an empty chat records nothing; a network failure is silent", async () => {
-    render(<MarkRead laneId="PKG" chatKey={KEY} readThrough={null} />);
+    render(<MarkRead conn={CONN} laneId="PKG" chatKey={KEY} readThrough={null} />);
     expect(fetchMock).not.toHaveBeenCalled();
     cleanup();
     fetchMock.mockImplementation(() => Promise.reject(new Error("offline")));
-    render(<MarkRead laneId="PKG" chatKey={KEY} readThrough="2026-11-23T14:05:00.000Z" />);
+    render(<MarkRead conn={CONN} laneId="PKG" chatKey={KEY} readThrough="2026-11-23T14:05:00.000Z" />);
     await waitFor(() => expect(fetchMock).toHaveBeenCalled());
   });
 });
@@ -235,12 +236,12 @@ describe("C2: Refresh after Load older messages leaves no hole", () => {
   it("older pages are kept and merged by id with the refreshed first page; the next 'older than' time is the oldest message shown", async () => {
     const first = [msg("m5", "2026-11-23T14:00:00.000Z"), msg("m6", "2026-11-23T14:05:00.000Z")];
     fetchMock.mockImplementationOnce(() => reply(200, { messages: [msg("m3", "2026-11-22T14:00:00.000Z"), msg("m4", "2026-11-22T14:05:00.000Z")], nextBefore: "2026-11-22T14:00:00.000Z" }));
-    const { rerender } = render(<ConversationMessages key={KEY} laneId="PKG" chatKey={KEY} initial={first} nextBefore="2026-11-23T14:00:00.000Z" group />);
+    const { rerender } = render(<ConversationMessages conn={CONN} key={KEY} laneId="PKG" chatKey={KEY} initial={first} nextBefore="2026-11-23T14:00:00.000Z" group />);
     fireEvent.click(screen.getByTestId("load-older"));
     await waitFor(() => expect(screen.getAllByTestId("message")).toHaveLength(4));
     // Refresh: the server sends a NEW first page (newer messages, overlapping one)
     const refreshed = [msg("m6", "2026-11-23T14:05:00.000Z"), msg("m7", "2026-11-23T14:10:00.000Z")];
-    rerender(<ConversationMessages key={KEY} laneId="PKG" chatKey={KEY} initial={refreshed} nextBefore="2026-11-23T14:05:00.000Z" group />);
+    rerender(<ConversationMessages conn={CONN} key={KEY} laneId="PKG" chatKey={KEY} initial={refreshed} nextBefore="2026-11-23T14:05:00.000Z" group />);
     expect(screen.getAllByTestId("message").map((m) => m.textContent?.match(/text m\d/)?.[0])).toEqual(["text m3", "text m4", "text m6", "text m7"]); // m5 fell out of the refreshed page and is not shown again, never duplicated
     // and the next click asks for older than the OLDEST shown (m3), not for the refreshed page's own time
     fetchMock.mockImplementationOnce(() => reply(200, { messages: [], nextBefore: null }));
@@ -250,14 +251,14 @@ describe("C2: Refresh after Load older messages leaves no hole", () => {
   });
 
   it("the scroll box is a labelled, focusable log", () => {
-    render(<ConversationMessages laneId="PKG" chatKey={KEY} initial={[msg("m1", "2026-11-23T14:00:00.000Z")]} nextBefore={null} group />);
+    render(<ConversationMessages conn={CONN} laneId="PKG" chatKey={KEY} initial={[msg("m1", "2026-11-23T14:00:00.000Z")]} nextBefore={null} group />);
     const box = screen.getByTestId("conversation-scroll");
     expect([box.getAttribute("role"), box.getAttribute("tabindex"), box.getAttribute("aria-label")]).toEqual(["log", "0", "Messages in this chat"]);
   });
 
   it("an unresolved member is said in words", async () => {
     fetchMock.mockImplementationOnce(() => reply(409, { error: "not_allowed", reason: "unresolved" }));
-    render(<CallButtons laneId="PKG" chatKey={KEY} call="available" openUrl="https://teams.microsoft.com/l/chat/19:abc123def456@thread.v2/conversations" />);
+    render(<CallButtons conn={CONN} laneId="PKG" chatKey={KEY} call="available" openUrl="https://teams.microsoft.com/l/chat/19:abc123def456@thread.v2/conversations" />);
     fireEvent.click(screen.getByRole("button", { name: "Call" }));
     await waitFor(() => expect(screen.getByTestId("call-error").textContent).toBe("Someone in this chat no longer has an account. Open the chat in Teams."));
   });
@@ -267,7 +268,7 @@ describe("L4: a window whose opener cannot be set is still a successful open", (
   it("no error is shown and no fallback link either", async () => {
     (window.open as unknown as ReturnType<typeof vi.fn>).mockImplementation(() => Object.defineProperty({}, "opener", { set() { throw new DOMException("cross-origin", "SecurityError"); } }));
     fetchMock.mockImplementation(() => reply(200, { url: "https://teams.microsoft.com/l/call/0/0?users=pat@teams.example.test" }));
-    render(<CallButtons laneId="PKG" chatKey={KEY} call="available" openUrl="https://teams.microsoft.com/l/chat/19:abc123def456@thread.v2/conversations" />);
+    render(<CallButtons conn={CONN} laneId="PKG" chatKey={KEY} call="available" openUrl="https://teams.microsoft.com/l/chat/19:abc123def456@thread.v2/conversations" />);
     fireEvent.click(screen.getByRole("button", { name: "Call" }));
     await waitFor(() => expect(window.open).toHaveBeenCalled());
     await waitFor(() => expect(screen.getByRole("button", { name: "Call" }).hasAttribute("disabled")).toBe(false));

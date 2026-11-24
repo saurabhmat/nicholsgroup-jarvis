@@ -10,7 +10,7 @@ import type { MessagesState } from "@/lib/teams-messages";
 afterEach(cleanup);
 const ID = "00000000-0000-4000-8000-0000000000c1";
 const ACCOUNT = "me@teams.example.test";
-const connected = (over: Partial<Extract<MessagesState, { kind: "connected" }>> = {}): MessagesState => ({ kind: "connected", connectionId: ID, account: ACCOUNT, degraded: false, missing: [], adminConsent: false, laneFeatures: ["chat_read", "call_links"], ...over });
+const connected = (over: Partial<Extract<MessagesState, { kind: "connected" }>> = {}): MessagesState => ({ kind: "connected", connectionId: ID, account: ACCOUNT, degraded: false, missing: [], adminConsent: false, laneFeatures: ["chat_read", "call_links"], accounts: [{ connectionId: CONN, account: "me@teams.example.test", label: "teams.example.test", usable: true, degraded: false, missing: [], has: ["chat_read", "call_links"] }], multi: false, canAddAnother: false, ...over });
 
 const WIDTHS = [1280, 390];
 const at = (width: number) => {
@@ -44,7 +44,7 @@ describe.each(WIDTHS)("Messages at %ipx", (width) => {
   });
 
   it("needs reconnect: Reconnect Teams names the connection", () => {
-    draw({ kind: "reconnect", connectionId: ID, account: ACCOUNT });
+    draw({ kind: "reconnect", connectionId: ID, account: ACCOUNT, accounts: [{ connectionId: ID, account: ACCOUNT, label: "teams.example.test", usable: false, degraded: false, missing: [], has: [] }] });
     const form = within(screen.getByTestId("messages-reconnect")).getByRole("button", { name: "Reconnect Teams" }).closest("form");
     expect(form?.getAttribute("action")).toBe(`/api/connect/teams/start?lane=PKG&connection=${ID}`);
     expect(screen.getByText("Your Teams sign-in expired")).toBeTruthy();

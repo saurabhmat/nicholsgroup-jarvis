@@ -25,6 +25,7 @@ beforeEach(() => {
   for (const f of Object.values(reader)) f.mockReset();
 });
 
+const CONNID = "00000000-0000-4000-8000-0000000000c1";
 describe("teams and channels", () => {
   it("teams: ids and names only", async () => {
     reader.listTeams.mockResolvedValue({ teams: [{ teamId: TEAM, name: "Alpha", archived: true }], more: true, self });
@@ -84,7 +85,7 @@ describe("posts and replies", () => {
     if (v.kind !== "ok") throw new Error("ok expected");
     expect(v.nextCursor).toBe("cur1");
     expect(v.posts.map((p) => [p.id, p.subject])).toEqual([["1700000000002", "Budget"], ["1700000000001", null], ["bad id/with slash", null]]);
-    expect(v.posts[0]?.images).toBe(`/api/lanes/PKG/messages/image?team=${TEAM}&channel=${KEY}&message=1700000000002`);
+    expect(v.posts[0]?.images).toBe(`/api/lanes/PKG/messages/image?team=${TEAM}&channel=${KEY}&conn=${CONNID}&message=1700000000002`);
     expect(v.posts[2]?.images).toBeNull();
     expect(v.posts[0]?.openUrl).toBe(`https://teams.microsoft.com/l/message/${CH}/1700000000002?tenantId=${TENANT}&groupId=${TEAM}&parentMessageId=1700000000002`);
     expect(v.posts[1]?.openUrl).toBe("https://teams.microsoft.com/l/message/x/1");
@@ -103,8 +104,8 @@ describe("posts and replies", () => {
   });
 
   it("the image address helper validates the message id and encodes the others", () => {
-    expect(postImagesBase("PKG", TEAM, KEY, "1700000000001")).toBe(`/api/lanes/PKG/messages/image?team=${TEAM}&channel=${KEY}&message=1700000000001`);
-    for (const bad of ["", "..", "a/b", "a b", "x".repeat(300)]) expect(postImagesBase("PKG", TEAM, KEY, bad), bad).toBeNull();
+    expect(postImagesBase("PKG", TEAM, KEY, "1700000000001", CONNID)).toBe(`/api/lanes/PKG/messages/image?team=${TEAM}&channel=${KEY}&conn=${CONNID}&message=1700000000001`);
+    for (const bad of ["", "..", "a/b", "a b", "x".repeat(300)]) expect(postImagesBase("PKG", TEAM, KEY, bad, CONNID), bad).toBeNull();
   });
 
   it("rule 6: a canary in names, subjects and bodies never reaches a log line", async () => {

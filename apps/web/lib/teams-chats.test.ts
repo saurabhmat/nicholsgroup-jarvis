@@ -9,8 +9,9 @@ const reader = vi.hoisted(() => ({
 }));
 vi.mock("@nichols/connectors/teams-reader", () => ({ listChats: reader.listChats, listMessages: reader.listMessages, openChat: reader.openChat }));
 
-import { chatRow, chatTitle, loadChatList, loadConversation, loadOlder, messageView } from "./teams-chats";
+import { chatRow, chatTitle, loadChatLists, loadConversation, loadOlder, messageView } from "./teams-chats";
 import { encodeChatKey } from "./teams-chat-key";
+import { decodeCursor } from "./teams-cursor";
 
 const CANARY = "canary-chat-content-5d21-not-real";
 const CHAT = "19:abc123def456@thread.v2";
@@ -27,7 +28,10 @@ const chat = (over: Record<string, unknown> = {}) => ({
 });
 const msg = (id: string, at: string, over: Record<string, unknown> = {}) => ({ id, createdAt: at, modifiedAt: at, edited: false, deleted: false, system: false, sender: { id: U1, name: "Pat", kind: "user" }, mine: false, nodes: [{ t: "text", v: `text ${id}` }], truncated: false, attachments: [], ...over });
 const person = (client: unknown = rpcClient([])) => ({ laneId: "PKG", userId: ME, connectionId: "00000000-0000-4000-8000-0000000000c1", client: client as never });
-const rpcClient = (markers: { chat_id: string; read_through: string }[], error: unknown = null) => ({ schema: () => ({ rpc: async () => ({ data: markers, error }) }) });
+const rpcClient = (markers: { chat_id: string; read_through: string }[], error: unknown = null) => ({ schema: () => ({ rpc: async () => ({ data: markers.map((m) => ({ connection_id: "00000000-0000-4000-8000-0000000000c1", ...m })), error }) }) });
+const SRC = { connectionId: "00000000-0000-4000-8000-0000000000c1", label: null, account: "me@teams.example.test", ord: 0 };
+// the one-account list: the combined loader over one source (it must behave exactly as the single-account list always did)
+const loadChatList = (p: ReturnType<typeof person>, opts: { cursor?: string; selectedKey?: string | null }) => loadChatLists({ laneId: p.laneId, userId: p.userId, client: p.client }, [SRC], opts);
 const self = { tenantId: "t", entraObjectId: ME };
 
 beforeEach(() => {
@@ -49,18 +53,18 @@ describe("titles and rows", () => {
 
   it("unread combines Teams' read time with the portal's marker; the selected chat is not unread; senders and 'You:' are in the preview; External is labelled", () => {
     const base = chat();
-    expect(chatRow(base as never, null, false, NOW)).toMatchObject({ unread: true, preview: "Pat Example: hello there", time: "9:05 AM", external: false, title: "Pat Example", key: encodeChatKey(CHAT) });
-    expect(chatRow(base as never, "2026-11-23T14:05:00.000Z", false, NOW).unread).toBe(false); // the portal's marker is at the newest message
-    expect(chatRow(base as never, "2026-11-22T00:00:00.000Z", false, NOW).unread).toBe(true); // an older marker does not clear it
-    expect(chatRow(base as never, null, true, NOW).unread).toBe(false); // open right now
+    expect(chatRow(base as never, null, false, NOW, SRC)).toMatchObject({ unread: true, preview: "Pat Example: hello there", time: "9:05 AM", external: false, title: "Pat Example", key: encodeChatKey(CHAT) });
+    expect(chatRow(base as never, "2026-11-23T14:05:00.000Z", false, NOW, SRC).unread).toBe(false); // the portal's marker is at the newest message
+    expect(chatRow(base as never, "2026-11-22T00:00:00.000Z", false, NOW, SRC).unread).toBe(true); // an older marker does not clear it
+    expect(chatRow(base as never, null, true, NOW, SRC).unread).toBe(false); // open right now
     const mine = chat({ preview: { ...base.preview, mine: true } });
-    expect(chatRow(mine as never, null, false, NOW)).toMatchObject({ unread: false, preview: "You: hello there" });
-    expect(chatRow(chat({ members: [member("Me", { self: true }), member("Ext", { external: true })] }) as never, null, false, NOW).external).toBe(true);
-    expect(chatRow(chat({ preview: { ...base.preview, deleted: true } }) as never, null, false, NOW).preview).toBe("This message was deleted");
-    expect(chatRow(chat({ preview: { ...base.preview, system: true } }) as never, null, false, NOW).preview).toBe("Teams event");
-    expect(chatRow(chat({ preview: { ...base.preview, text: "" } }) as never, null, false, NOW).preview).toBe("Pat Example: Message");
-    expect(chatRow(chat({ chatType: "oneOnOne" }) as never, null, false, NOW).preview).toBe("hello there");
-    expect(chatRow(chat({ preview: null, lastReadAt: null }) as never, null, false, NOW)).toMatchObject({ unread: false, preview: "", time: "" });
+    expect(chatRow(mine as never, null, false, NOW, SRC)).toMatchObject({ unread: false, preview: "You: hello there" });
+    expect(chatRow(chat({ members: [member("Me", { self: true }), member("Ext", { external: true })] }) as never, null, false, NOW, SRC).external).toBe(true);
+    expect(chatRow(chat({ preview: { ...base.preview, deleted: true } }) as never, null, false, NOW, SRC).preview).toBe("This message was deleted");
+    expect(chatRow(chat({ preview: { ...base.preview, system: true } }) as never, null, false, NOW, SRC).preview).toBe("Teams event");
+    expect(chatRow(chat({ preview: { ...base.preview, text: "" } }) as never, null, false, NOW, SRC).preview).toBe("Pat Example: Message");
+    expect(chatRow(chat({ chatType: "oneOnOne" }) as never, null, false, NOW, SRC).preview).toBe("hello there");
+    expect(chatRow(chat({ preview: null, lastReadAt: null }) as never, null, false, NOW, SRC)).toMatchObject({ unread: false, preview: "", time: "" });
   });
 });
 
@@ -71,14 +75,14 @@ describe("loadChatList", () => {
     expect(v.kind).toBe("ok");
     if (v.kind !== "ok") return;
     expect(v.rows.map((r) => [r.title, r.unread])).toEqual([["Pat Example", true], ["Second", false]]);
-    expect(v.moreCursor).toBe("next-cursor");
-    expect(reader.listChats).toHaveBeenCalledWith("PKG", "00000000-0000-4000-8000-0000000000c1", ME, {});
+    expect(decodeCursor(v.moreCursor)).toEqual([{ conn: "00000000-0000-4000-8000-0000000000c1", token: "next-cursor" }]); // the combined cursor, also with one account
+    expect(reader.listChats).toHaveBeenCalledWith("PKG", "00000000-0000-4000-8000-0000000000c1", ME, { memberReads: 20 });
   });
 
   it("an explicit cursor goes to the reader; the selected chat is not unread", async () => {
     reader.listChats.mockResolvedValue({ chats: [chat()], nextCursor: null, self });
     const v = await loadChatList(person(), { cursor: "abc", selectedKey: encodeChatKey(CHAT) });
-    expect(reader.listChats).toHaveBeenCalledWith("PKG", expect.any(String), ME, { cursor: "abc" });
+    expect(reader.listChats).toHaveBeenCalledWith("PKG", expect.any(String), ME, { cursor: "abc", memberReads: 20 });
     expect(v.kind === "ok" && v.rows[0]?.unread).toBe(false);
   });
 
@@ -206,10 +210,10 @@ describe("privacy (rule 6)", () => {
     reader.openChat.mockResolvedValue({ chat: chat({ topic: "Team chat", members: [] }), members: [member("Me", { self: true }), member("Pat")], membersMore: false });
     reader.listMessages.mockResolvedValue({ messages: [msg("1700000000001", "2026-11-23T14:05:00.000Z"), msg("bad id/with slash", "2026-11-23T14:06:00.000Z")], nextBefore: null, self });
     const v = await loadConversation(person(), CHAT, encodeChatKey(CHAT), { laneListsCalls: true, connectionHasCalls: true });
-    expect(v.kind === "ok" && v.messages.map((m) => m.images)).toEqual([null, `/api/lanes/PKG/messages/image?chat=${encodeChatKey(CHAT)}&message=1700000000001`]); // oldest first: the second message has no valid id
+    expect(v.kind === "ok" && v.messages.map((m) => m.images)).toEqual([null, `/api/lanes/PKG/messages/image?chat=${encodeChatKey(CHAT)}&conn=00000000-0000-4000-8000-0000000000c1&message=1700000000001`]); // oldest first: the second message has no valid id
     reader.listMessages.mockResolvedValue({ messages: [msg("1700000000002", "2026-11-23T13:00:00.000Z")], nextBefore: null, self });
     const older = await loadOlder(person(), CHAT, "2026-11-23T14:00:00.000Z");
-    expect(older.kind === "ok" && older.messages[0]?.images).toBe(`/api/lanes/PKG/messages/image?chat=${encodeChatKey(CHAT)}&message=1700000000002`);
+    expect(older.kind === "ok" && older.messages[0]?.images).toBe(`/api/lanes/PKG/messages/image?chat=${encodeChatKey(CHAT)}&conn=00000000-0000-4000-8000-0000000000c1&message=1700000000002`);
   });
 
   it("messageView carries only what the page draws (no raw body, no ids of members)", () => {
@@ -238,7 +242,7 @@ describe("T-281 review follow-ups", () => {
     const many = [member("Me", { self: true }), ...["A", "B", "C", "D", "E"].map((n) => member(n))];
     expect(chatTitle({ topic: null, members: many, membersCapped: true })).toBe("A, B, C and others");
     expect(chatTitle({ topic: null, members: many, membersCapped: false })).toBe("A, B, C +2");
-    expect(chatRow(chat({ topic: null, members: many, membersCapped: true }) as never, null, false, NOW).title).toBe("A, B, C and others");
+    expect(chatRow(chat({ topic: null, members: many, membersCapped: true }) as never, null, false, NOW, SRC).title).toBe("A, B, C and others");
   });
 
   it("C6: a conversation with more members than the first page says so in the title", async () => {

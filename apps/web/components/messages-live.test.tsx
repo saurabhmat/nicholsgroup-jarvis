@@ -4,6 +4,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { act, cleanup, fireEvent, render, screen } from "@testing-library/react";
 
+const CONN = "00000000-0000-4000-8000-0000000000c1";
 const refresh = vi.hoisted(() => vi.fn());
 vi.mock("next/navigation", () => ({ useRouter: () => ({ refresh }), usePathname: () => "/PKG/messages" }));
 
@@ -16,7 +17,7 @@ import type { ChatRowView, MessageView } from "@/lib/teams-chats";
 
 const KEY = encodeChatKey("19:abc123def456@thread.v2");
 const msg = (id: string, at: string, over: Record<string, unknown> = {}): MessageView => ({ id, at, time: "9:05 AM", fullTime: "x", day: at.slice(0, 10), sender: "Pat", mine: false, edited: false, deleted: false, system: false, nodes: [{ t: "text", v: `text ${id}` }], truncated: false, attachments: [], ...over }) as unknown as MessageView;
-const row = (key: string, title: string, unread = false): ChatRowView => ({ key, title, preview: `p ${title}`, time: "9:00 AM", unread, external: false });
+const row = (key: string, title: string, unread = false): ChatRowView => ({ key, conn: CONN, account: null, accountName: null, at: null, ord: 0, title, preview: `p ${title}`, time: "9:00 AM", unread, external: false });
 
 type Server = { truncated?: boolean; live: boolean; lastNoticeAt: string | null; dot: boolean; activityStatus: number; chats: ChatRowView[]; chatsStatus: number; newer: MessageView[]; newerStatus: number };
 let server: Server;
@@ -75,7 +76,7 @@ function page() {
     <MessagesLiveProvider laneId="PKG">
       <MessagesRefresh mode="live" />
       <ChatListLive laneId="PKG" initialRows={[row(KEY, "Pat")]} moreCursor={null} selectedKey={KEY} more={null} />
-      <ConversationMessages laneId="PKG" chatKey={KEY} initial={initial} nextBefore={null} group />
+      <ConversationMessages conn={CONN} laneId="PKG" chatKey={KEY} initial={initial} nextBefore={null} group />
     </MessagesLiveProvider>,
   );
 }
@@ -211,7 +212,7 @@ describe("with working notices: the loop asks OUR database, never Microsoft", ()
     const edited = [msg("m1", "2026-11-23T14:00:00.000Z", { modifiedAt: "2026-11-23T16:00:00.000Z", nodes: [{ t: "text", v: "newest text" }] }), msg("m2", "2026-11-23T14:05:00.000Z")];
     render(
       <MessagesLiveProvider laneId="PKG">
-        <ConversationMessages laneId="PKG" chatKey={KEY} initial={edited} nextBefore={null} group />
+        <ConversationMessages conn={CONN} laneId="PKG" chatKey={KEY} initial={edited} nextBefore={null} group />
       </MessagesLiveProvider>,
     );
     await tick(0);
