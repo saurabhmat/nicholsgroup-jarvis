@@ -36,7 +36,7 @@ behavioural probe; the test fails when the catalog holds a subject without an en
 
 ## 2. Authentication, AAL2, step-up (routes)
 
-31 `route.ts` handlers (some with several methods), 20 `page.tsx`, 4 server-action files (sign-in, mfa, briefing-actions, news-actions), `proxy.ts`,
+28 `route.ts` files (29 method handlers plus the three Inngest methods), 20 `page.tsx`, 4 server-action files (sign-in, mfa, briefing-actions, news-actions), `proxy.ts`,
 Inngest endpoint, 2 webhook endpoints, 4 OAuth routes. Existing static catalog tests: `lane-pages.test.ts`, `module-gate-pages.test.ts` (pages),
 `step-up-callers.test.ts` (callers of requireStepUp), `directive-exports.test.ts`. No catalog for API routes.
 Phase 2: `apps/web/tests/route-inventory.test.ts`: walks `app/` for route.ts, page.tsx and `"use server"` files, and compares with a classification

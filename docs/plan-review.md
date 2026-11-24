@@ -2239,3 +2239,14 @@ Security review, code review, two full re-checks by each and a closing security 
 - **More than 20 dismissed records in one chat** drop the oldest dismissed id.
 - **zod reaches the client bundle** through `@nichols/connectors/teams-pure` (the reader imports it); look at it if bundle size matters.
 - **Real company domain names in comments and fixtures.** The closing pass noticed the lane's real sign-in domains used as examples in two comments of `apps/web/lib/approvals.ts`; a search shows the same habit across the repository's tests and comments since long before the Teams work (about 250 lines, 47 files already before T-277). No record, credential or person is involved, but rule 2 and rule 10 ask for synthetic values: backlog task T-298 (proposed).
+
+### T-170 pilot security test (test engineer, Nov 24, 2026; branch agent/T-170)
+Report: `docs/security/pilot-test.md`; plan: `docs/security/pilot-test-plan.md`. No open BLOCKER or HIGH. Accepted or deferred (none built here, tests only):
+- **F-01 (MEDIUM)** no CSP, framing or nosniff headers from the app (`apps/web/next.config.ts`); pinned by an expected-failure test. Fix is a small `headers()` change, then remove `.fails`.
+- **F-02 (LOW)** the e-mail sign-in wrong-code counter lives in a client cookie; verify the hosted OTP limits instead or count server-side.
+- **F-03 (LOW)** policy classes `calendar`, `monday`, `notion` and the Google revoke writer are inert (no action type or gate); remove or build with tests.
+- **F-04 (LOW)** Stripe, GoHighLevel, monday, Notion, TimeSolv have no connector; their webhook, rule 8 and tampering tests wait for the connectors (the provider coverage test fails when a folder appears).
+- **F-05 (LOW)** about 40 files log with `console.*` outside the redacting logger; now pinned by a reviewed list and a "no bare error" rule.
+- **F-07 (LOW, test debt)** pgTAP 303 test 11 (and once 110 test 191) depend on the calendar date; make fixtures relative to `now()`.
+- Not done (needs a person, see section 5 of the report): hosted Supabase settings, production headers and cookies, Inngest keys in Vercel, live Intuit and Microsoft signatures, a staging end-to-end approval, a full `pnpm test:db` with reset, the opt-in real-model injection run.
+- The approvals executors are tested with fake database and provider calls per package; the database half is real (pgTAP 290, 308, 325, 330, 338). There is no single test that runs a real database, the TypeScript executor and a mocked provider together.
