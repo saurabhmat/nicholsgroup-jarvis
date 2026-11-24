@@ -42,13 +42,12 @@ import {
   CHANNELS_SHARED_TEXT,
   MESSAGES_LOAD_ERROR_TITLE,
   MESSAGES_RECONNECT_TITLE,
-  MESSAGES_TIMES_NOTE,
   messagesBusyText,
   reconnectToAddText,
   TEAMS_ADMIN_CONSENT_TEXT,
 } from "@/lib/teams-wording";
 import { FocusConversation, MessagesRefresh } from "./messages-client";
-import { ConversationSkeleton, ChatListSkeleton, WorkspaceLayout } from "./messages-chats";
+import { ComposerSlot, ConversationSkeleton, ChatListSkeleton, WorkspaceLayout } from "./messages-chats";
 import { AccountBadge, MessageItem, SignIn } from "./messages-view";
 import { SectionBoundary } from "./section-boundary";
 
@@ -353,12 +352,12 @@ export function ThreadPane({
     </header>
   );
   const shell = (body: ReactNode) => (
-    <section aria-label="Channel posts" data-testid="conversation" className="flex h-[calc(100dvh-8.5rem)] min-h-[22rem] min-w-0 flex-col overflow-hidden rounded-card border border-border bg-card lg:h-[calc(100dvh-13rem)] lg:min-h-[26rem]">
+    <section aria-label="Channel posts" data-testid="conversation" className="flex h-[calc(100dvh-8.5rem)] min-h-[22rem] min-w-0 flex-col overflow-hidden rounded-card border border-border bg-card lg:h-auto lg:min-h-0 lg:flex-1">
       {header}
       <div tabIndex={0} role="region" aria-label="Posts in this channel" data-testid="conversation-scroll" className="flex min-h-0 flex-1 flex-col gap-3 overflow-y-auto overscroll-contain px-3 py-3 sm:px-4">
         {body}
       </div>
-      <p className="border-t border-border px-4 py-1 text-small text-muted-foreground">{MESSAGES_TIMES_NOTE}</p>
+      <ComposerSlot />
       <FocusConversation chatKey={channelKey} />
     </section>
   );
@@ -520,7 +519,7 @@ export async function ChannelsWorkspace({ laneId, state, searchParams }: { laneI
     );
   };
   return (
-    <div className="flex min-w-0 flex-col gap-4">
+    <div className="flex min-w-0 flex-col gap-4 lg:min-h-0 lg:flex-1">
       <ChannelAccountNotes laneId={laneId} state={state} />
       <WorkspaceLayout
         selected={channelId !== null && open !== undefined}

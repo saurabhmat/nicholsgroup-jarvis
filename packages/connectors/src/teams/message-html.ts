@@ -9,6 +9,7 @@
 // is read by the strict hosted-content parser alone (it returns an id or nothing; the address itself is dropped). Event handlers, styles, classes and `javascript:`/`data:` URLs are never read.
 // Text has bidirectional overrides, zero-width spaces and control characters removed, so a message cannot reorder or hide what the person reads. Bounded: ONE linear pass (open elements are counted per tag, so no close tag and no link walks the stack; at most MAX_STACK open elements; input read up to MAX_INPUT_CHARS), at most MAX_NODES
 // nodes, nesting capped at MAX_DEPTH, and the text cut at MAX_TEXT_CHARS (the cut is reported, never silent). The converter never throws on input and never builds a message from content.
+// T-297: the output is tidied (see `tidy`): empty containers go, leading and trailing blank lines are trimmed, and a run of line breaks or blank paragraphs inside a message is ONE line break.
 
 import { hostedRefFromSrc, type HostedScope } from "./hosted-content";
 
@@ -420,18 +421,49 @@ export function cutUnits(s: string, max: number): string {
   return s.slice(0, end);
 }
 
-/** Drops empty containers and leading or trailing breaks; merges nothing else. Pure, linear. */
+/** Whitespace-only text (a Teams "empty line" is often `<p>&nbsp;</p>`, which decodes to a space). */
+const isBlankText = (n: MessageNode): boolean => n.t === "text" && n.v.trim() === "";
+/** A node that draws as empty space: a line break or whitespace-only text. */
+const isGap = (n: MessageNode): boolean => n.t === "br" || isBlankText(n);
+
+/**
+ * Tidies a node list (T-297, spec 8.4). Pure and LINEAR: every node is visited once, children first (the nesting is capped at MAX_DEPTH by the builder, so the recursion is shallow).
+ *   - a container left with no content is dropped (an empty paragraph, `<p><br></p>`, `<p>&nbsp;</p>`), a link keeps its host;
+ *   - leading and trailing gaps (line breaks, whitespace-only text) are trimmed at every level, so a message does not start or end with blank lines;
+ *   - a run of gaps in the middle that holds a line break collapses to ONE line break; a lone whitespace-only text between two inline nodes is a word space and stays.
+ * Nothing else is merged or reordered, and nothing is added that was not in the input.
+ */
 function tidy(nodes: MessageNode[]): MessageNode[] {
-  const out: MessageNode[] = [];
+  const kept: MessageNode[] = [];
   for (const n of nodes) {
     if ("c" in n) {
       const c = tidy(n.c);
       if (c.length === 0 && n.t !== "link") continue;
-      out.push({ ...n, c } as MessageNode);
-    } else out.push(n);
+      kept.push({ ...n, c } as MessageNode);
+    } else kept.push(n);
   }
-  while (out[0]?.t === "br") out.shift();
-  while (out[out.length - 1]?.t === "br") out.pop();
+  let start = 0;
+  let end = kept.length;
+  while (start < end && isGap(kept[start] as MessageNode)) start += 1;
+  while (end > start && isGap(kept[end - 1] as MessageNode)) end -= 1;
+  const out: MessageNode[] = [];
+  let i = start;
+  while (i < end) {
+    const n = kept[i] as MessageNode;
+    if (!isGap(n)) {
+      out.push(n);
+      i += 1;
+      continue;
+    }
+    let j = i;
+    let hasBreak = false;
+    while (j < end && isGap(kept[j] as MessageNode)) {
+      if ((kept[j] as MessageNode).t === "br") hasBreak = true;
+      j += 1;
+    }
+    out.push(hasBreak ? { t: "br" } : n); // a break inside the run wins; a run of spaces is its first space
+    i = j;
+  }
   return out;
 }
 

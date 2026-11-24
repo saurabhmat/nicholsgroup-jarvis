@@ -9,6 +9,7 @@ import type { MessageNode } from "@nichols/connectors/teams-pure";
 import { dayLabel } from "@/lib/teams-format";
 import type { AttachmentView, ChatRowView, MessageView } from "@/lib/teams-chats";
 import { MESSAGES_FILE_OPENS_IN_MICROSOFT, MESSAGES_TRUNCATED_TEXT, messagesAccountBadgeName } from "@/lib/teams-wording";
+import { MessageBubble } from "./messages-bubble";
 import { HostedImage, ImagePlaceholder } from "./messages-image";
 
 // ---- message bodies: typed nodes -> elements
@@ -148,38 +149,48 @@ function Attachment({ a }: { a: AttachmentView }) {
   );
 }
 
+/** The pieces inside a bubble: the sender (channel posts), the subject, the text or its placeholder, the truncation note and the attachment stubs. */
+function BubbleContent({ m, sender, subject = null }: { m: MessageView; sender: string | null; subject?: string | null }) {
+  return (
+    <>
+      {sender ? (
+        <p dir="auto" className="mb-0.5 text-small font-medium [overflow-wrap:anywhere]">
+          {sender}
+        </p>
+      ) : null}
+      {subject ? (
+        <p dir="auto" data-testid="post-subject" className="mb-0.5 text-body font-semibold [overflow-wrap:anywhere]">
+          {subject}
+        </p>
+      ) : null}
+      {m.deleted ? (
+        <p className="text-body italic text-muted-foreground">This message was deleted</p>
+      ) : m.system ? (
+        <p className="text-body italic text-muted-foreground">Teams event</p>
+      ) : (
+        <div dir="auto" data-testid="message-body" className="min-w-0 text-body [overflow-wrap:anywhere]">
+          {m.nodes.length > 0 ? renderNodes(m.nodes, m.images) : m.attachments.length === 0 ? <span className="text-muted-foreground">(no text)</span> : null}
+        </div>
+      )}
+      {m.truncated ? <p className="mt-1 text-small text-muted-foreground">{MESSAGES_TRUNCATED_TEXT}</p> : null}
+      {m.attachments.length > 0 ? (
+        <ul className="mt-2 flex flex-col gap-1">
+          {m.attachments.map((a, i) => (
+            <Attachment key={i} a={a} />
+          ))}
+        </ul>
+      ) : null}
+    </>
+  );
+}
+
+/** A channel post or reply: its own bubble with its time line under it (Graph orders posts by latest activity, so each carries its date). Chat messages are drawn by `MessageList`'s groups. */
 export function MessageItem({ m, showSender, subject = null, footer = null, showDate = false }: { m: MessageView; showSender: boolean; /** Draw the date with the time (channel posts and replies: Graph orders posts by latest activity, so a bare clock time says nothing). Eastern Time, as everywhere. */ showDate?: boolean; /** A channel post's own title (plain text), drawn above the text. */ subject?: string | null; /** Drawn under the time line, inside the same item (a post's reply and Open in Teams links, and its replies). */ footer?: ReactNode }) {
   return (
     <li data-testid="message" data-mine={m.mine ? "true" : "false"} className={cn("flex flex-col gap-0.5", m.mine ? "items-end" : "items-start")}>
-      <div className={cn("max-w-[92%] min-w-0 rounded-card border px-3 py-2 sm:max-w-[80%]", m.mine ? "border-primary/30 bg-primary/10" : "border-border bg-card")}>
-        {showSender && !m.mine && m.sender ? (
-          <p dir="auto" className="mb-0.5 text-small font-medium [overflow-wrap:anywhere]">
-            {m.sender}
-          </p>
-        ) : null}
-        {subject ? (
-          <p dir="auto" data-testid="post-subject" className="mb-0.5 text-body font-semibold [overflow-wrap:anywhere]">
-            {subject}
-          </p>
-        ) : null}
-        {m.deleted ? (
-          <p className="text-body italic text-muted-foreground">This message was deleted</p>
-        ) : m.system ? (
-          <p className="text-body italic text-muted-foreground">Teams event</p>
-        ) : (
-          <div dir="auto" data-testid="message-body" className="min-w-0 text-body [overflow-wrap:anywhere]">
-            {m.nodes.length > 0 ? renderNodes(m.nodes, m.images) : m.attachments.length === 0 ? <span className="text-muted-foreground">(no text)</span> : null}
-          </div>
-        )}
-        {m.truncated ? <p className="mt-1 text-small text-muted-foreground">{MESSAGES_TRUNCATED_TEXT}</p> : null}
-        {m.attachments.length > 0 ? (
-          <ul className="mt-2 flex flex-col gap-1">
-            {m.attachments.map((a, i) => (
-              <Attachment key={i} a={a} />
-            ))}
-          </ul>
-        ) : null}
-      </div>
+      <MessageBubble mine={m.mine} fullTime={m.fullTime}>
+        <BubbleContent m={m} sender={showSender && !m.mine && m.sender ? m.sender : null} subject={subject} />
+      </MessageBubble>
       <p className="px-1 text-small text-muted-foreground">
         <time dateTime={m.at} title={m.fullTime}>
           {showDate ? m.fullTime : m.time}
@@ -191,24 +202,87 @@ export function MessageItem({ m, showSender, subject = null, footer = null, show
   );
 }
 
-/** Messages oldest first, with a separator whenever the New York day changes. Sender names are drawn in group chats. */
-export function MessageList({ messages, group, after }: { messages: readonly MessageView[]; group: boolean; after?: string | null }) {
-  const items: ReactNode[] = [];
-  let day = after ?? null;
+// ---- a conversation: day separators and groups (T-297)
+/** Messages of one sender this close together (each to the one before it) are one group, with one time shown. */
+export const GROUP_GAP_MS = 5 * 60 * 1000;
+
+export type ConversationItem = { kind: "day"; key: string; at: string } | { kind: "group"; key: string; mine: boolean; sender: string | null; messages: MessageView[] };
+
+/**
+ * Pure: the conversation's items, oldest first. A day separator whenever the New York day changes (`m.day`; `after` is the day the list continues from). A message joins the group before it when it is
+ * the same sender (the same side: `mine`, and the same name), on the same day, within GROUP_GAP_MS of that group's last message, and neither it nor the group's last message is a Teams event or a deletion
+ * note (those stand alone). A time that does not parse never joins. Linear.
+ */
+export function groupMessages(messages: readonly MessageView[], after: string | null = null): ConversationItem[] {
+  const items: ConversationItem[] = [];
+  let day = after;
+  let last: Extract<ConversationItem, { kind: "group" }> | null = null;
   for (const m of messages) {
     if (m.day !== day) {
-      items.push(
-        <li key={`d-${m.day}-${m.id}`} className="flex justify-center py-1">
-          <div role="separator" aria-label={dayLabel(m.at)} className="rounded-full bg-muted px-3 py-0.5 text-small text-muted-foreground">
-            {dayLabel(m.at)}
-          </div>
-        </li>,
-      );
+      items.push({ kind: "day", key: `d-${m.day}-${m.id}`, at: m.at });
       day = m.day;
+      last = null;
     }
-    items.push(<MessageItem key={m.id} m={m} showSender={group} />);
+    const prev = last?.messages[last.messages.length - 1];
+    const gap = prev ? Date.parse(m.at) - Date.parse(prev.at) : Number.NaN;
+    const together = last !== null && prev !== undefined && !m.system && !prev.system && last.mine === m.mine && last.sender === m.sender && gap >= 0 && gap <= GROUP_GAP_MS;
+    if (together && last) last.messages.push(m);
+    else {
+      last = { kind: "group", key: `g-${m.id}`, mine: m.mine, sender: m.sender, messages: [m] };
+      items.push(last);
+    }
   }
-  return <>{items}</>;
+  return items;
+}
+
+function GroupView({ g, showSender }: { g: Extract<ConversationItem, { kind: "group" }>; showSender: boolean }) {
+  const lastMsg = g.messages[g.messages.length - 1] as MessageView;
+  const named = showSender && !g.mine && g.sender && !g.messages[0]?.system;
+  return (
+    <li data-testid="message-group" data-mine={g.mine ? "true" : "false"} className={cn("flex flex-col gap-0.5", g.mine ? "items-end" : "items-start")}>
+      {named ? (
+        <p dir="auto" data-testid="group-sender" className="px-1 text-small font-medium [overflow-wrap:anywhere]">
+          {g.sender}
+        </p>
+      ) : null}
+      <ul className={cn("flex min-w-0 max-w-full flex-col gap-0.5", g.mine ? "items-end" : "items-start")}>
+        {g.messages.map((m) => (
+          <li key={m.id} data-testid="message" data-mine={m.mine ? "true" : "false"} className={cn("flex min-w-0 max-w-full flex-col", g.mine ? "items-end" : "items-start")}>
+            <MessageBubble mine={m.mine} fullTime={m.fullTime}>
+              {/* the time and the side of every message, for a screen reader (the group shows one time; a tap or hover shows each one) */}
+              <span className="sr-only">
+                {g.mine ? "You" : (g.sender ?? "Message")}, <time dateTime={m.at}>{m.fullTime}</time>:{" "}
+              </span>
+              <BubbleContent m={m} sender={null} />
+              {m.edited ? <p className="mt-0.5 text-small text-muted-foreground">Edited</p> : null}
+            </MessageBubble>
+          </li>
+        ))}
+      </ul>
+      <p aria-hidden data-testid="group-time" className="px-1 text-small text-muted-foreground">
+        <time dateTime={lastMsg.at}>{lastMsg.time}</time>
+      </p>
+    </li>
+  );
+}
+
+/** Messages oldest first: a separator whenever the New York day changes, then groups of one sender's messages with one time each. Sender names (group chats) are drawn once per group. */
+export function MessageList({ messages, group, after }: { messages: readonly MessageView[]; group: boolean; after?: string | null }) {
+  return (
+    <>
+      {groupMessages(messages, after ?? null).map((it) =>
+        it.kind === "day" ? (
+          <li key={it.key} className="flex justify-center py-1">
+            <div role="separator" aria-label={dayLabel(it.at)} className="rounded-full bg-muted px-3 py-0.5 text-small text-muted-foreground">
+              {dayLabel(it.at)}
+            </div>
+          </li>
+        ) : (
+          <GroupView key={it.key} g={it} showSender={group} />
+        ),
+      )}
+    </>
+  );
 }
 
 // ---- the chat list

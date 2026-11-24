@@ -8,7 +8,7 @@
 //   CallButtons       Call and Video call (ask the server for the link, then open it in a new tab) and Open in Teams
 //   MarkRead          once per opened chat: records the portal's own read marker
 import { useRouter } from "next/navigation";
-import { useEffect, useLayoutEffect, useRef, useState, useTransition } from "react";
+import { useEffect, useLayoutEffect, useRef, useState, useTransition, type ReactNode } from "react";
 import { Button, buttonVariants, cn } from "@nichols/ui";
 import { NEWER_EPOCH } from "@/lib/messages-live-config";
 import type { CallState, MessageView } from "@/lib/teams-chats";
@@ -39,6 +39,7 @@ export function MessagesRefresh({ label = "Refresh", mode = "page" }: { label?: 
   const [pending, start] = useTransition();
   const [note, setNote] = useState<string | null>(null);
   const click = () => {
+    if (pending) return; // a refresh is under way: a second press waits (the button is not disabled: a disabled button would lose the keyboard focus)
     if (mode === "live" && live) {
       const r = live.requestRefresh("refresh");
       setNote(r.ok ? null : messagesRefreshWaitText(r.waitSeconds));
@@ -48,7 +49,8 @@ export function MessagesRefresh({ label = "Refresh", mode = "page" }: { label?: 
   };
   return (
     <>
-      <Button type="button" variant="outline" size="sm" disabled={pending} onClick={click} data-testid="messages-refresh">
+      {/* T-297: `aria-disabled`, not `disabled`: the keyboard focus stays on Refresh while it works and after it. 44 px high on a phone. */}
+      <Button type="button" variant="outline" size="sm" aria-disabled={pending ? true : undefined} onClick={click} data-testid="messages-refresh" className="max-lg:min-h-11">
         {pending ? "Refreshing..." : label}
       </Button>
       {note ? (
@@ -199,7 +201,12 @@ export function ConversationMessages({ laneId, chatKey, conn, initial, nextBefor
   );
 }
 
-export function CallButtons({ laneId, chatKey, conn, call, openUrl }: { laneId: string; chatKey: string; conn: string; call: CallState; openUrl: string }) {
+/**
+ * The header's actions (T-297): Call, Video call, Open in Teams and whatever the header passes as `children` (Refresh), then the lines that belong under the header: a call error, the fallback link
+ * and, only when calls are unavailable for this chat, the small muted note. The root is `display: contents`, so these are items of the HEADER's own flex row (the actions sit on the right; the lines
+ * take a row of their own under it). Each action is 44 px high on a phone.
+ */
+export function CallButtons({ laneId, chatKey, conn, call, openUrl, children }: { laneId: string; chatKey: string; conn: string; call: CallState; openUrl: string; children?: ReactNode }) {
   const [state, setState] = useState<{ busy: "call" | "video" | null; error: string | null; link: string | null }>({ busy: null, error: null, link: null });
   const note = call === "available" ? null : callUnavailableText(call);
 
@@ -236,32 +243,33 @@ export function CallButtons({ laneId, chatKey, conn, call, openUrl }: { laneId: 
   }
 
   return (
-    <div className="flex flex-wrap items-center gap-2" data-testid="call-buttons">
+    <div className="contents" data-testid="call-buttons">
       {call === "available" ? (
         <>
-          <Button type="button" variant="outline" size="sm" disabled={state.busy !== null} onClick={() => void press(false)} data-testid="call-button">
+          <Button type="button" variant="outline" size="sm" disabled={state.busy !== null} onClick={() => void press(false)} data-testid="call-button" className="max-lg:min-h-11">
             {state.busy === "call" ? "Opening..." : "Call"}
           </Button>
-          <Button type="button" variant="outline" size="sm" disabled={state.busy !== null} onClick={() => void press(true)} data-testid="video-button">
+          <Button type="button" variant="outline" size="sm" disabled={state.busy !== null} onClick={() => void press(true)} data-testid="video-button" className="max-lg:min-h-11">
             {state.busy === "video" ? "Opening..." : "Video call"}
           </Button>
         </>
       ) : null}
-      <a href={openUrl} target="_blank" rel="noopener noreferrer" data-testid="open-in-teams" className={cn(buttonVariants({ variant: "outline", size: "sm" }))}>
+      <a href={openUrl} target="_blank" rel="noopener noreferrer" data-testid="open-in-teams" className={cn(buttonVariants({ variant: "outline", size: "sm" }), "max-lg:min-h-11 max-lg:items-center")}>
         Open in Teams
       </a>
+      {children}
       {state.link ? (
-        <a href={state.link} target="_blank" rel="noopener noreferrer" data-testid="call-link" className="text-small font-medium text-primary underline underline-offset-2">
+        <a href={state.link} target="_blank" rel="noopener noreferrer" data-testid="call-link" className="basis-full text-small font-medium text-primary underline underline-offset-2">
           Open the call in Teams
         </a>
       ) : null}
       {state.error ? (
-        <p role="alert" data-testid="call-error" className="w-full text-small text-alert-foreground">
+        <p role="alert" data-testid="call-error" className="basis-full text-small text-alert-foreground">
           {state.error}
         </p>
       ) : null}
       {note ? (
-        <p data-testid="call-note" className="w-full text-small text-muted-foreground">
+        <p data-testid="call-note" className="basis-full text-small text-muted-foreground">
           {note}
         </p>
       ) : null}

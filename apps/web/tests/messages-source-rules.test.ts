@@ -9,7 +9,7 @@ import { describe, expect, it } from "vitest";
 
 const web = resolve(__dirname, "..");
 const read = (f: string) => readFileSync(join(web, f), "utf8");
-const MESSAGES = ["components/messages-view.tsx", "components/messages-chats.tsx", "components/messages-client.tsx", "components/messages-page.tsx", "lib/teams-chats.ts", "lib/teams-api.ts", "lib/teams-reads.ts", "lib/teams-format.ts", "lib/teams-errors.ts", "lib/teams-chat-key.ts"];
+const MESSAGES = ["components/messages-view.tsx", "components/messages-chats.tsx", "components/messages-client.tsx", "components/messages-page.tsx", "lib/teams-chats.ts", "lib/teams-api.ts", "lib/teams-reads.ts", "lib/teams-format.ts", "lib/teams-errors.ts", "lib/teams-chat-key.ts", "components/messages-scope.tsx", "components/messages-bubble.tsx", "lib/messages-view-state.ts"];
 const code = (f: string) => read(f).replace(/\/\*[\s\S]*?\*\//g, "").replace(/(^|[^:])\/\/[^\n]*/g, "$1"); // without comments
 
 describe("Messages source rules", () => {

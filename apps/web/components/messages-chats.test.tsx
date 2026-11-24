@@ -192,12 +192,16 @@ describe.each(WIDTHS)("the conversation at %ipx", (width) => {
     expect(items).toHaveLength(4);
     expect(items.map((i) => i.getAttribute("data-mine"))).toEqual(["false", "false", "true", "false"]);
     expect(screen.getAllByRole("separator").map((s) => s.getAttribute("aria-label"))).toEqual(["Sunday, November 22, 2026", "Monday, November 23, 2026"]);
-    expect(within(items[0] as HTMLElement).getByText("Pat")).toBeTruthy(); // sender name in a group
-    expect(within(items[2] as HTMLElement).queryByText("Pat")).toBeNull(); // not on my own
+    // T-297: the sender is named once per GROUP (m1 and m2 are an hour apart: two groups), never on my own, never on a Teams event
+    expect(screen.getAllByTestId("group-sender").map((s) => s.textContent)).toEqual(["Pat", "Pat"]);
+    expect(within(items[2] as HTMLElement).queryByText("Pat")).toBeNull();
     expect(within(items[0] as HTMLElement).getByText(/Edited/)).toBeTruthy();
     expect(within(items[1] as HTMLElement).getByText("This message was deleted")).toBeTruthy();
     expect(within(items[3] as HTMLElement).getByText("Teams event")).toBeTruthy();
-    expect(screen.getAllByText("9:05 AM")[0]?.getAttribute("title")).toBe("Nov 23, 2026, 9:05 AM ET");
+    // each group shows ONE time (the last message's); every message's full time is in the page for a screen reader and as a tooltip
+    expect(screen.getAllByTestId("group-time").map((t) => t.textContent)).toEqual(["9:05 AM", "9:05 AM", "9:05 AM", "9:05 AM"]);
+    expect(items.map((i) => i.querySelector("time")?.textContent)).toEqual(Array(4).fill("Nov 23, 2026, 9:05 AM ET"));
+    expect(screen.getAllByTestId("bubble")[0]?.getAttribute("title")).toBe("Nov 23, 2026, 9:05 AM ET");
   });
 
   it("a 1:1 chat draws no sender names", () => {

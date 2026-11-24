@@ -78,7 +78,7 @@ export function ConnectedFrame({ laneId, state, children }: { laneId: string; st
           <ChatListColumn laneId={laneId} state={state} />
         </div>
       ) : null}
-      <div data-testid="messages-right" className="min-h-0 min-w-0 group-data-[view=list]/messages:max-lg:hidden">
+      <div data-testid="messages-right" className="min-h-0 min-w-0 group-data-[view=list]/messages:max-lg:hidden lg:flex lg:flex-col">
         {children}
       </div>
     </div>

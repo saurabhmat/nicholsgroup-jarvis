@@ -339,3 +339,88 @@ describe("H1: the converter is linear in its input (time bounds are generous but
     expect(big.truncated).toBe(true);
   });
 });
+
+describe("T-297: empty blocks are trimmed and runs of blank lines collapse (spec 8.4)", () => {
+  const shape = (html: string) => htmlToNodes(html).nodes;
+  const p = (...c: MessageNode[]): MessageNode => ({ t: "p", c });
+  const text = (v: string): MessageNode => ({ t: "text", v });
+
+  it("a message that is only empty paragraphs, only line breaks, only whitespace or only nested empty blocks has no nodes", () => {
+    for (const html of ["<p></p><p></p><p></p>", "<p><br></p><p><br></p>", "<br><br><br>", "<br/>   <br/>", "   ", "&nbsp;", "<p>&nbsp;</p><p>&nbsp;</p>", "<div><div><p><b> </b></p></div></div>", "<p><span> </span><i></i></p>", "<blockquote><p>&nbsp;</p></blockquote>", "<ul><li></li><li><br></li></ul>"]) {
+      expect(shape(html), html).toEqual([]);
+    }
+  });
+
+  it("leading and trailing empty blocks, line breaks and spaces are trimmed (the blank lines at the end of a long incoming message)", () => {
+    expect(shape("<p>&nbsp;</p><p><br></p><p>Hello</p><p>&nbsp;</p><p></p><p><br></p><br><br>")).toEqual([p(text("Hello"))]);
+    expect(shape("<br><br>Hello<br><br><br>")).toEqual([text("Hello")]);
+    expect(shape("<p><br>  Hello there  <br> </p>")).toEqual([p(text("  Hello there  "))]); // only whole-blank nodes go; the text itself is never rewritten
+    expect(shape("<p>a</p><p>b</p><p>&nbsp;</p><p>&nbsp;</p><p>&nbsp;</p>")).toEqual([p(text("a")), p(text("b"))]);
+  });
+
+  it("a run of line breaks (or breaks and blank text) in the middle becomes ONE line break; a word space between inline nodes stays", () => {
+    expect(shape("a<br><br><br><br>b")).toEqual([text("a"), { t: "br" }, text("b")]);
+    expect(shape("a<br> <br> <br>b")).toEqual([text("a"), { t: "br" }, text("b")]);
+    expect(shape("<b>x</b> <i>y</i>")).toEqual([{ t: "b", c: [text("x")] }, text(" "), { t: "i", c: [text("y")] }]);
+    expect(shape("<p>one</p><p><br></p><p><br></p><p>two</p>")).toEqual([p(text("one")), p(text("two"))]);
+  });
+
+  it("a break one author wrote on purpose between two words still shows, once", () => {
+    expect(shape("first<br>second")).toEqual([text("first"), { t: "br" }, text("second")]);
+  });
+
+  it("content is never lost or invented: pictures, emoji, mentions and links are not 'empty'", () => {
+    expect(shape('<p><img src="https://x.example.test/a.png" alt="a"></p>')).toEqual([p({ t: "image" })]);
+    expect(shape('<p><emoji alt="😀"></emoji></p>')).toEqual([p({ t: "emoji", v: "😀" })]);
+    expect(shape('<p><at id="0">Pat</at></p>')).toEqual([p({ t: "mention", v: "@Pat" })]);
+    expect(shape('<p><a href="https://a.example.test/"></a></p>')).toEqual([p({ t: "link", href: "https://a.example.test/", host: "a.example.test", c: [] })]);
+  });
+
+  it("hostile input: markup around blanks cannot bring back an element, and the output is still the allow-list", () => {
+    const evil = ['<p><script>alert(1)</script>&nbsp;</p>', '<p onclick="x()">&nbsp;</p><img src=x onerror=alert(1)>', "<p><style>p{}</style></p><iframe src=//x></iframe>", "<p>&#x202e;&#x200b;</p>", "<p>\u0000\u0001 </p>"];
+    for (const html of evil) {
+      const r = htmlToNodes(html);
+      assertSafe(r.nodes);
+      expect(allText(r.nodes), html).not.toMatch(/alert|onclick|iframe|script/);
+    }
+    // zero-width and direction controls are removed before the blank test, so a message of only those is empty (not a blank bubble)
+    expect(shape("<p>&#x202e;&#x200b;&#x2060;</p>")).toEqual([]);
+  });
+
+  it("deeply nested empty and non-empty blocks are tidied without recursion trouble (depth is capped), and the text survives", () => {
+    const deep = "<div>".repeat(5_000) + "<p>&nbsp;</p>" + "kept" + "<br><br>" + "</div>".repeat(5_000);
+    const r = htmlToNodes(deep);
+    assertSafe(r.nodes);
+    expect(allText(r.nodes)).toBe("kept");
+    let maxDepth = 0;
+    walk(r.nodes, (_n, d) => (maxDepth = Math.max(maxDepth, d)));
+    expect(maxDepth).toBeLessThanOrEqual(MAX_DEPTH);
+    const deepEmpty = "<div>".repeat(5_000) + "<br>&nbsp;" + "</div>".repeat(5_000);
+    expect(shape(deepEmpty)).toEqual([]);
+  });
+
+  it("stays linear: a megabyte-class run of blanks and 100 KB of alternating blocks and breaks, best of three under 400 ms; every cap still holds", () => {
+    const blanks = "<p>&nbsp;</p><br>".repeat(8_000); // ~136 KB, > MAX_NODES / 2 nodes before tidy
+    const mixed = "<p>a</p><br><br><p></p>".repeat(5_000);
+    for (const html of [blanks, mixed, "<br>".repeat(100_000)]) {
+      const run = () => {
+        const t0 = performance.now();
+        const r = htmlToNodes(html);
+        assertSafe(r.nodes);
+        expect(r.nodes.length).toBeLessThanOrEqual(MAX_NODES);
+        return performance.now() - t0;
+      };
+      expect(Math.min(run(), run(), run())).toBeLessThan(400);
+    }
+    expect(shape(blanks)).toEqual([]);
+    // the text cut and the node cap are reported as before
+    expect(htmlToNodes(`<p>${"x".repeat(MAX_TEXT_CHARS + 50)}</p><p>&nbsp;</p>`).truncated).toBe(true);
+    expect(htmlToNodes("<b>a</b>".repeat(MAX_NODES + 10)).truncated).toBe(true);
+  });
+
+  it("plain-text bodies are tidied the same way: blank lines at the ends go, a run in the middle is one break", () => {
+    expect(textToNodes("\n\nhello\n\n\n\nworld\n\n  \n").nodes).toEqual([text("hello"), { t: "br" }, text("world")]);
+    expect(textToNodes("   \n \n").nodes).toEqual([]);
+    expect(bodyToNodes("html", "<p>&nbsp;</p>")).toEqual({ nodes: [], truncated: false });
+  });
+});
