@@ -20,10 +20,10 @@ import { createContext, useCallback, useContext, useEffect, useLayoutEffect, use
 import { Button, cn } from "@nichols/ui";
 import { hrefFor } from "@/lib/messages-href";
 import { debounced, noteSignedInUser, teamsDrafts } from "@/lib/reply-draft-store";
-import { clearTeamsRecords, MARKER_LIFETIME_MS, putMarker, readMarkers, removeMarker, subscribeMarkers, type SendMarker } from "@/lib/teams-send-marker";
+import { clearTeamsRecords, MAX_MARKERS, putMarker, readMarkers, removeMarker, subscribeMarkers, unresolvedOf, type SendMarker } from "@/lib/teams-send-marker";
 import { newRequestId, normalizeSendText, SEND_MAX_CHARS, sendCharCount, sendTextHash, sendTextProblem } from "@/lib/teams-send-text";
 import type { MessageView } from "@/lib/teams-chats";
-import { MESSAGES_SEND_HINT_DESKTOP, SEND_DISMISS, SEND_DISMISSED_TEXT, SEND_ERROR_TEXT, SEND_IF_NOT_SENT, SEND_NETWORK_TEXT, SEND_REPLAY_NOTE, SEND_STALE_TEXT, SEND_STATE_TEXT, SEND_STEP_UP_TEXT, SEND_TEXT_PROBLEM, teamsSendLine, type SendState } from "@/lib/teams-wording";
+import { MESSAGES_SEND_HINT_DESKTOP, SEND_DISMISS, SEND_DISMISSED_TEXT, SEND_ERROR_TEXT, SEND_IF_NOT_SENT, SEND_NETWORK_TEXT, SEND_OFF_EARLIER, SEND_REPLAY_NOTE, SEND_SAFE_LINE, SEND_SENT_EARLIER, SEND_STATE_TEXT, SEND_STEP_UP_TEXT, SEND_TEXT_PROBLEM, SEND_TOO_MANY_UNKNOWN, SEND_UNSAVED_NOTE, teamsSendLine, type SendState } from "@/lib/teams-wording";
 import { useMessagesLive } from "./messages-live";
 import { MessageBubble } from "./messages-bubble";
 
@@ -43,8 +43,12 @@ export type SendItem = {
   messageId: string | null;
   /** The person dismissed the check of an unknown outcome. */
   closed: boolean;
-  /** Older than the action's own life (one hour): the portal no longer offers to send it again with the same id. */
-  stale: boolean;
+  /** The answer to a retyped text was the message from before ("Sent earlier"): nothing new was sent. */
+  earlier: boolean;
+  /** A definite "not sent" of a replay: kept (with Dismiss) until the person dismisses it, so the text is never only in a bubble that disappears. */
+  sticky: boolean;
+  /** Sending is switched off for the company: the record is only a warning (no send action, Dismiss only). */
+  off: boolean;
 };
 
 type Answer =
@@ -75,7 +79,7 @@ export function classifyAnswer(status: number, body: unknown): Answer {
   return { kind: "refused", code, reason: SEND_ERROR_TEXT[code] ?? "", fresh: b.fresh === true || code === "request_reused" };
 }
 
-type Press = { clear: boolean };
+type Press = { clear: boolean; /** The press really ran (it did not return early because a send was open or the text was not valid). */ ran: boolean };
 type Note = { text: string; href?: string; link?: string } | null;
 type SendApi = {
   items: readonly SendItem[];
@@ -97,7 +101,7 @@ const useSend = (): SendApi | null => useContext(SendCtx);
 /** The text of the live region after announcing `s`: the same words twice in a row get a zero-width mark toggled on, so the text node changes and a screen reader says them again. */
 export const nextAnnounce = (prev: string, s: string): string => (prev.replaceAll("\u200b", "") === s ? (prev.endsWith("\u200b") ? s : `${s}\u200b`) : s);
 
-type ScopeProps = { laneId: string; conn: string; chatKey: string; userId: string; enabled: boolean; /** Sending is switched off for this company: this person's tab copies and markers for the lane are removed. */ clear?: boolean; children: ReactNode };
+type ScopeProps = { laneId: string; conn: string; chatKey: string; userId: string; enabled: boolean; /** Sending is switched off for this company: this person's unsent-text copies for the lane are removed and the records of unresolved messages are kept as warnings (text stripped when the lane does not allow storing it). */ clear?: "keep_text" | "strip_text" | false; children: ReactNode };
 
 export function SendScope({ laneId, conn, chatKey, userId, enabled, clear = false, children }: ScopeProps) {
   const router = useRouter();
@@ -108,7 +112,8 @@ export function SendScope({ laneId, conn, chatKey, userId, enabled, clear = fals
   const [note, setNote] = useState<Note>(null);
   const [announce, setAnnounce] = useState("");
   const inFlight = useRef(false);
-  const idFor = useRef<{ text: string; id: string } | null>(null); // the id of the text being composed after a definite refusal of a first submit (no marker then)
+  // the id of each canonical text whose outcome is not confirmed (in flight, unknown, dismissed, or a first submit refused before the dedupe): a retyped text reuses it even when tab storage failed
+  const idsByText = useRef(new Map<string, string>());
   const inDoubt = useRef(new Set<string>()); // ids whose request has left and whose outcome is not confirmed: a refusal for them is never "Not sent"
   const alive = useRef(true);
   const where = useMemo(() => ({ laneId, userId, item: `${conn}:${chatKey}` }), [laneId, userId, conn, chatKey]);
@@ -124,29 +129,34 @@ export function SendScope({ laneId, conn, chatKey, userId, enabled, clear = fals
   // Records from before (another visit, a reload, a closed tab) or a late answer for a chat that was left: shown, never put back into the box (except a confirmed "not sent").
   useEffect(() => {
     alive.current = true;
-    if (clear) clearTeamsRecords(laneId, userId); // sending is off for this company: nothing about it is kept in this tab
-    if (!enabled) return undefined;
-    noteSignedInUser(userId); // another person signing in in this tab clears the previous person's tab copies before anything is read
-    const adopt = (m: SendMarker) => {
-      const stale = Date.now() - m.startedAt > MARKER_LIFETIME_MS;
-      const base: SendItem = { id: m.id, text: m.text, state: "unknown", reason: null, note: m.dismissed ? SEND_DISMISSED_TEXT : stale ? SEND_STALE_TEXT : null, at: m.startedAt, messageId: null, closed: m.dismissed, stale };
-      if (m.state === "sent" || m.state === "checking") {
+    // sending is off for this company: unsent-text copies go; records of unresolved messages stay as warnings (text stripped when the lane does not allow storing it)
+    if (clear) clearTeamsRecords(laneId, userId, { stripText: clear === "strip_text" });
+    if (enabled) noteSignedInUser(userId); // another person signing in in this tab clears the previous person's tab copies before anything is read
+    const adopt = (m: SendMarker, off: boolean) => {
+      const base: SendItem = { id: m.id, text: m.text, state: "unknown", reason: null, note: m.dismissed ? SEND_DISMISSED_TEXT : null, at: m.startedAt, messageId: null, closed: m.dismissed, earlier: false, sticky: false, off };
+      if (!off && (m.state === "sent" || m.state === "checking")) {
         upsert({ ...base, state: m.state, note: null, closed: false, messageId: m.messageId });
         inDoubt.current.delete(m.id);
         removeMarker(where, m.id);
-      } else if (m.state === "not_sent") {
+      } else if (!off && m.state === "not_sent") {
         upsert({ ...base, state: "not_sent", reason: m.reason, note: null, closed: false });
         inDoubt.current.delete(m.id);
         removeMarker(where, m.id);
         setRestore((r) => ({ text: m.text, n: (r?.n ?? 0) + 1 }));
-      } else {
+      } else if (m.state === "inflight" || m.state === "unknown" || m.dismissed) {
         upsert(base);
         inDoubt.current.add(m.id);
+        if (m.text !== "") idsByText.current.set(m.text, m.id);
       }
     };
-    for (const m of readMarkers(where)) adopt(m);
+    for (const m of readMarkers(where)) adopt(m, !enabled);
+    if (!enabled) {
+      return () => {
+        alive.current = false;
+      };
+    }
     const off = subscribeMarkers(where, (_id, m) => {
-      if (m && !inFlight.current) adopt(m);
+      if (m && !inFlight.current) adopt(m, false);
     });
     return () => {
       alive.current = false;
@@ -162,57 +172,65 @@ export function SendScope({ laneId, conn, chatKey, userId, enabled, clear = fals
       const prior = readMarkers(where).find((x) => x.id === id);
       // a REPLAY: this id was submitted before (a marker exists for it, or an earlier request of this page whose outcome was not confirmed). Its refusals mean only "this request sent nothing".
       const replay = prior !== undefined || inDoubt.current.has(id);
+      // the person typed the text of an earlier message again: an answer that says it went is the earlier message, not a new one
+      const retyped = replay && text.raw !== null;
       const startedAt = prior?.startedAt ?? now;
       const marker: SendMarker = { id, hash, text: canonical, startedAt, state: "inflight", messageId: null, reason: null, dismissed: false };
-      putMarker(where, marker); // synchronously, before the request leaves
+      const saved = putMarker(where, marker); // synchronously, before the request leaves
       teamsDrafts.remove(laneId, userId, where.item); // the text lives in the marker now: never restored as a draft
       inDoubt.current.add(id);
-      upsert({ id, text: canonical, state: "sending", reason: null, note: null, at: startedAt, messageId: null, closed: false, stale: false });
+      idsByText.current.set(canonical, id);
+      upsert({ id, text: canonical, state: "sending", reason: null, note: null, at: startedAt, messageId: null, closed: false, earlier: false, sticky: false, off: false });
       say(SEND_STATE_TEXT.sending);
-      const settle = (state: SendState, reason: string | null, messageId: string | null, markerState: SendMarker["state"] | null) => {
-        patch(id, { state, reason, note: null, messageId, closed: false });
-        say(state === "not_sent" ? `${SEND_STATE_TEXT.not_sent}${reason ? `: ${reason}` : ""}` : SEND_STATE_TEXT[state]);
+      const settle = (state: SendState, reason: string | null, messageId: string | null, markerState: SendMarker["state"] | null, extra: Partial<SendItem> = {}) => {
+        patch(id, { state, reason, note: null, messageId, closed: false, ...extra });
+        say(state === "not_sent" ? `${SEND_STATE_TEXT.not_sent}${reason ? `: ${reason}` : ""}` : extra.earlier ? SEND_SENT_EARLIER : SEND_STATE_TEXT[state]);
         inDoubt.current.delete(id);
         if (markerState === null || alive.current) removeMarker(where, id);
         else putMarker(where, { ...marker, state: markerState, messageId, reason }); // a late answer after the chat was left: the right state shows on return
       };
       const stillUnknown = (noteText: string | null) => {
-        patch(id, { state: "unknown", reason: null, note: noteText, messageId: null, closed: false });
+        // the warning cannot be kept across a reload when the tab's storage refused it: the bubble says so
+        const joined = [noteText, saved ? null : SEND_UNSAVED_NOTE].filter((x): x is string => x !== null).join(" ");
+        patch(id, { state: "unknown", reason: null, note: joined === "" ? null : joined, messageId: null, closed: false });
         say(SEND_STATE_TEXT.unknown);
         putMarker(where, { ...marker, state: "unknown" }); // kept: on return, or for "Send if it has not been sent", the bubble is rebuilt from it
+      };
+      const definiteNotSent = (reason: string) => {
+        // nothing was sent. A replay's bubble is the only place the text is: it stays until dismissed, and the text goes back into an empty box
+        settle("not_sent", reason, null, "not_sent", replay ? { sticky: true } : {});
+        if (replay) setRestore((r) => ({ text: canonical, n: (r?.n ?? 0) + 1 }));
       };
       const finish = (a: Answer): Press => {
         if (a.kind === "sent" || a.kind === "checking") {
           const state = a.kind === "sent" ? "sent" : "checking";
-          const messageId = a.kind === "sent" ? a.messageId : null;
-          settle(state, null, messageId, state);
-          idFor.current = null;
+          settle(state, null, a.kind === "sent" ? a.messageId : null, state, retyped ? { earlier: true } : {});
+          idsByText.current.delete(canonical);
           if (a.kind === "sent") liveRef.current?.requestRefresh("refresh"); // one re-read; at most once a minute, a refusal is fine
-          return { clear: true };
+          return { clear: !retyped, ran: true }; // an earlier message that did go: the text stays in the box, so a deliberate second send is one more press (a new id)
         }
         if (a.kind === "unknown") {
           stillUnknown(a.reason ?? null);
-          return { clear: true };
+          return { clear: true, ran: true };
         }
         if (a.kind === "not_sent") {
           // the server says the action itself ended without sending: terminal for every request, replay or not
-          settle("not_sent", a.reason, null, "not_sent");
-          idFor.current = null;
-          return { clear: false };
+          definiteNotSent(a.reason);
+          idsByText.current.delete(canonical);
+          return { clear: false, ran: true };
         }
         if (a.kind === "refused") {
           if (!replay || a.fresh) {
             // nothing was sent: a first submit refused before anything was proposed, or a proposal the server rejected on the spot (definite even for a replay: it was never approved)
-            settle("not_sent", a.reason, null, "not_sent");
-            if (a.fresh) idFor.current = null; // a replay would find the rejected action: the next press needs a new id; otherwise the SAME id is kept for the same text
-            else idFor.current = { text: canonical, id };
-            return { clear: false };
+            definiteNotSent(a.reason);
+            if (a.fresh) idsByText.current.delete(canonical); // a replay would find the rejected action: the next press needs a new id; otherwise the SAME id is kept for the same text
+            return { clear: false, ran: true };
           }
           // a replay: this request sent nothing, but an earlier one with the same id may have: the message stays "may have been sent"
-          stillUnknown(SEND_REPLAY_NOTE[a.code === "rate_limited" ? "rate_limited" : a.code === "reconnect" ? "reconnect" : a.code === "mfa_required" ? "mfa_required" : a.code === "no_session" ? "no_session" : "default"] ?? SEND_REPLAY_NOTE.default ?? "");
-          return { clear: false };
+          stillUnknown(SEND_REPLAY_NOTE[a.code] ?? SEND_REPLAY_NOTE.default ?? "");
+          return { clear: false, ran: true };
         }
-        return { clear: false };
+        return { clear: false, ran: true };
       };
       try {
         const res = await fetch(`/api/lanes/${encodeURIComponent(laneId)}/messages/send`, {
@@ -237,16 +255,15 @@ export function SendScope({ laneId, conn, chatKey, userId, enabled, clear = fals
             stillUnknown(SEND_REPLAY_NOTE.step_up_required ?? null);
             setNote({ text: SEND_STEP_UP_TEXT });
             goToCode();
-            return { clear: false };
+            return { clear: false, ran: true };
           }
           // a first submit (or a proposal rejected on the spot): the server holds nothing. The text stays in the box; the tab copy is saved first, and the person is sent to enter the code only if it really was saved.
           setItems((xs) => xs.filter((x) => x.id !== id));
           removeMarker(where, id);
           inDoubt.current.delete(id);
-          if (a.fresh) idFor.current = null;
-          else idFor.current = { text: canonical, id };
-          const saved = text.raw !== null && teamsDrafts.write(laneId, userId, where.item, { text: text.raw });
-          if (!saved) {
+          if (a.fresh) idsByText.current.delete(canonical);
+          const kept = text.raw !== null && teamsDrafts.write(laneId, userId, where.item, { text: text.raw });
+          if (!kept) {
             setNote({ text: "Your text could not be kept for the authenticator step, so you were not sent away. Copy it, then reload and enter your authenticator code." });
             say("Your text could not be kept; copy it first.");
           } else {
@@ -254,7 +271,7 @@ export function SendScope({ laneId, conn, chatKey, userId, enabled, clear = fals
             say(SEND_STEP_UP_TEXT);
             goToCode();
           }
-          return { clear: false };
+          return { clear: false, ran: true };
         }
         return finish(a);
       } catch {
@@ -269,51 +286,69 @@ export function SendScope({ laneId, conn, chatKey, userId, enabled, clear = fals
 
   const press = useCallback(
     async (raw: string): Promise<Press> => {
-      if (inFlight.current) return { clear: false }; // a double click or a held key is the same press
-      if (sendTextProblem(raw) !== null) return { clear: false };
+      if (inFlight.current) return { clear: false, ran: false }; // a double click or a held key is the same press
+      if (sendTextProblem(raw) !== null) return { clear: false, ran: false };
       inFlight.current = true; // claimed before the first await: a second press during the hashing is ignored
       setNote(null);
       const canonical = normalizeSendText(raw);
       const hash = await sendTextHash(canonical);
-      // the id of this exact text: a marker for it (unknown, dismissed) within the action's life, else the id of a refused first submit, else a new one
-      const known = readMarkers(where).find((m) => m.text === canonical && Date.now() - m.startedAt <= MARKER_LIFETIME_MS);
-      const id = known?.id ?? (idFor.current?.text === canonical ? idFor.current.id : newRequestId());
-      if (id === null || hash === null) {
+      if (hash === null) {
         inFlight.current = false;
         setNote({ text: "This browser cannot prepare the message safely, so nothing was sent." });
-        return { clear: false };
+        return { clear: false, ran: true };
       }
-      setItems((xs) => xs.filter((x) => x.state !== "not_sent")); // an earlier refusal's bubble gives way to this attempt
+      // the id of this exact text: a record for it (matched by the text's hash, so a record whose text was stripped still counts), else the id of an earlier request of this page (in flight, unknown, dismissed,
+      // or a refused first submit; it works when tab storage failed too), else a new one
+      const list = readMarkers(where);
+      const known = list.find((m) => m.hash === hash);
+      const id = known?.id ?? idsByText.current.get(canonical) ?? newRequestId();
+      if (id === null) {
+        inFlight.current = false;
+        setNote({ text: "This browser cannot prepare the message safely, so nothing was sent." });
+        return { clear: false, ran: true };
+      }
+      // five messages whose outcome is not known: a sixth is not sent (the oldest is never evicted to make room)
+      if (known === undefined && !idsByText.current.has(canonical) && unresolvedOf(list).length >= MAX_MARKERS) {
+        inFlight.current = false;
+        setNote({ text: SEND_TOO_MANY_UNKNOWN });
+        say(SEND_TOO_MANY_UNKNOWN);
+        return { clear: false, ran: true };
+      }
+      setItems((xs) => xs.filter((x) => x.state !== "not_sent" || x.sticky)); // an earlier refusal's bubble gives way to this attempt (a replay's stays until dismissed)
       inFlight.current = false;
       return submit(canonical, id, hash, Date.now(), { raw });
     },
-    [submit, where],
+    [submit, where, say],
   );
 
   const sendIfNotSent = useCallback(
     async (id: string) => {
       if (inFlight.current) return;
       const item = items.find((x) => x.id === id);
-      if (!item) return;
-      if (Date.now() - item.at > MARKER_LIFETIME_MS) {
-        patch(id, { stale: true, note: SEND_STALE_TEXT }); // past the action's own life: not offered any more (a retyped text gets a new id)
-        return;
-      }
+      if (!item || item.text === "" || item.off) return; // a record whose text was removed (or sending is off) cannot be sent again
       const hash = (await sendTextHash(item.text)) ?? "";
       if (hash === "") return;
       await submit(item.text, id, hash, Date.now(), { raw: null });
     },
-    [items, submit, patch],
+    [items, submit],
   );
 
   const dismiss = useCallback(
     (id: string) => {
-      // the id is kept for that exact text (the marker stays, flagged): retyping it asks about the same message first, so it can never be posted twice
+      const item = items.find((x) => x.id === id);
+      if (!item) return;
+      if (item.off || item.sticky) {
+        // nothing can be sent from this bubble: it goes (and its record, when sending is off)
+        if (item.off) removeMarker(where, id);
+        setItems((xs) => xs.filter((x) => x.id !== id));
+        return;
+      }
+      // the id is kept for that exact text (the record stays, flagged): retyping it asks about the same message first, so it can never be posted twice
       const m = readMarkers(where).find((x) => x.id === id);
       if (m) putMarker(where, { ...m, dismissed: true });
       patch(id, { closed: true, note: SEND_DISMISSED_TEXT });
     },
-    [where, patch],
+    [where, patch, items],
   );
 
   const api = useMemo<SendApi>(() => ({ items, busy, press, sendIfNotSent, dismiss, restore, note, setNote, announce }), [items, busy, press, sendIfNotSent, dismiss, restore, note, announce]);
@@ -338,8 +373,9 @@ function nodesText(nodes: readonly Node[]): string {
  * with no id (Sent, checking; an unknown outcome that turned out sent) is matched by text, oldest first, and each Teams message hides at most ONE bubble: one of the person's own, not earlier than the press
  * (2 minutes of clock skew), with the same text, and not a message another bubble owns by id. Two sends of "ok" are two bubbles until two messages are in the list.
  */
-export function hiddenItems(items: readonly Pick<SendItem, "id" | "text" | "at" | "state" | "messageId">[], shown: readonly MessageView[]): Set<string> {
+export function hiddenItems(items: readonly (Pick<SendItem, "id" | "text" | "at" | "state" | "messageId"> & { earlier?: boolean })[], shown: readonly MessageView[]): Set<string> {
   const hidden = new Set<string>();
+  items = items.filter((i) => !i.earlier); // "Sent earlier" is shown even though the message is in the list: it says nothing new was sent
   const owned = new Set(items.flatMap((i) => (i.messageId ? [i.messageId] : [])));
   for (const i of items) if ((i.state === "sent" || i.state === "checking") && i.messageId && shown.some((m) => m.id === i.messageId)) hidden.add(i.id);
   const used = new Set<string>();
@@ -374,32 +410,41 @@ export function PendingBubbles({ shown }: { shown: readonly MessageView[] }) {
     <>
       {items.map((i) => (
         <li key={i.id} data-testid="send-item" data-state={i.state} data-closed={i.closed ? "true" : "false"} className="flex w-full min-w-0 flex-col items-end gap-0.5">
-          <MessageBubble mine fullTime="">
-            <div dir="auto" data-testid="send-text" className="min-w-0 whitespace-pre-wrap text-body [overflow-wrap:anywhere]">
-              {i.text}
-            </div>
-          </MessageBubble>
+          {i.text !== "" ? (
+            <MessageBubble mine fullTime="">
+              <div dir="auto" data-testid="send-text" className="min-w-0 whitespace-pre-wrap text-body [overflow-wrap:anywhere]">
+                {i.text}
+              </div>
+            </MessageBubble>
+          ) : null}
           <p data-testid="send-state" className={cn("flex flex-wrap items-baseline justify-end gap-x-1 px-1 text-small", i.state === "not_sent" ? "font-medium text-alert-foreground" : "text-muted-foreground")}>
             <span aria-hidden>{STATE_GLYPH[i.state]}</span>
-            {/* ONE state line; a message too old to ask the server about says so in its place (never both) */}
-            <span>{i.state === "unknown" && i.stale ? SEND_STALE_TEXT : SEND_STATE_TEXT[i.state]}</span>
+            {/* ONE state line */}
+            <span>{i.off ? SEND_OFF_EARLIER : i.earlier ? SEND_SENT_EARLIER : SEND_STATE_TEXT[i.state]}</span>
             {i.state === "not_sent" && i.reason ? <span>: {i.reason}</span> : null}
           </p>
-          {i.state === "unknown" && i.note && !(i.stale && i.note === SEND_STALE_TEXT) ? (
+          {i.state === "unknown" && i.note ? (
             <p data-testid="send-note" className="px-1 text-small text-muted-foreground">
               {i.note}
             </p>
           ) : null}
-          {i.state === "unknown" && !i.closed ? (
-            <div className="flex gap-2 px-1" data-testid="send-actions">
-              {i.stale ? null : (
-                <Button type="button" variant="outline" size="sm" className="max-lg:min-h-11" aria-disabled={send.busy ? true : undefined} onClick={() => void send.sendIfNotSent(i.id)} data-testid="send-if-not-sent">
-                  {SEND_IF_NOT_SENT}
+          {(i.state === "unknown" && !i.closed) || (i.state === "not_sent" && i.sticky) ? (
+            <div className="flex flex-col items-end gap-1 px-1" data-testid="send-actions">
+              <div className="flex gap-2">
+                {i.state === "unknown" && !i.off && i.text !== "" ? (
+                  <Button type="button" variant="outline" size="sm" className="max-lg:min-h-11" aria-disabled={send.busy ? true : undefined} onClick={() => void send.sendIfNotSent(i.id)} data-testid="send-if-not-sent">
+                    {SEND_IF_NOT_SENT}
+                  </Button>
+                ) : null}
+                <Button type="button" variant="outline" size="sm" className="max-lg:min-h-11" onClick={() => send.dismiss(i.id)} data-testid="send-dismiss">
+                  {SEND_DISMISS}
                 </Button>
-              )}
-              <Button type="button" variant="outline" size="sm" className="max-lg:min-h-11" onClick={() => send.dismiss(i.id)} data-testid="send-dismiss">
-                {SEND_DISMISS}
-              </Button>
+              </div>
+              {i.state === "unknown" && !i.off && i.text !== "" ? (
+                <p data-testid="send-safe" className="text-small text-muted-foreground">
+                  {SEND_SAFE_LINE}
+                </p>
+              ) : null}
             </div>
           ) : null}
         </li>
@@ -445,11 +490,22 @@ export function Composer({ laneId, conn, chatKey, account, accountLabel = null, 
 
   // the box grows with its text up to the line limit (and a third of the pane), then scrolls inside. It is fitted again when the pane's height changes (the phone keyboard opening), not only on a keystroke,
   // and when the list was at the bottom it stays at the bottom, so the newest message stays visible.
+  // "at the bottom" is remembered from the list's own scroll position (updated on every scroll and after each pin), because by the time the observer fires the pane has already shrunk and measuring then
+  // would call a list that WAS at the bottom "not at the bottom": the newest message would end up hidden under the keyboard.
+  const pinned = useRef(true);
+  const scrollerOf = useCallback(() => box.current?.closest<HTMLElement>('[data-testid="conversation"]')?.querySelector<HTMLElement>('[data-testid="conversation-scroll"]') ?? null, []);
+  useEffect(() => {
+    const sc = scrollerOf();
+    if (!sc) return undefined;
+    const note = () => void (pinned.current = sc.scrollHeight - sc.scrollTop - sc.clientHeight < 96);
+    note();
+    sc.addEventListener("scroll", note, { passive: true });
+    return () => sc.removeEventListener("scroll", note);
+  }, [scrollerOf]);
   const fit = useCallback(() => {
     const el = box.current;
     if (!el) return;
-    const scroller = el.closest<HTMLElement>('[data-testid="conversation"]')?.querySelector<HTMLElement>('[data-testid="conversation-scroll"]') ?? null;
-    const atBottom = scroller !== null && scroller.scrollHeight - scroller.scrollTop - scroller.clientHeight < 96;
+    const scroller = scrollerOf();
     el.style.height = "auto";
     const cs = window.getComputedStyle(el);
     const line = Number.parseFloat(cs.lineHeight) || 22;
@@ -460,8 +516,8 @@ export function Composer({ laneId, conn, chatKey, account, accountLabel = null, 
     const cap = pane > 0 ? Math.min(byLines, Math.max(pane / 3, 44)) : byLines;
     el.style.height = `${Math.min(el.scrollHeight, cap)}px`;
     el.style.overflowY = el.scrollHeight > cap ? "auto" : "hidden";
-    if (scroller && atBottom) scroller.scrollTop = scroller.scrollHeight;
-  }, []);
+    if (scroller && pinned.current) scroller.scrollTop = scroller.scrollHeight; // stays at the bottom
+  }, [scrollerOf]);
   useLayoutEffect(() => {
     fit();
   }, [text, fit]);
@@ -487,15 +543,15 @@ export function Composer({ laneId, conn, chatKey, account, accountLabel = null, 
   async function go() {
     if (!send) return;
     const sent = text;
-    writer.cancel(); // the text lives in the send's own record now (one record per message)
     const r = await send.press(sent);
+    if (r.ran) writer.cancel(); // the text lives in the send's own record now (one record per message)
     // the box is emptied only if it still holds exactly what was sent: text typed while the send was open stays, with its saved copy
     if (r.clear && latest.current === sent) {
       latest.current = "";
       setText("");
       writer.cancel();
       teamsDrafts.remove(laneId, userId, draftId);
-    } else if (latest.current !== "") writer.call(latest.current); // what is in the box (a refused text, or something newer) is kept in the tab again
+    } else if (r.ran && latest.current !== "") writer.call(latest.current); // what is in the box (a refused text, or something newer) is kept in the tab again; a press that did nothing (a send was open) saves nothing
     box.current?.focus();
   }
   function onKey(e: React.KeyboardEvent<HTMLTextAreaElement>) {

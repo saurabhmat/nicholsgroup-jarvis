@@ -8,8 +8,8 @@ import { draftNamespace } from "./reply-draft-store";
 export type MarkerState = "inflight" | "unknown" | "sent" | "checking" | "not_sent";
 export type SendMarker = { id: string; hash: string; text: string; startedAt: number; state: MarkerState; messageId: string | null; reason: string | null; dismissed: boolean };
 export const MAX_MARKERS = 5;
-/** A Teams action lives one hour (`act.expiry_hours`): past it the portal no longer offers to send again with the same id. */
-export const MARKER_LIFETIME_MS = 3_600_000;
+/** A record is never evicted while its outcome is unresolved: this many unresolved (in flight or unknown, not dismissed) records for one chat stop a new send until the person has looked at them. */
+export const unresolvedOf = (list: readonly SendMarker[]): SendMarker[] => list.filter((m) => !m.dismissed && (m.state === "inflight" || m.state === "unknown"));
 
 const STATES: readonly string[] = ["inflight", "unknown", "sent", "checking", "not_sent"];
 const str = (v: unknown, max: number): string | null => (typeof v === "string" && v.length <= max ? v : null);
@@ -47,9 +47,16 @@ const keyOf = (w: Where) => `${w.laneId}:${w.userId}:${w.item}`;
 const emit = (w: Where, id: string, m: SendMarker | null) => listeners.get(keyOf(w))?.forEach((f) => f(id, m));
 
 export const readMarkers = (w: Where): SendMarker[] => ns.read(w.laneId, w.userId, w.item) ?? [];
-/** Saves (or replaces, by id) one marker; the oldest beyond the cap are dropped. True when really saved. */
+/**
+ * Saves (or replaces, by id) one marker. True when really saved. Over the cap the oldest RESOLVED or DISMISSED record goes first; an unresolved one is evicted only if nothing else can be
+ * (the composer never lets that happen: it refuses a sixth unresolved message).
+ */
 export function putMarker(w: Where, m: SendMarker): boolean {
-  const rest = readMarkers(w).filter((x) => x.id !== m.id);
+  let rest = readMarkers(w).filter((x) => x.id !== m.id);
+  while (rest.length >= MAX_MARKERS) {
+    const i = rest.findIndex((x) => !(x.state === "inflight" || x.state === "unknown") || x.dismissed);
+    rest = rest.filter((_, k) => k !== (i >= 0 ? i : 0));
+  }
   const ok = write(w, [...rest, m]);
   emit(w, m.id, m);
   return ok;
@@ -70,16 +77,30 @@ export function subscribeMarkers(w: Where, fn: (id: string, m: SendMarker | null
   };
 }
 
-/** The lane no longer allows sending (policy off, drafts not stored): this person's tab copies and markers for the lane go. A few lines of storage, nothing else. */
-export function clearTeamsRecords(laneId: string, userId: string): void {
+/**
+ * Sending is switched off for the company: this person's unsent-text copies for the lane go, and so do the records of messages whose outcome is known. The records of messages whose outcome is UNKNOWN,
+ * in flight or dismissed stay (a real warning is not wiped, and a retyped text is still matched to its id): with `stripText` (the lane does not allow storing unsent text) their text is removed and only the id, the
+ * text's hash, the time and the state are kept.
+ */
+export function clearTeamsRecords(laneId: string, userId: string, opts: { stripText: boolean }): void {
   try {
     const s = window.sessionStorage;
-    const doomed: string[] = [];
+    const sendPrefix = `nichols:teams-send:${laneId}:${userId}:`;
+    const draftPrefix = `nichols:teams-draft:${laneId}:${userId}:`;
+    const drafts: string[] = [];
+    const sends: string[] = [];
     for (let i = 0; i < s.length; i++) {
       const k = s.key(i);
-      if (k !== null && (k.startsWith(`nichols:teams-send:${laneId}:${userId}:`) || k.startsWith(`nichols:teams-draft:${laneId}:${userId}:`))) doomed.push(k);
+      if (k === null) continue;
+      if (k.startsWith(draftPrefix)) drafts.push(k);
+      else if (k.startsWith(sendPrefix)) sends.push(k);
     }
-    for (const k of doomed) s.removeItem(k);
+    for (const k of drafts) s.removeItem(k);
+    for (const k of sends) {
+      const w = { laneId, userId, item: k.slice(sendPrefix.length) };
+      const keep = readMarkers(w).filter((m) => m.state === "inflight" || m.state === "unknown" || m.dismissed).map((m) => (opts.stripText ? { ...m, text: "" } : m));
+      write(w, keep);
+    }
   } catch {
     // storage blocked: nothing to clear
   }

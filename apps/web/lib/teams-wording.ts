@@ -183,14 +183,27 @@ export const SEND_TEXT_PROBLEM: Readonly<Record<"empty" | "too_long" | "too_big"
 export const SEND_IF_NOT_SENT = "Send if it has not been sent";
 export const SEND_DISMISS = "Dismiss";
 /** Notes under the one state line (never a second copy of the state line). */
-export const SEND_STALE_TEXT = "It was not confirmed. Look at the chat in Teams; if it is not there, type it again.";
-export const SEND_DISMISSED_TEXT = "Dismissed. Typing the same text again asks about this message first, so it is sent at most once.";
-/** A refusal answered to a request about a message that may already have gone: it says only that THIS request sent nothing. */
+export const SEND_DISMISSED_TEXT = "Dismissed. If you type the same words again, the portal first looks for this message, so it is never sent twice.";
+export const SEND_SENT_EARLIER = "Sent earlier: this is the message from before, nothing new was sent.";
+export const SEND_OFF_EARLIER = "A message you sent earlier may have been sent. Look at the chat in Teams.";
+export const SEND_SAFE_LINE = "Safe to press: the portal sends this message at most once.";
+export const SEND_UNSAVED_NOTE = "This warning cannot be kept if you reload: look at the chat in Teams before reloading.";
+export const SEND_TOO_MANY_UNKNOWN = "Look at the earlier messages in Teams first, then dismiss them here.";
+/** A refusal answered to a request about a message that may already have gone: it says only that THIS request sent nothing, and says what is true of it (transient ones say "try again"). */
 export const SEND_REPLAY_NOTE: Readonly<Record<string, string>> = Object.freeze({
   rate_limited: "Could not check just now: wait a second and try again.",
   step_up_required: "Enter your authenticator code to check.",
   reconnect: "Reconnect Teams to check.",
   mfa_required: "Finish signing in to check.",
   no_session: "Sign in to check.",
+  forbidden: "You can no longer send from this account.",
+  not_found: "This chat or account is no longer available here.",
+  gate_lane_off: "Sending is not switched on for this company yet.",
+  gate_not_usable: "Reconnect Teams to check.",
+  gate_reconnect: "Reconnect Teams to check.",
+  gate_policy_off: "Sending Teams messages is not allowed for this company yet.",
+  gate_drafts_off: "This company does not keep outbound drafts, so sending from the portal is off.",
+  gate_not_live: "Approvals are not live for this company yet.",
+  gate_not_enabled: "Sending is not switched on for this company yet.",
   default: "Could not check just now. Try again in a moment.",
 });

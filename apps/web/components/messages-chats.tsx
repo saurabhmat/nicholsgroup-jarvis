@@ -157,7 +157,7 @@ export function ConversationPane({ view, laneId, connectionId, send = null, user
   if (view.kind !== "ok") return <TeamsFailureCard failure={view.kind === "not_found" ? { kind: "not_found" } : view} laneId={laneId} connectionId={connectionId} testId="conversation-error" />;
   return (
     <section aria-label="Conversation" data-testid="conversation" className="flex h-[var(--pane-h,calc(100dvh-8.5rem))] min-h-[var(--pane-min,16rem)] min-w-0 flex-col overflow-hidden rounded-card border border-border bg-card lg:h-auto lg:min-h-0 lg:flex-1">
-      <SendScope key={`${view.conn}:${view.chatKey}`} laneId={laneId} conn={view.conn} chatKey={view.chatKey} userId={userId} enabled={send?.kind === "ready"} clear={send?.kind === "off" && (send.reason === "lane_off" || send.reason === "policy_off" || send.reason === "drafts_off")}>
+      <SendScope key={`${view.conn}:${view.chatKey}`} laneId={laneId} conn={view.conn} chatKey={view.chatKey} userId={userId} enabled={send?.kind === "ready"} clear={send?.kind === "off" ? (send.reason === "drafts_off" ? "strip_text" : send.reason === "lane_off" || send.reason === "policy_off" ? "keep_text" : false) : false}>
       <header data-testid="conversation-header" className="flex shrink-0 flex-wrap items-center gap-x-2 gap-y-2 border-b border-border px-3 py-2 sm:px-4">
         <div className="flex min-w-0 flex-1 basis-48 items-center gap-2">
           <Link href={hrefFor(laneId, null, null)} aria-label="Back to chats" data-testid="back-to-chats" className="inline-flex min-h-11 min-w-11 items-center justify-center rounded-control text-body font-medium text-primary hover:bg-muted lg:hidden">
