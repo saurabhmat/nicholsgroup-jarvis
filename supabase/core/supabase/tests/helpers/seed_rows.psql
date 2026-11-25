@@ -1,0 +1,90 @@
+-- Shared by the isolation tests (T-170). Include after `begin;` and \ir helpers/lane_rls.psql. Builds, inside the caller's rolled-back transaction:
+--   * `subject`: every table and view in the app schemas, with whether authenticated can read any column of it (column grants included);
+--   * REAL rows in every readable table, for lane PKG and lane APK and for two people (the owner and the admin) per lane, with ownership columns,
+--     connection ids, action types, document kinds and ages set so owner-only policies have something to hide. Row ids are kept in `seeded`.
+-- To do that without building each parent chain, the CHECK constraints of those tables are dropped and foreign keys and guard triggers are
+-- switched off (session_replication_role) WHILE SEEDING ONLY. Row-level security, grants, policies and functions are untouched, and the
+-- transaction is rolled back by the caller. The caller must set up its personas (memberships) BEFORE including this file.
+create temp table subject on commit drop as
+select c.oid::regclass as tbl, n.nspname || '.' || c.relname as name, c.relkind::text as kind,
+       has_any_column_privilege('authenticated', c.oid, 'select') as readable,
+       has_any_column_privilege('anon', c.oid, 'select, insert, update, references') or has_table_privilege('anon', c.oid, 'delete, truncate') as anon_any,
+       exists (select 1 from pg_attribute a where a.attrelid = c.oid and a.attname = 'lane_id' and not a.attisdropped) as has_lane
+from pg_class c join pg_namespace n on n.oid = c.relnamespace
+where c.relkind in ('r', 'p', 'v') and n.nspname in ('act','audit','brain','brief','cal','comms','core','fin','raw');
+grant all on subject to public;
+-- ---------------------------------------------------------------- real rows (constraints and FKs relaxed inside this transaction only)
+do $$ declare r record; begin
+  for r in select c.conrelid::regclass as t, c.conname from pg_constraint c join subject s on s.tbl = c.conrelid where c.contype = 'c' loop
+    execute format('alter table %s drop constraint %I', r.t, r.conname);
+  end loop;
+end $$;
+set local session_replication_role = replica;
+create function pg_temp.dummy(p_type text, p_name text, p_n int) returns text language sql as $$
+  select case p_type
+    when 'text' then quote_literal('seed-' || p_name || '-' || p_n) when 'uuid' then quote_literal(gen_random_uuid())
+    when 'timestamp with time zone' then 'now()' when 'date' then 'current_date'
+    when 'integer' then '1' when 'bigint' then '1' when 'smallint' then '1' when 'numeric' then '1' when 'boolean' then 'false'
+    when 'jsonb' then quote_literal('{}') when 'text[]' then quote_literal('{}') when 'uuid[]' then quote_literal('{}') when 'bytea' then quote_literal('\x00')
+    else 'null' end;
+$$;
+create temp table seeded (name text, lane text, n int) on commit drop;
+grant all on seeded to public;
+create function pg_temp.seed(p_name text, p_lane text, p_over jsonb, p_n int) returns void language plpgsql as $$
+declare v_tbl regclass := p_name::regclass; v_cols text; v_vals text; v_n int := (select count(*) + 1 from seeded);
+begin
+  select string_agg(quote_ident(a.attname), ', ' order by a.attnum),
+         string_agg(case when p_over ? a.attname then quote_nullable(p_over ->> a.attname) || '::' || format_type(a.atttypid, a.atttypmod)
+                         when a.attname = 'lane_id' then quote_literal(p_lane) else pg_temp.dummy(format_type(a.atttypid, null), a.attname, v_n) end, ', ' order by a.attnum)
+    into v_cols, v_vals
+  from pg_attribute a where a.attrelid = v_tbl and a.attnum > 0 and not a.attisdropped and a.attgenerated = ''
+    and ((a.attnotnull and not a.atthasdef and a.attidentity = '') or p_over ? a.attname or a.attname = 'lane_id');
+  execute format('insert into %s (%s) values (%s)', v_tbl, v_cols, v_vals);
+  insert into seeded values (p_name, p_lane, v_n);
+end $$;
+
+create function pg_temp.seed_all() returns void language plpgsql as $$
+declare lane text; who text; uid uuid; mail uuid; teams uuid; n int := 0; s record; a record; docs text;
+begin
+  foreach lane in array array['PKG', 'APK'] loop
+    foreach who in array array['owner@example.test', 'admin-technical@example.test'] loop
+      uid := pg_temp.uid(who); n := n + 1;
+      mail := gen_random_uuid(); teams := gen_random_uuid();
+      perform pg_temp.seed('core.connections', lane, jsonb_build_object('id', mail, 'provider', 'google', 'owner_user_id', uid, 'status', 'active', 'external_account_id', 'iso-' || n || '@g.example.test', 'features', '{}', 'transport', 'native'), n);
+      perform pg_temp.seed('core.connections', lane, jsonb_build_object('id', teams, 'provider', 'microsoft_teams', 'owner_user_id', uid, 'status', 'active', 'external_account_id', 'iso-' || n || '@t.example.test', 'features', '{}', 'transport', 'native'), n);
+      perform pg_temp.seed('comms.message_index', lane, jsonb_build_object('connection_id', mail, 'provider', 'google', 'thread_id', 'seed-thread-' || n), n);
+      perform pg_temp.seed('cal.event_index', lane, jsonb_build_object('connection_id', mail, 'provider', 'google'), n);
+      perform pg_temp.seed('comms.teams_chat_reads', lane, jsonb_build_object('connection_id', teams), n);
+      perform pg_temp.seed('comms.teams_activity', lane, jsonb_build_object('connection_id', teams), n);
+      perform pg_temp.seed('act.proposed_actions', lane, jsonb_build_object('action_type', 'email.send', 'connection_id', mail, 'provider', 'google', 'proposer_user_id', uid, 'status', 'proposed'), n);
+      perform pg_temp.seed('act.proposed_actions', lane, jsonb_build_object('action_type', 'teams.chat.send', 'connection_id', teams, 'provider', 'microsoft_teams', 'proposer_user_id', uid, 'status', 'proposed'), n);
+      perform pg_temp.seed('act.proposed_actions', lane, jsonb_build_object('action_type', 'qbo.disconnect', 'connection_id', mail, 'provider', 'quickbooks', 'proposer_user_id', uid, 'status', 'proposed'), n);
+      foreach docs in array array['about_me', 'context'] loop
+        perform pg_temp.seed('brain.documents', lane, jsonb_build_object('kind', docs, 'owner_user_id', uid), n);
+        perform pg_temp.seed('brain.document_versions', lane, jsonb_build_object('kind', docs, 'owner_user_id', uid), n);
+      end loop;
+      perform pg_temp.seed('brain.imports', lane, jsonb_build_object('user_id', uid), n);
+      perform pg_temp.seed('brain.section_completions', lane, jsonb_build_object('user_id', uid), n);
+      perform pg_temp.seed('brain.import_candidates', lane, jsonb_build_object('user_id', uid, 'created_at', now()), n);
+      perform pg_temp.seed('brain.import_candidates', lane, jsonb_build_object('user_id', uid, 'created_at', now() - interval '48 hours'), n + 100);
+      perform pg_temp.seed('brief.briefings', lane, jsonb_build_object('owner_user_id', uid), n);
+      perform pg_temp.seed('brief.briefing_runs', lane, jsonb_build_object('owner_user_id', uid, 'status', 'running', 'kind', 'manual', 'finished_at', null), n);
+    end loop;
+    -- lane-wide tables: one row per lane (two for variety)
+    for s in select name from subject where has_lane and kind <> 'v' and name not in ('core.lanes','core.users','core.memberships','core.connections','comms.message_index','cal.event_index','comms.teams_chat_reads','comms.teams_activity',
+         'act.proposed_actions','act.status_history','act.execution_claims','brain.documents','brain.document_versions','brain.imports','brain.section_completions','brain.import_candidates',
+         'brief.briefings','brief.briefing_runs','core.lane_config_current','core.lane_policies','core.lane_config') loop
+      n := n + 1;
+      perform pg_temp.seed(s.name, lane, '{}', n);
+    end loop;
+  end loop;
+  -- status history and claims for every seeded action
+  for a in select id, lane_id from act.proposed_actions where connection_id in (select id from core.connections where external_account_id like 'iso-%') loop
+    n := n + 1;
+    perform pg_temp.seed('act.status_history', a.lane_id, jsonb_build_object('action_id', a.id), n);
+    perform pg_temp.seed('act.execution_claims', a.lane_id, jsonb_build_object('action_id', a.id), n);
+  end loop;
+end $$;
+select pg_temp.seed_all();
+set local session_replication_role = default;
+

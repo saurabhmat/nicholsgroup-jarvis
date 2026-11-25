@@ -52,6 +52,11 @@ select core.comms_mail_apply_page('PKG', '00000000-0000-4000-8000-000000003031',
 select is((select is_bulk::text || is_generated::text || is_auth_pass::text from comms.message_index where message_id = 'f4' and lane_id = 'PKG'), 'truetruetrue', 'a re-synced message updates its flags');
 reset role;
 
+-- The fixtures above are dated Nov 10, 2026 and briefing_threads only reads the last 14 days from now(): move them (all by the same amount, so their order
+-- and gaps are unchanged) to just before the current hour, so this test cannot expire. Nothing the test asserts changes.
+set local session_replication_role = replica;
+update comms.message_index set received_at = received_at + (date_trunc('hour', now()) - interval '1 hour' - timestamptz '2026-11-10T16:00:00Z') where lane_id = 'PKG' and received_at < timestamptz '2026-11-11T00:00:00Z';
+set local session_replication_role = default;
 select pg_temp.claims('owner@example.test', 'aal2');
 set local role authenticated;
 select is((select string_agg(thread_key || ':' || is_bulk::text || is_calendar::text || is_auto::text || is_generated::text || is_auth_pass::text, ',' order by thread_key) from core.briefing_threads('PKG', now() - interval '14 days')),
