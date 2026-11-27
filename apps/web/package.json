@@ -24,10 +24,11 @@
     "@nichols/core": "workspace:*",
     "@nichols/ui": "workspace:*",
     "fflate": "0.8.3",
-    "zod": "4.6.7",
     "next": "16.4.6",
     "react": "19.3.0",
-    "react-dom": "19.3.0"
+    "react-dom": "19.3.0",
+    "recharts": "3.11.1",
+    "zod": "4.6.7"
   },
   "devDependencies": {
     "@nichols/eslint-plugin": "workspace:*",
