@@ -171,8 +171,41 @@ comment on function core.finance_receivables(text) is
 revoke all on function core.finance_receivables(text) from public, anon;
 grant execute on function core.finance_receivables(text) to authenticated, service_role;
 
+-- ---------------------------------------------------------------- the number of weeks (lane_config)
+-- lane_config is readable only with the "config" view; a finance reader has no such right. This definer function hands out ONE integer
+-- (finance.reports.weeks, 1 to 13, default 4 when absent or invalid) and only to a caller who holds the finance view at AAL2 for the lane.
+create or replace function core.finance_report_weeks(p_lane text)
+returns integer
+language plpgsql
+stable
+security definer
+set search_path = ''
+as $$
+declare
+  v_cfg jsonb;
+  v_w text;
+begin
+  if p_lane is null then
+    raise exception 'lane is required' using errcode = '22004';
+  end if;
+  if coalesce(auth.jwt() ->> 'aal', '') <> 'aal2' or not (p_lane = any (core.allowed_lanes(auth.uid(), 'finance'))) then
+    return null;
+  end if;
+  select cc.config into v_cfg from core.lane_config_current cc where cc.lane_id = p_lane;
+  v_w := case when pg_catalog.jsonb_typeof(v_cfg #> '{finance,reports,weeks}') = 'number' then v_cfg #>> '{finance,reports,weeks}' end;
+  if v_w ~ '^[0-9]{1,2}$' and v_w::integer between 1 and 13 then
+    return v_w::integer;
+  end if;
+  return 4;
+end;
+$$;
+comment on function core.finance_report_weeks(text) is
+  'Weeks shown by the Finance weekly report (T-301): lane_config finance.reports.weeks, 1 to 13, default 4; null for a caller without the finance view at AAL2. Definer only to read that one number.';
+revoke all on function core.finance_report_weeks(text) from public, anon;
+grant execute on function core.finance_report_weeks(text) to authenticated, service_role;
+
 -- ---------------------------------------------------------------- weeks
-create or replace function core.finance_weekly(p_lane text, p_weeks integer)
+create or replace function core.finance_weekly(p_lane text, p_weeks integer default null)
 returns table (
   state text,
   as_of timestamptz,
@@ -192,13 +225,15 @@ declare
   v_as_of timestamptz;
   v_has_data boolean;
   v_weeks jsonb;
+  v_weeks_n integer;
 begin
   if p_lane is null then
     raise exception 'lane is required' using errcode = '22004';
   end if;
-  if p_weeks is null or p_weeks < 1 or p_weeks > 13 then
+  if p_weeks is not null and (p_weeks < 1 or p_weeks > 13) then
     raise exception 'weeks must be 1 to 13' using errcode = '22023';
   end if;
+  v_weeks_n := coalesce(p_weeks, core.finance_report_weeks(p_lane), 4);
   select * into c from core.home_finance_context(p_lane);
   if not coalesce(c.allowed, false) then
     return query select 'no_access'::text, null::timestamptz, v_today, '[]'::jsonb;
@@ -220,7 +255,7 @@ begin
 
   with wk as (
     select g.n, (v_cur - 7 * g.n) as w_start, (v_cur - 7 * g.n + 6) as w_end, least(v_cur - 7 * g.n + 6, v_today) as w_through
-    from generate_series(0, p_weeks) g(n)
+    from generate_series(0, v_weeks_n) g(n)
   ), inv as (
     select w.n, (pg_catalog.count(*))::integer as cnt, coalesce(pg_catalog.sum(i.total), 0)::numeric(18,2) as amt
     from wk w
@@ -257,7 +292,7 @@ comment on function core.finance_weekly(text, integer) is
 revoke all on function core.finance_weekly(text, integer) from public, anon;
 grant execute on function core.finance_weekly(text, integer) to authenticated, service_role;
 
-create or replace function core.finance_week_detail(p_lane text, p_week date, p_weeks integer)
+create or replace function core.finance_week_detail(p_lane text, p_week date, p_weeks integer default null)
 returns table (
   state text,
   week_valid boolean,
@@ -282,14 +317,16 @@ declare
   v_has_data boolean;
   v_state text;
   v_through date;
+  v_weeks_n integer;
   v_inv jsonb; v_inv_n integer; v_pay jsonb; v_pay_n integer;
 begin
   if p_lane is null then
     raise exception 'lane is required' using errcode = '22004';
   end if;
-  if p_weeks is null or p_weeks < 1 or p_weeks > 13 then
+  if p_weeks is not null and (p_weeks < 1 or p_weeks > 13) then
     raise exception 'weeks must be 1 to 13' using errcode = '22023';
   end if;
+  v_weeks_n := coalesce(p_weeks, core.finance_report_weeks(p_lane), 4);
   select * into c from core.home_finance_context(p_lane);
   if not coalesce(c.allowed, false) then
     return query select 'no_access'::text, false, null::date, null::date, '[]'::jsonb, 0, '[]'::jsonb, 0, v_cap;
@@ -308,7 +345,7 @@ begin
     return;
   end if;
   -- A week that is not a Saturday inside the shown range is no week at all.
-  if p_week is null or p_week > v_cur or p_week < v_cur - 7 * p_weeks or (v_cur - p_week) % 7 <> 0 then
+  if p_week is null or p_week > v_cur or p_week < v_cur - 7 * v_weeks_n or (v_cur - p_week) % 7 <> 0 then
     return query select 'ok'::text, false, null::date, null::date, '[]'::jsonb, 0, '[]'::jsonb, 0, v_cap;
     return;
   end if;

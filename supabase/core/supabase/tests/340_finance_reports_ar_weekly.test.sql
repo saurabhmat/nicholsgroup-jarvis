@@ -7,7 +7,7 @@
 -- outside the range; the week detail (invalid dates, caps); denial: another lane, AAL1, no finance view, anon, bad arguments.
 -- Dates are relative to today (business date) and safe on any day of the week.
 begin;
-select plan(77);
+select plan(88);
 \ir helpers/lane_rls.psql
 
 update core.lanes set enabled = true where code in ('APK');
@@ -38,6 +38,10 @@ select ok((select bool_and(not prosecdef and proconfig = array['search_path=""']
            from pg_proc where oid in ('core.finance_receivables(text)'::regprocedure, 'core.finance_weekly(text, integer)'::regprocedure,
                                       'core.finance_week_detail(text, date, integer)'::regprocedure)),
           'the three are security invoker, stable, with an empty search_path');
+
+select ok((select prosecdef and proconfig = array['search_path=""'] and provolatile = 's' and has_function_privilege('authenticated', oid, 'execute') and not has_function_privilege('anon', oid, 'execute')
+            from pg_proc where oid = 'core.finance_report_weeks(text)'::regprocedure),
+          'finance_report_weeks is the one definer: empty search_path, authenticated only');
 
 -- ---------------------------------------------------------------- connections and mapping
 insert into core.connections (id, lane_id, provider, external_account_id, status, last_sync_at) values
@@ -280,7 +284,9 @@ select is((select week_valid from core.finance_week_detail('PKG', null, 4)), fal
 select is((select invoice_count + payment_count from core.finance_week_detail('PKG', pg_temp.cur() - 35, 4)), 0, 'detail: an invalid week lists nothing');
 select throws_ok($$select * from core.finance_weekly('PKG', 0)$$, '22023', null, 'weeks below 1 are refused');
 select throws_ok($$select * from core.finance_weekly('PKG', 14)$$, '22023', null, 'weeks above 13 are refused');
-select throws_ok($$select * from core.finance_weekly('PKG', null)$$, '22023', null, 'a null number of weeks is refused');
+select throws_ok($$select * from core.finance_week_detail('PKG', null, 14)$$, '22023', null, 'weeks above 13 are refused (detail)');
+select is((select jsonb_array_length(weeks) from core.finance_weekly('PKG')), 5, 'weeks from lane_config: not set, the default of 4 completed weeks (5 rows)');
+select is(core.finance_report_weeks('PKG'), 4, 'finance_report_weeks: the default is 4');
 reset role;
 
 -- caps on the detail: 55 invoices and 52 payments in week 3
@@ -305,6 +311,36 @@ reset role;
 select pg_temp.claims('outsider@example.test', 'aal2');
 set local role authenticated;
 select is((select state from core.finance_weekly('PKG', 4)), 'no_access', 'a user without the finance view: no weeks');
+reset role;
+
+-- ================================================================ lane_config finance.reports.weeks
+insert into core.lane_config (lane_id, version, config)
+select lane_id, version + 1,
+  config || jsonb_build_object('finance', coalesce(config -> 'finance', '{}'::jsonb)
+    || jsonb_build_object('reports', coalesce(config #> '{finance,reports}', '{}'::jsonb) || jsonb_build_object('weeks', 2)))
+from core.lane_config_current where lane_id = 'PKG';
+select pg_temp.claims('owner@example.test', 'aal2');
+set local role authenticated;
+select is(core.finance_report_weeks('PKG'), 2, 'finance_report_weeks: the configured 2');
+select is((select jsonb_array_length(weeks) from core.finance_weekly('PKG')), 3, 'weekly: the configured 2 completed weeks plus the current week');
+select is((select week_valid from core.finance_week_detail('PKG', pg_temp.cur() - 14)), true, 'detail: the configured range is the valid range (the last shown week)');
+select is((select week_valid from core.finance_week_detail('PKG', pg_temp.cur() - 21)), false, 'detail: a week beyond the configured range is no week');
+select is((select jsonb_array_length(weeks) from core.finance_weekly('PKG', 6)), 7, 'weekly: an explicit number overrides the configuration');
+reset role;
+select pg_temp.claims('outsider@example.test', 'aal2');
+set local role authenticated;
+select is(core.finance_report_weeks('PKG'), null::int, 'finance_report_weeks: nothing for a user without the finance view');
+reset role;
+select pg_temp.claims('owner@example.test', 'aal1');
+set local role authenticated;
+select is(core.finance_report_weeks('PKG'), null::int, 'finance_report_weeks: nothing at AAL1');
+reset role;
+insert into core.lane_config (lane_id, version, config)
+select lane_id, version + 1, jsonb_set(config, '{finance,reports,weeks}', '99')
+from core.lane_config_current where lane_id = 'PKG';
+select pg_temp.claims('owner@example.test', 'aal2');
+set local role authenticated;
+select is(core.finance_report_weeks('PKG'), 4, 'finance_report_weeks: a value outside 1 to 13 in the config falls back to 4');
 reset role;
 
 -- ================================================================ every connection disconnected: not_connected, no figure

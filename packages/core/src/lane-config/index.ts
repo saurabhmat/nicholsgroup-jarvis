@@ -445,6 +445,8 @@ export const laneConfigSchema = z.strictObject({
           // cached until Saurabh/Robert decide how far payroll exclusion goes, because those two let a reader recover the
           // aggregate payroll amount from the other cached reports.
           kinds: z.array(z.enum(REPORT_KINDS)).max(5).default([...DEFAULT_REPORT_KINDS]),
+          // The Finance weekly reports (T-301, T-302): completed business weeks shown before the current week, 1 to 13.
+          weeks: z.int().min(1).max(13).default(4),
         })
         .prefault({}),
       // QuickBooks backup poll (T-090): webhooks are the fast path; this CDC poll catches missed ones. Hours between polls.
