@@ -66,6 +66,7 @@ const REVIEWED = new Set([
   "apps/web/lib/connector-error-export.ts",
   "apps/web/lib/coverage.ts",
   "apps/web/lib/finance-page.ts",
+  "apps/web/lib/finance-reports.ts",
   "apps/web/lib/home-finance-detail.ts",
   "apps/web/lib/home-finance.ts",
   "apps/web/lib/home.ts",
