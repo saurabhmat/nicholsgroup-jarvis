@@ -47,7 +47,7 @@ insert into pin values
   ('core.connector_api_errors','health'), ('core.job_failures','health'), ('core.lane_config','config'), ('core.lane_policies','lane_policies'),
   ('core.lanes','lanes'), ('core.memberships','memberships'), ('core.push_subscriptions','health'), ('core.sync_cursors','health'),
   ('core.sync_now_requests','health'), ('core.sync_runs','health'), ('core.users','memberships'), ('core.webhook_events','health'),
-  ('fin.accounts','finance'), ('fin.bills','finance'), ('fin.invoices','finance'), ('fin.normalize_runs','health'), ('fin.payments','finance'),
+  ('fin.accounts','finance'), ('fin.bank_balances','finance'), ('fin.bills','finance'), ('fin.invoices','finance'), ('fin.normalize_runs','health'), ('fin.payments','finance'),
   ('fin.report_cache','finance'), ('fin.transactions','finance'), ('act.proposed_actions','own_mail'),
   ('act.status_history','action'), ('act.execution_claims','action'), ('comms.teams_activity','own_mail'), ('comms.teams_chat_reads','own_mail'),
   ('core.lane_config_current','config');
@@ -67,8 +67,8 @@ select is((select coalesce(array_agg(name order by name), '{}') from subject whe
 select is((select coalesce(array_agg(name order by name), '{}') from ((select name from pin) union all (select name from private_ok)) x where name not in (select name from subject))
           || (select coalesce(array_agg(name order by name), '{}') from private_ok where name in (select name from subject where readable)), '{}'::text[],
   'no stale pin or private entry, and no private entry became readable');
-select is((select count(*) filter (where readable) || '+' || count(*) filter (where not readable) || '=' || count(*) from subject), '39+7=46',
-  'catalog count: 39 readable (38 tables and the view) + 7 private = 46 relations in the app schemas (a change must be classified on purpose)');
+select is((select count(*) filter (where readable) || '+' || count(*) filter (where not readable) || '=' || count(*) from subject), '40+7=47',
+  'catalog count: 40 readable (39 tables and the view) + 7 private = 47 relations in the app schemas (a change must be classified on purpose)');
 
 -- ---------------------------------------------------------------- the oracle
 create function pg_temp.lanes_with(p_uid uuid, p_view text) returns text[] language sql as $$

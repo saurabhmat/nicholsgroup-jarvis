@@ -775,6 +775,12 @@ isOneToOne: false
 "connector_api_errors_purge":
 { Args: { "p_lane": string }; Returns: number
                            },
+"fin_bank_account_ids":
+{ Args: { "p_connection_id": string,"p_lane": string }; Returns: (string)[]
+                           },
+"fin_bank_balances_put":
+{ Args: { "p_as_of": string,"p_balances": Json,"p_connection_id": string,"p_date": string,"p_lane": string }; Returns: number
+                           },
 "fin_qbo_normalize":
 { Args: { "p_connection_id": string,"p_lane": string }; Returns: Json
                            },
@@ -783,6 +789,11 @@ isOneToOne: false
                            },
 "finance_ar_total_readable":
 { Args: { "p_lane": string }; Returns: boolean
+                           },
+"finance_cash":
+{ Args: { "p_lane": string,"p_weeks"?: number }; Returns: {
+              "accounts": Json,"as_of": string,"business_date": string,"columns": Json,"connection_status": string,"last_sync_at": string,"reason": string,"state": string,"totals": Json,"weeks": number
+            }[]
                            },
 "finance_overview":
 { Args: { "p_lane": string }; Returns: {
@@ -1072,6 +1083,26 @@ isOneToOne: false
                   }
                   Relationships: [
                     
+                  ]
+                },"bank_balances": {
+                  Row: {
+                    "account_id": string,"as_of": string,"balance_date": string,"book_balance": number,"connection_id": string,"created_at": string,"id": string,"lane_id": string,"provider": string,"updated_at": string
+                  }
+                  ComputedFields: never
+                  Insert: {
+                    "account_id": string,"as_of": string,"balance_date": string,"book_balance": number,"connection_id": string,"created_at"?: string,"id"?: string,"lane_id": string,"provider"?: string,"updated_at"?: string
+                  }
+                  Update: {
+                    "account_id"?: string,"as_of"?: string,"balance_date"?: string,"book_balance"?: number,"connection_id"?: string,"created_at"?: string,"id"?: string,"lane_id"?: string,"provider"?: string,"updated_at"?: string
+                  }
+                  Relationships: [
+                    {
+      foreignKeyName: "bank_balances_account_id_connection_id_fkey"
+      columns: ["account_id","connection_id"]
+isOneToOne: false
+      referencedRelation: "accounts"
+      referencedColumns: ["id","connection_id"]
+    }
                   ]
                 },"bills": {
                   Row: {
