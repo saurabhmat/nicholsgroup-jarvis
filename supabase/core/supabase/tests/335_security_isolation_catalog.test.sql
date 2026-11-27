@@ -47,7 +47,7 @@ insert into pin values
   ('core.connector_api_errors','health'), ('core.job_failures','health'), ('core.lane_config','config'), ('core.lane_policies','lane_policies'),
   ('core.lanes','lanes'), ('core.memberships','memberships'), ('core.push_subscriptions','health'), ('core.sync_cursors','health'),
   ('core.sync_now_requests','health'), ('core.sync_runs','health'), ('core.users','memberships'), ('core.webhook_events','health'),
-  ('fin.accounts','finance'), ('fin.bank_balances','finance'), ('fin.bills','finance'), ('fin.invoices','finance'), ('fin.normalize_runs','health'), ('fin.payments','finance'),
+  ('fin.accounts','finance'), ('fin.cash_book_balances','finance'), ('fin.bills','finance'), ('fin.invoices','finance'), ('fin.normalize_runs','health'), ('fin.payments','finance'),
   ('fin.report_cache','finance'), ('fin.transactions','finance'), ('act.proposed_actions','own_mail'),
   ('act.status_history','action'), ('act.execution_claims','action'), ('comms.teams_activity','own_mail'), ('comms.teams_chat_reads','own_mail'),
   ('core.lane_config_current','config');
