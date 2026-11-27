@@ -7,7 +7,7 @@
 -- outside the range; the week detail (invalid dates, caps); denial: another lane, AAL1, no finance view, anon, bad arguments.
 -- Dates are relative to today (business date) and safe on any day of the week.
 begin;
-select plan(88);
+select plan(91);
 \ir helpers/lane_rls.psql
 
 update core.lanes set enabled = true where code in ('APK');
@@ -97,6 +97,8 @@ select is((select (select jsonb_agg((b.j ->> 'bucket') || '=' || (b.j ->> 'total
           '["current=51.06/2", "1_30=0.00/0", "31_60=210.20/2", "61_90=0.00/0", "90_plus=100.10/1"]'::jsonb,
           'receivables: current (not yet due, due today, ...) 51.06, 31-60 210.20 (the no-due-date invoice by its issue date), 90+ 100.10');
 select is((select total from core.finance_receivables('PKG')), (select ar_total from core.finance_overview('PKG')), 'receivables: the total equals the Finance overview AR total');
+select is((select connection_status from core.finance_receivables('PKG')), 'active', 'receivables: the connection status of the current connection (for the page note)');
+select is((select last_sync_at is not null from core.finance_receivables('PKG')), true, 'receivables: the last sync');
 select is((select customer_count from core.finance_receivables('PKG')), 3, 'receivables: three customer rows');
 select is((select (select jsonb_agg(c.j ->> 'name' order by c.o) from jsonb_array_elements(customers) with ordinality c(j, o)) from core.finance_receivables('PKG')),
           '["Alpha Co", "Beta Co", null]'::jsonb, 'receivables: customers by total descending; no stored name is null (the page says Unknown customer)');
@@ -236,6 +238,7 @@ select pg_temp.claims('owner@example.test', 'aal2');
 set local role authenticated;
 select is((select state from core.finance_weekly('PKG', 4)), 'ok', 'weekly: ok');
 select is((select jsonb_array_length(weeks) from core.finance_weekly('PKG', 4)), 5, 'weekly: the current week plus four completed weeks');
+select is((select connection_status from core.finance_weekly('PKG', 4)), 'active', 'weekly: the connection status (for the page note)');
 select is((select jsonb_array_length(weeks) from core.finance_weekly('PKG', 13)), 14, 'weekly: 13 weeks asked, 14 rows');
 select is((select (select jsonb_agg(w.j ->> 'start' order by w.o) from jsonb_array_elements(weeks) with ordinality w(j, o)) from core.finance_weekly('PKG', 4)),
           (select jsonb_agg(to_char(pg_temp.cur() - 7 * n, 'YYYY-MM-DD') order by n) from generate_series(0, 4) n),

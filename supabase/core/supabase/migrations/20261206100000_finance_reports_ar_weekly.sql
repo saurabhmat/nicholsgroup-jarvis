@@ -14,6 +14,8 @@ create or replace function core.finance_receivables(p_lane text)
 returns table (
   state text,
   as_of timestamptz,
+  last_sync_at timestamptz,
+  connection_status text,
   business_date date,
   buckets jsonb,
   total numeric(18,2),
@@ -61,7 +63,7 @@ begin
   end if;
   select * into c from core.home_finance_context(p_lane);
   if not coalesce(c.allowed, false) then
-    return query select 'no_access'::text, null::timestamptz, v_today, '[]'::jsonb, null::numeric, 0, '[]'::jsonb, 0, 0, v_cap, v_inv_cap,
+    return query select 'no_access'::text, null::timestamptz, null::timestamptz, null::text, v_today, '[]'::jsonb, null::numeric, 0, '[]'::jsonb, 0, 0, v_cap, v_inv_cap,
       null::text, null::numeric, null::date, null::numeric;
     return;
   end if;
@@ -75,7 +77,7 @@ begin
     when not v_has_data then 'no_data'
     else 'ok' end;
   if v_state <> 'ok' then
-    return query select v_state, v_as_of, v_today, '[]'::jsonb, null::numeric, 0, '[]'::jsonb, 0, 0, v_cap, v_inv_cap,
+    return query select v_state, v_as_of, c.last_sync_at, c.connection_status, v_today, '[]'::jsonb, null::numeric, 0, '[]'::jsonb, 0, 0, v_cap, v_inv_cap,
       null::text, null::numeric, null::date, null::numeric;
     return;
   end if;
@@ -162,7 +164,7 @@ begin
     end if;
   end if;
 
-  return query select 'ok'::text, v_as_of, v_today, v_buckets, v_total, v_n, v_customers, v_cust_n, v_cust_shown, v_cap, v_inv_cap,
+  return query select 'ok'::text, v_as_of, c.last_sync_at, c.connection_status, v_today, v_buckets, v_total, v_n, v_customers, v_cust_n, v_cust_shown, v_cap, v_inv_cap,
     v_check_reason, v_check_total, case when v_check_reason is null then v_check_date end, v_check_diff;
 end;
 $$;
@@ -209,6 +211,8 @@ create or replace function core.finance_weekly(p_lane text, p_weeks integer defa
 returns table (
   state text,
   as_of timestamptz,
+  last_sync_at timestamptz,
+  connection_status text,
   business_date date,
   weeks jsonb
 )
@@ -236,7 +240,7 @@ begin
   v_weeks_n := coalesce(p_weeks, core.finance_report_weeks(p_lane), 4);
   select * into c from core.home_finance_context(p_lane);
   if not coalesce(c.allowed, false) then
-    return query select 'no_access'::text, null::timestamptz, v_today, '[]'::jsonb;
+    return query select 'no_access'::text, null::timestamptz, null::timestamptz, null::text, v_today, '[]'::jsonb;
     return;
   end if;
   v_as_of := coalesce(c.last_normalized_at, c.last_sync_at);
@@ -249,7 +253,7 @@ begin
     when not v_has_data then 'no_data'
     else 'ok' end;
   if v_state <> 'ok' then
-    return query select v_state, v_as_of, v_today, '[]'::jsonb;
+    return query select v_state, v_as_of, c.last_sync_at, c.connection_status, v_today, '[]'::jsonb;
     return;
   end if;
 
@@ -284,7 +288,7 @@ begin
   into v_weeks
   from wk w left join inv i on i.n = w.n left join pay p on p.n = w.n;
 
-  return query select 'ok'::text, v_as_of, v_today, v_weeks;
+  return query select 'ok'::text, v_as_of, c.last_sync_at, c.connection_status, v_today, v_weeks;
 end;
 $$;
 comment on function core.finance_weekly(text, integer) is

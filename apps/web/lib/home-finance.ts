@@ -130,20 +130,25 @@ const PNL_REASONS: Record<string, string> = {
 
 const reasonText = (map: Record<string, string>, reason: string): string => map[reason] ?? "Not available yet";
 
-/** The wording of a whole-section empty state, or null when the figures themselves are shown. */
-export function emptyStateText(view: Exclude<HomeFinanceView, { state: "no_access" }>): string | null {
-  switch (view.state) {
+/** The wording of a whole-section empty state for a state and the last sync, or null when the figures themselves are shown. */
+export function emptyTextFor(state: "unavailable" | "not_connected" | "no_data" | "mapping_missing" | "ok", lastSyncAt: string | null): string | null {
+  switch (state) {
     case "unavailable":
       return "Could not load QuickBooks figures. Reload in a minute.";
     case "not_connected":
       return CONNECT_TEXT;
     case "no_data":
-      return `No QuickBooks data yet (${view.lastSyncAt ? `last sync ${formatAsOf(view.lastSyncAt)}` : "not synced yet"})`;
+      return `No QuickBooks data yet (${lastSyncAt ? `last sync ${formatAsOf(lastSyncAt)}` : "not synced yet"})`;
     case "mapping_missing":
       return "QuickBooks is connected, but this company's entity mapping is missing. Ask your administrator to set it up.";
     case "ok":
       return null;
   }
+}
+
+/** The wording of a whole-section empty state, or null when the figures themselves are shown. */
+export function emptyStateText(view: Exclude<HomeFinanceView, { state: "no_access" }>): string | null {
+  return emptyTextFor(view.state, view.state === "unavailable" ? null : view.lastSyncAt);
 }
 
 /** The three cards for a view. [] for a role that may not see finance. */
@@ -202,12 +207,17 @@ export function financeCards(view: HomeFinanceView): FinanceCard[] {
   return [cash, ar, pnl];
 }
 
+/** A line telling the user a connection needs attention, for a connection status. */
+export function connectionNoteFor(status: string | null): string | null {
+  if (status === "reconnect_required") return "QuickBooks needs reconnecting. These figures may be out of date.";
+  if (status === "degraded") return "The QuickBooks connection has problems. These figures may be out of date.";
+  return null;
+}
+
 /** A line telling the user a connection needs attention, for the section note. */
 export function connectionNote(view: HomeFinanceView): string | null {
   if (view.state === "no_access" || view.state === "unavailable") return null;
-  if (view.connectionStatus === "reconnect_required") return "QuickBooks needs reconnecting. These figures may be out of date.";
-  if (view.connectionStatus === "degraded") return "The QuickBooks connection has problems. These figures may be out of date.";
-  return null;
+  return connectionNoteFor(view.connectionStatus);
 }
 
 // ---------------------------------------------------------------------------------------------------------- loading
