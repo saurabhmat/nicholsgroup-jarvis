@@ -5,9 +5,8 @@
 import type { Guards } from "@nichols/core/auth";
 import type { LaneClient } from "@nichols/core/lane-router";
 import { count, instant, num, text, type FinanceState } from "./home-finance";
-import { AGING_BUCKETS, toAging, type AgingBucket, type AgingRow } from "./home-finance-detail";
+import { AGING_BUCKETS, STATES, toAging, type AgingBucket, type AgingRow } from "./home-finance-detail";
 
-const STATES: readonly string[] = ["not_connected", "no_data", "mapping_missing", "ok", "no_access"];
 const YMD = /^\d{4}-\d{2}-\d{2}$/;
 const ymd = (v: unknown): string | null => (typeof v === "string" && YMD.test(v.slice(0, 10)) ? v.slice(0, 10) : null);
 const isRecord = (v: unknown): v is Record<string, unknown> => typeof v === "object" && v !== null;
@@ -40,7 +39,7 @@ export type ReceivableCustomer = {
 };
 export type ArCheck =
   | { kind: "ok"; total: number; reportDate: string; difference: number }
-  | { kind: "missing"; reason: "not_cached" | "withheld" | "older_than_data" | "unreadable" };
+  | { kind: "missing"; reason: "not_cached" | "withheld" | "older_than_data" | "unreadable" | "several_connections" };
 
 export type ReceivablesData = {
       state: Exclude<FinanceState, "no_access">;
@@ -53,6 +52,8 @@ export type ReceivablesData = {
       total: number | null;
       invoiceCount: number;
       customers: ReceivableCustomer[];
+      /** Customer rows SQL sent that the page could not read (never presented as the cap). */
+      unreadableCustomers: number;
       customerCount: number;
       customersShown: number;
       customerCap: number;
@@ -72,9 +73,9 @@ function toInvoices(v: unknown): ReceivableInvoice[] {
   });
 }
 
-function toCustomers(v: unknown): ReceivableCustomer[] {
-  if (!Array.isArray(v)) return [];
-  return v.flatMap((x: unknown) => {
+function toCustomers(v: unknown): { rows: ReceivableCustomer[]; unreadable: number } {
+  if (!Array.isArray(v)) return { rows: [], unreadable: 0 };
+  const rows = v.flatMap((x: unknown) => {
     if (!isRecord(x)) return [];
     const total = num(x.total);
     const parts = AGING_BUCKETS.map((b) => num(x[b]));
@@ -83,9 +84,10 @@ function toCustomers(v: unknown): ReceivableCustomer[] {
     const detail = toInvoices(x.detail);
     return [{ name: text(x.name), buckets, total, invoices: count(x.invoices), detail, detailShown: Math.min(count(x.detail_shown), detail.length) }];
   });
+  return { rows, unreadable: v.length - rows.length };
 }
 
-const CHECK_REASONS = ["not_cached", "withheld", "older_than_data", "unreadable"] as const;
+const CHECK_REASONS = ["not_cached", "withheld", "older_than_data", "unreadable", "several_connections"] as const;
 function toCheck(row: Record<string, unknown>): ArCheck | null {
   const reason = text(row.check_reason);
   if (reason !== null) {
@@ -103,9 +105,9 @@ export function toReceivables(data: unknown): Receivables {
   const state = stateOf(row);
   if (!row || state === null) return { state: "no_access" };
   if (state !== "ok") {
-    return { state, asOf: instant(row.as_of), lastSyncAt: instant(row.last_sync_at), connectionStatus: text(row.connection_status), businessDate: ymd(row.business_date), buckets: [], total: null, invoiceCount: 0, customers: [], customerCount: 0, customersShown: 0, customerCap: 0, invoiceCap: 0, check: null };
+    return { state, asOf: instant(row.as_of), lastSyncAt: instant(row.last_sync_at), connectionStatus: text(row.connection_status), businessDate: ymd(row.business_date), buckets: [], total: null, invoiceCount: 0, customers: [], unreadableCustomers: 0, customerCount: 0, customersShown: 0, customerCap: 0, invoiceCap: 0, check: null };
   }
-  const customers = toCustomers(row.customers);
+  const { rows: customers, unreadable } = toCustomers(row.customers);
   return {
     state,
     asOf: instant(row.as_of),
@@ -116,8 +118,9 @@ export function toReceivables(data: unknown): Receivables {
     total: num(row.total),
     invoiceCount: count(row.invoice_count),
     customers,
+    unreadableCustomers: unreadable,
     customerCount: count(row.customer_count),
-    customersShown: Math.min(count(row.customers_shown), customers.length),
+    customersShown: count(row.customers_shown),
     customerCap: count(row.customer_cap),
     invoiceCap: count(row.invoice_cap),
     check: toCheck(row),
@@ -245,7 +248,10 @@ export const CHECK_REASON_TEXT: Record<Extract<ArCheck, { kind: "missing" }>["re
   withheld: "QuickBooks' total is withheld: the report leaves out people excluded by the payroll settings, so its total would be incomplete.",
   older_than_data: "The cached aging report is older than the latest data, so the two are not compared.",
   unreadable: "The cached aging report could not be read.",
+  several_connections: "This company has more than one current QuickBooks connection: the computed total covers all of them and a QuickBooks report covers one, so they are not compared.",
 };
 export const CREDITS_NOTE = "Credit memos and unapplied credits are not synced, so a difference is expected for customers who hold credits. QuickBooks' report covers the whole company.";
 export const WEEKLY_NOT_INCLUDED = "Not included: sales receipts, credit memos and refunds are not synced. Payroll is excluded.";
 export const BUCKET_RULE = "Buckets count days past the due date (the invoice date when there is no due date) as of today in New York. Current means not yet due or due today.";
+export const PAYMENT_AMOUNT_NOTE =
+  "A payment's amount is the amount applied to invoices plus any unapplied remainder, as stored. It can differ from the bank deposit when part of it was applied to a credit memo (credit memos are not synced).";

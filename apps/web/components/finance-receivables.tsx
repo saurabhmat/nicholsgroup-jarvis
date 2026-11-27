@@ -11,6 +11,7 @@ import { AGING_BUCKETS, AGING_LABEL } from "@/lib/home-finance-detail";
 import { formatDay } from "@/lib/finance-page";
 import { BUCKET_RULE, CHECK_REASON_TEXT, CREDITS_NOTE, receivablesFor, type ArCheck, type ReceivableCustomer, type Receivables, type ReceivablesData } from "@/lib/finance-reports";
 import { CardBoundary } from "./card-boundary";
+import { ArRow } from "./finance-ar-row";
 import { ReportFrame, Small, UNAVAILABLE, plural } from "./finance-report-frame";
 
 // Seven figure columns after the name on a wide screen; on a phone each row is a stack (label beside figure).
@@ -23,16 +24,16 @@ function Figures({ buckets, total, invoices }: { buckets: Record<(typeof AGING_B
   return (
     <>
       {AGING_BUCKETS.map((b) => (
-        <span key={b} data-bucket={b} className={CELL}>
+        <span key={b} role="cell" data-bucket={b} className={CELL}>
           <span className={LABEL}>{AGING_LABEL[b]}</span>
           <span>{formatMoney(buckets[b])}</span>
         </span>
       ))}
-      <span data-field="total" className={`${CELL} font-semibold text-foreground`}>
+      <span role="cell" data-field="total" className={`${CELL} font-semibold text-foreground`}>
         <span className={LABEL}>Total</span>
         <span>{formatMoney(total)}</span>
       </span>
-      <span data-field="invoices" className={CELL}>
+      <span role="cell" data-field="invoices" className={CELL}>
         <span className={LABEL}>Open invoices</span>
         <span>{String(invoices)}</span>
       </span>
@@ -40,37 +41,26 @@ function Figures({ buckets, total, invoices }: { buckets: Record<(typeof AGING_B
   );
 }
 
-function CustomerRow({ c }: { c: ReceivableCustomer }) {
+function CustomerRow({ c, invoiceCap }: { c: ReceivableCustomer; invoiceCap: number }) {
   return (
-    <li data-testid="finance-ar-row">
-      <details className="group">
-        <summary className={`cursor-pointer list-none py-3 text-body marker:hidden [&::-webkit-details-marker]:hidden ${GRID} flex flex-col gap-1`}>
-          <span data-field="customer" className="flex items-center gap-2 font-medium text-foreground">
-            <span aria-hidden className="text-muted-foreground transition-transform group-open:rotate-90">›</span>
-            <span className="min-w-0 truncate">{c.name ?? UNKNOWN}</span>
-          </span>
-          <Figures buckets={c.buckets} total={c.total} invoices={c.invoices} />
-        </summary>
-        <div data-testid="finance-ar-detail" className="mb-3 ml-5 flex flex-col gap-2 rounded-control bg-muted/40 p-3">
-          <ul className="flex flex-col divide-y divide-border">
-            <li aria-hidden className="hidden grid-cols-4 gap-3 pb-1 text-label text-muted-foreground md:grid">
-              <span>Invoice date</span><span>Due date</span><span className="text-right">Days overdue</span><span className="text-right">Balance</span>
-            </li>
-            {c.detail.map((d, i) => (
-              <li key={`${d.issueDate ?? "x"}-${String(i)}`} data-testid="finance-ar-invoice" className="grid grid-cols-2 gap-x-3 gap-y-1 py-2 text-small md:grid-cols-4">
-                <span><span className="text-muted-foreground md:hidden">Invoice date </span>{d.issueDate ? formatDay(d.issueDate) : "Not recorded"}</span>
-                <span><span className="text-muted-foreground md:hidden">Due date </span>{d.dueDate ? formatDay(d.dueDate) : "No due date"}</span>
-                <span className="tabular-nums md:text-right"><span className="text-muted-foreground md:hidden">Days overdue </span>{String(d.daysOverdue)}</span>
-                <span className="font-medium tabular-nums md:text-right"><span className="text-muted-foreground md:hidden">Balance </span>{formatMoney(d.balance)}</span>
-              </li>
-            ))}
-          </ul>
-          {c.invoices > c.detail.length ? (
-            <Small testId="finance-ar-detail-cap">{`Showing the ${String(c.detail.length)} oldest of ${String(c.invoices)} open invoices. The row's figures count all of them.`}</Small>
-          ) : null}
+    <ArRow rowClass={`flex flex-col gap-1 ${GRID}`} name={c.name ?? UNKNOWN} cells={<Figures buckets={c.buckets} total={c.total} invoices={c.invoices} />}>
+      <div className="flex flex-col divide-y divide-border" role="table" aria-label={`Open invoices of ${c.name ?? UNKNOWN}`}>
+        <div role="row" className="hidden grid-cols-4 gap-3 pb-1 text-label text-muted-foreground md:grid">
+          <span role="columnheader">Invoice date</span><span role="columnheader">Due date</span><span role="columnheader" className="text-right">Days overdue</span><span role="columnheader" className="text-right">Balance</span>
         </div>
-      </details>
-    </li>
+        {c.detail.map((d, i) => (
+          <div key={`${d.issueDate ?? "x"}-${String(i)}`} role="row" data-testid="finance-ar-invoice" className="grid grid-cols-2 gap-x-3 gap-y-1 py-2 text-small md:grid-cols-4">
+            <span role="cell"><span className="text-muted-foreground md:hidden">Invoice date </span>{d.issueDate ? formatDay(d.issueDate) : "Not recorded"}</span>
+            <span role="cell"><span className="text-muted-foreground md:hidden">Due date </span>{d.dueDate ? formatDay(d.dueDate) : "No due date"}</span>
+            <span role="cell" className="tabular-nums md:text-right"><span className="text-muted-foreground md:hidden">Days overdue </span>{String(d.daysOverdue)}</span>
+            <span role="cell" className="font-medium tabular-nums md:text-right"><span className="text-muted-foreground md:hidden">Balance </span>{formatMoney(d.balance)}</span>
+          </div>
+        ))}
+      </div>
+      {c.invoices > c.detail.length ? (
+        <Small testId="finance-ar-detail-cap">{`Showing the ${String(c.detail.length)} oldest of ${String(c.invoices)} open invoices (at most ${String(invoiceCap)} are listed). The row's figures count all of them.`}</Small>
+      ) : null}
+    </ArRow>
   );
 }
 
@@ -87,7 +77,7 @@ function CheckLine({ check, total }: { check: ArCheck | null; total: number | nu
     <div data-testid="finance-ar-check" className="flex flex-col gap-1 border-t border-border pt-3">
       <p className="text-body text-foreground">{`QuickBooks AR aging report, as of ${formatDay(check.reportDate)}: ${formatMoney(check.total)}`}</p>
       <p data-testid="finance-ar-difference" className="text-body text-foreground">
-        {`Difference from the total above${total === null ? "" : ` (${formatMoney(total)})`}: ${formatMoney(check.difference)}`}
+        {`Computed total${total === null ? "" : ` (${formatMoney(total)})`} minus QuickBooks total (${formatMoney(check.total)}): ${formatMoney(check.difference)}`}
       </p>
       <Small>{CREDITS_NOTE}</Small>
     </div>
@@ -96,30 +86,34 @@ function CheckLine({ check, total }: { check: ArCheck | null; total: number | nu
 
 function ReceivablesBody({ data }: { data: ReceivablesData }) {
   const note = data.businessDate ? `As of ${formatDay(data.businessDate)}${data.asOf ? ` · data from ${formatAsOf(data.asOf)}` : ""}` : "Point in time";
-  if (data.customers.length === 0 || data.total === null || data.buckets.length !== 5) {
+  if ((data.customers.length === 0 && data.unreadableCustomers === 0) || data.total === null || data.buckets.length !== 5) {
     return <PageSection title="Aged receivables by customer" note={note} emptyTitle={data.invoiceCount === 0 && data.total !== null ? "No open invoices" : "Not available yet"} />;
   }
   const bucketTotals = Object.fromEntries(data.buckets.map((b) => [b.bucket, b.total])) as Record<(typeof AGING_BUCKETS)[number], number>;
-  const hidden = data.customerCount - data.customers.length;
+  // Rows cut by the cap (SQL's count) and rows the page could not read are two different things: never one line.
+  const hidden = data.customerCount - data.customersShown;
   return (
     <PageSection title="Aged receivables by customer" note={note}>
-      <div data-testid="finance-ar-table" className="flex flex-col">
-        <div aria-hidden className={`hidden border-b border-border pb-2 text-label text-muted-foreground ${GRID}`}>
-          <span>Customer</span>
-          {AGING_BUCKETS.map((b) => <span key={b} className="text-right">{AGING_LABEL[b]}</span>)}
-          <span className="text-right">Total</span>
-          <span className="text-right">Open invoices</span>
+      <div data-testid="finance-ar-table" role="table" aria-label="Aged receivables by customer" className="flex flex-col">
+        <div role="row" className={`hidden border-b border-border pb-2 text-label text-muted-foreground ${GRID}`}>
+          <span role="columnheader">Customer</span>
+          {AGING_BUCKETS.map((b) => <span key={b} role="columnheader" className="text-right">{AGING_LABEL[b]}</span>)}
+          <span role="columnheader" className="text-right">Total</span>
+          <span role="columnheader" className="text-right">Open invoices</span>
         </div>
-        <ul className="flex flex-col divide-y divide-border">
-          {data.customers.map((c, i) => <CustomerRow key={`${c.name ?? "unknown"}-${String(i)}`} c={c} />)}
-        </ul>
-        <div data-testid="finance-ar-total" className={`flex flex-col gap-1 border-t-2 border-border pt-3 text-body font-semibold text-foreground ${GRID}`}>
-          <span data-field="customer">Total</span>
+        <div role="rowgroup" className="flex flex-col divide-y divide-border">
+          {data.customers.map((c, i) => <CustomerRow key={`${c.name ?? "unknown"}-${String(i)}`} c={c} invoiceCap={data.invoiceCap} />)}
+        </div>
+        <div role="row" data-testid="finance-ar-total" className={`flex flex-col gap-1 border-t-2 border-border pt-3 text-body font-semibold text-foreground ${GRID}`}>
+          <span role="rowheader" data-field="customer">Total</span>
           <Figures buckets={bucketTotals} total={data.total} invoices={data.invoiceCount} />
         </div>
       </div>
       {hidden > 0 ? (
-        <Small testId="finance-ar-cap">{`Showing the ${String(data.customers.length)} customers with the largest balances. ${plural(hidden, "customer is", "customers are")} not shown. The totals row counts all ${String(data.customerCount)} customers.`}</Small>
+        <Small testId="finance-ar-cap">{`Showing the ${String(data.customersShown)} customers with the largest balances (at most ${String(data.customerCap)} are listed). ${plural(hidden, "customer is", "customers are")} not shown. The totals row counts all ${String(data.customerCount)} customers.`}</Small>
+      ) : null}
+      {data.unreadableCustomers > 0 ? (
+        <Small testId="finance-ar-unreadable">{`${plural(data.unreadableCustomers, "customer row", "customer rows")} could not be read and ${data.unreadableCustomers === 1 ? "is" : "are"} not shown. The totals row still counts ${data.unreadableCustomers === 1 ? "it" : "them"}.`}</Small>
       ) : null}
       <Small testId="finance-ar-rule">{`${BUCKET_RULE} Invoice numbers are not stored here.`}</Small>
       <CheckLine check={data.check} total={data.total} />

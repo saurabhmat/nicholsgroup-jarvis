@@ -26,7 +26,7 @@ describe("toReceivables", () => {
     expect(v.customers.map((c) => [c.name, c.total, c.invoices])).toEqual([["Alpha Co", 300.3, 2], [null, 1.01, 1]]);
     expect(v.customers[0]?.buckets).toEqual({ current: 0, "1_30": 0, "31_60": 200.2, "61_90": 0, "90_plus": 100.1 });
     expect(v.customers[0]?.detail).toEqual([{ issueDate: "2026-08-01", dueDate: "2026-08-06", daysOverdue: 95, balance: 100.1 }, { issueDate: "2026-10-01", dueDate: null, daysOverdue: 40, balance: 200.2 }]);
-    expect([v.customerCount, v.customersShown, v.customerCap, v.invoiceCap]).toEqual([3, 2, 50, 25]);
+    expect([v.customerCount, v.customersShown, v.customerCap, v.invoiceCap, v.unreadableCustomers]).toEqual([3, 2, 50, 25, 0]);
     expect(v.check).toEqual({ kind: "ok", total: 360, reportDate: "2026-11-27", difference: 1.36 });
     expect([v.connectionStatus, v.lastSyncAt, v.businessDate]).toEqual(["active", "2026-11-27T14:55:00.000Z", "2026-11-27"]);
   });
@@ -35,11 +35,15 @@ describe("toReceivables", () => {
     expect(toReceivables([arRow({ check_reason: "something_new", check_total: null })])).toMatchObject({ check: { kind: "missing", reason: "unreadable" } });
     expect(toReceivables([arRow({ check_total: null, check_difference: null })])).toMatchObject({ check: null });
   });
-  it("a customer with an unreadable figure is dropped (never shown with a wrong total); the shown count follows what is shown", () => {
+  it("a customer with an unreadable figure is dropped and COUNTED as unreadable; the cap numbers stay SQL's (a dropped row is never the cap)", () => {
     const v = toReceivables([arRow({ customers: [cust({ total: "x" }), cust({ "31_60": null }), cust()] })]);
     if (v.state !== "ok") throw new Error("state");
     expect(v.customers).toHaveLength(1);
-    expect(v.customersShown).toBe(1);
+    expect(v.unreadableCustomers).toBe(2);
+    expect([v.customerCount, v.customersShown]).toEqual([3, 2]);
+  });
+  it("several current connections is a reason of its own", () => {
+    expect(toReceivables([arRow({ check_reason: "several_connections", check_total: null, check_difference: null, check_report_date: null })])).toMatchObject({ check: { kind: "missing", reason: "several_connections" } });
   });
   it("days overdue is never negative and an unreadable invoice row is dropped", () => {
     const v = toReceivables([arRow({ customers: [cust({ detail: [{ issue_date: "2026-11-01", due_date: "2026-12-01", days_overdue: -3, balance: 5 }, { balance: "x", days_overdue: 1 }] })] })]);

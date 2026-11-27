@@ -36,6 +36,23 @@ describe("Invoices & payments tab", () => {
     expect(screen.getByTestId("finance-weekly-table").closest("[aria-hidden='true']")).toBeNull();
   });
 
+  it("the column names are reachable by role (weeks table and the chosen week's two tables)", () => {
+    draw(weekly({ week: "2026-11-14" }));
+    const t = screen.getByRole("table", { name: "Invoices and payments by week" });
+    expect(within(t).getAllByRole("columnheader").map((h) => h.textContent)).toEqual(["Week (Sat–Fri)", "Invoices issued", "Invoiced", "Payments received", "Received"]);
+    expect(within(t).getAllByRole("rowheader")).toHaveLength(5);
+    expect(within(screen.getByRole("table", { name: "Invoices issued" })).getAllByRole("columnheader").map((h) => h.textContent)).toEqual(["Customer", "Date", "Total", "Open balance"]);
+    expect(within(screen.getByRole("table", { name: "Payments received" })).getAllByRole("columnheader").map((h) => h.textContent)).toEqual(["Customer", "Date", "Amount"]);
+  });
+
+  it("the chart has a text legend for its two series and says how a payment's amount is made", () => {
+    draw();
+    const legend = screen.getByTestId("finance-weekly-legend");
+    expect(legend.textContent).toBe("Invoiced (left bar)Received (right bar)");
+    expect(legend.closest("[aria-hidden='true']")).toBe(screen.getByTestId("finance-weekly-chart"));
+    expect(screen.getByTestId("finance-weekly-payment-note").textContent).toContain("can differ from the bank deposit when part of it was applied to a credit memo");
+  });
+
   it("says what is not included", () => {
     draw();
     expect(screen.getByTestId("finance-weekly-not-included").textContent).toBe("Not included: sales receipts, credit memos and refunds are not synced. Payroll is excluded.");
@@ -63,7 +80,7 @@ describe("Invoices & payments tab", () => {
   it("the caps are stated for invoices and payments", () => {
     draw(weekly({ week: "2026-11-14", detail: { invoice_count: 55, payment_count: 52 } }));
     const caps = screen.getAllByTestId("finance-week-cap").map((c) => c.textContent);
-    expect(caps).toEqual(["Showing the first 2 of 55 invoices. The week's figures above count all of them.", "Showing the first 3 of 52 payments. The week's figures above count all of them."]);
+    expect(caps).toEqual(["Showing the first 2 of 55 invoices (at most 50 are listed). The week's figures above count all of them.", "Showing the first 3 of 52 payments (at most 50 are listed). The week's figures above count all of them."]);
   });
 
   it("an empty chosen week says so", () => {

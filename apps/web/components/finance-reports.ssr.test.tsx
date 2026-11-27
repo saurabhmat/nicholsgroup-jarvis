@@ -52,6 +52,7 @@ describe("Invoices & payments page, server-side render", () => {
     // Recharts 3 draws its SVG after it has measured the container in the browser: the server document holds the sized wrapper (no layout
     // jump), not the bars. The table below carries every figure, so nothing is missing from the server-rendered page.
     expect(html).toContain("recharts-wrapper");
+    expect(html).toContain("Invoiced (left bar)");
     for (const text of ["Nov 21, 2026 – Nov 27, 2026", "$1,000.50", "$100.01", "Eps Co", "Delta Co", "Not included: sales receipts, credit memos and refunds are not synced"]) expect(html).toContain(text);
     expect(html).not.toContain("Could not load");
   });

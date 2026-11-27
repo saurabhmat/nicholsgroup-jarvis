@@ -11,7 +11,13 @@ const compact = new Intl.NumberFormat("en-US", { notation: "compact", maximumFra
 
 export function WeeklyChart({ points }: { points: WeeklyChartPoint[] }) {
   return (
-    <div aria-hidden="true" data-testid="finance-weekly-chart" className="h-56 w-full min-w-0">
+    <div aria-hidden="true" data-testid="finance-weekly-chart" className="w-full min-w-0">
+      {/* The legend is plain text beside the colours (the two series differ by more than colour) and is in the server-rendered page. */}
+      <ul data-testid="finance-weekly-legend" className="mb-2 flex flex-wrap gap-x-4 gap-y-1 text-small text-foreground">
+        <li className="flex items-center gap-2"><span className="inline-block h-3 w-3 rounded-sm" style={{ background: "var(--chart-1)" }} />Invoiced (left bar)</li>
+        <li className="flex items-center gap-2"><span className="inline-block h-3 w-3 rounded-sm" style={{ background: "var(--chart-2)" }} />Received (right bar)</li>
+      </ul>
+      <div className="h-56 w-full min-w-0">
       <ResponsiveContainer width="100%" height="100%" initialDimension={{ width: 640, height: 224 }}>
         <BarChart data={points} margin={{ top: 4, right: 8, bottom: 0, left: 0 }}>
           <CartesianGrid vertical={false} stroke="var(--border)" />
@@ -21,6 +27,7 @@ export function WeeklyChart({ points }: { points: WeeklyChartPoint[] }) {
           <Bar dataKey="received" name="Received" fill="var(--chart-2)" radius={[3, 3, 0, 0]} isAnimationActive={false} />
         </BarChart>
       </ResponsiveContainer>
+      </div>
     </div>
   );
 }
