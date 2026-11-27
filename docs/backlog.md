@@ -1762,3 +1762,26 @@ Spec: `docs/specs/messages.md` §22 (answers Q-M10). Decision D-70 (a chat both 
 - depends: T-170
 - note: approved by Saurabh, Nov 24, 2026 ("yes", in reply to the lead agent's question whether to build the header fix as its own small task). Finding F-01 of `docs/security/pilot-test.md`: the app sends no `frame-ancestors`, `X-Frame-Options` or `X-Content-Type-Options`; rated MEDIUM while the portal has its own site (the session cookie is SameSite=Lax), HIGH if it ever shares a registrable domain with pages not fully controlled. Approvals are live for PKG (D-71), and a Teams Send is one click within the 8-hour window.
 - acceptance: every response of the web app (pages, API routes, the error and not-found pages) carries `X-Frame-Options: DENY`, `Content-Security-Policy: frame-ancestors 'none'` and `X-Content-Type-Options: nosniff`, set in one place (`apps/web/next.config.ts` `headers()` or `proxy.ts`, whichever also covers API routes and static files); the existing `Referrer-Policy` stays; routes that set their own stricter `Content-Security-Policy` (the Teams image route's `sandbox`) keep it and still forbid framing; no script or style policy is added in this task (a full CSP is a separate decision: record it in docs/plan-review.md); nothing the app does legitimately breaks (the installed iPhone app, OAuth redirects, the Inngest and webhook endpoints, images); the `it.fails` pin for F-01 in `apps/web/tests/security-headers.test.ts` becomes a passing test and is extended to assert the headers on a page, an API route and the image route; the finding is closed in `docs/security/pilot-test.md` with the human step "confirm the headers in production with the browser's network panel". App code touching every response: security review and code review, fix BLOCKER and HIGH.
+
+
+## Phase B13 — Finance: the controller's reports (Saurabh, Nov 27, 2026)
+
+Request (Saurabh, Nov 27, 2026, verbatim): "here are the reports being published by our finance controller. whats the best way to show them on the finance section. please review and advise before building — Cash report; Aged AR report; Invoices and received payments by week". No sample file or screenshot came with the message; the layouts are not known. **Advice first, nothing built.** The three tasks below are placeholders so the request is on record; the planner writes the acceptance once Saurabh has sent the layouts and answered the questions the lead agent asked the same day (live figures or the controller's file; what the cash report contains; number of weeks; whether credit memos and sales receipts count).
+
+Facts found Nov 27 (code and migrations, not production): the Finance page is one page (KPI cards, Subscriptions, Receivables aging by bucket, Cash by account, Controls, a list of cached reports). Stored from QuickBooks: accounts with the current book balance of bank accounts (no history), invoices (customer name, issue date, due date, total, balance; no document number), payments (date, amount, one row per invoice it was applied to), bills, transaction lines of Purchase, Deposit, Payment, BillPayment, Bill and JournalEntry. Not synced: SalesReceipt, CreditMemo, RefundReceipt, Transfer; payroll is excluded (D-25). Balance Sheet and Cash Flow are not cached (D-27). H-024 (the live PKG QuickBooks file) is unchecked.
+
+### T-300 Finance: Aged AR by customer
+- status: proposed
+- depends: T-244
+- note: placeholder (see the phase note). Buildable from `fin.invoices` as stored today: customer by bucket, a total row, open invoices per customer, and a line comparing the total with the cached QuickBooks AR aging summary. Open: aging by due date (today's rule) or by invoice date; whether invoice numbers are wanted (not stored today); credit memos are not synced.
+
+### T-301 Finance: invoices and received payments by week
+- status: proposed
+- depends: T-244
+- note: placeholder. Buildable from `fin.invoices` (issue date, total) and `fin.payments` (date, amount) per business week (Sat–Fri, America/New_York, rule 11). Open: number of weeks; whether sales receipts and credit memos count (not synced today); whether a payment not applied to an invoice is stored at all (check the normalizer before the spec).
+
+### T-302 Finance: cash report (balances by week)
+- status: proposed
+- depends: T-244
+- needs: the layout of the controller's cash report
+- note: placeholder. Today only the current book balance per bank account exists. A balance per past week needs either a stored snapshot from the day it is deployed (new table: `lane_id`, RLS, pgTAP) or a QuickBooks Balance Sheet read at each week end that keeps the bank-account rows only (to be checked against D-27 by the security review). Money in and out per week cannot be computed reliably from what is synced (no transfers, no sales receipts, payroll excluded). Every figure labelled "book balance" (rule 7).
