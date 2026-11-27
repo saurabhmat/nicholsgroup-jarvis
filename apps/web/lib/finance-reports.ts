@@ -225,6 +225,8 @@ export type FinanceCashData = {
   businessDate: string | null;
   reason: "bank_mapping_missing" | "no_own_bank_accounts" | null;
   weeks: number;
+  /** `finance.reports.cash_history` (default off): when false the table has the Today column only. */
+  historyEnabled: boolean;
   /** Today first, then the week ends newest first. */
   columns: CashColumn[];
   accounts: CashAccount[];
@@ -262,7 +264,7 @@ export function toFinanceCash(data: unknown): FinanceCash {
   const row = rowOf(data);
   const state = stateOf(row);
   if (!row || state === null) return { state: "no_access" };
-  const base = { state, asOf: instant(row.as_of), lastSyncAt: instant(row.last_sync_at), connectionStatus: text(row.connection_status), businessDate: ymd(row.business_date), weeks: count(row.weeks) };
+  const base = { state, asOf: instant(row.as_of), lastSyncAt: instant(row.last_sync_at), connectionStatus: text(row.connection_status), businessDate: ymd(row.business_date), weeks: count(row.weeks), historyEnabled: row.history_enabled === true };
   const reason = row.reason === "bank_mapping_missing" || row.reason === "no_own_bank_accounts" ? row.reason : null;
   if (state !== "ok") return { ...base, reason: null, columns: [], accounts: [], totals: [], unreadableAccounts: 0 };
   const columns = toCashColumns(row.columns);
@@ -356,6 +358,9 @@ export const PAYMENT_AMOUNT_NOTE =
 
 export const CASH_NOTE =
   "Every figure is the book balance as QuickBooks reports it. The change is the difference of two book balances; money in and out is not shown. Payroll accounts are not listed.";
+export const HISTORY_OFF_TEXT = "Weekly history is not switched on for this company. Today's book balances are shown.";
+export const CASH_MISSING_NOTE =
+  "A balance marked not available can be an account with a zero balance on that date, an account opened later, or a parent account with sub-accounts, because QuickBooks' report does not show it as its own row. Accounts closed since are not listed, so earlier totals cover today's accounts only.";
 export const CASH_REASON_TEXT: Record<NonNullable<FinanceCashData["reason"]>, string> = {
   bank_mapping_missing: "No bank accounts are mapped to a company yet. Ask your administrator to set that up.",
   no_own_bank_accounts: "No bank account is mapped to this company.",

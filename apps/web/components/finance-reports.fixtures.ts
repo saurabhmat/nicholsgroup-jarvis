@@ -56,7 +56,7 @@ const cashCols = [
 ];
 const cc = (book_balance: number | null, change: number | null = null) => ({ book_balance, change });
 const cashRow = {
-  state: "ok", as_of: "2026-11-27T15:00:00Z", last_sync_at: "2026-11-27T14:55:00Z", connection_status: "active", business_date: "2026-11-27", reason: null, weeks: 3, columns: cashCols,
+  state: "ok", as_of: "2026-11-27T15:00:00Z", last_sync_at: "2026-11-27T14:55:00Z", connection_status: "active", business_date: "2026-11-27", reason: null, weeks: 3, history_enabled: true, columns: cashCols,
   accounts: [
     { name: "Operating Checking", shared: false, cells: [cc(1000.5, 99.5), cc(901, 101), cc(800), cc(null)] },
     { name: "Savings", shared: true, cells: [cc(2000.25, -100), cc(2100.25, 0), cc(null), cc(null)] },

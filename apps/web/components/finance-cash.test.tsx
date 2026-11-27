@@ -48,7 +48,7 @@ describe("Cash tab", () => {
       "Today$3,000.75+$99.50 vs. the older column",
       "Fri Nov 20, 2026$3,001.25",
       "Fri Nov 13, 2026Not complete1 account has no balance",
-      "Fri Nov 6, 2026Not complete2 accounts have no balance",
+      "Fri Nov 6, 2026Not read yet",
     ]);
     expect(total.textContent).not.toContain("$800.00"); // 800 alone is the partial sum SQL refused to give
   });
@@ -61,6 +61,34 @@ describe("Cash tab", () => {
     expect(heads[2]).toBe("Fri Nov 20, 2026Read Nov 27, 2:00 AM ET");
     expect(heads[4]).toBe("Fri Nov 6, 2026Not read yet");
     expect(screen.getByTestId("finance-cash-unread").textContent).toContain("1 week end has not been read from QuickBooks yet");
+  });
+
+  it("a column that has not been read at all says Not read yet in the total row too (not N accounts missing)", () => {
+    draw();
+    const total = screen.getByTestId("finance-cash-total-row");
+    expect(total.textContent).not.toContain("2 accounts have no balance");
+    expect(cellsOf(total)[3]).toBe("Fri Nov 6, 2026Not read yet");
+  });
+
+  it("says that a not available balance can be a zero balance, a later account or a parent, and that closed accounts are not listed", () => {
+    draw();
+    const note = screen.getByTestId("finance-cash-missing-note").textContent ?? "";
+    expect(note).toContain("zero balance");
+    expect(note).toContain("opened later");
+    expect(note).toContain("parent account with sub-accounts");
+    expect(note).toContain("Accounts closed since are not listed, so earlier totals cover today's accounts only");
+  });
+
+  it("history switched off: the Today column only, with the sentence that says so; no week columns, no unread or missing notes", () => {
+    const v = cash({ history_enabled: false, weeks: 4, columns: [{ kind: "today", date: "2026-11-27", as_of: "2026-11-27T14:55:00Z", read: 2, accounts: 2 }],
+      accounts: [{ name: "Operating Checking", shared: false, cells: [{ book_balance: 1000.5, change: null }] }, { name: "Savings", shared: true, cells: [{ book_balance: 2000.25, change: null }] }],
+      totals: [{ book_balance: 3000.75, change: null, missing: 0 }] });
+    draw(v);
+    expect(screen.getByTestId("finance-cash-history-off").textContent).toBe("Weekly history is not switched on for this company. Today's book balances are shown.");
+    expect(within(screen.getByTestId("finance-cash-total-row")).getByText("$3,000.75")).toBeTruthy();
+    expect(screen.queryByTestId("finance-cash-unread")).toBeNull();
+    expect(screen.queryByTestId("finance-cash-missing-note")).toBeNull();
+    expect([...screen.getByTestId("finance-cash-table").querySelectorAll("[role='columnheader']")]).toHaveLength(2);
   });
 
   it("says book balance, never bank balance; money in and out is not shown; payroll accounts are not listed", () => {

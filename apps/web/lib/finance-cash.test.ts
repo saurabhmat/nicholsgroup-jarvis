@@ -1,7 +1,7 @@
 // T-302: mapping of core.finance_cash, its loader and the guarded reader. Synthetic figures only (rule 10). The mapper copies SQL's figures;
 // nothing is added, subtracted or estimated here.
 import { describe, expect, it, vi } from "vitest";
-import { CASH_NOTE, financeCashFor, loadFinanceCash, toFinanceCash } from "./finance-reports";
+import { CASH_MISSING_NOTE, CASH_NOTE, HISTORY_OFF_TEXT, financeCashFor, loadFinanceCash, toFinanceCash } from "./finance-reports";
 
 const col = (kind: string, date: string, as_of: string | null, read: number, accounts = 2) => ({ kind, date, as_of, read, accounts });
 const cell = (book_balance: number | string | null, change: number | string | null = null) => ({ book_balance, change });
@@ -12,7 +12,7 @@ const columns = [
   col("week_end", "2026-11-06", null, 0),
 ];
 const row = (over: Record<string, unknown> = {}) => ({
-  state: "ok", as_of: "2026-11-27T15:00:00Z", last_sync_at: "2026-11-27T14:55:00Z", connection_status: "active", business_date: "2026-11-27", reason: null, weeks: 3, columns,
+  state: "ok", as_of: "2026-11-27T15:00:00Z", last_sync_at: "2026-11-27T14:55:00Z", connection_status: "active", business_date: "2026-11-27", reason: null, weeks: 3, history_enabled: true, columns,
   accounts: [
     { name: "Operating Checking", shared: false, cells: [cell(1000.5, 99.5), cell("901.00", 101), cell(800, null), cell(null)] },
     { name: "Savings", shared: true, cells: [cell(2000.25, 100), cell(1900.25, null), cell(null), cell(null)] },
@@ -26,6 +26,7 @@ describe("toFinanceCash", () => {
     if (v.state !== "ok") throw new Error("state");
     expect(v.reason).toBeNull();
     expect(v.weeks).toBe(3);
+    expect(v.historyEnabled).toBe(true);
     expect(v.columns.map((c) => [c.kind, c.date, c.read, c.accounts, c.asOf])).toEqual([
       ["today", "2026-11-27", 2, 2, "2026-11-27T14:55:00.000Z"], ["week_end", "2026-11-20", 2, 2, "2026-11-27T07:00:00.000Z"], ["week_end", "2026-11-13", 1, 2, "2026-11-27T07:00:00.000Z"], ["week_end", "2026-11-06", 0, 2, null],
     ]);
@@ -77,11 +78,19 @@ describe("toFinanceCash", () => {
     expect(toFinanceCash(null)).toEqual({ state: "no_access" });
     expect(toFinanceCash([row({ state: "maybe" })])).toEqual({ state: "no_access" });
   });
+  it("the history switch is read as given: only a real true counts", () => {
+    for (const bad of [false, "true", 1, null, undefined]) expect(toFinanceCash([row({ history_enabled: bad })])).toMatchObject({ historyEnabled: false });
+  });
   it("the wording says book balance and that money in and out is not shown", () => {
     expect(CASH_NOTE).toContain("book balance");
     expect(CASH_NOTE).not.toMatch(/bank balance/i);
     expect(CASH_NOTE).toContain("money in and out is not shown");
     expect(CASH_NOTE).toContain("Payroll accounts are not listed");
+    expect(CASH_MISSING_NOTE).toContain("zero balance");
+    expect(CASH_MISSING_NOTE).toContain("opened later");
+    expect(CASH_MISSING_NOTE).toContain("parent account with sub-accounts");
+    expect(CASH_MISSING_NOTE).toContain("Accounts closed since are not listed");
+    expect(HISTORY_OFF_TEXT).toContain("not switched on");
   });
 });
 

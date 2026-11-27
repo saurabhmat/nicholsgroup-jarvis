@@ -10,7 +10,7 @@ import { loadLane } from "@/lib/lane-page";
 import { timed } from "@/lib/timed";
 import { formatAsOf, formatMoney, hasFinanceView } from "@/lib/home-finance";
 import { formatDay } from "@/lib/finance-page";
-import { CASH_NOTE, CASH_REASON_TEXT, financeCashFor, type CashCell, type CashColumn, type FinanceCash, type FinanceCashData } from "@/lib/finance-reports";
+import { CASH_MISSING_NOTE, CASH_NOTE, CASH_REASON_TEXT, HISTORY_OFF_TEXT, financeCashFor, type CashCell, type CashColumn, type FinanceCash, type FinanceCashData } from "@/lib/finance-reports";
 import { CardBoundary } from "./card-boundary";
 import { ReportFrame, Small, UNAVAILABLE, plural } from "./finance-report-frame";
 
@@ -30,7 +30,7 @@ const columnSub = (c: CashColumn): string => {
 
 function Cell({ cell, column, total }: { cell: CashCell; column: CashColumn; total?: { missing: number } }) {
   const notRead = column.kind === "week_end" && column.read === 0;
-  const missingText = total ? "Not complete" : column.kind === "today" ? "No balance yet" : notRead ? "Not read yet" : "Not available";
+  const missingText = total && !notRead ? "Not complete" : column.kind === "today" ? "No balance yet" : notRead ? "Not read yet" : "Not available";
   return (
     <span role="cell" data-column={column.date} className={CELL}>
       <span className={LABEL}>{columnLabel(column)}</span>
@@ -40,7 +40,7 @@ function Cell({ cell, column, total }: { cell: CashCell; column: CashColumn; tot
         ) : (
           <span data-field="book-balance" className="font-semibold text-foreground">{formatMoney(cell.bookBalance)}</span>
         )}
-        {total && cell.bookBalance === null && total.missing > 0 ? (
+        {total && !notRead && cell.bookBalance === null && total.missing > 0 ? (
           <span data-field="missing" className="text-small text-muted-foreground">{`${plural(total.missing, "account has", "accounts have")} no balance`}</span>
         ) : null}
         {cell.change !== null ? <span data-field="change" className="text-small text-muted-foreground">{`${formatChange(cell.change)} vs. the older column`}</span> : null}
@@ -59,7 +59,11 @@ function CashBody({ cash }: { cash: FinanceCashData }) {
   const total = cash.totals;
   return (
     <PageSection title="Cash: book balance by account" note={note}>
-      <Small>{`Today and the end of the last ${plural(weekColumns.length, "completed week", "completed weeks")}, newest first. Each figure is a book balance with its change from the older column next to it.`}</Small>
+      {weekColumns.length === 0 ? (
+        <Small testId="finance-cash-history-off">{HISTORY_OFF_TEXT}</Small>
+      ) : (
+        <Small>{`Today and the end of the last ${plural(weekColumns.length, "completed week", "completed weeks")}, newest first. Each figure is a book balance with its change from the older column next to it.`}</Small>
+      )}
       <div className="md:overflow-x-auto">
         <div data-testid="finance-cash-table" role="table" aria-label="Book balance by bank account, today and at the end of each week" style={style} className="flex flex-col md:min-w-max">
           <div role="row" className={`hidden border-b border-border pb-2 text-label text-muted-foreground ${GRID}`}>
@@ -93,6 +97,7 @@ function CashBody({ cash }: { cash: FinanceCashData }) {
       {unread > 0 ? <Small testId="finance-cash-unread">{`${plural(unread, "week end has", "week ends have")} not been read from QuickBooks yet. QuickBooks is read nightly; a week end that cannot be read stays blank.`}</Small> : null}
       {total.length === 0 ? <Small testId="finance-cash-no-total">{`${plural(cash.unreadableAccounts, "account row", "account rows")} could not be read, so no total is shown.`}</Small> : null}
       <Small>A total is shown only when every account of the column has a balance; it is never a partial sum.</Small>
+      {weekColumns.length > 0 ? <Small testId="finance-cash-missing-note">{CASH_MISSING_NOTE}</Small> : null}
       <Small testId="finance-cash-note">{CASH_NOTE}</Small>
     </PageSection>
   );
