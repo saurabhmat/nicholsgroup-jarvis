@@ -51,12 +51,14 @@ declare
   v_inv_cap constant integer := 25;
   rep record;
   v_rep_total_txt text;
-  v_rep_total numeric(18,2);
-  v_check_reason text;
+    v_check_reason text;
   v_check_total numeric(18,2);
   v_check_date date;
   v_check_diff numeric(18,2);
-  v_fig_re constant text := '^-?[0-9]{1,16}(\.[0-9]{1,6})?$';
+  v_d date;
+  v_t numeric(18,2);
+  v_df numeric(18,2);
+  v_fig_re constant text := '^-?[0-9]{1,30}(\.[0-9]{1,6})?$';
 begin
   if p_lane is null then
     raise exception 'lane is required' using errcode = '22004';
@@ -132,13 +134,19 @@ begin
   into v_buckets, v_total, v_n, v_customers, v_cust_n;
   v_cust_shown := least(v_cust_n, v_cap);
 
-  -- The check line: the newest cached QuickBooks AgedReceivables report of a current connection, its TOTAL row (the last column).
+  -- The check line: the newest cached QuickBooks AgedReceivables report of the current connection, its TOTAL row (the last column).
+  -- Fail closed (D-25, rule 13): QuickBooks' total includes invoices the normalizer dropped for a payroll, employee or excluded-entity reason
+  -- (they are not in fin.invoices), so the difference would show their balance. The total is shown only when the latest normalize run of
+  -- every current connection counted none (core.finance_ar_total_readable); a run from before that count existed counts as "some".
+  -- With several current QuickBooks files the computed total covers all of them and a report covers one: no comparison.
   select r.* into rep from fin.report_cache r
   where r.lane_id = p_lane and r.report = 'ar_aging_summary' and r.connection_id = any (c.qbo_connections)
   order by r.params ->> 'report_date' desc nulls last, r.as_of desc, r.fetched_at desc limit 1;
-  if not found then
+  if pg_catalog.cardinality(c.qbo_connections) > 1 then
+    v_check_reason := 'several_connections';
+  elsif not found then
     v_check_reason := 'not_cached';
-  elsif coalesce(rep.payload #>> '{Header,TotalsWithheld}', 'false') = 'true' then
+  elsif not core.finance_ar_total_readable(p_lane) or coalesce(rep.payload #>> '{Header,TotalsWithheld}', 'false') = 'true' then
     v_check_reason := 'withheld';
   else
     select e.j #>> '{ColData,-1,value}' into v_rep_total_txt
@@ -150,28 +158,70 @@ begin
     elsif v_rep_total_txt !~ v_fig_re or coalesce(rep.params ->> 'report_date', '') !~ '^[0-9]{4}-[0-9]{2}-[0-9]{2}$' then
       v_check_reason := 'unreadable';
     else
-      v_check_date := (rep.params ->> 'report_date')::date;
-      v_rep_total := pg_catalog.round(v_rep_total_txt::numeric, 2);
-      -- The report is a picture of one day; the computed total is of the synced data now. A report dated before the last data
-      -- processing day is not comparable.
-      if v_check_date < coalesce((c.last_normalized_at at time zone 'America/New_York')::date, v_today) then
-        v_check_reason := 'older_than_data';
-        v_check_date := null;
-      else
-        v_check_total := v_rep_total;
-        v_check_diff := (v_total - v_rep_total)::numeric(18,2);
+      begin
+        -- An impossible date (2026-13-45) or a figure too big for numeric(18,2) passes the pattern but not the cast: unreadable, never an error.
+        v_d := (rep.params ->> 'report_date')::date;
+        v_t := pg_catalog.round(v_rep_total_txt::numeric, 2);
+        v_df := (v_total - v_t)::numeric(18,2);
+      exception when others then
+        v_check_reason := 'unreadable';
+      end;
+      if v_check_reason is null then
+        -- The report is a picture of one day; the computed total is of the synced data now. A report dated before the last data
+        -- processing day is not comparable.
+        if v_d < coalesce((c.last_normalized_at at time zone 'America/New_York')::date, v_today) then
+          v_check_reason := 'older_than_data';
+        else
+          v_check_total := v_t;
+          v_check_date := v_d;
+          v_check_diff := v_df;
+        end if;
       end if;
     end if;
   end if;
 
   return query select 'ok'::text, v_as_of, c.last_sync_at, c.connection_status, v_today, v_buckets, v_total, v_n, v_customers, v_cust_n, v_cust_shown, v_cap, v_inv_cap,
-    v_check_reason, v_check_total, case when v_check_reason is null then v_check_date end, v_check_diff;
+    v_check_reason, v_check_total, v_check_date, v_check_diff;
 end;
 $$;
 comment on function core.finance_receivables(text) is
   'Aged AR by customer (T-300): the open own-entity invoices of core.home_finance_detail (same set, same buckets), one row per QuickBooks customer id (50 rows, 25 invoices each, counts returned), a totals figure and the QuickBooks AgedReceivables TOTAL with the difference when a comparable cached report exists. Same gate and states as home_finance_detail. Invoker: RLS applies.';
 revoke all on function core.finance_receivables(text) from public, anon;
 grant execute on function core.finance_receivables(text) to authenticated, service_role;
+
+-- ---------------------------------------------------------------- may QuickBooks' AR total be shown (normalizer counts)
+-- fin.normalize_runs is readable with the "health" view only, not the finance view. This definer returns ONE boolean to a caller who holds the
+-- finance view at AAL2 for the lane: true only when the lane has at least one current QuickBooks connection and the LATEST normalize run of
+-- EVERY current connection has counts.dead_invoices_sensitive = 0 (a missing key, a missing run, or any other value is false).
+create or replace function core.finance_ar_total_readable(p_lane text)
+returns boolean
+language plpgsql
+stable
+security definer
+set search_path = ''
+as $$
+begin
+  if p_lane is null then
+    raise exception 'lane is required' using errcode = '22004';
+  end if;
+  if coalesce(auth.jwt() ->> 'aal', '') <> 'aal2' or not (p_lane = any (core.allowed_lanes(auth.uid(), 'finance'))) then
+    return false;
+  end if;
+  return exists (select 1 from core.connections k where k.lane_id = p_lane and k.provider = 'quickbooks' and k.status <> 'disconnected')
+    and not exists (
+      select 1 from core.connections k
+      where k.lane_id = p_lane and k.provider = 'quickbooks' and k.status <> 'disconnected'
+        and not coalesce((
+          select r.counts -> 'dead_invoices_sensitive' = '0'::jsonb
+          from fin.normalize_runs r
+          where r.lane_id = p_lane and r.connection_id = k.id
+          order by r.finished_at desc, r.started_at desc limit 1), false));
+end;
+$$;
+comment on function core.finance_ar_total_readable(text) is
+  'T-300: true only when the latest normalize run of every current QuickBooks connection counted no Invoice dropped for a payroll, employee or excluded-entity reason (counts.dead_invoices_sensitive = 0); false for a caller without the finance view at AAL2. Definer only to read that one fact.';
+revoke all on function core.finance_ar_total_readable(text) from public, anon;
+grant execute on function core.finance_ar_total_readable(text) to authenticated, service_role;
 
 -- ---------------------------------------------------------------- the number of weeks (lane_config)
 -- lane_config is readable only with the "config" view; a finance reader has no such right. This definer function hands out ONE integer
@@ -186,6 +236,7 @@ as $$
 declare
   v_cfg jsonb;
   v_w text;
+  v_n integer;
 begin
   if p_lane is null then
     raise exception 'lane is required' using errcode = '22004';
@@ -195,8 +246,10 @@ begin
   end if;
   select cc.config into v_cfg from core.lane_config_current cc where cc.lane_id = p_lane;
   v_w := case when pg_catalog.jsonb_typeof(v_cfg #> '{finance,reports,weeks}') = 'number' then v_cfg #>> '{finance,reports,weeks}' end;
-  if v_w ~ '^[0-9]{1,2}$' and v_w::integer between 1 and 13 then
-    return v_w::integer;
+  -- No reliance on the order of evaluation of "and": the cast happens only inside the case.
+  v_n := case when v_w ~ '^[0-9]{1,2}$' then v_w::integer end;
+  if v_n between 1 and 13 then
+    return v_n;
   end if;
   return 4;
 end;

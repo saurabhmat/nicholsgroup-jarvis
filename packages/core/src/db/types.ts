@@ -781,6 +781,9 @@ isOneToOne: false
 "fin_report_cache_put":
 { Args: { "p_as_of": string,"p_connection_id": string,"p_fetched_at": string,"p_lane": string,"p_params": Json,"p_payload": Json,"p_report": string }; Returns: string
                            },
+"finance_ar_total_readable":
+{ Args: { "p_lane": string }; Returns: boolean
+                           },
 "finance_overview":
 { Args: { "p_lane": string }; Returns: {
               "ar_invoices": number,"ar_total": number,"as_of": string,"connection_status": string,"last_normalized_at": string,"last_sync_at": string,"reports": Json,"state": string,"unmapped_bills_open": number

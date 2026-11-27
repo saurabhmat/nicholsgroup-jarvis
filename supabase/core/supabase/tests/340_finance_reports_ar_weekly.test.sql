@@ -7,7 +7,7 @@
 -- outside the range; the week detail (invalid dates, caps); denial: another lane, AAL1, no finance view, anon, bad arguments.
 -- Dates are relative to today (business date) and safe on any day of the week.
 begin;
-select plan(91);
+select plan(118);
 \ir helpers/lane_rls.psql
 
 update core.lanes set enabled = true where code in ('APK');
@@ -64,7 +64,7 @@ select is((select state from core.finance_weekly('PKG', 4)), 'no_data', 'weekly:
 select is((select state from core.finance_week_detail('PKG', pg_temp.cur(), 4)), 'no_data', 'week detail: no_data');
 reset role;
 insert into fin.normalize_runs (lane_id, connection_id, class_tracking, class_fallback, counts, started_at, finished_at)
-values ('PKG', '00000000-0000-4000-8000-000000005101', false, false, '{}', now() - interval '61 minutes', now() - interval '1 hour');
+values ('PKG', '00000000-0000-4000-8000-000000005101', false, false, '{"dead_invoices_sensitive": 0}', now() - interval '61 minutes', now() - interval '1 hour');
 
 -- ================================================================ aged AR
 -- Open own-entity invoices (current connection): Alpha (C1) 100.10 at 95 days and 200.20 at 40 days; Beta (C2) 50.05 not yet due and
@@ -154,6 +154,90 @@ select is((select check_reason || '/' || coalesce(check_total::text, 'null') fro
           'check line: a report older than the last data processing is not compared');
 reset role;
 
+-- Fail closed (D-25): QuickBooks' total includes invoices the normalizer dropped for a payroll, employee or excluded-entity reason.
+-- The total is shown only when the LATEST normalize run of EVERY current connection has dead_invoices_sensitive = 0.
+create function pg_temp.today_report(p_total text, p_date text default null) returns void language sql as $$
+  delete from fin.report_cache where lane_id = 'PKG' and report = 'ar_aging_summary';
+  insert into fin.report_cache (lane_id, connection_id, report, params, payload, as_of, fetched_at)
+  values ('PKG', '00000000-0000-4000-8000-000000005101', 'ar_aging_summary', jsonb_build_object('report_date', coalesce(p_date, to_char(pg_temp.today(), 'YYYY-MM-DD'))),
+          jsonb_build_object('Header', '{}'::jsonb, 'Rows', jsonb_build_object('Row', jsonb_build_array(jsonb_build_object('type', 'Summary', 'ColData', jsonb_build_array(jsonb_build_object('value', 'TOTAL'), jsonb_build_object('value', p_total)))))),
+          now() - interval '2 hours', now() - interval '2 hours');
+$$;
+select pg_temp.today_report('361.36');
+select pg_temp.claims('owner@example.test', 'aal2');
+set local role authenticated;
+select is((select check_total from core.finance_receivables('PKG')), 361.36::numeric, 'sensitive: the latest run counted none: the total is shown');
+select is(core.finance_ar_total_readable('PKG'), true, 'sensitive: finance_ar_total_readable is true');
+reset role;
+insert into fin.normalize_runs (lane_id, connection_id, class_tracking, class_fallback, counts, started_at, finished_at)
+values ('PKG', '00000000-0000-4000-8000-000000005101', false, false, '{}', now() - interval '51 minutes', now() - interval '50 minutes');
+select pg_temp.claims('owner@example.test', 'aal2');
+set local role authenticated;
+select is((select check_reason || '/' || coalesce(check_total::text, 'null') || '/' || coalesce(check_difference::text, 'null') || '/' || coalesce(check_report_date::text, 'null') from core.finance_receivables('PKG')), 'withheld/null/null/null',
+          'sensitive: the latest run has no dead_invoices_sensitive key (a run from before): withheld, no total, no difference, no date');
+reset role;
+insert into fin.normalize_runs (lane_id, connection_id, class_tracking, class_fallback, counts, started_at, finished_at)
+values ('PKG', '00000000-0000-4000-8000-000000005101', false, false, '{"dead_invoices_sensitive": 2}', now() - interval '41 minutes', now() - interval '40 minutes');
+select pg_temp.claims('owner@example.test', 'aal2');
+set local role authenticated;
+select is((select check_reason || '/' || coalesce(check_total::text, 'null') from core.finance_receivables('PKG')), 'withheld/null', 'sensitive: the latest run dropped 2 invoices: withheld');
+reset role;
+insert into fin.normalize_runs (lane_id, connection_id, class_tracking, class_fallback, counts, started_at, finished_at)
+values ('PKG', '00000000-0000-4000-8000-000000005101', false, false, '{"dead_invoices_sensitive": 0}', now() - interval '31 minutes', now() - interval '30 minutes');
+select pg_temp.claims('owner@example.test', 'aal2');
+set local role authenticated;
+select is((select check_total from core.finance_receivables('PKG')), 361.36::numeric, 'sensitive: only the LATEST run counts: a later run with 0 shows the total again');
+reset role;
+
+-- Several current QuickBooks connections: the computed total covers all of them, a report covers one: no comparison. And the sensitive
+-- rule needs EVERY current connection's latest run to be clean.
+insert into core.connections (id, lane_id, provider, external_account_id, status, last_sync_at)
+values ('00000000-0000-4000-8000-000000005104', 'PKG', 'quickbooks', '8800000000514', 'active', now() - interval '1 hour');
+insert into fin.normalize_runs (lane_id, connection_id, class_tracking, class_fallback, counts, started_at, finished_at)
+values ('PKG', '00000000-0000-4000-8000-000000005104', false, false, '{"dead_invoices_sensitive": 1}', now() - interval '21 minutes', now() - interval '20 minutes');
+select pg_temp.claims('owner@example.test', 'aal2');
+set local role authenticated;
+select is(core.finance_ar_total_readable('PKG'), false, 'sensitive: two connections, one with a dropped invoice: not readable');
+select is((select check_reason || '/' || coalesce(check_total::text, 'null') from core.finance_receivables('PKG')), 'several_connections/null', 'several connections: no comparison, no total');
+reset role;
+insert into fin.normalize_runs (lane_id, connection_id, class_tracking, class_fallback, counts, started_at, finished_at)
+values ('PKG', '00000000-0000-4000-8000-000000005104', false, false, '{"dead_invoices_sensitive": 0}', now() - interval '11 minutes', now() - interval '10 minutes');
+select pg_temp.claims('owner@example.test', 'aal2');
+set local role authenticated;
+select is(core.finance_ar_total_readable('PKG'), true, 'sensitive: both connections clean: readable');
+select is((select check_reason from core.finance_receivables('PKG')), 'several_connections', 'several connections: still no comparison');
+reset role;
+update core.connections set status = 'disconnected' where id = '00000000-0000-4000-8000-000000005104';
+select pg_temp.claims('outsider@example.test', 'aal2');
+set local role authenticated;
+select is(core.finance_ar_total_readable('PKG'), false, 'sensitive: a user without the finance view gets false');
+reset role;
+select pg_temp.claims('owner@example.test', 'aal1');
+set local role authenticated;
+select is(core.finance_ar_total_readable('PKG'), false, 'sensitive: AAL1 gets false');
+reset role;
+select pg_temp.claims('owner@example.test', 'aal2');
+set local role authenticated;
+select is(core.finance_ar_total_readable('APK'), false, 'sensitive: another lane gets false');
+reset role;
+set local role anon;
+select throws_ok($$select core.finance_ar_total_readable('PKG')$$, '42501', null, 'anon cannot call finance_ar_total_readable');
+reset role;
+
+-- Unreadable, never an error: an impossible date or a figure too big for numeric(18,2) passes the pattern but not the cast.
+select pg_temp.today_report('361.36', '2026-13-45');
+select pg_temp.claims('owner@example.test', 'aal2');
+set local role authenticated;
+select is((select check_reason from core.finance_receivables('PKG')), 'unreadable', 'check line: an impossible report date is unreadable (the page still answers)');
+select is((select total from core.finance_receivables('PKG')), 361.36::numeric, 'check line: and the figures are still there');
+reset role;
+select pg_temp.today_report('99999999999999999999999.00');
+select pg_temp.claims('owner@example.test', 'aal2');
+set local role authenticated;
+select is((select check_reason from core.finance_receivables('PKG')), 'unreadable', 'check line: a figure that overflows numeric(18,2) is unreadable');
+reset role;
+select pg_temp.today_report('361.36');
+
 -- The caps are stated: 52 more customers with one small invoice each, 27 more invoices for one customer.
 insert into fin.invoices (lane_id, connection_id, source_id, customer_id, customer_name, issue_date, due_date, total, balance, entity_code)
 select 'PKG', '00000000-0000-4000-8000-000000005101', 'cap-' || g, 'cap' || g, 'Cap ' || g, pg_temp.today() - 10, pg_temp.today() + 1, 0.01, 0.01, 'PKG' from generate_series(1, 52) g;
@@ -168,6 +252,35 @@ select is((select (c.j ->> 'invoices')::int || '/' || jsonb_array_length(c.j -> 
            from core.finance_receivables('PKG'), jsonb_array_elements(customers) c(j) where c.j ->> 'name' = 'Alpha Co'), '29/25/25', 'caps: 29 invoices, 25 listed, the count says so');
 select is((select (b.j ->> 'total')::numeric from core.finance_receivables('PKG'), jsonb_array_elements(buckets) b(j) where b.j ->> 'bucket' = 'current'), 51.06 + 0.52 + 27.00,
           'caps: the buckets and the total still count every invoice (nothing is dropped from a figure)');
+reset role;
+
+-- A user who holds the finance view in BOTH lanes asks for PKG and gets none of APK's figures: the lane predicate itself, not only RLS.
+insert into core.memberships (user_id, lane_id, role) values (pg_temp.uid('owner@example.test'), 'APK', 'owner');
+select pg_temp.claims('owner@example.test', 'aal2');
+set local role authenticated;
+select is((select total from core.finance_receivables('PKG')), 388.88::numeric, 'two lanes: PKG receivables hold none of APK''s 777.00');
+select is((select customer_count from core.finance_receivables('PKG')), 55, 'two lanes: PKG''s 55 customers, not APK''s');
+reset role;
+delete from core.memberships where lane_id = 'APK' and user_id = pg_temp.uid('owner@example.test');
+select pg_temp.claims('owner@example.test', 'aal2');
+set local role authenticated;
+select is(core.finance_report_weeks('APK'), null::int, 'a PKG-only user: finance_report_weeks(APK) is null');
+reset role;
+
+-- The aging boundaries: due exactly 30, 31, 60, 61, 90 and 91 days ago, yesterday, today and tomorrow (distinct amounts: a bucket that
+-- changes <= to < changes a total).
+delete from fin.invoices where lane_id in ('PKG', 'APK');
+insert into fin.invoices (lane_id, connection_id, source_id, customer_id, customer_name, issue_date, due_date, total, balance, entity_code)
+select 'PKG', '00000000-0000-4000-8000-000000005101', 'b-' || d.days, 'b' || d.days, 'Boundary ' || d.days, pg_temp.today() - 200, pg_temp.today() - d.days, d.amt, d.amt, 'PKG'
+from (values (-1, 128.00), (0, 64.00), (1, 256.00), (30, 1.00), (31, 2.00), (60, 4.00), (61, 8.00), (90, 16.00), (91, 32.00)) d(days, amt);
+select pg_temp.claims('owner@example.test', 'aal2');
+set local role authenticated;
+select is((select jsonb_agg((b.j ->> 'bucket') || '=' || (b.j ->> 'total') || '/' || (b.j ->> 'count') order by b.o) from core.finance_receivables('PKG'), jsonb_array_elements(buckets) with ordinality b(j, o)),
+          '["current=192.00/2", "1_30=257.00/2", "31_60=6.00/2", "61_90=24.00/2", "90_plus=32.00/1"]'::jsonb,
+          'boundaries: tomorrow and today are current; yesterday and 30 days are 1-30; 31 and 60 are 31-60; 61 and 90 are 61-90; 91 is 90+');
+select is((select jsonb_agg(b.j order by b.o) from core.finance_receivables('PKG'), jsonb_array_elements(buckets) with ordinality b(j, o)),
+          (select jsonb_agg(a.j order by a.o) from core.home_finance_detail('PKG'), jsonb_array_elements(aging) with ordinality a(j, o)),
+          'boundaries: and the Overview aging agrees on every one');
 reset role;
 
 -- ================================================================ denial (receivables)
@@ -246,6 +359,13 @@ select is((select (select jsonb_agg(w.j ->> 'start' order by w.o) from jsonb_arr
 select is((select (select jsonb_agg(w.j ->> 'end' order by w.o) from jsonb_array_elements(weeks) with ordinality w(j, o)) from core.finance_weekly('PKG', 4)),
           (select jsonb_agg(to_char(pg_temp.cur() - 7 * n + 6, 'YYYY-MM-DD') order by n) from generate_series(0, 4) n),
           'weekly: every row ends on the Friday');
+select is((select bool_and(extract(dow from (w.j ->> 'start')::date) = 6 and (w.j ->> 'end')::date - (w.j ->> 'start')::date = 6) from core.finance_weekly('PKG', 4), jsonb_array_elements(weeks) w(j)),
+          true, 'weekly: every returned week starts on a Saturday (dow 6) and ends six days later, checked on the rows themselves');
+select is((select bool_and((w.j ->> 'start')::date - (n.next ->> 'start')::date = 7) from core.finance_weekly('PKG', 4) f, jsonb_array_elements(f.weeks) with ordinality w(j, o)
+           join (select a.j as next, a.o from core.finance_weekly('PKG', 4) g, jsonb_array_elements(g.weeks) with ordinality a(j, o)) n on n.o = w.o + 1),
+          true, 'weekly: consecutive rows are exactly seven days apart');
+select is((select (w.j ->> 'start')::date <= (now() at time zone 'America/New_York')::date and (now() at time zone 'America/New_York')::date <= (w.j ->> 'end')::date
+           from core.finance_weekly('PKG', 4), jsonb_array_elements(weeks) with ordinality w(j, o) where o = 1), true, 'weekly: the first row contains today');
 select is((select (w.j ->> 'invoiced_count') || '/' || (w.j ->> 'invoiced_amount') from core.finance_weekly('PKG', 4), jsonb_array_elements(weeks) w(j) where (w.j ->> 'is_current')::boolean),
           '2/1000.50', 'week 0: Saturday and today counted, tomorrow is not, exclusions are not');
 select is((select (w.j ->> 'received_count') || '/' || (w.j ->> 'received_amount') from core.finance_weekly('PKG', 4), jsonb_array_elements(weeks) w(j) where (w.j ->> 'is_current')::boolean),
@@ -269,6 +389,17 @@ select is((select (select sum((w.j ->> 'received_amount')::numeric) from jsonb_a
 select is((select (select sum((w.j ->> 'invoiced_count')::int) from jsonb_array_elements(weeks) w(j))::int from core.finance_weekly('PKG', 1)), 4, 'weekly: asking for one week shows the current week and one completed week');
 select is((select (w.j ->> 'is_current')::boolean from core.finance_weekly('PKG', 4), jsonb_array_elements(weeks) with ordinality w(j, o) where o = 1), true, 'weekly: the first row is the current week');
 reset role;
+
+-- Both lanes held by one user: PKG's weeks hold none of APK's invoice (17.00) and payment (17.00) of the same Saturday.
+insert into core.memberships (user_id, lane_id, role) values (pg_temp.uid('owner@example.test'), 'APK', 'owner');
+select pg_temp.claims('owner@example.test', 'aal2');
+set local role authenticated;
+select is((select (w.j ->> 'invoiced_count') || '/' || (w.j ->> 'invoiced_amount') || '/' || (w.j ->> 'received_count') || '/' || (w.j ->> 'received_amount')
+           from core.finance_weekly('PKG', 4), jsonb_array_elements(weeks) w(j) where (w.j ->> 'is_current')::boolean), '2/1000.50/1/100.00', 'two lanes: PKG''s current week holds none of APK''s figures');
+select is((select invoice_count || '/' || payment_count from core.finance_week_detail('PKG', pg_temp.cur(), 4)), '2/1', 'two lanes: PKG''s week detail lists none of APK''s rows');
+select is((select (select count(*) from jsonb_array_elements(payments) p(j) where (p.j ->> 'amount')::numeric = 17.00) from core.finance_week_detail('PKG', pg_temp.cur(), 4)), 0::bigint, 'two lanes: no 17.00 payment in PKG''s list');
+reset role;
+delete from core.memberships where lane_id = 'APK' and user_id = pg_temp.uid('owner@example.test');
 
 -- ================================================================ week detail
 select pg_temp.claims('owner@example.test', 'aal2');
