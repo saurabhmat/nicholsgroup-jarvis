@@ -1770,18 +1770,19 @@ Request (Saurabh, Nov 27, 2026, verbatim): "here are the reports being published
 
 Facts found Nov 27 (code and migrations, not production): the Finance page is one page (KPI cards, Subscriptions, Receivables aging by bucket, Cash by account, Controls, a list of cached reports). Stored from QuickBooks: accounts with the current book balance of bank accounts (no history), invoices (customer name, issue date, due date, total, balance; no document number), payments (date, amount, one row per invoice it was applied to), bills, transaction lines of Purchase, Deposit, Payment, BillPayment, Bill and JournalEntry. Not synced: SalesReceipt, CreditMemo, RefundReceipt, Transfer; payroll is excluded (D-25). Balance Sheet and Cash Flow are not cached (D-27). H-024 (the live PKG QuickBooks file) is unchecked.
 
-### T-300 Finance: Aged AR by customer
-- status: proposed
-- depends: T-244
-- note: placeholder (see the phase note). Buildable from `fin.invoices` as stored today: customer by bucket, a total row, open invoices per customer, and a line comparing the total with the cached QuickBooks AR aging summary. Open: aging by due date (today's rule) or by invoice date; whether invoice numbers are wanted (not stored today); credit memos are not synced.
+**Answers (Saurabh, Nov 27, 2026, verbatim): "I dont have snapshot of the report and live pub k quickbooks is already connected...you can go like 4 weeks back. Yes I agree computng directly from quickbooks".** Taken as the go-ahead to build (he opened with "now we need to build some reports from quickbooks"). So: figures computed live from the synced QuickBooks data; no sample layouts exist, so the layouts are the lead agent's (standard controller layouts, spec `docs/specs/finance.md` §15); 4 completed business weeks plus the current week to date. Not answered, the lead agent's defaults (he was told): the cash report shows balances only, no money in and out; aging by due date; no invoice numbers. H-024 (live PKG file connected) is his statement, not checked by the agent; its box is left as it is.
+
+### T-300 Finance: tabs and Aged AR by customer
+- status: approved (Saurabh, Nov 27, 2026, see the phase note)
+- depends: T-243
+- acceptance: spec `docs/specs/finance.md` §15.1 and §15.2. Finance gets a tab row (Overview, Receivables, Invoices & payments; Cash is added by T-302); Overview is today's page unchanged. Receivables: one row per customer with the five buckets (Current, 1–30, 31–60, 61–90, 90+, by days past due) and a total, a totals row, the open invoices of each customer on expansion (invoice date, due date, days overdue, balance), "as of" and source, and a line comparing the computed total with the cached QuickBooks AR aging summary when that total is readable. Same open-invoice set as `core.home_finance_detail` (a pgTAP test proves the bucket totals are equal). Every figure from SQL (rule 7); `laneId` everywhere; finance view and AAL2 as the Overview; a cross-lane denial test; production SQL as a manual part with a check.
 
 ### T-301 Finance: invoices and received payments by week
-- status: proposed
-- depends: T-244
-- note: placeholder. Buildable from `fin.invoices` (issue date, total) and `fin.payments` (date, amount) per business week (Sat–Fri, America/New_York, rule 11). Open: number of weeks; whether sales receipts and credit memos count (not synced today); whether a payment not applied to an invoice is stored at all (check the normalizer before the spec).
+- status: approved (Saurabh, Nov 27, 2026, see the phase note)
+- depends: T-300
+- acceptance: spec §15.3. One row per business week (Sat–Fri, America/New_York, rule 11): the current week to date and the completed weeks before it (`lane_config.finance.reports.weeks`, 1 to 13, default 4): invoices issued (count, amount) and payments received (count, amount), a grouped bar chart, and the invoices and payments of a chosen week. A payment counts once whatever the number of invoices it was applied to. Voided and deleted rows are left out. A boundary test: Friday and Saturday dates fall in the right weeks. The page says what is not included (sales receipts, credit memos, refunds: not synced). Built with T-300 in one branch and one PR.
 
-### T-302 Finance: cash report (balances by week)
-- status: proposed
-- depends: T-244
-- needs: the layout of the controller's cash report
-- note: placeholder. Today only the current book balance per bank account exists. A balance per past week needs either a stored snapshot from the day it is deployed (new table: `lane_id`, RLS, pgTAP) or a QuickBooks Balance Sheet read at each week end that keeps the bank-account rows only (to be checked against D-27 by the security review). Money in and out per week cannot be computed reliably from what is synced (no transfers, no sales receipts, payroll excluded). Every figure labelled "book balance" (rule 7).
+### T-302 Finance: cash report (book balance per bank account by week)
+- status: approved (Saurabh, Nov 27, 2026, see the phase note)
+- depends: T-301
+- acceptance: spec §15.4. Cash tab: the book balance of each bank account today and at the end of each of the last completed business weeks (same number of weeks as T-301), the change from week to week, a total row, "as of" per column, every figure labelled "book balance" (rule 7). Past balances come from a QuickBooks Balance Sheet read at each week-end date of which ONLY the rows of the lane's bank accounts are kept (no total, equity, net income or any other row is stored; D-27 stays as it is, and the security review must confirm that nothing payroll-related can be derived). New storage has `lane_id`, RLS and pgTAP with a cross-lane denial test in the same change. No money in and out in this version (transfers, sales receipts and payroll are not synced, so they would not add up). Full security and code review (connector and data access).
