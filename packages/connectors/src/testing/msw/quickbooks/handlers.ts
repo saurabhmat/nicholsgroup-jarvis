@@ -92,6 +92,8 @@ export type FakeIntuit = {
     /** T-052: report answers by Intuit's report name, and what was asked (query strings as sent). */
     reports: FakeReports;
     reportRequests: { name: string; query: Record<string, string> }[];
+    /** T-302: a BalanceSheet answer per end_date (YYYY-MM-DD); a date without an entry gets `reports.BalanceSheet`. */
+    balanceSheetByDate: Record<string, unknown>;
     /** Any request to the API that is not a GET on a known read path (must stay empty). */
     unexpected: { method: string; path: string }[];
     /** Next N query/CDC/Preferences calls answer this status (429 gets Retry-After: 0). */
@@ -131,6 +133,7 @@ export function createFakeIntuit(options: FakeIntuitOptions = {}): FakeIntuit {
     preferencesRequests: 0,
     reports: syntheticReports(),
     reportRequests: [],
+    balanceSheetByDate: {},
     unexpected: [],
     failRead: null,
   };
@@ -224,7 +227,13 @@ export function createFakeIntuit(options: FakeIntuitOptions = {}): FakeIntuit {
       if (denied) return denied;
       const name = String(params.name);
       state.reportRequests.push({ name, query: Object.fromEntries(new URL(request.url).searchParams) });
-      const report = state.reports[name];
+      const end = new URL(request.url).searchParams.get("end_date") ?? "";
+      let report: unknown = (name === "BalanceSheet" ? state.balanceSheetByDate[end] : undefined) ?? state.reports[name];
+      // Like Intuit, the default Balance Sheet echoes the requested period in its header (an explicit per-date answer is returned as given).
+      if (report && name === "BalanceSheet" && !state.balanceSheetByDate[end] && end) {
+        const base = report as { Header?: Record<string, unknown> };
+        report = { ...base, Header: { ...base.Header, StartPeriod: new URL(request.url).searchParams.get("start_date") ?? end, EndPeriod: end } };
+      }
       if (!report) return HttpResponse.json({ Fault: { Error: [{ Message: "Invalid report name", code: "4000" }], type: "ValidationFault" } }, { status: 400, headers: tidHeader() });
       return HttpResponse.json(report, { headers: tidHeader() });
     }),

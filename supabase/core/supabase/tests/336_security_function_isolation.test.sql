@@ -32,7 +32,7 @@ insert into no_subject_ok values
   ('act.action_rows_visible(uuid)', 'RLS helper keyed by an action id: checked below with real ids (true only for the caller''s own rows)'),
   ('core.brain_home_lane()', 'returns the configured home lane code, no lane data'),
   ('core.role_views(text)', 'static role to view map'), ('core.view_names()', 'static list of view names'), ('core.viewer_view_names()', 'static list of view names'),
-  ('fin.business_week(timestamp with time zone)', 'pure date helper'), ('fin.et_date(timestamp with time zone)', 'pure date helper'),
+  ('core.business_week_start(date)', 'pure date helper (T-302)'), ('fin.business_week(timestamp with time zone)', 'pure date helper'), ('fin.et_date(timestamp with time zone)', 'pure date helper'),
   ('fin.month_range(date)', 'pure date helper'), ('fin.month_start(date)', 'pure date helper'), ('fin.mtd_range(timestamp with time zone)', 'pure date helper'),
   ('fin.next_month_start(date)', 'pure date helper'), ('fin.ytd_range(date)', 'pure date helper'), ('fin.ytd_start(date)', 'pure date helper');
 grant all on no_subject_ok to public;
@@ -177,13 +177,13 @@ begin
 end $$;
 
 -- ---------------------------------------------------------------- the catalog is classified
-select is((select count(*)::int from fn), 97, 'the catalog holds 97 functions callable by authenticated (a new one changes the count: it is probed automatically; update the figure on purpose)');
+select is((select count(*)::int from fn), 100, 'the catalog holds 100 functions callable by authenticated (a new one changes the count: it is probed automatically; update the figure on purpose)');
 select is((select coalesce(array_agg(name order by name), '{}') from fn where not has_lane and not has_user and sig not in (select sig from no_subject_ok)), '{}'::text[],
   'every callable function takes a lane or a user, or is on the reviewed list of pure helpers');
 select is((select coalesce(array_agg(sig order by sig), '{}') from no_subject_ok where sig not in (select sig from fn)), '{}'::text[], 'no stale entry on the reviewed helper list');
 select is((select count(*)::int from idmap where conn is null or tconn is null or act is null or imp is null or run is null or news is null or doc_path is null or thread is null), 0, 'the seed gave every (lane, person) real ids of every kind');
-select is((select count(*)::int from fn where has_lane) || ' lane functions, ' || (select count(*)::int from fn where has_user) || ' user functions', '79 lane functions, 9 user functions',
-  'functions exercised: 79 take a lane (all probed cross-lane, AAL1 and cross-user) and 9 take a person (the person probe runs for all 9); 16 are reviewed pure helpers');
+select is((select count(*)::int from fn where has_lane) || ' lane functions, ' || (select count(*)::int from fn where has_user) || ' user functions', '81 lane functions, 9 user functions',
+  'functions exercised: 81 take a lane (all probed cross-lane, AAL1 and cross-user) and 9 take a person (the person probe runs for all 9); 17 are reviewed pure helpers');
 
 -- ---------------------------------------------------------------- lane parameter
 select is(pg_temp.lane_probe('owner@example.test', 'aal2', 'APK', 'APK', 'admin'), '{}'::text[], 'CROSS-LANE: PKG-only owner at AAL2 asking for APK with real APK ids: the answer equals the missing-lane answer for every lane function, carries no APK id, changes no row');

@@ -100,7 +100,7 @@ select is((select coalesce(array_agg(n.nspname || '.' || p.proname order by 1), 
   'rule 7: no function that writes a fin table can be executed by authenticated or anon (the model works with the signed-in user''s role)');
 select is((select string_agg(p.proname::text, ',' order by p.proname) from pg_proc p join pg_namespace n on n.oid = p.pronamespace
            where n.nspname in ('act','audit','brain','brief','cal','comms','core','fin','raw') and p.prokind = 'f' and p.prosrc ~* '(insert into|update|delete from|truncate)\s+fin\.'),
-          'fin_qbo_normalize,fin_report_cache_put', 'rule 7: the only fin writers are the QuickBooks normalizer and the report cache writer (service role, called by connector jobs); a new writer fails here');
+          'fin_cash_book_balances_purge,fin_cash_book_balances_put,fin_qbo_normalize,fin_report_cache_put', 'rule 7: the only fin writers are the cash book balance writer and purge, the QuickBooks normalizer and the report cache writer (service role, called by connector jobs); a new writer fails here');
 select pg_temp.claims('owner@example.test', 'aal2');
 set local role authenticated;
 select is((select (select count(*) from (select 1) x where (select pg_temp.denied_write()))::int), 1, 'rule 7: a signed-in owner at AAL2 cannot insert into, update or call the writers of fin tables (insufficient_privilege)');

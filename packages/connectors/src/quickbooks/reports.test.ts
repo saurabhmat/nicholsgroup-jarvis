@@ -36,7 +36,7 @@ const planned = (h: QboHarness) => planReports(h.reportState.settings, false, h.
 const entry = (h: QboHarness, kind: string) => h.reportState.stored.find((e) => e.report === kind)!;
 
 describe("what is asked for: date range, accounting method and class come from lane_config (acceptance)", () => {
-  const base: ReportSettings = { method: "accrual", period: "year_to_date", classIds: [], kinds: ALL };
+  const base: ReportSettings = { method: "accrual", period: "year_to_date", classIds: [], kinds: ALL, weeks: 4, cashHistory: false };
   const NOW = Date.parse("2026-11-06T15:00:00Z");
   const by = (reqs: ReportRequest[], kind: string) => reqs.find((r) => r.kind === kind)!;
 
@@ -108,7 +108,7 @@ describe("what is asked for: date range, accounting method and class come from l
 });
 
 describe("P&L windows for Finance and Home (T-244): week, month and year to date, America/New_York", () => {
-  const base: ReportSettings = { method: "accrual", period: "year_to_date", classIds: [], kinds: ALL };
+  const base: ReportSettings = { method: "accrual", period: "year_to_date", classIds: [], kinds: ALL, weeks: 4, cashHistory: false };
   const t12: ReportSettings = { ...base, period: "trailing_12_months" };
   const pnls = (settings: ReportSettings, at: string) => planReports(settings, false, Date.parse(at)).filter((r) => r.kind === "pnl").map((r) => `${r.params.start_date}..${r.params.end_date}`);
 
@@ -235,7 +235,7 @@ describe("a pull: five reports into the cache, GET only (acceptance: stored with
 
   it("the class filter reaches Intuit only when the connection's class-tracking flag is on (P&L and balance sheet)", async () => {
     const on = await setup({ classTracking: true });
-    on.h.reportState.settings = { method: "accrual", period: "year_to_date", classIds: ["2", "5"], kinds: ALL };
+    on.h.reportState.settings = { method: "accrual", period: "year_to_date", classIds: ["2", "5"], kinds: ALL, weeks: 4, cashHistory: false };
     await on.h.reportsJob.run(LANE, on.conn.id);
     const asked = Object.fromEntries(on.intuit.state.reportRequests.map((r) => [r.name, r.query.class]));
     expect(asked).toEqual({ ProfitAndLoss: "2,5", BalanceSheet: "2,5", CashFlow: undefined, AgedReceivables: undefined, AgedPayables: undefined });
@@ -243,7 +243,7 @@ describe("a pull: five reports into the cache, GET only (acceptance: stored with
     expect(entry(on.h, "ar_aging_summary").params).toMatchObject({ unsplit: "report_not_class_aware" });
 
     const off = await setup({ classTracking: false });
-    off.h.reportState.settings = { method: "cash", period: "trailing_12_months", classIds: ["2"], kinds: ALL };
+    off.h.reportState.settings = { method: "cash", period: "trailing_12_months", classIds: ["2"], kinds: ALL, weeks: 4, cashHistory: false };
     for (const name of ["ProfitAndLoss", "BalanceSheet"]) (off.intuit.state.reports[name] as { Header: Record<string, unknown> }).Header.ReportBasis = "Cash";
     await off.h.reportsJob.run(LANE, off.conn.id);
     expect(off.intuit.state.reportRequests.every((r) => r.query.class === undefined)).toBe(true);
@@ -299,7 +299,10 @@ describe("default settings from an empty lane_config", () => {
     h.reportState.settings = await reader.reportSettings(LANE);
     await h.reportsJob.run(LANE, conn.id);
     const extra = planned(h).length - 3;
+    // T-302: the cash history is OFF by default (fail closed): no Balance Sheet request, and the switch-off purge ran.
     expect(intuit.state.reportRequests.map((r) => r.name)).toEqual(["ProfitAndLoss", "AgedReceivables", "AgedPayables", ...Array<string>(extra).fill("ProfitAndLoss")]);
+    expect(h.cashState.purges).toEqual([true]);
+    expect(h.reportState.stored.some((e) => e.report === "balance_sheet")).toBe(false);
   });
 });
 
@@ -361,7 +364,7 @@ describe("the stored projection: strict allowlist, flat, Id kept (acceptance)", 
     const deep: unknown = Array.from({ length: 1 }, () => null).reduce<unknown>((acc) => acc, { type: "Data", ColData: [{ value: "x" }] });
     let node: unknown = deep;
     for (let i = 0; i < 12; i += 1) node = { type: "Section", Header: { ColData: [{ value: "s" }] }, Rows: { Row: [node] } };
-    const req = planReports({ method: "accrual", period: "year_to_date", classIds: [], kinds: ["pnl"] }, false, Date.now())[0]!;
+    const req = planReports({ method: "accrual", period: "year_to_date", classIds: [], kinds: ["pnl"], weeks: 4, cashHistory: false }, false, Date.now())[0]!;
     expect(() => projectReport(req, { Header: {}, Rows: { Row: [node] } }, { payrollAccountIds: new Set(), excludedEntityIds: new Set() })).toThrow(/nested too deeply/);
   });
 
@@ -497,7 +500,7 @@ describe("payroll (D-25, default (b)): payroll account rows are not cached, and 
   });
 
   it("projection unit: an excluded id never survives, whatever the label", () => {
-    const req = planReports({ method: "accrual", period: "year_to_date", classIds: [], kinds: ["pnl"] }, false, Date.now())[0]!;
+    const req = planReports({ method: "accrual", period: "year_to_date", classIds: [], kinds: ["pnl"], weeks: 4, cashHistory: false }, false, Date.now())[0]!;
     const policy: ReportPolicy = reportPolicy([{ Id: "9", Name: "Misc", AccountSubType: "PayrollTaxPayable" }], { accountIds: [], accountSubtypes: ["PayrollTaxPayable"], excludedEntityIds: [] });
     const out = projectReport(req, { Header: {}, Rows: { Row: [{ type: "Data", ColData: [{ value: "Perfectly Normal", id: "9" }, { value: "12.00" }] }, { type: "Data", ColData: [{ value: "Fine", id: "10" }, { value: "1.00" }] }] } }, policy);
     expect(out.payload.Rows.Row.map((r) => r.ColData[0]?.id)).toEqual(["10"]);

@@ -249,7 +249,7 @@ export function createLaneConfigReader(clientFor: JobClientFor): LaneConfigReade
       const qbo = root.qbo === undefined || root.qbo === null ? undefined : laneConfigSchema.shape.qbo.safeParse(root.qbo);
       if (qbo && !qbo.success) throw bad();
       if (qbo?.data?.entity_mapping_mode !== "file_class") classIds = [];
-      return { method: finance.data.accounting_method, period: finance.data.reports.period, classIds: [...classIds], kinds: [...new Set(finance.data.reports.kinds)] };
+      return { method: finance.data.accounting_method, period: finance.data.reports.period, classIds: [...classIds], kinds: [...new Set(finance.data.reports.kinds)], weeks: finance.data.reports.weeks, cashHistory: finance.data.reports.cash_history };
     },
     async qboSyncIntervalHours(laneId) {
       const config = await readConfig(laneId);

@@ -1,5 +1,5 @@
 // T-300, T-301: synthetic Finance report data shared by the view tests (rule 10). Test-only: never imported by the app.
-import { toFinanceWeekly, toReceivables, toWeekDetail } from "@/lib/finance-reports";
+import { toFinanceCash, toFinanceWeekly, toReceivables, toWeekDetail } from "@/lib/finance-reports";
 import type { WeeklyData } from "./finance-weekly";
 
 const buckets = [
@@ -46,3 +46,21 @@ export function weekly(over: { weekly?: Record<string, unknown>; detail?: Record
     week,
   };
 }
+
+// T-302: the cash report. Today and three week ends; Fri Nov 6 is not read yet; the second account has no balance for Nov 13 (so that total is null).
+const cashCols = [
+  { kind: "today", date: "2026-11-27", as_of: "2026-11-27T14:55:00Z", read: 2, accounts: 2 },
+  { kind: "week_end", date: "2026-11-20", as_of: "2026-11-27T07:00:00Z", read: 2, accounts: 2 },
+  { kind: "week_end", date: "2026-11-13", as_of: "2026-11-27T07:00:00Z", read: 1, accounts: 2 },
+  { kind: "week_end", date: "2026-11-06", as_of: null, read: 0, accounts: 2 },
+];
+const cc = (book_balance: number | null, change: number | null = null) => ({ book_balance, change });
+const cashRow = {
+  state: "ok", as_of: "2026-11-27T15:00:00Z", last_sync_at: "2026-11-27T14:55:00Z", connection_status: "active", business_date: "2026-11-27", reason: null, weeks: 3, history_enabled: true, columns: cashCols,
+  accounts: [
+    { name: "Operating Checking", shared: false, cells: [cc(1000.5, 99.5), cc(901, 101), cc(800), cc(null)] },
+    { name: "Savings", shared: true, cells: [cc(2000.25, -100), cc(2100.25, 0), cc(null), cc(null)] },
+  ],
+  totals: [{ ...cc(3000.75, 99.5), missing: 0 }, { ...cc(3001.25), missing: 0 }, { ...cc(null), missing: 1 }, { ...cc(null), missing: 2 }],
+};
+export const cash = (over: Record<string, unknown> = {}) => toFinanceCash([{ ...cashRow, ...over }]);

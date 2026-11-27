@@ -12,13 +12,13 @@ const draw = (data = receivables()) => render(<ReceivablesView laneId="PKG" lane
 const cells = (el: HTMLElement) => [...el.querySelectorAll("[data-bucket], [data-field='total'], [data-field='invoices']")].map((c) => c.textContent?.replace(/\s+/g, " ").trim());
 
 describe("Receivables tab", () => {
-  it("the tab row links the three tabs; Receivables is current; the row scrolls sideways inside its own box", () => {
+  it("the tab row links the four tabs (Cash second); Receivables is current; the row scrolls sideways inside its own box", () => {
     draw();
     const nav = screen.getByTestId("finance-tabs");
     const links = within(nav).getAllByRole("link");
-    expect(links.map((l) => l.getAttribute("href"))).toEqual(["/PKG/finance", "/PKG/finance/receivables", "/PKG/finance/weekly"]);
-    expect(links.map((l) => l.getAttribute("aria-current"))).toEqual([null, "page", null]);
-    expect(links.map((l) => l.textContent)).toEqual(["Overview", "Receivables", "Invoices & payments"]);
+    expect(links.map((l) => l.getAttribute("href"))).toEqual(["/PKG/finance", "/PKG/finance/cash", "/PKG/finance/receivables", "/PKG/finance/weekly"]);
+    expect(links.map((l) => l.getAttribute("aria-current"))).toEqual([null, null, "page", null]);
+    expect(links.map((l) => l.textContent)).toEqual(["Overview", "Cash", "Receivables", "Invoices & payments"]);
     expect(nav.className).toContain("overflow-x-auto");
     expect(links[0]?.className).toContain("whitespace-nowrap");
   });

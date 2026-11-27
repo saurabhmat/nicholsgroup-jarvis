@@ -18,6 +18,7 @@ import { createQboApi } from "../quickbooks/api";
 import { createQboFeatureRecorder, type QboFeatureStore } from "../quickbooks/features";
 import { createQuickBooksConnector } from "../quickbooks/connector";
 import { createQboReportsJob, type ReportCacheEntry, type ReportCacheStore } from "../quickbooks/reports-job";
+import type { CashBookBalanceEntry, CashBookBalanceStore } from "../quickbooks/cash-book-balance-store";
 import type { ReportSettings } from "../quickbooks/reports";
 import type { QboConnection } from "../quickbooks/guard";
 import { createQuickBooksRevoker, QBO_REVOKE_ACTION } from "../quickbooks/writer";
@@ -247,7 +248,7 @@ export function createQboHarness(options: QboHarnessOptions) {
   } });
   // ---- T-052 twins: lane_config report settings and fin.report_cache (with the database guard's rules ported).
   const reportState: { settings: ReportSettings; failSettings: boolean; stored: ReportCacheEntry[]; failStore: { reports: readonly string[] | "all"; kind: "transient" | "provider_error" } | null } = {
-    settings: { method: "accrual", period: "year_to_date", classIds: [], kinds: ["pnl", "balance_sheet", "cash_flow", "ar_aging_summary", "ap_aging_summary"] },
+    settings: { method: "accrual", period: "year_to_date", classIds: [], kinds: ["pnl", "balance_sheet", "cash_flow", "ar_aging_summary", "ap_aging_summary"], weeks: 4, cashHistory: false },
     failSettings: false,
     stored: [],
     failStore: null,
@@ -283,10 +284,36 @@ export function createQboHarness(options: QboHarnessOptions) {
       else reportState.stored.push(entry);
     },
   };
+  /** Twin of core.fin_cash_account_ids / core.fin_cash_book_balances_put (T-302): the ids the normalizer kept, and a writer that refuses the whole call for any other id. */
+  const cashState: { ids: string[]; puts: CashBookBalanceEntry[]; failIds: boolean; failDates: string[]; purges: boolean[]; failPurge: boolean; permanentDates: string[]; permanentIds: boolean } = { ids: ["1"], puts: [], failIds: false, failDates: [], purges: [], failPurge: false, permanentDates: [], permanentIds: false };
+  const cashStore: CashBookBalanceStore = {
+    async purge(laneId, conn, all) {
+      assertLaneBound(laneId, conn);
+      if (cashState.failPurge) throw new ConnectorError({ kind: "transient", message: "Cash book balance store unavailable" });
+      cashState.purges.push(all);
+      if (all) cashState.puts.length = 0;
+    },
+    async accountIds(laneId, conn) {
+      assertLaneBound(laneId, conn);
+      if (cashState.failIds) throw new ConnectorError({ kind: "transient", message: "Cash book balance store unavailable" });
+      if (cashState.permanentIds) throw new ConnectorError({ kind: "provider_error", message: "The cash account list is not valid" });
+      return [...cashState.ids];
+    },
+    async put(laneId, conn, entry) {
+      assertLaneBound(laneId, conn);
+      if (cashState.failDates.includes(entry.date)) throw new ConnectorError({ kind: "transient", message: "Cash book balance store unavailable" });
+      if (cashState.permanentDates.includes(entry.date)) throw new ConnectorError({ kind: "provider_error", message: "The cash book balances were refused by the database" });
+      if (entry.balances.some((b) => !cashState.ids.includes(b.accountId))) throw new ConnectorError({ kind: "provider_error", message: "The cash book balances were refused by the database" });
+      const at = cashState.puts.findIndex((p) => p.date === entry.date);
+      if (at >= 0) cashState.puts[at] = entry;
+      else cashState.puts.push(entry);
+    },
+  };
   const reportsJob = createQboReportsJob({
     loader: { loadConnection: (laneId, id) => connections.load(laneId, id) },
     api,
     store: reportStore,
+    cashBalances: cashStore,
     settings: async () => {
       if (reportState.failSettings) throw new ConnectorError({ kind: "provider_error", message: "The lane's report settings are not valid" });
       return reportState.settings;
@@ -371,6 +398,7 @@ export function createQboHarness(options: QboHarnessOptions) {
     clock,
     payrollState,
     reportState,
+    cashState,
     reportGuardProblem,
     reportsJob,
     logs,

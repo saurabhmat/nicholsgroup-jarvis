@@ -16,10 +16,11 @@ const stateOf = (row: Record<string, unknown> | undefined): Exclude<FinanceState
 
 // ---------------------------------------------------------------------------------------------------------- tabs
 
-export type FinanceTabKey = "overview" | "receivables" | "weekly";
-/** The tab row of the Finance section (spec 15.1). The Cash tab (T-302) is added with that task. Links, not client state. */
+export type FinanceTabKey = "overview" | "cash" | "receivables" | "weekly";
+/** The tab row of the Finance section (spec 15.1): Overview, Cash (T-302), Receivables, Invoices & payments. Links, not client state. */
 export const FINANCE_TABS: readonly { key: FinanceTabKey; label: string; segment: string }[] = [
   { key: "overview", label: "Overview", segment: "finance" },
+  { key: "cash", label: "Cash", segment: "finance/cash" },
   { key: "receivables", label: "Receivables", segment: "finance/receivables" },
   { key: "weekly", label: "Invoices & payments", segment: "finance/weekly" },
 ];
@@ -199,6 +200,97 @@ export function parseWeek(value: unknown): string | null {
   return Number.isNaN(t) || new Date(t).toISOString().slice(0, 10) !== value ? null : value;
 }
 
+// ---------------------------------------------------------------------------------------------------------- cash (T-302)
+
+export type CashColumn = {
+  kind: "today" | "week_end";
+  /** Today (New York) or the Friday that ends a completed business week, YYYY-MM-DD. */
+  date: string;
+  /** Today: the books sync; a week end: when QuickBooks was read (the oldest read of the column). null: not read yet. */
+  asOf: string | null;
+  /** Accounts that have a stored book balance in this column, of `accounts`. 0 of n = "not read yet". */
+  read: number;
+  accounts: number;
+};
+/** One book balance and its change from the next older column. Both null when missing (never 0). */
+export type CashCell = { bookBalance: number | null; change: number | null };
+export type CashAccount = { name: string; shared: boolean; cells: CashCell[] };
+/** `missing` accounts of the column have no balance: the total is then null (SQL never returns a partial sum). */
+export type CashTotal = CashCell & { missing: number };
+export type FinanceCashData = {
+  state: Exclude<FinanceState, "no_access">;
+  asOf: string | null;
+  lastSyncAt: string | null;
+  connectionStatus: string | null;
+  businessDate: string | null;
+  reason: "bank_mapping_missing" | "no_own_bank_accounts" | null;
+  weeks: number;
+  /** `finance.reports.cash_history` (default off): when false the table has the Today column only. */
+  historyEnabled: boolean;
+  /** Today first, then the week ends newest first. */
+  columns: CashColumn[];
+  accounts: CashAccount[];
+  /** One per column; [] when an account row could not be read (a total is never shown then). */
+  totals: CashTotal[];
+  /** Account rows SQL sent that the page could not read (said on the page, never silently dropped). */
+  unreadableAccounts: number;
+};
+export type FinanceCash = { state: "unavailable" } | { state: "no_access" } | FinanceCashData;
+
+function toCashColumns(v: unknown): CashColumn[] {
+  if (!Array.isArray(v)) return [];
+  const out: CashColumn[] = [];
+  for (const x of v) {
+    if (!isRecord(x)) return []; // the columns are positional: one unreadable column makes every cell untrustworthy
+    const date = ymd(x.date);
+    const kind = x.kind === "today" || x.kind === "week_end" ? x.kind : null;
+    if (!date || kind === null) return [];
+    out.push({ kind, date, asOf: instant(x.as_of), read: count(x.read), accounts: count(x.accounts) });
+  }
+  return out;
+}
+
+function toCashCells(v: unknown, columns: number): CashCell[] | null {
+  if (!Array.isArray(v) || v.length !== columns) return null;
+  const out: CashCell[] = [];
+  for (const x of v) {
+    if (!isRecord(x)) return null;
+    out.push({ bookBalance: num(x.book_balance), change: num(x.change) });
+  }
+  return out;
+}
+
+export function toFinanceCash(data: unknown): FinanceCash {
+  const row = rowOf(data);
+  const state = stateOf(row);
+  if (!row || state === null) return { state: "no_access" };
+  const base = { state, asOf: instant(row.as_of), lastSyncAt: instant(row.last_sync_at), connectionStatus: text(row.connection_status), businessDate: ymd(row.business_date), weeks: count(row.weeks), historyEnabled: row.history_enabled === true };
+  const reason = row.reason === "bank_mapping_missing" || row.reason === "no_own_bank_accounts" ? row.reason : null;
+  if (state !== "ok") return { ...base, reason: null, columns: [], accounts: [], totals: [], unreadableAccounts: 0 };
+  const columns = toCashColumns(row.columns);
+  const rawAccounts = Array.isArray(row.accounts) ? row.accounts : [];
+  const accounts: CashAccount[] = [];
+  for (const x of columns.length === 0 ? [] : rawAccounts) {
+    if (!isRecord(x)) continue;
+    const name = text(x.name);
+    const cells = toCashCells(x.cells, columns.length);
+    if (name !== null && cells !== null) accounts.push({ name, shared: x.shared === true, cells });
+  }
+  const unreadable = columns.length === 0 ? rawAccounts.length : rawAccounts.length - accounts.length;
+  const totalCells = Array.isArray(row.totals) && row.totals.length === columns.length ? row.totals : null;
+  const totals: CashTotal[] = [];
+  if (totalCells !== null && unreadable === 0) {
+    for (const x of totalCells) {
+      if (!isRecord(x)) {
+        totals.length = 0;
+        break;
+      }
+      totals.push({ bookBalance: num(x.book_balance), change: num(x.change), missing: count(x.missing) });
+    }
+  }
+  return { ...base, reason, columns, accounts, totals, unreadableAccounts: unreadable };
+}
+
 // ---------------------------------------------------------------------------------------------------------- loading
 
 type Db = Pick<LaneClient, "schema">;
@@ -223,6 +315,13 @@ export async function loadWeekDetail(client: Db, laneId: string, week: string): 
   return toWeekDetail(data);
 }
 
+/** The number of weeks is lane_config `finance.reports.weeks` (default 4), read by the database like the weekly report's. */
+export async function loadFinanceCash(client: Db, laneId: string): Promise<FinanceCash> {
+  const { data, error } = await client.schema("core").rpc("finance_cash", { p_lane: laneId });
+  if (error) throw new Error("finance cash unavailable");
+  return toFinanceCash(data);
+}
+
 async function guarded<T>(g: G, laneId: string, what: string, load: (client: Db) => Promise<T>): Promise<T | { state: "unavailable" }> {
   try {
     const { client } = await g.requireLane(laneId as Parameters<Guards["requireLane"]>[0]);
@@ -236,6 +335,7 @@ async function guarded<T>(g: G, laneId: string, what: string, load: (client: Db)
 /** The lane gate has already run on the page; an outage gives `unavailable`, never an empty or invented figure. */
 export const receivablesFor = (g: G, laneId: string, load = loadReceivables): Promise<Receivables> => guarded(g, laneId, "receivables", (c) => load(c, laneId));
 export const financeWeeklyFor = (g: G, laneId: string, load = loadFinanceWeekly): Promise<FinanceWeekly> => guarded(g, laneId, "weekly", (c) => load(c, laneId));
+export const financeCashFor = (g: G, laneId: string, load = loadFinanceCash): Promise<FinanceCash> => guarded(g, laneId, "cash", (c) => load(c, laneId));
 export async function weekDetailFor(g: G, laneId: string, week: string | null, load = loadWeekDetail): Promise<WeekDetail> {
   if (week === null) return { state: "none" };
   return guarded(g, laneId, "week detail", (c) => load(c, laneId, week));
@@ -255,3 +355,13 @@ export const WEEKLY_NOT_INCLUDED = "Not included: sales receipts, credit memos a
 export const BUCKET_RULE = "Buckets count days past the due date (the invoice date when there is no due date) as of today in New York. Current means not yet due or due today.";
 export const PAYMENT_AMOUNT_NOTE =
   "A payment's amount is the amount applied to invoices plus any unapplied remainder, as stored. It can differ from the bank deposit when part of it was applied to a credit memo (credit memos are not synced).";
+
+export const CASH_NOTE =
+  "Every figure is the book balance as QuickBooks reports it. The change is the difference of two book balances; money in and out is not shown. Payroll accounts are not listed.";
+export const HISTORY_OFF_TEXT = "Weekly history is not switched on for this company. Today's book balances are shown.";
+export const CASH_MISSING_NOTE =
+  "A balance marked not available can be an account with a zero balance on that date, an account opened later, or a parent account with sub-accounts, because QuickBooks' report does not show it as its own row. Accounts closed since are not listed, so earlier totals cover today's accounts only.";
+export const CASH_REASON_TEXT: Record<NonNullable<FinanceCashData["reason"]>, string> = {
+  bank_mapping_missing: "No bank accounts are mapped to a company yet. Ask your administrator to set that up.",
+  no_own_bank_accounts: "No bank account is mapped to this company.",
+};
