@@ -6,7 +6,7 @@
 -- lost lines, currency, raw_record_id object types, the constant-message name trigger (no DETAIL), the masker, grants and
 -- RLS with cross-lane denial.
 begin;
-select plan(208);
+select plan(210);
 \ir helpers/lane_rls.psql
 
 -- ---------------------------------------------------------------- helpers
@@ -148,6 +148,9 @@ select pg_temp.raw('Invoice', 'I8', '{"Id": "I8", "TxnDate": "2026-10-08", "Tota
 select pg_temp.raw('Invoice', 'I9', '{"Id": "I9", "TxnDate": "2026-13-45", "TotalAmt": 90, "Balance": 90, "CustomerRef": {"value": "cust-pkg"}}');
 select pg_temp.raw('Invoice', 'I10', '{"Id": "I10", "TxnDate": "2026-10-10", "TotalAmt": 1234.565, "Balance": -0.005, "CustomerRef": {"value": "cust-pkg"}, "ClassRef": {"value": "class-unknown"}}');
 select pg_temp.raw('Invoice', 'I-dead', '{"Id": "I-dead"}', true);
+-- T-300: invoices dropped for a payroll account and for an excluded customer (counted as dead_invoices_sensitive).
+select pg_temp.raw('Invoice', 'I-pay', '{"Id": "I-pay", "TxnDate": "2026-10-11", "TotalAmt": 11, "Balance": 11, "CustomerRef": {"value": "cust-pkg"}, "Line": [{"Id": "1", "Amount": 11, "SalesItemLineDetail": {"ItemAccountRef": {"value": "900"}}}]}');
+select pg_temp.raw('Invoice', 'I-ent', '{"Id": "I-ent", "TxnDate": "2026-10-11", "TotalAmt": 12, "Balance": 12, "CustomerRef": {"value": "777"}}');
 -- Bills.
 select pg_temp.raw('Bill', 'B1', '{"Id": "B1", "TxnDate": "2026-10-05", "DueDate": "2026-11-10", "TotalAmt": 250, "Balance": 250, "VendorRef": {"value": "v1"}, "APAccountRef": {"value": "30"}, "ClassRef": {"value": "class-synthetic-pkg"}, "Line": [{"Id": "1", "Amount": 250, "DetailType": "AccountBasedExpenseLineDetail", "AccountBasedExpenseLineDetail": {"AccountRef": {"value": "20"}, "ClassRef": {"value": "class-synthetic-pkg"}}}]}');
 select pg_temp.raw('Bill', 'B-pay', '{"Id": "B-pay", "TxnDate": "2026-10-09", "TotalAmt": 5000, "Balance": 5000, "VendorRef": {"value": "v1"}, "APAccountRef": {"value": "30"}, "Line": [{"Id": "1", "Amount": 5000, "AccountBasedExpenseLineDetail": {"AccountRef": {"value": "900"}}}]}');
@@ -204,8 +207,10 @@ select is((select array[is_bank::text, entity_code, owner_entity_code] from fin.
 select is((select array[entity_code, owner_entity_code] from fin.accounts where source_id = '11'), array['APK', 'APK'], 'a bank account owned by another entity is shown under it');
 select is((select array[entity_code, coalesce(owner_entity_code, 'none')] from fin.accounts where source_id = '20'), array['unmapped', 'none'], 'a non-bank account is unmapped in file_class mode');
 select is((select active from fin.accounts where source_id = '40'), false, 'an inactive account is stored inactive');
-select is((select r -> 'dead_payroll' from run1), '6'::jsonb, 'dead by payroll: 4 accounts + B-pay + PU-pay');
-select is((select r -> 'dead_entity' from run1), '3'::jsonb, 'dead by excluded entity: customer 777, vendor 777, purchase PU-ent');
+select is((select r -> 'dead_payroll' from run1), '7'::jsonb, 'dead by payroll: 4 accounts + B-pay + PU-pay + I-pay');
+select is((select r -> 'dead_entity' from run1), '4'::jsonb, 'dead by excluded entity: customer 777, vendor 777, purchase PU-ent, invoice I-ent');
+select is((select r -> 'dead_invoices_sensitive' from run1), '2'::jsonb, 'T-300: invoices dropped for a payroll account (I-pay) or an excluded customer (I-ent) are counted: dead_invoices_sensitive = 2 (a deleted invoice is not)');
+select is((select counts -> 'dead_invoices_sensitive' from fin.normalize_runs where connection_id = '00000000-0000-4000-8000-000000000661' order by finished_at desc limit 1), '2'::jsonb, 'T-300: the key is stored with the run (read by core.finance_ar_total_readable)');
 select is((select r -> 'dead_deleted' from run1), '2'::jsonb, 'dead by deletion: I-dead and B-gone');
 select is((select r -> 'dead_linked' from run1), '2'::jsonb, 'dead by link: P5 (deleted invoice) and BP2 (deleted/excluded bill)');
 

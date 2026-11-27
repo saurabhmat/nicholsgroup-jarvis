@@ -26,9 +26,9 @@ export type HomeFinanceDetail =
       unmappedBills: number;
     };
 
-const STATES: readonly string[] = ["not_connected", "no_data", "mapping_missing", "ok", "no_access"];
+export const STATES: readonly string[] = ["not_connected", "no_data", "mapping_missing", "ok", "no_access"];
 
-function toAging(v: unknown): AgingRow[] {
+export function toAging(v: unknown): AgingRow[] {
   if (!Array.isArray(v)) return [];
   const by = new Map<string, AgingRow>();
   for (const x of v) {

@@ -15,8 +15,8 @@ const run = async (code) => {
 };
 
 describe("apps/web/eslint.config.mjs", () => {
-  // The first lint loads eslint-config-next cold, which can exceed vitest's 5 s default when turbo runs suites in parallel.
-  it("enforces the boundary rules", { timeout: 30_000 }, async () => {
+  // The first lint loads eslint-config-next cold, which can exceed vitest's 5 s default when turbo runs suites in parallel (30 s was exceeded on the one-core build machine under load, Nov 27, 2026).
+  it("enforces the boundary rules", { timeout: 120_000 }, async () => {
     expect(await run(`import Stripe from "stripe";\nexport default Stripe;`)).toContain("nichols/no-vendor-sdk");
   });
   it("blocks inline disables of a boundary rule", async () => {

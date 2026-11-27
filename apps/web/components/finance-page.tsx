@@ -8,6 +8,7 @@ import { EmptyState, KpiCard, PageHeader, PageSection, PERIODS, laneHref } from 
 import { guards } from "@/lib/guards";
 import { loadLane } from "@/lib/lane-page";
 import { CardBoundary } from "./card-boundary";
+import { FinanceTabs } from "./finance-report-frame";
 import { timed } from "@/lib/timed";
 import { CONNECT_TEXT, connectionNote, emptyStateText, financeCards, formatAsOf, formatMoney, hasFinanceView, homeFinanceFor, type HomeFinanceView } from "@/lib/home-finance";
 import { AGING_LABEL, barWidths, homeFinanceDetailFor, type HomeFinanceDetail } from "@/lib/home-finance-detail";
@@ -308,6 +309,7 @@ export function FinanceView({ laneId, laneName, period, data }: { laneId: string
   return (
     <div className="flex flex-col gap-6">
       {header}
+      <FinanceTabs laneId={laneId} active="overview" />
       {note ? <p data-testid="finance-connection-note" className="text-small text-muted-foreground">{note}</p> : null}
       {/* Keyed on the period: a card that failed gets a fresh boundary when the period link changes (soft navigation). */}
       <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
