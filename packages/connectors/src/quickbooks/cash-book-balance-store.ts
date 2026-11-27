@@ -20,9 +20,9 @@ export type CashBookBalanceEntry = {
 };
 
 export interface CashBookBalanceStore {
-  /** QuickBooks ids of the connection's bank accounts that the normalizer kept (fin.accounts: is_bank, active, not deleted). */
+  /** QuickBooks ids of the connection's cash accounts: the bank accounts "Cash by account" lists (core.fin_cash_accounts: is_bank, active, not deleted, mapped to the lane's own entity). */
   accountIds(laneId: LaneId, conn: QboConnection): Promise<string[]>;
-  /** Writes ALL accounts of one date in one call; the database refuses the whole call when any account is not a bank account of the connection. */
+  /** Writes ALL accounts of one date in one call; the database refuses the whole call when any account is not one of the connection's cash accounts (see accountIds). */
   put(laneId: LaneId, conn: QboConnection, entry: CashBookBalanceEntry): Promise<void>;
   /**
    * Retention (26 weeks), rows of disconnected connections and, with `all` (the history switch is off), every stored row of the connection. Called at the

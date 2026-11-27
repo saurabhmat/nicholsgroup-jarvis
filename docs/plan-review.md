@@ -2285,3 +2285,30 @@ Built in one pass on `agent/T-300` (Finance tabs, aged AR by customer, invoices 
 
 **Stop-hook failure the same day:** `packages/eslint-plugin/src/config-web.test.js` timed out at 30 s while two reviewers and the full suite ran on the one core (load 7); passes alone in 4 s; timeout raised to 120 s.
 
+## T-302: subagent reviews (security and code, run after the build, Nov 27, 2026)
+
+Finance cash report (spec `docs/specs/finance.md` §15.4), built on `agent/T-302` on top of T-300/T-301. Reviewers were given the diff, the spec and D-25/D-27, not the builder's conclusions.
+
+**First reviews: no BLOCKER, no HIGH.** The security reviewer traced the Balance Sheet answer from the HTTP response to the point it is discarded: only `{account id, balance}` of the kept rows is stored or returned; errors are constants; logs carry dates, counts and error kinds; the Inngest step result holds no balance; `fin.report_cache` is not written and no `balance_sheet` kind exists (D-27 unchanged).
+- **Security M-1 (mitigated, residual accepted with a human step):** a bank account used only for payroll, or to pay one person, is a Bank-type account with a bank subtype, so the payroll classification catches it only by name or by a listed id. Its weekly change is the payroll run. Not a new kind of exposure (the Overview already shows that account's current balance at every sync), but new as a stored, 13-week, pre-subtracted history. Fix: history off by default; only own-entity cash accounts are read; `pkg-cash-accounts-list.sql` for a person to look at before `enable-cash-history-T-302.sql`.
+- **Security M-2 (fixed):** was on by default for every lane, and off neither hid nor removed stored rows; retention ran only inside a write. Now default false; `finance_cash` hides the week columns when off; the job purges when off; retention is its own call at the start of every run; a disconnected connection's rows are removed at the next run.
+- **Security M-3 / code M1 (fixed):** an empty call left the date's rows in place (`= any(NULL)`), against the comments. An empty read now clears the date; pgTAP on a date that has rows.
+- **Code M2 (answered, not "fixed"):** QuickBooks probably leaves a zero-balance account out of the Balance Sheet, which blanks that column's total. No zero is invented while this is unverified against Intuit; the page says what a missing balance can mean. Revisit after the sandbox check (H-089): if confirmed, store 0.00 for an asked account absent from an otherwise valid report.
+- **Code M3 (fixed):** `core.business_week_start(date)` tested on the same fixed dates as the TypeScript `cashHistoryDates` tests (Friday, Saturday, Sunday, year end, both DST weeks).
+- **Code M4 (fixed):** a permanent cash-read failure no longer marks the nightly reports run failed; a transient one still does.
+- **LOWs fixed:** the insert repeats the validated conditions and compares row counts; inactive accounts refused; names changed from "bank balance" to "cash book balance" before anything reached production; only own-entity accounts stored; unread column wording; closed-accounts note.
+
+**Re-check of the fixes (security): no BLOCKER, HIGH or MEDIUM.** Open LOW, not fixed:
+- **N-2:** a permanent cash-history failure is visible only in the logs; the run row says ok. Wanted later: a count of dates not stored in the run row, so the job-failures view shows it.
+- **N-4:** once a lane is enabled, a payroll-only account with a neutral name the reviewer does not recognise still shows its weekly change to every finance-view role; account names are stored with runs of five or more digits masked, which makes similar names hard to tell apart; an account mapped later joins the history with no new look. Runbook rule: re-run `pkg-cash-accounts-list.sql` whenever `entities.bank_accounts` changes.
+- **N-5:** rows of a connection that is neither usable nor disconnected (for example `reconnect_required`) are purged only by another usable connection's run; hidden while the switch is off.
+- **N-1 (not applicable):** part 39 does not guard against its own pre-rename version; that version was never given to Saurabh and never run outside the local database.
+- **N-3:** two stale code comments corrected by the lead; the table comment in the migration still says "removed by the writer" (left, so the migration and part 39 stay identical).
+- Accepted: 26 weeks kept while at most 13 are shown; figures limited to 15 digits; a closed account is not listed, so earlier totals cover today's accounts only (said on the page).
+
+**Decisions (Saurabh was told):** history off by default and enabled per lane by a manual SQL pair; a disconnected connection's rows are removed at once, not after the retention period; no zero invented for an absent account; a parent bank account with sub-accounts is not read.
+
+**Not verified:** nothing was tried against Intuit (request parameters, the meaning of a one-day range, the row shape, zero-balance rows, parent accounts); the Cash page was not opened in a browser; the production files were run only against the local database (part 39 twice, its check 21 of 21; enable, check and undo inside a rolled-back transaction).
+
+**Checks run by the lead on the finished branch:** root script tests 221 of 221; whole `apps/web` suite 183 files, 2506 tests. A stop check during the fix pass failed on three tests of files the builder had open and uncommitted; gone on the finished branch. Earlier the same day the stop check caught `recharts` missing from `scripts/dependency-allowlist.test.mjs` (T-301; builders had not run the root script tests): added on both branches, and builders are now told to run those tests.
+
