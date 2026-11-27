@@ -38,11 +38,11 @@ describe("Finance page, live figures", () => {
     expect(card("Net income").textContent).toContain("Year to date");
   });
 
-  it("T-300: the tab row links Overview (current), Receivables and Invoices & payments; no Cash tab yet; the period switcher stays on the Overview", () => {
+  it("T-300, T-302: the tab row links Overview (current), Cash, Receivables and Invoices & payments; the period switcher stays on the Overview", () => {
     draw();
     const links = within(screen.getByTestId("finance-tabs")).getAllByRole("link");
     expect(links.map((l) => [l.textContent, l.getAttribute("href"), l.getAttribute("aria-current")])).toEqual([
-      ["Overview", "/PKG/finance", "page"], ["Receivables", "/PKG/finance/receivables", null], ["Invoices & payments", "/PKG/finance/weekly", null],
+      ["Overview", "/PKG/finance", "page"], ["Cash", "/PKG/finance/cash", null], ["Receivables", "/PKG/finance/receivables", null], ["Invoices & payments", "/PKG/finance/weekly", null],
     ]);
     expect(screen.getByTestId("finance-period")).toBeTruthy();
   });

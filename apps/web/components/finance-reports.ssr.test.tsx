@@ -5,7 +5,8 @@ import { renderToReadableStream } from "react-dom/server";
 import { describe, expect, it, vi } from "vitest";
 import { ReceivablesView } from "./finance-receivables";
 import { WeeklyView, type WeeklyData } from "./finance-weekly";
-import { receivables, weekly } from "./finance-reports.fixtures";
+import { receivables, weekly, cash } from "./finance-reports.fixtures";
+import { CashView } from "./finance-cash";
 import type { Receivables } from "@/lib/finance-reports";
 
 async function ssr(node: React.ReactElement): Promise<{ html: string; errors: unknown[] }> {
@@ -74,6 +75,37 @@ describe("Invoices & payments page, server-side render", () => {
       };
       const { html, errors } = await ssr(<WeeklyView laneId="PKG" laneName="Pub K Group" data={broken} />);
       expect(errors).toHaveLength(1);
+      expect(html).toContain("Invoices &amp; payments");
+      expect(html).not.toContain("$1,000.50");
+    } finally {
+      quiet.mockRestore();
+    }
+  });
+});
+
+describe("Cash page, server-side render", () => {
+  it("renders the tabs (Cash second), the account rows, the total row and the notes without errors", async () => {
+    const { html, errors } = await ssr(<CashView laneId="PKG" laneName="Pub K Group" data={cash()} />);
+    expect(errors).toEqual([]);
+    for (const text of ["Overview", "Cash", "Receivables", "Operating Checking", "Savings", "Shared account", "$1,000.50", "$3,000.75", "Total book balance", "Not read yet", "money in and out is not shown"]) expect(html).toContain(text);
+    expect(html).not.toMatch(/bank balance/i);
+    expect(html).not.toContain("Could not load");
+  });
+
+  it("a failing table is contained: the header and tabs render, no figure", async () => {
+    const quiet = vi.spyOn(console, "error").mockImplementation(() => undefined);
+    try {
+      const good = cash();
+      if (good.state !== "ok") throw new Error("fixture");
+      const broken = {
+        ...good,
+        get accounts(): never {
+          throw new TypeError("synthetic card failure");
+        },
+      };
+      const { html, errors } = await ssr(<CashView laneId="PKG" laneName="Pub K Group" data={broken} />);
+      expect(errors).toHaveLength(1);
+      expect(html).toContain("Finance");
       expect(html).toContain("Invoices &amp; payments");
       expect(html).not.toContain("$1,000.50");
     } finally {

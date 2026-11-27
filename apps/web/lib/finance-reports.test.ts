@@ -104,8 +104,8 @@ describe("parseWeek", () => {
 });
 
 describe("tabs", () => {
-  it("Overview, Receivables, Invoices & payments (no Cash tab until T-302)", () => {
-    expect(FINANCE_TABS.map((t) => [t.key, t.segment])).toEqual([["overview", "finance"], ["receivables", "finance/receivables"], ["weekly", "finance/weekly"]]);
+  it("Overview, Cash, Receivables, Invoices & payments (Cash second, T-302)", () => {
+    expect(FINANCE_TABS.map((t) => [t.key, t.segment])).toEqual([["overview", "finance"], ["cash", "finance/cash"], ["receivables", "finance/receivables"], ["weekly", "finance/weekly"]]);
   });
 });
 
