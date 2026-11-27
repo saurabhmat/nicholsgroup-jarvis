@@ -796,6 +796,24 @@ isOneToOne: false
               "pnl_as_of": string,"pnl_end": string,"pnl_expenses": number,"pnl_income": number,"pnl_method": string,"pnl_net": number,"pnl_partial": boolean,"pnl_reason": string,"pnl_start": string
             }[]
                            },
+"finance_receivables":
+{ Args: { "p_lane": string }; Returns: {
+              "as_of": string,"buckets": Json,"business_date": string,"check_difference": number,"check_reason": string,"check_report_date": string,"check_total": number,"connection_status": string,"customer_cap": number,"customer_count": number,"customers": Json,"customers_shown": number,"invoice_cap": number,"invoice_count": number,"last_sync_at": string,"state": string,"total": number
+            }[]
+                           },
+"finance_report_weeks":
+{ Args: { "p_lane": string }; Returns: number
+                           },
+"finance_week_detail":
+{ Args: { "p_lane": string,"p_week": string,"p_weeks"?: number }; Returns: {
+              "invoice_count": number,"invoices": Json,"payment_count": number,"payments": Json,"row_cap": number,"state": string,"week_end": string,"week_start": string,"week_valid": boolean
+            }[]
+                           },
+"finance_weekly":
+{ Args: { "p_lane": string,"p_weeks"?: number }; Returns: {
+              "as_of": string,"business_date": string,"connection_status": string,"last_sync_at": string,"state": string,"weeks": Json
+            }[]
+                           },
 "has_lane_role":
 { Args: { "p_lane": string,"p_roles": (string)[],"p_uid": string }; Returns: boolean
                            },

@@ -42,10 +42,7 @@ export type ArCheck =
   | { kind: "ok"; total: number; reportDate: string; difference: number }
   | { kind: "missing"; reason: "not_cached" | "withheld" | "older_than_data" | "unreadable" };
 
-export type Receivables =
-  | { state: "unavailable" }
-  | { state: "no_access" }
-  | {
+export type ReceivablesData = {
       state: Exclude<FinanceState, "no_access">;
       asOf: string | null;
       lastSyncAt: string | null;
@@ -61,7 +58,8 @@ export type Receivables =
       customerCap: number;
       invoiceCap: number;
       check: ArCheck | null;
-    };
+};
+export type Receivables = { state: "unavailable" } | { state: "no_access" } | ReceivablesData;
 
 function toInvoices(v: unknown): ReceivableInvoice[] {
   if (!Array.isArray(v)) return [];
@@ -140,10 +138,8 @@ export type WeekRow = {
   receivedCount: number;
   receivedAmount: number;
 };
-export type FinanceWeekly =
-  | { state: "unavailable" }
-  | { state: "no_access" }
-  | { state: Exclude<FinanceState, "no_access">; asOf: string | null; lastSyncAt: string | null; connectionStatus: string | null; businessDate: string | null; weeks: WeekRow[] };
+export type FinanceWeeklyData = { state: Exclude<FinanceState, "no_access">; asOf: string | null; lastSyncAt: string | null; connectionStatus: string | null; businessDate: string | null; weeks: WeekRow[] };
+export type FinanceWeekly = { state: "unavailable" } | { state: "no_access" } | FinanceWeeklyData;
 
 function toWeeks(v: unknown): WeekRow[] {
   if (!Array.isArray(v)) return [];
