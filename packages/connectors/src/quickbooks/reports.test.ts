@@ -299,8 +299,9 @@ describe("default settings from an empty lane_config", () => {
     h.reportState.settings = await reader.reportSettings(LANE);
     await h.reportsJob.run(LANE, conn.id);
     const extra = planned(h).length - 3;
-    // T-302: the cash history is on by default (four completed weeks): one Balance Sheet read per week end, after the reports, and none of it cached.
-    expect(intuit.state.reportRequests.map((r) => r.name)).toEqual(["ProfitAndLoss", "AgedReceivables", "AgedPayables", ...Array<string>(extra).fill("ProfitAndLoss"), ...Array<string>(4).fill("BalanceSheet")]);
+    // T-302: the cash history is OFF by default (fail closed): no Balance Sheet request, and the switch-off purge ran.
+    expect(intuit.state.reportRequests.map((r) => r.name)).toEqual(["ProfitAndLoss", "AgedReceivables", "AgedPayables", ...Array<string>(extra).fill("ProfitAndLoss")]);
+    expect(h.cashState.purges).toEqual([true]);
     expect(h.reportState.stored.some((e) => e.report === "balance_sheet")).toBe(false);
   });
 });

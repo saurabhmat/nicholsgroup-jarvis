@@ -16,7 +16,7 @@ import { createQboFeatureStore } from "../quickbooks/features";
 import { createReconnectStore } from "../quickbooks/reconnect";
 import { createNormalizeStore } from "../quickbooks/normalize-store";
 import { createReportCacheStore } from "../quickbooks/report-store";
-import { createBankBalanceStore } from "../quickbooks/bank-balance-store";
+import { createCashBookBalanceStore } from "../quickbooks/cash-book-balance-store";
 import { createSyncCursorStore, createSyncRunStore } from "../sync/store";
 import { createSyncTargetLister } from "../sync/targets";
 import { createCalendarIndexStore } from "../comms/cal-store";
@@ -102,8 +102,8 @@ export const qboFeatureStore = createQboFeatureStore(getLaneJobClient);
 /** Writes QuickBooks reports to fin.report_cache with the lane's job client (T-052). */
 export const reportCacheStore = createReportCacheStore(getLaneJobClient);
 
-/** Reads the bank account ids and writes the bank-account balances of past week ends (fin.bank_balances) with the lane's job client (T-302). */
-export const bankBalanceStore = createBankBalanceStore(getLaneJobClient);
+/** Reads the bank account ids and writes the cash-account book balances of past week ends (fin.cash_book_balances) with the lane's job client (T-302). */
+export const cashBookBalanceStore = createCashBookBalanceStore(getLaneJobClient);
 
 /** Runs the QuickBooks normalizer (raw.source_records -> fin.*) with the lane's job client (T-056). */
 export const normalizeStore = createNormalizeStore(getLaneJobClient);

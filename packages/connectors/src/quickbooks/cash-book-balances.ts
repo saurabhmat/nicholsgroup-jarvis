@@ -1,12 +1,12 @@
-// QuickBooks bank balances from the Balance Sheet (T-302, spec finance.md 15.4): the book balance of each of the lane's bank accounts at the end of a date.
+// QuickBooks cash book balances from the Balance Sheet (T-302, spec finance.md 15.4): the book balance of each of the lane's bank accounts at the end of a date.
 //
 // What is read and what is kept (rules 4, 6, 7, 13; D-25 and D-27 unchanged):
 //  - ONE report request per date: GET /v3/company/{realm}/reports/BalanceSheet with start_date = end_date = the date and accounting_method (the lane's
-//    method; a bank account's balance is the same in both). No class filter: a bank balance is the whole account (D-18). One value column (no
+//    method; a bank account's balance is the same in both). No class filter: a cash account's balance is the whole account (D-18). One value column (no
 //    summarize_column_by), so a row is { account cell, amount cell }. UNVERIFIED against Intuit: only the synthetic MSW fake exists (H-035 / T-302 live
 //    check): that the balance is "as of end_date" for a one-day range, and that the amount is the second cell.
-//  - The raw report is cut down HERE, before anything leaves this function: `projectBankBalances` returns only { accountId, balance } for ids in the set
-//    passed in (the lane's bank accounts that the normalizer kept, minus payroll accounts). No label, section, total, other account, header or
+//  - The raw report is cut down HERE, before anything leaves this function: `projectCashBookBalances` returns only { accountId, balance } for ids in the set
+//    passed in (the lane's cash accounts as Cash by account lists them (fin.accounts: bank, active, not deleted, mapped to the own entity), minus payroll accounts). No label, section, total, other account, header or
 //    column of the report is returned, stored, logged, cached or put in an error message (all messages are constants). `balance_sheet` is NOT a cached
 //    report kind (D-27): nothing of a Balance Sheet reaches fin.report_cache.
 //  - A row is an account's OWN balance only when ALL of this holds, otherwise the account is left out of the answer (the cell then reads "not read yet";
@@ -26,7 +26,7 @@ import { businessDate, businessWeekStart } from "./reports";
 const MAX_LEVEL = 10;
 const MAX_ROWS = 20_000;
 const MAX_COLUMNS = 64;
-export const MAX_BANK_IDS = 200;
+export const MAX_CASH_IDS = 200;
 
 const FIGURE = /^-?[0-9]{1,15}(\.[0-9]{1,6})?$/;
 const SAFE_ID = /^[0-9]{1,20}$/;
@@ -85,10 +85,10 @@ const ReportIn = z.object({
   Rows: z.object({ Row: z.array(z.unknown()).max(MAX_ROWS).optional() }).optional(),
 });
 
-export type BankBalance = { accountId: string; balance: string };
-export type ProjectedBankBalances = {
+export type CashBookBalance = { accountId: string; balance: string };
+export type ProjectedCashBookBalances = {
   /** Only the accounts whose own balance could be told apart safely; ordered by account id. */
-  balances: BankBalance[];
+  balances: CashBookBalance[];
   /** The instant Intuit produced the report (Header.Time), or null when absent or unreadable. */
   producedAt: string | null;
 };
@@ -99,8 +99,8 @@ const bad = (message: string, tid: string | null) => new ConnectorError({ kind: 
  * Cuts a Balance Sheet answer down to { accountId, balance } for the ids in `accountIds` (see the file header for the rules). Throws a provider_error
  * with a constant message on any shape problem; nothing of the answer is in it.
  */
-export function projectBankBalances(request: BalanceSheetRequest, raw: unknown, accountIds: ReadonlySet<string>, tid: string | null = null): ProjectedBankBalances {
-  if (accountIds.size > MAX_BANK_IDS) throw bad("Too many bank accounts to read", tid);
+export function projectCashBookBalances(request: BalanceSheetRequest, raw: unknown, accountIds: ReadonlySet<string>, tid: string | null = null): ProjectedCashBookBalances {
+  if (accountIds.size > MAX_CASH_IDS) throw bad("Too many cash accounts to read", tid);
   const parsed = ReportIn.safeParse(raw);
   if (!parsed.success) throw bad("Balance sheet response is not valid", tid);
   const { Header: h, Rows: r } = parsed.data;
@@ -139,7 +139,7 @@ export function projectBankBalances(request: BalanceSheetRequest, raw: unknown, 
   };
   walk(r?.Row ?? [], 0);
 
-  const balances: BankBalance[] = [];
+  const balances: CashBookBalance[] = [];
   for (const id of [...candidate.keys()].sort()) {
     if (seen.get(id) === 1) balances.push({ accountId: id, balance: candidate.get(id) as string });
   }
