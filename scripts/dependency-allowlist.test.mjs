@@ -24,6 +24,7 @@ const ALLOWED = {
     "@nichols/ui", // T-022
     "zod", // T-232: request body schema in the approvals route (no network or DB access; same major as core)
     "fflate", // T-220: reads a brain-folder .zip in the browser (D-39: never uploaded); pinned exactly, no dependencies
+    "recharts", // T-301: the weekly invoices-and-payments bar chart (client component only; in the CLAUDE.md stack); pinned exactly (3.11.1), no install scripts in its tree (security review, Nov 27, 2026)
     "@playwright/test", // T-018 end-to-end tests
     "@testing-library/dom", // T-216: component tests (same versions as packages/ui)
     "@testing-library/react", // T-216
