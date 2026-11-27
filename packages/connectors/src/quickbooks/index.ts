@@ -4,7 +4,7 @@
 import { getServerEnv, requireConnectorEnv } from "@nichols/core/env/server";
 import { getAudit } from "@nichols/core/lane-router";
 import type { LaneBoundConnection } from "../contract/lane-bound";
-import { apiErrorStore, connectionLoader, syncRunStore, getToken, normalizeStore, reportCacheStore, qboFeatureStore, laneConfigReader, actionClaimReader, reconnectStore, revokeToken, rotateToken, storeToken } from "../vault/index";
+import { apiErrorStore, connectionLoader, syncRunStore, getToken, normalizeStore, reportCacheStore, bankBalanceStore, qboFeatureStore, laneConfigReader, actionClaimReader, reconnectStore, revokeToken, rotateToken, storeToken } from "../vault/index";
 import { SecretValue } from "../vault/secret";
 import { createQboApi } from "./api";
 import { createApiErrorSink } from "../error-log/sink";
@@ -85,6 +85,7 @@ export const quickbooksReportsJob = createQboReportsJob({
   loader: connectionLoader,
   api,
   store: reportCacheStore,
+  bankBalances: bankBalanceStore,
   settings: (laneId) => laneConfigReader.reportSettings(laneId),
   payroll: (laneId) => laneConfigReader.payrollSettings(laneId),
   runs: syncRunStore,

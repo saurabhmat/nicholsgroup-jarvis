@@ -19,6 +19,8 @@ import { createJobRunLog } from "../sync/job-run";
 import type { SyncRunStore, SyncTrigger } from "../sync/types";
 import type { QboApi } from "./api";
 import { assertQuickbooksConnection, type QboConnection } from "./guard";
+import { cashHistoryDates, planBalanceSheetAt, projectBankBalances } from "./bank-balances";
+import type { BankBalanceStore } from "./bank-balance-store";
 import { planReports, projectReport, reportPolicy, REPORT_MAX_BYTES, type ProjectedReport, type QboReportKind, type ReportSettings } from "./reports";
 import type { JobRunResult } from "../sync/job-run";
 import { entityQuery, MAX_PAGES, PAGE_SIZE, type PayrollSettings } from "./sync";
@@ -46,6 +48,11 @@ export type QboReportsJobDeps = {
   loader: ConnectionLoader<string>;
   api: QboApi;
   store: ReportCacheStore;
+  /**
+   * T-302: the bank balances at the end of the last completed business weeks (Balance Sheet, bank-account rows only) into fin.bank_balances.
+   * Optional: without it, or with `finance.reports.cash_history` off, nothing is read. NOT a report kind and nothing of the Balance Sheet is cached (D-27).
+   */
+  bankBalances?: BankBalanceStore;
   /** `lane_config` report settings (method, period, own-entity classes); a throw fails the run before any call. */
   settings: (laneId: LaneId) => Promise<ReportSettings>;
   /** `lane_config.finance.payroll` (D-25); a throw fails the run before any call. */
@@ -86,6 +93,47 @@ export function createQboReportsJob(deps: QboReportsJobDeps) {
       out.push(...items);
       if (items.length < PAGE_SIZE) return out;
     }
+  }
+
+  /**
+   * The bank-account balances at the end of each of the last `settings.weeks` completed business weeks. One request and one database call per date; a
+   * date that fails (shape, store) is counted and does not stop the others (`onError` records it for the run's outcome); a token or connection problem
+   * is thrown at once. Only counts and dates are logged: never an account id, a label or a figure.
+   */
+  async function cashHistory(
+    laneId: LaneId,
+    conn: QboConnection,
+    settings: ReportSettings,
+    payrollAccountIds: ReadonlySet<string>,
+    startedMs: number,
+    child: ConnectorLogger,
+    store: BankBalanceStore,
+    onError: (e: ConnectorError) => void,
+  ): Promise<{ dates: number; stored: number }> {
+    // The bank accounts the normalizer kept, never a payroll account (defence in depth: payroll accounts are not in fin.accounts either).
+    const ids = new Set((await store.accountIds(laneId, conn)).filter((id) => !payrollAccountIds.has(id)));
+    if (ids.size === 0) return { dates: 0, stored: 0 };
+    let stored = 0;
+    const dates = cashHistoryDates(startedMs, settings.weeks);
+    for (const date of dates) {
+      try {
+        const request = planBalanceSheetAt(date, settings.method);
+        const res = await deps.api.get<unknown>(laneId, conn, request.path, { realm: conn.external_account_id }, request.query);
+        const projected = projectBankBalances(request, res.data, ids, res.providerTid);
+        const fetchedAt = new Date(now()).toISOString();
+        const age = projected.producedAt === null ? Number.NaN : Date.parse(fetchedAt) - Date.parse(projected.producedAt);
+        const asOf = age >= 0 && age <= MAX_REPORT_AGE_MS ? (projected.producedAt as string) : fetchedAt;
+        await store.put(laneId, conn, { date, asOf, balances: projected.balances });
+        stored += 1;
+        if (projected.balances.length < ids.size) child.info("qbo.cash_history.partial", { date, read: projected.balances.length, asked: ids.size });
+      } catch (e) {
+        const err = toConnectorError(e);
+        child.warn("qbo.cash_history.date_failed", { date, kind: err.info.kind });
+        if (err.info.disposition === "reconnect_required" || err.info.kind === "lane_mismatch" || err.info.kind === "connection_unavailable") throw err;
+        onError(err);
+      }
+    }
+    return { dates: dates.length, stored };
   }
 
   return {
@@ -147,7 +195,21 @@ export function createQboReportsJob(deps: QboReportsJobDeps) {
             if (!firstError || (firstError.info.disposition !== "retry" && err.info.disposition === "retry")) firstError = err;
           }
         }
-        child.info("qbo.reports.done", { stored: stored.length, excluded_rows: excludedRows });
+        // T-302: after the reports (so a failure here never stops them), one Balance Sheet request per completed week, kept down to bank accounts.
+        let cash = { dates: 0, stored: 0 };
+        if (deps.bankBalances && settings.cashHistory) {
+          try {
+            cash = await cashHistory(laneId, conn, settings, policy.payrollAccountIds, startedMs, child, deps.bankBalances, (err) => {
+              if (!firstError || (firstError.info.disposition !== "retry" && err.info.disposition === "retry")) firstError = err;
+            });
+          } catch (e) {
+            const err = toConnectorError(e);
+            child.warn("qbo.cash_history.failed", { kind: err.info.kind });
+            if (err.info.disposition === "reconnect_required" || err.info.kind === "lane_mismatch" || err.info.kind === "connection_unavailable") throw err;
+            if (!firstError || (firstError.info.disposition !== "retry" && err.info.disposition === "retry")) firstError = err;
+          }
+        }
+        child.info("qbo.reports.done", { stored: stored.length, excluded_rows: excludedRows, cash_dates: cash.dates, cash_stored: cash.stored });
         if (firstError) {
           error = firstError;
           outcome = failure(firstError, stored);

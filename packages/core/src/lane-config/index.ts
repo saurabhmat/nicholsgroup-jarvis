@@ -447,6 +447,9 @@ export const laneConfigSchema = z.strictObject({
           kinds: z.array(z.enum(REPORT_KINDS)).max(5).default([...DEFAULT_REPORT_KINDS]),
           // The Finance weekly reports (T-301, T-302): completed business weeks shown before the current week, 1 to 13.
           weeks: z.int().min(1).max(13).default(4),
+          // The nightly reports job also reads the bank-account balances at the end of each of those weeks (Balance Sheet, bank-account rows only) for the
+          // Finance Cash tab (T-302). false turns that read off (the Cash tab then shows today's balances only).
+          cash_history: z.boolean().default(true),
         })
         .prefault({}),
       // QuickBooks backup poll (T-090): webhooks are the fast path; this CDC poll catches missed ones. Hours between polls.

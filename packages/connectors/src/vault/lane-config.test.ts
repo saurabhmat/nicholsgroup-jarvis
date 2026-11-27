@@ -153,13 +153,13 @@ describe("reportSettings (T-052)", () => {
   const entities = { own_entity: "PKG", by_entity: { PKG: { qbo_class_ids: ["12", "3"] }, APK: { qbo_class_ids: ["99"] } } };
 
   it("defaults: accrual, year to date, no classes", async () => {
-    expect(await cfg({}).reportSettings("PKG")).toEqual({ method: "accrual", period: "year_to_date", classIds: [], kinds: ["pnl", "ar_aging_summary", "ap_aging_summary"] });
-    expect(await createLaneConfigReader(client({ data: null }).clientFor).reportSettings("PKG")).toEqual({ method: "accrual", period: "year_to_date", classIds: [], kinds: ["pnl", "ar_aging_summary", "ap_aging_summary"] });
+    expect(await cfg({}).reportSettings("PKG")).toEqual({ method: "accrual", period: "year_to_date", classIds: [], kinds: ["pnl", "ar_aging_summary", "ap_aging_summary"], weeks: 4, cashHistory: true });
+    expect(await createLaneConfigReader(client({ data: null }).clientFor).reportSettings("PKG")).toEqual({ method: "accrual", period: "year_to_date", classIds: [], kinds: ["pnl", "ar_aging_summary", "ap_aging_summary"], weeks: 4, cashHistory: true });
   });
 
   it("reads the method and period, and the lane's OWN entity classes only (never another entity's)", async () => {
     const r = await cfg({ finance: { accounting_method: "cash", reports: { period: "trailing_12_months", kinds: ["pnl", "balance_sheet", "pnl"] } }, qbo: { realm_id: "1001", entity_mapping_mode: "file_class" }, entities }).reportSettings("PKG");
-    expect(r).toEqual({ method: "cash", period: "trailing_12_months", classIds: ["12", "3"], kinds: ["pnl", "balance_sheet"] });
+    expect(r).toEqual({ method: "cash", period: "trailing_12_months", classIds: ["12", "3"], kinds: ["pnl", "balance_sheet"], weeks: 4, cashHistory: true });
   });
 
   it("classes only count in a file_class lane (in a file lane the file is the entity)", async () => {

@@ -64,7 +64,7 @@ describe("mail_transport (T-219, D-30, D-37)", () => {
 describe("lane config schema", () => {
   it("accepts a valid config and fills the spec defaults", () => {
     const c = parseLaneConfig(VALID);
-    expect(c.finance).toEqual({ accounting_method: "accrual", weekly_cash_time: "06:00", monthly_close_trigger: "manual", payroll: { account_ids: [], account_subtypes: [...QBO_PAYROLL_SUBTYPES], excluded_entity_ids: [] }, reports: { period: "year_to_date", kinds: ["pnl", "ar_aging_summary", "ap_aging_summary"], weeks: 4 }, qbo_sync: { interval_hours: 4 } });
+    expect(c.finance).toEqual({ accounting_method: "accrual", weekly_cash_time: "06:00", monthly_close_trigger: "manual", payroll: { account_ids: [], account_subtypes: [...QBO_PAYROLL_SUBTYPES], excluded_entity_ids: [] }, reports: { period: "year_to_date", kinds: ["pnl", "ar_aging_summary", "ap_aging_summary"], weeks: 4, cash_history: true }, qbo_sync: { interval_hours: 4 } });
     expect(c.approvals.approvals_live).toBe(false);
     expect(c.approvals.step_up_max_age_s).toBe(300);
     expect(c.approvals.teams_step_up_max_age_s).toBe(300); // T-286, D-67 open: the same as email until the owner decides
@@ -105,6 +105,9 @@ describe("lane config schema", () => {
     expect(parseLaneConfig({ finance: { reports: { weeks: 13 } } }).finance.reports.weeks).toBe(13);
     expect(parseLaneConfig({ finance: { reports: { weeks: 1 } } }).finance.reports.weeks).toBe(1);
     for (const bad of [0, 14, 2.5, "4", -1]) expect(() => parseLaneConfig({ finance: { reports: { weeks: bad } } })).toThrow(z.ZodError);
+    // T-302: the cash history read of the nightly reports job: a boolean, on by default.
+    expect(parseLaneConfig({ finance: { reports: { cash_history: false } } }).finance.reports.cash_history).toBe(false);
+    for (const bad of ["no", 0, null]) expect(() => parseLaneConfig({ finance: { reports: { cash_history: bad } } })).toThrow(z.ZodError);
     expect(parseLaneConfig({ finance: { qbo_sync: { interval_hours: 6 } } }).finance.qbo_sync.interval_hours).toBe(6);
     for (const bad of [0, 5, 24, 1.5, "4", -4]) expect(() => parseLaneConfig({ finance: { qbo_sync: { interval_hours: bad } } })).toThrow(z.ZodError);
     expect(() => parseLaneConfig({ finance: { qbo_sync: { interval_hours: 4, extra: 1 } } })).toThrow(z.ZodError);

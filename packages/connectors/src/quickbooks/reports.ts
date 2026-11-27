@@ -72,6 +72,10 @@ export type ReportSettings = {
   classIds: string[];
   /** Report kinds to fetch and cache (`lane_config.finance.reports.kinds`; default excludes balance_sheet and cash_flow, D-27). */
   kinds: readonly QboReportKind[];
+  /** Completed business weeks the Finance reports show (`finance.reports.weeks`, 1 to 13): the cash history reads one Friday per week (T-302). */
+  weeks: number;
+  /** `finance.reports.cash_history`: also read bank-account balances at those Fridays (T-302, ./bank-balances.ts). */
+  cashHistory: boolean;
 };
 
 export type ReportRequest = {

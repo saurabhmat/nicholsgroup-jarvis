@@ -18,6 +18,7 @@ import { createQboApi } from "../quickbooks/api";
 import { createQboFeatureRecorder, type QboFeatureStore } from "../quickbooks/features";
 import { createQuickBooksConnector } from "../quickbooks/connector";
 import { createQboReportsJob, type ReportCacheEntry, type ReportCacheStore } from "../quickbooks/reports-job";
+import type { BankBalanceEntry, BankBalanceStore } from "../quickbooks/bank-balance-store";
 import type { ReportSettings } from "../quickbooks/reports";
 import type { QboConnection } from "../quickbooks/guard";
 import { createQuickBooksRevoker, QBO_REVOKE_ACTION } from "../quickbooks/writer";
@@ -247,7 +248,7 @@ export function createQboHarness(options: QboHarnessOptions) {
   } });
   // ---- T-052 twins: lane_config report settings and fin.report_cache (with the database guard's rules ported).
   const reportState: { settings: ReportSettings; failSettings: boolean; stored: ReportCacheEntry[]; failStore: { reports: readonly string[] | "all"; kind: "transient" | "provider_error" } | null } = {
-    settings: { method: "accrual", period: "year_to_date", classIds: [], kinds: ["pnl", "balance_sheet", "cash_flow", "ar_aging_summary", "ap_aging_summary"] },
+    settings: { method: "accrual", period: "year_to_date", classIds: [], kinds: ["pnl", "balance_sheet", "cash_flow", "ar_aging_summary", "ap_aging_summary"], weeks: 4, cashHistory: false },
     failSettings: false,
     stored: [],
     failStore: null,
@@ -283,10 +284,28 @@ export function createQboHarness(options: QboHarnessOptions) {
       else reportState.stored.push(entry);
     },
   };
+  /** Twin of core.fin_bank_account_ids / core.fin_bank_balances_put (T-302): the ids the normalizer kept, and a writer that refuses the whole call for any other id. */
+  const bankState: { ids: string[]; puts: BankBalanceEntry[]; failIds: boolean; failDates: string[]; } = { ids: ["1"], puts: [], failIds: false, failDates: [] };
+  const bankStore: BankBalanceStore = {
+    async accountIds(laneId, conn) {
+      assertLaneBound(laneId, conn);
+      if (bankState.failIds) throw new ConnectorError({ kind: "transient", message: "Bank balance store unavailable" });
+      return [...bankState.ids];
+    },
+    async put(laneId, conn, entry) {
+      assertLaneBound(laneId, conn);
+      if (bankState.failDates.includes(entry.date)) throw new ConnectorError({ kind: "transient", message: "Bank balance store unavailable" });
+      if (entry.balances.some((b) => !bankState.ids.includes(b.accountId))) throw new ConnectorError({ kind: "provider_error", message: "The bank balances were refused by the database" });
+      const at = bankState.puts.findIndex((p) => p.date === entry.date);
+      if (at >= 0) bankState.puts[at] = entry;
+      else bankState.puts.push(entry);
+    },
+  };
   const reportsJob = createQboReportsJob({
     loader: { loadConnection: (laneId, id) => connections.load(laneId, id) },
     api,
     store: reportStore,
+    bankBalances: bankStore,
     settings: async () => {
       if (reportState.failSettings) throw new ConnectorError({ kind: "provider_error", message: "The lane's report settings are not valid" });
       return reportState.settings;
@@ -371,6 +390,7 @@ export function createQboHarness(options: QboHarnessOptions) {
     clock,
     payrollState,
     reportState,
+    bankState,
     reportGuardProblem,
     reportsJob,
     logs,
